@@ -14,6 +14,21 @@ struct BlurModifier: AnimatableModifier {
     }
 }
 
+// Custom AnimatableModifier for smooth text size changes
+struct AnimatableFontModifier: AnimatableModifier {
+    var size: CGFloat
+    var weight: Font.Weight
+
+    var animatableData: CGFloat {
+        get { size }
+        set { size = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: weight))
+    }
+}
+
 extension AnyTransition {
     static var blurFadeSlide: AnyTransition {
         AnyTransition.modifier(
@@ -21,8 +36,8 @@ extension AnyTransition {
             identity: BlurModifier(blurRadius: 0.0)
         )
         .combined(with: .opacity)
-        .combined(with: .scale(scale: 0.85, anchor: .bottom))
-        .combined(with: .offset(y: 30))
+        .combined(with: .scale(scale: 0.92, anchor: .bottom))
+        .combined(with: .offset(y: 15))
     }
 }
 
@@ -106,13 +121,19 @@ public struct MiniPlayerView: View {
                                     // Track Info
                                     VStack(spacing: 4) {
                                         Text(musicController.currentTrackTitle)
-                                            .font(.system(size: isHovering ? 14 : 16, weight: .bold))
+                                            .modifier(AnimatableFontModifier(
+                                                size: isHovering ? 14 : 16,
+                                                weight: .bold
+                                            ))
                                             .foregroundColor(.white)
                                             .lineLimit(1)
                                             .shadow(radius: 2)
 
                                         Text(musicController.currentArtist)
-                                            .font(.system(size: isHovering ? 12 : 14, weight: .medium))
+                                            .modifier(AnimatableFontModifier(
+                                                size: isHovering ? 12 : 14,
+                                                weight: .medium
+                                            ))
                                             .foregroundColor(.white.opacity(0.8))
                                             .lineLimit(1)
                                             .shadow(radius: 2)
@@ -269,22 +290,21 @@ public struct MiniPlayerView: View {
                 }
             }
             .onHover { hovering in
-                // Animation for album art - slower and smoother
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                // Animation for album art and text - faster
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                     isHovering = hovering
                 }
 
                 if hovering {
-                    // Delay showing controls AFTER album art animation completes
-                    // Album art animation takes ~0.45s, so delay by that amount
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
+                    // Delay showing controls by 0.1s after animation starts
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                             showControls = true
                         }
                     }
                 } else {
                     // Hide controls quickly when mouse leaves
-                    withAnimation(.easeOut(duration: 0.2)) {
+                    withAnimation(.easeOut(duration: 0.18)) {
                         showControls = false
                     }
                 }
