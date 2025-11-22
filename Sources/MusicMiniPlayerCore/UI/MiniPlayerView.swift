@@ -17,12 +17,12 @@ struct BlurModifier: AnimatableModifier {
 extension AnyTransition {
     static var blurFadeSlide: AnyTransition {
         AnyTransition.modifier(
-            active: BlurModifier(blurRadius: 20.0),
+            active: BlurModifier(blurRadius: 30.0),
             identity: BlurModifier(blurRadius: 0.0)
         )
         .combined(with: .opacity)
-        .combined(with: .scale(scale: 0.9, anchor: .bottom))
-        .combined(with: .offset(y: 20))
+        .combined(with: .scale(scale: 0.85, anchor: .bottom))
+        .combined(with: .offset(y: 30))
     }
 }
 
@@ -269,20 +269,22 @@ public struct MiniPlayerView: View {
                 }
             }
             .onHover { hovering in
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                // Animation for album art - slower and smoother
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
                     isHovering = hovering
                 }
 
                 if hovering {
-                    // Delay showing controls by 0.1 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    // Delay showing controls AFTER album art animation completes
+                    // Album art animation takes ~0.45s, so delay by that amount
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
                             showControls = true
                         }
                     }
                 } else {
                     // Hide controls quickly when mouse leaves
-                    withAnimation(.easeOut(duration: 0.15)) {
+                    withAnimation(.easeOut(duration: 0.2)) {
                         showControls = false
                     }
                 }
