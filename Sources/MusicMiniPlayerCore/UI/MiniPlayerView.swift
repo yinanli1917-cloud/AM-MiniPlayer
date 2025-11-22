@@ -15,11 +15,14 @@ struct BlurModifier: AnimatableModifier {
 }
 
 extension AnyTransition {
-    static var blurFade: AnyTransition {
+    static var blurFadeSlide: AnyTransition {
         AnyTransition.modifier(
-            active: BlurModifier(blurRadius: 10.0),
+            active: BlurModifier(blurRadius: 20.0),
             identity: BlurModifier(blurRadius: 0.0)
-        ).combined(with: .opacity)
+        )
+        .combined(with: .opacity)
+        .combined(with: .scale(scale: 0.9, anchor: .bottom))
+        .combined(with: .offset(y: 20))
     }
 }
 
@@ -120,7 +123,6 @@ public struct MiniPlayerView: View {
                                 .cornerRadius(12)
                                 .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
                                 .matchedGeometryEffect(id: "albumArt", in: animation)
-                                .animation(.spring(response: 0.5, dampingFraction: 0.75), value: isHovering)
                                 .onTapGesture {
                                     withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                                         isFlipped.toggle()
@@ -240,8 +242,8 @@ public struct MiniPlayerView: View {
                                     .padding(.top, 0)
                                     .transition(
                                         .asymmetric(
-                                            insertion: .blurFade.combined(with: .move(edge: .bottom)),
-                                            removal: .opacity
+                                            insertion: .blurFadeSlide,
+                                            removal: .opacity.combined(with: .scale(scale: 0.95))
                                         )
                                     )
                                 }
@@ -267,20 +269,20 @@ public struct MiniPlayerView: View {
                 }
             }
             .onHover { hovering in
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     isHovering = hovering
                 }
 
                 if hovering {
-                    // Delay showing controls by 0.2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
+                    // Delay showing controls by 0.1 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             showControls = true
                         }
                     }
                 } else {
-                    // Hide controls immediately when mouse leaves
-                    withAnimation(.easeOut(duration: 0.2)) {
+                    // Hide controls quickly when mouse leaves
+                    withAnimation(.easeOut(duration: 0.15)) {
                         showControls = false
                     }
                 }
