@@ -15,17 +15,17 @@ public struct LiquidBackgroundView: View {
                 .fill(.clear)
                 .ignoresSafeArea()
 
-            // 2. Liquid Glass Effect with dynamic tint
+            // 2. Liquid Glass Effect with dynamic tint (clear style for more transparency)
             if let color = dominantColor {
                 Rectangle()
-                    .fill(Color(nsColor: color))
-                    .glassEffect(.regular.tint(Color(nsColor: color)))
+                    .fill(.clear)
+                    .glassEffect(.clear.tint(Color(nsColor: color).opacity(0.3)))
                     .ignoresSafeArea()
             } else {
-                // Fallback: regular glass without tint
+                // Fallback: clear glass without tint
                 Rectangle()
                     .fill(.clear)
-                    .glassEffect(.regular)
+                    .glassEffect(.clear)
                     .ignoresSafeArea()
             }
         }
