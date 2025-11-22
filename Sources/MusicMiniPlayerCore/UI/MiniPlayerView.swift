@@ -22,34 +22,23 @@ public struct MiniPlayerView: View {
                             let artSize = geometry.size.width * 0.60 // Reduced to 60% for better padding balance
                             
                             ZStack(alignment: .bottom) {
-                                // 1. Original Artwork (clear)
+                                // 1. Artwork with Metal Progressive Blur Shader
                                 Image(nsImage: artwork)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                                     .frame(width: artSize, height: artSize)
-                                    .clipped()
-
-                                // 2. Progressive Blur Overlay (only bottom 30%)
-                                Image(nsImage: artwork)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: artSize, height: artSize)
-                                    .blur(radius: 60, opaque: false)
-                                    .clipped()
-                                    .mask(
-                                        // Progressive mask: bottom 30% region
-                                        LinearGradient(
-                                            gradient: Gradient(stops: [
-                                                .init(color: .clear, location: 0.0),      // Top: clear
-                                                .init(color: .clear, location: 0.7),      // 70%: still clear
-                                                .init(color: .black, location: 1.0)        // 100%: full blur
-                                            ]),
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
+                                    .layerEffect(
+                                        ShaderLibrary.progressiveBlur(
+                                            .float2(artSize, artSize),
+                                            .float(0.70),    // blurStart: 70% down from top
+                                            .float(1.0),     // blurEnd: 100% (bottom)
+                                            .float(30.0)     // maxRadius: 30px blur
+                                        ),
+                                        maxSampleOffset: CGSize(width: 30, height: 30)
                                     )
+                                    .clipped()
 
-                                // 3. Dark Gradient for Text Readability (also only bottom region)
+                                // 2. Dark Gradient for Text Readability
                                 LinearGradient(
                                     gradient: Gradient(colors: [.clear, .black.opacity(0.7)]),
                                     startPoint: .top,
@@ -57,8 +46,8 @@ public struct MiniPlayerView: View {
                                 )
                                 .frame(width: artSize, height: artSize * 0.4)
                                 .allowsHitTesting(false)
-                                
-                                // 4. Text Info
+
+                                // 3. Text Info
                                 VStack(spacing: 4) {
                                     Text(musicController.currentTrackTitle)
                                         .font(.system(size: 15, weight: .bold))
