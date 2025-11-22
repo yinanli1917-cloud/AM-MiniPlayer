@@ -22,21 +22,36 @@ public struct MiniPlayerView: View {
                             let artSize = geometry.size.width * 0.60 // Reduced to 60% for better padding balance
                             
                             ZStack(alignment: .bottom) {
-                                // 1. Artwork with Metal Progressive Blur Shader
-                                Image(nsImage: artwork)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: artSize, height: artSize)
-                                    .layerEffect(
-                                        ShaderLibrary.progressiveBlur(
-                                            .float2(artSize, artSize),
-                                            .float(0.70),    // blurStart: 70% down from top
-                                            .float(1.0),     // blurEnd: 100% (bottom)
-                                            .float(30.0)     // maxRadius: 30px blur
-                                        ),
-                                        maxSampleOffset: CGSize(width: 30, height: 30)
-                                    )
-                                    .clipped()
+                                // 1. Artwork with Progressive Blur via Overlay
+                                ZStack {
+                                    // Base artwork (sharp)
+                                    Image(nsImage: artwork)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: artSize, height: artSize)
+
+                                    // Blurred version (only bottom 30%)
+                                    GeometryReader { geo in
+                                        Image(nsImage: artwork)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .frame(width: artSize, height: artSize)
+                                            .blur(radius: 50)
+                                            .mask(
+                                                LinearGradient(
+                                                    gradient: Gradient(stops: [
+                                                        .init(color: .clear, location: 0.0),
+                                                        .init(color: .clear, location: 0.7),
+                                                        .init(color: .black, location: 1.0)
+                                                    ]),
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
+                                                )
+                                            )
+                                    }
+                                }
+                                .frame(width: artSize, height: artSize)
+                                .clipped()
 
                                 // 2. Dark Gradient for Text Readability
                                 LinearGradient(

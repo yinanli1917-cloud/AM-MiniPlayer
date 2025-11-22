@@ -39,7 +39,7 @@ public struct LiquidBackgroundView: View {
         .onAppear {
             updateColor()
         }
-        .onChange(of: artwork) { _ in
+        .onChange(of: artwork) {
             updateColor()
         }
     }
