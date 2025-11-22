@@ -89,10 +89,56 @@ public struct MiniPlayerView: View {
                         }
 
                         Spacer() // Equal spacing bottom
-                        
+
                         // Bottom Controls Container
                         VStack(spacing: 12) {
-                            // Main Controls Row (Absolute Centering)
+
+                            // 1. Time - Lossless Badge - Duration
+                            HStack {
+                                Text("0:07")
+                                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .frame(width: 30, alignment: .leading)
+
+                                Spacer()
+
+                                // Lossless Badge
+                                HStack(spacing: 2) {
+                                    Image(systemName: "waveform")
+                                        .font(.system(size: 8))
+                                    Text("Lossless")
+                                        .font(.system(size: 9, weight: .semibold))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(4)
+                                .foregroundColor(.white.opacity(0.9))
+
+                                Spacer()
+
+                                Text("-4:11")
+                                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .frame(width: 30, alignment: .trailing)
+                            }
+                            .padding(.horizontal, 8)
+
+                            // 2. Progress Bar
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule()
+                                        .fill(Color.white.opacity(0.2))
+                                        .frame(height: 4)
+
+                                    Capsule()
+                                        .fill(Color.white)
+                                        .frame(width: geo.size.width * 0.3, height: 4)
+                                }
+                            }
+                            .frame(height: 4)
+
+                            // 3. Main Controls Row (Absolute Centering)
                             ZStack {
                                 // Left: Volume
                                 HStack {
