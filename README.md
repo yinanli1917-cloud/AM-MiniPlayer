@@ -156,10 +156,43 @@ Sources/
 
 ### Design Principles
 
-- **Liquid Glass**: Native NSVisualEffectView with dynamic color tinting
+- **Liquid Glass**: Using `.glassEffect()` modifier (macOS 26.0+)
+  - Three styles: `.regular`, `.clear`, `.identity`
+  - Dynamic tinting: `.glassEffect(.regular.tint(Color))`
+  - Interactive mode: `.glassEffect(.regular.interactive())` for controls
+  - Custom shapes: `.glassEffect(.regular, in: .circle)`
+  - Auto-adapts to background content (light/dark mode)
 - **Progressive Blur**: Gradient mask simulation (future: Metal shader)
 - **Animations**: Spring-based transitions (0.6s response, 0.8 damping)
 - **Typography**: SF Pro, Bold for active elements, Regular with opacity for inactive
+
+### Liquid Glass Implementation Notes
+
+The `.glassEffect()` modifier is the official SwiftUI API for Liquid Glass (introduced in iOS 26 / macOS 26.0):
+
+**Basic Usage:**
+```swift
+Rectangle()
+    .glassEffect(.regular)
+```
+
+**With Dynamic Tinting:**
+```swift
+Rectangle()
+    .fill(dominantColor)
+    .glassEffect(.regular.tint(dominantColor))
+```
+
+**Key Characteristics:**
+- Automatically interacts with desktop wallpaper and underlying content
+- Creates light-bending translucent effect
+- Adapts appearance based on background (may shift between light/dark)
+- For controls with user interaction, use `.interactive()` variant
+
+**References:**
+- [Official Documentation](https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:))
+- [WWDC 2025 Session](https://developer.apple.com/videos/play/wwdc2025/323/)
+- [Tutorial: Applying Liquid Glass to Custom Views](https://developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views)
 
 ## Git Workflow
 
