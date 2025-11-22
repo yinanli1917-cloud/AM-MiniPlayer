@@ -31,24 +31,23 @@ public struct MiniPlayerView: View {
                                         .frame(width: artSize, height: artSize)
 
                                     // Blurred version (only bottom 30%)
-                                    GeometryReader { geo in
-                                        Image(nsImage: artwork)
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fill)
-                                            .frame(width: artSize, height: artSize)
-                                            .blur(radius: 50)
-                                            .mask(
-                                                LinearGradient(
-                                                    gradient: Gradient(stops: [
-                                                        .init(color: .clear, location: 0.0),
-                                                        .init(color: .clear, location: 0.7),
-                                                        .init(color: .black, location: 1.0)
-                                                    ]),
-                                                    startPoint: .top,
-                                                    endPoint: .bottom
-                                                )
+                                    Image(nsImage: artwork)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: artSize, height: artSize)
+                                        .blur(radius: 80)
+                                        .mask(
+                                            LinearGradient(
+                                                gradient: Gradient(stops: [
+                                                    .init(color: .clear, location: 0.0),
+                                                    .init(color: .clear, location: 0.65),
+                                                    .init(color: .black.opacity(0.5), location: 0.80),
+                                                    .init(color: .black, location: 1.0)
+                                                ]),
+                                                startPoint: .top,
+                                                endPoint: .bottom
                                             )
-                                    }
+                                        )
                                 }
                                 .frame(width: artSize, height: artSize)
                                 .clipped()
