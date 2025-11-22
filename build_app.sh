@@ -37,9 +37,15 @@ cat > MusicMiniPlayer.app/Contents/Info.plist << 'PLIST'
     <string>MusicMiniPlayer needs access to control Music.app playback</string>
     <key>NSAppleMusicUsageDescription</key>
     <string>MusicMiniPlayer displays your currently playing music and lyrics</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
 PLIST
+
+echo "🎨 Compiling assets..."
+xcrun actool Sources/MusicMiniPlayerCore/Resources/AppIcon.icon --compile MusicMiniPlayer.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --output-partial-info-plist partial_info.plist
+rm partial_info.plist
 
 echo "✅ App bundle created at MusicMiniPlayer.app"
 echo "🚀 You can now open it with: open MusicMiniPlayer.app"
