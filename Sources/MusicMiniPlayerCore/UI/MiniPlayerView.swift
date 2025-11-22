@@ -3,7 +3,9 @@ import SwiftUI
 public struct MiniPlayerView: View {
     @EnvironmentObject var musicController: MusicController
     @State private var isFlipped: Bool = false
-    
+    @State private var isHovering: Bool = false
+    @Namespace private var animation
+
     public init() {}
     
     public var body: some View {
@@ -15,191 +17,210 @@ public struct MiniPlayerView: View {
                 // Content
                 VStack(spacing: 0) {
                     if !isFlipped {
-                        Spacer() // Equal spacing top
-
-                        // Album Art with Progressive Blur and Text
+                        // Album Art with Track Info
                         if let artwork = musicController.currentArtwork {
-                            let artSize = geometry.size.width * 0.60 // Reduced to 60% for better padding balance
-                            
-                            ZStack(alignment: .bottom) {
-                                // 1. Artwork with Progressive Blur via Overlay
-                                ZStack {
-                                    // Base artwork (sharp)
-                                    Image(nsImage: artwork)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: artSize, height: artSize)
+                            VStack(spacing: 0) {
+                                // Top Spacer - dynamic based on hover
+                                Spacer()
+                                    .frame(height: isHovering ? 24 : nil)
 
-                                    // Blurred version (only bottom 30%)
-                                    Image(nsImage: artwork)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: artSize, height: artSize)
-                                        .blur(radius: 80)
-                                        .mask(
-                                            LinearGradient(
-                                                gradient: Gradient(stops: [
-                                                    .init(color: .clear, location: 0.0),
-                                                    .init(color: .clear, location: 0.65),
-                                                    .init(color: .black.opacity(0.5), location: 0.80),
-                                                    .init(color: .black, location: 1.0)
-                                                ]),
-                                                startPoint: .top,
-                                                endPoint: .bottom
+                                if !isHovering {
+                                    Spacer()
+                                }
+
+                                // Album Artwork
+                                ZStack(alignment: .bottom) {
+                                    // Artwork with Progressive Blur
+                                    ZStack {
+                                        Image(nsImage: artwork)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .frame(
+                                                width: isHovering ? geometry.size.width * 0.50 : geometry.size.width * 0.70,
+                                                height: isHovering ? geometry.size.width * 0.50 : geometry.size.width * 0.70
                                             )
-                                        )
-                                }
-                                .frame(width: artSize, height: artSize)
-                                .clipped()
 
-                                // 2. Dark Gradient for Text Readability
-                                LinearGradient(
-                                    gradient: Gradient(colors: [.clear, .black.opacity(0.7)]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                                .frame(width: artSize, height: artSize * 0.4)
-                                .allowsHitTesting(false)
+                                        Image(nsImage: artwork)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .frame(
+                                                width: isHovering ? geometry.size.width * 0.50 : geometry.size.width * 0.70,
+                                                height: isHovering ? geometry.size.width * 0.50 : geometry.size.width * 0.70
+                                            )
+                                            .blur(radius: 80)
+                                            .mask(
+                                                LinearGradient(
+                                                    gradient: Gradient(stops: [
+                                                        .init(color: .clear, location: 0.0),
+                                                        .init(color: .clear, location: 0.65),
+                                                        .init(color: .black.opacity(0.5), location: 0.80),
+                                                        .init(color: .black, location: 1.0)
+                                                    ]),
+                                                    startPoint: .top,
+                                                    endPoint: .bottom
+                                                )
+                                            )
+                                    }
+                                    .clipped()
 
-                                // 3. Text Info
-                                VStack(spacing: 4) {
-                                    Text(musicController.currentTrackTitle)
-                                        .font(.system(size: 15, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .lineLimit(1)
-                                        .shadow(radius: 2)
-                                    
-                                    Text(musicController.currentArtist)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .lineLimit(1)
-                                        .shadow(radius: 2)
+                                    // Dark Gradient for Text
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [.clear, .black.opacity(0.7)]),
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                    .frame(
+                                        width: isHovering ? geometry.size.width * 0.50 : geometry.size.width * 0.70,
+                                        height: (isHovering ? geometry.size.width * 0.50 : geometry.size.width * 0.70) * 0.4
+                                    )
+                                    .allowsHitTesting(false)
+
+                                    // Track Info
+                                    VStack(spacing: 4) {
+                                        Text(musicController.currentTrackTitle)
+                                            .font(.system(size: isHovering ? 14 : 16, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .lineLimit(1)
+                                            .shadow(radius: 2)
+
+                                        Text(musicController.currentArtist)
+                                            .font(.system(size: isHovering ? 12 : 14, weight: .medium))
+                                            .foregroundColor(.white.opacity(0.8))
+                                            .lineLimit(1)
+                                            .shadow(radius: 2)
+                                    }
+                                    .padding(.bottom, 12)
+                                    .padding(.horizontal, 12)
                                 }
-                                .padding(.bottom, 16)
-                                .padding(.horizontal, 12)
-                                .frame(width: artSize)
-                            }
-                            .cornerRadius(12)
-                            .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
-                            .onTapGesture {
-                                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                    isFlipped.toggle()
+                                .cornerRadius(12)
+                                .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
+                                .matchedGeometryEffect(id: "albumArt", in: animation)
+                                .onTapGesture {
+                                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                                        isFlipped.toggle()
+                                    }
+                                }
+
+                                if !isHovering {
+                                    Spacer()
+                                }
+
+                                // Controls - only visible on hover
+                                if isHovering {
+                                    VStack(spacing: 12) {
+                                        // Time & Lossless Badge
+                                        HStack {
+                                            Text("0:07")
+                                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                                .foregroundColor(.white.opacity(0.6))
+                                                .frame(width: 30, alignment: .leading)
+
+                                            Spacer()
+
+                                            HStack(spacing: 2) {
+                                                Image(systemName: "waveform")
+                                                    .font(.system(size: 8))
+                                                Text("Lossless")
+                                                    .font(.system(size: 9, weight: .semibold))
+                                            }
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(.ultraThinMaterial)
+                                            .cornerRadius(4)
+                                            .foregroundColor(.white.opacity(0.9))
+
+                                            Spacer()
+
+                                            Text("-4:11")
+                                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                                .foregroundColor(.white.opacity(0.6))
+                                                .frame(width: 30, alignment: .trailing)
+                                        }
+                                        .padding(.horizontal, 8)
+
+                                        // Progress Bar
+                                        GeometryReader { geo in
+                                            ZStack(alignment: .leading) {
+                                                Capsule()
+                                                    .fill(Color.white.opacity(0.2))
+                                                    .frame(height: 4)
+
+                                                Capsule()
+                                                    .fill(Color.white)
+                                                    .frame(width: geo.size.width * 0.3, height: 4)
+                                            }
+                                        }
+                                        .frame(height: 4)
+
+                                        // Playback Controls
+                                        ZStack {
+                                            HStack {
+                                                Button(action: {}) {
+                                                    Image(systemName: "speaker.wave.2.fill")
+                                                        .font(.system(size: 14))
+                                                        .foregroundColor(.white.opacity(0.7))
+                                                }
+                                                .frame(width: 40)
+                                                Spacer()
+                                            }
+
+                                            HStack(spacing: 24) {
+                                                Button(action: musicController.previousTrack) {
+                                                    Image(systemName: "backward.fill")
+                                                        .font(.system(size: 18))
+                                                        .foregroundColor(.white)
+                                                }
+
+                                                Button(action: musicController.togglePlayPause) {
+                                                    Image(systemName: musicController.isPlaying ? "pause.fill" : "play.fill")
+                                                        .font(.system(size: 32))
+                                                        .foregroundColor(.white)
+                                                }
+
+                                                Button(action: musicController.nextTrack) {
+                                                    Image(systemName: "forward.fill")
+                                                        .font(.system(size: 18))
+                                                        .foregroundColor(.white)
+                                                }
+                                            }
+
+                                            HStack {
+                                                Spacer()
+                                                HStack(spacing: 16) {
+                                                    Button(action: { withAnimation { isFlipped.toggle() } }) {
+                                                        Image(systemName: "quote.bubble")
+                                                            .font(.system(size: 14))
+                                                            .foregroundColor(.white.opacity(0.7))
+                                                    }
+
+                                                    Button(action: {}) {
+                                                        Image(systemName: "list.bullet")
+                                                            .font(.system(size: 14))
+                                                            .foregroundColor(.white.opacity(0.7))
+                                                    }
+                                                }
+                                                .frame(width: 60, alignment: .trailing)
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 20)
+                                    .padding(.top, 16)
+                                    .transition(.asymmetric(
+                                        insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                        removal: .opacity
+                                    ))
                                 }
                             }
                         } else {
+                            Spacer()
                             RoundedRectangle(cornerRadius: 12)
                                 .fill(Color.gray.opacity(0.3))
-                                .frame(width: geometry.size.width * 0.60, height: geometry.size.width * 0.60)
+                                .frame(width: geometry.size.width * 0.70, height: geometry.size.width * 0.70)
                                 .overlay(Text("No Art").foregroundColor(.white))
+                            Spacer()
                         }
-
-                        Spacer() // Equal spacing bottom
-
-                        // Bottom Controls Container
-                        VStack(spacing: 12) {
-
-                            // 1. Time - Lossless Badge - Duration
-                            HStack {
-                                Text("0:07")
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .frame(width: 30, alignment: .leading)
-
-                                Spacer()
-
-                                // Lossless Badge
-                                HStack(spacing: 2) {
-                                    Image(systemName: "waveform")
-                                        .font(.system(size: 8))
-                                    Text("Lossless")
-                                        .font(.system(size: 9, weight: .semibold))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(4)
-                                .foregroundColor(.white.opacity(0.9))
-
-                                Spacer()
-
-                                Text("-4:11")
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .frame(width: 30, alignment: .trailing)
-                            }
-                            .padding(.horizontal, 8)
-
-                            // 2. Progress Bar
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule()
-                                        .fill(Color.white.opacity(0.2))
-                                        .frame(height: 4)
-
-                                    Capsule()
-                                        .fill(Color.white)
-                                        .frame(width: geo.size.width * 0.3, height: 4)
-                                }
-                            }
-                            .frame(height: 4)
-
-                            // 3. Main Controls Row (Absolute Centering)
-                            ZStack {
-                                // Left: Volume
-                                HStack {
-                                    Button(action: {}) {
-                                        Image(systemName: "speaker.wave.2.fill")
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.white.opacity(0.7))
-                                    }
-                                    .frame(width: 40)
-                                    Spacer()
-                                }
-                                
-                                // Center: Playback Controls
-                                HStack(spacing: 24) { // Increased spacing for better touch targets
-                                    Button(action: musicController.previousTrack) {
-                                        Image(systemName: "backward.fill")
-                                            .font(.system(size: 18))
-                                            .foregroundColor(.white)
-                                    }
-                                    
-                                    Button(action: musicController.togglePlayPause) {
-                                        Image(systemName: musicController.isPlaying ? "pause.fill" : "play.fill")
-                                            .font(.system(size: 32))
-                                            .foregroundColor(.white)
-                                    }
-                                    
-                                    Button(action: musicController.nextTrack) {
-                                        Image(systemName: "forward.fill")
-                                            .font(.system(size: 18))
-                                            .foregroundColor(.white)
-                                    }
-                                }
-                                
-                                // Right: Lyrics & List
-                                HStack {
-                                    Spacer()
-                                    HStack(spacing: 16) {
-                                        Button(action: { withAnimation { isFlipped.toggle() } }) {
-                                            Image(systemName: "quote.bubble")
-                                                .font(.system(size: 14))
-                                                .foregroundColor(isFlipped ? .white : .white.opacity(0.7))
-                                        }
-                                        
-                                        Button(action: {}) {
-                                            Image(systemName: "list.bullet")
-                                                .font(.system(size: 14))
-                                                .foregroundColor(.white.opacity(0.7))
-                                        }
-                                    }
-                                    .frame(width: 60, alignment: .trailing)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 20)
                     } else {
                         // Lyrics View
                         LyricsView()
@@ -210,6 +231,11 @@ public struct MiniPlayerView: View {
                             }
                             .transition(.opacity)
                     }
+                }
+            }
+            .onHover { hovering in
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
+                    isHovering = hovering
                 }
             }
         }
