@@ -1,0 +1,31 @@
+# Tasks
+
+- [x] Research & Feasibility Analysis <!-- id: 0 -->
+    - [x] Verify "Liquid Glass" documentation and SwiftUI implementation <!-- id: 1 -->
+    - [x] Analyze `Tuneful` repository for Apple Music control and architecture <!-- id: 2 -->
+    - [x] Analyze lyrics repositories (`applemusic-like-lyrics`, `Manzana-Apple-Music-Lyrics`) <!-- id: 3 -->
+    - [x] Investigate macOS Menu Bar and PIP implementation in SwiftUI <!-- id: 4 -->
+- [x] PRD & Design Guidelines <!-- id: 5 -->
+    - [x] Draft Product Requirements Document (PRD) <!-- id: 6 -->
+    - [x] Create Design Guidelines for Figma (Auto Layout, Blur/Glass limits) <!-- id: 7 -->
+    - [x] Define Technical Stack & Best Practices <!-- id: 8 -->
+- [x] Project Setup <!-- id: 9 -->
+    - [x] Initialize Project Structure <!-- id: 10 -->
+    - [x] Set up Git repository <!-- id: 11 -->
+- [x] Core Logic Implementation <!-- id: 12 -->
+    - [x] Implement Apple Music Control Service (ScriptingBridge) <!-- id: 13 -->
+    - [x] Implement Lyrics Fetching Service (Mock for MVP) <!-- id: 14 -->
+    - [ ] Implement Album Art Fetching <!-- id: 15 -->
+- [x] UI Implementation <!-- id: 16 -->
+    - [x] Create Base "Liquid Glass" Background View <!-- id: 17 -->
+    - [x] Implement Progressive Blur Shader (Simulated via Mask) <!-- id: 18 -->
+    - [x] Build Mini Player Main View <!-- id: 19 -->
+    - [x] Implement Flip Animation for Lyrics <!-- id: 20 -->
+    - [x] Build Scrolling Lyrics View <!-- id: 21 -->
+    - [x] Implement Menu Bar Extra <!-- id: 22 -->
+    - [ ] Implement PIP (Picture-in-Picture) Window Logic <!-- id: 23 -->
+    - [ ] Add Trackpad Gestures (Swipe for Next/Prev) <!-- id: 24 -->
+- [ ] Verification & Polish <!-- id: 25 -->
+    - [ ] Verify Animations and Transitions <!-- id: 26 -->
+    - [ ] Test with various macOS versions (if applicable) <!-- id: 27 -->
+    - [ ] Performance Profiling (Memory/CPU) <!-- id: 28 -->
