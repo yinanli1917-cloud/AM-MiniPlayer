@@ -29,28 +29,25 @@ public struct MiniPlayerView: View {
                                     .frame(width: artSize, height: artSize)
                                     .clipped()
 
-                                // 2. Progressive Blur Overlay (only bottom 20%)
-                                ZStack(alignment: .bottom) {
-                                    // Blurred version
-                                    Image(nsImage: artwork)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: artSize, height: artSize)
-                                        .blur(radius: 40)
-                                        .clipped()
-                                }
-                                .frame(width: artSize, height: artSize * 0.2, alignment: .bottom)
-                                .mask(
-                                    // Progressive mask: fully visible at bottom (1.0) → fade out at top (0.0)
-                                    LinearGradient(
-                                        gradient: Gradient(stops: [
-                                            .init(color: .clear, location: 0.0),     // Top of 20% region: invisible
-                                            .init(color: .black, location: 1.0)       // Bottom: fully visible
-                                        ]),
-                                        startPoint: .top,
-                                        endPoint: .bottom
+                                // 2. Progressive Blur Overlay (only bottom 30%)
+                                Image(nsImage: artwork)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: artSize, height: artSize)
+                                    .blur(radius: 60, opaque: false)
+                                    .clipped()
+                                    .mask(
+                                        // Progressive mask: bottom 30% region
+                                        LinearGradient(
+                                            gradient: Gradient(stops: [
+                                                .init(color: .clear, location: 0.0),      // Top: clear
+                                                .init(color: .clear, location: 0.7),      // 70%: still clear
+                                                .init(color: .black, location: 1.0)        // 100%: full blur
+                                            ]),
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
                                     )
-                                )
 
                                 // 3. Dark Gradient for Text Readability (also only bottom region)
                                 LinearGradient(
