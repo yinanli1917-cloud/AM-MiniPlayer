@@ -15,14 +15,21 @@ public struct LiquidBackgroundView: View {
                 .fill(.clear)
                 .ignoresSafeArea()
 
-            // 2. Liquid Glass Effect with dynamic tint and rounded rectangle shape
+            // 2. Semi-transparent color layer (preserves the vibrant color)
+            if let color = dominantColor {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(nsColor: color).opacity(0.4))
+                    .ignoresSafeArea()
+            }
+
+            // 3. Liquid Glass Effect on top (adds the glass refraction)
             if let color = dominantColor {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(.clear)
-                    .glassEffect(.clear.tint(Color(nsColor: color).opacity(0.3)), in: .rect(cornerRadius: 16))
+                    .glassEffect(.clear.tint(Color(nsColor: color).opacity(0.6)), in: .rect(cornerRadius: 16))
                     .ignoresSafeArea()
             } else {
-                // Fallback: clear glass without tint, still with rounded rectangle
+                // Fallback: clear glass without tint
                 RoundedRectangle(cornerRadius: 16)
                     .fill(.clear)
                     .glassEffect(.clear, in: .rect(cornerRadius: 16))
