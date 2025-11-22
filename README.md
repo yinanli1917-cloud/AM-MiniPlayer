@@ -1,215 +1,122 @@
-# Music Mini Player
+# Music Mini Player for macOS
 
-A premium macOS Mini Player for Apple Music with Liquid Glass effects and Time-Synced Lyrics.
+一个精美的 macOS 菜单栏音乐播放器，带有歌词显示和流畅动画。
 
-> **Target Platform**: macOS 26.0+ (Liquid Glass requires latest macOS features)
+## ✨ 特性
 
-## Quick Start
+- 🎵 **菜单栏迷你播放器** - 占用空间小，随时可用
+- 🎨 **动态背景** - 根据专辑封面自动提取颜色
+- 📝 **歌词显示** - 支持时间同步的歌词滚动
+- 🎭 **3D 翻转动画** - 优雅的页面切换效果
+- 📋 **播放列表** - 查看播放历史和队列
+- ⚡ **流畅动画** - 细腻的过渡效果
 
-### Running the App
+## 🚀 快速开始
 
-1. **Open in Xcode**:
+### 方法一：直接使用 .app（推荐）
+
+1. 打开应用：
    ```bash
-   open Package.swift
+   open MusicMiniPlayer.app
    ```
 
-2. **Permissions**:
-   - First run will request permission to control "Music.app"
-   - If not prompted: `System Settings → Privacy & Security → Automation`
+2. 应用会出现在菜单栏，点击音乐图标即可使用
 
-3. **Features**:
-   - **Menu Bar**: Music note icon in menu bar
-   - **Mini Player**: Click album art to flip to lyrics
-   - **Lyrics**: Currently uses simulated data for demonstration
+### 方法二：从源码构建
 
-### Building from Source
+1. 构建并创建 .app：
+   ```bash
+   ./build_app.sh
+   ```
+
+2. 启动应用：
+   ```bash
+   open MusicMiniPlayer.app
+   ```
+
+## 📖 使用说明
+
+### 页面切换
+
+- **专辑页** → **歌词页**：点击左下角的对话气泡图标 💬
+- **专辑页** → **播放列表**：点击右下角的列表图标 📋
+- **返回专辑页**：在任何页面点击相应图标即可返回
+
+### 控制操作
+
+- **播放/暂停**：点击中央播放按钮
+- **上一曲/下一曲**：点击左右箭头
+- **进度控制**：鼠标悬停在进度条上会变粗，可拖动调整
+- **查看歌词**：切换到歌词页，歌词会自动同步滚动
+
+## 🎵 歌词功能
+
+### 歌词来源
+
+应用会自动从以下来源获取歌词：
+1. **LRCLIB** - 优先，支持时间同步
+2. **lyrics.ovh** - 备选，纯文本歌词
+
+### 歌词同步
+
+- 歌词提前 600ms 开始动画
+- 滚动和模糊效果完全同步
+- 当前行高亮显示，其他行渐进模糊
+
+## 🛠 技术栈
+
+- **Swift** - 核心语言
+- **SwiftUI** - UI 框架
+- **MusicKit** - 音乐播放控制
+- **ScriptingBridge** - Music.app 集成
+
+## 📝 开发说明
+
+### 项目结构
+
+```
+MusicMiniPlayer/
+├── Sources/
+│   ├── MusicMiniPlayerApp/      # 主应用
+│   └── MusicMiniPlayerCore/     # 核心功能
+│       ├── Services/            # 服务层
+│       │   ├── MusicController.swift
+│       │   ├── LyricsService.swift
+│       │   └── NSImage+AverageColor.swift
+│       └── UI/                  # UI 组件
+│           ├── MiniPlayerView.swift
+│           ├── LyricsView.swift
+│           ├── PlaylistView.swift
+│           └── LiquidBackgroundView.swift
+├── Package.swift
+└── build_app.sh                 # 构建脚本
+```
+
+### 构建命令
 
 ```bash
+# Debug 构建
 swift build
-swift run
+
+# Release 构建
+swift build -c release
+
+# 创建 .app 包
+./build_app.sh
 ```
 
-## Project Architecture
+## 🎨 动画参数
 
-```
-Sources/
-├── MusicMiniPlayerApp/
-│   └── MusicMiniPlayerApp.swift          # App entry point, MenuBarExtra + Window setup
-└── MusicMiniPlayerCore/
-    ├── Services/
-    │   ├── MusicController.swift         # ScriptingBridge for Apple Music control
-    │   ├── LyricsService.swift           # Lyrics fetching & time-sync logic
-    │   └── NSImage+AverageColor.swift    # Dominant color extraction
-    └── UI/
-        ├── MiniPlayerView.swift          # Main player UI with flip animation
-        ├── LyricsView.swift              # Scrolling time-synced lyrics
-        ├── LiquidBackgroundView.swift    # Dynamic glass effect with album colors
-        └── VisualEffectView.swift        # NSVisualEffectView wrapper
-```
+- **歌词切换**：600ms easeInOut
+- **页面翻转**：600ms spring (response: 0.6, damping: 0.8)
+- **进度条放大**：1.05x scale on hover
+- **控制显示**：300ms blur fade + 50ms delay
 
-### Technical Stack
+## 📄 许可证
 
-- **Language**: Swift 5.9+
-- **Framework**: SwiftUI (100%)
-- **Music Control**: ScriptingBridge for Apple Music
-- **Visual Effects**: NSVisualEffectView + Dynamic Color Extraction
-- **Window Management**: MenuBarExtra + Custom Window Styling
+MIT License
 
-## Current Status
+## 🙏 致谢
 
-### ✅ Completed Features
-
-- [x] **Core Architecture**
-  - [x] Swift Package Manager setup
-  - [x] Modular design (App + Core library)
-
-- [x] **Apple Music Integration**
-  - [x] ScriptingBridge integration
-  - [x] Playback controls (Play/Pause, Next/Previous)
-  - [x] Real-time track info (Title, Artist, Album)
-  - [x] Playback state monitoring (Polling + DistributedNotification)
-  - [x] Playback progress tracking
-  - [x] Album artwork fetching (basic implementation)
-
-- [x] **UI Implementation**
-  - [x] Menu Bar Extra
-  - [x] Floating PIP window (basic)
-  - [x] Liquid Glass background effect
-  - [x] Dynamic theme color from album art
-  - [x] Mini Player main view with controls
-  - [x] Progress bar UI (static)
-  - [x] Lossless quality badge
-  - [x] Flip animation (Album Art ↔ Lyrics)
-  - [x] Scrolling lyrics view with auto-scroll
-  - [x] Active line highlighting
-
-- [x] **Lyrics System**
-  - [x] Lyrics data model
-  - [x] Time-sync engine
-  - [x] Mock lyrics generator (for demo)
-
-### 🔴 Remaining Features
-
-#### High Priority
-
-- [ ] **Album Artwork Caching**
-  - Current: Only fetches once, doesn't update on track change
-  - Need: Smart caching with Track Persistent ID comparison
-
-- [ ] **Interactive Progress Bar**
-  - Current: Static display
-  - Need: Real-time updates + drag to seek
-
-- [ ] **Real Lyrics Fetching**
-  - Current: Mock data only
-  - Need: Apple Music Web scraping (port logic from [Manzana](https://github.com/dropcreations/Manzana-Apple-Music-Lyrics))
-  - Alternative: Third-party lyrics API integration
-
-- [ ] **Trackpad Gestures**
-  - Missing: Two-finger swipe to change tracks
-  - Implementation: NSGestureRecognizer or SwiftUI gestures
-
-#### Medium Priority
-
-- [ ] **PIP Window Enhancement**
-  - Always-on-top behavior
-  - Window position persistence (UserDefaults)
-  - Drag visual feedback
-
-- [ ] **Volume Control**
-  - UI exists but non-functional
-  - Need: System volume API integration
-
-- [ ] **Playlist View**
-  - Current: Button only
-  - Need: Display current play queue
-
-#### Low Priority (Polish)
-
-- [ ] **Visual Effects Enhancement**
-  - Metal shader for true progressive blur
-  - Hover show/hide animations
-  - Smoother transitions
-
-- [ ] **Performance Optimization**
-  - Memory profiling
-  - CPU optimization (color extraction)
-  - Reduce ScriptingBridge polling frequency
-
-- [ ] **Testing**
-  - Edge case handling (Music app not running, no track, etc.)
-  - Performance benchmarking
-
-## Technical Notes
-
-### References
-
-- **Tuneful**: [martinfekete10/Tuneful](https://github.com/martinfekete10/Tuneful) - ScriptingBridge reference
-- **Apple Music Like Lyrics**: [Steve-xmh/applemusic-like-lyrics](https://github.com/Steve-xmh/applemusic-like-lyrics) - Time-synced lyrics parsing
-- **Manzana**: [dropcreations/Manzana-Apple-Music-Lyrics](https://github.com/dropcreations/Manzana-Apple-Music-Lyrics) - Apple Music Web lyrics fetcher (Python, needs Swift port)
-
-### Known Issues
-
-1. **MusicController.swift:113-119**: Album artwork caching too simplistic
-2. **MiniPlayerView.swift:98-123**: Time display hardcoded, needs binding to real data
-3. **LyricsService.swift:43-54**: Mock implementation only
-
-### Design Principles
-
-- **Liquid Glass**: Using `.glassEffect()` modifier (macOS 26.0+)
-  - Three styles: `.regular`, `.clear`, `.identity`
-  - Dynamic tinting: `.glassEffect(.regular.tint(Color))`
-  - Interactive mode: `.glassEffect(.regular.interactive())` for controls
-  - Custom shapes: `.glassEffect(.regular, in: .circle)`
-  - Auto-adapts to background content (light/dark mode)
-- **Progressive Blur**: Gradient mask simulation (future: Metal shader)
-- **Animations**: Spring-based transitions (0.6s response, 0.8 damping)
-- **Typography**: SF Pro, Bold for active elements, Regular with opacity for inactive
-
-### Liquid Glass Implementation Notes
-
-The `.glassEffect()` modifier is the official SwiftUI API for Liquid Glass (introduced in iOS 26 / macOS 26.0):
-
-**Basic Usage:**
-```swift
-Rectangle()
-    .glassEffect(.regular)
-```
-
-**With Dynamic Tinting:**
-```swift
-Rectangle()
-    .fill(dominantColor)
-    .glassEffect(.regular.tint(dominantColor))
-```
-
-**Key Characteristics:**
-- Automatically interacts with desktop wallpaper and underlying content
-- Creates light-bending translucent effect
-- Adapts appearance based on background (may shift between light/dark)
-- For controls with user interaction, use `.interactive()` variant
-
-**References:**
-- [Official Documentation](https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:))
-- [WWDC 2025 Session](https://developer.apple.com/videos/play/wwdc2025/323/)
-- [Tutorial: Applying Liquid Glass to Custom Views](https://developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views)
-
-## Git Workflow
-
-Your changes will automatically sync to GitHub when you:
-
-```bash
-git add .
-git commit -m "your message"
-git push
-```
-
-Or use the `gh` CLI for pull requests:
-
-```bash
-gh pr create --title "Feature: XYZ" --body "Description"
-```
-
-## License
-
-MIT
+- 使用 LRCLIB 和 lyrics.ovh 提供的免费歌词 API
+- 灵感来自 Apple Music 的设计语言

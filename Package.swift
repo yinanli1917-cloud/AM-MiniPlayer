@@ -27,7 +27,15 @@ let package = Package(
         .executableTarget(
             name: "MusicMiniPlayer",
             dependencies: ["MusicMiniPlayerCore"],
-            path: "Sources/MusicMiniPlayerApp" // We will move the App file here
+            path: "Sources/MusicMiniPlayerApp",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/MusicMiniPlayerApp/Info.plist"
+                ])
+            ]
         ),
     ]
 )
