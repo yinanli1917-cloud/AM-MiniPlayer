@@ -22,39 +22,43 @@ public struct MiniPlayerView: View {
                             let artSize = geometry.size.width * 0.60 // Reduced to 60% for better padding balance
                             
                             ZStack(alignment: .bottom) {
-                                // 1. Original Artwork
+                                // 1. Original Artwork (clear)
                                 Image(nsImage: artwork)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                                     .frame(width: artSize, height: artSize)
                                     .clipped()
-                                
-                                // 2. Progressive Blur Overlay
-                                Image(nsImage: artwork)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: artSize, height: artSize)
-                                    .blur(radius: 50)
-                                    .mask(
-                                        LinearGradient(
-                                            gradient: Gradient(stops: [
-                                                .init(color: .clear, location: 0.0),
-                                                .init(color: .black, location: 0.3),
-                                                .init(color: .black, location: 1.0)
-                                            ]),
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
+
+                                // 2. Progressive Blur Overlay (only bottom 20%)
+                                ZStack(alignment: .bottom) {
+                                    // Blurred version
+                                    Image(nsImage: artwork)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: artSize, height: artSize)
+                                        .blur(radius: 40)
+                                        .clipped()
+                                }
+                                .frame(width: artSize, height: artSize * 0.2, alignment: .bottom)
+                                .mask(
+                                    // Progressive mask: fully visible at bottom (1.0) → fade out at top (0.0)
+                                    LinearGradient(
+                                        gradient: Gradient(stops: [
+                                            .init(color: .clear, location: 0.0),     // Top of 20% region: invisible
+                                            .init(color: .black, location: 1.0)       // Bottom: fully visible
+                                        ]),
+                                        startPoint: .top,
+                                        endPoint: .bottom
                                     )
-                                    .clipped()
-                                
-                                // 3. Dark Gradient for Text Readability
+                                )
+
+                                // 3. Dark Gradient for Text Readability (also only bottom region)
                                 LinearGradient(
-                                    gradient: Gradient(colors: [.clear, .black.opacity(0.6)]),
-                                    startPoint: .center,
+                                    gradient: Gradient(colors: [.clear, .black.opacity(0.7)]),
+                                    startPoint: .top,
                                     endPoint: .bottom
                                 )
-                                .frame(width: artSize, height: artSize)
+                                .frame(width: artSize, height: artSize * 0.4)
                                 .allowsHitTesting(false)
                                 
                                 // 4. Text Info
