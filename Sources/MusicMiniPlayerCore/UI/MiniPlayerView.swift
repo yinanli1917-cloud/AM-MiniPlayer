@@ -34,12 +34,12 @@ public struct MiniPlayerView: View {
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                                     .frame(width: artSize, height: artSize)
-                                    .blur(radius: 20)
+                                    .blur(radius: 40)
                                     .mask(
                                         LinearGradient(
                                             gradient: Gradient(stops: [
-                                                .init(color: .clear, location: 0.6),
-                                                .init(color: .black, location: 0.95)
+                                                .init(color: .clear, location: 0.4),
+                                                .init(color: .black, location: 0.8)
                                             ]),
                                             startPoint: .top,
                                             endPoint: .bottom
