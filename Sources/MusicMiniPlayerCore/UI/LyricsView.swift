@@ -1,51 +1,124 @@
 import SwiftUI
+import AppKit
 
 public struct LyricsView: View {
     @EnvironmentObject var musicController: MusicController
     @StateObject private var lyricsService = LyricsService.shared
-    
-    public init() {}
-    
+    @State private var isHovering: Bool = false
+    @State private var isProgressBarHovering: Bool = false
+    @State private var dragPosition: CGFloat? = nil
+    @State private var isManualScrolling: Bool = false
+    @State private var autoScrollTimer: Timer? = nil
+    @State private var showControls: Bool = true
+    @State private var lastDragLocation: CGFloat = 0
+    @State private var dragVelocity: CGFloat = 0
+    @State private var showLoadingDots: Bool = false
+    @Binding var currentPage: PlayerPage
+    var openWindow: OpenWindowAction?
+
+    public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil) {
+        self._currentPage = currentPage
+        self.openWindow = openWindow
+    }
+
     public var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 20) {
-                    if lyricsService.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let error = lyricsService.error {
-                        Text(error)
-                            .foregroundColor(.red)
-                    } else {
-                        ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
-                            Text(line.text)
-                                .font(.system(size: index == lyricsService.currentLineIndex ? 24 : 18,
-                                              weight: index == lyricsService.currentLineIndex ? .bold : .regular,
-                                              design: .rounded))
-                                .foregroundColor(index == lyricsService.currentLineIndex ? .white : .white.opacity(0.5))
-                                .blur(radius: index == lyricsService.currentLineIndex ? 0 : 0.5)
-                                .scaleEffect(index == lyricsService.currentLineIndex ? 1.05 : 1.0)
-                                .animation(.spring(), value: lyricsService.currentLineIndex)
-                                .id(index)
-                                .onTapGesture {
-                                    // Seek to this line? (Optional feature)
+        ZStack {
+            // Main lyrics container
+            if lyricsService.isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .foregroundColor(.white)
+            } else if let error = lyricsService.error {
+                VStack(spacing: 12) {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 48))
+                        .foregroundColor(.white.opacity(0.3))
+                    Text(error)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            } else if lyricsService.lyrics.isEmpty {
+                emptyStateView
+            } else {
+                // Lyrics scroll view
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 20) {
+                            // Top spacer for centering first lyrics
+                            Spacer()
+                                .frame(height: 160)
+
+                            ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
+                                // Show loading dots as a lyric line when currentLineIndex is nil and we're before this line
+                                if lyricsService.currentLineIndex == nil &&
+                                   musicController.currentTime > 0 &&
+                                   musicController.currentTime < line.startTime &&
+                                   (index == 0 || (index > 0 && musicController.currentTime >= lyricsService.lyrics[index - 1].endTime)) {
+                                    LoadingDotsLyricView(
+                                        currentTime: musicController.currentTime,
+                                        nextLineStartTime: line.startTime,
+                                        previousLineEndTime: index > 0 ? lyricsService.lyrics[index - 1].endTime : 0
+                                    )
+                                    .id("loading-dots-\(index)")
                                 }
+
+                                LyricLineView(
+                                    line: line,
+                                    index: index,
+                                    currentIndex: lyricsService.currentLineIndex ?? 0,
+                                    currentTime: musicController.currentTime,
+                                    isScrolling: isManualScrolling
+                                )
+                                .id(line.id)
+                                .onTapGesture {
+                                    musicController.seek(to: line.startTime)
+                                }
+                            }
+
+                            // Bottom spacer for centering last lyrics
+                            Spacer()
+                                .frame(height: 200)
+                        }
+                    }
+                    .onScrollWheel { event in
+                        // User is manually scrolling
+                        isManualScrolling = true
+                        showControls = false
+
+                        // Cancel existing timer
+                        autoScrollTimer?.invalidate()
+
+                        // Set new timer to restore auto-scroll after 2 seconds
+                        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isManualScrolling = false
+                                showControls = true
+                            }
+                        }
+                    }
+                    .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
+                        if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
+                            withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.5)) {
+                                proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
+                            }
                         }
                     }
                 }
-                .padding()
-                .frame(maxWidth: .infinity)
             }
-            .onChange(of: lyricsService.currentLineIndex) {
-                if let index = lyricsService.currentLineIndex {
-                    withAnimation {
-                        proxy.scrollTo(index, anchor: .center)
-                    }
+            
+            // Bottom control bar
+            controlBar
+        }
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isHovering = hovering
+                if hovering && !isManualScrolling {
+                    showControls = true
                 }
             }
         }
         .onAppear {
-            // Trigger fetch when view appears
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
@@ -59,11 +132,324 @@ public struct LyricsView: View {
             lyricsService.updateCurrentTime(musicController.currentTime)
         }
     }
+    
+    // MARK: - Subviews
+    
+    private var emptyStateView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "music.note")
+                .font(.system(size: 48))
+                .foregroundColor(.white.opacity(0.3))
+            Text("No lyrics available")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.white.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+    
+    private var controlBar: some View {
+        VStack {
+            Spacer()
+            ZStack(alignment: .bottom) {
+                // Gradient mask
+                LinearGradient(
+                    gradient: Gradient(colors: [.clear, .black.opacity(0.8)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 200)
+                .allowsHitTesting(false)
+                .opacity(isHovering && showControls ? 1 : 0)
+
+                // Controls
+                if isHovering && showControls {
+                    VStack(spacing: 8) {
+                        timeAndProgressBar
+                        playbackControls
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                    .background(Color.clear.contentShape(Rectangle()))
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+            }
+        }
+    }
+    
+    private var timeAndProgressBar: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text(formatTime(musicController.currentTime))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 35, alignment: .leading)
+
+                Spacer()
+
+                if let quality = musicController.audioQuality {
+                    qualityBadge(quality)
+                }
+
+                Spacer()
+
+                Text("-" + formatTime(musicController.duration - musicController.currentTime))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 35, alignment: .trailing)
+            }
+            .padding(.horizontal, 28)
+
+            progressBar
+        }
+    }
+    
+    private func qualityBadge(_ quality: String) -> some View {
+        HStack(spacing: 2) {
+            if quality == "Hi-Res Lossless" {
+                Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 8))
+            } else if quality == "Dolby Atmos" {
+                Image(systemName: "spatial.audio.badge.checkmark").font(.system(size: 8))
+            } else {
+                Image(systemName: "waveform").font(.system(size: 8))
+            }
+            Text(quality).font(.system(size: 9, weight: .semibold))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(.ultraThinMaterial)
+        .cornerRadius(4)
+        .foregroundColor(.white.opacity(0.9))
+    }
+    
+    private var progressBar: some View {
+        GeometryReader { geo in
+            let currentProgress: CGFloat = musicController.duration > 0 ? (dragPosition ?? CGFloat(musicController.currentTime / musicController.duration)) : 0
+
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.2)).frame(height: isProgressBarHovering ? 8 : 6)
+                Capsule().fill(Color.white).frame(width: geo.size.width * currentProgress, height: isProgressBarHovering ? 8 : 6)
+            }
+            .scaleEffect(isProgressBarHovering ? 1.05 : 1.0)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    isProgressBarHovering = hovering
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged({ value in
+                        let percentage = min(max(0, value.location.x / geo.size.width), 1)
+                        dragPosition = percentage
+                    })
+                    .onEnded({ value in
+                        let percentage = min(max(0, value.location.x / geo.size.width), 1)
+                        let time = percentage * musicController.duration
+                        musicController.seek(to: time)
+                        dragPosition = nil
+                    })
+            )
+            .frame(maxHeight: .infinity, alignment: .center)
+        }
+        .frame(height: 20)
+        .padding(.horizontal, 20)
+    }
+    
+    private var playbackControls: some View {
+        HStack(spacing: 0) {
+            Spacer().frame(width: 12)
+            Button(action: { withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) { currentPage = .album } }) {
+                Image(systemName: "quote.bubble.fill").font(.system(size: 16)).foregroundColor(.white).frame(width: 28, height: 28)
+            }
+            Spacer()
+            Button(action: musicController.previousTrack) {
+                Image(systemName: "backward.fill").font(.system(size: 20)).foregroundColor(.white).frame(width: 32, height: 32)
+            }
+            Spacer().frame(width: 10)
+            Button(action: musicController.togglePlayPause) {
+                ZStack {
+                    Image(systemName: musicController.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 24)).foregroundColor(.white)
+                }
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Spacer().frame(width: 10)
+            Button(action: musicController.nextTrack) {
+                Image(systemName: "forward.fill").font(.system(size: 20)).foregroundColor(.white).frame(width: 32, height: 32)
+            }
+            Spacer()
+            Button(action: { withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) { currentPage = .playlist } }) {
+                Image(systemName: "music.note.list").font(.system(size: 16)).foregroundColor(.white.opacity(0.7)).frame(width: 28, height: 28)
+            }
+            Spacer().frame(width: 12)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func formatTime(_ time: Double) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Lyric Line View
+
+struct LyricLineView: View {
+    let line: LyricLine
+    let index: Int
+    let currentIndex: Int
+    let currentTime: TimeInterval
+    let isScrolling: Bool // Add parameter to know if user is scrolling
+
+    var body: some View {
+        let distance = index - currentIndex
+        let isCurrent = distance == 0
+        let isPast = distance < 0
+
+        // Visual State Calculations
+        let scale: CGFloat = isCurrent ? 1.08 : 1.0
+        let blur: CGFloat = {
+            // No blur when scrolling to show all lyrics clearly
+            if isScrolling { return 0 }
+            // Progressive blur based on distance when not scrolling
+            if isCurrent { return 0 }
+            if isPast { return min(CGFloat(abs(distance)) * 0.5, 3.0) }
+            return min(CGFloat(abs(distance)) * 0.8, 6.0)
+        }()
+        let opacity: CGFloat = {
+            if isCurrent { return 1.0 }
+            if isPast { return 0.5 }
+            // Progressive opacity for future lines
+            return max(0.9 - Double(abs(distance)) * 0.12, 0.3)
+        }()
+        let yOffset: CGFloat = isCurrent ? -2 : 0 // Lift current line slightly
+        
+        // Simple text without karaoke effect, allow multiple lines
+        Text(line.text)
+            .font(.system(size: 24, weight: isCurrent ? .bold : .medium, design: .rounded))
+            .foregroundColor(.white)
+            .lineLimit(nil) // Allow unlimited lines for wrapping
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true) // Allow text to expand vertically
+            .scaleEffect(scale, anchor: .leading)
+            .blur(radius: blur)
+            .opacity(opacity)
+            .offset(y: yOffset)
+            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: currentIndex)
+            .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Loading Dots View (Legacy - no longer used)
+
+struct LoadingDotsView: View {
+    @State private var animationPhase: Int = 0
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<3) { index in
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 8, height: 8)
+                    .opacity(animationPhase == index ? 1.0 : 0.3)
+                    .scaleEffect(animationPhase == index ? 1.2 : 1.0)
+            }
+        }
+        .onAppear {
+            // Animate dots sequentially
+            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    animationPhase = (animationPhase + 1) % 3
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Loading Dots Lyric View (in scroll list)
+
+struct LoadingDotsLyricView: View {
+    let currentTime: TimeInterval
+    let nextLineStartTime: TimeInterval
+    let previousLineEndTime: TimeInterval
+
+    var body: some View {
+        // Calculate the wait duration (gap between lyrics)
+        let waitDuration = nextLineStartTime - previousLineEndTime
+
+        // Calculate time elapsed in this gap
+        let elapsedTime = currentTime - previousLineEndTime
+
+        // Divide the wait duration into 3 equal segments for the dots
+        let segmentDuration = waitDuration / 3.0
+
+        // Determine which dot should be active based on elapsed time
+        let activeDot: Int = {
+            if elapsedTime < segmentDuration {
+                return 0
+            } else if elapsedTime < segmentDuration * 2 {
+                return 1
+            } else {
+                return 2
+            }
+        }()
+
+        HStack(spacing: 8) {
+            ForEach(0..<3) { index in
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 10, height: 10)
+                    .opacity(index <= activeDot ? 1.0 : 0.3)
+                    .scaleEffect(index == activeDot ? 1.2 : 1.0)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: activeDot)
+            }
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Scroll Wheel Extension
+
+extension View {
+    func onScrollWheel(_ handler: @escaping (NSEvent) -> Void) -> some View {
+        self.overlay(
+            GeometryReader { _ in
+                ScrollWheelHandlerView(handler: handler)
+            }
+        )
+    }
+}
+
+struct ScrollWheelHandlerView: NSViewRepresentable {
+    let handler: (NSEvent) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = ScrollWheelEventView()
+        view.scrollHandler = handler
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+class ScrollWheelEventView: NSView {
+    var scrollHandler: ((NSEvent) -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        scrollHandler?(event)
+        super.scrollWheel(with: event)
+    }
 }
 
 #Preview {
-    LyricsView()
-        .environmentObject(MusicController.shared)
-        .frame(width: 300, height: 300)
+    @Previewable @State var currentPage: PlayerPage = .lyrics
+    LyricsView(currentPage: $currentPage)
+        .environmentObject(MusicController(preview: true))
+        .frame(width: 300, height: 400)
         .background(Color.black)
 }

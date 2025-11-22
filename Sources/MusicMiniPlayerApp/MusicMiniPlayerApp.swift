@@ -3,25 +3,25 @@ import MusicMiniPlayerCore
 
 @main
 struct MusicMiniPlayerApp: App {
-    // We will initialize our controllers here
     @StateObject private var musicController = MusicController.shared
-    
+    @Environment(\.openWindow) private var openWindow
+
     var body: some Scene {
-        // Menu Bar Extra
         MenuBarExtra("Music Mini Player", systemImage: "music.note") {
-            MiniPlayerView()
+            MiniPlayerContentView()
                 .environmentObject(musicController)
+                .frame(width: 300, height: 380)
+                .background(Color.red) // DEBUG: Force visual change
         }
-        .menuBarExtraStyle(.window) // Allows for a custom SwiftUI view in the menu
-        
-        // Optional: Main Window if we want one, but user asked for Menu Bar & PIP
-        Window("Mini Player", id: "pip-window") {
-            MiniPlayerView()
-                .environmentObject(musicController)
-                .frame(width: 300, height: 300)
-                .background(.clear) // Allow the inner LiquidBackgroundView to show
-        }
-        .windowStyle(.plain)
-        .windowResizability(.contentSize)
+        .menuBarExtraStyle(.window)
+    }
+}
+
+// Helper view to access openWindow environment
+struct MiniPlayerContentView: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        MiniPlayerView(openWindow: openWindow)
     }
 }

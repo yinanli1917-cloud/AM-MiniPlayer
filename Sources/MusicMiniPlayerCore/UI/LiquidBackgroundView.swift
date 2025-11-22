@@ -1,72 +1,57 @@
 import SwiftUI
+import os
 
 public struct LiquidBackgroundView: View {
     var artwork: NSImage?
-    @State private var dominantColor: NSColor?
+    @State private var dominantColor: Color = .clear
+    private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LiquidBackground")
 
     public init(artwork: NSImage? = nil) {
         self.artwork = artwork
     }
 
     public var body: some View {
-        ZStack {
-            // 1. Base layer with desktop wallpaper transparency
-            Rectangle()
-                .fill(.clear)
-                .ignoresSafeArea()
-
-            // 2. Semi-transparent color layer (preserves the vibrant color)
-            if let color = dominantColor {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(nsColor: color).opacity(0.4))
-                    .ignoresSafeArea()
+        // Use glass effect with color tinting
+        Rectangle()
+            .fill(.clear)
+            .glassEffect(
+                dominantColor != .clear
+                    ? .clear.tint(dominantColor.opacity(0.8)) // Increased from 0.6 to 0.8 for deeper color
+                    : .clear.tint(Color(red: 0.35, green: 0.15, blue: 0.25).opacity(0.7)),
+                in: .rect(cornerRadius: 16)
+            )
+            .ignoresSafeArea()
+            .onAppear {
+                updateColor()
             }
-
-            // 3. Liquid Glass Effect on top (adds the glass refraction)
-            if let color = dominantColor {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.clear)
-                    .glassEffect(.clear.tint(Color(nsColor: color).opacity(0.6)), in: .rect(cornerRadius: 16))
-                    .ignoresSafeArea()
-            } else {
-                // Fallback: clear glass without tint
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.clear)
-                    .glassEffect(.clear, in: .rect(cornerRadius: 16))
-                    .ignoresSafeArea()
+            .onChange(of: artwork) {
+                updateColor()
             }
-        }
-        .onAppear {
-            updateColor()
-        }
-        .onChange(of: artwork) {
-            updateColor()
-        }
     }
 
     private func updateColor() {
         if let artwork = artwork {
             DispatchQueue.global(qos: .userInitiated).async {
-                let color = artwork.dominantColor()
-                DispatchQueue.main.async {
-                    withAnimation(.linear(duration: 0.5)) {
-                        self.dominantColor = color
+                if let nsColor = artwork.dominantColor() {
+                    // Log the extracted color for debugging
+                    var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+                    nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+                    self.logger.info("🎨 Extracted dominant color - H:\(hue, format: .fixed(precision: 2)) S:\(saturation, format: .fixed(precision: 2)) B:\(brightness, format: .fixed(precision: 2))")
+
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.8)) {
+                            self.dominantColor = Color(nsColor: nsColor)
+                        }
                     }
+                } else {
+                    self.logger.warning("⚠️ Failed to extract dominant color")
                 }
             }
+        } else {
+            logger.info("🔄 No artwork - clearing color")
+            withAnimation(.easeInOut(duration: 0.6)) {
+                dominantColor = .clear
+            }
         }
-    }
-}
-
-#Preview {
-    ZStack {
-        // Simulate Desktop Wallpaper
-        Color.purple
-            .ignoresSafeArea()
-        
-        // The Player Window Background
-        LiquidBackgroundView(artwork: NSImage(systemSymbolName: "music.note", accessibilityDescription: nil))
-            .frame(width: 300, height: 300)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
     }
 }
