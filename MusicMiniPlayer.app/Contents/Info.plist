@@ -22,5 +22,7 @@
     <string>MusicMiniPlayer needs access to control Music.app playback</string>
     <key>NSAppleMusicUsageDescription</key>
     <string>MusicMiniPlayer displays your currently playing music and lyrics</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
