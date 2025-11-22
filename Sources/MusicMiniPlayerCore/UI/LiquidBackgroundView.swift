@@ -15,17 +15,17 @@ public struct LiquidBackgroundView: View {
                 .fill(.clear)
                 .ignoresSafeArea()
 
-            // 2. Liquid Glass Effect with dynamic tint (clear style for more transparency)
+            // 2. Liquid Glass Effect with dynamic tint and rounded rectangle shape
             if let color = dominantColor {
-                Rectangle()
+                RoundedRectangle(cornerRadius: 16)
                     .fill(.clear)
-                    .glassEffect(.clear.tint(Color(nsColor: color).opacity(0.3)))
+                    .glassEffect(.clear.tint(Color(nsColor: color).opacity(0.3)), in: .rect(cornerRadius: 16))
                     .ignoresSafeArea()
             } else {
-                // Fallback: clear glass without tint
-                Rectangle()
+                // Fallback: clear glass without tint, still with rounded rectangle
+                RoundedRectangle(cornerRadius: 16)
                     .fill(.clear)
-                    .glassEffect(.clear)
+                    .glassEffect(.clear, in: .rect(cornerRadius: 16))
                     .ignoresSafeArea()
             }
         }
