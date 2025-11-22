@@ -93,9 +93,9 @@ extension NSImage {
         var brightness: CGFloat = 0
         hsbColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
 
-        // Boost saturation but REDUCE brightness for deeper colors
-        let enhancedSaturation = min(1.0, saturation * 1.4)
-        let enhancedBrightness = max(0.3, min(0.7, brightness * 0.85))
+        // Boost saturation but REDUCE brightness significantly for vintage/deep colors
+        let enhancedSaturation = min(1.0, saturation * 1.5)
+        let enhancedBrightness = max(0.25, min(0.6, brightness * 0.75))
 
         return NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: 1.0)
     }
