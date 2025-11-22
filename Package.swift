@@ -21,7 +21,8 @@ let package = Package(
             name: "MusicMiniPlayerCore",
             path: "Sources/MusicMiniPlayerCore",
             resources: [
-                .process("Resources")
+                .process("Resources"),
+                .process("Shaders")
             ]
         ),
         .executableTarget(
