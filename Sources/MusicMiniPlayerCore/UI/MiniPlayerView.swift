@@ -1,9 +1,33 @@
 import SwiftUI
 
+// Custom Blur AnimatableModifier for smooth blur transitions
+struct BlurModifier: AnimatableModifier {
+    var blurRadius: Double
+
+    var animatableData: Double {
+        get { blurRadius }
+        set { blurRadius = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.blur(radius: blurRadius)
+    }
+}
+
+extension AnyTransition {
+    static var blurFade: AnyTransition {
+        AnyTransition.modifier(
+            active: BlurModifier(blurRadius: 10.0),
+            identity: BlurModifier(blurRadius: 0.0)
+        ).combined(with: .opacity)
+    }
+}
+
 public struct MiniPlayerView: View {
     @EnvironmentObject var musicController: MusicController
     @State private var isFlipped: Bool = false
     @State private var isHovering: Bool = false
+    @State private var showControls: Bool = false
     @Namespace private var animation
 
     public init() {}
@@ -113,7 +137,7 @@ public struct MiniPlayerView: View {
                                 }
 
                                 // Controls - only visible on hover with delay
-                                if isHovering {
+                                if showControls {
                                     VStack(spacing: 12) {
                                         // Time & Lossless Badge
                                         HStack {
@@ -214,9 +238,12 @@ public struct MiniPlayerView: View {
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 20)
                                     .padding(.top, 0)
-                                    .opacity(isHovering ? 1.0 : 0.0)
-                                    .scaleEffect(isHovering ? 1.0 : 0.95)
-                                    .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(0.2), value: isHovering)
+                                    .transition(
+                                        .asymmetric(
+                                            insertion: .blurFade.combined(with: .move(edge: .bottom)),
+                                            removal: .opacity
+                                        )
+                                    )
                                 }
                             }
                         } else {
@@ -242,6 +269,20 @@ public struct MiniPlayerView: View {
             .onHover { hovering in
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
                     isHovering = hovering
+                }
+
+                if hovering {
+                    // Delay showing controls by 0.2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.75)) {
+                            showControls = true
+                        }
+                    }
+                } else {
+                    // Hide controls immediately when mouse leaves
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        showControls = false
+                    }
                 }
             }
         }
