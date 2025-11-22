@@ -20,12 +20,13 @@ public struct MiniPlayerView: View {
                         // Album Art with Track Info
                         if let artwork = musicController.currentArtwork {
                             VStack(spacing: 0) {
-                                // Top Spacer - dynamic based on hover
-                                Spacer()
-                                    .frame(height: isHovering ? 24 : nil)
-
                                 if !isHovering {
+                                    // Centered layout when not hovering
                                     Spacer()
+                                } else {
+                                    // Fixed top padding when hovering
+                                    Spacer()
+                                        .frame(height: 24)
                                 }
 
                                 // Album Artwork
@@ -95,17 +96,23 @@ public struct MiniPlayerView: View {
                                 .cornerRadius(12)
                                 .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
                                 .matchedGeometryEffect(id: "albumArt", in: animation)
+                                .animation(.spring(response: 0.5, dampingFraction: 0.75), value: isHovering)
                                 .onTapGesture {
                                     withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                                         isFlipped.toggle()
                                     }
                                 }
 
+                                // Bottom Spacer - for centering when not hovering
                                 if !isHovering {
                                     Spacer()
+                                } else {
+                                    // Small spacing before controls when hovering
+                                    Spacer()
+                                        .frame(height: 16)
                                 }
 
-                                // Controls - only visible on hover
+                                // Controls - only visible on hover with delay
                                 if isHovering {
                                     VStack(spacing: 12) {
                                         // Time & Lossless Badge
@@ -206,11 +213,10 @@ public struct MiniPlayerView: View {
                                     }
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 20)
-                                    .padding(.top, 16)
-                                    .transition(.asymmetric(
-                                        insertion: .opacity.combined(with: .move(edge: .bottom)),
-                                        removal: .opacity
-                                    ))
+                                    .padding(.top, 0)
+                                    .opacity(isHovering ? 1.0 : 0.0)
+                                    .scaleEffect(isHovering ? 1.0 : 0.95)
+                                    .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(0.2), value: isHovering)
                                 }
                             }
                         } else {
