@@ -3,44 +3,31 @@ import SwiftUI
 public struct LiquidBackgroundView: View {
     var artwork: NSImage?
     @State private var dominantColor: NSColor?
-    
+
     public init(artwork: NSImage? = nil) {
         self.artwork = artwork
     }
-    
+
     public var body: some View {
         ZStack {
-            // 1. Native Glass Material
-            // .underWindowBackground allows the desktop wallpaper to show through with a blur.
-            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
-                .ignoresSafeArea()
-            
-            // 2. Dynamic Theme Tint (Liquid Effect)
-            if let color = dominantColor {
-                ZStack {
-                    // Translucent tint to colorize the glass
-                    // Increased opacity to 0.4 to make the color (e.g. red sofa) more visible
-                    Color(nsColor: color)
-                        .opacity(0.4) 
-                    
-                    // Subtle gradient to add depth without blocking the background
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color(nsColor: color).opacity(0.5),
-                            Color(nsColor: color).opacity(0.1)
-                        ]),
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-                .ignoresSafeArea()
-            }
-            
-            // 3. Noise Texture (Optional, keeps it subtle)
+            // 1. Base layer with desktop wallpaper transparency
             Rectangle()
-                .fill(Color.white.opacity(0.02))
-                .blendMode(.overlay)
+                .fill(.clear)
                 .ignoresSafeArea()
+
+            // 2. Liquid Glass Effect with dynamic tint
+            if let color = dominantColor {
+                Rectangle()
+                    .fill(Color(nsColor: color))
+                    .glassEffect(.regular.tint(Color(nsColor: color)))
+                    .ignoresSafeArea()
+            } else {
+                // Fallback: regular glass without tint
+                Rectangle()
+                    .fill(.clear)
+                    .glassEffect(.regular)
+                    .ignoresSafeArea()
+            }
         }
         .onAppear {
             updateColor()
@@ -49,7 +36,7 @@ public struct LiquidBackgroundView: View {
             updateColor()
         }
     }
-    
+
     private func updateColor() {
         if let artwork = artwork {
             DispatchQueue.global(qos: .userInitiated).async {

@@ -15,11 +15,11 @@ public struct MiniPlayerView: View {
                 // Content
                 VStack(spacing: 0) {
                     if !isFlipped {
-                        Spacer(minLength: 10) // Small top spacer
-                        
+                        Spacer() // Equal spacing top
+
                         // Album Art with Progressive Blur and Text
                         if let artwork = musicController.currentArtwork {
-                            let artSize = geometry.size.width * 0.75 // Increased to 75% for better fill
+                            let artSize = geometry.size.width * 0.60 // Reduced to 60% for better padding balance
                             
                             ZStack(alignment: .bottom) {
                                 // 1. Original Artwork
@@ -75,7 +75,7 @@ public struct MiniPlayerView: View {
                                 .frame(width: artSize)
                             }
                             .cornerRadius(12)
-                            .shadow(color: .black.opacity(0.4), radius: 20, x: 0, y: 10)
+                            .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
                             .onTapGesture {
                                 withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                                     isFlipped.toggle()
@@ -84,11 +84,11 @@ public struct MiniPlayerView: View {
                         } else {
                             RoundedRectangle(cornerRadius: 12)
                                 .fill(Color.gray.opacity(0.3))
-                                .frame(width: geometry.size.width * 0.75, height: geometry.size.width * 0.75)
+                                .frame(width: geometry.size.width * 0.60, height: geometry.size.width * 0.60)
                                 .overlay(Text("No Art").foregroundColor(.white))
                         }
-                        
-                        Spacer(minLength: 15) // Reduced spacing between art and controls
+
+                        Spacer() // Equal spacing bottom
                         
                         // Bottom Controls Container
                         VStack(spacing: 12) {
