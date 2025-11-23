@@ -32,10 +32,10 @@ public class LyricsService: ObservableObject {
 
     private init() {}
 
-    func fetchLyrics(for title: String, artist: String, duration: TimeInterval) {
-        // Avoid re-fetching if same song
+    func fetchLyrics(for title: String, artist: String, duration: TimeInterval, forceRefresh: Bool = false) {
+        // Avoid re-fetching if same song (unless force refresh)
         let songID = "\(title)-\(artist)"
-        guard songID != currentSongID else { return }
+        guard songID != currentSongID || forceRefresh else { return }
 
         currentSongID = songID
         isLoading = true
@@ -50,13 +50,19 @@ public class LyricsService: ObservableObject {
 
             // Try multiple sources in order of preference
             do {
-                // 1. Try LRCLIB first (best quality, time-synced)
-                logger.info("🔍 Source 1: Trying LRCLIB...")
-                fetchedLyrics = try await fetchFromLRCLIB(title: title, artist: artist, duration: duration)
+                // 1. Try amll-ttml-db first (best quality, word-level timing)
+                logger.info("🔍 Source 1: Trying amll-ttml-db...")
+                fetchedLyrics = try await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration)
 
                 if fetchedLyrics == nil {
-                    // 2. Try lyrics.ovh (simple, no auth)
-                    logger.info("🔍 Source 2: Trying lyrics.ovh...")
+                    // 2. Try LRCLIB (good quality, time-synced)
+                    logger.info("🔍 Source 2: Trying LRCLIB...")
+                    fetchedLyrics = try await fetchFromLRCLIB(title: title, artist: artist, duration: duration)
+                }
+
+                if fetchedLyrics == nil {
+                    // 3. Try lyrics.ovh (simple, no auth)
+                    logger.info("🔍 Source 3: Trying lyrics.ovh...")
                     fetchedLyrics = try await fetchFromLyricsOVH(title: title, artist: artist, duration: duration)
                 }
 
@@ -109,6 +115,165 @@ public class LyricsService: ObservableObject {
             // No line matches - set to nil (will trigger loading dots)
             currentLineIndex = nil
         }
+    }
+
+    // MARK: - amll-ttml-db API (TTML format with word-level timing)
+    
+    private func fetchFromAMLLTTMLDB(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        logger.info("🌐 Fetching from amll-ttml-db: \(title) by \(artist)")
+        
+        // Note: This is a placeholder API endpoint - update with actual amll-ttml-db API when available
+        // Common pattern: https://api.amll-ttml-db.com/search?title=...&artist=...
+        // For now, we'll use a reasonable endpoint structure that can be updated
+        
+        // Build URL with parameters
+        var components = URLComponents(string: "https://api.amll-ttml-db.com/api/search")!
+        components.queryItems = [
+            URLQueryItem(name: "title", value: title),
+            URLQueryItem(name: "artist", value: artist)
+        ]
+        
+        guard let url = components.url else {
+            logger.error("Invalid amll-ttml-db URL")
+            return nil
+        }
+        
+        logger.info("📡 Request URL: \(url.absoluteString)")
+        
+        var request = URLRequest(url: url)
+        request.setValue("MusicMiniPlayer/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10.0
+        
+        let session = URLSession.shared
+        
+        do {
+            let (data, response) = try await session.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                logger.error("Invalid response type from amll-ttml-db")
+                return nil
+            }
+            
+            logger.info("📦 Response status: \(httpResponse.statusCode)")
+            
+            // Check for 404 - no lyrics found
+            if httpResponse.statusCode == 404 {
+                logger.warning("No lyrics found in amll-ttml-db")
+                return nil
+            }
+            
+            // Check for other errors
+            guard (200...299).contains(httpResponse.statusCode) else {
+                logger.error("HTTP error from amll-ttml-db: \(httpResponse.statusCode)")
+                return nil
+            }
+            
+            // Try to parse as JSON first (API might return JSON with TTML content)
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // Check if response contains TTML data
+                if let ttmlContent = json["ttml"] as? String, !ttmlContent.isEmpty {
+                    logger.info("✅ Found TTML content in JSON response")
+                    return parseTTML(ttmlContent)
+                } else if let ttmlUrl = json["ttml_url"] as? String, let ttmlUrlObj = URL(string: ttmlUrl) {
+                    // If API returns a URL to TTML file, fetch it
+                    logger.info("📥 Fetching TTML from URL: \(ttmlUrl)")
+                    let (ttmlData, _) = try await session.data(from: ttmlUrlObj)
+                    if let ttmlString = String(data: ttmlData, encoding: .utf8) {
+                        return parseTTML(ttmlString)
+                    }
+                }
+            }
+            
+            // Try parsing as direct TTML XML
+            if let ttmlString = String(data: data, encoding: .utf8), !ttmlString.isEmpty {
+                logger.info("✅ Received TTML content directly")
+                return parseTTML(ttmlString)
+            }
+            
+            logger.warning("No TTML content found in amll-ttml-db response")
+            return nil
+        } catch {
+            logger.error("❌ Error fetching from amll-ttml-db: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
+    // MARK: - TTML Parser
+    
+    private func parseTTML(_ ttmlString: String) -> [LyricLine]? {
+        logger.info("📝 Parsing TTML content (\(ttmlString.count) chars)")
+        
+        // TTML format: <tt><body><div><p begin="HH:MM:SS.mmm" end="HH:MM:SS.mmm">Text</p></div></body></tt>
+        // We'll use a simple parser to extract <p> elements with timing
+        
+        var lines: [LyricLine] = []
+        
+        // Pattern to match <p> tags with begin and end attributes
+        // Matches: <p begin="00:00:10.500" end="00:00:15.200">Text here</p>
+        let pattern = "<p[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>(.*?)</p>"
+        
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            logger.error("Failed to create TTML regex")
+            return nil
+        }
+        
+        let matches = regex.matches(in: ttmlString, range: NSRange(ttmlString.startIndex..., in: ttmlString))
+        
+        for match in matches {
+            guard match.numberOfRanges >= 4 else { continue }
+            
+            // Extract begin time
+            guard let beginRange = Range(match.range(at: 1), in: ttmlString) else { continue }
+            let beginString = String(ttmlString[beginRange])
+            
+            // Extract end time
+            guard let endRange = Range(match.range(at: 2), in: ttmlString) else { continue }
+            let endString = String(ttmlString[endRange])
+            
+            // Extract text content
+            guard let textRange = Range(match.range(at: 3), in: ttmlString) else { continue }
+            var text = String(ttmlString[textRange])
+            
+            // Remove any nested tags and decode HTML entities
+            text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            text = text.replacingOccurrences(of: "&lt;", with: "<")
+            text = text.replacingOccurrences(of: "&gt;", with: ">")
+            text = text.replacingOccurrences(of: "&amp;", with: "&")
+            text = text.replacingOccurrences(of: "&quot;", with: "\"")
+            text = text.replacingOccurrences(of: "&apos;", with: "'")
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            guard !text.isEmpty else { continue }
+            
+            // Parse time format: HH:MM:SS.mmm or HH:MM:SS,mmm
+            if let startTime = parseTTMLTime(beginString),
+               let endTime = parseTTMLTime(endString) {
+                lines.append(LyricLine(text: text, startTime: startTime, endTime: endTime))
+            }
+        }
+        
+        // Sort by start time to ensure correct order
+        lines.sort { $0.startTime < $1.startTime }
+        
+        logger.info("✅ Parsed \(lines.count) lyric lines from TTML")
+        return lines.isEmpty ? nil : lines
+    }
+    
+    private func parseTTMLTime(_ timeString: String) -> TimeInterval? {
+        // TTML time format: HH:MM:SS.mmm or HH:MM:SS,mmm or HH:MM:SS.mm
+        // Also supports: H:MM:SS.mmm (single digit hour)
+        let components = timeString.components(separatedBy: CharacterSet(charactersIn: ":,."))
+        
+        guard components.count >= 3 else { return nil }
+        
+        let hour = Int(components[0]) ?? 0
+        let minute = Int(components[1]) ?? 0
+        let second = Int(components[2]) ?? 0
+        let millisecond = components.count > 3 ? (Int(components[3]) ?? 0) : 0
+        
+        let totalSeconds = Double(hour * 3600) + Double(minute * 60) + Double(second) + Double(millisecond) / 1000.0
+        return totalSeconds
     }
 
     // MARK: - LRCLIB API (Free, Open-Source Lyrics Database)

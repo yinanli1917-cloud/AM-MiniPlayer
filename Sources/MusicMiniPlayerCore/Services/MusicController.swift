@@ -316,10 +316,11 @@ public class MusicController: ObservableObject {
             return
         }
 
-        logger.info("🎨 Fetching artwork via AppleScript for \(title)")
+        logger.info("🎨 Fetching artwork for \(title) by \(artist)")
 
-        // Use AppleScript for reliable artwork retrieval
+        // Try multiple sources in order: AppleScript -> MusicKit -> Placeholder
         Task {
+            // 1. Try AppleScript first (most reliable for local tracks)
             if let appleScriptData = self.fetchArtworkDataViaAppleScript(),
                let image = NSImage(data: appleScriptData) {
                 await MainActor.run {
@@ -330,11 +331,27 @@ public class MusicController: ObservableObject {
                     }
                     self.logger.info("✅ Successfully fetched and cached artwork via AppleScript")
                 }
-            } else {
+                return
+            }
+            
+            // 2. Try MusicKit as fallback (better for Apple Music tracks)
+            logger.info("🔄 AppleScript failed, trying MusicKit...")
+            if let musicKitImage = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
                 await MainActor.run {
-                    self.currentArtwork = self.createPlaceholder()
-                    self.logger.warning("⚠️ Failed to fetch artwork - using placeholder")
+                    self.currentArtwork = musicKitImage
+                    // Cache the artwork
+                    if !persistentID.isEmpty {
+                        self.artworkCache.setObject(musicKitImage, forKey: persistentID as NSString)
+                    }
+                    self.logger.info("✅ Successfully fetched and cached artwork via MusicKit")
                 }
+                return
+            }
+            
+            // 3. Fallback to placeholder if all methods fail
+            await MainActor.run {
+                self.currentArtwork = self.createPlaceholder()
+                self.logger.warning("⚠️ Failed to fetch artwork from all sources - using placeholder")
             }
         }
     }
@@ -403,6 +420,38 @@ public class MusicController: ObservableObject {
             return descriptor.data
         }
         return nil
+    }
+    
+    // Fetch artwork by persistentID using AppleScript (for playlist items)
+    public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
+        guard !isPreview, !persistentID.isEmpty else { return nil }
+        
+        let script = """
+        tell application "Music"
+            try
+                set targetTrack to first track of current playlist whose persistent ID is "\(persistentID)"
+                return data of artwork 1 of targetTrack
+            on error
+                return missing value
+            end try
+        end tell
+        """
+        
+        return await Task.detached {
+            var error: NSDictionary?
+            if let scriptObject = NSAppleScript(source: script) {
+                let descriptor = scriptObject.executeAndReturnError(&error)
+                if let error = error {
+                    self.logger.error("AppleScript Artwork Error (persistentID): \(error)")
+                    return nil
+                }
+                let data = descriptor.data
+                if !data.isEmpty, let image = NSImage(data: data) {
+                    return image
+                }
+            }
+            return nil
+        }.value
     }
 
     private func createPlaceholder() -> NSImage {

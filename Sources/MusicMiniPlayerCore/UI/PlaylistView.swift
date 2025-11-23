@@ -248,10 +248,34 @@ public struct PlaylistView: View {
                             Spacer().frame(height: 100)
                         }
                     }
+                    .background(
+                        // Use a transparent overlay to detect scroll without blocking
+                        ScrollDetectorView(
+                            onScrollDetected: {
+                                // User is manually scrolling
+                                isManualScrolling = true
+                                showControls = false
+
+                                // Cancel existing timer
+                                autoScrollTimer?.invalidate()
+
+                                // Set new timer to restore controls after 2 seconds of no scrolling
+                                autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        isManualScrolling = false
+                                        if isHovering {
+                                            showControls = true
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                        .allowsHitTesting(false) // Don't block touches
+                    )
                 }
             }
 
-            // Bottom control bar
+            // Bottom control bar - fixed position at bottom
             VStack {
                 Spacer()
                 ZStack(alignment: .bottom) {
@@ -261,177 +285,20 @@ public struct PlaylistView: View {
                         startPoint: .top,
                         endPoint: .bottom
                     )
-                    .frame(height: 200)
+                    .frame(height: 100)
                     .allowsHitTesting(false)
                     .opacity(isHovering && showControls ? 1 : 0)
 
                     // Full control set - visible on hover
                     if isHovering && showControls {
-                        VStack(spacing: 8) {
-                            // Time & Progress Bar
-                            VStack(spacing: 4) {
-                                // Time labels
-                                HStack {
-                                    Text(formatTime(musicController.currentTime))
-                                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                                        .foregroundColor(.white.opacity(0.6))
-                                        .frame(width: 35, alignment: .leading)
-
-                                    Spacer()
-
-                                    // Audio quality badge
-                                    if let quality = musicController.audioQuality {
-                                        HStack(spacing: 2) {
-                                            if quality == "Hi-Res Lossless" {
-                                                Image(systemName: "waveform.badge.magnifyingglass")
-                                                    .font(.system(size: 8))
-                                            } else if quality == "Dolby Atmos" {
-                                                Image(systemName: "spatial.audio.badge.checkmark")
-                                                    .font(.system(size: 8))
-                                            } else {
-                                                Image(systemName: "waveform")
-                                                    .font(.system(size: 8))
-                                            }
-                                            Text(quality)
-                                                .font(.system(size: 9, weight: .semibold))
-                                        }
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(.ultraThinMaterial)
-                                        .cornerRadius(4)
-                                        .foregroundColor(.white.opacity(0.9))
-                                    }
-
-                                    Spacer()
-
-                                    Text("-" + formatTime(musicController.duration - musicController.currentTime))
-                                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                                        .foregroundColor(.white.opacity(0.6))
-                                        .frame(width: 35, alignment: .trailing)
-                                }
-                                .padding(.horizontal, 28)
-
-                                // Progress Bar
-                                GeometryReader { geo in
-                                    let currentProgress: CGFloat = {
-                                        if musicController.duration > 0 {
-                                            return dragPosition ?? CGFloat(musicController.currentTime / musicController.duration)
-                                        }
-                                        return 0
-                                    }()
-
-                                    ZStack(alignment: .leading) {
-                                        // Background Track
-                                        Capsule()
-                                            .fill(Color.white.opacity(0.2))
-                                            .frame(height: isProgressBarHovering ? 8 : 6)
-
-                                        // Active Progress
-                                        Capsule()
-                                            .fill(Color.white)
-                                            .frame(
-                                                width: geo.size.width * currentProgress,
-                                                height: isProgressBarHovering ? 8 : 6
-                                            )
-                                    }
-                                    .scaleEffect(isProgressBarHovering ? 1.05 : 1.0)
-                                    .contentShape(Rectangle())
-                                    .onHover { hovering in
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                            isProgressBarHovering = hovering
-                                        }
-                                    }
-                                    .gesture(
-                                        DragGesture(minimumDistance: 0)
-                                            .onChanged({ value in
-                                                let percentage = min(max(0, value.location.x / geo.size.width), 1)
-                                                dragPosition = percentage
-                                            })
-                                            .onEnded({ value in
-                                                let percentage = min(max(0, value.location.x / geo.size.width), 1)
-                                                let time = percentage * musicController.duration
-                                                musicController.seek(to: time)
-                                                dragPosition = nil
-                                            })
-                                    )
-                                    .frame(maxHeight: .infinity, alignment: .center)
-                                }
-                                .frame(height: 20)
-                                .padding(.horizontal, 20)
-                            }
-
-                            // Playback Controls
-                            HStack(spacing: 0) {
-                                Spacer().frame(width: 12)
-
-                                // Lyrics button (left)
-                                Button(action: {
-                                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                        currentPage = .lyrics
-                                    }
-                                }) {
-                                    Image(systemName: "quote.bubble")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(.white.opacity(0.7))
-                                        .frame(width: 28, height: 28)
-                                }
-
-                                Spacer()
-
-                                // Previous Track
-                                Button(action: musicController.previousTrack) {
-                                    Image(systemName: "backward.fill")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.white)
-                                        .frame(width: 32, height: 32)
-                                }
-
-                                Spacer().frame(width: 10)
-
-                                // Play/Pause
-                                Button(action: musicController.togglePlayPause) {
-                                    ZStack {
-                                        Image(systemName: musicController.isPlaying ? "pause.fill" : "play.fill")
-                                            .font(.system(size: 24))
-                                            .foregroundColor(.white)
-                                    }
-                                    .frame(width: 32, height: 32)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-
-                                Spacer().frame(width: 10)
-
-                                // Next Track
-                                Button(action: musicController.nextTrack) {
-                                    Image(systemName: "forward.fill")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.white)
-                                        .frame(width: 32, height: 32)
-                                }
-
-                                Spacer()
-
-                                // Playlist Icon (right) - filled when on this page
-                                Button(action: {
-                                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                        currentPage = .album
-                                    }
-                                }) {
-                                    Image(systemName: "music.note.list.fill")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(.white)
-                                        .frame(width: 28, height: 28)
-                                }
-
-                                Spacer().frame(width: 12)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 20)
-                        .background(Color.clear.contentShape(Rectangle()))
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        SharedBottomControls(
+                            currentPage: $currentPage,
+                            isHovering: $isHovering,
+                            showControls: $showControls,
+                            isProgressBarHovering: $isProgressBarHovering,
+                            dragPosition: $dragPosition
+                        )
+                        .padding(.bottom, 0) // Ensure consistent bottom padding
                     }
                 }
             }
@@ -547,9 +414,17 @@ struct PlaylistItemRowCompact: View {
         .task {
             // Use .task instead of .onAppear for better async handling
             if artwork == nil {
-                let fetchedArtwork = await musicController.fetchMusicKitArtwork(title: title, artist: artist, album: album)
-                await MainActor.run {
-                    artwork = fetchedArtwork
+                // Try AppleScript first (most reliable for local tracks)
+                if let fetchedArtwork = await musicController.fetchArtworkByPersistentID(persistentID: persistentID) {
+                    await MainActor.run {
+                        artwork = fetchedArtwork
+                    }
+                } else {
+                    // Fallback to MusicKit
+                    let fetchedArtwork = await musicController.fetchMusicKitArtwork(title: title, artist: artist, album: album)
+                    await MainActor.run {
+                        artwork = fetchedArtwork
+                    }
                 }
             }
         }

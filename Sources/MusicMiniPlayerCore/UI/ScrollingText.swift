@@ -6,6 +6,8 @@ struct ScrollingText: View {
     let textColor: Color
     let maxWidth: CGFloat
 
+    var alignment: Alignment = .center // Default to center, but can be overridden
+
     @State private var textWidth: CGFloat = 0
     @State private var offset: CGFloat = 0
     @State private var shouldScroll = false
@@ -42,7 +44,7 @@ struct ScrollingText: View {
                     .foregroundColor(textColor)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: maxWidth, alignment: .leading)
+                    .frame(maxWidth: maxWidth, alignment: alignment)
             }
         }
         .frame(height: 20)
