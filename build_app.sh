@@ -11,7 +11,7 @@ mkdir -p MusicMiniPlayer.app/Contents/Resources
 # Copy binary
 cp .build/release/MusicMiniPlayer MusicMiniPlayer.app/Contents/MacOS/
 
-# Create Info.plist with all required permissions
+# Create Info.plist with ALL required permissions and icon configuration
 cat > MusicMiniPlayer.app/Contents/Info.plist << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -22,7 +22,7 @@ cat > MusicMiniPlayer.app/Contents/Info.plist << 'PLIST'
     <key>CFBundleIdentifier</key>
     <string>com.yinanli.MusicMiniPlayer</string>
     <key>CFBundleName</key>
-    <string>Music Mini Player</string>
+    <string>MusicMiniPlayer</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -43,9 +43,24 @@ cat > MusicMiniPlayer.app/Contents/Info.plist << 'PLIST'
 </plist>
 PLIST
 
-echo "🎨 Compiling assets..."
-xcrun actool Sources/MusicMiniPlayerCore/Resources/AppIcon.icon --compile MusicMiniPlayer.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --output-partial-info-plist partial_info.plist
-rm partial_info.plist
+
+echo "🎨 Copying icon resources..."
+# Copy AppIcon.icon to app bundle and convert to .icns
+if [ -d "AppIcon.icon" ]; then
+    echo "🎨 Compiling AppIcon.icon using actool..."
+    xcrun actool AppIcon.icon --compile MusicMiniPlayer.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null
+    
+    if [ -f "partial_info.plist" ]; then
+        echo "✅ AppIcon compiled successfully"
+        # Merge partial info plist if needed, but we already set CFBundleIconName in Info.plist
+        rm partial_info.plist
+    else
+        echo "⚠️  actool failed to generate partial info plist"
+    fi
+else
+    echo "⚠️  AppIcon.icon not found"
+fi
+
 
 echo "✅ App bundle created at MusicMiniPlayer.app"
 echo "🚀 You can now open it with: open MusicMiniPlayer.app"
