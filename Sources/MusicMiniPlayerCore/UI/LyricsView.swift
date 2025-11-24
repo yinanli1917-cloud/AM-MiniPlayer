@@ -121,7 +121,7 @@ public struct LyricsView: View {
                                 if !isManualScrolling {
                                     isManualScrolling = true
                                 }
-                                
+
                                 // Hide controls immediately when scrolling
                                 if showControls {
                                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -131,15 +131,14 @@ public struct LyricsView: View {
 
                                 // Cancel existing timer
                                 autoScrollTimer?.invalidate()
-
-                                // Set new timer to restore auto-scroll after 2 seconds of no scrolling
-                                autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
-                                    withAnimation(.easeInOut(duration: 0.3)) {
-                                        isManualScrolling = false
-                                        // Only show controls if hovering
-                                        if isHovering {
-                                            showControls = true
-                                        }
+                            },
+                            onScrollStopped: {
+                                // User stopped scrolling for 2 seconds
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isManualScrolling = false
+                                    // Only show controls if hovering
+                                    if isHovering {
+                                        showControls = true
                                     }
                                 }
                             }
@@ -475,63 +474,57 @@ struct LoadingDotsLyricView: View {
     let previousLineEndTime: TimeInterval
 
     var body: some View {
-        // Calculate the wait duration (gap between lyrics)
-        let waitDuration = nextLineStartTime - previousLineEndTime
+        // Calculate the gap duration (time between lyrics)
+        let gapDuration = max(0.5, nextLineStartTime - previousLineEndTime)
 
-        // Calculate time elapsed in this gap
-        let elapsedTime = currentTime - previousLineEndTime
+        // Calculate elapsed time in this gap
+        let elapsedTime = max(0, currentTime - previousLineEndTime)
 
-        // Divide the wait duration into 3 equal segments for the dots
-        let segmentDuration = waitDuration / 3.0
+        // Only show dots if we're still in the gap (before the next line starts exactly)
+        // This prevents overlap with the first lyric line
+        guard elapsedTime < gapDuration else {
+            return AnyView(EmptyView())
+        }
 
-        // Determine which dots should be lit (once lit, they stay lit)
-        let litDots: Int = {
-            if elapsedTime < segmentDuration {
-                return 0
-            } else if elapsedTime < segmentDuration * 2 {
-                return 1
-            } else if elapsedTime < segmentDuration * 3 {
-                return 2
+        // Use 3 equal segments for the dots animation - true thirds
+        let segmentDuration = gapDuration / 3.0
+
+        // Calculate smooth progress for each dot
+        let dotProgresses: [CGFloat] = (0..<3).map { index in
+            let dotStartTime = segmentDuration * CGFloat(index)
+            let dotEndTime = segmentDuration * CGFloat(index + 1)
+
+            if elapsedTime <= dotStartTime {
+                return 0.0
+            } else if elapsedTime >= dotEndTime {
+                return 1.0
             } else {
-                return 3 // All dots lit
-            }
-        }()
-        
-        // Calculate fade out progress (last 15% of wait duration for smooth transition)
-        let fadeOutStart = waitDuration * 0.85
-        let fadeOutProgress = max(0, min(1, (elapsedTime - fadeOutStart) / (waitDuration - fadeOutStart)))
-        let dotsOpacity = 1.0 - fadeOutProgress
-
-        // Display dots as a normal lyric line with same spacing (20) and style
-        HStack(spacing: 8) {
-            ForEach(0..<3) { index in
-                let isLit = index < litDots
-                
-                // Opacity: lit dots stay bright, unlit dots are dim
-                let dotOpacity: Double = {
-                    if isLit {
-                        return 1.0 * dotsOpacity
-                    } else {
-                        return 0.3 * dotsOpacity
-                    }
-                }()
-                
-                // Scale: lit dots are slightly larger
-                let dotScale: CGFloat = isLit ? 1.2 : 1.0
-                
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 10, height: 10)
-                    .opacity(dotOpacity)
-                    .scaleEffect(dotScale)
-                    .animation(.spring(response: 0.4, dampingFraction: 0.7), value: litDots)
-                    .animation(.easeInOut(duration: 0.4), value: dotsOpacity)
+                // Smooth easing function for natural animation
+                let progress = (elapsedTime - dotStartTime) / (dotEndTime - dotStartTime)
+                return progress * progress * (3.0 - 2.0 * progress) // Smooth step function
             }
         }
-        .font(.system(size: 24, weight: .medium, design: .rounded))
-        .foregroundColor(.white)
-        .padding(.horizontal, 32)
-        .frame(maxWidth: .infinity, alignment: .leading)
+
+        // Display dots as proper lyric line with Apple Music style - much larger
+        return AnyView(
+            HStack(spacing: 16) {
+                ForEach(0..<3, id: \.self) { index in
+                    let progress = dotProgresses[index]
+
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 10, height: 10) // Much larger dots
+                        .scaleEffect(0.7 + progress * 0.3) // Scale from 0.7 to 1.0
+                        .opacity(0.4 + progress * 0.6) // Fade from 0.4 to 1.0
+                        .animation(.timingCurve(0.2, 0.0, 0.0, 1.0, duration: 0.4), value: progress)
+                }
+            }
+            .font(.system(size: 23, weight: .medium, design: .rounded)) // Same size as lyric lines
+            .foregroundColor(.white)
+            .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(0.7) // Slightly transparent like upcoming lyrics
+        )
     }
 }
 
@@ -539,56 +532,48 @@ struct LoadingDotsLyricView: View {
 
 struct ScrollDetectorView: NSViewRepresentable {
     let onScrollDetected: () -> Void
-    
+    let onScrollStopped: () -> Void
+
     func makeNSView(context: Context) -> NSView {
         let view = ScrollDetectorNSView()
         view.onScrollDetected = onScrollDetected
+        view.onScrollStopped = onScrollStopped
         return view
     }
-    
+
     func updateNSView(_ nsView: NSView, context: Context) {
         if let detectorView = nsView as? ScrollDetectorNSView {
             detectorView.onScrollDetected = onScrollDetected
+            detectorView.onScrollStopped = onScrollStopped
         }
     }
 }
 
 class ScrollDetectorNSView: NSView {
     var onScrollDetected: (() -> Void)?
+    var onScrollStopped: (() -> Void)?
     private var lastScrollTime: Date = Date()
-    private var scrollTimer: Timer?
-    
+    private var autoScrollTimer: Timer?
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        // Monitor scroll events via NSScrollView if available
-        if let scrollView = findScrollView(in: self) {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(scrollViewDidScroll),
-                name: NSView.boundsDidChangeNotification,
-                object: scrollView.contentView
-            )
-        }
     }
-    
+
     override func scrollWheel(with event: NSEvent) {
         // Don't block - just notify and pass through immediately
         lastScrollTime = Date()
         onScrollDetected?()
-        
-        // Cancel and restart timer
-        scrollTimer?.invalidate()
-        scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-            // If no scroll for 2 seconds, reset
-            if Date().timeIntervalSince(self.lastScrollTime) > 2.0 {
-                timer.invalidate()
+
+        // Cancel existing timer and create new 2-second timer
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            // Only call onScrollStopped if no scrolling in the past 2 seconds
+            if Date().timeIntervalSince(self.lastScrollTime) >= 2.0 {
+                self.onScrollStopped?()
             }
         }
-        
+
         // Always pass event to super immediately - don't block
         super.scrollWheel(with: event)
     }
@@ -610,7 +595,7 @@ class ScrollDetectorNSView: NSView {
     }
     
     deinit {
-        scrollTimer?.invalidate()
+        autoScrollTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 }
