@@ -283,7 +283,7 @@ public struct PlaylistView: View {
                         startPoint: .top,
                         endPoint: .bottom
                     )
-                    .frame(height: 100)
+                    .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
                     .allowsHitTesting(false)
                     .opacity(isHovering && showControls ? 1 : 0)
 
@@ -308,9 +308,28 @@ public struct PlaylistView: View {
                     }
                 }
             }
-            .onAppear {
+                .onAppear {
                 musicController.fetchUpNextQueue()
             }
+            .background(
+                ScrollDetectorBackground(
+                    onScrollDetected: {
+                        isManualScrolling = true
+                        showControls = false
+
+                        autoScrollTimer?.invalidate()
+                        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isManualScrolling = false
+                                if isHovering {
+                                    showControls = true
+                                }
+                            }
+                        }
+                    }
+                )
+                .allowsHitTesting(false)
+            )
         }
     }
 

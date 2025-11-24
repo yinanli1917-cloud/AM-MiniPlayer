@@ -170,11 +170,37 @@ public struct LyricsView: View {
                 }
             }
         }
-        .onAppear {
+          .onAppear {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
         }
+        .background(
+            ScrollDetectorBackground(
+                onScrollDetected: {
+                    if !isManualScrolling {
+                        isManualScrolling = true
+                    }
+
+                    if showControls {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showControls = false
+                        }
+                    }
+
+                    autoScrollTimer?.invalidate()
+                    autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            isManualScrolling = false
+                            if isHovering {
+                                showControls = true
+                            }
+                        }
+                    }
+                }
+            )
+            .allowsHitTesting(false)
+        )
         .onChange(of: musicController.currentTrackTitle) {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
@@ -623,6 +649,7 @@ class ScrollDetectorNSView: NSView {
         NotificationCenter.default.removeObserver(self)
     }
 }
+
 
 #Preview {
     @Previewable @State var currentPage: PlayerPage = .lyrics
