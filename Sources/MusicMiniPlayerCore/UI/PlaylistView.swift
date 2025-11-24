@@ -258,14 +258,13 @@ public struct PlaylistView: View {
 
                                 // Cancel existing timer
                                 autoScrollTimer?.invalidate()
-
-                                // Set new timer to restore controls after 2 seconds of no scrolling
-                                autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
-                                    withAnimation(.easeInOut(duration: 0.3)) {
-                                        isManualScrolling = false
-                                        if isHovering {
-                                            showControls = true
-                                        }
+                            },
+                            onScrollStopped: {
+                                // User stopped scrolling for 2 seconds
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isManualScrolling = false
+                                    if isHovering {
+                                        showControls = true
                                     }
                                 }
                             }
