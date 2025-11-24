@@ -82,7 +82,7 @@ public struct LyricsView: View {
                                    musicController.currentTime > 0 &&
                                    musicController.currentTime < line.startTime &&
                                    (index == 0 || (index > 0 && musicController.currentTime >= lyricsService.lyrics[index - 1].endTime))
-                                
+
                                 // Show loading dots as a normal lyric line (same spacing and style)
                                 if showLoadingDots {
                                     LoadingDotsLyricView(
@@ -93,13 +93,18 @@ public struct LyricsView: View {
                                     .id("loading-dots-\(index)")
                                 }
 
-                                // First line should display normally, same as other future lines
+                                // First line should display with blur if loading dots are active for it
+                                let isFirstLineLoading = index == 0 && lyricsService.currentLineIndex == nil &&
+                                                      musicController.currentTime > 0 &&
+                                                      musicController.currentTime < line.startTime
+
                                 LyricLineView(
                                     line: line,
                                     index: index,
                                     currentIndex: lyricsService.currentLineIndex ?? 0,
                                     currentTime: musicController.currentTime,
-                                    isScrolling: isManualScrolling
+                                    isScrolling: isManualScrolling,
+                                    isPreLoading: isFirstLineLoading
                                 )
                                 .id(line.id)
                                 .onTapGesture {
@@ -113,11 +118,10 @@ public struct LyricsView: View {
                         }
                         .drawingGroup()  // Performance optimization for smooth 60fps animations
                     }
-                    .background(
-                        // Use a transparent overlay to detect scroll without blocking
+                    .overlay(
                         ScrollDetectorView(
                             onScrollDetected: {
-                                // User is manually scrolling - update state without blocking
+                                // User is manually scrolling - update state
                                 if !isManualScrolling {
                                     isManualScrolling = true
                                 }
@@ -143,7 +147,7 @@ public struct LyricsView: View {
                                 }
                             }
                         )
-                        .allowsHitTesting(false) // Don't block touches
+                        .allowsHitTesting(false)
                     )
                     .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
                         if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
@@ -350,6 +354,7 @@ struct LyricLineView: View {
     let currentIndex: Int
     let currentTime: TimeInterval
     let isScrolling: Bool // Add parameter to know if user is scrolling
+    let isPreLoading: Bool // Whether this line is being pre-loaded during dots animation
 
     var body: some View {
         let distance = index - currentIndex
@@ -373,10 +378,13 @@ struct LyricLineView: View {
         let blur: CGFloat = {
             // No blur when scrolling to show all lyrics clearly
             if isScrolling { return 0 }
-            
+
+            // If this line is pre-loading during dots animation, keep it blurred
+            if isPreLoading { return 4.0 }
+
             // Progressive blur based on distance when not scrolling
             if isCurrent { return 0 }
-            
+
             if isPast {
                 // Past lines: gentle blur that increases with distance
                 let blurAmount = min(CGFloat(absDistance) * 0.4, 2.5)
@@ -389,10 +397,13 @@ struct LyricLineView: View {
         }()
         
         let opacity: CGFloat = {
+            // If this line is pre-loading during dots animation, keep it very transparent
+            if isPreLoading { return 0.3 }
+
             if isCurrent {
                 return 1.0
             }
-            
+
             if isPast {
                 // Past lines: fade gracefully but remain readable
                 let fadeAmount = max(0.4, 1.0 - Double(absDistance) * 0.15)

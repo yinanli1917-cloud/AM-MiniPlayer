@@ -248,8 +248,7 @@ public struct PlaylistView: View {
                             Spacer().frame(height: 100)
                         }
                     }
-                    .background(
-                        // Use a transparent overlay to detect scroll without blocking
+                    .overlay(
                         ScrollDetectorView(
                             onScrollDetected: {
                                 // User is manually scrolling
@@ -269,7 +268,7 @@ public struct PlaylistView: View {
                                 }
                             }
                         )
-                        .allowsHitTesting(false) // Don't block touches
+                        .allowsHitTesting(false)
                     )
                 }
             }
