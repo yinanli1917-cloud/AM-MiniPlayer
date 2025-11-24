@@ -111,6 +111,7 @@ public struct LyricsView: View {
                             Spacer()
                                 .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
                         }
+                        .drawingGroup()  // Performance optimization for smooth 60fps animations
                     }
                     .background(
                         // Use a transparent overlay to detect scroll without blocking
@@ -205,7 +206,7 @@ public struct LyricsView: View {
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 100)
+                .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
                 .allowsHitTesting(false)
                 .opacity(isHovering && showControls ? 1 : 0)
 
@@ -415,19 +416,6 @@ struct LyricLineView: View {
             }
         }()
         
-        // Calculate progress within current line for subtle animations
-        let lineProgress: Double = {
-            guard isCurrent, currentTime >= line.startTime, line.endTime > line.startTime else {
-                return 0
-            }
-            let duration = line.endTime - line.startTime
-            let elapsed = currentTime - line.startTime
-            return min(1.0, max(0.0, elapsed / duration))
-        }()
-        
-        // Subtle pulse effect for current line
-        let pulseScale: CGFloat = isCurrent ? (1.0 + sin(lineProgress * .pi * 2) * 0.02) : 1.0
-        
         // Simple text without karaoke effect, allow multiple lines
         Text(line.text)
             .font(.system(size: 24, weight: isCurrent ? .bold : .medium, design: .rounded))
@@ -435,7 +423,7 @@ struct LyricLineView: View {
             .lineLimit(nil) // Allow unlimited lines for wrapping
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true) // Allow text to expand vertically
-            .scaleEffect(scale * pulseScale, anchor: .leading)
+            .scaleEffect(scale, anchor: .leading)  // Removed pulseScale - no breathing effect
             .blur(radius: blur)
             .opacity(opacity)
             .offset(y: yOffset)
