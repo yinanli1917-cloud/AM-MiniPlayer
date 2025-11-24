@@ -85,6 +85,9 @@ public struct MiniPlayerView: View {
                                     let availableHeight = geo.size.height - (showControls ? 100 : 0)
                                     let artSize = isHovering ? geo.size.width * 0.50 : geo.size.width * 0.70
                                     
+                                    // Shadow offset adds visual weight at bottom, so adjust center point
+                                    let shadowYOffset: CGFloat = 6  // Half of shadow y offset (12/2) for visual balance
+                                    
                                     // Album Artwork + Text Unit (as a single ZStack with explicit size)
                                     ZStack(alignment: .bottomLeading) {
                                         // 1. Main Artwork - defines the ZStack size
@@ -138,7 +141,7 @@ public struct MiniPlayerView: View {
                                     .frame(width: artSize, height: artSize) // Explicit frame to ensure proper sizing
                                     .position(
                                         x: geo.size.width / 2,
-                                        y: availableHeight / 2
+                                        y: (availableHeight / 2) + shadowYOffset  // Adjust for shadow visual weight
                                     )
                                     .transition(.blurFadeSlide)
                                     

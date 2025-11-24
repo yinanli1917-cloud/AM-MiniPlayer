@@ -7,7 +7,7 @@
     <key>CFBundleIdentifier</key>
     <string>com.yinanli.MusicMiniPlayer</string>
     <key>CFBundleName</key>
-    <string>Music Mini Player</string>
+    <string>MusicMiniPlayer</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
