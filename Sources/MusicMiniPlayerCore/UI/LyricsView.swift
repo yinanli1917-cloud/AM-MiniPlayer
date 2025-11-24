@@ -379,8 +379,11 @@ struct LyricLineView: View {
             // No blur when scrolling to show all lyrics clearly
             if isScrolling { return 0 }
 
-            // If this line is pre-loading during dots animation, keep it blurred
-            if isPreLoading { return 4.0 }
+            // If this line is pre-loading during dots animation, treat it as upcoming future line
+            if isPreLoading {
+                // Treat as future line with distance 1
+                return min(CGFloat(1) * 0.7, 5.0)
+            }
 
             // Progressive blur based on distance when not scrolling
             if isCurrent { return 0 }
@@ -397,8 +400,11 @@ struct LyricLineView: View {
         }()
         
         let opacity: CGFloat = {
-            // If this line is pre-loading during dots animation, keep it very transparent
-            if isPreLoading { return 0.3 }
+            // If this line is pre-loading during dots animation, treat it as upcoming future line
+            if isPreLoading {
+                // Treat as future line with distance 1
+                return max(0.25, 0.95 - Double(1) * 0.10)
+            }
 
             if isCurrent {
                 return 1.0
@@ -486,7 +492,12 @@ struct LoadingDotsLyricView: View {
 
     var body: some View {
         // Calculate the gap duration (time between lyrics)
-        let gapDuration = max(0.5, nextLineStartTime - previousLineEndTime)
+        let gapDuration = nextLineStartTime - previousLineEndTime
+
+        // Only show dots if there's a meaningful gap
+        guard gapDuration > 0.3 else {
+            return AnyView(EmptyView())
+        }
 
         // Calculate elapsed time in this gap
         let elapsedTime = max(0, currentTime - previousLineEndTime)
@@ -518,7 +529,7 @@ struct LoadingDotsLyricView: View {
 
         // Display dots as proper lyric line with Apple Music style - much larger
         return AnyView(
-            HStack(spacing: 16) {
+            HStack(spacing: 8) {
                 ForEach(0..<3, id: \.self) { index in
                     let progress = dotProgresses[index]
 
@@ -549,6 +560,8 @@ struct ScrollDetectorView: NSViewRepresentable {
         let view = ScrollDetectorNSView()
         view.onScrollDetected = onScrollDetected
         view.onScrollStopped = onScrollStopped
+        view.frame = NSRect(x: 0, y: 0, width: 1000, height: 1000) // Make it large enough to catch events
+        view.autoresizingMask = [.width, .height]
         return view
     }
 
