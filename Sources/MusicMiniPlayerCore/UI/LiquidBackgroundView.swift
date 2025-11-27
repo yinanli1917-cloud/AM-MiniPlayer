@@ -13,16 +13,13 @@ public struct LiquidBackgroundView: View {
     public var body: some View {
         ZStack {
             // 底层：艳丽的颜色背景（clear需要colorful背景）
+            // 注意：dominantColor已经在提取时增强过了，这里不再处理
             if dominantColor != .clear {
                 dominantColor
-                    .saturation(5.4)  // 3倍饱和度：1.8 * 3 = 5.4
-                    .brightness(0.9)  // 降低明度增加深度
-                    .opacity(0.2)
+                    .opacity(0.3)  // 提高opacity让颜色更明显
             } else {
-                Color(red: 0.35, green: 0.15, blue: 0.25)
-                    .saturation(4.5)  // 3倍饱和度：1.5 * 3 = 4.5
-                    .brightness(0.9)
-                    .opacity(0.2)
+                Color(red: 0.99, green: 0.24, blue: 0.27)  // 使用鲜艳的红色作为fallback
+                    .opacity(0.3)
             }
 
             // 顶层：clear glass效果（最大透明度）
