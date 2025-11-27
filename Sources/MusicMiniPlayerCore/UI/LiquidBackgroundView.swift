@@ -16,10 +16,10 @@ public struct LiquidBackgroundView: View {
             // 注意：dominantColor已经在提取时增强过了，这里不再处理
             if dominantColor != .clear {
                 dominantColor
-                    .opacity(0.3)  // 提高opacity让颜色更明显
+                    .opacity(0.6)  // 足够高的opacity让颜色明显
             } else {
                 Color(red: 0.99, green: 0.24, blue: 0.27)  // 使用鲜艳的红色作为fallback
-                    .opacity(0.3)
+                    .opacity(0.6)
             }
 
             // 顶层：clear glass效果（最大透明度）
