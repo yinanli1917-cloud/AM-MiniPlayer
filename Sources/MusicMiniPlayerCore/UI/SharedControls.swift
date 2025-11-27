@@ -46,10 +46,8 @@ struct SharedBottomControls: View {
                 // Left navigation button
                 leftNavigationButton
                     .frame(width: 28, height: 28)
-                    .zIndex(1)
 
                 Spacer()
-                    .zIndex(1)
 
                 // Previous Track
                 Button(action: musicController.previousTrack) {
@@ -59,7 +57,6 @@ struct SharedBottomControls: View {
                 }
                 .frame(width: 32, height: 32)
                 .buttonStyle(.plain)
-                .zIndex(1)
 
                 // Play/Pause
                 Button(action: musicController.togglePlayPause) {
@@ -69,7 +66,6 @@ struct SharedBottomControls: View {
                 }
                 .frame(width: 32, height: 32)
                 .buttonStyle(.plain)
-                .zIndex(1)
 
                 // Next Track
                 Button(action: musicController.nextTrack) {
@@ -79,18 +75,33 @@ struct SharedBottomControls: View {
                 }
                 .frame(width: 32, height: 32)
                 .buttonStyle(.plain)
-                .zIndex(1)
 
                 Spacer()
-                    .zIndex(1)
 
-                // Right navigation button
-                rightNavigationButton
-                    .frame(width: 28, height: 28)
-                    .zIndex(1)
+                // Right navigation button - 直接内联避免computed property问题
+                Button(action: {
+                    print("🎵 Playlist button clicked - current page: \(currentPage)")
+                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                        let oldPage = currentPage
+                        if currentPage == .album {
+                            currentPage = .playlist
+                        } else if currentPage == .playlist {
+                            currentPage = .album
+                        } else {
+                            currentPage = .playlist
+                        }
+                        print("🎵 Page changed from \(oldPage) to \(currentPage)")
+                    }
+                }) {
+                    Image(systemName: currentPage == .playlist ? "music.note.list.fill" : "music.note.list")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.white.opacity(currentPage == .playlist ? 1.0 : 0.7))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
-            .zIndex(1)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 30)
@@ -123,35 +134,6 @@ struct SharedBottomControls: View {
         }
     }
 
-    private var rightNavigationButton: some View {
-        Button(action: {
-            print("🎵 Playlist button clicked - current page: \(currentPage)")
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                let oldPage = currentPage
-                if currentPage == .album {
-                    currentPage = .playlist
-                } else if currentPage == .playlist {
-                    currentPage = .album
-                } else {
-                    currentPage = .playlist
-                }
-                print("🎵 Page changed from \(oldPage) to \(currentPage)")
-            }
-        }) {
-            ZStack {
-                Circle()
-                    .fill(Color.clear)
-                    .frame(width: 28, height: 28)
-
-                Image(systemName: currentPage == .playlist ? "music.note.list.fill" : "music.note.list")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(.white.opacity(currentPage == .playlist ? 1.0 : 0.7))
-            }
-            .frame(width: 28, height: 28)
-            .id("playlist-button-\(currentPage.hashValue)")
-        }
-        .buttonStyle(.plain)
-    }
 
     private var progressBar: some View {
         GeometryReader { geo in
@@ -183,11 +165,10 @@ struct SharedBottomControls: View {
                     isProgressBarHovering = hovering
                 }
             }
-            .highPriorityGesture(
+            .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged({ value in
                         isDraggingProgressBar = true
-                        // 使用local coordinate space - value.location已经是相对于GeometryReader的本地坐标
                         let percentage = min(max(0, value.location.x / geo.size.width), 1)
                         dragPosition = percentage
                     })
