@@ -48,23 +48,19 @@ public class LyricsService: ObservableObject {
         Task {
             var fetchedLyrics: [LyricLine]? = nil
 
-            // Try multiple sources in order of preference
+            // Try multiple sources in parallel for faster response
             do {
-                // 1. Try amll-ttml-db first (best quality, word-level timing)
-                logger.info("🔍 Source 1: Trying amll-ttml-db...")
-                fetchedLyrics = try await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration)
+                logger.info("🔍 Starting parallel search from multiple sources...")
 
-                if fetchedLyrics == nil {
-                    // 2. Try LRCLIB (good quality, time-synced)
-                    logger.info("🔍 Source 2: Trying LRCLIB...")
-                    fetchedLyrics = try await fetchFromLRCLIB(title: title, artist: artist, duration: duration)
-                }
+                async let source1 = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration)
+                async let source2 = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration)
+                async let source3 = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration)
 
-                if fetchedLyrics == nil {
-                    // 3. Try lyrics.ovh (simple, no auth)
-                    logger.info("🔍 Source 3: Trying lyrics.ovh...")
-                    fetchedLyrics = try await fetchFromLyricsOVH(title: title, artist: artist, duration: duration)
-                }
+                // Return the first successful result
+                let results = await [source1, source2, source3]
+                fetchedLyrics = results.first { $0 != nil } ?? nil
+
+                logger.info("🎤 Parallel search completed")
 
                 if let lyrics = fetchedLyrics {
                     await MainActor.run {

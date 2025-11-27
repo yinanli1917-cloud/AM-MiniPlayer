@@ -13,35 +13,72 @@ public struct PlaylistView: View {
     @State private var lastDragLocation: CGFloat = 0
     @State private var dragVelocity: CGFloat = 0
     @Binding var currentPage: PlayerPage
-    @Namespace private var tabNamespace
-    
-    public init(currentPage: Binding<PlayerPage>) {
+    var animationNamespace: Namespace.ID
+    @State private var isCoverAnimating: Bool = false
+
+    public init(currentPage: Binding<PlayerPage>, animationNamespace: Namespace.ID) {
         self._currentPage = currentPage
+        self.animationNamespace = animationNamespace
     }
 
     public var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background gradient matching main player
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color.black.opacity(0.95),
-                        Color.gray.opacity(0.2)
-                    ]),
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                // Background (Liquid Glass) - same as MiniPlayerView
+                LiquidBackgroundView(artwork: musicController.currentArtwork)
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // Liquid Glass Tab Bar
+                    // 第一行：Music/Hide按钮 - 仅在hover时显示
+                    if isHovering && showControls {
+                        HStack {
+                            Button(action: {
+                                let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+                                NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.up.left")
+                                        .font(.system(size: 10, weight: .semibold))
+                                    Text("Music")
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .foregroundColor(.white.opacity(0.6))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.white.opacity(0.08))
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .help("打开 Apple Music")
+
+                            Spacer()
+
+                            Button(action: {
+                                NSApplication.shared.keyWindow?.orderOut(nil)
+                            }) {
+                                Image(systemName: "chevron.compact.up")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.white.opacity(0.08))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("收起到菜单栏")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
+                        .transition(.opacity)
+                    }
+
+                    // 第二行：Tab Bar
                     HStack(spacing: 0) {
                         ZStack {
                             // Background Capsule
                             Capsule()
                                 .fill(Color.white.opacity(0.1))
                                 .frame(height: 32)
-                            
+
                             // Selection Capsule
                             GeometryReader { geo in
                                 Capsule()
@@ -50,7 +87,7 @@ public struct PlaylistView: View {
                                     .offset(x: selectedTab == 0 ? 2 : geo.size.width / 2 + 2, y: 2)
                                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
                             }
-                            
+
                             // Tab Labels
                             HStack(spacing: 0) {
                                 Button(action: { selectedTab = 0 }) {
@@ -61,7 +98,7 @@ public struct PlaylistView: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                
+
                                 Button(action: { selectedTab = 1 }) {
                                     Text("Up Next")
                                         .font(.system(size: 13, weight: selectedTab == 1 ? .semibold : .medium))
@@ -73,22 +110,10 @@ public struct PlaylistView: View {
                             }
                         }
                         .frame(height: 32)
-                        .padding(.horizontal, 60) // Center the tabs with padding
+                        .padding(.horizontal, 60)
                         .padding(.top, 16)
                         .padding(.bottom, 12)
                     }
-                    .background(
-                        // Shadow hint for scrollability
-                        VStack(spacing: 0) {
-                            Spacer()
-                            LinearGradient(
-                                gradient: Gradient(colors: [.clear, .black.opacity(0.1)]),
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 4)
-                        }
-                    )
 
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 0) {
@@ -99,8 +124,10 @@ public struct PlaylistView: View {
 
                                 VStack(spacing: 0) {
                                     Button(action: {
-                                        // Click on Now Playing card goes back to album page
-                                        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                                        // 5-second animation to album page
+                                        print("🎬 Starting 5-second animation")
+                                        withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 5.0)) {
+                                            isCoverAnimating = true
                                             currentPage = .album
                                         }
                                     }) {
@@ -113,6 +140,7 @@ public struct PlaylistView: View {
                                                     .frame(width: artSize, height: artSize)
                                                     .cornerRadius(6)
                                                     .shadow(radius: 3)
+                                                    .matchedGeometryEffect(id: "main-artwork", in: animationNamespace)
                                             } else {
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .fill(Color.gray.opacity(0.3))
@@ -248,27 +276,24 @@ public struct PlaylistView: View {
                             Spacer().frame(height: 100)
                         }
                     }
-                    .overlay(
-                        ScrollDetectorView(
-                            onScrollDetected: {
-                                // User is manually scrolling
-                                isManualScrolling = true
-                                showControls = false
+                    .simpleScrollDetection(
+                        onScrollStarted: {
+                            // User is manually scrolling
+                            isManualScrolling = true
+                            showControls = false
 
-                                // Cancel existing timer
-                                autoScrollTimer?.invalidate()
-                            },
-                            onScrollStopped: {
-                                // User stopped scrolling for 2 seconds
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    isManualScrolling = false
-                                    if isHovering {
-                                        showControls = true
-                                    }
+                            // Cancel existing timer
+                            autoScrollTimer?.invalidate()
+                        },
+                        onScrollEnded: {
+                            // User stopped scrolling for 2 seconds
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isManualScrolling = false
+                                if isHovering {
+                                    showControls = true
                                 }
                             }
-                        )
-                        .allowsHitTesting(false)
+                        }
                     )
                 }
             }
@@ -311,25 +336,6 @@ public struct PlaylistView: View {
                 .onAppear {
                 musicController.fetchUpNextQueue()
             }
-            .background(
-                ScrollDetectorBackground(
-                    onScrollDetected: {
-                        isManualScrolling = true
-                        showControls = false
-
-                        autoScrollTimer?.invalidate()
-                        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                isManualScrolling = false
-                                if isHovering {
-                                    showControls = true
-                                }
-                            }
-                        }
-                    }
-                )
-                .allowsHitTesting(false)
-            )
         }
     }
 
@@ -450,6 +456,7 @@ struct PlaylistItemRowCompact: View {
 
 #Preview {
     @Previewable @State var currentPage: PlayerPage = .playlist
-    PlaylistView(currentPage: $currentPage)
+    @Previewable @Namespace var namespace
+    PlaylistView(currentPage: $currentPage, animationNamespace: namespace)
         .environmentObject(MusicController(preview: true))
 }

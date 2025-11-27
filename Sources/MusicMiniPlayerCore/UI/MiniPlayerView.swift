@@ -68,8 +68,8 @@ public struct MiniPlayerView: View {
             ZStack {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
-                
-                // Content
+
+                // Content - NO WindowDragGesture here to avoid conflicts
                 VStack(spacing: 0) {
                     if currentPage == .album {
                         // Album Art with Track Info - using auto layout
@@ -98,7 +98,7 @@ public struct MiniPlayerView: View {
                                             .clipped()
                                             .cornerRadius(12)
                                             .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
-                                            .matchedGeometryEffect(id: "albumArt", in: animation)
+                                            .matchedGeometryEffect(id: "main-artwork", in: animation)
                                             .onTapGesture {
                                                 withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                                                     currentPage = currentPage == .album ? .lyrics : .album
@@ -144,31 +144,20 @@ public struct MiniPlayerView: View {
                                         y: (availableHeight / 2) + shadowYOffset  // Adjust for shadow visual weight
                                     )
                                     .transition(.blurFadeSlide)
-                                    
+
                                     // Controls - fixed at bottom (overlay)
                                     if showControls {
                                         VStack {
                                             Spacer()
-                                            ZStack(alignment: .bottom) {
-                                                // Gradient mask (same as other pages)
-                                                LinearGradient(
-                                                    gradient: Gradient(colors: [.clear, .black.opacity(0.8)]),
-                                                    startPoint: .top,
-                                                    endPoint: .bottom
-                                                )
-                                                .frame(height: 100)
-                                                .allowsHitTesting(false)
-                                                .opacity(1)
-                                                
-                                                SharedBottomControls(
-                                                    currentPage: $currentPage,
-                                                    isHovering: $isHovering,
-                                                    showControls: $showControls,
-                                                    isProgressBarHovering: $isProgressBarHovering,
-                                                    dragPosition: $dragPosition
-                                                )
-                                                .padding(.bottom, 0) // Same as other pages
-                                            }
+
+                                            SharedBottomControls(
+                                                currentPage: $currentPage,
+                                                isHovering: $isHovering,
+                                                showControls: $showControls,
+                                                isProgressBarHovering: $isProgressBarHovering,
+                                                dragPosition: $dragPosition
+                                            )
+                                            .padding(.bottom, 0)
                                         }
                                         .transition(
                                             .asymmetric(
@@ -205,7 +194,7 @@ public struct MiniPlayerView: View {
                             .transition(.opacity)
                     } else if currentPage == .playlist {
                         // Playlist View with 3D flip animation
-                        PlaylistView(currentPage: $currentPage)
+                        PlaylistView(currentPage: $currentPage, animationNamespace: animation)
                             .rotation3DEffect(
                                 .degrees(currentPage == .playlist ? 0 : 90),
                                 axis: (x: 0, y: 1, z: 0),
@@ -236,8 +225,62 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        .frame(width: 300, height: 380) // Increased height to fit controls
+        .frame(width: 300, height: 380) // Original aspect ratio
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(alignment: .topLeading) {
+            // Music按钮 - hover时显示
+            if showControls {
+                Button(action: {
+                    let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+                    NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.left")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Music")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(.white.opacity(0.6))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(12)
+                .help("打开 Apple Music")
+                .transition(
+                    .asymmetric(
+                        insertion: .blurFadeSlide,
+                        removal: .opacity.combined(with: .scale(scale: 0.95))
+                    )
+                )
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            // Hide按钮 - hover时显示
+            if showControls {
+                Button(action: {
+                    NSApplication.shared.keyWindow?.orderOut(nil)
+                }) {
+                    Image(systemName: "chevron.compact.up")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(12)
+                .help("收起到菜单栏")
+                .transition(
+                    .asymmetric(
+                        insertion: .blurFadeSlide,
+                        removal: .opacity.combined(with: .scale(scale: 0.95))
+                    )
+                )
+            }
+        }
     }
 
 }
@@ -268,7 +311,7 @@ public struct MiniPlayerView: View {
                 }
                 return controller
             }())
-            .frame(width: 300, height: 340)
+            .frame(width: 300, height: 300)
             .clipShape(RoundedRectangle(cornerRadius: 20))
             .shadow(radius: 20)
     }
