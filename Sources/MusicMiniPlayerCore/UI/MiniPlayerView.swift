@@ -228,58 +228,48 @@ public struct MiniPlayerView: View {
         .frame(width: 300, height: 380) // Original aspect ratio
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
-            // Music按钮 - hover时显示
-            if showControls {
-                Button(action: {
-                    let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
-                    NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.up.left")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text("Music")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundColor(.white.opacity(0.6))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(Capsule())
+            // Music按钮 - 始终存在但透明度控制，避免hover循环
+            Button(action: {
+                let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+                NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.left")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Music")
+                        .font(.system(size: 11, weight: .medium))
                 }
-                .buttonStyle(.plain)
-                .padding(12)
-                .help("打开 Apple Music")
-                .transition(
-                    .asymmetric(
-                        insertion: .blurFadeSlide,
-                        removal: .opacity.combined(with: .scale(scale: 0.95))
-                    )
-                )
+                .foregroundColor(.white.opacity(0.6))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.08))
+                .clipShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .padding(12)
+            .help("打开 Apple Music")
+            .opacity(showControls ? 1 : 0)
+            .animation(.easeInOut(duration: 0.3), value: showControls)
+            .allowsHitTesting(showControls)
         }
         .overlay(alignment: .topTrailing) {
-            // Hide按钮 - hover时显示
-            if showControls {
-                Button(action: {
-                    NSApplication.shared.keyWindow?.orderOut(nil)
-                }) {
-                    Image(systemName: "chevron.compact.up")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.08))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .padding(12)
-                .help("收起到菜单栏")
-                .transition(
-                    .asymmetric(
-                        insertion: .blurFadeSlide,
-                        removal: .opacity.combined(with: .scale(scale: 0.95))
-                    )
-                )
+            // Hide按钮 - 始终存在但透明度控制
+            Button(action: {
+                NSApplication.shared.keyWindow?.orderOut(nil)
+            }) {
+                Image(systemName: "chevron.compact.up")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Circle())
             }
+            .buttonStyle(.plain)
+            .padding(12)
+            .help("收起到菜单栏")
+            .opacity(showControls ? 1 : 0)
+            .animation(.easeInOut(duration: 0.3), value: showControls)
+            .allowsHitTesting(showControls)
         }
     }
 
