@@ -16,8 +16,6 @@
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>MusicMiniPlayer needs access to control Music.app playback</string>
     <key>NSAppleMusicUsageDescription</key>

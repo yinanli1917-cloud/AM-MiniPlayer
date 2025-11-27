@@ -23,6 +23,9 @@ public struct LyricsView: View {
 
     public var body: some View {
         ZStack {
+            // Background (Liquid Glass) - same as MiniPlayerView
+            LiquidBackgroundView(artwork: musicController.currentArtwork)
+            .ignoresSafeArea()
             // Main lyrics container
             if lyricsService.isLoading {
                 ProgressView()
@@ -77,11 +80,13 @@ public struct LyricsView: View {
                                 .frame(height: 160)
 
                             ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
-                                // Show loading dots as a lyric line when currentLineIndex is nil and we're before this line
-                                let showLoadingDots = lyricsService.currentLineIndex == nil &&
-                                   musicController.currentTime > 0 &&
-                                   musicController.currentTime < line.startTime &&
-                                   (index == 0 || (index > 0 && musicController.currentTime >= lyricsService.lyrics[index - 1].endTime))
+                                // Show loading dots as a lyric line when we're in the gap between lyrics
+                                // CRITICAL: Force show loading dots with proper timing
+                                let shouldShowDots = (index == 0 && musicController.currentTime < line.startTime && musicController.currentTime > 0) ||
+                                                 (index > 0 && musicController.currentTime >= lyricsService.lyrics[index - 1].endTime && musicController.currentTime < line.startTime)
+
+                                // Add small buffer time before first lyric starts for smooth transition
+                                let showLoadingDots = shouldShowDots && musicController.currentTime < (line.startTime - 0.05)
 
                                 // Show loading dots as a normal lyric line (same spacing and style)
                                 if showLoadingDots {
@@ -118,36 +123,32 @@ public struct LyricsView: View {
                         }
                         .drawingGroup()  // Performance optimization for smooth 60fps animations
                     }
-                    .overlay(
-                        ScrollDetectorView(
-                            onScrollDetected: {
-                                // User is manually scrolling - update state
-                                if !isManualScrolling {
-                                    isManualScrolling = true
-                                }
+                    .simpleScrollDetection(
+                        onScrollStarted: {
+                            // User is manually scrolling - update state
+                            if !isManualScrolling {
+                                isManualScrolling = true
+                            }
 
-                                // Hide controls immediately when scrolling
-                                if showControls {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = false
-                                    }
-                                }
-
-                                // Cancel existing timer
-                                autoScrollTimer?.invalidate()
-                            },
-                            onScrollStopped: {
-                                // User stopped scrolling for 2 seconds
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    isManualScrolling = false
-                                    // Only show controls if hovering
-                                    if isHovering {
-                                        showControls = true
-                                    }
+                            // Hide controls immediately when scrolling
+                            if showControls {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showControls = false
                                 }
                             }
-                        )
-                        .allowsHitTesting(false)
+
+                            // Cancel existing timer
+                            autoScrollTimer?.invalidate()
+                        },
+                        onScrollEnded: {
+                            // User stopped scrolling for 2 seconds
+                            print("📜 Scroll ended callback - isHovering: \(isHovering)")
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isManualScrolling = false
+                                // Show controls if currently hovering, otherwise keep hidden
+                                showControls = isHovering
+                            }
+                        }
                     )
                     .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
                         if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
@@ -167,6 +168,8 @@ public struct LyricsView: View {
                 isHovering = hovering
                 if hovering && !isManualScrolling {
                     showControls = true
+                } else if !hovering && !isManualScrolling {
+                    showControls = false
                 }
             }
         }
@@ -175,33 +178,7 @@ public struct LyricsView: View {
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
         }
-        .background(
-            ScrollDetectorBackground(
-                onScrollDetected: {
-                    if !isManualScrolling {
-                        isManualScrolling = true
-                    }
-
-                    if showControls {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showControls = false
-                        }
-                    }
-
-                    autoScrollTimer?.invalidate()
-                    autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            isManualScrolling = false
-                            if isHovering {
-                                showControls = true
-                            }
-                        }
-                    }
-                }
-            )
-            .allowsHitTesting(false)
-        )
-        .onChange(of: musicController.currentTrackTitle) {
+          .onChange(of: musicController.currentTrackTitle) {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
@@ -470,7 +447,7 @@ struct LyricLineView: View {
             .opacity(opacity)
             .offset(y: yOffset)
             .animation(
-                .spring(response: 0.5, dampingFraction: 0.75, blendDuration: 0.2),
+                .timingCurve(0.2, 0.0, 0.0, 1.0, duration: 1.2),
                 value: currentIndex
             )
             .animation(
@@ -565,6 +542,14 @@ struct LoadingDotsLyricView: View {
                         .scaleEffect(0.7 + progress * 0.3) // Scale from 0.7 to 1.0
                         .opacity(0.4 + progress * 0.6) // Fade from 0.4 to 1.0
                         .animation(.timingCurve(0.2, 0.0, 0.0, 1.0, duration: 0.4), value: progress)
+                        // Add breathing effect for completed dots
+                        .overlay(
+                            Circle()
+                                .fill(Color.white)
+                                .scaleEffect(progress > 0.5 ? 1.2 + sin(Date().timeIntervalSince1970 * 3) * 0.1 : 1.0)
+                                .opacity(progress > 0.5 ? 0.3 : 0.0)
+                                .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: progress > 0.5)
+                        )
                 }
             }
             .font(.system(size: 23, weight: .medium, design: .rounded)) // Same size as lyric lines
@@ -576,79 +561,6 @@ struct LoadingDotsLyricView: View {
     }
 }
 
-// MARK: - Scroll Detector View (non-blocking)
-
-struct ScrollDetectorView: NSViewRepresentable {
-    let onScrollDetected: () -> Void
-    let onScrollStopped: () -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = ScrollDetectorNSView()
-        view.onScrollDetected = onScrollDetected
-        view.onScrollStopped = onScrollStopped
-        view.frame = NSRect(x: 0, y: 0, width: 1000, height: 1000) // Make it large enough to catch events
-        view.autoresizingMask = [.width, .height]
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        if let detectorView = nsView as? ScrollDetectorNSView {
-            detectorView.onScrollDetected = onScrollDetected
-            detectorView.onScrollStopped = onScrollStopped
-        }
-    }
-}
-
-class ScrollDetectorNSView: NSView {
-    var onScrollDetected: (() -> Void)?
-    var onScrollStopped: (() -> Void)?
-    private var lastScrollTime: Date = Date()
-    private var autoScrollTimer: Timer?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-    }
-
-    override func scrollWheel(with event: NSEvent) {
-        // Don't block - just notify and pass through immediately
-        lastScrollTime = Date()
-        onScrollDetected?()
-
-        // Cancel existing timer and create new 2-second timer
-        autoScrollTimer?.invalidate()
-        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            // Only call onScrollStopped if no scrolling in the past 2 seconds
-            if Date().timeIntervalSince(self.lastScrollTime) >= 2.0 {
-                self.onScrollStopped?()
-            }
-        }
-
-        // Always pass event to super immediately - don't block
-        super.scrollWheel(with: event)
-    }
-    
-    @objc private func scrollViewDidScroll() {
-        lastScrollTime = Date()
-        onScrollDetected?()
-    }
-    
-    private func findScrollView(in view: NSView) -> NSScrollView? {
-        var current: NSView? = view.superview
-        while current != nil {
-            if let scrollView = current as? NSScrollView {
-                return scrollView
-            }
-            current = current?.superview
-        }
-        return nil
-    }
-    
-    deinit {
-        autoScrollTimer?.invalidate()
-        NotificationCenter.default.removeObserver(self)
-    }
-}
 
 
 #Preview {

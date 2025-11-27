@@ -82,51 +82,62 @@ extension NSImage {
 
         // Fallback to average if no vibrant color found
         if bestColor.score == -1 {
+            print("⚠️ No vibrant color found, using average")
             return self.averageColor()
         }
 
-        // Enhance saturation by 30% to make the color more vibrant
-        let color = NSColor(red: bestColor.r, green: bestColor.g, blue: bestColor.b, alpha: 1.0)
-        let hsbColor = color.usingColorSpace(.deviceRGB) ?? color
-        var hue: CGFloat = 0
-        var saturation: CGFloat = 0
-        var brightness: CGFloat = 0
-        hsbColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+        // 极端增强饱和度和明度以便测试
+        let nsColor = NSColor(red: bestColor.r, green: bestColor.g, blue: bestColor.b, alpha: 1.0)
 
-        // Boost saturation and brightness for vibrant, liquid glass effect
-        let enhancedSaturation = min(1.0, saturation * 1.8) // Vibrant but not oversaturated
-        let enhancedBrightness = max(0.35, min(0.65, brightness * 0.85)) // Brighter: range 0.35-0.65
+        // 转换到HSB色彩空间进行增强
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
 
-        return NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: 1.0)
+        // 极端增强：饱和度翻10倍，明度降低到0.3以获得深色艳丽效果
+        let enhancedSaturation = min(saturation * 10.0, 1.0)
+        let enhancedBrightness = max(brightness * 0.3, 0.15)
+
+        let finalColor = NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: 1.0)
+        print("🎨 Enhanced color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness)")
+        return finalColor
     }
 
     func averageColor() -> NSColor? {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        
+
         let inputImage = CIImage(cgImage: cgImage)
         let extentVector = CIVector(x: inputImage.extent.origin.x,
                                     y: inputImage.extent.origin.y,
                                     z: inputImage.extent.size.width,
                                     w: inputImage.extent.size.height)
-        
+
         guard let filter = CIFilter(name: "CIAreaAverage",
                                     parameters: [kCIInputImageKey: inputImage,
                                                  kCIInputExtentKey: extentVector]) else { return nil }
         guard let outputImage = filter.outputImage else { return nil }
-        
+
         var bitmap = [UInt8](repeating: 0, count: 4)
         let context = CIContext(options: [.workingColorSpace: kCFNull!])
-        
+
         context.render(outputImage,
                        toBitmap: &bitmap,
                        rowBytes: 4,
                        bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
                        format: .RGBA8,
                        colorSpace: nil)
-        
-        return NSColor(red: CGFloat(bitmap[0]) / 255,
+
+        let nsColor = NSColor(red: CGFloat(bitmap[0]) / 255,
                        green: CGFloat(bitmap[1]) / 255,
                        blue: CGFloat(bitmap[2]) / 255,
                        alpha: CGFloat(bitmap[3]) / 255)
+
+        // 对averageColor也进行同样的极端增强
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        let enhancedSaturation = min(saturation * 10.0, 1.0)
+        let enhancedBrightness = max(brightness * 0.3, 0.15)
+
+        print("🎨 Enhanced average color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness)")
+        return NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: 1.0)
     }
 }
