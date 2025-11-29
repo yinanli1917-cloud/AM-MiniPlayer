@@ -34,8 +34,8 @@ public class MusicController: ObservableObject {
     @Published public var audioQuality: String? = nil // "Lossless", "Hi-Res Lossless", "Dolby Atmos", nil
     @Published public var shuffleEnabled: Bool = false
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
-    @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String)] = []
-    @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String)] = []
+    @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
+    @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
 
     // Private properties
     private var musicApp: SBApplication?
@@ -63,15 +63,15 @@ public class MusicController: ObservableObject {
             
             // Populate dummy data for preview
             self.recentTracks = [
-                (title: "Recent Song 1", artist: "Artist A", album: "Album A", persistentID: "1"),
-                (title: "Recent Song 2", artist: "Artist B", album: "Album B", persistentID: "2"),
-                (title: "Recent Song 3", artist: "Artist C", album: "Album C", persistentID: "3")
+                (title: "Recent Song 1", artist: "Artist A", album: "Album A", persistentID: "1", duration: 190.0),
+                (title: "Recent Song 2", artist: "Artist B", album: "Album B", persistentID: "2", duration: 210.0),
+                (title: "Recent Song 3", artist: "Artist C", album: "Album C", persistentID: "3", duration: 180.0)
             ]
-            
+
             self.upNextTracks = [
-                (title: "Next Song 1", artist: "Artist X", album: "Album X", persistentID: "4"),
-                (title: "Next Song 2", artist: "Artist Y", album: "Album Y", persistentID: "5"),
-                (title: "Next Song 3", artist: "Artist Z", album: "Album Z", persistentID: "6")
+                (title: "Next Song 1", artist: "Artist X", album: "Album X", persistentID: "4", duration: 200.0),
+                (title: "Next Song 2", artist: "Artist Y", album: "Album Y", persistentID: "5", duration: 220.0),
+                (title: "Next Song 3", artist: "Artist Z", album: "Album Z", persistentID: "6", duration: 195.0)
             ]
             return
         }
@@ -589,13 +589,13 @@ public class MusicController: ObservableObject {
         guard !isPreview else {
             // Preview data
             upNextTracks = [
-                ("Next Song 1", "Artist 1", "Album 1", "1"),
-                ("Next Song 2", "Artist 2", "Album 2", "2"),
-                ("Next Song 3", "Artist 3", "Album 3", "3")
+                ("Next Song 1", "Artist 1", "Album 1", "1", 180.0),
+                ("Next Song 2", "Artist 2", "Album 2", "2", 200.0),
+                ("Next Song 3", "Artist 3", "Album 3", "3", 220.0)
             ]
             recentTracks = [
-                ("Recent Song 1", "Artist A", "Album A", "A"),
-                ("Recent Song 2", "Artist B", "Album B", "B")
+                ("Recent Song 1", "Artist A", "Album A", "A", 190.0),
+                ("Recent Song 2", "Artist B", "Album B", "B", 210.0)
             ]
             return
         }
@@ -614,7 +614,7 @@ public class MusicController: ObservableObject {
                     repeat with i from 1 to (trackCount)
                         if i > 10 then exit repeat
                         set t to item i of queueTracks
-                        set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & ":::"
+                        set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & "|||" & (duration of t) & ":::"
                     end repeat
                 else
                     -- Fallback to current playlist
@@ -636,7 +636,7 @@ public class MusicController: ObservableObject {
                         repeat with i from (currentIndex + 1) to (currentIndex + 10)
                             if i > trackCount then exit repeat
                             set t to item i of queueTracks
-                            set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & ":::"
+                            set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & "|||" & (duration of t) & ":::"
                         end repeat
                     end if
                 end if
@@ -667,7 +667,7 @@ public class MusicController: ObservableObject {
                 if currentIndex > 1 then
                     repeat with i from (currentIndex - 1) to 1 by -1
                         set t to item i of queueTracks
-                        set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & ":::"
+                        set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & "|||" & (duration of t) & ":::"
                         if (currentIndex - i) >= 10 then exit repeat
                     end repeat
                 end if
@@ -687,6 +687,12 @@ public class MusicController: ObservableObject {
                     DispatchQueue.main.async {
                         self.upNextTracks = parsed
                         self.logger.info("✅ Fetched \(parsed.count) up next tracks")
+
+                        // Trigger lyrics preloading for upcoming tracks (first 3 only to avoid hammering APIs)
+                        let tracksToPreload = Array(parsed.prefix(3)).map { (title: $0.title, artist: $0.artist, duration: $0.duration) }
+                        if !tracksToPreload.isEmpty {
+                            LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
+                        }
                     }
                 } else if let error = error {
                     self.logger.error("❌ Up Next fetch error: \(error)")
@@ -710,8 +716,8 @@ public class MusicController: ObservableObject {
         }
     }
 
-    private func parseQueueResult(_ resultString: String) -> [(title: String, artist: String, album: String, persistentID: String)] {
-        var tracks: [(String, String, String, String)] = []
+    private func parseQueueResult(_ resultString: String) -> [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] {
+        var tracks: [(String, String, String, String, TimeInterval)] = []
 
         // Split by track separator
         let trackStrings = resultString.components(separatedBy: ":::")
@@ -721,12 +727,13 @@ public class MusicController: ObservableObject {
         for trackString in trackStrings {
             // Split by field separator
             let fields = trackString.components(separatedBy: "|||")
-            if fields.count >= 4 {
+            if fields.count >= 5 {
                 let title = fields[0].trimmingCharacters(in: .whitespacesAndNewlines)
                 let artist = fields[1].trimmingCharacters(in: .whitespacesAndNewlines)
                 let album = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
                 let id = fields[3].trimmingCharacters(in: .whitespacesAndNewlines)
-                tracks.append((title, artist, album, id))
+                let durationSeconds = Double(fields[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0.0
+                tracks.append((title, artist, album, id, durationSeconds))
             }
         }
 

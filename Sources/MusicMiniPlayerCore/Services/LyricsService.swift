@@ -17,6 +17,24 @@ public struct LyricLine: Identifiable, Equatable {
     }
 }
 
+// MARK: - Cache Item
+
+class CachedLyricsItem: NSObject {
+    let lyrics: [LyricLine]
+    let timestamp: Date
+
+    init(lyrics: [LyricLine]) {
+        self.lyrics = lyrics
+        self.timestamp = Date()
+        super.init()
+    }
+
+    var isExpired: Bool {
+        // Cache expires after 24 hours
+        return Date().timeIntervalSince(timestamp) > 86400
+    }
+}
+
 // MARK: - Service
 
 public class LyricsService: ObservableObject {
@@ -30,7 +48,14 @@ public class LyricsService: ObservableObject {
     private var currentSongID: String?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
 
-    private init() {}
+    // MARK: - Lyrics Cache
+    private let lyricsCache = NSCache<NSString, CachedLyricsItem>()
+
+    private init() {
+        // Configure cache limits
+        lyricsCache.countLimit = 50 // Store up to 50 songs' lyrics
+        lyricsCache.totalCostLimit = 10 * 1024 * 1024 // 10MB limit
+    }
 
     func fetchLyrics(for title: String, artist: String, duration: TimeInterval, forceRefresh: Bool = false) {
         // Avoid re-fetching if same song (unless force refresh)
@@ -38,6 +63,24 @@ public class LyricsService: ObservableObject {
         guard songID != currentSongID || forceRefresh else { return }
 
         currentSongID = songID
+
+        // Check cache first
+        if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+            logger.info("✅ Using cached lyrics for: \(title) - \(artist)")
+
+            // Apply cached lyrics with loading line
+            let loadingLine = LyricLine(
+                text: "⋯",
+                startTime: 0,
+                endTime: cached.lyrics[0].startTime
+            )
+            self.lyrics = [loadingLine] + cached.lyrics
+            self.isLoading = false
+            self.error = nil
+            self.currentLineIndex = nil
+            return
+        }
+
         isLoading = true
         error = nil
         // Don't clear lyrics immediately - keep showing old lyrics until new ones load
@@ -63,6 +106,11 @@ public class LyricsService: ObservableObject {
                 logger.info("🎤 Parallel search completed")
 
                 if let lyrics = fetchedLyrics, !lyrics.isEmpty {
+                    // Cache the lyrics
+                    let cacheItem = CachedLyricsItem(lyrics: lyrics)
+                    self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
+                    self.logger.info("💾 Cached lyrics for: \(songID)")
+
                     await MainActor.run {
                         // 🎵 Insert a loading placeholder line at the beginning
                         // This allows smooth scroll animation from loading state to first lyric
@@ -118,6 +166,48 @@ public class LyricsService: ObservableObject {
         } else {
             // No line matches - set to nil (will trigger loading dots)
             currentLineIndex = nil
+        }
+    }
+
+    // MARK: - Preloading
+
+    /// Preload lyrics for upcoming songs in the queue
+    /// This fetches lyrics in the background and stores them in cache for instant display
+    public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval)]) {
+        logger.info("🔄 Preloading lyrics for \(tracks.count) upcoming songs")
+
+        Task {
+            for track in tracks {
+                let songID = "\(track.title)-\(track.artist)"
+
+                // Skip if already in cache and not expired
+                if let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+                    logger.info("⏭️ Skipping preload - already cached: \(songID)")
+                    continue
+                }
+
+                logger.info("📥 Preloading: \(track.title) - \(track.artist)")
+
+                // Fetch lyrics in background
+                async let source1 = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration)
+                async let source2 = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration)
+                async let source3 = try? await fetchFromLyricsOVH(title: track.title, artist: track.artist, duration: track.duration)
+
+                let results = await [source1, source2, source3]
+                if let fetchedLyrics = results.first(where: { $0 != nil && !$0!.isEmpty }) ?? nil {
+                    // Cache the preloaded lyrics
+                    let cacheItem = CachedLyricsItem(lyrics: fetchedLyrics)
+                    lyricsCache.setObject(cacheItem, forKey: songID as NSString)
+                    logger.info("✅ Preloaded and cached: \(songID) (\(fetchedLyrics.count) lines)")
+                } else {
+                    logger.warning("⚠️ No lyrics found for preload: \(songID)")
+                }
+
+                // Small delay to avoid hammering APIs
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            }
+
+            logger.info("✅ Preloading complete")
         }
     }
 
