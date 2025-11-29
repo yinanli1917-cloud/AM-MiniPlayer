@@ -108,14 +108,15 @@ public struct LyricsView: View {
                                         musicController.seek(to: line.startTime)
                                     }
 
-                                    // 检测间奏：如果下一句歌词间隔超过5秒，插入间奏动画
+                                    // 检测间奏：检查时间轴是否跳跃超过5秒
                                     if index < lyricsService.lyrics.count - 1 {
                                         let currentLine = lyricsService.lyrics[index]
                                         let nextLine = lyricsService.lyrics[index + 1]
-                                        let gap = nextLine.startTime - currentLine.endTime
+                                        // 关键：检测 startTime 的跳跃，而不是 endTime 到 startTime 的差距
+                                        let timeJump = nextLine.startTime - currentLine.startTime
 
-                                        if gap > 5.0 && currentLine.text != "⋯" {
-                                            // 间奏动画占位符
+                                        if timeJump >= 5.0 && currentLine.text != "⋯" && nextLine.text != "⋯" {
+                                            // 间奏动画：从当前行结束到下一行开始
                                             InterludeLoadingDotsView(
                                                 currentTime: musicController.currentTime,
                                                 startTime: currentLine.endTime,
@@ -457,6 +458,7 @@ struct LyricLineView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .padding(.horizontal, 32)  // 🔑 先padding，再做视觉效果
         .scaleEffect(scale, anchor: .leading)
         .blur(radius: blur)
         .opacity(opacity)
@@ -469,7 +471,6 @@ struct LyricLineView: View {
             .easeInOut(duration: 0.3),
             value: isScrolling
         )
-        .padding(.horizontal, 32)  // 左右各32px padding，保证居中
         .contentShape(Rectangle())
     }
 }
