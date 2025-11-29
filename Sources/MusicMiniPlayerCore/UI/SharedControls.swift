@@ -1,4 +1,18 @@
 import SwiftUI
+import AppKit
+
+// NSView wrapper that prevents window dragging
+struct NonDraggableView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NonDraggableNSView {
+        return NonDraggableNSView()
+    }
+
+    func updateNSView(_ nsView: NonDraggableNSView, context: Context) {}
+}
+
+class NonDraggableNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+}
 
 // MARK: - Shared Bottom Controls
 struct SharedBottomControls: View {
@@ -12,7 +26,7 @@ struct SharedBottomControls: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // Time & Progress Bar
+            // Time & Progress Bar - wrapped to prevent window dragging
             VStack(spacing: 4) {
                 // Time labels
                 HStack {
@@ -40,6 +54,7 @@ struct SharedBottomControls: View {
                 // Progress Bar
                 progressBar
             }
+            .background(NonDraggableView())
 
             // Playback Controls
             HStack(spacing: 12) {
@@ -50,56 +65,28 @@ struct SharedBottomControls: View {
                 Spacer()
 
                 // Previous Track
-                Button(action: musicController.previousTrack) {
-                    Image(systemName: "backward.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.white)
+                HoverableControlButton(iconName: "backward.fill", size: 18) {
+                    musicController.previousTrack()
                 }
                 .frame(width: 32, height: 32)
-                .buttonStyle(.plain)
 
                 // Play/Pause
-                Button(action: musicController.togglePlayPause) {
-                    Image(systemName: musicController.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(.white)
+                HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 22) {
+                    musicController.togglePlayPause()
                 }
                 .frame(width: 32, height: 32)
-                .buttonStyle(.plain)
 
                 // Next Track
-                Button(action: musicController.nextTrack) {
-                    Image(systemName: "forward.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.white)
+                HoverableControlButton(iconName: "forward.fill", size: 18) {
+                    musicController.nextTrack()
                 }
                 .frame(width: 32, height: 32)
-                .buttonStyle(.plain)
 
                 Spacer()
 
-                // Right navigation button - 直接内联避免computed property问题
-                Button(action: {
-                    print("🎵 Playlist button clicked - current page: \(currentPage)")
-                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                        let oldPage = currentPage
-                        if currentPage == .album {
-                            currentPage = .playlist
-                        } else if currentPage == .playlist {
-                            currentPage = .album
-                        } else {
-                            currentPage = .playlist
-                        }
-                        print("🎵 Page changed from \(oldPage) to \(currentPage)")
-                    }
-                }) {
-                    Image(systemName: currentPage == .playlist ? "music.note.list.fill" : "music.note.list")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white.opacity(currentPage == .playlist ? 1.0 : 0.7))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
-                .frame(width: 28, height: 28)
+                // Right navigation button
+                playlistNavigationButton
+                    .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
         }
@@ -112,7 +99,10 @@ struct SharedBottomControls: View {
     // MARK: - Computed Properties
 
     private var leftNavigationButton: some View {
-        Button(action: {
+        NavigationIconButton(
+            iconName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
+            isActive: currentPage == .lyrics
+        ) {
             print("💬 Lyrics button clicked - current page: \(currentPage)")
             withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                 let oldPage = currentPage
@@ -121,16 +111,30 @@ struct SharedBottomControls: View {
                 } else if currentPage == .lyrics {
                     currentPage = .album
                 } else if currentPage == .playlist {
-                    // From playlist, go to lyrics
                     currentPage = .lyrics
                 }
                 print("💬 Page changed from \(oldPage) to \(currentPage)")
             }
-        }) {
-            Image(systemName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble")
-                .font(.system(size: 16))
-                .foregroundColor(.white.opacity(currentPage == .lyrics ? 1.0 : 0.7))
-                .frame(width: 28, height: 28)
+        }
+    }
+
+    private var playlistNavigationButton: some View {
+        NavigationIconButton(
+            iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
+            isActive: currentPage == .playlist
+        ) {
+            print("🎵 Playlist button clicked - current page: \(currentPage)")
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                let oldPage = currentPage
+                if currentPage == .album {
+                    currentPage = .playlist
+                } else if currentPage == .playlist {
+                    currentPage = .album
+                } else {
+                    currentPage = .playlist
+                }
+                print("🎵 Page changed from \(oldPage) to \(currentPage)")
+            }
         }
     }
 
@@ -165,7 +169,7 @@ struct SharedBottomControls: View {
                     isProgressBarHovering = hovering
                 }
             }
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged({ value in
                         isDraggingProgressBar = true
@@ -209,5 +213,59 @@ struct SharedBottomControls: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Hoverable Button Components
+
+struct HoverableControlButton: View {
+    let iconName: String
+    let size: CGFloat
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: iconName)
+                .font(.system(size: size))
+                .foregroundColor(isHovering ? .white : .white.opacity(0.8))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(isHovering ? 0.15 : 0))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
+struct NavigationIconButton: View {
+    let iconName: String
+    let isActive: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: iconName)
+                .font(.system(size: 16))
+                .foregroundColor(isActive ? .white : (isHovering ? .white.opacity(0.9) : .white.opacity(0.7)))
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity((isActive || isHovering) ? 0.15 : 0))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
     }
 }

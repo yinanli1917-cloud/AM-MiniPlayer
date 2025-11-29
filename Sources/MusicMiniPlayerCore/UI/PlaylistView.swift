@@ -41,7 +41,7 @@ public struct PlaylistView: View {
                         .transition(.opacity)
                     }
 
-                    // 第二行：Tab Bar
+                    // Tab Bar
                     HStack(spacing: 0) {
                         ZStack {
                             // Background Capsule
@@ -193,6 +193,7 @@ public struct PlaylistView: View {
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.top, 12)
+                                .padding(.bottom, 12)  // 与下面的歌曲列表间距
                             }
 
                             // Tab Content
@@ -287,6 +288,8 @@ public struct PlaylistView: View {
                     isHovering = hovering
                     if hovering && !isManualScrolling {
                         showControls = true
+                    } else if !hovering && !isManualScrolling {
+                        showControls = false
                     }
                 }
             }
