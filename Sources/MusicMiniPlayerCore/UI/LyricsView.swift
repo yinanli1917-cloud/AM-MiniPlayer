@@ -90,7 +90,7 @@ public struct LyricsView: View {
                     // Lyrics scroll view - controls must be OUTSIDE as overlay
                     ScrollViewReader { proxy in
                         ScrollView(.vertical, showsIndicators: false) {
-                            VStack(alignment: .leading, spacing: 20) {
+                            VStack(alignment: .leading, spacing: 28) {  // 从20增加到28
                                 // Top spacer for centering first lyrics
                                 Spacer()
                                     .frame(height: 160)
@@ -106,6 +106,23 @@ public struct LyricsView: View {
                                     .id(line.id)
                                     .onTapGesture {
                                         musicController.seek(to: line.startTime)
+                                    }
+
+                                    // 检测间奏：如果下一句歌词间隔超过5秒，插入间奏动画
+                                    if index < lyricsService.lyrics.count - 1 {
+                                        let currentLine = lyricsService.lyrics[index]
+                                        let nextLine = lyricsService.lyrics[index + 1]
+                                        let gap = nextLine.startTime - currentLine.endTime
+
+                                        if gap > 5.0 && currentLine.text != "⋯" {
+                                            // 间奏动画占位符
+                                            InterludeLoadingDotsView(
+                                                currentTime: musicController.currentTime,
+                                                startTime: currentLine.endTime,
+                                                endTime: nextLine.startTime
+                                            )
+                                            .id("interlude-\(index)")
+                                        }
                                     }
                                 }
 
@@ -513,6 +530,76 @@ struct TimeBasedLoadingDotsView: View {
         .scaleEffect(0.8) // 整体缩小到0.8x
         .frame(height: 24) // Match lyric text height
         .opacity(overallOpacity) // 🔑 应用整体淡出效果
+    }
+}
+
+// MARK: - Interlude Loading Dots View (间奏加载动画)
+
+struct InterludeLoadingDotsView: View {
+    let currentTime: TimeInterval
+    let startTime: TimeInterval  // 间奏开始时间（上一句结束）
+    let endTime: TimeInterval    // 间奏结束时间（下一句开始）
+
+    var body: some View {
+        let duration = endTime - startTime // 间奏总时长
+        let segmentDuration = duration / 3.0 // 每个点占1/3时间
+
+        // 计算每个点的进度（0.0-1.0）
+        let dotProgresses: [CGFloat] = (0..<3).map { index in
+            let dotStartTime = startTime + segmentDuration * Double(index)
+            let dotEndTime = startTime + segmentDuration * Double(index + 1)
+
+            if currentTime <= dotStartTime {
+                return 0.0
+            } else if currentTime >= dotEndTime {
+                return 1.0
+            } else {
+                // 平滑渐变函数
+                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
+                return CGFloat(progress * progress * (3.0 - 2.0 * progress)) // Smoothstep
+            }
+        }
+
+        // 🔑 整体淡入淡出：在间奏前后3.5s进行渐变
+        let overallOpacity: CGFloat = {
+            let fadeInDuration: TimeInterval = 3.5
+            let fadeOutDuration: TimeInterval = 3.5
+
+            if currentTime < startTime {
+                // 还没到间奏，完全透明
+                return 0.0
+            } else if currentTime < startTime + fadeInDuration {
+                // 淡入阶段
+                let fadeProgress = (currentTime - startTime) / fadeInDuration
+                return CGFloat(fadeProgress)
+            } else if currentTime >= endTime {
+                // 已过间奏，完全透明
+                return 0.0
+            } else if currentTime >= endTime - fadeOutDuration {
+                // 淡出阶段
+                let fadeProgress = (endTime - currentTime) / fadeOutDuration
+                return CGFloat(fadeProgress)
+            } else {
+                // 间奏中间，完全不透明
+                return 1.0
+            }
+        }()
+
+        HStack(spacing: 10) {
+            ForEach(0..<3) { index in
+                let progress = dotProgresses[index]
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 10, height: 10)
+                    .opacity(0.35 + progress * 0.65) // 从0.35渐变到1.0
+                    .scaleEffect(1.0 + progress * 0.3) // 从1.0渐变到1.3
+            }
+        }
+        .scaleEffect(0.8) // 整体缩小到0.8x
+        .frame(height: 24) // Match lyric text height
+        .opacity(overallOpacity) // 🔑 应用整体淡入淡出效果
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

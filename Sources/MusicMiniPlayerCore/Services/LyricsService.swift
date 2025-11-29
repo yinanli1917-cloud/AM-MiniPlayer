@@ -91,19 +91,27 @@ public class LyricsService: ObservableObject {
         Task {
             var fetchedLyrics: [LyricLine]? = nil
 
-            // Try multiple sources in parallel for faster response
+            // Try sources in priority order: AMLL-TTML-DB → LRCLIB → lyrics.ovh
             do {
-                logger.info("🔍 Starting parallel search from multiple sources...")
+                logger.info("🔍 Starting priority-based search...")
 
-                async let source1 = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration)
-                async let source2 = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration)
-                async let source3 = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration)
+                // Priority 1: AMLL-TTML-DB (best quality - word-level timing)
+                if let lyrics = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                    logger.info("✅ Found lyrics from AMLL-TTML-DB (priority 1)")
+                }
+                // Priority 2: LRCLIB (good quality - line-level timing)
+                else if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                    logger.info("✅ Found lyrics from LRCLIB (priority 2)")
+                }
+                // Priority 3: lyrics.ovh (fallback - plain text)
+                else if let lyrics = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                    logger.info("✅ Found lyrics from lyrics.ovh (priority 3)")
+                }
 
-                // Return the first successful result
-                let results = await [source1, source2, source3]
-                fetchedLyrics = results.first { $0 != nil } ?? nil
-
-                logger.info("🎤 Parallel search completed")
+                logger.info("🎤 Priority search completed")
 
                 if let lyrics = fetchedLyrics, !lyrics.isEmpty {
                     // Cache the lyrics
@@ -188,17 +196,27 @@ public class LyricsService: ObservableObject {
 
                 logger.info("📥 Preloading: \(track.title) - \(track.artist)")
 
-                // Fetch lyrics in background
-                async let source1 = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration)
-                async let source2 = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration)
-                async let source3 = try? await fetchFromLyricsOVH(title: track.title, artist: track.artist, duration: track.duration)
+                // Fetch lyrics in background using priority order
+                var fetchedLyrics: [LyricLine]? = nil
 
-                let results = await [source1, source2, source3]
-                if let fetchedLyrics = results.first(where: { $0 != nil && !$0!.isEmpty }) ?? nil {
+                // Priority 1: AMLL-TTML-DB
+                if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                }
+                // Priority 2: LRCLIB
+                else if let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                }
+                // Priority 3: lyrics.ovh
+                else if let lyrics = try? await fetchFromLyricsOVH(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                }
+
+                if let lyrics = fetchedLyrics {
                     // Cache the preloaded lyrics
-                    let cacheItem = CachedLyricsItem(lyrics: fetchedLyrics)
+                    let cacheItem = CachedLyricsItem(lyrics: lyrics)
                     lyricsCache.setObject(cacheItem, forKey: songID as NSString)
-                    logger.info("✅ Preloaded and cached: \(songID) (\(fetchedLyrics.count) lines)")
+                    logger.info("✅ Preloaded and cached: \(songID) (\(lyrics.count) lines)")
                 } else {
                     logger.warning("⚠️ No lyrics found for preload: \(songID)")
                 }
