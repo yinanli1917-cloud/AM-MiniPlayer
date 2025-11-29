@@ -8,6 +8,8 @@ public class WindowResizeHandler {
     private var resizeStartPoint: NSPoint = .zero
     private var resizeStartFrame: NSRect = .zero
     private var resizeEdge: ResizeEdge = .none
+    private var currentEdge: ResizeEdge = .none
+    private var eventMonitor: Any?
 
     private let edgeThreshold: CGFloat = 8.0 // 边缘检测阈值
     private let aspectRatio: CGFloat = 300.0 / 380.0 // 原始宽高比
@@ -29,6 +31,13 @@ public class WindowResizeHandler {
     public init(window: NSWindow) {
         self.window = window
         setupTracking()
+        setupEventMonitor()
+    }
+
+    deinit {
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
     private func setupTracking() {
@@ -46,14 +55,78 @@ public class WindowResizeHandler {
             wrapperView.addSubview(subview)
         }
 
-        // 创建overlay view处理缩放
-        let overlayView = ResizeOverlayView(handler: self)
-        overlayView.frame = contentView.bounds
-        overlayView.autoresizingMask = [.width, .height]
-
-        // 先添加wrapper，再添加overlay（overlay在最上层）
+        // 添加wrapper
         contentView.addSubview(wrapperView)
-        contentView.addSubview(overlayView)
+    }
+
+    private func setupEventMonitor() {
+        // 监听本地鼠标事件
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self = self, let window = self.window else { return event }
+
+            // 只处理我们窗口的事件
+            guard event.window == window else { return event }
+
+            switch event.type {
+            case .mouseMoved:
+                self.handleMouseMoved(event)
+                return event
+
+            case .leftMouseDown:
+                return self.handleMouseDown(event)
+
+            case .leftMouseDragged:
+                self.handleMouseDragged(event)
+                return nil // 拖拽时消费事件
+
+            case .leftMouseUp:
+                self.handleMouseUp(event)
+                return event
+
+            default:
+                return event
+            }
+        }
+    }
+
+    private func handleMouseMoved(_ event: NSEvent) {
+        guard let window = window, let contentView = window.contentView else { return }
+
+        let locationInWindow = event.locationInWindow
+        let locationInView = contentView.convert(locationInWindow, from: nil)
+        let edge = detectEdge(at: locationInView, in: contentView)
+
+        if edge != currentEdge {
+            currentEdge = edge
+            cursor(for: edge).set()
+        }
+    }
+
+    private func handleMouseDown(_ event: NSEvent) -> NSEvent? {
+        guard let window = window, let contentView = window.contentView else { return event }
+
+        let locationInWindow = event.locationInWindow
+        let locationInView = contentView.convert(locationInWindow, from: nil)
+        let edge = detectEdge(at: locationInView, in: contentView)
+
+        if edge != .none {
+            startResize(at: locationInWindow, edge: edge)
+            return nil // 消费事件
+        }
+
+        return event // 传递事件
+    }
+
+    private func handleMouseDragged(_ event: NSEvent) {
+        if isResizing {
+            updateResize(to: NSEvent.mouseLocation)
+        }
+    }
+
+    private func handleMouseUp(_ event: NSEvent) {
+        if isResizing {
+            endResize()
+        }
     }
 
     func detectEdge(at point: NSPoint, in view: NSView) -> ResizeEdge {
@@ -168,86 +241,6 @@ public class WindowResizeHandler {
     func endResize() {
         isResizing = false
         resizeEdge = .none
-    }
-}
-
-// MARK: - Resize Overlay View
-
-class ResizeOverlayView: NSView {
-    weak var handler: WindowResizeHandler?
-    private var currentEdge: WindowResizeHandler.ResizeEdge = .none
-
-    init(handler: WindowResizeHandler) {
-        self.handler = handler
-        super.init(frame: .zero)
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-
-        // 移除旧的跟踪区域
-        trackingAreas.forEach { removeTrackingArea($0) }
-
-        // 添加新的跟踪区域
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        guard let handler = handler else { return }
-
-        let locationInView = convert(event.locationInWindow, from: nil)
-        let edge = handler.detectEdge(at: locationInView, in: self)
-
-        if edge != currentEdge {
-            currentEdge = edge
-            handler.cursor(for: edge).set()
-        }
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        NSCursor.arrow.set()
-        currentEdge = .none
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard let handler = handler else { return }
-
-        let locationInView = convert(event.locationInWindow, from: nil)
-        let edge = handler.detectEdge(at: locationInView, in: self)
-
-        if edge != .none {
-            handler.startResize(at: event.locationInWindow, edge: edge)
-        } else {
-            // 不在边缘，传递给下一个响应者（允许窗口拖动）
-            super.mouseDown(with: event)
-        }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let handler = handler else { return }
-        handler.updateResize(to: NSEvent.mouseLocation)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        guard let handler = handler else { return }
-        handler.endResize()
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        // 只在边缘区域拦截事件
-        guard let handler = handler else { return nil }
-        let edge = handler.detectEdge(at: point, in: self)
-        return edge != .none ? self : nil
     }
 }
 
