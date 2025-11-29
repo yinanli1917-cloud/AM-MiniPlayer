@@ -1,45 +1,6 @@
 import SwiftUI
 
-// Custom Blur AnimatableModifier for smooth blur transitions
-struct BlurModifier: AnimatableModifier {
-    var blurRadius: Double
-
-    var animatableData: Double {
-        get { blurRadius }
-        set { blurRadius = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content.blur(radius: blurRadius)
-    }
-}
-
-// Custom AnimatableModifier for smooth text size changes
-struct AnimatableFontModifier: AnimatableModifier {
-    var size: CGFloat
-    var weight: Font.Weight
-
-    var animatableData: CGFloat {
-        get { size }
-        set { size = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content.font(.system(size: size, weight: weight))
-    }
-}
-
-extension AnyTransition {
-    static var blurFadeSlide: AnyTransition {
-        AnyTransition.modifier(
-            active: BlurModifier(blurRadius: 40.0),
-            identity: BlurModifier(blurRadius: 0.0)
-        )
-        .combined(with: .opacity)
-        .combined(with: .scale(scale: 0.92, anchor: .bottom))
-        .combined(with: .offset(y: 15))
-    }
-}
+// 移除自定义transition，使用SwiftUI官方transition避免icon消失bug
 
 // Page enumeration for three-page system
 public enum PlayerPage {
@@ -107,7 +68,7 @@ public struct MiniPlayerView: View {
                                         
                                         // 2. Gradient Mask (Bottom) - ALWAYS VISIBLE
                                         LinearGradient(
-                                            gradient: Gradient(colors: [.clear, .black.opacity(0.8)]),
+                                            gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
                                             startPoint: .top,
                                             endPoint: .bottom
                                         )
@@ -143,7 +104,10 @@ public struct MiniPlayerView: View {
                                         x: geo.size.width / 2,
                                         y: (availableHeight / 2) + shadowYOffset  // Adjust for shadow visual weight
                                     )
-                                    .transition(.blurFadeSlide)
+                                    .transition(.asymmetric(
+                                        insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                                        removal: .opacity
+                                    ))
 
                                     // Controls - fixed at bottom (overlay)
                                     if showControls {
@@ -159,12 +123,7 @@ public struct MiniPlayerView: View {
                                             )
                                             .padding(.bottom, 0)
                                         }
-                                        .transition(
-                                            .asymmetric(
-                                                insertion: .blurFadeSlide,
-                                                removal: .opacity.combined(with: .scale(scale: 0.95))
-                                            )
-                                        )
+                                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
                                     }
                                 }
                                 )
@@ -204,72 +163,44 @@ public struct MiniPlayerView: View {
                     }
                 }
             }
-            .onHover { hovering in
-                // Animation for album art and text - faster
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                    isHovering = hovering
-                }
-
-                if hovering {
-                    // Delay showing controls by 0.1s after animation starts
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                            showControls = true
-                        }
-                    }
-                } else {
-                    // Hide controls quickly when mouse leaves
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        showControls = false
-                    }
-                }
-            }
         }
         .frame(width: 300, height: 380) // Original aspect ratio
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
-            // Music按钮 - 始终存在但透明度控制，避免hover循环
-            Button(action: {
-                let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
-                NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.up.left")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("Music")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundColor(.white.opacity(0.6))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.08))
-                .clipShape(Capsule())
+            // Music按钮 - overlay不接收hover事件
+            if showControls {
+                MusicButtonView()
+                    .padding(12)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
-            .buttonStyle(.plain)
-            .padding(12)
-            .help("打开 Apple Music")
-            .opacity(showControls ? 1 : 0)
-            .animation(.easeInOut(duration: 0.3), value: showControls)
-            .allowsHitTesting(showControls)
         }
         .overlay(alignment: .topTrailing) {
-            // Hide按钮 - 始终存在但透明度控制
-            Button(action: {
-                NSApplication.shared.keyWindow?.orderOut(nil)
-            }) {
-                Image(systemName: "chevron.compact.up")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white.opacity(0.6))
-                    .frame(width: 28, height: 28)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(Circle())
+            // Hide按钮 - overlay不接收hover事件
+            if showControls {
+                HideButtonView()
+                    .padding(12)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
-            .buttonStyle(.plain)
-            .padding(12)
-            .help("收起到菜单栏")
-            .opacity(showControls ? 1 : 0)
-            .animation(.easeInOut(duration: 0.3), value: showControls)
-            .allowsHitTesting(showControls)
+        }
+        .onHover { hovering in
+            // Animation for album art and text - faster
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                isHovering = hovering
+            }
+
+            if hovering {
+                // Delay showing controls by 0.1s after animation starts
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                        showControls = true
+                    }
+                }
+            } else {
+                // Hide controls quickly when mouse leaves
+                withAnimation(.easeOut(duration: 0.18)) {
+                    showControls = false
+                }
+            }
         }
     }
 
@@ -343,5 +274,76 @@ extension NSBezierPath {
         // Implementation of custom path for partial corners would go here.
         // For now, falling back to standard rounded rect to avoid compilation errors if complex path logic is missing.
         self.appendRoundedRect(rect, xRadius: cornerRadii.width, yRadius: cornerRadii.height)
+    }
+}
+
+// MARK: - Hoverable Button Views
+
+struct MusicButtonView: View {
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: {
+            let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+            NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.up.left")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Music")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                ZStack {
+                    Color.white.opacity(isHovering ? 0.15 : 0.08)
+                    if isHovering {
+                        Color.white.opacity(0.05)
+                    }
+                }
+            )
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+        .help("打开 Apple Music")
+    }
+}
+
+struct HideButtonView: View {
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: {
+            NSApplication.shared.keyWindow?.orderOut(nil)
+        }) {
+            Image(systemName: "chevron.up")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    ZStack {
+                        Color.white.opacity(isHovering ? 0.15 : 0.08)
+                        if isHovering {
+                            Color.white.opacity(0.05)
+                        }
+                    }
+                )
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+        .help("收起到菜单栏")
     }
 }
