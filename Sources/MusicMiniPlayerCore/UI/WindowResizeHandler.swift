@@ -4,7 +4,6 @@ import SwiftUI
 /// 窗口缩放处理器 - 实现整体scale缩放（不是resize）
 public class WindowResizeHandler {
     private weak var window: NSWindow?
-    private var trackingArea: NSTrackingArea?
     private var isResizing = false
     private var resizeStartPoint: NSPoint = .zero
     private var resizeStartFrame: NSRect = .zero
@@ -35,23 +34,26 @@ public class WindowResizeHandler {
     private func setupTracking() {
         guard let window = window, let contentView = window.contentView else { return }
 
-        // 创建全窗口跟踪区域
-        trackingArea = NSTrackingArea(
-            rect: contentView.bounds,
-            options: [.activeAlways, .mouseMoved, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
+        // 创建wrapper view来包含原内容
+        let wrapperView = NSView(frame: contentView.bounds)
+        wrapperView.autoresizingMask = [.width, .height]
+        wrapperView.wantsLayer = true
 
-        if let trackingArea = trackingArea {
-            contentView.addTrackingArea(trackingArea)
+        // 移动原有内容到wrapper
+        let existingSubviews = contentView.subviews
+        for subview in existingSubviews {
+            subview.removeFromSuperview()
+            wrapperView.addSubview(subview)
         }
 
-        // 创建自定义视图来处理鼠标事件
+        // 创建overlay view处理缩放
         let overlayView = ResizeOverlayView(handler: self)
         overlayView.frame = contentView.bounds
         overlayView.autoresizingMask = [.width, .height]
-        contentView.addSubview(overlayView, positioned: .above, relativeTo: nil)
+
+        // 先添加wrapper，再添加overlay（overlay在最上层）
+        contentView.addSubview(wrapperView)
+        contentView.addSubview(overlayView)
     }
 
     func detectEdge(at point: NSPoint, in view: NSView) -> ResizeEdge {
