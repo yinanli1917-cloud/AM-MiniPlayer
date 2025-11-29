@@ -158,9 +158,9 @@ public class WindowResizeHandler {
         case .bottom, .top:
             return .resizeUpDown
         case .bottomRight, .topLeft:
-            return NSCursor.resizeNorthwestSoutheast
+            return .resizeNortheastSouthwest  // ↗️↙️
         case .bottomLeft, .topRight:
-            return NSCursor.resizeNortheastSouthwest
+            return .resizeNorthwestSoutheast  // ↖️↘️
         case .none:
             return .arrow
         }
@@ -190,42 +190,45 @@ public class WindowResizeHandler {
         case .right:
             newFrame.size.width = resizeStartFrame.width + delta.x
             newFrame.size.height = newFrame.size.width / aspectRatio
+
         case .left:
             newFrame.size.width = resizeStartFrame.width - delta.x
             newFrame.size.height = newFrame.size.width / aspectRatio
             newFrame.origin.x = resizeStartFrame.maxX - newFrame.width
+
         case .bottom:
             newFrame.size.height = resizeStartFrame.height - delta.y
             newFrame.size.width = newFrame.size.height * aspectRatio
             newFrame.origin.y = resizeStartFrame.maxY - newFrame.height
+
         case .top:
             newFrame.size.height = resizeStartFrame.height + delta.y
             newFrame.size.width = newFrame.size.height * aspectRatio
+
         case .bottomRight:
-            // 使用对角线距离来计算缩放
-            let diagonal = sqrt(delta.x * delta.x + delta.y * delta.y)
-            let scaleFactor = 1.0 + (diagonal / 300.0) * (delta.x > 0 ? 1 : -1)
-            newFrame.size.width = resizeStartFrame.width * scaleFactor
+            // 右下角：基于宽度变化
+            newFrame.size.width = resizeStartFrame.width + delta.x
             newFrame.size.height = newFrame.size.width / aspectRatio
             newFrame.origin.y = resizeStartFrame.maxY - newFrame.height
+
         case .bottomLeft:
-            let diagonal = sqrt(delta.x * delta.x + delta.y * delta.y)
-            let scaleFactor = 1.0 + (diagonal / 300.0) * (delta.x < 0 ? 1 : -1)
-            newFrame.size.width = resizeStartFrame.width * scaleFactor
+            // 左下角：基于宽度变化（反向）
+            newFrame.size.width = resizeStartFrame.width - delta.x
             newFrame.size.height = newFrame.size.width / aspectRatio
             newFrame.origin.x = resizeStartFrame.maxX - newFrame.width
             newFrame.origin.y = resizeStartFrame.maxY - newFrame.height
+
         case .topRight:
-            let diagonal = sqrt(delta.x * delta.x + delta.y * delta.y)
-            let scaleFactor = 1.0 + (diagonal / 300.0) * (delta.x > 0 ? 1 : -1)
-            newFrame.size.width = resizeStartFrame.width * scaleFactor
+            // 右上角：基于宽度变化
+            newFrame.size.width = resizeStartFrame.width + delta.x
             newFrame.size.height = newFrame.size.width / aspectRatio
+
         case .topLeft:
-            let diagonal = sqrt(delta.x * delta.x + delta.y * delta.y)
-            let scaleFactor = 1.0 + (diagonal / 300.0) * (delta.x < 0 ? 1 : -1)
-            newFrame.size.width = resizeStartFrame.width * scaleFactor
+            // 左上角：基于宽度变化（反向）
+            newFrame.size.width = resizeStartFrame.width - delta.x
             newFrame.size.height = newFrame.size.width / aspectRatio
             newFrame.origin.x = resizeStartFrame.maxX - newFrame.width
+
         case .none:
             return
         }
@@ -247,13 +250,60 @@ public class WindowResizeHandler {
 // MARK: - NSCursor Extensions
 
 extension NSCursor {
+    // macOS标准的对角线缩放光标
     static var resizeNorthwestSoutheast: NSCursor {
-        return NSCursor(image: NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Resize")!,
-                       hotSpot: NSPoint(x: 8, y: 8))
+        // 创建自定义光标图片 ↖️↘️
+        let image = NSImage(size: NSSize(width: 16, height: 16))
+        image.lockFocus()
+
+        // 绘制对角线箭头
+        let path = NSBezierPath()
+        // 左上箭头
+        path.move(to: NSPoint(x: 2, y: 14))
+        path.line(to: NSPoint(x: 2, y: 10))
+        path.line(to: NSPoint(x: 6, y: 10))
+        path.move(to: NSPoint(x: 2, y: 14))
+        path.line(to: NSPoint(x: 6, y: 14))
+        // 右下箭头
+        path.move(to: NSPoint(x: 14, y: 2))
+        path.line(to: NSPoint(x: 14, y: 6))
+        path.line(to: NSPoint(x: 10, y: 6))
+        path.move(to: NSPoint(x: 14, y: 2))
+        path.line(to: NSPoint(x: 10, y: 2))
+
+        NSColor.white.setStroke()
+        path.lineWidth = 2
+        path.stroke()
+
+        image.unlockFocus()
+        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
     }
 
     static var resizeNortheastSouthwest: NSCursor {
-        return NSCursor(image: NSImage(systemSymbolName: "arrow.up.right.and.arrow.down.left", accessibilityDescription: "Resize")!,
-                       hotSpot: NSPoint(x: 8, y: 8))
+        // 创建自定义光标图片 ↗️↙️
+        let image = NSImage(size: NSSize(width: 16, height: 16))
+        image.lockFocus()
+
+        // 绘制对角线箭头
+        let path = NSBezierPath()
+        // 右上箭头
+        path.move(to: NSPoint(x: 14, y: 14))
+        path.line(to: NSPoint(x: 14, y: 10))
+        path.line(to: NSPoint(x: 10, y: 10))
+        path.move(to: NSPoint(x: 14, y: 14))
+        path.line(to: NSPoint(x: 10, y: 14))
+        // 左下箭头
+        path.move(to: NSPoint(x: 2, y: 2))
+        path.line(to: NSPoint(x: 2, y: 6))
+        path.line(to: NSPoint(x: 6, y: 6))
+        path.move(to: NSPoint(x: 2, y: 2))
+        path.line(to: NSPoint(x: 6, y: 2))
+
+        NSColor.white.setStroke()
+        path.lineWidth = 2
+        path.stroke()
+
+        image.unlockFocus()
+        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
     }
 }
