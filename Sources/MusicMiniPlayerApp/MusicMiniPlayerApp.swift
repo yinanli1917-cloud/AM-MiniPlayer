@@ -97,7 +97,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = true
-        window.isMovableByWindowBackground = false // Disable to prevent progress bar conflict
+        window.isMovableByWindowBackground = true // Enable window dragging
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.hidesOnDeactivate = false

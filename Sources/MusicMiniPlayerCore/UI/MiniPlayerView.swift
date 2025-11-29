@@ -66,13 +66,13 @@ public struct MiniPlayerView: View {
                                                 }
                                             }
                                         
-                                        // 2. Gradient Mask (Bottom) - ALWAYS VISIBLE
+                                        // 2. Gradient Mask (Bottom) - ALWAYS VISIBLE - 只覆盖文字区域
                                         LinearGradient(
                                             gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
                                             startPoint: .top,
                                             endPoint: .bottom
                                         )
-                                        .frame(width: artSize, height: isHovering ? 80 : 100)
+                                        .frame(width: artSize, height: 50)  // 缩小到只覆盖文字
                                         .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
                                         .allowsHitTesting(false)
                                         

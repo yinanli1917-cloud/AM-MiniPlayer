@@ -27,20 +27,8 @@ public struct LyricsView: View {
             LiquidBackgroundView(artwork: musicController.currentArtwork)
             .ignoresSafeArea()
 
+            // Main lyrics container
             VStack(spacing: 0) {
-                // 第一行：Music/Hide按钮 - 仅在hover时显示
-                if isHovering && showControls {
-                    HStack {
-                        MusicButtonView()
-                        Spacer()
-                        HideButtonView()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
-                    .transition(.opacity)
-                }
-
-                // Main lyrics container
                 if lyricsService.isLoading {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,6 +143,22 @@ public struct LyricsView: View {
                         }
                     )
                 }
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            // Music按钮 - overlay不接收hover事件，不改变布局
+            if showControls {
+                MusicButtonView()
+                    .padding(12)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            // Hide按钮 - overlay不接收hover事件，不改变布局
+            if showControls {
+                HideButtonView()
+                    .padding(12)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
         .onHover { hovering in
@@ -425,7 +429,7 @@ struct LyricLineView: View {
                     currentTime: currentTime,
                     endTime: line.endTime
                 )
-                .frame(width: 236, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text(line.text)
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
@@ -433,7 +437,7 @@ struct LyricLineView: View {
                     .lineLimit(nil)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(width: 236, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .scaleEffect(scale, anchor: .leading)
@@ -448,7 +452,7 @@ struct LyricLineView: View {
             .easeInOut(duration: 0.3),
             value: isScrolling
         )
-        .padding(.horizontal, 32)
+        .padding(.horizontal, 32)  // 左右各32px padding，保证居中
         .contentShape(Rectangle())
     }
 }
@@ -479,15 +483,15 @@ struct TimeBasedLoadingDotsView: View {
             }
         }
 
-        // 🔑 计算整体淡出透明度：当接近endTime时淡出
+        // 🔑 计算整体淡出透明度：与第一句歌词滚动同步（3.5s tolerance）
         let overallOpacity: CGFloat = {
-            let fadeOutDuration: TimeInterval = 0.5 // 0.5秒淡出时间
+            let fadeOutDuration: TimeInterval = 3.5 // 与LyricsService的tolerance同步
 
             if currentTime >= endTime {
                 // 已经超过结束时间，完全透明
                 return 0.0
             } else if currentTime >= endTime - fadeOutDuration {
-                // 进入淡出阶段
+                // 进入淡出阶段，与第一句歌词滚动进入同步
                 let fadeProgress = (endTime - currentTime) / fadeOutDuration
                 return CGFloat(fadeProgress) // 从1.0淡到0.0
             } else {

@@ -62,12 +62,20 @@ public class LyricsService: ObservableObject {
 
                 logger.info("🎤 Parallel search completed")
 
-                if let lyrics = fetchedLyrics {
+                if let lyrics = fetchedLyrics, !lyrics.isEmpty {
                     await MainActor.run {
-                        self.lyrics = lyrics
+                        // 🎵 Insert a loading placeholder line at the beginning
+                        // This allows smooth scroll animation from loading state to first lyric
+                        let loadingLine = LyricLine(
+                            text: "⋯", // Three dots as placeholder
+                            startTime: 0,
+                            endTime: lyrics[0].startTime
+                        )
+
+                        self.lyrics = [loadingLine] + lyrics
                         self.isLoading = false
                         self.error = nil
-                        self.logger.info("✅ Successfully fetched \(lyrics.count) lyric lines")
+                        self.logger.info("✅ Successfully fetched \(lyrics.count) lyric lines (+ 1 loading line)")
                     }
                 } else {
                     throw NSError(domain: "LyricsService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Lyrics not found in any source"])
