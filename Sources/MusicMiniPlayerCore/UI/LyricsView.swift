@@ -26,142 +26,136 @@ public struct LyricsView: View {
             // Background (Liquid Glass) - same as MiniPlayerView
             LiquidBackgroundView(artwork: musicController.currentArtwork)
             .ignoresSafeArea()
-            // Main lyrics container
-            if lyricsService.isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .foregroundColor(.white)
-            } else if let error = lyricsService.error {
-                VStack(spacing: 16) {
-                    Image(systemName: "music.note")
-                        .font(.system(size: 48))
-                        .foregroundColor(.white.opacity(0.3))
-                    Text(error)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
-                    
-                    // Retry button
-                    Button(action: {
-                        lyricsService.fetchLyrics(
-                            for: musicController.currentTrackTitle,
-                            artist: musicController.currentArtist,
-                            duration: musicController.duration,
-                            forceRefresh: true
-                        )
-                    }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 12, weight: .semibold))
-                            Text("Retry")
-                                .font(.system(size: 14, weight: .semibold))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
-                        .background(Color.white.opacity(0.2))
-                        .cornerRadius(8)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                        )
+
+            VStack(spacing: 0) {
+                // 第一行：Music/Hide按钮 - 仅在hover时显示
+                if isHovering && showControls {
+                    HStack {
+                        MusicButtonView()
+                        Spacer()
+                        HideButtonView()
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+                    .transition(.opacity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            } else if lyricsService.lyrics.isEmpty {
-                emptyStateView
-            } else {
-                // Lyrics scroll view
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 20) {
-                            // Top spacer for centering first lyrics
-                            Spacer()
-                                .frame(height: 160)
 
-                            ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
-                                // Show loading dots as a lyric line when we're in the gap between lyrics
-                                // CRITICAL: Force show loading dots with proper timing
-                                let shouldShowDots = (index == 0 && musicController.currentTime < line.startTime && musicController.currentTime > 0) ||
-                                                 (index > 0 && musicController.currentTime >= lyricsService.lyrics[index - 1].endTime && musicController.currentTime < line.startTime)
+                // Main lyrics container
+                if lyricsService.isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .foregroundColor(.white)
+                } else if let error = lyricsService.error {
+                    VStack(spacing: 16) {
+                        Image(systemName: "music.note")
+                            .font(.system(size: 48))
+                            .foregroundColor(.white.opacity(0.3))
+                        Text(error)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
 
-                                // Add small buffer time before first lyric starts for smooth transition
-                                let showLoadingDots = shouldShowDots && musicController.currentTime < (line.startTime - 0.05)
-
-                                // Show loading dots as a normal lyric line (same spacing and style)
-                                if showLoadingDots {
-                                    LoadingDotsLyricView(
-                                        currentTime: musicController.currentTime,
-                                        nextLineStartTime: line.startTime,
-                                        previousLineEndTime: index > 0 ? lyricsService.lyrics[index - 1].endTime : 0
-                                    )
-                                    .id("loading-dots-\(index)")
-                                }
-
-                                // First line should display with blur if loading dots are active for it
-                                let isFirstLineLoading = index == 0 && lyricsService.currentLineIndex == nil &&
-                                                      musicController.currentTime > 0 &&
-                                                      musicController.currentTime < line.startTime
-
-                                LyricLineView(
-                                    line: line,
-                                    index: index,
-                                    currentIndex: lyricsService.currentLineIndex ?? 0,
-                                    currentTime: musicController.currentTime,
-                                    isScrolling: isManualScrolling,
-                                    isPreLoading: isFirstLineLoading
-                                )
-                                .id(line.id)
-                                .onTapGesture {
-                                    musicController.seek(to: line.startTime)
-                                }
+                        // Retry button
+                        Button(action: {
+                            lyricsService.fetchLyrics(
+                                for: musicController.currentTrackTitle,
+                                artist: musicController.currentArtist,
+                                duration: musicController.duration,
+                                forceRefresh: true
+                            )
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 12, weight: .semibold))
+                                Text("Retry")
+                                    .font(.system(size: 14, weight: .semibold))
                             }
-
-                            // Bottom spacer for centering last lyrics
-                            Spacer()
-                                .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                            )
                         }
-                        .drawingGroup()  // Performance optimization for smooth 60fps animations
+                        .buttonStyle(.plain)
                     }
-                    .simpleScrollDetection(
-                        onScrollStarted: {
-                            // User is manually scrolling - update state
-                            if !isManualScrolling {
-                                isManualScrolling = true
-                            }
-
-                            // Hide controls immediately when scrolling
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .overlay(
+                        Group {
                             if showControls {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showControls = false
-                                }
-                            }
-
-                            // Cancel existing timer
-                            autoScrollTimer?.invalidate()
-                        },
-                        onScrollEnded: {
-                            // User stopped scrolling for 2 seconds
-                            print("📜 Scroll ended callback - isHovering: \(isHovering)")
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                isManualScrolling = false
-                                // Show controls if currently hovering, otherwise keep hidden
-                                showControls = isHovering
+                                controlBar
                             }
                         }
                     )
-                    .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
-                        if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
-                            withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.5)) {
-                                proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
+                } else if lyricsService.lyrics.isEmpty {
+                    emptyStateView
+                        .overlay(
+                            Group {
+                                if showControls {
+                                    controlBar
+                                }
+                            }
+                        )
+                } else {
+                    // Lyrics scroll view - controls must be OUTSIDE as overlay
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 20) {
+                                // Top spacer for centering first lyrics
+                                Spacer()
+                                    .frame(height: 160)
+
+                                ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
+                                    LyricLineView(
+                                        line: line,
+                                        index: index,
+                                        currentIndex: lyricsService.currentLineIndex ?? 0,
+                                        currentTime: musicController.currentTime,
+                                        isScrolling: isManualScrolling
+                                    )
+                                    .id(line.id)
+                                    .onTapGesture {
+                                        musicController.seek(to: line.startTime)
+                                    }
+                                }
+
+                                // Bottom spacer for centering last lyrics
+                                Spacer()
+                                    .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
+                            }
+                            .drawingGroup()  // Performance optimization for smooth 60fps animations
+                        }
+                        .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
+                            if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
+                                // 检查是否是第一句歌词（从nil或0切换到0）
+                                let isFirstLine = (oldValue == nil || oldValue == 0) && newValue == 0
+
+                                if isFirstLine {
+                                    // 第一句使用更平滑的spring动画
+                                    withAnimation(.spring(response: 0.8, dampingFraction: 0.75, blendDuration: 0.3)) {
+                                        proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
+                                    }
+                                } else {
+                                    // 其他行使用标准的缓动曲线
+                                    withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.5)) {
+                                        proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
+                                    }
+                                }
                             }
                         }
                     }
+                    .overlay(
+                        // 🔑 关键：控件必须在ScrollView的overlay之上，而不是在同一个ZStack内
+                        Group {
+                            if showControls {
+                                controlBar
+                            }
+                        }
+                    )
                 }
             }
-            
-            // Bottom control bar
-            controlBar
         }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.3)) {
@@ -205,30 +199,30 @@ public struct LyricsView: View {
     private var controlBar: some View {
         VStack {
             Spacer()
+
+            // 渐变遮罩 + 控件区域（整体拦截点击，防止穿透）
             ZStack(alignment: .bottom) {
                 // Gradient mask
                 LinearGradient(
-                    gradient: Gradient(colors: [.clear, .black.opacity(0.8)]),
+                    gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
-                .allowsHitTesting(false)
-                .opacity(isHovering && showControls ? 1 : 0)
+                .frame(height: 80)
 
-                // Controls - fixed position at bottom
-                if isHovering && showControls {
-                    SharedBottomControls(
-                        currentPage: $currentPage,
-                        isHovering: $isHovering,
-                        showControls: $showControls,
-                        isProgressBarHovering: $isProgressBarHovering,
-                        dragPosition: $dragPosition
-                    )
-                    .padding(.bottom, 0) // Ensure consistent bottom padding
-                }
+                SharedBottomControls(
+                    currentPage: $currentPage,
+                    isHovering: $isHovering,
+                    showControls: $showControls,
+                    isProgressBarHovering: $isProgressBarHovering,
+                    dragPosition: $dragPosition
+                )
+                .padding(.bottom, 0)
             }
+            .contentShape(Rectangle())  // 🔑 确保整个区域可点击
+            .allowsHitTesting(true)     // 🔑 拦截所有点击，防止穿透到下层歌词
         }
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
     }
     
     private var timeAndProgressBar: some View {
@@ -357,7 +351,6 @@ struct LyricLineView: View {
     let currentIndex: Int
     let currentTime: TimeInterval
     let isScrolling: Bool // Add parameter to know if user is scrolling
-    let isPreLoading: Bool // Whether this line is being pre-loaded during dots animation
 
     var body: some View {
         let distance = index - currentIndex
@@ -366,27 +359,20 @@ struct LyricLineView: View {
         let absDistance = abs(distance)
 
         // Enhanced Visual State Calculations with smoother transitions
+        // 使用scaleEffect而不是动态字体，保持文本排版一致性
         let scale: CGFloat = {
             if isCurrent {
-                // Current line: subtle scale up with smooth transition
                 return 1.08
             } else if absDistance == 1 {
-                // Adjacent lines: very slight scale
-                return 1.02
+                return 0.96
             } else {
-                return 1.0
+                return 0.92
             }
         }()
-        
+
         let blur: CGFloat = {
             // No blur when scrolling to show all lyrics clearly
             if isScrolling { return 0 }
-
-            // If this line is pre-loading during dots animation, treat it as upcoming future line
-            if isPreLoading {
-                // Treat as future line with distance 1
-                return min(CGFloat(1) * 0.7, 5.0)
-            }
 
             // Progressive blur based on distance when not scrolling
             if isCurrent { return 0 }
@@ -403,12 +389,6 @@ struct LyricLineView: View {
         }()
         
         let opacity: CGFloat = {
-            // If this line is pre-loading during dots animation, treat it as upcoming future line
-            if isPreLoading {
-                // Treat as future line with distance 1
-                return max(0.25, 0.95 - Double(1) * 0.10)
-            }
-
             if isCurrent {
                 return 1.0
             }
@@ -435,54 +415,100 @@ struct LyricLineView: View {
             }
         }()
         
-        // Simple text without karaoke effect, allow multiple lines
-        Text(line.text)
-            .font(.system(size: 24, weight: isCurrent ? .bold : .medium, design: .rounded))
-            .foregroundColor(.white)
-            .lineLimit(nil) // Allow unlimited lines for wrapping
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true) // Allow text to expand vertically
-            .scaleEffect(scale, anchor: .leading)  // Removed pulseScale - no breathing effect
-            .blur(radius: blur)
-            .opacity(opacity)
-            .offset(y: yOffset)
-            .animation(
-                .timingCurve(0.2, 0.0, 0.0, 1.0, duration: 1.2),
-                value: currentIndex
-            )
-            .animation(
-                .easeInOut(duration: 0.3),
-                value: isScrolling
-            )
-            .padding(.horizontal, 32)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+        // 🔑 关键修复：所有歌词使用完全一致的字体（24pt + semibold）
+        // 字体大小、粗细、行间距完全相同，确保所有歌词的文本排版100%一致
+        // 只通过scaleEffect改变视觉大小，不触发任何布局重新计算
+        Group {
+            if line.text == "⋯" {
+                // 特殊处理：加载占位符显示基于时间的三等分点亮动画
+                TimeBasedLoadingDotsView(
+                    currentTime: currentTime,
+                    endTime: line.endTime
+                )
+                .frame(width: 236, alignment: .leading)
+            } else {
+                Text(line.text)
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(nil)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 236, alignment: .leading)
+            }
+        }
+        .scaleEffect(scale, anchor: .leading)
+        .blur(radius: blur)
+        .opacity(opacity)
+        .offset(y: yOffset)
+        .animation(
+            .timingCurve(0.2, 0.0, 0.0, 1.0, duration: 1.2),
+            value: currentIndex
+        )
+        .animation(
+            .easeInOut(duration: 0.3),
+            value: isScrolling
+        )
+        .padding(.horizontal, 32)
+        .contentShape(Rectangle())
     }
 }
 
-// MARK: - Loading Dots View (Legacy - no longer used)
+// MARK: - Time-Based Loading Dots View (三等分前奏时间点亮动画)
 
-struct LoadingDotsView: View {
-    @State private var animationPhase: Int = 0
+struct TimeBasedLoadingDotsView: View {
+    let currentTime: TimeInterval
+    let endTime: TimeInterval
 
     var body: some View {
-        HStack(spacing: 8) {
+        let duration = endTime // 前奏总时长
+        let segmentDuration = duration / 3.0 // 每个点占1/3时间
+
+        // 计算每个点的进度（0.0-1.0）
+        let dotProgresses: [CGFloat] = (0..<3).map { index in
+            let dotStartTime = segmentDuration * Double(index)
+            let dotEndTime = segmentDuration * Double(index + 1)
+
+            if currentTime <= dotStartTime {
+                return 0.0
+            } else if currentTime >= dotEndTime {
+                return 1.0
+            } else {
+                // 平滑渐变函数
+                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
+                return CGFloat(progress * progress * (3.0 - 2.0 * progress)) // Smoothstep
+            }
+        }
+
+        // 🔑 计算整体淡出透明度：当接近endTime时淡出
+        let overallOpacity: CGFloat = {
+            let fadeOutDuration: TimeInterval = 0.5 // 0.5秒淡出时间
+
+            if currentTime >= endTime {
+                // 已经超过结束时间，完全透明
+                return 0.0
+            } else if currentTime >= endTime - fadeOutDuration {
+                // 进入淡出阶段
+                let fadeProgress = (endTime - currentTime) / fadeOutDuration
+                return CGFloat(fadeProgress) // 从1.0淡到0.0
+            } else {
+                // 正常显示
+                return 1.0
+            }
+        }()
+
+        HStack(spacing: 10) {
             ForEach(0..<3) { index in
+                let progress = dotProgresses[index]
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 8, height: 8)
-                    .opacity(animationPhase == index ? 1.0 : 0.3)
-                    .scaleEffect(animationPhase == index ? 1.2 : 1.0)
+                    .frame(width: 10, height: 10)
+                    .opacity(0.35 + progress * 0.65) // 从0.35渐变到1.0
+                    .scaleEffect(1.0 + progress * 0.3) // 从1.0渐变到1.3
             }
         }
-        .onAppear {
-            // Animate dots sequentially
-            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    animationPhase = (animationPhase + 1) % 3
-                }
-            }
-        }
+        .scaleEffect(0.8) // 整体缩小到0.8x
+        .frame(height: 24) // Match lyric text height
+        .opacity(overallOpacity) // 🔑 应用整体淡出效果
     }
 }
 

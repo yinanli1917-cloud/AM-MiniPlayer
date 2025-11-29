@@ -32,39 +32,9 @@ public struct PlaylistView: View {
                     // 第一行：Music/Hide按钮 - 仅在hover时显示
                     if isHovering && showControls {
                         HStack {
-                            Button(action: {
-                                let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
-                                NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.up.left")
-                                        .font(.system(size: 10, weight: .semibold))
-                                    Text("Music")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .foregroundColor(.white.opacity(0.6))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color.white.opacity(0.08))
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .help("打开 Apple Music")
-
+                            MusicButtonView()
                             Spacer()
-
-                            Button(action: {
-                                NSApplication.shared.keyWindow?.orderOut(nil)
-                            }) {
-                                Image(systemName: "chevron.compact.up")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .frame(width: 28, height: 28)
-                                    .background(Color.white.opacity(0.08))
-                                    .clipShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .help("收起到菜单栏")
+                            HideButtonView()
                         }
                         .padding(.horizontal, 12)
                         .padding(.top, 12)
@@ -115,6 +85,7 @@ public struct PlaylistView: View {
                         .padding(.bottom, 12)
                     }
 
+                    // ScrollView - controls must be OUTSIDE as overlay
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 0) {
 
@@ -276,53 +247,39 @@ public struct PlaylistView: View {
                             Spacer().frame(height: 100)
                         }
                     }
-                    .simpleScrollDetection(
-                        onScrollStarted: {
-                            // User is manually scrolling
-                            isManualScrolling = true
-                            showControls = false
+                    .overlay(
+                        // 🔑 关键：控件必须在ScrollView的overlay之上，带渐变遮罩且防止点击穿透
+                        Group {
+                            if showControls {
+                                VStack {
+                                    Spacer()
 
-                            // Cancel existing timer
-                            autoScrollTimer?.invalidate()
-                        },
-                        onScrollEnded: {
-                            // User stopped scrolling for 2 seconds
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                isManualScrolling = false
-                                if isHovering {
-                                    showControls = true
+                                    // 渐变遮罩 + 控件区域（整体拦截点击，防止穿透）
+                                    ZStack(alignment: .bottom) {
+                                        // Gradient mask
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                        .frame(height: 80)
+
+                                        SharedBottomControls(
+                                            currentPage: $currentPage,
+                                            isHovering: $isHovering,
+                                            showControls: $showControls,
+                                            isProgressBarHovering: $isProgressBarHovering,
+                                            dragPosition: $dragPosition
+                                        )
+                                        .padding(.bottom, 0)
+                                    }
+                                    .contentShape(Rectangle())  // 🔑 确保整个区域可点击
+                                    .allowsHitTesting(true)     // 🔑 拦截所有点击，防止穿透到下层歌单
                                 }
+                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
                             }
                         }
                     )
-                }
-            }
-
-            // Bottom control bar - fixed position at bottom
-            VStack {
-                Spacer()
-                ZStack(alignment: .bottom) {
-                    // Gradient mask
-                    LinearGradient(
-                        gradient: Gradient(colors: [.clear, .black.opacity(0.8)]),
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
-                    .allowsHitTesting(false)
-                    .opacity(isHovering && showControls ? 1 : 0)
-
-                    // Full control set - visible on hover
-                    if isHovering && showControls {
-                        SharedBottomControls(
-                            currentPage: $currentPage,
-                            isHovering: $isHovering,
-                            showControls: $showControls,
-                            isProgressBarHovering: $isProgressBarHovering,
-                            dragPosition: $dragPosition
-                        )
-                        .padding(.bottom, 0) // Ensure consistent bottom padding
-                    }
                 }
             }
             .onHover { hovering in
@@ -333,7 +290,7 @@ public struct PlaylistView: View {
                     }
                 }
             }
-                .onAppear {
+            .onAppear {
                 musicController.fetchUpNextQueue()
             }
         }

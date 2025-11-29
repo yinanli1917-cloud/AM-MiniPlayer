@@ -93,12 +93,13 @@ extension NSImage {
         var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
         nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
 
-        // 极端增强：饱和度翻10倍，明度降低到0.3以获得深色艳丽效果
-        let enhancedSaturation = min(saturation * 10.0, 1.0)
-        let enhancedBrightness = max(brightness * 0.3, 0.15)
+        // 大幅增强：匹配图片中红沙发的鲜艳度
+        let enhancedSaturation = min(saturation * 3.5, 0.95)  // 3.5x enhancement, max 95%
+        let enhancedBrightness = max(brightness * 0.75, 0.40)  // Retain 75% brightness, min 40%
+        let finalAlpha: CGFloat = 0.7  // 70% transparency for Liquid Glass layering
 
-        let finalColor = NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: 1.0)
-        print("🎨 Enhanced color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness)")
+        let finalColor = NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: finalAlpha)
+        print("🎨 Enhanced color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness) A=\(finalAlpha)")
         return finalColor
     }
 
@@ -131,13 +132,14 @@ extension NSImage {
                        blue: CGFloat(bitmap[2]) / 255,
                        alpha: CGFloat(bitmap[3]) / 255)
 
-        // 对averageColor也进行同样的极端增强
+        // 对averageColor也进行同样的大幅增强
         var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
         nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-        let enhancedSaturation = min(saturation * 10.0, 1.0)
-        let enhancedBrightness = max(brightness * 0.3, 0.15)
+        let enhancedSaturation = min(saturation * 3.5, 0.95)  // 3.5x enhancement, max 95%
+        let enhancedBrightness = max(brightness * 0.75, 0.40)  // Retain 75% brightness, min 40%
+        let alphaValue: CGFloat = 0.7  // 70% transparency for Liquid Glass layering
 
-        print("🎨 Enhanced average color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness)")
-        return NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: 1.0)
+        print("🎨 Enhanced average color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness) A=\(alphaValue)")
+        return NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: alphaValue)
     }
 }

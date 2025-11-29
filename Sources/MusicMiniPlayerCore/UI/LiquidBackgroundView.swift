@@ -1,5 +1,25 @@
 import SwiftUI
+import AppKit
 import os
+
+// MARK: - NSVisualEffectView Wrapper for macOS Liquid Glass
+struct LiquidGlassEffectView: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
+    }
+}
 
 public struct LiquidBackgroundView: View {
     var artwork: NSImage?
@@ -12,31 +32,55 @@ public struct LiquidBackgroundView: View {
 
     public var body: some View {
         ZStack {
-            // 底层：艳丽的颜色背景（clear需要colorful背景）
-            // 注意：dominantColor已经在提取时增强过了，这里不再处理
+            // 第一层：macOS Liquid Glass - NSVisualEffectView with behindWindow blending
+            LiquidGlassEffectView(
+                material: .hudWindow,
+                blendingMode: .behindWindow
+            )
+            .ignoresSafeArea()
+
+            // 第二层：专辑主色调 - 使用更高的不透明度和正常混合
             if dominantColor != .clear {
                 dominantColor
-                    .opacity(0.6)  // 足够高的opacity让颜色明显
-            } else {
-                Color(red: 0.99, green: 0.24, blue: 0.27)  // 使用鲜艳的红色作为fallback
-                    .opacity(0.6)
+                    .opacity(0.6)  // 从0.35提高到0.6
+                    .ignoresSafeArea()
+                    .blendMode(.normal)  // 使用normal而不是overlay
             }
 
-            // 顶层：clear glass效果（最大透明度）
-            Rectangle()
-                .fill(.clear)
-                .glassEffect(
-                    {
-                        if dominantColor != .clear {
-                            return .clear.tint(dominantColor)
-                        } else {
-                            return .clear.tint(Color(red: 0.35, green: 0.15, blue: 0.25))
-                        }
-                    }(),
-                    in: .rect(cornerRadius: 16)
-                )
+            // 第三层：额外的半透明材质层增强玻璃效果
+            LiquidGlassEffectView(
+                material: .hudWindow,
+                blendingMode: .withinWindow
+            )
+            .ignoresSafeArea()
+            .opacity(0.5)
+
+            // 第四层：高光渐变层
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color.white.opacity(0.25),
+                    Color.clear,
+                    Color.clear
+                ]),
+                startPoint: .topLeading,
+                endPoint: .center
+            )
+            .ignoresSafeArea()
+            .blendMode(.overlay)
+
+            // 第五层：深度渐变
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color.white.opacity(0.04),
+                    Color.clear,
+                    Color.black.opacity(0.08)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
         }
-        .ignoresSafeArea()
         .onAppear {
             updateColor()
         }
