@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var floatingWindow: NSPanel?
     var musicController = MusicController.shared
+    var resizeHandler: WindowResizeHandler?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Create menu bar status item
@@ -114,6 +115,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let hostingView = NSHostingView(rootView: contentView)
         window.contentView = hostingView
+
+        // 启用窗口缩放功能
+        resizeHandler = WindowResizeHandler(window: window)
     }
 
     @objc func toggleWindow() {
