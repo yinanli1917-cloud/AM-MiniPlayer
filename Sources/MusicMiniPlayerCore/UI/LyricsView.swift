@@ -561,27 +561,27 @@ struct InterludeLoadingDotsView: View {
             }
         }
 
-        // 🔑 整体淡入淡出：在间奏前后3.5s进行渐变
+        // 🔑 整体淡入淡出
         let overallOpacity: CGFloat = {
-            let fadeInDuration: TimeInterval = 3.5
-            let fadeOutDuration: TimeInterval = 3.5
+            let fadeInDuration: TimeInterval = min(1.0, duration / 6.0) // 快速淡入（最多1秒）
+            let fadeOutDuration: TimeInterval = 3.5 // 3.5秒淡出，同时下一句歌词进入
 
             if currentTime < startTime {
                 // 还没到间奏，完全透明
                 return 0.0
             } else if currentTime < startTime + fadeInDuration {
-                // 淡入阶段
+                // 快速淡入
                 let fadeProgress = (currentTime - startTime) / fadeInDuration
                 return CGFloat(fadeProgress)
             } else if currentTime >= endTime {
                 // 已过间奏，完全透明
                 return 0.0
             } else if currentTime >= endTime - fadeOutDuration {
-                // 淡出阶段
+                // 淡出阶段（与下一句歌词进入同步）
                 let fadeProgress = (endTime - currentTime) / fadeOutDuration
                 return CGFloat(fadeProgress)
             } else {
-                // 间奏中间，完全不透明
+                // 间奏播放中，完全不透明
                 return 1.0
             }
         }()
