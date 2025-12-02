@@ -53,7 +53,8 @@ public struct MiniPlayerView: View {
                     .allowsHitTesting(currentPage == .album)
             }
         }
-        .frame(width: 300, height: 380) // Original aspect ratio
+        // 移除固定尺寸，让视图自动填充窗口以支持缩放
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
             // Music按钮 - 只在album页面显示（其他页面有各自的按钮）
