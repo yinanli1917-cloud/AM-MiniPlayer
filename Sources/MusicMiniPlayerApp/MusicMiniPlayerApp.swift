@@ -26,14 +26,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Music Mini Player")
+            let image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Music Mini Player")
+            image?.isTemplate = true  // 确保使用模板渲染
+            button.image = image
             button.action = #selector(statusBarButtonClicked)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            fputs("[AppDelegate] Status bar button configured with music.note icon\n", stderr)
+        } else {
+            fputs("[AppDelegate] ERROR: Failed to get status bar button\n", stderr)
         }
 
-        // Set activation policy to regular (show dock icon so user can quit)
-        NSApp.setActivationPolicy(.regular)
+        // Set activation policy to accessory (hide dock icon, only show menu bar icon)
+        // This ensures menu bar icon is always visible even when window is hidden
+        NSApp.setActivationPolicy(.accessory)
 
         // Create borderless floating window (Arc browser style PIP)
         createFloatingWindow()
@@ -81,10 +87,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             height: windowSize.height
         )
 
-        // Create panel with borderless style
+        // Create panel with resizable style
+        // Note: .nonactivatingPanel CONFLICTS with .resizable, so we DON'T use it
         floatingWindow = NSPanel(
             contentRect: windowRect,
-            styleMask: [.nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.titled, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -102,18 +109,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.hidesOnDeactivate = false
+        window.acceptsMouseMovedEvents = true // 关键：让tracking area的mouseMoved工作
 
         // Hide all window buttons
         window.standardWindowButton(.closeButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
 
-        // Create SwiftUI content view
+        // Create SwiftUI content view (不要设置固定frame，让它自适应窗口大小)
         let contentView = MiniPlayerContentView()
             .environmentObject(musicController)
-            .frame(width: 300, height: 380)
 
         let hostingView = NSHostingView(rootView: contentView)
+        hostingView.autoresizingMask = [.width, .height] // 关键：让hosting view自动调整大小
         window.contentView = hostingView
 
         // 启用窗口缩放功能
