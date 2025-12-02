@@ -3,81 +3,150 @@ import MusicMiniPlayerCore
 
 @main
 struct MusicMiniPlayerApp: App {
-    @StateObject private var musicController = MusicController.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // 不使用SwiftUI Window,完全由AppDelegate管理
+        // 使用一个隐藏的 Settings scene 保持 SwiftUI App 生命周期
         Settings {
             EmptyView()
         }
     }
 }
 
-// AppDelegate to manage menu bar icon and borderless floating window
-class AppDelegate: NSObject, NSApplicationDelegate {
+// AppDelegate 管理菜单栏图标和浮动窗口
+class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var statusItem: NSStatusItem?
     var floatingWindow: NSPanel?
     var musicController = MusicController.shared
     var resizeHandler: WindowResizeHandler?
+    private var windowDelegate: FloatingWindowDelegate?
+    private var statusItemMenu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Create menu bar status item
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        fputs("[AppDelegate] Application launched\n", stderr)
 
-        if let button = statusItem?.button {
-            let image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Music Mini Player")
-            image?.isTemplate = true  // 确保使用模板渲染
-            button.image = image
-            button.action = #selector(statusBarButtonClicked)
-            button.target = self
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            fputs("[AppDelegate] Status bar button configured with music.note icon\n", stderr)
-        } else {
-            fputs("[AppDelegate] ERROR: Failed to get status bar button\n", stderr)
-        }
+        // 创建菜单栏图标
+        createStatusBarItem()
 
-        // Set activation policy to accessory (hide dock icon, only show menu bar icon)
-        // This ensures menu bar icon is always visible even when window is hidden
-        NSApp.setActivationPolicy(.accessory)
-
-        // Create borderless floating window (Arc browser style PIP)
+        // 创建浮动窗口
         createFloatingWindow()
 
-        // Show window by default
+        // 默认显示窗口
         floatingWindow?.orderFront(nil)
+
+        // 延迟激活
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        fputs("[AppDelegate] Setup complete\n", stderr)
     }
 
-    @objc func statusBarButtonClicked(_ sender: NSStatusBarButton) {
-        let event = NSApp.currentEvent!
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
+
+    // MARK: - Status Bar Item
+
+    func createStatusBarItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Music Mini Player")
+            button.action = #selector(statusItemClicked(_:))
+            button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+
+        // 创建右键菜单
+        createStatusItemMenu()
+
+        fputs("[AppDelegate] Status bar item created\n", stderr)
+    }
+
+    func createStatusItemMenu() {
+        statusItemMenu = NSMenu()
+
+        let showHideItem = NSMenuItem(title: "Show/Hide Window", action: #selector(toggleWindow), keyEquivalent: "m")
+        showHideItem.keyEquivalentModifierMask = [.command, .shift]
+        showHideItem.target = self
+        statusItemMenu?.addItem(showHideItem)
+
+        statusItemMenu?.addItem(NSMenuItem.separator())
+
+        // 播放控制
+        let playPauseItem = NSMenuItem(title: musicController.isPlaying ? "Pause" : "Play", action: #selector(togglePlayPause), keyEquivalent: " ")
+        playPauseItem.keyEquivalentModifierMask = []
+        playPauseItem.target = self
+        statusItemMenu?.addItem(playPauseItem)
+
+        let previousItem = NSMenuItem(title: "Previous", action: #selector(previousTrack), keyEquivalent: "")
+        previousItem.target = self
+        statusItemMenu?.addItem(previousItem)
+
+        let nextItem = NSMenuItem(title: "Next", action: #selector(nextTrack), keyEquivalent: "")
+        nextItem.target = self
+        statusItemMenu?.addItem(nextItem)
+
+        statusItemMenu?.addItem(NSMenuItem.separator())
+
+        let openMusicItem = NSMenuItem(title: "Open Apple Music", action: #selector(openAppleMusic), keyEquivalent: "")
+        openMusicItem.target = self
+        statusItemMenu?.addItem(openMusicItem)
+
+        statusItemMenu?.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        statusItemMenu?.addItem(quitItem)
+    }
+
+    @objc func statusItemClicked(_ sender: AnyObject?) {
+        guard let event = NSApp.currentEvent else { return }
 
         if event.type == .rightMouseUp {
-            // Right click - show menu
-            showMenu()
+            // 右键显示菜单
+            updateStatusItemMenu()
+            statusItem?.menu = statusItemMenu
+            statusItem?.button?.performClick(nil)
+            statusItem?.menu = nil  // 点击后移除菜单，恢复左键功能
         } else {
-            // Left click - toggle window
+            // 左键切换窗口显示
             toggleWindow()
         }
     }
 
-    func showMenu() {
-        let menu = NSMenu()
+    func updateStatusItemMenu() {
+        // 更新播放/暂停状态
+        if let playPauseItem = statusItemMenu?.item(withTitle: "Play") ?? statusItemMenu?.item(withTitle: "Pause") {
+            playPauseItem.title = musicController.isPlaying ? "Pause" : "Play"
+        }
+    }
 
-        menu.addItem(NSMenuItem(title: "Show/Hide Window", action: #selector(toggleWindow), keyEquivalent: ""))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit Music Mini Player", action: #selector(quitApp), keyEquivalent: "q"))
+    @objc func togglePlayPause() {
+        musicController.togglePlayPause()
+    }
 
-        statusItem?.menu = menu
-        statusItem?.button?.performClick(nil)
-        statusItem?.menu = nil
+    @objc func previousTrack() {
+        musicController.previousTrack()
+    }
+
+    @objc func nextTrack() {
+        musicController.nextTrack()
+    }
+
+    @objc func openAppleMusic() {
+        let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+        NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
     }
 
     @objc func quitApp() {
         NSApp.terminate(nil)
     }
 
+    // MARK: - Floating Window
+
     func createFloatingWindow() {
-        // Create borderless floating panel with original aspect ratio
         let windowSize = NSSize(width: 300, height: 380)
         let screenFrame = NSScreen.main?.visibleFrame ?? .zero
         let windowRect = NSRect(
@@ -87,45 +156,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             height: windowSize.height
         )
 
-        // Create panel with resizable style
-        // Note: .nonactivatingPanel CONFLICTS with .resizable, so we DON'T use it
         floatingWindow = NSPanel(
             contentRect: windowRect,
-            styleMask: [.titled, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
         guard let window = floatingWindow else { return }
 
-        // Configure floating window properties
+        // 配置浮动窗口属性
         window.isFloatingPanel = true
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = true
-        window.isMovableByWindowBackground = true // Enable window dragging
+        window.isMovableByWindowBackground = true
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.hidesOnDeactivate = false
-        window.acceptsMouseMovedEvents = true // 关键：让tracking area的mouseMoved工作
+        window.acceptsMouseMovedEvents = true
+        window.becomesKeyOnlyIfNeeded = true
 
-        // Hide all window buttons
+        // 设置窗口代理
+        windowDelegate = FloatingWindowDelegate()
+        window.delegate = windowDelegate
+
+        // 隐藏窗口按钮
         window.standardWindowButton(.closeButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
 
-        // Create SwiftUI content view (不要设置固定frame，让它自适应窗口大小)
+        // 创建 SwiftUI 内容视图
         let contentView = MiniPlayerContentView()
             .environmentObject(musicController)
 
         let hostingView = NSHostingView(rootView: contentView)
-        hostingView.autoresizingMask = [.width, .height] // 关键：让hosting view自动调整大小
+        hostingView.autoresizingMask = [.width, .height]
         window.contentView = hostingView
 
         // 启用窗口缩放功能
         resizeHandler = WindowResizeHandler(window: window)
+
+        fputs("[AppDelegate] Floating window created\n", stderr)
     }
 
     @objc func toggleWindow() {
@@ -137,6 +211,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.orderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+}
+
+// 窗口代理
+class FloatingWindowDelegate: NSObject, NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
     }
 }
 

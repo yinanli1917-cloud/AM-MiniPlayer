@@ -95,9 +95,8 @@ public struct PlaylistView: View {
 
                                 VStack(spacing: 0) {
                                     Button(action: {
-                                        // 5-second animation to album page
-                                        print("🎬 Starting 5-second animation")
-                                        withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 5.0)) {
+                                        // 🔑 使用较慢的动画时间（0.8秒）方便观察matchedGeometryEffect
+                                        withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
                                             isCoverAnimating = true
                                             currentPage = .album
                                         }
@@ -111,7 +110,7 @@ public struct PlaylistView: View {
                                                     .frame(width: artSize, height: artSize)
                                                     .cornerRadius(6)
                                                     .shadow(radius: 3)
-                                                    .matchedGeometryEffect(id: "main-artwork", in: animationNamespace)
+                                                    .matchedGeometryEffect(id: "album-artwork", in: animationNamespace, isSource: currentPage == .playlist)
                                             } else {
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .fill(Color.gray.opacity(0.3))
@@ -248,6 +247,58 @@ public struct PlaylistView: View {
                             Spacer().frame(height: 100)
                         }
                     }
+                    // 🔑 添加scroll检测 - 使用加速度检测
+                    .scrollDetectionWithVelocity(
+                        onScrollStarted: {
+                            // 开始手动滚动时
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isManualScrolling = true
+                            }
+                            // 取消之前的恢复定时器
+                            autoScrollTimer?.invalidate()
+                        },
+                        onScrollEnded: {
+                            // 滚动结束2秒后恢复
+                            autoScrollTimer?.invalidate()
+                            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isManualScrolling = false
+                                    // 如果鼠标还在窗口内，显示控件
+                                    if isHovering {
+                                        showControls = true
+                                    }
+                                }
+                            }
+                        },
+                        onScrollWithVelocity: { deltaY, velocity in
+                            // deltaY > 0 = 手指向下滑（内容向上滚动，显示下面的内容）
+                            // deltaY < 0 = 手指向上滑（内容向下滚动，显示上面的内容）
+                            let velocityThreshold: CGFloat = 300  // 快速滚动阈值
+                            let slowThreshold: CGFloat = 100      // 慢速滚动阈值
+
+                            if deltaY > 0 {
+                                // 向下滚动（显示更多内容）
+                                if abs(velocity) < slowThreshold {
+                                    // 慢速向下滚动 - 立即显示controls
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = true
+                                    }
+                                } else if abs(velocity) > velocityThreshold {
+                                    // 快速向下滚动 - 隐藏controls
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = false
+                                    }
+                                }
+                            } else if deltaY < 0 {
+                                // 向上滚动（回到顶部）- 快速时隐藏controls
+                                if abs(velocity) > velocityThreshold {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = false
+                                    }
+                                }
+                            }
+                        }
+                    )
                     .overlay(
                         // 🔑 关键：控件必须在ScrollView的overlay之上，带渐变遮罩且防止点击穿透
                         Group {
@@ -318,6 +369,7 @@ struct PlaylistItemRowCompact: View {
     @Binding var currentPage: PlayerPage
     @State private var isHovering = false
     @State private var artwork: NSImage? = nil
+    @State private var currentArtworkID: String = "" // 追踪当前artwork对应的ID
     @EnvironmentObject var musicController: MusicController
 
     // Check if this is the currently playing track
@@ -337,8 +389,8 @@ struct PlaylistItemRowCompact: View {
             }
         }) {
             HStack(spacing: 8) {
-                // Album art (responsive)
-                if let artwork = artwork {
+                // Album art (responsive) - 只有artwork ID匹配时才显示
+                if let artwork = artwork, currentArtworkID == persistentID {
                     Image(nsImage: artwork)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -394,18 +446,27 @@ struct PlaylistItemRowCompact: View {
                 isHovering = hovering
             }
         }
-        .task {
-            // Use .task instead of .onAppear for better async handling
-            if artwork == nil {
-                // Try AppleScript first (most reliable for local tracks)
-                if let fetchedArtwork = await musicController.fetchArtworkByPersistentID(persistentID: persistentID) {
-                    await MainActor.run {
+        .task(id: persistentID) {
+            // 关键修复：使用 .task(id:) 来响应persistentID变化
+            // 当ID变化时，先清除旧artwork，再获取新的
+            if currentArtworkID != persistentID {
+                artwork = nil
+                currentArtworkID = persistentID
+            }
+
+            // Try AppleScript first (most reliable for local tracks)
+            if let fetchedArtwork = await musicController.fetchArtworkByPersistentID(persistentID: persistentID) {
+                await MainActor.run {
+                    // 再次验证ID匹配（防止race condition）
+                    if currentArtworkID == persistentID {
                         artwork = fetchedArtwork
                     }
-                } else {
-                    // Fallback to MusicKit
-                    let fetchedArtwork = await musicController.fetchMusicKitArtwork(title: title, artist: artist, album: album)
-                    await MainActor.run {
+                }
+            } else {
+                // Fallback to MusicKit
+                let fetchedArtwork = await musicController.fetchMusicKitArtwork(title: title, artist: artist, album: album)
+                await MainActor.run {
+                    if currentArtworkID == persistentID {
                         artwork = fetchedArtwork
                     }
                 }

@@ -41,11 +41,16 @@ public class MusicController: ObservableObject {
     private var musicApp: SBApplication?
     private var pollingTimer: Timer?
     private var interpolationTimer: Timer?
+    private var queueCheckTimer: Timer?
     private var lastPollTime: Date = .distantPast
     private var currentPersistentID: String?
     private var artworkCache = NSCache<NSString, NSImage>()
     private var isPreview: Bool = false
-    
+
+    // Queue sync state
+    private var lastQueueHash: String = ""
+    private var queueObserverTask: Task<Void, Never>?
+
     // State synchronization lock
     private var lastUserActionTime: Date = .distantPast
     private let userActionLockDuration: TimeInterval = 1.5
@@ -134,14 +139,76 @@ public class MusicController: ObservableObject {
     deinit {
         pollingTimer?.invalidate()
         interpolationTimer?.invalidate()
+        queueCheckTimer?.invalidate()
+        queueObserverTask?.cancel()
         DistributedNotificationCenter.default().removeObserver(self)
     }
 
     // MARK: - Setup
 
+    @MainActor
     private func requestMusicKitAuthorization() async {
-        let status = await MusicAuthorization.request()
-        logger.info("MusicKit Authorization Status: \(String(describing: status))")
+        // 1. 检查当前状态
+        let currentStatus = MusicAuthorization.currentStatus
+        logger.info("Current MusicKit status: \(String(describing: currentStatus))")
+
+        if currentStatus == .authorized {
+            logger.info("✅ MusicKit already authorized!")
+            return
+        }
+
+        // 2. 请求授权
+        if currentStatus == .notDetermined {
+            logger.info("Requesting MusicKit authorization...")
+            let newStatus = await MusicAuthorization.request()
+            logger.info("Authorization request returned: \(String(describing: newStatus))")
+
+            switch newStatus {
+            case .authorized:
+                logger.info("✅ MusicKit authorized!")
+            case .denied:
+                logger.warning("⚠️ User denied MusicKit access")
+                // 在 macOS 上，授权被拒绝后需要引导用户手动设置
+                showMusicKitAuthorizationGuide()
+            case .restricted:
+                logger.error("❌ MusicKit access is restricted by parental controls")
+            case .notDetermined:
+                logger.warning("⚠️ Status still not determined")
+            @unknown default:
+                logger.error("Unknown authorization status")
+            }
+        } else if currentStatus == .denied {
+            logger.warning("⚠️ MusicKit previously denied - showing guide")
+            showMusicKitAuthorizationGuide()
+        }
+    }
+
+    /// 显示 MusicKit 授权引导对话框
+    @MainActor
+    public func showMusicKitAuthorizationGuide() {
+        let alert = NSAlert()
+        alert.messageText = "需要 Apple Music 访问权限"
+        alert.informativeText = """
+        Music Mini Player 需要访问您的 Apple Music 资料库才能显示专辑封面、歌曲信息和队列。
+
+        请按以下步骤授权：
+        1. 打开「系统设置」
+        2. 前往「隐私与安全性」
+        3. 选择「媒体与 Apple Music」
+        4. 开启「Music Mini Player」的权限
+
+        然后重新启动应用。
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "稍后")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            // 打开系统设置 - 隐私与安全性
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_MediaLibrary") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     private func setupNotifications() {
@@ -158,10 +225,95 @@ public class MusicController: ObservableObject {
         pollingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updatePlayerState()
         }
-        
+
         // Local interpolation timer (60fps) for smooth UI updates
         interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
             self?.interpolateTime()
+        }
+
+        // Queue hash check timer - lightweight check every 2 seconds
+        queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.checkQueueHashAndRefresh()
+        }
+
+        // Setup MusicKit queue observer
+        setupMusicKitQueueObserver()
+    }
+
+    // MARK: - Queue Sync (双层检测)
+
+    /// 轻量级队列hash检测 - 通过playlist ID + track count检测变化
+    private func checkQueueHashAndRefresh() {
+        guard !isPreview else { return }
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+
+            let hashScript = """
+            tell application "Music"
+                try
+                    set playlistName to name of current playlist
+                    set trackCount to count of tracks of current playlist
+                    set currentID to persistent ID of current track
+                    return playlistName & ":" & trackCount & ":" & currentID
+                on error
+                    return ""
+                end try
+            end tell
+            """
+
+            var error: NSDictionary?
+            if let scriptObject = NSAppleScript(source: hashScript) {
+                let descriptor = scriptObject.executeAndReturnError(&error)
+                if let hash = descriptor.stringValue, !hash.isEmpty {
+                    DispatchQueue.main.async {
+                        if hash != self.lastQueueHash {
+                            self.logger.info("🔄 Queue hash changed: \(self.lastQueueHash) -> \(hash)")
+                            self.lastQueueHash = hash
+                            self.fetchUpNextQueue()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// MusicKit队列观察器 - 使用DistributedNotificationCenter监听Apple Music变化
+    private func setupMusicKitQueueObserver() {
+        guard !isPreview else { return }
+
+        // 监听 Apple Music 播放信息变化（包括队列变化）
+        // 这些是macOS上可用的通知
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(queueMayHaveChanged),
+            name: NSNotification.Name("com.apple.Music.playerInfo"),
+            object: nil
+        )
+
+        // 监听播放列表变化
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(queueMayHaveChanged),
+            name: NSNotification.Name("com.apple.Music.playlistChanged"),
+            object: nil
+        )
+
+        logger.info("📻 Setup DistributedNotificationCenter observers for queue changes")
+    }
+
+    @objc private func queueMayHaveChanged(_ notification: Notification) {
+        // 防抖动：如果距离上次检查不到1秒，跳过
+        let now = Date()
+        if now.timeIntervalSince(lastPollTime) < 1.0 {
+            return
+        }
+
+        logger.info("📻 Received notification: \(notification.name.rawValue)")
+
+        // 延迟执行以避免在快速切换时重复刷新
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.checkQueueHashAndRefresh()
         }
     }
     
@@ -409,16 +561,47 @@ public class MusicController: ObservableObject {
     }
 
     private func fetchArtworkDataViaAppleScript() -> Data? {
-        let script = "tell application \"Music\" to get data of artwork 1 of current track"
+        // 首先尝试获取 current track 的 artwork
+        let trackArtworkScript = "tell application \"Music\" to get data of artwork 1 of current track"
         var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: script) {
+        if let scriptObject = NSAppleScript(source: trackArtworkScript) {
             let descriptor = scriptObject.executeAndReturnError(&error)
-            if let error = error {
-                logger.error("AppleScript Artwork Error: \(error)")
-                return nil
+            if error == nil {
+                let data = descriptor.data
+                if !data.isEmpty {
+                    return data
+                }
             }
-            return descriptor.data
         }
+
+        // 对于电台/流媒体，尝试获取 current stream title 的封面
+        // Apple Music 电台可能需要不同的方法
+        logger.info("🔄 Track artwork failed, trying stream artwork...")
+
+        // 尝试从 current playlist 获取封面（电台场景）
+        let playlistArtworkScript = """
+        tell application "Music"
+            try
+                return data of artwork 1 of current playlist
+            on error
+                return missing value
+            end try
+        end tell
+        """
+
+        error = nil
+        if let scriptObject = NSAppleScript(source: playlistArtworkScript) {
+            let descriptor = scriptObject.executeAndReturnError(&error)
+            if error == nil {
+                let data = descriptor.data
+                if !data.isEmpty {
+                    logger.info("✅ Got artwork from current playlist")
+                    return data
+                }
+            }
+        }
+
+        logger.error("AppleScript Artwork Error: No artwork available from track or playlist")
         return nil
     }
     
@@ -600,52 +783,131 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // Fetch Up Next queue - try to get real "Up Next" user playlist first
+        // 🔑 优先使用 MusicKit 获取真实的 "Up Next" 播放队列（包括随机播放顺序）
+        Task {
+            await fetchUpNextViaMusicKit()
+        }
+
+        // 同时用 AppleScript 获取历史记录（MusicKit 不提供这个）
+        fetchRecentHistoryViaAppleScript()
+    }
+
+    /// 使用 MusicKit 获取真实的播放队列（包括随机播放顺序）
+    private func fetchUpNextViaMusicKit() async {
+        // 检查 MusicKit 授权
+        let authStatus = MusicAuthorization.currentStatus
+        if authStatus != .authorized {
+            let newStatus = await MusicAuthorization.request()
+            if newStatus != .authorized {
+                logger.warning("⚠️ MusicKit not authorized, falling back to AppleScript for Up Next")
+                await fetchUpNextViaAppleScript()
+                return
+            }
+        }
+
+        // 使用 ApplicationMusicPlayer 获取真实队列
+        let player = ApplicationMusicPlayer.shared
+        let queue = player.queue
+
+        var trackList: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
+
+        // 获取队列中的条目
+        for entry in queue.entries.prefix(15) {
+            if let item = entry.item {
+                switch item {
+                case .song(let song):
+                    trackList.append((
+                        title: song.title,
+                        artist: song.artistName,
+                        album: song.albumTitle ?? "",
+                        persistentID: song.id.rawValue,
+                        duration: song.duration ?? 0
+                    ))
+                default:
+                    break
+                }
+            }
+        }
+
+        // 创建不可变副本用于 MainActor
+        let tracks = trackList
+
+        if !tracks.isEmpty {
+            await MainActor.run {
+                // 移除当前正在播放的歌曲（队列第一个通常是当前歌曲）
+                if tracks.first?.title == self.currentTrackTitle {
+                    self.upNextTracks = Array(tracks.dropFirst())
+                } else {
+                    self.upNextTracks = tracks
+                }
+                self.logger.info("✅ Fetched \(self.upNextTracks.count) up next tracks via MusicKit")
+            }
+        } else {
+            // MusicKit 队列为空，回退到 AppleScript
+            logger.info("⚠️ MusicKit queue empty, falling back to AppleScript")
+            await fetchUpNextViaAppleScript()
+        }
+    }
+
+    /// AppleScript 方式获取 Up Next（回退方案）
+    private func fetchUpNextViaAppleScript() async {
         let upNextScript = """
         tell application "Music"
             set output to ""
             try
-                -- Try to get the actual "Up Next" user playlist
-                if exists user playlist "Up Next" then
-                    set queueTracks to tracks of user playlist "Up Next"
-                    set trackCount to count of queueTracks
+                set queueTracks to tracks of current playlist
+                set trackCount to count of queueTracks
 
-                    -- Get up to 10 tracks from Up Next
-                    repeat with i from 1 to (trackCount)
-                        if i > 10 then exit repeat
+                -- Find current track index
+                set currentTrackID to persistent ID of current track
+                set currentIndex to 0
+                repeat with i from 1 to trackCount
+                    if persistent ID of item i of queueTracks is currentTrackID then
+                        set currentIndex to i
+                        exit repeat
+                    end if
+                end repeat
+
+                -- Get next 10 tracks
+                if currentIndex > 0 then
+                    repeat with i from (currentIndex + 1) to (currentIndex + 10)
+                        if i > trackCount then exit repeat
                         set t to item i of queueTracks
                         set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & "|||" & (duration of t) & ":::"
                     end repeat
-                else
-                    -- Fallback to current playlist
-                    set queueTracks to tracks of current playlist
-                    set trackCount to count of queueTracks
-
-                    -- Find current track index
-                    set currentTrackID to persistent ID of current track
-                    set currentIndex to 0
-                    repeat with i from 1 to trackCount
-                        if persistent ID of item i of queueTracks is currentTrackID then
-                            set currentIndex to i
-                            exit repeat
-                        end if
-                    end repeat
-
-                    -- Get next 10 tracks
-                    if currentIndex > 0 then
-                        repeat with i from (currentIndex + 1) to (currentIndex + 10)
-                            if i > trackCount then exit repeat
-                            set t to item i of queueTracks
-                            set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & "|||" & (duration of t) & ":::"
-                        end repeat
-                    end if
                 end if
             end try
             return output
         end tell
         """
 
-        // Fetch recent history
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+
+            // Fetch Up Next via AppleScript
+            if let scriptObject = NSAppleScript(source: upNextScript) {
+                let descriptor = scriptObject.executeAndReturnError(&error)
+                if error == nil, let resultString = descriptor.stringValue {
+                    let parsed = self.parseQueueResult(resultString)
+                    DispatchQueue.main.async {
+                        self.upNextTracks = parsed
+                        self.logger.info("✅ Fetched \(parsed.count) up next tracks via AppleScript fallback")
+
+                        // Trigger lyrics preloading for upcoming tracks (first 3 only to avoid hammering APIs)
+                        let tracksToPreload = Array(parsed.prefix(3)).map { (title: $0.title, artist: $0.artist, duration: $0.duration) }
+                        if !tracksToPreload.isEmpty {
+                            LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
+                        }
+                    }
+                } else if let error = error {
+                    self.logger.error("❌ Up Next fetch error: \(error)")
+                }
+            }
+        }
+    }
+
+    /// 使用 AppleScript 获取历史记录
+    private func fetchRecentHistoryViaAppleScript() {
         let historyScript = """
         tell application "Music"
             set output to ""
@@ -678,29 +940,6 @@ public class MusicController: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async {
             var error: NSDictionary?
-
-            // Fetch Up Next
-            if let scriptObject = NSAppleScript(source: upNextScript) {
-                let descriptor = scriptObject.executeAndReturnError(&error)
-                if error == nil, let resultString = descriptor.stringValue {
-                    let parsed = self.parseQueueResult(resultString)
-                    DispatchQueue.main.async {
-                        self.upNextTracks = parsed
-                        self.logger.info("✅ Fetched \(parsed.count) up next tracks")
-
-                        // Trigger lyrics preloading for upcoming tracks (first 3 only to avoid hammering APIs)
-                        let tracksToPreload = Array(parsed.prefix(3)).map { (title: $0.title, artist: $0.artist, duration: $0.duration) }
-                        if !tracksToPreload.isEmpty {
-                            LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
-                        }
-                    }
-                } else if let error = error {
-                    self.logger.error("❌ Up Next fetch error: \(error)")
-                }
-            }
-
-            // Fetch Recent History
-            error = nil
             if let scriptObject = NSAppleScript(source: historyScript) {
                 let descriptor = scriptObject.executeAndReturnError(&error)
                 if error == nil, let resultString = descriptor.stringValue {

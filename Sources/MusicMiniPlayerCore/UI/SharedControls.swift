@@ -124,7 +124,8 @@ struct SharedBottomControls: View {
             isActive: currentPage == .playlist
         ) {
             print("🎵 Playlist button clicked - current page: \(currentPage)")
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            // 🔑 使用较慢的动画时间（0.8秒）方便观察matchedGeometryEffect双向动画
+            withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
                 let oldPage = currentPage
                 if currentPage == .album {
                     currentPage = .playlist

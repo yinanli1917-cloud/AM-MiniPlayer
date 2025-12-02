@@ -91,24 +91,29 @@ public class LyricsService: ObservableObject {
         Task {
             var fetchedLyrics: [LyricLine]? = nil
 
-            // Try sources in priority order: AMLL-TTML-DB → LRCLIB → lyrics.ovh
+            // Try sources in priority order: NetEase → LRCLIB → AMLL-TTML-DB → lyrics.ovh
             do {
                 logger.info("🔍 Starting priority-based search...")
 
-                // Priority 1: AMLL-TTML-DB (best quality - word-level timing)
-                if let lyrics = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                // Priority 1: NetEase/163 Music (best for Chinese songs, excellent sync)
+                if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
-                    logger.info("✅ Found lyrics from AMLL-TTML-DB (priority 1)")
+                    logger.info("✅ Found lyrics from NetEase (priority 1)")
                 }
                 // Priority 2: LRCLIB (good quality - line-level timing)
                 else if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                     logger.info("✅ Found lyrics from LRCLIB (priority 2)")
                 }
-                // Priority 3: lyrics.ovh (fallback - plain text)
+                // Priority 3: AMLL-TTML-DB (word-level timing when available)
+                else if let lyrics = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                    logger.info("✅ Found lyrics from AMLL-TTML-DB (priority 3)")
+                }
+                // Priority 4: lyrics.ovh (fallback - plain text)
                 else if let lyrics = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
-                    logger.info("✅ Found lyrics from lyrics.ovh (priority 3)")
+                    logger.info("✅ Found lyrics from lyrics.ovh (priority 4)")
                 }
 
                 logger.info("🎤 Priority search completed")
@@ -199,15 +204,19 @@ public class LyricsService: ObservableObject {
                 // Fetch lyrics in background using priority order
                 var fetchedLyrics: [LyricLine]? = nil
 
-                // Priority 1: AMLL-TTML-DB
-                if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                // Priority 1: NetEase (best sync)
+                if let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
                 // Priority 2: LRCLIB
                 else if let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
-                // Priority 3: lyrics.ovh
+                // Priority 3: AMLL-TTML-DB
+                else if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                    fetchedLyrics = lyrics
+                }
+                // Priority 4: lyrics.ovh
                 else if let lyrics = try? await fetchFromLyricsOVH(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
@@ -589,5 +598,134 @@ public class LyricsService: ObservableObject {
 
         logger.info("Created \(lines.count) unsynced lyric lines")
         return lines
+    }
+
+    // MARK: - NetEase (163 Music) API - Best for Chinese songs
+
+    private func fetchFromNetEase(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        logger.info("🌐 Fetching from NetEase: \(title) by \(artist)")
+
+        // Step 1: Search for the song
+        guard let songId = try await searchNetEaseSong(title: title, artist: artist, duration: duration) else {
+            logger.warning("No matching song found on NetEase")
+            return nil
+        }
+
+        logger.info("🎵 Found NetEase song ID: \(songId)")
+
+        // Step 2: Get lyrics for the song
+        return try await fetchNetEaseLyrics(songId: songId)
+    }
+
+    private func searchNetEaseSong(title: String, artist: String, duration: TimeInterval) async throws -> Int? {
+        // NetEase search API
+        let searchKeyword = "\(title) \(artist)"
+        guard let encodedKeyword = searchKeyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            return nil
+        }
+
+        // Using the public NetEase API endpoint
+        let urlString = "https://music.163.com/api/search/get?s=\(encodedKeyword)&type=1&limit=10"
+        guard let url = URL(string: urlString) else { return nil }
+
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        request.timeoutInterval = 10.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            logger.error("NetEase search failed with non-200 status")
+            return nil
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [String: Any],
+              let songs = result["songs"] as? [[String: Any]] else {
+            logger.error("Failed to parse NetEase search response")
+            return nil
+        }
+
+        // Find best match by comparing title, artist, and duration
+        for song in songs {
+            guard let songId = song["id"] as? Int,
+                  let songName = song["name"] as? String else { continue }
+
+            // Get artists
+            var songArtist = ""
+            if let artists = song["artists"] as? [[String: Any]],
+               let firstArtist = artists.first,
+               let artistName = firstArtist["name"] as? String {
+                songArtist = artistName
+            }
+
+            // Get duration (in milliseconds)
+            let songDuration = (song["duration"] as? Double ?? 0) / 1000.0
+
+            // Check if this is a good match
+            let titleMatch = songName.lowercased().contains(title.lowercased()) ||
+                            title.lowercased().contains(songName.lowercased())
+            let artistMatch = songArtist.lowercased().contains(artist.lowercased()) ||
+                             artist.lowercased().contains(songArtist.lowercased())
+            let durationMatch = abs(songDuration - duration) < 10 // Within 10 seconds
+
+            if titleMatch && (artistMatch || durationMatch) {
+                logger.info("✅ NetEase match: \(songName) by \(songArtist) (duration: \(Int(songDuration))s)")
+                return songId
+            }
+        }
+
+        // Fallback: return first result if no perfect match
+        if let firstSong = songs.first, let songId = firstSong["id"] as? Int {
+            logger.info("⚠️ Using first NetEase result as fallback")
+            return songId
+        }
+
+        return nil
+    }
+
+    private func fetchNetEaseLyrics(songId: Int) async throws -> [LyricLine]? {
+        // NetEase lyrics API
+        let urlString = "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1"
+        guard let url = URL(string: urlString) else { return nil }
+
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        request.timeoutInterval = 10.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            logger.error("NetEase lyrics fetch failed")
+            return nil
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            logger.error("Failed to parse NetEase lyrics response")
+            return nil
+        }
+
+        // Get synced lyrics (lrc field)
+        if let lrc = json["lrc"] as? [String: Any],
+           let lyricText = lrc["lyric"] as? String,
+           !lyricText.isEmpty {
+            logger.info("✅ Found NetEase synced lyrics (\(lyricText.count) chars)")
+            return parseLRC(lyricText)
+        }
+
+        // Fallback to translated lyrics if available
+        if let tlyric = json["tlyric"] as? [String: Any],
+           let translatedText = tlyric["lyric"] as? String,
+           !translatedText.isEmpty {
+            logger.info("⚠️ Using NetEase translated lyrics")
+            return parseLRC(translatedText)
+        }
+
+        logger.warning("No lyrics content in NetEase response")
+        return nil
     }
 }
