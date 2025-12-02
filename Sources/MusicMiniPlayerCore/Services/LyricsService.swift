@@ -91,24 +91,24 @@ public class LyricsService: ObservableObject {
         Task {
             var fetchedLyrics: [LyricLine]? = nil
 
-            // Try sources in priority order: NetEase → LRCLIB → AMLL-TTML-DB → lyrics.ovh
+            // Try sources in priority order: AMLL-TTML-DB → LRCLIB → NetEase → lyrics.ovh
             do {
                 logger.info("🔍 Starting priority-based search...")
 
-                // Priority 1: NetEase/163 Music (best for Chinese songs, excellent sync)
-                if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                // Priority 1: AMLL-TTML-DB (best quality - word-level timing)
+                if let lyrics = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
-                    logger.info("✅ Found lyrics from NetEase (priority 1)")
+                    logger.info("✅ Found lyrics from AMLL-TTML-DB (priority 1)")
                 }
                 // Priority 2: LRCLIB (good quality - line-level timing)
                 else if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                     logger.info("✅ Found lyrics from LRCLIB (priority 2)")
                 }
-                // Priority 3: AMLL-TTML-DB (word-level timing when available)
-                else if let lyrics = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                // Priority 3: NetEase/163 Music (good for Chinese songs)
+                else if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
-                    logger.info("✅ Found lyrics from AMLL-TTML-DB (priority 3)")
+                    logger.info("✅ Found lyrics from NetEase (priority 3)")
                 }
                 // Priority 4: lyrics.ovh (fallback - plain text)
                 else if let lyrics = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
@@ -204,16 +204,16 @@ public class LyricsService: ObservableObject {
                 // Fetch lyrics in background using priority order
                 var fetchedLyrics: [LyricLine]? = nil
 
-                // Priority 1: NetEase (best sync)
-                if let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                // Priority 1: AMLL-TTML-DB (best quality)
+                if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
                 // Priority 2: LRCLIB
                 else if let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
-                // Priority 3: AMLL-TTML-DB
-                else if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                // Priority 3: NetEase
+                else if let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
                 // Priority 4: lyrics.ovh
@@ -649,6 +649,7 @@ public class LyricsService: ObservableObject {
         }
 
         // Find best match by comparing title, artist, and duration
+        // 🔑 关键修复：必须同时匹配标题和艺术家，不使用不准确的 fallback
         for song in songs {
             guard let songId = song["id"] as? Int,
                   let songName = song["name"] as? String else { continue }
@@ -664,25 +665,22 @@ public class LyricsService: ObservableObject {
             // Get duration (in milliseconds)
             let songDuration = (song["duration"] as? Double ?? 0) / 1000.0
 
-            // Check if this is a good match
+            // 🔑 严格匹配：标题和艺术家必须都匹配
             let titleMatch = songName.lowercased().contains(title.lowercased()) ||
                             title.lowercased().contains(songName.lowercased())
             let artistMatch = songArtist.lowercased().contains(artist.lowercased()) ||
                              artist.lowercased().contains(songArtist.lowercased())
             let durationMatch = abs(songDuration - duration) < 10 // Within 10 seconds
 
-            if titleMatch && (artistMatch || durationMatch) {
-                logger.info("✅ NetEase match: \(songName) by \(songArtist) (duration: \(Int(songDuration))s)")
+            // 必须同时匹配标题和艺术家（duration 作为额外验证）
+            if titleMatch && artistMatch {
+                logger.info("✅ NetEase exact match: \(songName) by \(songArtist) (duration: \(Int(songDuration))s)")
                 return songId
             }
         }
 
-        // Fallback: return first result if no perfect match
-        if let firstSong = songs.first, let songId = firstSong["id"] as? Int {
-            logger.info("⚠️ Using first NetEase result as fallback")
-            return songId
-        }
-
+        // ❌ 移除不准确的 fallback - 如果没有精确匹配就返回 nil
+        logger.warning("⚠️ No exact match found in NetEase search results")
         return nil
     }
 

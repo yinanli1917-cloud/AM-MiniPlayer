@@ -376,84 +376,130 @@ public class MusicController: ObservableObject {
     }
 
     func updatePlayerState() {
-        // 1. Check if running
-        guard let app = musicApp else {
-            return // Silently return if not connected yet
-        }
+        guard !isPreview else { return }
 
-        // 2. Use ScriptingBridge dynamic properties with setValue/value(forKey:)
-        // Get player state
-        if let playerStateRaw = app.value(forKey: "playerState") as? Int {
-            let isCurrentlyPlaying = (playerStateRaw == 0x6b505350) // 'kPSP' = playing
-            
-            DispatchQueue.main.async {
-                // Only update if we haven't performed a user action recently
-                if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
-                    self.isPlaying = isCurrentlyPlaying
+        // 使用 AppleScript 获取状态（比 ScriptingBridge 更可靠）
+        updatePlayerStateViaAppleScript()
+    }
+
+    /// 使用 AppleScript 获取播放状态（更可靠的方式）
+    private func updatePlayerStateViaAppleScript() {
+        let script = """
+        tell application "Music"
+            try
+                set playerState to player state as string
+                set isPlaying to "false"
+                if playerState is "playing" then
+                    set isPlaying to "true"
+                end if
+
+                if exists current track then
+                    set trackName to name of current track
+                    set trackArtist to artist of current track
+                    set trackAlbum to album of current track
+                    set trackDuration to duration of current track as string
+                    set trackID to persistent ID of current track
+                    set trackPosition to player position as string
+                    set trackBitRate to bit rate of current track as string
+                    set trackSampleRate to sample rate of current track as string
+
+                    return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate
+                else
+                    return isPlaying & "|||NOT_PLAYING|||||||0||||||0|||0|||0"
+                end if
+            on error errMsg
+                return "ERROR:" & errMsg
+            end try
+        end tell
+        """
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            var error: NSDictionary?
+            if let scriptObject = NSAppleScript(source: script) {
+                let descriptor = scriptObject.executeAndReturnError(&error)
+
+                if let error = error {
+                    let errorMsg = error["NSAppleScriptErrorBriefMessage"] as? String ?? "Unknown error"
+                    self.logger.error("❌ AppleScript error: \(errorMsg)")
+                    return
                 }
-            }
-        }
 
-        // 3. Get current track
-        if let track = app.value(forKey: "currentTrack") as? SBObject {
-            let trackName = (track.value(forKey: "name") as? String) ?? "Unknown Title"
-            let trackArtist = (track.value(forKey: "artist") as? String) ?? "Unknown Artist"
-            let trackAlbum = (track.value(forKey: "album") as? String) ?? ""
-            let trackDuration = (track.value(forKey: "duration") as? Double) ?? 0
-            let persistentID = (track.value(forKey: "persistentID") as? String) ?? ""
-
-            // Try to get audio quality info (bitRate, sampleRate)
-            let bitRate = (track.value(forKey: "bitRate") as? Int) ?? 0
-            let sampleRate = (track.value(forKey: "sampleRate") as? Int) ?? 0
-
-            logger.info("🎵 Audio info - bitRate: \(bitRate) kbps, sampleRate: \(sampleRate) Hz")
-
-            // Determine audio quality badge
-            var quality: String? = nil
-            if sampleRate >= 176400 || bitRate >= 3000 { // Hi-Res Lossless (>= 88.2kHz or >= 3000 kbps)
-                quality = "Hi-Res Lossless"
-            } else if sampleRate >= 44100 && bitRate >= 1000 { // Lossless (CD quality)
-                quality = "Lossless"
-            }
-            logger.info("🏷️ Audio quality badge: \(quality ?? "none")")
-            // Note: Dolby Atmos detection would require checking track metadata or using MusicKit
-
-            let position = (app.value(forKey: "playerPosition") as? Double) ?? 0
-            let trackChanged = persistentID != self.currentPersistentID && !persistentID.isEmpty
-
-            DispatchQueue.main.async {
-                self.currentTrackTitle = trackName
-                self.currentArtist = trackArtist
-                self.currentAlbum = trackAlbum
-                self.duration = trackDuration
-                
-                // Only update time from source if difference is significant (> 0.5s)
-                // or if we just started/stopped/seeked
-                if abs(self.currentTime - position) > 0.5 || !self.isPlaying {
-                    self.currentTime = position
+                guard let resultString = descriptor.stringValue else {
+                    self.logger.error("❌ No result from AppleScript")
+                    return
                 }
-                
-                self.audioQuality = quality
-                self.lastPollTime = Date()
 
-                // Fetch artwork if track changed
-                if trackChanged {
-                    self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist) - fetching artwork")
-                    self.currentPersistentID = persistentID
-                    self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
+                if resultString.hasPrefix("ERROR:") {
+                    self.logger.error("❌ AppleScript returned error: \(resultString)")
+                    return
                 }
-            }
-        } else {
-            DispatchQueue.main.async {
-                if self.currentTrackTitle != "Not Playing" {
-                    self.logger.info("⏹️ No track playing")
+
+                let parts = resultString.components(separatedBy: "|||")
+                guard parts.count >= 9 else {
+                    self.logger.error("❌ Invalid AppleScript result format (parts: \(parts.count), expected 9+): '\(resultString)'")
+                    return
                 }
-                self.currentTrackTitle = "Not Playing"
-                self.currentArtist = ""
-                self.currentAlbum = ""
-                self.duration = 0
-                self.currentTime = 0
-                self.audioQuality = nil
+
+                let isPlaying = parts[0] == "true"
+                let trackName = parts[1]
+                let trackArtist = parts[2]
+                let trackAlbum = parts[3]
+                let trackDuration = Double(parts[4]) ?? 0
+                let persistentID = parts[5]
+                let position = Double(parts[6]) ?? 0
+                let bitRate = Int(parts[7]) ?? 0
+                let sampleRate = Int(parts[8]) ?? 0
+
+                // Determine audio quality
+                var quality: String? = nil
+                if sampleRate >= 176400 || bitRate >= 3000 {
+                    quality = "Hi-Res Lossless"
+                } else if sampleRate >= 44100 && bitRate >= 1000 {
+                    quality = "Lossless"
+                }
+
+                let trackChanged = persistentID != self.currentPersistentID && !persistentID.isEmpty && trackName != "NOT_PLAYING"
+
+                DispatchQueue.main.async {
+                    // Update playing state
+                    if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
+                        self.isPlaying = isPlaying
+                    }
+
+                    if trackName == "NOT_PLAYING" {
+                        if self.currentTrackTitle != "Not Playing" {
+                            self.logger.info("⏹️ No track playing")
+                        }
+                        self.currentTrackTitle = "Not Playing"
+                        self.currentArtist = ""
+                        self.currentAlbum = ""
+                        self.duration = 0
+                        self.currentTime = 0
+                        self.audioQuality = nil
+                    } else {
+                        self.currentTrackTitle = trackName
+                        self.currentArtist = trackArtist
+                        self.currentAlbum = trackAlbum
+                        self.duration = trackDuration
+
+                        // Only update time if difference is significant
+                        if abs(self.currentTime - position) > 0.5 || !self.isPlaying {
+                            self.currentTime = position
+                        }
+
+                        self.audioQuality = quality
+                        self.lastPollTime = Date()
+
+                        // Fetch artwork if track changed
+                        if trackChanged {
+                            self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
+                            self.currentPersistentID = persistentID
+                            self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
+                        }
+                    }
+                }
             }
         }
     }

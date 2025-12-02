@@ -1,28 +1,30 @@
 #!/bin/bash
 
-echo "🔨 Building MusicMiniPlayer..."
+echo "🔨 Building nanoPod..."
 swift build -c release
 
 echo "📦 Creating app bundle..."
-rm -rf MusicMiniPlayer.app
-mkdir -p MusicMiniPlayer.app/Contents/MacOS
-mkdir -p MusicMiniPlayer.app/Contents/Resources
+rm -rf nanoPod.app
+mkdir -p nanoPod.app/Contents/MacOS
+mkdir -p nanoPod.app/Contents/Resources
 
-# Copy binary
-cp .build/release/MusicMiniPlayer MusicMiniPlayer.app/Contents/MacOS/
+# Copy binary (still named MusicMiniPlayer from Swift package)
+cp .build/release/MusicMiniPlayer nanoPod.app/Contents/MacOS/nanoPod
 
 # Create Info.plist with ALL required permissions and icon configuration
-cat > MusicMiniPlayer.app/Contents/Info.plist << 'PLIST'
+cat > nanoPod.app/Contents/Info.plist << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>MusicMiniPlayer</string>
+    <string>nanoPod</string>
     <key>CFBundleIdentifier</key>
     <string>com.yinanli.MusicMiniPlayer</string>
     <key>CFBundleName</key>
-    <string>MusicMiniPlayer</string>
+    <string>nanoPod</string>
+    <key>CFBundleDisplayName</key>
+    <string>nanoPod</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -32,11 +34,22 @@ cat > MusicMiniPlayer.app/Contents/Info.plist << 'PLIST'
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>MusicMiniPlayer needs access to control Music.app playback</string>
+    <string>nanoPod needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
     <key>NSAppleMusicUsageDescription</key>
-    <string>MusicMiniPlayer displays your currently playing music and lyrics</string>
+    <string>nanoPod needs access to your Apple Music library to display album artwork, track information, and lyrics.</string>
     <key>CFBundleIconName</key>
     <string>AppIcon</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.yinanli.nanoPod</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>nanopod</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -46,11 +59,10 @@ echo "🎨 Copying icon resources..."
 # Copy AppIcon.icon to app bundle and convert to .icns
 if [ -d "AppIcon.icon" ]; then
     echo "🎨 Compiling AppIcon.icon using actool..."
-    xcrun actool AppIcon.icon --compile MusicMiniPlayer.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null
-    
+    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null
+
     if [ -f "partial_info.plist" ]; then
         echo "✅ AppIcon compiled successfully"
-        # Merge partial info plist if needed, but we already set CFBundleIconName in Info.plist
         rm partial_info.plist
     else
         echo "⚠️  actool failed to generate partial info plist"
@@ -60,5 +72,5 @@ else
 fi
 
 
-echo "✅ App bundle created at MusicMiniPlayer.app"
-echo "🚀 You can now open it with: open MusicMiniPlayer.app"
+echo "✅ App bundle created at nanoPod.app"
+echo "🚀 You can now open it with: open nanoPod.app"
