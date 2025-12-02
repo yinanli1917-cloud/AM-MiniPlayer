@@ -90,7 +90,7 @@ public struct LyricsView: View {
                     // Lyrics scroll view - controls must be OUTSIDE as overlay
                     ScrollViewReader { proxy in
                         ScrollView(.vertical, showsIndicators: false) {
-                            VStack(alignment: .leading, spacing: 28) {  // 从20增加到28
+                            VStack(alignment: .leading, spacing: 20) {  // 恢复原来的20px spacing
                                 // Top spacer for centering first lyrics
                                 Spacer()
                                     .frame(height: 160)
@@ -108,23 +108,8 @@ public struct LyricsView: View {
                                         musicController.seek(to: line.startTime)
                                     }
 
-                                    // 检测间奏：检查时间轴是否跳跃超过5秒
-                                    if index < lyricsService.lyrics.count - 1 {
-                                        let currentLine = lyricsService.lyrics[index]
-                                        let nextLine = lyricsService.lyrics[index + 1]
-                                        // 关键：检测 startTime 的跳跃，而不是 endTime 到 startTime 的差距
-                                        let timeJump = nextLine.startTime - currentLine.startTime
-
-                                        if timeJump >= 5.0 && currentLine.text != "⋯" && nextLine.text != "⋯" {
-                                            // 间奏动画：从当前行结束到下一行开始
-                                            InterludeLoadingDotsView(
-                                                currentTime: musicController.currentTime,
-                                                startTime: currentLine.endTime,
-                                                endTime: nextLine.startTime
-                                            )
-                                            .id("interlude-\(index)")
-                                        }
-                                    }
+                                    // 检测间奏：上一句结束时间到下一句开始时间的间隔
+                                    checkAndShowInterlude(at: index)
                                 }
 
                                 // Bottom spacer for centering last lyrics
@@ -152,6 +137,58 @@ public struct LyricsView: View {
                             }
                         }
                     }
+                    // 🔑 添加scroll检测 - 使用加速度检测（与歌单页面相同逻辑）
+                    .scrollDetectionWithVelocity(
+                        onScrollStarted: {
+                            // 开始手动滚动时
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isManualScrolling = true
+                            }
+                            // 取消之前的恢复定时器
+                            autoScrollTimer?.invalidate()
+                        },
+                        onScrollEnded: {
+                            // 滚动结束2秒后恢复
+                            autoScrollTimer?.invalidate()
+                            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isManualScrolling = false
+                                    // 如果鼠标还在窗口内，显示控件
+                                    if isHovering {
+                                        showControls = true
+                                    }
+                                }
+                            }
+                        },
+                        onScrollWithVelocity: { deltaY, velocity in
+                            // deltaY > 0 = 手指向下滑（内容向上滚动，显示下面的内容）
+                            // deltaY < 0 = 手指向上滑（内容向下滚动，显示上面的内容）
+                            let velocityThreshold: CGFloat = 300  // 快速滚动阈值
+                            let slowThreshold: CGFloat = 100      // 慢速滚动阈值
+
+                            if deltaY > 0 {
+                                // 向下滚动（显示更多内容）
+                                if abs(velocity) < slowThreshold {
+                                    // 慢速向下滚动 - 立即显示controls
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = true
+                                    }
+                                } else if abs(velocity) > velocityThreshold {
+                                    // 快速向下滚动 - 隐藏controls
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = false
+                                    }
+                                }
+                            } else if deltaY < 0 {
+                                // 向上滚动（回到顶部）- 快速时隐藏controls
+                                if abs(velocity) > velocityThreshold {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = false
+                                    }
+                                }
+                            }
+                        }
+                    )
                     .overlay(
                         // 🔑 关键：控件必须在ScrollView的overlay之上，而不是在同一个ZStack内
                         Group {
@@ -363,6 +400,24 @@ public struct LyricsView: View {
         let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
     }
+
+    @ViewBuilder
+    private func checkAndShowInterlude(at index: Int) -> some View {
+        if index < lyricsService.lyrics.count - 1 {
+            let currentLine = lyricsService.lyrics[index]
+            let nextLine = lyricsService.lyrics[index + 1]
+            let interludeGap = nextLine.startTime - currentLine.endTime
+
+            if interludeGap >= 5.0 && currentLine.text != "⋯" && nextLine.text != "⋯" {
+                InterludeLoadingDotsView(
+                    currentTime: musicController.currentTime,
+                    startTime: currentLine.endTime,
+                    endTime: nextLine.startTime
+                )
+                .id("interlude-\(index)")
+            }
+        }
+    }
 }
 
 // MARK: - Lyric Line View
@@ -382,7 +437,11 @@ struct LyricLineView: View {
 
         // Enhanced Visual State Calculations with smoother transitions
         // 使用scaleEffect而不是动态字体，保持文本排版一致性
+        // 手动滚动时所有歌词统一样式
         let scale: CGFloat = {
+            // 手动滚动时所有歌词使用统一大小
+            if isScrolling { return 1.0 }
+
             if isCurrent {
                 return 1.08
             } else if absDistance == 1 {
@@ -409,8 +468,11 @@ struct LyricLineView: View {
                 return blurAmount
             }
         }()
-        
+
         let opacity: CGFloat = {
+            // 手动滚动时所有歌词统一透明度
+            if isScrolling { return 0.9 }
+
             if isCurrent {
                 return 1.0
             }
@@ -440,26 +502,28 @@ struct LyricLineView: View {
         // 🔑 关键修复：所有歌词使用完全一致的字体（24pt + semibold）
         // 字体大小、粗细、行间距完全相同，确保所有歌词的文本排版100%一致
         // 只通过scaleEffect改变视觉大小，不触发任何布局重新计算
-        Group {
-            if line.text == "⋯" {
-                // 特殊处理：加载占位符显示基于时间的三等分点亮动画
-                TimeBasedLoadingDotsView(
-                    currentTime: currentTime,
-                    endTime: line.endTime
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text(line.text)
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .foregroundColor(.white)
-                    .lineLimit(nil)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 0) {
+            Group {
+                if line.text == "⋯" {
+                    // 特殊处理：加载占位符显示基于时间的三等分点亮动画
+                    TimeBasedLoadingDotsView(
+                        currentTime: currentTime,
+                        endTime: line.endTime
+                    )
+                } else {
+                    Text(line.text)
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white)
+                        .lineLimit(nil)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+            .scaleEffect(scale, anchor: .leading)  // 🔑 在文字上直接应用scale，anchor为leading
+
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 32)  // 🔑 先padding，再做视觉效果
-        .scaleEffect(scale, anchor: .leading)
+        .padding(.horizontal, 32)  // padding在scale之后，确保左对齐不变
         .blur(radius: blur)
         .opacity(opacity)
         .offset(y: yOffset)
