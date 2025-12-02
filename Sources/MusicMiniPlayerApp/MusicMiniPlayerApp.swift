@@ -1,21 +1,25 @@
+import AppKit
 import SwiftUI
 import MusicMiniPlayerCore
 
+// 使用纯 AppKit 入口，避免 SwiftUI App 生命周期问题
 @main
-struct MusicMiniPlayerApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+class AppMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
 
-    var body: some Scene {
-        // 使用一个隐藏的 Settings scene 保持 SwiftUI App 生命周期
-        Settings {
-            EmptyView()
-        }
+        // 设置为 accessory app（无 Dock 图标）
+        app.setActivationPolicy(.accessory)
+
+        app.run()
     }
 }
 
 // AppDelegate 管理菜单栏图标和浮动窗口
-class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
-    var statusItem: NSStatusItem?
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var statusItem: NSStatusItem!
     var floatingWindow: NSPanel?
     var musicController = MusicController.shared
     var resizeHandler: WindowResizeHandler?
@@ -25,7 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationDidFinishLaunching(_ notification: Notification) {
         fputs("[AppDelegate] Application launched\n", stderr)
 
-        // 创建菜单栏图标
+        // 创建菜单栏图标 - 必须在主线程且应用启动后
         createStatusBarItem()
 
         // 创建浮动窗口
@@ -33,13 +37,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // 默认显示窗口
         floatingWindow?.orderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
 
-        // 延迟激活
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        fputs("[AppDelegate] Setup complete\n", stderr)
+        fputs("[AppDelegate] Setup complete - statusItem: \(statusItem != nil), window: \(floatingWindow != nil)\n", stderr)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -49,19 +49,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Status Bar Item
 
     func createStatusBarItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // 创建状态栏项目 - 使用固定长度确保显示
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
-        if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Music Mini Player")
-            button.action = #selector(statusItemClicked(_:))
-            button.target = self
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        guard let button = statusItem.button else {
+            fputs("[AppDelegate] ERROR: Failed to get status item button\n", stderr)
+            return
         }
+
+        // 使用 SF Symbol 图标
+        if let image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Music Mini Player") {
+            image.isTemplate = true  // 让系统自动适配深色/浅色模式
+            button.image = image
+        } else {
+            // 备用：使用文字
+            button.title = "♪"
+        }
+
+        button.action = #selector(statusItemClicked(_:))
+        button.target = self
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         // 创建右键菜单
         createStatusItemMenu()
 
-        fputs("[AppDelegate] Status bar item created\n", stderr)
+        fputs("[AppDelegate] Status bar item created successfully\n", stderr)
     }
 
     func createStatusItemMenu() {
@@ -75,7 +87,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         statusItemMenu?.addItem(NSMenuItem.separator())
 
         // 播放控制
-        let playPauseItem = NSMenuItem(title: musicController.isPlaying ? "Pause" : "Play", action: #selector(togglePlayPause), keyEquivalent: " ")
+        let playPauseItem = NSMenuItem(title: "Play/Pause", action: #selector(togglePlayPause), keyEquivalent: " ")
         playPauseItem.keyEquivalentModifierMask = []
         playPauseItem.target = self
         statusItemMenu?.addItem(playPauseItem)
@@ -102,24 +114,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc func statusItemClicked(_ sender: AnyObject?) {
-        guard let event = NSApp.currentEvent else { return }
+        guard let event = NSApp.currentEvent else {
+            toggleWindow()
+            return
+        }
 
         if event.type == .rightMouseUp {
             // 右键显示菜单
-            updateStatusItemMenu()
-            statusItem?.menu = statusItemMenu
-            statusItem?.button?.performClick(nil)
-            statusItem?.menu = nil  // 点击后移除菜单，恢复左键功能
+            statusItem.menu = statusItemMenu
+            statusItem.button?.performClick(nil)
+            // 延迟清除菜单，让菜单有机会显示
+            DispatchQueue.main.async {
+                self.statusItem.menu = nil
+            }
         } else {
             // 左键切换窗口显示
             toggleWindow()
-        }
-    }
-
-    func updateStatusItemMenu() {
-        // 更新播放/暂停状态
-        if let playPauseItem = statusItemMenu?.item(withTitle: "Play") ?? statusItemMenu?.item(withTitle: "Pause") {
-            playPauseItem.title = musicController.isPlaying ? "Pause" : "Play"
         }
     }
 

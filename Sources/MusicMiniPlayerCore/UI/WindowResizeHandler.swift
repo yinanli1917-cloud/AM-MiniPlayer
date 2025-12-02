@@ -7,128 +7,192 @@ private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: 
 /// 窗口缩放边缘枚举
 public enum ResizeEdge {
     case none, right, bottom, bottomRight, left, top, bottomLeft, topRight, topLeft
+
+    var cursor: NSCursor {
+        switch self {
+        case .right, .left:
+            return NSCursor.resizeLeftRight
+        case .top, .bottom:
+            return NSCursor.resizeUpDown
+        case .topLeft, .bottomRight:
+            // 尝试获取对角线光标
+            if let cursor = NSCursor.perform(NSSelectorFromString("_windowResizeNorthWestSouthEastCursor"))?.takeUnretainedValue() as? NSCursor {
+                return cursor
+            }
+            return NSCursor.crosshair
+        case .topRight, .bottomLeft:
+            if let cursor = NSCursor.perform(NSSelectorFromString("_windowResizeNorthEastSouthWestCursor"))?.takeUnretainedValue() as? NSCursor {
+                return cursor
+            }
+            return NSCursor.crosshair
+        case .none:
+            return NSCursor.arrow
+        }
+    }
 }
 
-/// 可缩放的透明 NSView - 放置在窗口内容上层捕获边缘拖动
-/// 使用 NSView.mouseDown + NSWindow.nextEvent 事件循环实现可靠的窗口缩放
-public class ResizableEdgeView: NSView {
-    private weak var targetWindow: NSWindow?
-    private let edgeSize: CGFloat = 12.0
+/// 窗口缩放处理器 - 使用全局事件监视器实现边缘缩放
+public class WindowResizeHandler: NSObject {
+    private weak var window: NSWindow?
+    private let edgeSize: CGFloat = 8.0
     private let aspectRatio: CGFloat = 300.0 / 380.0
 
     private var isResizing = false
     private var initialFrame: NSRect = .zero
     private var initialMouse: NSPoint = .zero
     private var resizeEdge: ResizeEdge = .none
+    private var currentEdge: ResizeEdge = .none
+
+    private var mouseMovedMonitor: Any?
+    private var mouseDownMonitor: Any?
+    private var mouseDraggedMonitor: Any?
+    private var mouseUpMonitor: Any?
 
     public init(window: NSWindow) {
-        self.targetWindow = window
-        super.init(frame: .zero)
-        setupTrackingArea()
-        fputs("[ResizableEdgeView] Initialized for window resize\n", stderr)
+        self.window = window
+        super.init()
+
+        configureWindow()
+        setupEventMonitors()
+
+        fputs("[WindowResizeHandler] Initialized with global event monitors\n", stderr)
     }
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    deinit {
+        removeEventMonitors()
     }
 
-    private func setupTrackingArea() {
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
+    private func configureWindow() {
+        guard let window = window else { return }
+        window.minSize = NSSize(width: 200, height: 200 / aspectRatio)
+        window.maxSize = NSSize(width: 600, height: 600 / aspectRatio)
     }
 
-    public override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach { removeTrackingArea($0) }
-        setupTrackingArea()
-    }
-
-    // MARK: - Hit Testing
-
-    /// 只有在边缘区域时才接收点击，否则让事件穿透到下层 SwiftUI 内容
-    public override func hitTest(_ point: NSPoint) -> NSView? {
-        let edge = detectEdge(at: point)
-        if edge != .none {
-            return self
+    private func setupEventMonitors() {
+        // 监听鼠标移动来更新光标
+        mouseMovedMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+            self?.handleMouseMoved(event)
+            return event
         }
-        return nil  // 让事件穿透
+
+        // 监听鼠标按下
+        mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            if let handled = self?.handleMouseDown(event), handled {
+                return nil  // 消费事件
+            }
+            return event
+        }
+
+        // 监听鼠标拖动
+        mouseDraggedMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] event in
+            if let handled = self?.handleMouseDragged(event), handled {
+                return nil
+            }
+            return event
+        }
+
+        // 监听鼠标松开
+        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] event in
+            if let handled = self?.handleMouseUp(event), handled {
+                return nil
+            }
+            return event
+        }
     }
 
-    // MARK: - Mouse Events
-
-    public override func mouseMoved(with event: NSEvent) {
-        let localPoint = convert(event.locationInWindow, from: nil)
-        let edge = detectEdge(at: localPoint)
-        updateCursor(for: edge)
+    private func removeEventMonitors() {
+        if let monitor = mouseMovedMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = mouseDownMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = mouseDraggedMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = mouseUpMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
-    public override func mouseExited(with event: NSEvent) {
-        NSCursor.arrow.set()
+    // MARK: - Event Handlers
+
+    private func handleMouseMoved(_ event: NSEvent) {
+        guard let window = window, !isResizing else { return }
+
+        let screenPoint = NSEvent.mouseLocation
+        let windowFrame = window.frame
+
+        // 检查鼠标是否在窗口附近
+        let expandedFrame = windowFrame.insetBy(dx: -edgeSize, dy: -edgeSize)
+        guard expandedFrame.contains(screenPoint) else {
+            if currentEdge != .none {
+                currentEdge = .none
+                NSCursor.arrow.set()
+            }
+            return
+        }
+
+        let edge = detectEdge(screenPoint: screenPoint, windowFrame: windowFrame)
+
+        if edge != currentEdge {
+            currentEdge = edge
+            edge.cursor.set()
+        }
     }
 
-    public override func mouseDown(with event: NSEvent) {
-        guard let window = targetWindow else { return }
+    private func handleMouseDown(_ event: NSEvent) -> Bool {
+        guard let window = window else { return false }
 
-        let localPoint = convert(event.locationInWindow, from: nil)
-        let edge = detectEdge(at: localPoint)
+        let screenPoint = NSEvent.mouseLocation
+        let windowFrame = window.frame
+        let edge = detectEdge(screenPoint: screenPoint, windowFrame: windowFrame)
 
-        guard edge != .none else { return }
+        guard edge != .none else { return false }
 
         // 开始缩放
         isResizing = true
         resizeEdge = edge
-        initialMouse = NSEvent.mouseLocation
-        initialFrame = window.frame
+        initialMouse = screenPoint
+        initialFrame = windowFrame
 
         // 临时禁用窗口拖动
         window.isMovableByWindowBackground = false
 
-        fputs("[ResizableEdgeView] Started resize - edge: \(edge)\n", stderr)
+        fputs("[WindowResizeHandler] Started resize - edge: \(edge)\n", stderr)
+        return true
+    }
 
-        // 🔑 关键：使用事件循环进行连续鼠标追踪
-        var trackingEvent: NSEvent? = event
+    private func handleMouseDragged(_ event: NSEvent) -> Bool {
+        guard isResizing else { return false }
+        performResize(currentMouse: NSEvent.mouseLocation)
+        return true
+    }
 
-        while isResizing {
-            // 获取下一个鼠标事件
-            trackingEvent = window.nextEvent(
-                matching: [.leftMouseDragged, .leftMouseUp],
-                until: Date.distantFuture,
-                inMode: .eventTracking,
-                dequeue: true
-            )
+    private func handleMouseUp(_ event: NSEvent) -> Bool {
+        guard isResizing else { return false }
 
-            guard let currentEvent = trackingEvent else { break }
+        isResizing = false
+        resizeEdge = .none
+        window?.isMovableByWindowBackground = true
 
-            switch currentEvent.type {
-            case .leftMouseDragged:
-                performResize(currentMouse: NSEvent.mouseLocation)
-
-            case .leftMouseUp:
-                isResizing = false
-                window.isMovableByWindowBackground = true
-                NSCursor.arrow.set()
-                fputs("[ResizableEdgeView] Completed resize\n", stderr)
-
-            default:
-                break
-            }
-        }
+        fputs("[WindowResizeHandler] Completed resize\n", stderr)
+        return true
     }
 
     // MARK: - Edge Detection
 
-    private func detectEdge(at point: NSPoint) -> ResizeEdge {
-        let viewBounds = bounds
+    private func detectEdge(screenPoint: NSPoint, windowFrame: NSRect) -> ResizeEdge {
+        let nearLeft = screenPoint.x <= windowFrame.minX + edgeSize && screenPoint.x >= windowFrame.minX - edgeSize
+        let nearRight = screenPoint.x >= windowFrame.maxX - edgeSize && screenPoint.x <= windowFrame.maxX + edgeSize
+        let nearBottom = screenPoint.y <= windowFrame.minY + edgeSize && screenPoint.y >= windowFrame.minY - edgeSize
+        let nearTop = screenPoint.y >= windowFrame.maxY - edgeSize && screenPoint.y <= windowFrame.maxY + edgeSize
 
-        let nearLeft = point.x <= edgeSize
-        let nearRight = point.x >= viewBounds.width - edgeSize
-        let nearBottom = point.y <= edgeSize
-        let nearTop = point.y >= viewBounds.height - edgeSize
+        // 检查是否在窗口内部（允许边缘外一点点）
+        let inWindowX = screenPoint.x >= windowFrame.minX - edgeSize && screenPoint.x <= windowFrame.maxX + edgeSize
+        let inWindowY = screenPoint.y >= windowFrame.minY - edgeSize && screenPoint.y <= windowFrame.maxY + edgeSize
+
+        guard inWindowX && inWindowY else { return .none }
 
         if nearBottom && nearRight { return .bottomRight }
         if nearBottom && nearLeft { return .bottomLeft }
@@ -138,39 +202,14 @@ public class ResizableEdgeView: NSView {
         if nearLeft { return .left }
         if nearBottom { return .bottom }
         if nearTop { return .top }
+
         return .none
-    }
-
-    // MARK: - Cursor Updates
-
-    private func updateCursor(for edge: ResizeEdge) {
-        switch edge {
-        case .right, .left:
-            NSCursor.resizeLeftRight.set()
-        case .top, .bottom:
-            NSCursor.resizeUpDown.set()
-        case .topLeft, .bottomRight:
-            // 使用私有API获取对角线光标
-            if let cursor = NSCursor.perform(NSSelectorFromString("_windowResizeNorthWestSouthEastCursor"))?.takeUnretainedValue() as? NSCursor {
-                cursor.set()
-            } else {
-                NSCursor.crosshair.set()
-            }
-        case .topRight, .bottomLeft:
-            if let cursor = NSCursor.perform(NSSelectorFromString("_windowResizeNorthEastSouthWestCursor"))?.takeUnretainedValue() as? NSCursor {
-                cursor.set()
-            } else {
-                NSCursor.crosshair.set()
-            }
-        case .none:
-            NSCursor.arrow.set()
-        }
     }
 
     // MARK: - Resize Logic
 
     private func performResize(currentMouse: NSPoint) {
-        guard let window = targetWindow else { return }
+        guard let window = window else { return }
 
         let dx = currentMouse.x - initialMouse.x
         let dy = currentMouse.y - initialMouse.y
@@ -217,61 +256,5 @@ public class ResizableEdgeView: NSView {
 
         let newFrame = NSRect(x: newOriginX, y: newOriginY, width: newWidth, height: newHeight)
         window.setFrame(newFrame, display: true, animate: false)
-    }
-}
-
-/// 窗口缩放处理器 - 管理 ResizableEdgeView 的生命周期
-public class WindowResizeHandler: NSObject, NSWindowDelegate {
-    private weak var window: NSWindow?
-    private var resizeView: ResizableEdgeView?
-    private let aspectRatio: CGFloat = 300.0 / 380.0
-
-    public init(window: NSWindow) {
-        self.window = window
-        super.init()
-
-        configureWindow()
-        setupResizeView()
-
-        fputs("[WindowResizeHandler] Initialized with ResizableEdgeView\n", stderr)
-    }
-
-    private func configureWindow() {
-        guard let window = window else { return }
-        window.minSize = NSSize(width: 200, height: 200 / aspectRatio)
-        window.maxSize = NSSize(width: 600, height: 600 / aspectRatio)
-        window.delegate = self
-    }
-
-    private func setupResizeView() {
-        guard let window = window, let contentView = window.contentView else { return }
-
-        // 创建透明的边缘检测视图
-        let resizeView = ResizableEdgeView(window: window)
-        resizeView.translatesAutoresizingMaskIntoConstraints = false
-        resizeView.wantsLayer = true
-        resizeView.layer?.backgroundColor = NSColor.clear.cgColor
-
-        // 添加到内容视图的最上层
-        contentView.addSubview(resizeView, positioned: .above, relativeTo: nil)
-
-        // 约束让它覆盖整个窗口
-        NSLayoutConstraint.activate([
-            resizeView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            resizeView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            resizeView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            resizeView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
-        ])
-
-        self.resizeView = resizeView
-    }
-
-    // MARK: - NSWindowDelegate
-
-    public func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        // 保持宽高比
-        let newWidth = frameSize.width
-        let newHeight = newWidth / aspectRatio
-        return NSSize(width: newWidth, height: newHeight)
     }
 }
