@@ -3,36 +3,26 @@ import SwiftUI
 import MusicMiniPlayerCore
 
 /// macOS Tahoe 菜单栏应用
-/// 使用纯 AppKit 入口确保稳定性
-/// 菜单栏图标可能需要在系统设置中手动启用：设置 > 菜单栏 > 找到应用 > 启用
+/// 使用纯 AppKit 入口 + NSStatusItem，最可靠的方式
 @main
-class AppMain {
-    static func main() {
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
+class AppMain: NSObject, NSApplicationDelegate {
+    static var shared: AppMain!
 
-        // 设置为 accessory app（无 Dock 图标）
-        // 注意：macOS Tahoe 可能需要用户在系统设置中启用菜单栏图标
-        app.setActivationPolicy(.accessory)
-
-        // 保持强引用
-        _ = delegate
-
-        app.run()
-    }
-}
-
-/// AppDelegate 管理菜单栏图标和浮动窗口
-class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var floatingWindow: NSPanel?
     let musicController = MusicController.shared
-    var resizeHandler: WindowResizeHandler?
     private var windowDelegate: FloatingWindowDelegate?
 
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppMain()
+        AppMain.shared = delegate
+        app.delegate = delegate
+        app.run()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        fputs("[AppDelegate] Application launched\n", stderr)
+        fputs("[AppMain] Application launched\n", stderr)
 
         // 创建菜单栏图标
         setupStatusItem()
@@ -43,11 +33,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 显示窗口
         showWindow()
 
-        fputs("[AppDelegate] Setup complete\n", stderr)
+        fputs("[AppMain] Setup complete\n", stderr)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        fputs("[AppDelegate] applicationShouldTerminateAfterLastWindowClosed - returning false\n", stderr)
         return false
     }
 
@@ -55,13 +44,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.isVisible = true
 
         guard let button = statusItem.button else {
-            fputs("[AppDelegate] ERROR: Failed to get status item button\n", stderr)
+            fputs("[AppMain] ERROR: Failed to get status item button\n", stderr)
             return
         }
 
-        // 使用 SF Symbol，设为 template 自动适应深色/浅色
+        // 使用 SF Symbol
         if let image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Music Mini Player") {
             image.isTemplate = true
             button.image = image
@@ -93,7 +83,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem.menu = menu
 
-        fputs("[AppDelegate] Status item created\n", stderr)
+        fputs("[AppMain] Status item created\n", stderr)
     }
 
     @objc func togglePlayPause() { musicController.togglePlayPause() }
@@ -141,6 +131,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.acceptsMouseMovedEvents = true
         window.becomesKeyOnlyIfNeeded = true
 
+        // 设置窗口比例和尺寸限制
+        window.aspectRatio = NSSize(width: 300, height: 380)
+        window.minSize = NSSize(width: 280, height: 354)
+        window.maxSize = NSSize(width: 450, height: 570)
+
         windowDelegate = FloatingWindowDelegate()
         window.delegate = windowDelegate
 
@@ -155,9 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hostingView.autoresizingMask = [.width, .height]
         window.contentView = hostingView
 
-        resizeHandler = WindowResizeHandler(window: window)
-
-        fputs("[AppDelegate] Window created\n", stderr)
+        fputs("[AppMain] Window created\n", stderr)
     }
 
     func showWindow() {

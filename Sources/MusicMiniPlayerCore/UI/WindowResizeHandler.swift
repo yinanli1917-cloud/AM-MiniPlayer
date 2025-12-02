@@ -34,7 +34,7 @@ public enum ResizeEdge {
 /// 窗口缩放处理器 - 使用全局事件监视器实现边缘缩放
 public class WindowResizeHandler: NSObject {
     private weak var window: NSWindow?
-    private let edgeSize: CGFloat = 8.0
+    private let edgeSize: CGFloat = 12.0  // 增大边缘检测区域，让光标更容易触发
     private let aspectRatio: CGFloat = 300.0 / 380.0
 
     private var isResizing = false
@@ -64,8 +64,9 @@ public class WindowResizeHandler: NSObject {
 
     private func configureWindow() {
         guard let window = window else { return }
-        window.minSize = NSSize(width: 200, height: 200 / aspectRatio)
-        window.maxSize = NSSize(width: 600, height: 600 / aspectRatio)
+        // 设置合理的最小/最大尺寸
+        window.minSize = NSSize(width: 250, height: 250 / aspectRatio)  // 最小 250px
+        window.maxSize = NSSize(width: 500, height: 500 / aspectRatio)  // 最大 500px
     }
 
     private func setupEventMonitors() {
@@ -129,6 +130,7 @@ public class WindowResizeHandler: NSObject {
             if currentEdge != .none {
                 currentEdge = .none
                 NSCursor.arrow.set()
+                NSCursor.arrow.push()  // 强制推送光标更新
             }
             return
         }
@@ -137,7 +139,8 @@ public class WindowResizeHandler: NSObject {
 
         if edge != currentEdge {
             currentEdge = edge
-            edge.cursor.set()
+            // 使用 push 而不是 set，更可靠
+            edge.cursor.push()
         }
     }
 
@@ -174,7 +177,17 @@ public class WindowResizeHandler: NSObject {
 
         isResizing = false
         resizeEdge = .none
+        currentEdge = .none
         window?.isMovableByWindowBackground = true
+
+        // 恢复默认光标
+        NSCursor.arrow.set()
+        NSCursor.arrow.push()
+
+        // 延迟再次确保光标恢复
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSCursor.arrow.set()
+        }
 
         fputs("[WindowResizeHandler] Completed resize\n", stderr)
         return true
@@ -232,8 +245,8 @@ public class WindowResizeHandler: NSObject {
             return
         }
 
-        // 限制宽度范围
-        newWidth = max(200, min(600, newWidth))
+        // 限制宽度范围（与 configureWindow 一致）
+        newWidth = max(250, min(500, newWidth))
         let newHeight = newWidth / aspectRatio
 
         // 计算X坐标

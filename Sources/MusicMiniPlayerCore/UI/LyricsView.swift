@@ -239,6 +239,7 @@ public struct LyricsView: View {
         .onChange(of: musicController.currentTime) {
             lyricsService.updateCurrentTime(musicController.currentTime)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     // MARK: - Subviews
@@ -429,6 +430,8 @@ struct LyricLineView: View {
     let currentTime: TimeInterval
     let isScrolling: Bool // Add parameter to know if user is scrolling
 
+    @State private var isHovering: Bool = false
+
     var body: some View {
         let distance = index - currentIndex
         let isCurrent = distance == 0
@@ -437,10 +440,10 @@ struct LyricLineView: View {
 
         // Enhanced Visual State Calculations with smoother transitions
         // 使用scaleEffect而不是动态字体，保持文本排版一致性
-        // 手动滚动时所有歌词统一样式
+        // 手动滚动时，所有歌词使用统一的"未选中"样式（scale=0.92）
         let scale: CGFloat = {
-            // 手动滚动时所有歌词使用统一大小
-            if isScrolling { return 1.0 }
+            // 手动滚动时所有歌词使用统一的"未选中"大小
+            if isScrolling { return 0.92 }
 
             if isCurrent {
                 return 1.08
@@ -452,8 +455,8 @@ struct LyricLineView: View {
         }()
 
         let blur: CGFloat = {
-            // No blur when scrolling to show all lyrics clearly
-            if isScrolling { return 0 }
+            // 手动滚动时使用轻微模糊，和未选中歌词一致
+            if isScrolling { return 0.5 }
 
             // Progressive blur based on distance when not scrolling
             if isCurrent { return 0 }
@@ -470,8 +473,8 @@ struct LyricLineView: View {
         }()
 
         let opacity: CGFloat = {
-            // 手动滚动时所有歌词统一透明度
-            if isScrolling { return 0.9 }
+            // 手动滚动时所有歌词统一透明度（和未选中歌词一致）
+            if isScrolling { return 0.7 }
 
             if isCurrent {
                 return 1.0
@@ -524,6 +527,16 @@ struct LyricLineView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 32)  // padding在scale之后，确保左对齐不变
+        .padding(.vertical, 8)  // 增加垂直 padding 让 hover 背景有空间
+        .background(
+            // 🎨 macOS 26 Liquid Glass hover 效果
+            Group {
+                if isScrolling && isHovering && line.text != "⋯" {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.08))
+                }
+            }
+        )
         .blur(radius: blur)
         .opacity(opacity)
         .offset(y: yOffset)
@@ -535,7 +548,17 @@ struct LyricLineView: View {
             .easeInOut(duration: 0.3),
             value: isScrolling
         )
+        .animation(
+            .easeInOut(duration: 0.2),
+            value: isHovering
+        )
         .contentShape(Rectangle())
+        .onHover { hovering in
+            // 只在手动滚动时启用 hover 效果
+            if isScrolling {
+                isHovering = hovering
+            }
+        }
     }
 }
 
