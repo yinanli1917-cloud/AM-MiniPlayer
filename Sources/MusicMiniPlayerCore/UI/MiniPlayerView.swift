@@ -16,6 +16,7 @@ public struct MiniPlayerView: View {
     @State private var showControls: Bool = false
     @State private var isProgressBarHovering: Bool = false
     @State private var dragPosition: CGFloat? = nil
+    @State private var showAlbumText: Bool = true  // 控制专辑页文字渐现
     @Namespace private var animation
 
     var openWindow: OpenWindowAction?
@@ -23,160 +24,48 @@ public struct MiniPlayerView: View {
     public init(openWindow: OpenWindowAction? = nil) {
         self.openWindow = openWindow
     }
-    
+
     public var body: some View {
         GeometryReader { geometry in
             ZStack {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
 
-                // Content - NO WindowDragGesture here to avoid conflicts
-                VStack(spacing: 0) {
-                    if currentPage == .album {
-                        // Album Art with Track Info - using auto layout
-                        if let artwork = musicController.currentArtwork {
-                            GeometryReader { geo in
-                                ZStack {
-                                    Color.clear // Ensure ZStack takes space if needed, but frame below is better
-                                }
-                                .frame(width: geo.size.width, height: geo.size.height)
-                                .overlay(
-                                    ZStack {
-                                    // Calculate available height for centering
-                                    let availableHeight = geo.size.height - (showControls ? 100 : 0)
-                                    let artSize = isHovering ? geo.size.width * 0.50 : geo.size.width * 0.70
-                                    
-                                    // Shadow offset adds visual weight at bottom, so adjust center point
-                                    let shadowYOffset: CGFloat = 6  // Half of shadow y offset (12/2) for visual balance
-                                    
-                                    // Album Artwork + Text Unit (as a single ZStack with explicit size)
-                                    ZStack(alignment: .bottomLeading) {
-                                        // 1. Main Artwork - defines the ZStack size
-                                        Image(nsImage: artwork)
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fill)
-                                            .frame(width: artSize, height: artSize)
-                                            .clipped()
-                                            .cornerRadius(12)
-                                            .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
-                                            .matchedGeometryEffect(id: "main-artwork", in: animation)
-                                            .onTapGesture {
-                                                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                                    currentPage = currentPage == .album ? .lyrics : .album
-                                                }
-                                            }
-                                        
-                                        // 2. Gradient Mask (Bottom) - ALWAYS VISIBLE - 只覆盖文字区域
-                                        LinearGradient(
-                                            gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                        .frame(width: artSize, height: 50)  // 缩小到只覆盖文字
-                                        .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
-                                        .allowsHitTesting(false)
-                                        
-                                        // 3. Track Info - Inside artwork, STRICTLY left aligned - ALWAYS VISIBLE
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            ScrollingText(
-                                                text: musicController.currentTrackTitle,
-                                                font: .system(size: isHovering ? 14 : 16, weight: .bold),
-                                                textColor: .white,
-                                                maxWidth: artSize - 24,
-                                                alignment: .leading
-                                            )
-                                            .shadow(radius: 2)
-                                            
-                                            ScrollingText(
-                                                text: musicController.currentArtist,
-                                                font: .system(size: isHovering ? 12 : 13, weight: .medium),
-                                                textColor: .white.opacity(0.9),
-                                                maxWidth: artSize - 24,
-                                                alignment: .leading
-                                            )
-                                            .shadow(radius: 2)
-                                        }
-                                        .padding(.leading, 12)
-                                        .padding(.bottom, 12)
-                                    }
-                                    .frame(width: artSize, height: artSize) // Explicit frame to ensure proper sizing
-                                    .position(
-                                        x: geo.size.width / 2,
-                                        y: (availableHeight / 2) + shadowYOffset  // Adjust for shadow visual weight
-                                    )
-                                    .transition(.asymmetric(
-                                        insertion: .opacity.combined(with: .scale(scale: 0.95)),
-                                        removal: .opacity
-                                    ))
+                // 🔑 使用ZStack叠加所有页面，通过opacity和zIndex控制显示
+                // 这样matchedGeometryEffect可以在页面切换时正确工作
 
-                                    // Controls - fixed at bottom (overlay)
-                                    if showControls {
-                                        VStack {
-                                            Spacer()
-
-                                            SharedBottomControls(
-                                                currentPage: $currentPage,
-                                                isHovering: $isHovering,
-                                                showControls: $showControls,
-                                                isProgressBarHovering: $isProgressBarHovering,
-                                                dragPosition: $dragPosition
-                                            )
-                                            .padding(.bottom, 0)
-                                        }
-                                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                                    }
-                                }
-                                )
-                            }
-                        } else {
-                            Spacer()
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.gray.opacity(0.3))
-                                .frame(width: geometry.size.width * 0.70, height: geometry.size.width * 0.70)
-                                .overlay(Text("No Art").foregroundColor(.white))
-
-                            Text("Not Playing")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.top, 10)
-
-                            Spacer()
-                        }
-                    } else if currentPage == .lyrics {
-                        // Lyrics View with 3D flip animation
-                        LyricsView(currentPage: $currentPage, openWindow: openWindow)
-                            .rotation3DEffect(
-                                .degrees(currentPage == .lyrics ? 0 : -90),
-                                axis: (x: 0, y: 1, z: 0),
-                                perspective: 0.5
-                            )
-                            .transition(.opacity)
-                    } else if currentPage == .playlist {
-                        // Playlist View with 3D flip animation
-                        PlaylistView(currentPage: $currentPage, animationNamespace: animation)
-                            .rotation3DEffect(
-                                .degrees(currentPage == .playlist ? 0 : 90),
-                                axis: (x: 0, y: 1, z: 0),
-                                perspective: 0.5
-                            )
-                            .transition(.opacity)
-                    }
+                // Lyrics View (底层)
+                if currentPage == .lyrics {
+                    LyricsView(currentPage: $currentPage, openWindow: openWindow)
+                        .zIndex(1)
                 }
+
+                // Playlist View (中层) - 始终存在以支持matchedGeometryEffect
+                PlaylistView(currentPage: $currentPage, animationNamespace: animation)
+                    .opacity(currentPage == .playlist ? 1 : 0)
+                    .zIndex(currentPage == .playlist ? 2 : 0)
+                    .allowsHitTesting(currentPage == .playlist)
+
+                // Album View (顶层) - 始终存在以支持matchedGeometryEffect
+                albumPageContent(geometry: geometry)
+                    .opacity(currentPage == .album ? 1 : 0)
+                    .zIndex(currentPage == .album ? 2 : 0)
+                    .allowsHitTesting(currentPage == .album)
             }
         }
         .frame(width: 300, height: 380) // Original aspect ratio
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
-            // Music按钮 - overlay不接收hover事件
-            if showControls {
+            // Music按钮 - 只在album页面显示（其他页面有各自的按钮）
+            if showControls && currentPage == .album {
                 MusicButtonView()
                     .padding(12)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Hide按钮 - overlay不接收hover事件
-            if showControls {
+            // Hide按钮 - 只在album页面显示（其他页面有各自的按钮）
+            if showControls && currentPage == .album {
                 HideButtonView()
                     .padding(12)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -202,8 +91,138 @@ public struct MiniPlayerView: View {
                 }
             }
         }
+        .onChange(of: currentPage) { oldValue, newValue in
+            // 🔑 页面切换时控制文字渐现动画
+            if newValue == .album && oldValue == .playlist {
+                // 从歌单返回专辑页 - 先隐藏文字，动画完成后渐现
+                showAlbumText = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showAlbumText = true
+                    }
+                }
+            } else if newValue == .playlist && oldValue == .album {
+                // 从专辑去歌单页 - 隐藏文字
+                showAlbumText = false
+            } else {
+                // 其他情况显示文字
+                showAlbumText = true
+            }
+        }
     }
 
+    // MARK: - Album Page Content (抽取为函数支持matchedGeometryEffect)
+    @ViewBuilder
+    private func albumPageContent(geometry: GeometryProxy) -> some View {
+        if let artwork = musicController.currentArtwork {
+            GeometryReader { geo in
+                ZStack {
+                    Color.clear
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .overlay(
+                    ZStack {
+                        // Calculate available height for centering
+                        let availableHeight = geo.size.height - (showControls ? 100 : 0)
+                        let artSize = isHovering ? geo.size.width * 0.50 : geo.size.width * 0.70
+
+                        // Shadow offset adds visual weight at bottom
+                        let shadowYOffset: CGFloat = 6
+
+                        // Album Artwork + Text Unit
+                        ZStack(alignment: .bottomLeading) {
+                            // 1. Main Artwork - 使用matchedGeometryEffect
+                            Image(nsImage: artwork)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: artSize, height: artSize)
+                                .clipped()
+                                .cornerRadius(12)
+                                .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
+                                .matchedGeometryEffect(id: "album-artwork", in: animation, isSource: currentPage == .album)
+                                .onTapGesture {
+                                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                                        currentPage = currentPage == .album ? .lyrics : .album
+                                    }
+                                }
+
+                            // 2. Gradient Mask - 动画过渡时隐藏
+                            if showAlbumText {
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(width: artSize, height: 50)
+                                .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
+                                .allowsHitTesting(false)
+                            }
+
+                            // 3. Track Info - 动画过渡时隐藏
+                            if showAlbumText {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ScrollingText(
+                                        text: musicController.currentTrackTitle,
+                                        font: .system(size: isHovering ? 14 : 16, weight: .bold),
+                                        textColor: .white,
+                                        maxWidth: artSize - 24,
+                                        alignment: .leading
+                                    )
+                                    .shadow(radius: 2)
+
+                                    ScrollingText(
+                                        text: musicController.currentArtist,
+                                        font: .system(size: isHovering ? 12 : 13, weight: .medium),
+                                        textColor: .white.opacity(0.9),
+                                        maxWidth: artSize - 24,
+                                        alignment: .leading
+                                    )
+                                    .shadow(radius: 2)
+                                }
+                                .padding(.leading, 12)
+                                .padding(.bottom, 12)
+                            }
+                        }
+                        .frame(width: artSize, height: artSize)
+                        .position(
+                            x: geo.size.width / 2,
+                            y: (availableHeight / 2) + shadowYOffset
+                        )
+
+                        // Controls - fixed at bottom (overlay)
+                        if showControls {
+                            VStack {
+                                Spacer()
+                                SharedBottomControls(
+                                    currentPage: $currentPage,
+                                    isHovering: $isHovering,
+                                    showControls: $showControls,
+                                    isProgressBarHovering: $isProgressBarHovering,
+                                    dragPosition: $dragPosition
+                                )
+                                .padding(.bottom, 0)
+                            }
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        }
+                    }
+                )
+            }
+        } else {
+            VStack {
+                Spacer()
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: geometry.size.width * 0.70, height: geometry.size.width * 0.70)
+                    .overlay(Text("No Art").foregroundColor(.white))
+
+                Text("Not Playing")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.top, 10)
+                Spacer()
+            }
+        }
+    }
 }
 
 #Preview {
