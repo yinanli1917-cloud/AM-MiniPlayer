@@ -170,7 +170,7 @@ public struct MiniPlayerView: View {
                 .frame(width: artSize, height: artSize)
                 .position(
                     x: geo.size.width / 2,
-                    y: (availableHeight / 2) + shadowYOffset
+                    y: (availableHeight / 2) + shadowYOffset + (artSize / 2) - 25  // 🔑 移到封面底部
                 )
                 .allowsHitTesting(false)  // 让点击穿透到placeholder
             }

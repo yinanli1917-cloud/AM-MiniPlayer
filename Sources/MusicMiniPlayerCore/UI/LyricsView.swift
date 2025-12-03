@@ -13,6 +13,7 @@ public struct LyricsView: View {
     @State private var lastDragLocation: CGFloat = 0
     @State private var dragVelocity: CGFloat = 0
     @State private var showLoadingDots: Bool = false
+    @State private var controlsLockedHidden: Bool = false  // 🔑 锁定隐藏，防止反复
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
 
@@ -160,6 +161,7 @@ public struct LyricsView: View {
                             autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
                                 withAnimation(.easeInOut(duration: 0.3)) {
                                     isManualScrolling = false
+                                    controlsLockedHidden = false  // 🔑 解锁
                                     // 如果鼠标还在窗口内，显示控件
                                     if isHovering {
                                         showControls = true
@@ -175,22 +177,28 @@ public struct LyricsView: View {
 
                             if deltaY > 0 {
                                 // 向下滚动（显示更多内容）
-                                if abs(velocity) < slowThreshold {
-                                    // 慢速向下滚动 - 立即显示controls
+                                if abs(velocity) > velocityThreshold {
+                                    // 快速向下滚动 - 隐藏并锁定
+                                    if !controlsLockedHidden {
+                                        withAnimation(.easeOut(duration: 0.15)) {
+                                            showControls = false
+                                            controlsLockedHidden = true  // 🔑 锁定，防止慢速时重新显示
+                                        }
+                                    }
+                                } else if abs(velocity) < slowThreshold && !controlsLockedHidden {
+                                    // 慢速向下滚动且未锁定 - 显示controls
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         showControls = true
                                     }
-                                } else if abs(velocity) > velocityThreshold {
-                                    // 快速向下滚动 - 隐藏controls
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = false
-                                    }
                                 }
                             } else if deltaY < 0 {
-                                // 向上滚动（回到顶部）- 快速时隐藏controls
+                                // 向上滚动（回到顶部）- 快速时隐藏并锁定
                                 if abs(velocity) > velocityThreshold {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = false
+                                    if !controlsLockedHidden {
+                                        withAnimation(.easeOut(duration: 0.15)) {
+                                            showControls = false
+                                            controlsLockedHidden = true  // 🔑 锁定
+                                        }
                                     }
                                 }
                             }
