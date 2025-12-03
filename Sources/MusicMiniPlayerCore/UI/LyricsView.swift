@@ -374,7 +374,7 @@ public struct LyricsView: View {
     private var playbackControls: some View {
         HStack(spacing: 0) {
             Spacer().frame(width: 12)
-            Button(action: { withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) { currentPage = .album } }) {
+            Button(action: { withAnimation(.spring(response: 5.0, dampingFraction: 0.8)) { currentPage = .album } }) {
                 Image(systemName: "quote.bubble.fill").font(.system(size: 16)).foregroundColor(.white).frame(width: 28, height: 28)
             }
             Spacer()
@@ -395,7 +395,7 @@ public struct LyricsView: View {
                 Image(systemName: "forward.fill").font(.system(size: 20)).foregroundColor(.white).frame(width: 32, height: 32)
             }
             Spacer()
-            Button(action: { withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) { currentPage = .playlist } }) {
+            Button(action: { withAnimation(.spring(response: 5.0, dampingFraction: 0.8)) { currentPage = .playlist } }) {
                 Image(systemName: "music.note.list").font(.system(size: 16)).foregroundColor(.white.opacity(0.7)).frame(width: 28, height: 28)
             }
             Spacer().frame(width: 12)
@@ -533,18 +533,18 @@ struct LyricLineView: View {
 
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 32)  // 先应用左右padding
         .padding(.vertical, 8)  // 增加垂直 padding 让 hover 背景有空间
         .background(
-            // 🎨 macOS 26 Liquid Glass hover 效果 - 带左右padding
+            // 🎨 macOS 26 Liquid Glass hover 效果
             Group {
                 if isScrolling && isHovering && line.text != "⋯" {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.white.opacity(0.08))
-                        .padding(.horizontal, 12)  // 左右留出12px空间
+                        .padding(.horizontal, 8)  // 背景左右留出8px空间
                 }
             }
         )
-        .padding(.horizontal, 32)  // padding在background之后，确保左对齐不变
         .blur(radius: blur)
         .opacity(opacity)
         .offset(y: yOffset)
