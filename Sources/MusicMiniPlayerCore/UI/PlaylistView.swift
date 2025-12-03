@@ -95,23 +95,18 @@ public struct PlaylistView: View {
 
                                 VStack(spacing: 0) {
                                     Button(action: {
-                                        // 🔑 使用较慢的动画时间（0.8秒）方便观察matchedGeometryEffect
-                                        withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
+                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                             isCoverAnimating = true
                                             currentPage = .album
                                         }
                                     }) {
                                         HStack(spacing: 10) {
-                                            // Album art (responsive)
+                                            // Placeholder for Album art - matchedGeometryEffect with isSource: true
                                             if let artwork = musicController.currentArtwork {
-                                                Image(nsImage: artwork)
-                                                    .resizable()
-                                                    .aspectRatio(contentMode: .fill)
+                                                Color.clear
                                                     .frame(width: artSize, height: artSize)
                                                     .cornerRadius(6)
-                                                    .shadow(radius: 3)
-                                                    .matchedGeometryEffect(id: "album-artwork", in: animationNamespace, isSource: currentPage == .playlist)
-                                                    .transition(.scale(scale: 1))  // 避免fade，只做几何变换
+                                                    .matchedGeometryEffect(id: "playlist-placeholder", in: animationNamespace, isSource: true)
                                             } else {
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .fill(Color.gray.opacity(0.3))
@@ -382,7 +377,7 @@ struct PlaylistItemRowCompact: View {
         Button(action: {
             // If clicking on current track, go back to album page
             if isCurrentTrack {
-                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     currentPage = .album
                 }
             } else {

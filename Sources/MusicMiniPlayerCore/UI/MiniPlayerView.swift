@@ -32,7 +32,7 @@ public struct MiniPlayerView: View {
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
 
                 // 🔑 使用ZStack叠加所有页面，通过opacity和zIndex控制显示
-                // 这样matchedGeometryEffect可以在页面切换时正确工作
+                // matchedGeometryEffect: 使用单个浮动Image + invisible placeholders避免crossfade
 
                 // Lyrics View (底层)
                 if currentPage == .lyrics {
@@ -51,6 +51,18 @@ public struct MiniPlayerView: View {
                     .opacity(currentPage == .album ? 1 : 0)
                     .zIndex(currentPage == .album ? 2 : 0)
                     .allowsHitTesting(currentPage == .album)
+
+                // 🎯 浮动的Artwork - 单个Image实例，通过matchedGeometry移动
+                if let artwork = musicController.currentArtwork {
+                    floatingArtwork(artwork: artwork, geometry: geometry)
+                        .zIndex(50)  // 在占位符之上，但要让文字和遮罩在更上层
+                }
+
+                // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上
+                if currentPage == .album, let artwork = musicController.currentArtwork {
+                    albumOverlayContent(geometry: geometry)
+                        .zIndex(101)  // 在浮动artwork之上
+                }
             }
         }
         // 移除固定尺寸，让视图自动填充窗口以支持缩放
@@ -112,6 +124,100 @@ public struct MiniPlayerView: View {
         }
     }
 
+    // MARK: - Album Overlay Content (文字和遮罩)
+    @ViewBuilder
+    private func albumOverlayContent(geometry: GeometryProxy) -> some View {
+        GeometryReader { geo in
+            let availableHeight = geo.size.height - (showControls ? 100 : 0)
+            let artSize = isHovering ? geo.size.width * 0.50 : geo.size.width * 0.70
+            let shadowYOffset: CGFloat = 6
+
+            if showAlbumText {
+                ZStack(alignment: .bottomLeading) {
+                    // Gradient Mask
+                    LinearGradient(
+                        gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(width: artSize, height: 50)
+                    .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
+                    .allowsHitTesting(false)
+
+                    // Track Info
+                    VStack(alignment: .leading, spacing: 2) {
+                        ScrollingText(
+                            text: musicController.currentTrackTitle,
+                            font: .system(size: isHovering ? 14 : 16, weight: .bold),
+                            textColor: .white,
+                            maxWidth: artSize - 24,
+                            alignment: .leading
+                        )
+                        .shadow(radius: 2)
+
+                        ScrollingText(
+                            text: musicController.currentArtist,
+                            font: .system(size: isHovering ? 12 : 13, weight: .medium),
+                            textColor: .white.opacity(0.9),
+                            maxWidth: artSize - 24,
+                            alignment: .leading
+                        )
+                        .shadow(radius: 2)
+                    }
+                    .padding(.leading, 12)
+                    .padding(.bottom, 12)
+                }
+                .frame(width: artSize, height: artSize)
+                .position(
+                    x: geo.size.width / 2,
+                    y: (availableHeight / 2) + shadowYOffset
+                )
+                .allowsHitTesting(false)  // 让点击穿透到placeholder
+            }
+        }
+    }
+
+    // MARK: - Floating Artwork (单个Image实例避免crossfade)
+    @ViewBuilder
+    private func floatingArtwork(artwork: NSImage, geometry: GeometryProxy) -> some View {
+        GeometryReader { geo in
+            let availableHeight = geo.size.height - (showControls ? 100 : 0)
+            let shadowYOffset: CGFloat = 6
+
+            // 根据当前页面计算尺寸和样式
+            let (artSize, cornerRadius, shadowRadius, xPosition, yPosition) = {
+                if currentPage == .album {
+                    // Album页面样式
+                    let size = isHovering ? geo.size.width * 0.50 : geo.size.width * 0.70
+                    return (size, 12.0, 25.0, geo.size.width / 2, (availableHeight / 2) + shadowYOffset)
+                } else if currentPage == .playlist {
+                    // Playlist页面样式
+                    return (70.0, 6.0, 3.0, 35.0, 70.0)
+                } else {
+                    // Lyrics页面（不显示封面）
+                    return (0.0, 0.0, 0.0, 0.0, 0.0)
+                }
+            }()
+
+            if currentPage != .lyrics {
+                Image(nsImage: artwork)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: artSize, height: artSize)
+                    .clipped()
+                    .cornerRadius(cornerRadius)
+                    .shadow(color: .black.opacity(0.5), radius: shadowRadius, x: 0, y: currentPage == .album ? 12 : 2)
+                    .matchedGeometryEffect(
+                        id: currentPage == .album ? "album-placeholder" : "playlist-placeholder",
+                        in: animation,
+                        isSource: false
+                    )
+                    .position(x: xPosition, y: yPosition)
+                    .allowsHitTesting(false)  // 让点击穿透到placeholder
+            }
+        }
+    }
+
     // MARK: - Album Page Content (抽取为函数支持matchedGeometryEffect)
     @ViewBuilder
     private func albumPageContent(geometry: GeometryProxy) -> some View {
@@ -130,61 +236,16 @@ public struct MiniPlayerView: View {
                         // Shadow offset adds visual weight at bottom
                         let shadowYOffset: CGFloat = 6
 
-                        // Album Artwork + Text Unit
-                        ZStack(alignment: .bottomLeading) {
-                            // 1. Main Artwork - 使用matchedGeometryEffect
-                            Image(nsImage: artwork)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: artSize, height: artSize)
-                                .clipped()
-                                .cornerRadius(12)
-                                .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
-                                .matchedGeometryEffect(id: "album-artwork", in: animation, isSource: currentPage == .album)
-                                .transition(.scale(scale: 1))  // 避免fade，只做几何变换
-                                .onTapGesture {
-                                    withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                                        currentPage = currentPage == .album ? .lyrics : .album
-                                    }
+                        // Album Artwork Placeholder
+                        Color.clear
+                            .frame(width: artSize, height: artSize)
+                            .cornerRadius(12)
+                            .matchedGeometryEffect(id: "album-placeholder", in: animation, isSource: true)
+                            .onTapGesture {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                    currentPage = currentPage == .album ? .lyrics : .album
                                 }
-
-                            // 2. Gradient Mask - 动画过渡时隐藏
-                            if showAlbumText {
-                                LinearGradient(
-                                    gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                                .frame(width: artSize, height: 50)
-                                .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
-                                .allowsHitTesting(false)
                             }
-
-                            // 3. Track Info - 动画过渡时隐藏
-                            if showAlbumText {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    ScrollingText(
-                                        text: musicController.currentTrackTitle,
-                                        font: .system(size: isHovering ? 14 : 16, weight: .bold),
-                                        textColor: .white,
-                                        maxWidth: artSize - 24,
-                                        alignment: .leading
-                                    )
-                                    .shadow(radius: 2)
-
-                                    ScrollingText(
-                                        text: musicController.currentArtist,
-                                        font: .system(size: isHovering ? 12 : 13, weight: .medium),
-                                        textColor: .white.opacity(0.9),
-                                        maxWidth: artSize - 24,
-                                        alignment: .leading
-                                    )
-                                    .shadow(radius: 2)
-                                }
-                                .padding(.leading, 12)
-                                .padding(.bottom, 12)
-                            }
-                        }
                         .frame(width: artSize, height: artSize)
                         .position(
                             x: geo.size.width / 2,
