@@ -341,7 +341,8 @@ public struct PlaylistView: View {
             .onHover { hovering in
                 withAnimation(.easeInOut(duration: 0.3)) {
                     isHovering = hovering
-                    if hovering && !isManualScrolling {
+                    // 🔑 只在未锁定且未手动滚动时根据 hover 状态显示/隐藏控件
+                    if hovering && !isManualScrolling && !controlsLockedHidden {
                         showControls = true
                     } else if !hovering && !isManualScrolling {
                         showControls = false

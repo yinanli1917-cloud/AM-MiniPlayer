@@ -55,7 +55,7 @@ public struct MiniPlayerView: View {
                 // 🎯 浮动的Artwork - 单个Image实例，通过matchedGeometry移动
                 if let artwork = musicController.currentArtwork {
                     floatingArtwork(artwork: artwork, geometry: geometry)
-                        .zIndex(50)  // 在占位符之上，但要让文字和遮罩在更上层
+                        .zIndex(currentPage == .album ? 50 : 0.5)  // Album页高层级，Playlist页低层级避免遮挡tab
                 }
 
                 // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上

@@ -175,11 +175,15 @@ public struct LyricsView: View {
                             let velocityThreshold: CGFloat = 300  // 快速滚动阈值
                             let slowThreshold: CGFloat = 100      // 慢速滚动阈值
 
+                            // 🔍 调试日志
+                            print("📊 Lyrics Scroll - deltaY: \(deltaY), velocity: \(velocity), locked: \(controlsLockedHidden), showControls: \(showControls)")
+
                             if deltaY > 0 {
                                 // 向下滚动（显示更多内容）
                                 if abs(velocity) > velocityThreshold {
                                     // 快速向下滚动 - 隐藏并锁定
                                     if !controlsLockedHidden {
+                                        print("🚀 Fast scroll detected - hiding controls")
                                         withAnimation(.easeOut(duration: 0.15)) {
                                             showControls = false
                                             controlsLockedHidden = true  // 🔑 锁定，防止慢速时重新显示
@@ -187,6 +191,7 @@ public struct LyricsView: View {
                                     }
                                 } else if abs(velocity) < slowThreshold && !controlsLockedHidden {
                                     // 慢速向下滚动且未锁定 - 显示controls
+                                    print("🐌 Slow scroll detected - showing controls")
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         showControls = true
                                     }
@@ -195,6 +200,7 @@ public struct LyricsView: View {
                                 // 向上滚动（回到顶部）- 快速时隐藏并锁定
                                 if abs(velocity) > velocityThreshold {
                                     if !controlsLockedHidden {
+                                        print("🚀 Fast scroll up detected - hiding controls")
                                         withAnimation(.easeOut(duration: 0.15)) {
                                             showControls = false
                                             controlsLockedHidden = true  // 🔑 锁定
@@ -234,7 +240,8 @@ public struct LyricsView: View {
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.3)) {
                 isHovering = hovering
-                if hovering && !isManualScrolling {
+                // 🔑 只在未锁定且未手动滚动时根据 hover 状态显示/隐藏控件
+                if hovering && !isManualScrolling && !controlsLockedHidden {
                     showControls = true
                 } else if !hovering && !isManualScrolling {
                     showControls = false
