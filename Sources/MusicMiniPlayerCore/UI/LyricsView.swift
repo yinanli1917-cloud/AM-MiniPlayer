@@ -33,6 +33,13 @@ public struct LyricsView: View {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .foregroundColor(.white)
+                        .overlay(
+                            Group {
+                                if showControls {
+                                    controlBar
+                                }
+                            }
+                        )
                 } else if let error = lyricsService.error {
                     VStack(spacing: 16) {
                         Image(systemName: "music.note")
@@ -526,17 +533,18 @@ struct LyricLineView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 32)  // padding在scale之后，确保左对齐不变
         .padding(.vertical, 8)  // 增加垂直 padding 让 hover 背景有空间
         .background(
-            // 🎨 macOS 26 Liquid Glass hover 效果
+            // 🎨 macOS 26 Liquid Glass hover 效果 - 带左右padding
             Group {
                 if isScrolling && isHovering && line.text != "⋯" {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.white.opacity(0.08))
+                        .padding(.horizontal, 12)  // 左右留出12px空间
                 }
             }
         )
+        .padding(.horizontal, 32)  // padding在background之后，确保左对齐不变
         .blur(radius: blur)
         .opacity(opacity)
         .offset(y: yOffset)

@@ -141,6 +141,7 @@ public struct MiniPlayerView: View {
                                 .cornerRadius(12)
                                 .shadow(color: .black.opacity(0.5), radius: 25, x: 0, y: 12)
                                 .matchedGeometryEffect(id: "album-artwork", in: animation, isSource: currentPage == .album)
+                                .transition(.scale(scale: 1))  // 避免fade，只做几何变换
                                 .onTapGesture {
                                     withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                                         currentPage = currentPage == .album ? .lyrics : .album

@@ -111,6 +111,7 @@ public struct PlaylistView: View {
                                                     .cornerRadius(6)
                                                     .shadow(radius: 3)
                                                     .matchedGeometryEffect(id: "album-artwork", in: animationNamespace, isSource: currentPage == .playlist)
+                                                    .transition(.scale(scale: 1))  // 避免fade，只做几何变换
                                             } else {
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .fill(Color.gray.opacity(0.3))
