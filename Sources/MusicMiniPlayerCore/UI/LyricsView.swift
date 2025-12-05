@@ -12,13 +12,27 @@ public struct LyricsView: View {
     @State private var showControls: Bool = true
     @State private var lastDragLocation: CGFloat = 0
     @State private var dragVelocity: CGFloat = 0
+    @State private var wasFastScrolling: Bool = false  // 🔑 防抖：追踪是否刚经历快速滚动
     @State private var showLoadingDots: Bool = false
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
+    @State private var lastVelocity: CGFloat = 0  // 记录上一次速度
+    @State private var scrollLocked: Bool = false  // 🔑 锁定快速滚动状态，防止检测衰减速度
+
+    // 🐛 调试窗口状态
+    @State private var showDebugWindow: Bool = false
+    @State private var debugMessages: [String] = []
 
     public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil) {
         self._currentPage = currentPage
         self.openWindow = openWindow
+    }
+
+    private func addDebugMessage(_ message: String) {
+        debugMessages.append(message)
+        if debugMessages.count > 100 {
+            debugMessages.removeFirst(50)
+        }
     }
 
     public var body: some View {
@@ -116,7 +130,7 @@ public struct LyricsView: View {
                                     }
 
                                     // 检测间奏：上一句结束时间到下一句开始时间的间隔
-                                    checkAndShowInterlude(at: index)
+                                    checkAndShowInterlude(at: index, currentTime: musicController.currentTime)
                                 }
 
                                 // Bottom spacer for centering last lyrics
@@ -144,13 +158,13 @@ public struct LyricsView: View {
                             }
                         }
                     }
-                    // 🔑 添加scroll检测 - 使用加速度检测（与歌单页面相同逻辑）
+                    // 🔑 添加scroll检测 - 简单规则：velocity >= 200 隐藏并锁定，< 200 且下滑显示
                     .scrollDetectionWithVelocity(
                         onScrollStarted: {
                             // 开始手动滚动时
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                isManualScrolling = true
-                            }
+                            isManualScrolling = true
+                            lastVelocity = 0
+                            scrollLocked = false  // 🔑 重置锁定状态
                             // 取消之前的恢复定时器
                             autoScrollTimer?.invalidate()
                         },
@@ -160,6 +174,8 @@ public struct LyricsView: View {
                             autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
                                 withAnimation(.easeInOut(duration: 0.3)) {
                                     isManualScrolling = false
+                                    lastVelocity = 0
+                                    scrollLocked = false  // 🔑 重置锁定状态
                                     // 如果鼠标还在窗口内，显示控件
                                     if isHovering {
                                         showControls = true
@@ -168,32 +184,34 @@ public struct LyricsView: View {
                             }
                         },
                         onScrollWithVelocity: { deltaY, velocity in
-                            // deltaY > 0 = 手指向下滑（内容向上滚动，显示下面的内容）
-                            // deltaY < 0 = 手指向上滑（内容向下滚动，显示上面的内容）
-                            let velocityThreshold: CGFloat = 300  // 快速滚动阈值
-                            let slowThreshold: CGFloat = 100      // 慢速滚动阈值
+                            let absVelocity = abs(velocity)
+                            let threshold: CGFloat = 200
 
-                            if deltaY > 0 {
-                                // 向下滚动（显示更多内容）
-                                if abs(velocity) < slowThreshold {
-                                    // 慢速向下滚动 - 立即显示controls
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = true
-                                    }
-                                } else if abs(velocity) > velocityThreshold {
-                                    // 快速向下滚动 - 隐藏controls
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = false
-                                    }
-                                }
-                            } else if deltaY < 0 {
-                                // 向上滚动（回到顶部）- 快速时隐藏controls
-                                if abs(velocity) > velocityThreshold {
+                            let debugMsg = String(format: "🔍 deltaY: %.1f, v: %.1f, locked: %@", deltaY, absVelocity, scrollLocked ? "YES" : "NO")
+                            addDebugMessage(debugMsg)
+
+                            // 快速滚动 → 隐藏并锁定
+                            if absVelocity >= threshold {
+                                addDebugMessage("⚡️ FAST - hiding & locking")
+                                scrollLocked = true
+                                if showControls {
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         showControls = false
                                     }
                                 }
                             }
+                            // 慢速下滑 → 解锁并显示
+                            else if deltaY > 0 && absVelocity < threshold {
+                                addDebugMessage("🐌 SLOW DOWN - unlocking & showing")
+                                scrollLocked = false
+                                if !showControls {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = true
+                                    }
+                                }
+                            }
+
+                            lastVelocity = absVelocity
                         }
                     )
                     .overlay(
@@ -205,6 +223,46 @@ public struct LyricsView: View {
                         }
                     )
                 }
+            }
+
+            // 🐛 调试窗口 - inside ZStack
+            if showDebugWindow {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("Scroll Debug")
+                            .font(.system(size: 10, weight: .bold))
+                        Spacer()
+                        Button("Clear") {
+                            debugMessages.removeAll()
+                        }
+                        .font(.system(size: 9))
+                        Button("✕") {
+                            showDebugWindow = false
+                        }
+                        .font(.system(size: 9))
+                    }
+                    .padding(4)
+                    .background(Color.black.opacity(0.8))
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(debugMessages.suffix(20), id: \.self) { msg in
+                                Text(msg)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 150)
+                    .background(Color.black.opacity(0.9))
+                }
+                .frame(width: 280)
+                .background(Color.black.opacity(0.95))
+                .cornerRadius(8)
+                .shadow(radius: 10)
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -224,14 +282,20 @@ public struct LyricsView: View {
             }
         }
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isHovering = hovering
-                if hovering && !isManualScrolling {
-                    showControls = true
-                } else if !hovering && !isManualScrolling {
-                    showControls = false
+            isHovering = hovering
+            // 🔑 只在非滚动状态时响应 hover
+            if !isManualScrolling {
+                if hovering {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showControls = true
+                    }
+                } else {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showControls = false
+                    }
                 }
             }
+            // 滚动时 hover 状态改变不影响 showControls
         }
           .onAppear {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
@@ -410,7 +474,7 @@ public struct LyricsView: View {
     }
 
     @ViewBuilder
-    private func checkAndShowInterlude(at index: Int) -> some View {
+    private func checkAndShowInterlude(at index: Int, currentTime: TimeInterval) -> some View {
         if index < lyricsService.lyrics.count - 1 {
             let currentLine = lyricsService.lyrics[index]
             let nextLine = lyricsService.lyrics[index + 1]
@@ -418,7 +482,7 @@ public struct LyricsView: View {
 
             if interludeGap >= 5.0 && currentLine.text != "⋯" && nextLine.text != "⋯" {
                 InterludeLoadingDotsView(
-                    currentTime: musicController.currentTime,
+                    currentTime: currentTime,
                     startTime: currentLine.endTime,
                     endTime: nextLine.startTime
                 )
@@ -462,8 +526,8 @@ struct LyricLineView: View {
         }()
 
         let blur: CGFloat = {
-            // 手动滚动时使用轻微模糊，和未选中歌词一致
-            if isScrolling { return 0.5 }
+            // 手动滚动时完全清晰，无模糊
+            if isScrolling { return 0 }
 
             // Progressive blur based on distance when not scrolling
             if isCurrent { return 0 }
@@ -480,8 +544,8 @@ struct LyricLineView: View {
         }()
 
         let opacity: CGFloat = {
-            // 手动滚动时所有歌词统一透明度（和未选中歌词一致）
-            if isScrolling { return 0.7 }
+            // 手动滚动时所有歌词统一透明度 100%（完全不透明）
+            if isScrolling { return 1.0 }
 
             if isCurrent {
                 return 1.0
