@@ -16,7 +16,6 @@ public struct MiniPlayerView: View {
     @State private var showControls: Bool = false
     @State private var isProgressBarHovering: Bool = false
     @State private var dragPosition: CGFloat? = nil
-    @State private var showAlbumText: Bool = true  // 控制专辑页文字渐现
     @State private var playlistSelectedTab: Int = 1  // 0 = History, 1 = Up Next
     @Namespace private var animation
 
@@ -119,23 +118,6 @@ public struct MiniPlayerView: View {
             }
         }
         .onChange(of: currentPage) { oldValue, newValue in
-            // 🔑 页面切换时控制文字渐现动画
-            if newValue == .album && oldValue == .playlist {
-                // 从歌单返回专辑页 - 先隐藏文字，动画完成后渐现
-                showAlbumText = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        showAlbumText = true
-                    }
-                }
-            } else if newValue == .playlist && oldValue == .album {
-                // 从专辑去歌单页 - 隐藏文字
-                showAlbumText = false
-            } else {
-                // 其他情况显示文字
-                showAlbumText = true
-            }
-
             // 🔑 页面切换时，如果鼠标在窗口内（isHovering已经是true），触发控件显示
             if isHovering {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -162,8 +144,7 @@ public struct MiniPlayerView: View {
             // 遮罩应该在封面底部
             let maskY = artCenterY + (artSize / 2) - (maskHeight / 2)
 
-            if showAlbumText {
-                VStack(spacing: 0) {
+            VStack(spacing: 0) {
                     // Gradient Mask
                     LinearGradient(
                         gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
@@ -201,7 +182,6 @@ public struct MiniPlayerView: View {
                 .matchedGeometryEffect(id: "album-text", in: animation)  // 🔑 让文字同步跟随封面动画
                 .position(x: geo.size.width / 2, y: maskY)
                 .allowsHitTesting(false)
-            }
         }
     }
 

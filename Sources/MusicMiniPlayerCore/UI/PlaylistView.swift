@@ -89,6 +89,7 @@ public struct PlaylistView: View {
                                                     .lineLimit(1)
                                             }
                                         }
+                                        .matchedGeometryEffect(id: "album-text", in: animationNamespace)
 
                                         Spacer()
                                     }
