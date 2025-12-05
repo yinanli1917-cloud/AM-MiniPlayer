@@ -93,7 +93,10 @@ struct SharedBottomControls: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 30)
         .frame(maxWidth: .infinity, alignment: .bottom)
-        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        .transition(.asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .opacity.combined(with: .scale(scale: 0.95))
+        ))
     }
 
     // MARK: - Computed Properties

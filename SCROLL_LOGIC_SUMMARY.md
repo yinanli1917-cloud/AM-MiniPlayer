@@ -59,6 +59,26 @@
 - 使用 `DispatchQueue.main.async` 确保状态更新不阻塞主线程
 - 2秒延迟后恢复自动滚动，并根据 hover 状态决定是否显示控件
 
+## 最新更新 (2025-12-05)
+
+### PlaylistView 滚动逻辑改进
+- **速度阈值**: 200 - 快速/慢速滚动分界线
+- **快速滚动** (velocity >= 200): 隐藏控件，设置 `scrollLocked = true`
+- **慢速下滑** (deltaY > 0, velocity < 200, isHovering): 解锁并显示控件
+- **关键修复**: 添加 `&& isHovering` 检查，防止鼠标离开时错误显示控件
+- **防止闪烁**: 只在鼠标在窗口内时响应慢速滚动
+
+### Music/Hide 按钮改为 overlay
+- 从 Tab 层移到 MiniPlayerView 的 `.overlay()` 修饰符
+- 支持 album 和 playlist 两个页面
+- 不占用布局空间，纯浮动显示
+- 与 `showControls` 状态同步
+
+### 专辑文字 matchedGeometryEffect
+- 添加 `matchedGeometryEffect(id: "album-text")` 到渐变遮罩 + 文字容器
+- 文字现在随封面同步移动，像"嵌入"在封面上一样
+- hover 时文字缩小动画与封面缩小同步
+
 
 
 

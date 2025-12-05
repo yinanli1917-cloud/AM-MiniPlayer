@@ -233,15 +233,10 @@ public struct PlaylistView: View {
                                 }
                             }
                         }
-                        // 慢速下滑 → 解锁并显示（仅当鼠标在窗口内）
-                        else if deltaY > 0 && absVelocity < threshold && isHovering {
-                            addDebugMessage("🐌 SLOW DOWN - unlocking & showing")
+                        // 慢速下滑 → 只解锁，不显示控件（由onScrollEnded的timer处理显示）
+                        else if absVelocity < threshold {
+                            addDebugMessage("🐌 SLOW - unlocking")
                             scrollLocked = false
-                            if !showControls {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showControls = true
-                                }
-                            }
                         }
 
                         lastVelocity = absVelocity
