@@ -19,6 +19,12 @@ public struct MiniPlayerView: View {
     @State private var playlistSelectedTab: Int = 1  // 0 = History, 1 = Up Next
     @Namespace private var animation
 
+    // 🔑 Clip 逻辑 - 从 PlaylistView 传递的滚动偏移量
+    @State private var playlistScrollOffset: CGFloat = 0
+
+    // 🔑 控件hover状态跟踪 - 防止鼠标在控件上时隐藏控件
+    @State private var isControlsHovering: Bool = false
+
     var openWindow: OpenWindowAction?
 
     public init(openWindow: OpenWindowAction? = nil) {
@@ -41,7 +47,7 @@ public struct MiniPlayerView: View {
                 }
 
                 // Playlist View - 始终存在以支持matchedGeometryEffect
-                PlaylistView(currentPage: $currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering)
+                PlaylistView(currentPage: $currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, scrollOffset: $playlistScrollOffset)
                     .opacity(currentPage == .playlist ? 1 : 0)
                     .zIndex(currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
                     .allowsHitTesting(currentPage == .playlist)
@@ -64,17 +70,54 @@ public struct MiniPlayerView: View {
                         .zIndex(101)  // 在浮动artwork之上
                 }
 
-                // 🔑 Tab 层 - 只在歌单页显示，透明浮现
+                // Tab 层 - 只在歌单页显示（集成Music/Hide按钮）
                 if currentPage == .playlist {
                     VStack(spacing: 0) {
-                        // Tab Bar
-                        PlaylistTabBar(selectedTab: $playlistSelectedTab, showControls: showControls, isHovering: isHovering)
-                            .padding(.top, 16)
+                        // 遮挡层 - 使用与背景相同的取色+模糊效果
+                        ZStack {
+                            // 底层：Liquid Glass 模糊效果
+                            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+                                .frame(height: 90)
+
+                            // 中间层：专辑主色调（与LiquidBackgroundView一致）
+                            PlaylistTabBackground(artwork: musicController.currentArtwork)
+                                .frame(height: 90)
+
+                            VStack(spacing: 0) {
+                                // Music/Hide 按钮行
+                                HStack {
+                                    MusicButtonView()
+                                    Spacer()
+                                    HideButtonView()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.top, 12)
+
+                                // Tab Bar
+                                PlaylistTabBarIntegrated(selectedTab: $playlistSelectedTab)
+                                    .padding(.top, 8)
+                            }
+                        }
+                        .frame(height: 90)
+                        // 🔑 底部阴影效果 - 表现tab栏层级更高
+                        .overlay(alignment: .bottom) {
+                            LinearGradient(
+                                gradient: Gradient(colors: [
+                                    Color.black.opacity(0.0),
+                                    Color.black.opacity(0.15)
+                                ]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 12)
+                            .offset(y: 12)  // 向下偏移显示在tab栏下方
+                            .allowsHitTesting(false)
+                        }
 
                         Spacer()
                     }
                     .zIndex(2.5)
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(true)
                 }
             }
         }
@@ -82,44 +125,54 @@ public struct MiniPlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
-            // Music按钮 - album 和 playlist 页面都显示
-            if showControls && (currentPage == .album || currentPage == .playlist) {
+            // Music按钮 - 只在专辑页面hover时显示（歌单页面已集成到tab栏）
+            if showControls && currentPage == .album {
                 MusicButtonView()
                     .padding(12)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .transition(.opacity)
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Hide按钮 - album 和 playlist 页面都显示
-            if showControls && (currentPage == .album || currentPage == .playlist) {
+            // Hide按钮 - 只在专辑页面hover时显示（歌单页面已集成到tab栏）
+            if showControls && currentPage == .album {
                 HideButtonView()
                     .padding(12)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .transition(.opacity)
             }
         }
         .onHover { hovering in
             // Animation for album art and text - faster
             withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                 isHovering = hovering
-            }
 
-            if hovering {
-                // Delay showing controls by 0.1s after animation starts
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                        showControls = true
+                // 专辑页面：基于hover显示控件
+                if currentPage == .album {
+                    if hovering {
+                        // 延迟显示控件
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                showControls = true
+                            }
+                        }
+                    } else {
+                        // 🔑 只有当鼠标不在控件上时才隐藏
+                        if !isControlsHovering {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                showControls = false
+                            }
+                        }
                     }
-                }
-            } else {
-                // Hide controls quickly when mouse leaves
-                withAnimation(.easeOut(duration: 0.18)) {
-                    showControls = false
+                } else {
+                    // 🔑 歌词和歌单页面：鼠标离开且不在控件上时隐藏
+                    if !hovering && !isControlsHovering && showControls {
+                        showControls = false
+                    }
                 }
             }
         }
         .onChange(of: currentPage) { oldValue, newValue in
-            // 🔑 页面切换时，如果鼠标在窗口内（isHovering已经是true），触发控件显示
-            if isHovering {
+            // 切换到专辑页面时，如果鼠标在窗口内，显示控件
+            if newValue == .album && isHovering {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                         showControls = true
@@ -130,6 +183,7 @@ public struct MiniPlayerView: View {
     }
 
     // MARK: - Album Overlay Content (文字和遮罩)
+    // 🔑 hover前：文字在封面底部；hover后：文字移动到进度条左侧，右侧显示shuffle/repeat
     @ViewBuilder
     private func albumOverlayContent(geometry: GeometryProxy) -> some View {
         GeometryReader { geo in
@@ -144,44 +198,119 @@ public struct MiniPlayerView: View {
             // 遮罩应该在封面底部
             let maskY = artCenterY + (artSize / 2) - (maskHeight / 2)
 
-            VStack(spacing: 0) {
-                    // Gradient Mask
-                    LinearGradient(
-                        gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(width: artSize, height: maskHeight)
-                    .overlay(
-                        // Track Info - 叠加在遮罩上
-                        VStack(alignment: .leading, spacing: 2) {
-                            ScrollingText(
-                                text: musicController.currentTrackTitle,
-                                font: .system(size: isHovering ? 14 : 16, weight: .bold),
-                                textColor: .white,
-                                maxWidth: artSize - 24,
-                                alignment: .leading
-                            )
-                            .shadow(radius: 2)
+            ZStack {
+                // 🎨 非hover状态：文字在封面底部（带渐变遮罩）
+                if !isHovering {
+                    VStack(spacing: 0) {
+                        LinearGradient(
+                            gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(width: artSize, height: maskHeight)
+                        .overlay(
+                            VStack(alignment: .leading, spacing: 2) {
+                                ScrollingText(
+                                    text: musicController.currentTrackTitle,
+                                    font: .system(size: 16, weight: .bold),
+                                    textColor: .white,
+                                    maxWidth: artSize - 24,
+                                    alignment: .leading
+                                )
+                                .matchedGeometryEffect(id: "track-title", in: animation)
+                                .shadow(radius: 2)
 
-                            ScrollingText(
-                                text: musicController.currentArtist,
-                                font: .system(size: isHovering ? 12 : 13, weight: .medium),
-                                textColor: .white.opacity(0.9),
-                                maxWidth: artSize - 24,
-                                alignment: .leading
-                            )
-                            .shadow(radius: 2)
-                        }
-                        .padding(.leading, 12)
-                        .padding(.bottom, 10)
-                        , alignment: .bottomLeading
-                    )
+                                ScrollingText(
+                                    text: musicController.currentArtist,
+                                    font: .system(size: 13, weight: .medium),
+                                    textColor: .white.opacity(0.9),
+                                    maxWidth: artSize - 24,
+                                    alignment: .leading
+                                )
+                                .matchedGeometryEffect(id: "track-artist", in: animation)
+                                .shadow(radius: 2)
+                            }
+                            .padding(.leading, 12)
+                            .padding(.bottom, 10)
+                            , alignment: .bottomLeading
+                        )
+                    }
+                    .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
+                    .position(x: geo.size.width / 2, y: maskY)
+                    .allowsHitTesting(false)
                 }
-                .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
-                .matchedGeometryEffect(id: "album-text", in: animation)  // 🔑 让文字同步跟随封面动画
-                .position(x: geo.size.width / 2, y: maskY)
-                .allowsHitTesting(false)
+
+                // 🎨 hover状态：文字移到底部控件区域左侧，右侧显示shuffle/repeat
+                // 🔑 使用与进度条相同的padding (20+20=40) 实现对齐
+                if isHovering && showControls {
+                    VStack {
+                        Spacer()
+                        HStack(alignment: .center, spacing: 0) {
+                            // 左侧：歌曲信息（左对齐到进度条左端）
+                            VStack(alignment: .leading, spacing: 2) {
+                                ScrollingText(
+                                    text: musicController.currentTrackTitle,
+                                    font: .system(size: 12, weight: .bold),
+                                    textColor: .white,
+                                    maxWidth: geo.size.width * 0.4,  // 🔑 使用相对宽度
+                                    alignment: .leading
+                                )
+                                .matchedGeometryEffect(id: "track-title", in: animation)
+
+                                ScrollingText(
+                                    text: musicController.currentArtist,
+                                    font: .system(size: 10, weight: .medium),
+                                    textColor: .white.opacity(0.8),
+                                    maxWidth: geo.size.width * 0.4,  // 🔑 使用相对宽度
+                                    alignment: .leading
+                                )
+                                .matchedGeometryEffect(id: "track-artist", in: animation)
+                            }
+
+                            Spacer(minLength: 12)
+
+                            // 右侧：Shuffle和Repeat圆形图标（右对齐到进度条右端）
+                            HStack(spacing: 10) {
+                                // Shuffle 按钮
+                                Button(action: {
+                                    musicController.toggleShuffle()
+                                }) {
+                                    Image(systemName: "shuffle")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(musicController.shuffleEnabled ? .white : .white.opacity(0.6))
+                                        .frame(width: 28, height: 28)
+                                        .background(
+                                            Circle()
+                                                .fill(musicController.shuffleEnabled ? Color(red: 0.99, green: 0.24, blue: 0.27) : Color.white.opacity(0.1))
+                                        )
+                                }
+                                .buttonStyle(.plain)
+
+                                // Repeat 按钮
+                                Button(action: {
+                                    musicController.cycleRepeatMode()
+                                }) {
+                                    Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(musicController.repeatMode > 0 ? .white : .white.opacity(0.6))
+                                        .frame(width: 28, height: 28)
+                                        .background(
+                                            Circle()
+                                                .fill(musicController.repeatMode > 0 ? Color(red: 0.99, green: 0.24, blue: 0.27) : Color.white.opacity(0.1))
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        // 🔑 与进度条padding对齐: 外层20 + 进度条20 = 40
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 125)  // 在进度条上方
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.82), value: isHovering)
+            .animation(.spring(response: 0.3, dampingFraction: 0.82), value: showControls)
         }
     }
 
@@ -293,11 +422,14 @@ public struct MiniPlayerView: View {
                                     isHovering: $isHovering,
                                     showControls: $showControls,
                                     isProgressBarHovering: $isProgressBarHovering,
-                                    dragPosition: $dragPosition
+                                    dragPosition: $dragPosition,
+                                    onControlsHoverChanged: { hovering in
+                                        isControlsHovering = hovering
+                                    }
                                 )
                                 .padding(.bottom, 0)
                             }
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                            .transition(.opacity)
                         }
                     }
                 )
@@ -462,17 +594,15 @@ struct HideButtonView: View {
     }
 }
 
-// MARK: - Playlist Tab Bar (用于 overlay)
+// MARK: - Playlist Tab Bar (集成版，带透明背景)
 
-struct PlaylistTabBar: View {
+struct PlaylistTabBarIntegrated: View {
     @Binding var selectedTab: Int
-    let showControls: Bool
-    let isHovering: Bool
 
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
-                // Background Capsule
+                // Background Capsule - 恢复原来的透明设计
                 Capsule()
                     .fill(Color.white.opacity(0.1))
                     .frame(height: 32)
@@ -509,7 +639,53 @@ struct PlaylistTabBar: View {
             }
             .frame(height: 32)
         }
-        .padding(.horizontal, 60)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 50)
     }
 }
+
+// MARK: - Playlist Tab Background (与LiquidBackgroundView一致的取色)
+
+struct PlaylistTabBackground: View {
+    var artwork: NSImage?
+    @State private var dominantColor: Color = .clear
+
+    var body: some View {
+        ZStack {
+            // 专辑主色调层（与LiquidBackgroundView一致）
+            if dominantColor != .clear {
+                dominantColor
+                    .opacity(0.6)  // 与LiquidBackgroundView相同的不透明度
+            }
+
+            // 额外的半透明材质层增强玻璃效果
+            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                .opacity(0.5)
+        }
+        .onAppear {
+            updateColor()
+        }
+        .onChange(of: artwork) {
+            updateColor()
+        }
+    }
+
+    private func updateColor() {
+        if let artwork = artwork {
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let nsColor = artwork.dominantColor() {
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.5)) {
+                            self.dominantColor = Color(nsColor: nsColor)
+                        }
+                    }
+                }
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                dominantColor = .clear
+            }
+        }
+    }
+}
+
+

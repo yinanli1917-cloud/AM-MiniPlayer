@@ -18,6 +18,7 @@ public struct LyricsView: View {
     var openWindow: OpenWindowAction?
     @State private var lastVelocity: CGFloat = 0  // 记录上一次速度
     @State private var scrollLocked: Bool = false  // 🔑 锁定快速滚动状态，防止检测衰减速度
+    @State private var hasTriggeredSlowScroll: Bool = false  // 🔑 慢速滚动是否已触发过控件显示
 
     // 🐛 调试窗口状态
     @State private var showDebugWindow: Bool = false
@@ -158,52 +159,57 @@ public struct LyricsView: View {
                             }
                         }
                     }
-                    // 🔑 添加scroll检测 - 简单规则：velocity >= 200 隐藏并锁定，< 200 且下滑显示
+                    // 🔑 添加scroll检测 - 简单规则：velocity >= 300 隐藏并锁定，慢速下滑只触发一次显示
                     .scrollDetectionWithVelocity(
                         onScrollStarted: {
                             // 开始手动滚动时
                             isManualScrolling = true
                             lastVelocity = 0
                             scrollLocked = false  // 🔑 重置锁定状态
+                            hasTriggeredSlowScroll = false  // 🔑 重置慢速滚动触发标志
                             // 取消之前的恢复定时器
                             autoScrollTimer?.invalidate()
                         },
                         onScrollEnded: {
-                            // 滚动结束2秒后恢复
+                            // 滚动结束时立即隐藏控件，并2秒后恢复自动滚动
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                showControls = false  // 🔑 停止滚动时立即隐藏控件
+                            }
                             autoScrollTimer?.invalidate()
                             autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
                                 withAnimation(.easeInOut(duration: 0.3)) {
                                     isManualScrolling = false
                                     lastVelocity = 0
                                     scrollLocked = false  // 🔑 重置锁定状态
-                                    // 如果鼠标还在窗口内，显示控件
-                                    if isHovering {
-                                        showControls = true
-                                    }
+                                    hasTriggeredSlowScroll = false  // 🔑 重置慢速滚动触发标志
+                                    // 🔑 恢复自动滚动后，根据hover状态决定是否显示
+                                    // 不在这里显示控件，让hover handler处理
                                 }
                             }
                         },
                         onScrollWithVelocity: { deltaY, velocity in
                             let absVelocity = abs(velocity)
-                            let threshold: CGFloat = 200
+                            let threshold: CGFloat = 300  // 🔑 阈值提高到300
 
-                            let debugMsg = String(format: "🔍 deltaY: %.1f, v: %.1f, locked: %@", deltaY, absVelocity, scrollLocked ? "YES" : "NO")
+                            let debugMsg = String(format: "🔍 deltaY: %.1f, v: %.1f, locked: %@, triggered: %@", deltaY, absVelocity, scrollLocked ? "YES" : "NO", hasTriggeredSlowScroll ? "YES" : "NO")
                             addDebugMessage(debugMsg)
 
-                            // 快速滚动 → 隐藏并锁定
+                            // 快速滚动 → 隐藏并锁定，同时重置慢速触发标志
                             if absVelocity >= threshold {
                                 addDebugMessage("⚡️ FAST - hiding & locking")
                                 scrollLocked = true
+                                hasTriggeredSlowScroll = false  // 🔑 快速滚动时重置，允许下次慢速时再触发
                                 if showControls {
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         showControls = false
                                     }
                                 }
                             }
-                            // 慢速下滑 → 解锁并显示
-                            else if deltaY > 0 && absVelocity < threshold {
-                                addDebugMessage("🐌 SLOW DOWN - unlocking & showing")
+                            // 慢速下滑 → 只触发一次显示
+                            else if deltaY > 0 && absVelocity < threshold && !hasTriggeredSlowScroll {
+                                addDebugMessage("🐌 SLOW DOWN - unlocking & showing (ONCE)")
                                 scrollLocked = false
+                                hasTriggeredSlowScroll = true  // 🔑 标记已触发，防止反复触发
                                 if !showControls {
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         showControls = true
@@ -283,19 +289,19 @@ public struct LyricsView: View {
         }
         .onHover { hovering in
             isHovering = hovering
-            // 🔑 只在非滚动状态时响应 hover
-            if !isManualScrolling {
-                if hovering {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        showControls = true
-                    }
-                } else {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        showControls = false
-                    }
+            // 🔑 鼠标离开窗口时总是隐藏控件（无论是否在滚动）
+            if !hovering {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showControls = false
                 }
             }
-            // 滚动时 hover 状态改变不影响 showControls
+            // 🔑 只在非滚动状态时，鼠标进入显示控件
+            else if !isManualScrolling {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showControls = true
+                }
+            }
+            // 滚动时鼠标进入不自动显示控件（由scroll逻辑控制）
         }
           .onAppear {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
@@ -333,7 +339,7 @@ public struct LyricsView: View {
 
             // 渐变遮罩 + 控件区域（整体拦截点击，防止穿透）
             ZStack(alignment: .bottom) {
-                // Gradient mask
+                // Gradient mask - 使用opacity动画而不是clipShape
                 LinearGradient(
                     gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
                     startPoint: .top,
@@ -353,7 +359,8 @@ public struct LyricsView: View {
             .contentShape(Rectangle())  // 🔑 确保整个区域可点击
             .allowsHitTesting(true)     // 🔑 拦截所有点击，防止穿透到下层歌词
         }
-        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        // 🔑 移除clipShape transition，使用纯opacity + 轻微offset动画
+        .transition(.opacity.combined(with: .offset(y: 20)))
     }
     
     private var timeAndProgressBar: some View {

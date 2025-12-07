@@ -12,24 +12,28 @@ public struct PlaylistView: View {
     @State private var isManualScrolling: Bool = false
     @State private var autoScrollTimer: Timer? = nil
     @State private var lastDragLocation: CGFloat = 0
-    @State private var dragVelocity: CGFloat = 0
     @State private var wasFastScrolling: Bool = false
     @Binding var currentPage: PlayerPage
     var animationNamespace: Namespace.ID
     @State private var isCoverAnimating: Bool = false
     @State private var lastVelocity: CGFloat = 0
     @State private var scrollLocked: Bool = false
+    @State private var hasTriggeredSlowScroll: Bool = false  // 🔑 慢速滚动是否已触发过控件显示
+
+    // 🔑 Clip 逻辑 - 滚动偏移量跟踪（通过 Binding 传递给 MiniPlayerView）
+    @Binding var scrollOffset: CGFloat
 
     // 🐛 调试窗口状态
     @State private var showDebugWindow: Bool = false
     @State private var debugMessages: [String] = []
 
-    public init(currentPage: Binding<PlayerPage>, animationNamespace: Namespace.ID, selectedTab: Binding<Int>, showControls: Binding<Bool>, isHovering: Binding<Bool>) {
+    public init(currentPage: Binding<PlayerPage>, animationNamespace: Namespace.ID, selectedTab: Binding<Int>, showControls: Binding<Bool>, isHovering: Binding<Bool>, scrollOffset: Binding<CGFloat>) {
         self._currentPage = currentPage
         self.animationNamespace = animationNamespace
         self._selectedTab = selectedTab
         self._showControls = showControls
         self._isHovering = isHovering  // 🔑 接收 isHovering binding
+        self._scrollOffset = scrollOffset  // 🔑 接收 scrollOffset binding
     }
 
     public var body: some View {
@@ -89,7 +93,6 @@ public struct PlaylistView: View {
                                                     .lineLimit(1)
                                             }
                                         }
-                                        .matchedGeometryEffect(id: "album-text", in: animationNamespace)
 
                                         Spacer()
                                     }
@@ -197,51 +200,68 @@ public struct PlaylistView: View {
                         Spacer().frame(height: 100)
                     }
                 }
+                // 🔑 scroll检测 - 与LyricsView同步的逻辑：阈值300，只触发一次，停止时隐藏
                 .scrollDetectionWithVelocity(
                     onScrollStarted: {
+                        // 开始手动滚动时
                         isManualScrolling = true
                         lastVelocity = 0
                         scrollLocked = false
+                        hasTriggeredSlowScroll = false  // 🔑 重置慢速滚动触发标志
                         autoScrollTimer?.invalidate()
                     },
                     onScrollEnded: {
+                        // 滚动结束时立即隐藏控件
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            showControls = false  // 🔑 停止滚动时立即隐藏控件
+                        }
                         autoScrollTimer?.invalidate()
                         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
                             withAnimation(.easeInOut(duration: 0.3)) {
                                 isManualScrolling = false
                                 lastVelocity = 0
                                 scrollLocked = false
-                                if isHovering {
-                                    showControls = true
-                                }
+                                hasTriggeredSlowScroll = false  // 🔑 重置慢速滚动触发标志
                             }
                         }
                     },
                     onScrollWithVelocity: { deltaY, velocity in
                         let absVelocity = abs(velocity)
-                        let threshold: CGFloat = 200
+                        let threshold: CGFloat = 300  // 🔑 阈值提高到300
 
-                        let debugMsg = String(format: "🔍 deltaY: %.1f, v: %.1f, locked: %@, hover: %@", deltaY, absVelocity, scrollLocked ? "Y" : "N", isHovering ? "Y" : "N")
+                        let debugMsg = String(format: "🔍 deltaY: %.1f, v: %.1f, locked: %@, triggered: %@", deltaY, absVelocity, scrollLocked ? "YES" : "NO", hasTriggeredSlowScroll ? "YES" : "NO")
                         addDebugMessage(debugMsg)
 
-                        // 快速滚动 → 隐藏并锁定
+                        // 快速滚动 → 隐藏并锁定，同时重置慢速触发标志
                         if absVelocity >= threshold {
                             addDebugMessage("⚡️ FAST - hiding & locking")
                             scrollLocked = true
+                            hasTriggeredSlowScroll = false  // 🔑 快速滚动时重置，允许下次慢速时再触发
                             if showControls {
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     showControls = false
                                 }
                             }
                         }
-                        // 慢速下滑 → 只解锁，不显示控件（由onScrollEnded的timer处理显示）
-                        else if absVelocity < threshold {
-                            addDebugMessage("🐌 SLOW - unlocking")
+                        // 慢速下滑 → 只触发一次显示
+                        else if deltaY > 0 && absVelocity < threshold && !hasTriggeredSlowScroll {
+                            addDebugMessage("🐌 SLOW DOWN - unlocking & showing (ONCE)")
                             scrollLocked = false
+                            hasTriggeredSlowScroll = true  // 🔑 标记已触发，防止反复触发
+                            if !showControls {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showControls = true
+                                }
+                            }
                         }
 
                         lastVelocity = absVelocity
-                    }
+                    },
+                    onScrollOffsetChanged: { offset in
+                        // 🔑 跟踪滚动偏移量用于 clip 逻辑
+                        scrollOffset = offset
+                    },
+                    isEnabled: currentPage == .playlist  // 🔑 只在歌单页面启用滚动检测
                 )
                 .overlay(
                     Group {
@@ -250,6 +270,7 @@ public struct PlaylistView: View {
                                 Spacer()
 
                                 ZStack(alignment: .bottom) {
+                                    // 渐变背景 - 使用opacity动画，不需要clipShape
                                     LinearGradient(
                                         gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
                                         startPoint: .top,
@@ -269,10 +290,21 @@ public struct PlaylistView: View {
                                 .contentShape(Rectangle())
                                 .allowsHitTesting(true)
                             }
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                            // 🔑 使用与LyricsView相同的简单transition
+                            .transition(.opacity.combined(with: .offset(y: 20)))
                         }
                     }
                 )
+                .onHover { hovering in
+                    isHovering = hovering
+                    // 🔑 鼠标离开窗口时总是隐藏控件（与LyricsView同步）
+                    if !hovering {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            showControls = false
+                        }
+                    }
+                    // 🔑 歌单页面不在非滚动时自动显示控件（由tab层和scroll逻辑控制）
+                }
 
                 // 🐛 调试窗口
                 if showDebugWindow {
@@ -314,7 +346,6 @@ public struct PlaylistView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 }
             }
-            // 🔑 移除 onHover - 由 MiniPlayerView 统一控制
             .onAppear {
                 musicController.fetchUpNextQueue()
             }
@@ -442,12 +473,14 @@ struct PlaylistItemRowCompact: View {
     }
 }
 
+
 #Preview {
     @Previewable @State var currentPage: PlayerPage = .playlist
     @Previewable @State var selectedTab: Int = 1
     @Previewable @State var showControls: Bool = true
     @Previewable @State var isHovering: Bool = false
+    @Previewable @State var scrollOffset: CGFloat = 0
     @Previewable @Namespace var namespace
-    PlaylistView(currentPage: $currentPage, animationNamespace: namespace, selectedTab: $selectedTab, showControls: $showControls, isHovering: $isHovering)
+    PlaylistView(currentPage: $currentPage, animationNamespace: namespace, selectedTab: $selectedTab, showControls: $showControls, isHovering: $isHovering, scrollOffset: $scrollOffset)
         .environmentObject(MusicController(preview: true))
 }

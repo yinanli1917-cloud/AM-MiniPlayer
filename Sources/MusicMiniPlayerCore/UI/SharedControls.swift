@@ -14,6 +14,34 @@ class NonDraggableNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
 }
 
+// MARK: - Custom Transitions
+
+extension AnyTransition {
+    // 圆角矩形从下往上渐现的动画
+    static var customSlideUpWithRoundedCorners: AnyTransition {
+        AnyTransition.asymmetric(
+            insertion: .roundedCornerSlideIn,
+            removal: .opacity
+        )
+    }
+
+    static var roundedCornerSlideIn: AnyTransition {
+        AnyTransition.modifier(active: RoundedCornerSlideModifier(isVisible: false), identity: RoundedCornerSlideModifier(isVisible: true))
+    }
+}
+
+struct RoundedCornerSlideModifier: ViewModifier {
+    let isVisible: Bool
+    private let travelDistance: CGFloat = 80  // 滑动距离
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: isVisible ? 0 : travelDistance)
+            .opacity(isVisible ? 1 : 0)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
 // MARK: - Shared Bottom Controls
 struct SharedBottomControls: View {
     @EnvironmentObject var musicController: MusicController
@@ -22,7 +50,9 @@ struct SharedBottomControls: View {
     @Binding var showControls: Bool
     @Binding var isProgressBarHovering: Bool
     @Binding var dragPosition: CGFloat?
+    var onControlsHoverChanged: ((Bool) -> Void)? = nil  // 🔑 可选回调：控件hover状态变化
     @State private var isDraggingProgressBar: Bool = false
+    @State private var isControlAreaHovering: Bool = false  // 🔑 整个控件区域的hover状态
 
     var body: some View {
         VStack(spacing: 8) {
@@ -93,10 +123,13 @@ struct SharedBottomControls: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 30)
         .frame(maxWidth: .infinity, alignment: .bottom)
-        .transition(.asymmetric(
-            insertion: .move(edge: .bottom).combined(with: .opacity),
-            removal: .opacity.combined(with: .scale(scale: 0.95))
-        ))
+        // 🔑 跟踪整个控件区域的hover状态
+        .onHover { hovering in
+            isControlAreaHovering = hovering
+            onControlsHoverChanged?(hovering)
+        }
+        // 🔑 移除clipShape transition，避免方形遮罩问题
+        .transition(.opacity)
     }
 
     // MARK: - Computed Properties
@@ -165,8 +198,7 @@ struct SharedBottomControls: View {
                         height: isProgressBarHovering ? 8 : 6
                     )
             }
-            .scaleEffect(isProgressBarHovering ? 1.05 : 1.0)
-            .contentShape(Rectangle())
+                .contentShape(Capsule())
             .onHover { hovering in
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                     isProgressBarHovering = hovering
