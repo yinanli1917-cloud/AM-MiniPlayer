@@ -56,8 +56,8 @@ public struct PlaylistView: View {
 
                             VStack(spacing: 0) {
                                 Button(action: {
-                                    // 🔑 更快更优雅的非线性动画（response 0.4→0.28，更快0.3秒左右）
-                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+                                    // 🔑 快速但不弹性的动画
+                                    withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                                         isCoverAnimating = true
                                         currentPage = .album
                                     }
@@ -239,8 +239,17 @@ public struct PlaylistView: View {
                         // 🔑 阈值提高到800，让稍微快一点的下滑也算慢速
                         let threshold: CGFloat = 800
 
+                        // 🔑 上滑（deltaY < 0）→ 立即隐藏控件
+                        if deltaY < 0 {
+                            if showControls {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showControls = false
+                                }
+                            }
+                            scrollLocked = true  // 锁定本轮滚动
+                        }
                         // 🔑 快速滚动 → 隐藏并锁定本轮（只有剧烈快速才触发）
-                        if absVelocity >= threshold {
+                        else if absVelocity >= threshold {
                             if !scrollLocked {
                                 scrollLocked = true
                             }
@@ -274,13 +283,13 @@ public struct PlaylistView: View {
                                 Spacer()
 
                                 ZStack(alignment: .bottom) {
-                                    // 渐变背景 - 使用opacity动画，不需要clipShape
+                                    // 🔑 渐变背景 - 遮罩效果
                                     LinearGradient(
                                         gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
                                         startPoint: .top,
                                         endPoint: .bottom
                                     )
-                                    .frame(height: 80)
+                                    .frame(height: 130)
 
                                     SharedBottomControls(
                                         currentPage: $currentPage,
@@ -299,20 +308,8 @@ public struct PlaylistView: View {
                         }
                     }
                 )
-                .onHover { hovering in
-                    isHovering = hovering
-                    if hovering {
-                        // 🔑 歌单页面hover时显示控件
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showControls = true
-                        }
-                    } else {
-                        // 🔑 鼠标离开窗口时隐藏控件
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            showControls = false
-                        }
-                    }
-                }
+                // 🔑 移除PlaylistView自己的onHover，完全由MiniPlayerView控制hover状态
+                // 避免多个onHover导致状态冲突和抽风
 
                 // 🐛 调试窗口
                 if showDebugWindow {

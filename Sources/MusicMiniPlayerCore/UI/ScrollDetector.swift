@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 // MARK: - Scroll Event Monitor (Works with any ScrollView)
-// 🔑 重新设计：使用视图层级内的事件捕获，避免全局监听导致的抖动
+// 🔑 使用全局事件监听 + 防抖节流确保稳定性
 
 struct ScrollEventMonitor: ViewModifier {
     let onScrollStarted: () -> Void
@@ -15,20 +15,21 @@ struct ScrollEventMonitor: ViewModifier {
                     onScrollStarted: onScrollStarted,
                     onScrollEnded: onScrollEnded,
                     onScrollWithVelocity: nil,
-                    onScrollOffsetChanged: nil
+                    onScrollOffsetChanged: nil,
+                    isEnabled: true
                 )
             )
     }
 }
 
-// MARK: - Scroll Event Monitor with Velocity (for Playlist acceleration detection)
+// MARK: - Scroll Event Monitor with Velocity (for Playlist/Lyrics acceleration detection)
 
 struct ScrollEventMonitorWithVelocity: ViewModifier {
     let onScrollStarted: () -> Void
     let onScrollEnded: () -> Void
     let onScrollWithVelocity: (CGFloat, CGFloat) -> Void  // (deltaY, velocity) - positive = scroll down (content up)
     let onScrollOffsetChanged: ((CGFloat) -> Void)?
-    var isEnabled: Bool = true  // 🔑 启用/禁用开关
+    var isEnabled: Bool = true
 
     func body(content: Content) -> some View {
         content
@@ -49,21 +50,22 @@ struct ScrollEventRepresentable: NSViewRepresentable {
     let onScrollEnded: () -> Void
     let onScrollWithVelocity: ((CGFloat, CGFloat) -> Void)?
     let onScrollOffsetChanged: ((CGFloat) -> Void)?
-    var isEnabled: Bool = true  // 🔑 启用/禁用开关
+    var isEnabled: Bool = true
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     class Coordinator {
         var isScrolling = false
         var scrollTimer: Timer?
         var lastScrollTime: CFTimeInterval = 0
         var accumulatedDeltaY: CGFloat = 0
+        var eventMonitor: Any?
 
-        // 🔑 防抖：记录上次回调时间，避免频繁触发
+        // 防抖
         var lastCallbackTime: CFTimeInterval = 0
-        let callbackThrottleInterval: CFTimeInterval = 0.016  // ~60fps
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
+        let callbackThrottleInterval: CFTimeInterval = 0.025  // 40fps节流，减少回调频率
     }
 
     class EventMonitorView: NSView {
@@ -72,34 +74,39 @@ struct ScrollEventRepresentable: NSViewRepresentable {
         var onScrollWithVelocity: ((CGFloat, CGFloat) -> Void)?
         var onScrollOffsetChanged: ((CGFloat) -> Void)?
         weak var coordinator: Coordinator?
-        var isEnabled: Bool = true  // 🔑 启用/禁用开关
+        var isEnabled: Bool = true
 
-        private let scrollEndDelay: TimeInterval = 0.15  // 🔑 缩短到150ms，更快响应结束
+        private let scrollEndDelay: TimeInterval = 0.2  // 200ms检测滚动结束
 
-        override var acceptsFirstResponder: Bool { true }
+        func setupEventMonitor() {
+            guard coordinator?.eventMonitor == nil else { return }
 
-        // 🔑 关键：重写scrollWheel方法，在视图层级内捕获事件
-        override func scrollWheel(with event: NSEvent) {
-            super.scrollWheel(with: event)
-            // 🔑 只有启用时才处理滚动事件
-            if isEnabled {
-                handleScrollEvent(event)
+            // 🔑 使用全局事件监听器捕获滚动事件
+            coordinator?.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                self?.handleScrollEvent(event)
+                return event  // 不消费事件
+            }
+        }
+
+        func removeEventMonitor() {
+            if let monitor = coordinator?.eventMonitor {
+                NSEvent.removeMonitor(monitor)
+                coordinator?.eventMonitor = nil
             }
         }
 
         private func handleScrollEvent(_ event: NSEvent) {
             guard let coordinator = coordinator else { return }
-            guard isEnabled else { return }  // 🔑 二次检查
+            guard isEnabled else { return }
+
+            // 检查事件是否发生在当前窗口内
+            guard let window = self.window, event.window == window else { return }
 
             let currentTime = CACurrentMediaTime()
             let deltaY = event.scrollingDeltaY
 
-            // 🔑 检查滚动相位（macOS trackpad支持）
-            let phase = event.phase
-            let momentumPhase = event.momentumPhase
-
-            // 忽略极小的滚动量（减少噪音）
-            if abs(deltaY) < 0.1 && phase == [] && momentumPhase == [] {
+            // 忽略极小的滚动量
+            if abs(deltaY) < 0.5 {
                 return
             }
 
@@ -107,7 +114,7 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             var velocity: CGFloat = 0
             if coordinator.lastScrollTime > 0 {
                 let timeDelta = currentTime - coordinator.lastScrollTime
-                if timeDelta > 0 && timeDelta < 0.3 {
+                if timeDelta > 0 && timeDelta < 0.5 {
                     velocity = deltaY / CGFloat(timeDelta)
                 }
             }
@@ -115,7 +122,7 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             coordinator.lastScrollTime = currentTime
             coordinator.accumulatedDeltaY += deltaY
 
-            // 🔑 检测滚动开始
+            // 检测滚动开始
             if !coordinator.isScrolling {
                 coordinator.isScrolling = true
                 DispatchQueue.main.async { [weak self] in
@@ -123,20 +130,18 @@ struct ScrollEventRepresentable: NSViewRepresentable {
                 }
             }
 
-            // 🔑 节流回调，避免每帧都触发导致抖动
+            // 🔑 节流回调
             let shouldCallback = (currentTime - coordinator.lastCallbackTime) >= coordinator.callbackThrottleInterval
 
             if shouldCallback {
                 coordinator.lastCallbackTime = currentTime
 
-                // 回调速度信息
                 if let callback = onScrollWithVelocity {
                     DispatchQueue.main.async {
                         callback(deltaY, velocity)
                     }
                 }
 
-                // 回调滚动偏移量
                 if let offsetCallback = onScrollOffsetChanged {
                     let offset = coordinator.accumulatedDeltaY
                     DispatchQueue.main.async {
@@ -145,19 +150,10 @@ struct ScrollEventRepresentable: NSViewRepresentable {
                 }
             }
 
-            // 🔑 使用相位检测结束，或者fallback到定时器
-            if phase == .ended || momentumPhase == .ended {
-                // 相位结束，延迟一小段时间后触发结束
-                coordinator.scrollTimer?.invalidate()
-                coordinator.scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
-                    self?.handleScrollEnd()
-                }
-            } else {
-                // 没有相位信息，使用定时器检测结束
-                coordinator.scrollTimer?.invalidate()
-                coordinator.scrollTimer = Timer.scheduledTimer(withTimeInterval: scrollEndDelay, repeats: false) { [weak self] _ in
-                    self?.handleScrollEnd()
-                }
+            // 重置结束定时器
+            coordinator.scrollTimer?.invalidate()
+            coordinator.scrollTimer = Timer.scheduledTimer(withTimeInterval: scrollEndDelay, repeats: false) { [weak self] _ in
+                self?.handleScrollEnd()
             }
         }
 
@@ -176,6 +172,7 @@ struct ScrollEventRepresentable: NSViewRepresentable {
         }
 
         deinit {
+            removeEventMonitor()
             coordinator?.scrollTimer?.invalidate()
         }
     }
@@ -188,6 +185,7 @@ struct ScrollEventRepresentable: NSViewRepresentable {
         view.onScrollOffsetChanged = onScrollOffsetChanged
         view.coordinator = context.coordinator
         view.isEnabled = isEnabled
+        view.setupEventMonitor()
         return view
     }
 
@@ -196,8 +194,13 @@ struct ScrollEventRepresentable: NSViewRepresentable {
         nsView.onScrollEnded = onScrollEnded
         nsView.onScrollWithVelocity = onScrollWithVelocity
         nsView.onScrollOffsetChanged = onScrollOffsetChanged
-        nsView.coordinator = context.coordinator
-        nsView.isEnabled = isEnabled  // 🔑 更新启用状态
+        nsView.isEnabled = isEnabled
+
+        if isEnabled && context.coordinator.eventMonitor == nil {
+            nsView.setupEventMonitor()
+        } else if !isEnabled {
+            nsView.removeEventMonitor()
+        }
     }
 }
 

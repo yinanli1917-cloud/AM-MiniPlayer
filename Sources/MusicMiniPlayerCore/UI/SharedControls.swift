@@ -57,7 +57,7 @@ struct SharedBottomControls: View {
     var body: some View {
         VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
             // Progress Bar & Time - 🔑 时间显示移到进度条下方
-            VStack(spacing: 6) {  // 🔑 进度条与时间间距=6
+            VStack(spacing: 0) {  // 🔑 进度条与时间间距=0（紧贴）
                 // Progress Bar - 放在最上面
                 progressBar
 
@@ -119,7 +119,7 @@ struct SharedBottomControls: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 32)  // 🔑 整体下移（28→32）
+        .padding(.bottom, 20)  // 🔑 底部padding减小（32→20）
         .frame(maxWidth: .infinity, alignment: .bottom)
         // 🔑 跟踪整个控件区域的hover状态
         .onHover { hovering in
@@ -138,7 +138,8 @@ struct SharedBottomControls: View {
             isActive: currentPage == .lyrics
         ) {
             print("💬 Lyrics button clicked - current page: \(currentPage)")
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            // 🔑 快速但不弹性的动画
+            withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                 let oldPage = currentPage
                 if currentPage == .album {
                     currentPage = .lyrics
@@ -158,7 +159,8 @@ struct SharedBottomControls: View {
             isActive: currentPage == .playlist
         ) {
             print("🎵 Playlist button clicked - current page: \(currentPage)")
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            // 🔑 快速但不弹性的动画
+            withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                 let oldPage = currentPage
                 if currentPage == .album {
                     currentPage = .playlist
@@ -186,14 +188,14 @@ struct SharedBottomControls: View {
                 // Background Track
                 Capsule()
                     .fill(Color.white.opacity(0.2))
-                    .frame(height: isProgressBarHovering ? 8 : 6)
+                    .frame(height: isProgressBarHovering ? 12 : 7)
 
                 // Active Progress
                 Capsule()
                     .fill(Color.white)
                     .frame(
                         width: geo.size.width * currentProgress,
-                        height: isProgressBarHovering ? 8 : 6
+                        height: isProgressBarHovering ? 12 : 7
                     )
             }
                 .contentShape(Capsule())
@@ -220,7 +222,7 @@ struct SharedBottomControls: View {
                     })
             )
         }
-        .frame(height: 20)
+        .frame(height: 12)  // 🔑 减小进度条区域高度
         .padding(.horizontal, 20)
     }
 

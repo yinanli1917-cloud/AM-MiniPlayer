@@ -22,6 +22,9 @@ public struct MiniPlayerView: View {
     // 🔑 Clip 逻辑 - 从 PlaylistView 传递的滚动偏移量
     @State private var playlistScrollOffset: CGFloat = 0
 
+    // 🔑 封面页hover后文字和遮罩延迟显示
+    @State private var showOverlayContent: Bool = false
+
     var openWindow: OpenWindowAction?
 
     public init(openWindow: OpenWindowAction? = nil) {
@@ -74,7 +77,6 @@ public struct MiniPlayerView: View {
                         ZStack {
                             // 背景：withinWindow模糊 - 遮挡下层内容但与整体背景融合
                             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .opacity(0.85)
 
                             VStack(spacing: 0) {
                                 // Music/Hide 按钮行
@@ -94,8 +96,24 @@ public struct MiniPlayerView: View {
                             }
                         }
                         .frame(height: 80)
-                        // 🔑 细腻的底部阴影分隔效果
-                        .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
+
+                        // 🔑 底部模糊过渡带 - 使用更柔和的多段渐变mask
+                        VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                            .frame(height: 40)
+                            .mask(
+                                LinearGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(color: .black, location: 0),
+                                        .init(color: .black.opacity(0.7), location: 0.15),
+                                        .init(color: .black.opacity(0.4), location: 0.35),
+                                        .init(color: .black.opacity(0.15), location: 0.6),
+                                        .init(color: .black.opacity(0.05), location: 0.8),
+                                        .init(color: .clear, location: 1.0)
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
 
                         Spacer()
                     }
@@ -134,28 +152,23 @@ public struct MiniPlayerView: View {
                         showControls = true
                     }
                 }
+                // 🔑 文字和渐变遮罩延迟0.1秒后渐现（等待matchedGeometry动画完成）
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showOverlayContent = true
+                    }
+                }
             } else {
+                // 🔑 离开时立即隐藏文字遮罩
+                withAnimation(.easeOut(duration: 0.1)) {
+                    showOverlayContent = false
+                }
                 withAnimation(.easeOut(duration: 0.18)) {
                     showControls = false
                 }
             }
         }
-        .onChange(of: currentPage) { oldPage, newPage in
-            // 🔑 切换到封面页时，立即设置为hover后状态（小封面+显示控件）
-            if newPage == .album {
-                // 使用更快的动画，与PlaylistView点击封面一致
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
-                    isHovering = true
-                    showControls = true
-                }
-            }
-            // 🔑 切换到其他页面时，如果鼠标在窗口内，显示控件
-            else if isHovering {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
-                    showControls = true
-                }
-            }
-        }
+        // 🔑 删除onChange中的hover强制设置，让onHover自然控制状态
     }
 
     // MARK: - Album Overlay Content (文字遮罩 + 底部控件)
@@ -210,6 +223,8 @@ public struct MiniPlayerView: View {
                             .padding(.bottom, 10)
                             , alignment: .bottomLeading
                         )
+                        // 🔑 非hover状态的遮罩使用showOverlayContent控制opacity
+                        .opacity(showOverlayContent ? 0 : 1)
                     }
                     .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
                     .position(x: geo.size.width / 2, y: maskY)
@@ -269,12 +284,12 @@ public struct MiniPlayerView: View {
                             }
                         }
                         .padding(.horizontal, 40)  // 🔑 与进度条左右端点对齐
-                        .padding(.bottom, 18)  // 🔑 歌曲信息与封面保持距离（增加到18）
+                        .padding(.bottom, 8)  // 🔑 歌曲信息行下边padding改为8
 
                         // 🔑 与SharedBottomControls完全一致的控件布局
                         VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
                             // 进度条 + 时间标签（时间在进度条下方）
-                            VStack(spacing: 6) {  // 🔑 进度条与时间间距=6
+                            VStack(spacing: 0) {  // 🔑 进度条与时间间距=0（紧贴）
                                 // 进度条 - 放在最上面
                                 progressBarView(geo: geo)
 
@@ -306,7 +321,8 @@ public struct MiniPlayerView: View {
                                     iconName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
                                     isActive: currentPage == .lyrics
                                 ) {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                    // 🔑 更快但不弹性的动画
+                                    withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                                         currentPage = currentPage == .lyrics ? .album : .lyrics
                                     }
                                 }
@@ -335,7 +351,8 @@ public struct MiniPlayerView: View {
                                     iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
                                     isActive: currentPage == .playlist
                                 ) {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                    // 🔑 更快但不弹性的动画
+                                    withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                                         currentPage = currentPage == .playlist ? .album : .playlist
                                     }
                                 }
@@ -344,13 +361,16 @@ public struct MiniPlayerView: View {
                             .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 20)  // 🔑 与SharedBottomControls一致
-                        .padding(.bottom, 32)  // 🔑 整体下移（28→32）
+                        .padding(.bottom, 20)  // 🔑 底部padding减小（32→20）
                     }
+                    // 🔑 hover状态的控件使用showOverlayContent控制延迟显示
+                    .opacity(showOverlayContent ? 1 : 0)
                     .transition(.opacity)
                 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.82), value: isHovering)
             .animation(.spring(response: 0.3, dampingFraction: 0.82), value: showControls)
+            .animation(.easeInOut(duration: 0.2), value: showOverlayContent)
         }
     }
 
@@ -368,11 +388,11 @@ public struct MiniPlayerView: View {
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.white.opacity(0.2))
-                    .frame(height: isProgressBarHovering ? 8 : 6)
+                    .frame(height: isProgressBarHovering ? 12 : 7)
 
                 Capsule()
                     .fill(Color.white)
-                    .frame(width: barGeo.size.width * currentProgress, height: isProgressBarHovering ? 8 : 6)
+                    .frame(width: barGeo.size.width * currentProgress, height: isProgressBarHovering ? 12 : 7)
             }
             .contentShape(Capsule())
             .onHover { hovering in
@@ -392,7 +412,7 @@ public struct MiniPlayerView: View {
                     })
             )
         }
-        .frame(height: 20)
+        .frame(height: 12)  // 🔑 减小进度条区域高度
         .padding(.horizontal, 20)  // 🔑 固定padding=20，与SharedBottomControls完全一致
     }
 
@@ -505,7 +525,8 @@ public struct MiniPlayerView: View {
                     .cornerRadius(12)
                     .matchedGeometryEffect(id: "album-placeholder", in: animation, isSource: true)
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        // 🔑 快速但不弹性的动画
+                        withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                             currentPage = currentPage == .album ? .lyrics : .album
                         }
                     }
