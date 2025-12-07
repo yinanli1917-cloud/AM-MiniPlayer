@@ -57,7 +57,7 @@ struct SharedBottomControls: View {
     var body: some View {
         VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
             // Progress Bar & Time - 🔑 时间显示移到进度条下方
-            VStack(spacing: 1) {  // 🔑 进度条与时间间距=1
+            VStack(spacing: 6) {  // 🔑 进度条与时间间距=6
                 // Progress Bar - 放在最上面
                 progressBar
 
@@ -119,7 +119,7 @@ struct SharedBottomControls: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 28)  // 🔑 略微减少底部padding（30→28）
+        .padding(.bottom, 32)  // 🔑 整体下移（28→32）
         .frame(maxWidth: .infinity, alignment: .bottom)
         // 🔑 跟踪整个控件区域的hover状态
         .onHover { hovering in

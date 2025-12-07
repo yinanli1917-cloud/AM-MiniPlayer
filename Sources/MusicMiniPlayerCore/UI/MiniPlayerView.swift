@@ -124,33 +124,19 @@ public struct MiniPlayerView: View {
             }
         }
         .onHover { hovering in
-            // 🔑 封面页始终保持hover状态，不响应onHover的false
-            if currentPage == .album {
-                // 封面页：只响应true（鼠标进入），不响应false
-                if hovering && !isHovering {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                        isHovering = true
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                            showControls = true
-                        }
-                    }
-                }
-                // 封面页不隐藏控件
-            } else {
-                // 其他页面：正常响应hover
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                    isHovering = hovering
-                }
-                if hovering {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+            // 🔑 简单逻辑：鼠标在窗口内=hover（显示控件+缩小封面），鼠标离开=非hover（放大封面）
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                isHovering = hovering
+            }
+            if hovering {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
                         showControls = true
                     }
-                } else {
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        showControls = false
-                    }
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    showControls = false
                 }
             }
         }
@@ -283,12 +269,12 @@ public struct MiniPlayerView: View {
                             }
                         }
                         .padding(.horizontal, 40)  // 🔑 与进度条左右端点对齐
-                        .padding(.bottom, 12)  // 🔑 歌曲信息与封面/进度条保持距离
+                        .padding(.bottom, 18)  // 🔑 歌曲信息与封面保持距离（增加到18）
 
                         // 🔑 与SharedBottomControls完全一致的控件布局
                         VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
                             // 进度条 + 时间标签（时间在进度条下方）
-                            VStack(spacing: 1) {  // 🔑 进度条与时间间距=1
+                            VStack(spacing: 6) {  // 🔑 进度条与时间间距=6
                                 // 进度条 - 放在最上面
                                 progressBarView(geo: geo)
 
@@ -358,7 +344,7 @@ public struct MiniPlayerView: View {
                             .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 20)  // 🔑 与SharedBottomControls一致
-                        .padding(.bottom, 28)  // 🔑 与SharedControls一致（30→28）
+                        .padding(.bottom, 32)  // 🔑 整体下移（28→32）
                     }
                     .transition(.opacity)
                 }
