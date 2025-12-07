@@ -55,15 +55,17 @@ struct SharedBottomControls: View {
     @State private var isControlAreaHovering: Bool = false  // 🔑 整个控件区域的hover状态
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Time & Progress Bar - wrapped to prevent window dragging
-            VStack(spacing: 4) {
-                // Time labels
+        VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
+            // Progress Bar & Time - 🔑 时间显示移到进度条下方
+            VStack(spacing: 1) {  // 🔑 进度条与时间间距=1
+                // Progress Bar - 放在最上面
+                progressBar
+
+                // Time labels - 移到进度条下方，padding与进度条一致
                 HStack {
                     Text(formatTime(musicController.currentTime))
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 35, alignment: .leading)
 
                     Spacer()
 
@@ -77,12 +79,8 @@ struct SharedBottomControls: View {
                     Text("-" + formatTime(musicController.duration - musicController.currentTime))
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 35, alignment: .trailing)
                 }
-                .padding(.horizontal, 28)
-
-                // Progress Bar
-                progressBar
+                .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
             }
             .background(NonDraggableView())
 
@@ -121,7 +119,7 @@ struct SharedBottomControls: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 30)
+        .padding(.bottom, 28)  // 🔑 略微减少底部padding（30→28）
         .frame(maxWidth: .infinity, alignment: .bottom)
         // 🔑 跟踪整个控件区域的hover状态
         .onHover { hovering in

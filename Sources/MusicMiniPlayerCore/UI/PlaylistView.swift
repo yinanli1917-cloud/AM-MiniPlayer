@@ -46,9 +46,9 @@ public struct PlaylistView: View {
                 // 主内容 ScrollView
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
-                        // 🔑 顶部占位 - 为 Tab 层留空间（Music/Hide 按钮是 overlay 不占空间）
+                        // 🔑 顶部占位 - 为 Tab 层留空间
                         Spacer()
-                            .frame(height: 60)  // Tab 高度固定 60
+                            .frame(height: 90)  // Tab 高度80 + 额外spacing
 
                         // Now Playing Section
                         if musicController.currentTrackTitle != "Not Playing" {
@@ -56,7 +56,8 @@ public struct PlaylistView: View {
 
                             VStack(spacing: 0) {
                                 Button(action: {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                                    // 🔑 更快更优雅的非线性动画（response 0.4→0.28，更快0.3秒左右）
+                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
                                         isCoverAnimating = true
                                         currentPage = .album
                                     }
@@ -200,54 +201,58 @@ public struct PlaylistView: View {
                         Spacer().frame(height: 100)
                     }
                 }
-                // 🔑 scroll检测 - 与LyricsView同步的逻辑：阈值300，只触发一次，停止时隐藏
+                // 🔑 scroll检测逻辑：
+                // - 只有"最开始就是慢速下滑"才显示控件（一次）
+                // - 一旦快速滚动过，本轮滚动不再显示控件
+                // - 快速→慢速衰减不显示
+                // - 滚动停止时隐藏
                 .scrollDetectionWithVelocity(
                     onScrollStarted: {
-                        // 开始手动滚动时
+                        // 开始手动滚动时重置状态
                         isManualScrolling = true
                         lastVelocity = 0
                         scrollLocked = false
-                        hasTriggeredSlowScroll = false  // 🔑 重置慢速滚动触发标志
+                        hasTriggeredSlowScroll = false
                         autoScrollTimer?.invalidate()
                     },
                     onScrollEnded: {
-                        // 滚动结束时立即隐藏控件
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            showControls = false  // 🔑 停止滚动时立即隐藏控件
-                        }
+                        // 🔑 滚动结束后保持控件2秒再隐藏（如果鼠标仍在窗口内则不隐藏）
                         autoScrollTimer?.invalidate()
                         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                            // 只有当鼠标不在窗口内时才隐藏
+                            if !isHovering {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    showControls = false
+                                }
+                            }
+                            // 重置滚动状态
                             withAnimation(.easeInOut(duration: 0.3)) {
                                 isManualScrolling = false
                                 lastVelocity = 0
                                 scrollLocked = false
-                                hasTriggeredSlowScroll = false  // 🔑 重置慢速滚动触发标志
+                                hasTriggeredSlowScroll = false
                             }
                         }
                     },
                     onScrollWithVelocity: { deltaY, velocity in
                         let absVelocity = abs(velocity)
-                        let threshold: CGFloat = 300  // 🔑 阈值提高到300
+                        // 🔑 阈值提高到800，让稍微快一点的下滑也算慢速
+                        let threshold: CGFloat = 800
 
-                        let debugMsg = String(format: "🔍 deltaY: %.1f, v: %.1f, locked: %@, triggered: %@", deltaY, absVelocity, scrollLocked ? "YES" : "NO", hasTriggeredSlowScroll ? "YES" : "NO")
-                        addDebugMessage(debugMsg)
-
-                        // 快速滚动 → 隐藏并锁定，同时重置慢速触发标志
+                        // 🔑 快速滚动 → 隐藏并锁定本轮（只有剧烈快速才触发）
                         if absVelocity >= threshold {
-                            addDebugMessage("⚡️ FAST - hiding & locking")
-                            scrollLocked = true
-                            hasTriggeredSlowScroll = false  // 🔑 快速滚动时重置，允许下次慢速时再触发
+                            if !scrollLocked {
+                                scrollLocked = true
+                            }
                             if showControls {
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     showControls = false
                                 }
                             }
                         }
-                        // 慢速下滑 → 只触发一次显示
-                        else if deltaY > 0 && absVelocity < threshold && !hasTriggeredSlowScroll {
-                            addDebugMessage("🐌 SLOW DOWN - unlocking & showing (ONCE)")
-                            scrollLocked = false
-                            hasTriggeredSlowScroll = true  // 🔑 标记已触发，防止反复触发
+                        // 🔑 慢速下滑 → 只在未锁定且未触发过时显示一次
+                        else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
+                            hasTriggeredSlowScroll = true
                             if !showControls {
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     showControls = true
@@ -258,10 +263,9 @@ public struct PlaylistView: View {
                         lastVelocity = absVelocity
                     },
                     onScrollOffsetChanged: { offset in
-                        // 🔑 跟踪滚动偏移量用于 clip 逻辑
                         scrollOffset = offset
                     },
-                    isEnabled: currentPage == .playlist  // 🔑 只在歌单页面启用滚动检测
+                    isEnabled: currentPage == .playlist
                 )
                 .overlay(
                     Group {
@@ -297,13 +301,17 @@ public struct PlaylistView: View {
                 )
                 .onHover { hovering in
                     isHovering = hovering
-                    // 🔑 鼠标离开窗口时总是隐藏控件（与LyricsView同步）
-                    if !hovering {
+                    if hovering {
+                        // 🔑 歌单页面hover时显示控件
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showControls = true
+                        }
+                    } else {
+                        // 🔑 鼠标离开窗口时隐藏控件
                         withAnimation(.easeInOut(duration: 0.3)) {
                             showControls = false
                         }
                     }
-                    // 🔑 歌单页面不在非滚动时自动显示控件（由tab层和scroll逻辑控制）
                 }
 
                 // 🐛 调试窗口
