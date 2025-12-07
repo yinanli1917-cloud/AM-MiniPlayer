@@ -57,7 +57,7 @@ struct SharedBottomControls: View {
     var body: some View {
         VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
             // Progress Bar & Time - 🔑 时间显示移到进度条下方
-            VStack(spacing: 0) {  // 🔑 进度条与时间间距=0（紧贴）
+            VStack(spacing: 2) {  // 🔑 进度条与时间间距=2
                 // Progress Bar - 放在最上面
                 progressBar
 
@@ -188,14 +188,14 @@ struct SharedBottomControls: View {
                 // Background Track
                 Capsule()
                     .fill(Color.white.opacity(0.2))
-                    .frame(height: isProgressBarHovering ? 12 : 7)
+                    .frame(height: isProgressBarHovering ? 15 : 5)
 
                 // Active Progress
                 Capsule()
                     .fill(Color.white)
                     .frame(
                         width: geo.size.width * currentProgress,
-                        height: isProgressBarHovering ? 12 : 7
+                        height: isProgressBarHovering ? 15 : 5
                     )
             }
                 .contentShape(Capsule())

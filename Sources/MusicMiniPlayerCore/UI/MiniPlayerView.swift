@@ -191,12 +191,34 @@ public struct MiniPlayerView: View {
                 // 🎨 非hover状态：文字在封面底部（带渐变遮罩）
                 if !isHovering {
                     VStack(spacing: 0) {
-                        LinearGradient(
-                            gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(width: artSize, height: maskHeight)
+                        // 🔑 使用多层渐变创建更柔和的遮罩效果
+                        ZStack {
+                            // 底层渐变 - 提供主要暗化效果
+                            LinearGradient(
+                                gradient: Gradient(colors: [
+                                    .clear,
+                                    .black.opacity(0.2),
+                                    .black.opacity(0.45)
+                                ]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(width: artSize, height: maskHeight)
+
+                            // 顶层渐变 - 柔化边缘
+                            LinearGradient(
+                                gradient: Gradient(stops: [
+                                    .init(color: .clear, location: 0),
+                                    .init(color: .clear, location: 0.3),
+                                    .init(color: .black.opacity(0.15), location: 0.7),
+                                    .init(color: .black.opacity(0.25), location: 1.0)
+                                ]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(width: artSize, height: maskHeight)
+                            .blendMode(.multiply)
+                        }
                         .overlay(
                             VStack(alignment: .leading, spacing: 2) {
                                 ScrollingText(
@@ -252,7 +274,7 @@ public struct MiniPlayerView: View {
 
                                 ScrollingText(
                                     text: musicController.currentArtist,
-                                    font: .system(size: 10, weight: .medium),  // 🔑 从11改为10
+                                    font: .system(size: 11, weight: .medium),  // 🔑 从10改回11
                                     textColor: .white.opacity(0.7),
                                     maxWidth: geo.size.width * 0.50,
                                     alignment: .leading
@@ -289,7 +311,7 @@ public struct MiniPlayerView: View {
                         // 🔑 与SharedBottomControls完全一致的控件布局
                         VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
                             // 进度条 + 时间标签（时间在进度条下方）
-                            VStack(spacing: 0) {  // 🔑 进度条与时间间距=0（紧贴）
+                            VStack(spacing: 2) {  // 🔑 进度条与时间间距=2
                                 // 进度条 - 放在最上面
                                 progressBarView(geo: geo)
 
@@ -388,11 +410,11 @@ public struct MiniPlayerView: View {
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.white.opacity(0.2))
-                    .frame(height: isProgressBarHovering ? 12 : 7)
+                    .frame(height: isProgressBarHovering ? 15 : 5)
 
                 Capsule()
                     .fill(Color.white)
-                    .frame(width: barGeo.size.width * currentProgress, height: isProgressBarHovering ? 12 : 7)
+                    .frame(width: barGeo.size.width * currentProgress, height: isProgressBarHovering ? 15 : 5)
             }
             .contentShape(Capsule())
             .onHover { hovering in
