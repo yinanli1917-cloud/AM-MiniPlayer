@@ -176,7 +176,9 @@ struct SharedBottomControls: View {
 
 
     private var progressBar: some View {
-        GeometryReader { geo in
+        let barHeight: CGFloat = isProgressBarHovering ? 12 : 7  // 🔑 hover前7px，hover后12px
+
+        return GeometryReader { geo in
             let currentProgress: CGFloat = {
                 if musicController.duration > 0 {
                     return dragPosition ?? CGFloat(musicController.currentTime / musicController.duration)
@@ -184,21 +186,27 @@ struct SharedBottomControls: View {
                 return 0
             }()
 
-            ZStack(alignment: .leading) {
-                // Background Track
+            // 🔑 使用遮罩实现圆角不拉伸效果
+            ZStack {
+                // Background Track - 从中心向上下扩展
                 Capsule()
                     .fill(Color.white.opacity(0.2))
-                    .frame(height: isProgressBarHovering ? 15 : 5)
+                    .frame(height: barHeight)
 
-                // Active Progress
+                // Active Progress - 使用遮罩保持圆角不变形
                 Capsule()
                     .fill(Color.white)
-                    .frame(
-                        width: geo.size.width * currentProgress,
-                        height: isProgressBarHovering ? 15 : 5
+                    .frame(height: barHeight)
+                    .mask(
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .frame(width: geo.size.width * currentProgress)
+                            Spacer(minLength: 0)
+                        }
                     )
             }
-                .contentShape(Capsule())
+            .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
+            .contentShape(Capsule())
             .onHover { hovering in
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                     isProgressBarHovering = hovering
@@ -222,7 +230,7 @@ struct SharedBottomControls: View {
                     })
             )
         }
-        .frame(height: 12)  // 🔑 减小进度条区域高度
+        .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
         .padding(.horizontal, 20)
     }
 

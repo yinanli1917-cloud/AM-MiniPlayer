@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "MusicMiniPlayer",
     platforms: [
-        .macOS("26.0")
+        .macOS(.v14)  // 最低支持 macOS 14 Sonoma
     ],
     products: [
         .executable(

@@ -106,6 +106,11 @@ public struct PlaylistView: View {
 
                                 // Shuffle & Repeat buttons
                                 HStack(spacing: 30) {
+                                    // 🔑 主题色（Apple Music红）
+                                    let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+                                    // 🔑 背景：主题色20%不透明度
+                                    let themeBackground = themeColor.opacity(0.20)
+
                                     Spacer()
 
                                     Button(action: {
@@ -117,10 +122,10 @@ public struct PlaylistView: View {
                                             Text("Shuffle")
                                                 .font(.system(size: 11, weight: .medium))
                                         }
-                                        .foregroundColor(musicController.shuffleEnabled ? .white : .white.opacity(0.6))
+                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.6))
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 7)
-                                        .background(musicController.shuffleEnabled ? Color(red: 0.99, green: 0.24, blue: 0.27) : Color.white.opacity(0.1))
+                                        .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
                                         .cornerRadius(16)
                                     }
                                     .buttonStyle(.plain)
@@ -134,10 +139,10 @@ public struct PlaylistView: View {
                                             Text("Repeat")
                                                 .font(.system(size: 11, weight: .medium))
                                         }
-                                        .foregroundColor(musicController.repeatMode > 0 ? .white : .white.opacity(0.6))
+                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.6))
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 7)
-                                        .background(musicController.repeatMode > 0 ? Color(red: 0.99, green: 0.24, blue: 0.27) : Color.white.opacity(0.1))
+                                        .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
                                         .cornerRadius(16)
                                     }
                                     .buttonStyle(.plain)

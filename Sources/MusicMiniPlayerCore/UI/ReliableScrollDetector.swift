@@ -12,8 +12,8 @@ struct ReliableScrollDetector: View {
     @State private var lastScrollTime: Date = Date()
 
     var body: some View {
-        if #available(macOS 14.0, *) {
-            // Use modern onScrollPhaseChange for macOS 14+
+        if #available(macOS 15.0, *) {
+            // Use modern onScrollPhaseChange for macOS 15+
             Color.clear
                 .onScrollPhaseChange { oldPhase, newPhase in
                     print("🔍 Scroll phase change: \(oldPhase) -> \(newPhase)")
@@ -28,7 +28,7 @@ struct ReliableScrollDetector: View {
                     }
                 }
         } else {
-            // Fallback to enhanced geometry-based detection for older versions
+            // Fallback to enhanced geometry-based detection for macOS 14
             GeometryReader { geometry in
                 Color.clear
                     .onAppear {

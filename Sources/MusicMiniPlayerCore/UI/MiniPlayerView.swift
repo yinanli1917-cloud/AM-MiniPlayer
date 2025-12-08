@@ -286,21 +286,26 @@ public struct MiniPlayerView: View {
                             Spacer()
 
                             HStack(spacing: 8) {
+                                // 🔑 主题色（Apple Music红）
+                                let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+                                // 🔑 背景：主题色20%不透明度
+                                let themeBackground = themeColor.opacity(0.20)
+
                                 Button(action: { musicController.toggleShuffle() }) {
                                     Image(systemName: "shuffle")
                                         .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(musicController.shuffleEnabled ? .white : .white.opacity(0.5))
+                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.5))
                                         .frame(width: 26, height: 26)
-                                        .background(Circle().fill(musicController.shuffleEnabled ? Color(red: 0.99, green: 0.24, blue: 0.27) : Color.white.opacity(0.1)))
+                                        .background(Circle().fill(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1)))
                                 }
                                 .buttonStyle(.plain)
 
                                 Button(action: { musicController.cycleRepeatMode() }) {
                                     Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                                         .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(musicController.repeatMode > 0 ? .white : .white.opacity(0.5))
+                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.5))
                                         .frame(width: 26, height: 26)
-                                        .background(Circle().fill(musicController.repeatMode > 0 ? Color(red: 0.99, green: 0.24, blue: 0.27) : Color.white.opacity(0.1)))
+                                        .background(Circle().fill(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1)))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -399,6 +404,8 @@ public struct MiniPlayerView: View {
     // 进度条视图（与SharedBottomControls完全一致，padding固定为20）
     @ViewBuilder
     private func progressBarView(geo: GeometryProxy) -> some View {
+        let barHeight: CGFloat = isProgressBarHovering ? 12 : 7  // 🔑 hover前7px，hover后12px
+
         GeometryReader { barGeo in
             let currentProgress: CGFloat = {
                 if musicController.duration > 0 {
@@ -407,15 +414,26 @@ public struct MiniPlayerView: View {
                 return 0
             }()
 
-            ZStack(alignment: .leading) {
+            // 🔑 使用遮罩实现圆角不拉伸效果
+            ZStack {
+                // Background Track - 从中心向上下扩展
                 Capsule()
                     .fill(Color.white.opacity(0.2))
-                    .frame(height: isProgressBarHovering ? 15 : 5)
+                    .frame(height: barHeight)
 
+                // Active Progress - 使用遮罩保持圆角不变形
                 Capsule()
                     .fill(Color.white)
-                    .frame(width: barGeo.size.width * currentProgress, height: isProgressBarHovering ? 15 : 5)
+                    .frame(height: barHeight)
+                    .mask(
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .frame(width: barGeo.size.width * currentProgress)
+                            Spacer(minLength: 0)
+                        }
+                    )
             }
+            .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
@@ -434,7 +452,7 @@ public struct MiniPlayerView: View {
                     })
             )
         }
-        .frame(height: 12)  // 🔑 减小进度条区域高度
+        .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
         .padding(.horizontal, 20)  // 🔑 固定padding=20，与SharedBottomControls完全一致
     }
 
