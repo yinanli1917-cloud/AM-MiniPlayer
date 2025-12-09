@@ -568,7 +568,7 @@ public struct MiniPlayerView: View {
                 }
                 return controller
             }())
-            .frame(width: 300, height: 300)
+            .frame(width: 300, height: 380)
             .clipShape(RoundedRectangle(cornerRadius: 20))
             .shadow(radius: 20)
     }

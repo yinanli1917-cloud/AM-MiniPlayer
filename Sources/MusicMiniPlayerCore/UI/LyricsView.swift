@@ -862,6 +862,6 @@ struct LoadingDotsLyricView: View {
     @Previewable @State var currentPage: PlayerPage = .lyrics
     LyricsView(currentPage: $currentPage)
         .environmentObject(MusicController(preview: true))
-        .frame(width: 300, height: 400)
+        .frame(width: 300, height: 380)
         .background(Color.black)
 }
