@@ -44,55 +44,54 @@ public struct PlaylistView: View {
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                 .ignoresSafeArea()
 
-                // 主内容 ScrollView - 单页布局：History → Now Playing → Up Next
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // 🔑 顶部占位 - 为 overlay 按钮留空间
-                        Spacer()
-                            .frame(height: 50)
+                // 主内容 ScrollView - 单页布局：History（上滚可见）→ Now Playing（默认位置）→ Up Next
+                ScrollViewReader { scrollProxy in
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            // 🔑 顶部占位 - 为 overlay 按钮留空间
+                            Spacer()
+                                .frame(height: 50)
 
-                        // ═══════════════════════════════════════════
-                        // MARK: - History Section
-                        // ═══════════════════════════════════════════
-                        Text("History")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
-
-                        if musicController.recentTracks.isEmpty {
-                            Text("No recent tracks")
-                                .font(.system(size: 12))
-                                .foregroundColor(.white.opacity(0.5))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 20)
-                        } else {
-                            ForEach(Array(musicController.recentTracks.enumerated()), id: \.offset) { index, track in
-                                PlaylistItemRowCompact(
-                                    title: track.title,
-                                    artist: track.artist,
-                                    album: track.album,
-                                    persistentID: track.persistentID,
-                                    artSize: min(geometry.size.width * 0.12, 40.0),
-                                    currentPage: $currentPage
-                                )
-                            }
-                        }
-
-                        // ═══════════════════════════════════════════
-                        // MARK: - Now Playing Section
-                        // ═══════════════════════════════════════════
-                        if musicController.currentTrackTitle != "Not Playing" {
-                            let artSize = min(geometry.size.width * 0.18, 60.0)
-
-                            Text("Now Playing")
+                            // ═══════════════════════════════════════════
+                            // MARK: - History Section（往上滚动才能看到）
+                            // ═══════════════════════════════════════════
+                            Text("History")
                                 .font(.system(size: 13, weight: .bold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 12)
-                                .padding(.top, 16)
                                 .padding(.bottom, 8)
 
-                            Button(action: {
+                            if musicController.recentTracks.isEmpty {
+                                Text("No recent tracks")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.white.opacity(0.5))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 20)
+                            } else {
+                                ForEach(Array(musicController.recentTracks.enumerated()), id: \.offset) { index, track in
+                                    PlaylistItemRowCompact(
+                                        title: track.title,
+                                        artist: track.artist,
+                                        album: track.album,
+                                        persistentID: track.persistentID,
+                                        artSize: min(geometry.size.width * 0.12, 40.0),
+                                        currentPage: $currentPage
+                                    )
+                                }
+                            }
+
+                            // ═══════════════════════════════════════════
+                            // MARK: - Now Playing Section（默认位置）
+                            // ═══════════════════════════════════════════
+                            if musicController.currentTrackTitle != "Not Playing" {
+                                let artSize = min(geometry.size.width * 0.18, 60.0)
+
+                                // 🔑 锚点 - 用于默认滚动到此位置
+                                Color.clear
+                                    .frame(height: 50)  // 顶部留空给Music/Hide按钮
+                                    .id("nowPlaying")
+
+                                Button(action: {
                                 withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                                     isCoverAnimating = true
                                     currentPage = .album
@@ -208,7 +207,14 @@ public struct PlaylistView: View {
                             }
                         }
 
-                        Spacer().frame(height: 120)
+                            Spacer().frame(height: 120)
+                        }
+                    }
+                    .onAppear {
+                        // 🔑 默认滚动到 Now Playing 位置
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            scrollProxy.scrollTo("nowPlaying", anchor: .top)
+                        }
                     }
                 }
                 // 🔑 scroll检测逻辑：

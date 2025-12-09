@@ -461,20 +461,20 @@ public struct MiniPlayerView: View {
                             .clipped()
                             .blur(radius: 40)
                             .mask(
-                                VStack(spacing: 0) {
-                                    Color.clear  // 顶部：不显示模糊（清晰）
-                                        .frame(height: artSize * 0.5)
-                                    LinearGradient(
-                                        colors: [.clear, .black],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                    .frame(height: artSize * 0.2)  // 过渡区域
-                                    Color.black  // 底部：显示模糊（文字底板）
-                                        .frame(height: artSize * 0.3)
-                                }
+                                LinearGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .clear, location: 0.55),
+                                        .init(color: .black.opacity(0.5), location: 0.7),
+                                        .init(color: .black, location: 0.85),
+                                        .init(color: .black, location: 1.0)
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
                             )
-                            .id(artwork)  // 强制在artwork变化时重新创建
+                            .allowsHitTesting(false)
+                            .id(artwork)
                     }
                 }
                 .cornerRadius(cornerRadius)
