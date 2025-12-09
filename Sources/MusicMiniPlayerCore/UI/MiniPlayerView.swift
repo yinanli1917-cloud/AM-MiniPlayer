@@ -74,25 +74,9 @@ public struct MiniPlayerView: View {
                 // Tab 层 - 只在歌单页显示（集成Music/Hide按钮）
                 if currentPage == .playlist {
                     VStack(spacing: 0) {
-                        // 🔑 Tab栏 - 模糊层在底，按钮在上
-                        ZStack(alignment: .top) {
-                            // 背景：系统模糊效果（实时模糊下层内容）- 在最底层
-                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .mask(
-                                    LinearGradient(
-                                        gradient: Gradient(stops: [
-                                            .init(color: .black, location: 0),
-                                            .init(color: .black, location: 0.65),
-                                            .init(color: .black.opacity(0.5), location: 0.82),
-                                            .init(color: .black.opacity(0.15), location: 0.93),
-                                            .init(color: .clear, location: 1.0)
-                                        ]),
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-
-                            // 按钮内容 - 在模糊层上面
+                        // 🔑 Tab栏 - 按钮区域 + 底部渐变模糊
+                        VStack(spacing: 0) {
+                            // 按钮内容区域（不透明背景）
                             VStack(spacing: 4) {
                                 // Music/Hide 按钮行
                                 HStack {
@@ -105,12 +89,27 @@ public struct MiniPlayerView: View {
 
                                 // Tab Bar - 紧凑版
                                 PlaylistTabBarCompact(selectedTab: $playlistSelectedTab)
-                                    .padding(.horizontal, 40)
-                                    .padding(.bottom, 6)
+                                    .padding(.horizontal, 50)
                             }
-                            .frame(height: 70)
+                            .frame(height: 62)
+                            .background(VisualEffectView(material: .hudWindow, blendingMode: .withinWindow))
+
+                            // 底部渐变模糊过渡带
+                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                                .frame(height: 25)
+                                .mask(
+                                    LinearGradient(
+                                        gradient: Gradient(stops: [
+                                            .init(color: .black, location: 0),
+                                            .init(color: .black.opacity(0.5), location: 0.4),
+                                            .init(color: .black.opacity(0.15), location: 0.7),
+                                            .init(color: .clear, location: 1.0)
+                                        ]),
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
                         }
-                        .frame(height: 82)
 
                         Spacer()
                     }
@@ -507,13 +506,13 @@ public struct MiniPlayerView: View {
                             .mask(
                                 LinearGradient(
                                     gradient: Gradient(stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.3),
-                                        .init(color: .black, location: 0.55),
-                                        .init(color: .black, location: 1.0)
+                                        .init(color: .black, location: 0),
+                                        .init(color: .black, location: 0.45),
+                                        .init(color: .clear, location: 0.7),
+                                        .init(color: .clear, location: 1.0)
                                     ]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
+                                    startPoint: .bottom,
+                                    endPoint: .top
                                 )
                             )
                             .id(artwork)  // 强制在artwork变化时重新创建
@@ -784,14 +783,14 @@ struct PlaylistTabBarCompact: View {
             // Background Capsule
             Capsule()
                 .fill(Color.white.opacity(0.1))
-                .frame(height: 26)
+                .frame(height: 24)
 
             // Selection Capsule
             GeometryReader { geo in
                 Capsule()
                     .fill(Color.white.opacity(0.25))
-                    .frame(width: geo.size.width / 2 - 3, height: 22)
-                    .offset(x: selectedTab == 0 ? 2 : geo.size.width / 2 + 1, y: 2)
+                    .frame(width: geo.size.width / 2 - 2, height: 20)
+                    .offset(x: selectedTab == 0 ? 1 : geo.size.width / 2 + 1, y: 2)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
             }
 
@@ -799,7 +798,7 @@ struct PlaylistTabBarCompact: View {
             HStack(spacing: 0) {
                 Button(action: { selectedTab = 0 }) {
                     Text("History")
-                        .font(.system(size: 11, weight: selectedTab == 0 ? .semibold : .medium))
+                        .font(.system(size: 10, weight: selectedTab == 0 ? .semibold : .medium))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
@@ -808,7 +807,7 @@ struct PlaylistTabBarCompact: View {
 
                 Button(action: { selectedTab = 1 }) {
                     Text("Up Next")
-                        .font(.system(size: 11, weight: selectedTab == 1 ? .semibold : .medium))
+                        .font(.system(size: 10, weight: selectedTab == 1 ? .semibold : .medium))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
@@ -816,7 +815,7 @@ struct PlaylistTabBarCompact: View {
                 .buttonStyle(.plain)
             }
         }
-        .frame(height: 26)
+        .frame(height: 24)
     }
 }
 
