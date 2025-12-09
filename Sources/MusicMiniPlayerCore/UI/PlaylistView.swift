@@ -44,169 +44,171 @@ public struct PlaylistView: View {
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                 .ignoresSafeArea()
 
-                // 主内容 ScrollView
+                // 主内容 ScrollView - 单页布局：History → Now Playing → Up Next
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
-                        // 🔑 顶部占位 - 为 Tab 层留空间
+                        // 🔑 顶部占位 - 为 overlay 按钮留空间
                         Spacer()
-                            .frame(height: 90)  // Tab 高度80 + 额外spacing
+                            .frame(height: 50)
 
-                        // Now Playing Section
+                        // ═══════════════════════════════════════════
+                        // MARK: - History Section
+                        // ═══════════════════════════════════════════
+                        Text("History")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 8)
+
+                        if musicController.recentTracks.isEmpty {
+                            Text("No recent tracks")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 20)
+                        } else {
+                            ForEach(Array(musicController.recentTracks.enumerated()), id: \.offset) { index, track in
+                                PlaylistItemRowCompact(
+                                    title: track.title,
+                                    artist: track.artist,
+                                    album: track.album,
+                                    persistentID: track.persistentID,
+                                    artSize: min(geometry.size.width * 0.12, 40.0),
+                                    currentPage: $currentPage
+                                )
+                            }
+                        }
+
+                        // ═══════════════════════════════════════════
+                        // MARK: - Now Playing Section
+                        // ═══════════════════════════════════════════
                         if musicController.currentTrackTitle != "Not Playing" {
-                            let artSize = min(geometry.size.width * 0.22, 70.0)
+                            let artSize = min(geometry.size.width * 0.18, 60.0)
 
-                            VStack(spacing: 0) {
-                                Button(action: {
-                                    // 🔑 快速但不弹性的动画
-                                    withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                                        isCoverAnimating = true
-                                        currentPage = .album
+                            Text("Now Playing")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 16)
+                                .padding(.bottom, 8)
+
+                            Button(action: {
+                                withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
+                                    isCoverAnimating = true
+                                    currentPage = .album
+                                }
+                            }) {
+                                HStack(spacing: 10) {
+                                    // Placeholder for Album art
+                                    if musicController.currentArtwork != nil {
+                                        Color.clear
+                                            .frame(width: artSize, height: artSize)
+                                            .cornerRadius(6)
+                                            .matchedGeometryEffect(id: "playlist-placeholder", in: animationNamespace, isSource: true)
+                                    } else {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.gray.opacity(0.3))
+                                            .frame(width: artSize, height: artSize)
                                     }
-                                }) {
-                                    HStack(spacing: 10) {
-                                        // Placeholder for Album art
-                                        if musicController.currentArtwork != nil {
-                                            Color.clear
-                                                .frame(width: artSize, height: artSize)
-                                                .cornerRadius(6)
-                                                .matchedGeometryEffect(id: "playlist-placeholder", in: animationNamespace, isSource: true)
-                                        } else {
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(Color.gray.opacity(0.3))
-                                                .frame(width: artSize, height: artSize)
-                                        }
 
-                                        // Track info
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(musicController.currentTrackTitle)
-                                                .font(.system(size: 13, weight: .bold))
-                                                .foregroundColor(.white)
-                                                .lineLimit(1)
+                                    // Track info
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(musicController.currentTrackTitle)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .lineLimit(1)
 
-                                            Text(musicController.currentArtist)
-                                                .font(.system(size: 11, weight: .medium))
-                                                .foregroundColor(.white.opacity(0.8))
-                                                .lineLimit(1)
-
-                                            if !musicController.currentAlbum.isEmpty {
-                                                Text(musicController.currentAlbum)
-                                                    .font(.system(size: 10, weight: .regular))
-                                                    .foregroundColor(.white.opacity(0.6))
-                                                    .lineLimit(1)
-                                            }
-                                        }
-
-                                        Spacer()
+                                        Text(musicController.currentArtist)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.white.opacity(0.7))
+                                            .lineLimit(1)
                                     }
-                                    .padding(12)
-                                    .background(Color.white.opacity(0.05))
-                                    .cornerRadius(10)
-                                    .contentShape(Rectangle())
+
+                                    Spacer()
+                                }
+                                .padding(10)
+                                .background(Color.white.opacity(0.08))
+                                .cornerRadius(8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12)
+
+                            // Shuffle & Repeat buttons
+                            HStack(spacing: 20) {
+                                let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+                                let themeBackground = themeColor.opacity(0.20)
+
+                                Spacer()
+
+                                Button(action: { musicController.toggleShuffle() }) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "shuffle")
+                                            .font(.system(size: 11))
+                                        Text("Shuffle")
+                                            .font(.system(size: 10, weight: .medium))
+                                    }
+                                    .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.6))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
+                                    .cornerRadius(14)
+                                    .contentShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
 
-                                // Shuffle & Repeat buttons
-                                HStack(spacing: 30) {
-                                    // 🔑 主题色（Apple Music红）
-                                    let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                                    // 🔑 背景：主题色20%不透明度
-                                    let themeBackground = themeColor.opacity(0.20)
-
-                                    Spacer()
-
-                                    Button(action: {
-                                        musicController.toggleShuffle()
-                                    }) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "shuffle")
-                                                .font(.system(size: 12))
-                                            Text("Shuffle")
-                                                .font(.system(size: 11, weight: .medium))
-                                        }
-                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.6))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 7)
-                                        .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
-                                        .cornerRadius(16)
-                                        .contentShape(Capsule())
+                                Button(action: { musicController.cycleRepeatMode() }) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                            .font(.system(size: 11))
+                                        Text("Repeat")
+                                            .font(.system(size: 10, weight: .medium))
                                     }
-                                    .buttonStyle(.plain)
-
-                                    Button(action: {
-                                        musicController.cycleRepeatMode()
-                                    }) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                                .font(.system(size: 12))
-                                            Text("Repeat")
-                                                .font(.system(size: 11, weight: .medium))
-                                        }
-                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.6))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 7)
-                                        .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
-                                        .cornerRadius(16)
-                                        .contentShape(Capsule())
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    Spacer()
+                                    .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.6))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
+                                    .cornerRadius(14)
+                                    .contentShape(Capsule())
                                 }
-                                .padding(.top, 12)
+                                .buttonStyle(.plain)
+
+                                Spacer()
                             }
+                            .padding(.top, 10)
                             .padding(.horizontal, 12)
-                            .padding(.top, 12)
-                            .padding(.bottom, 12)
                         }
 
-                        // Tab Content
-                        if selectedTab == 0 {
-                            if musicController.recentTracks.isEmpty {
-                                Text("No recent tracks")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.white.opacity(0.5))
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 40)
-                            } else {
-                                ForEach(Array(musicController.recentTracks.enumerated()), id: \.offset) { index, track in
-                                    PlaylistItemRowCompact(
-                                        title: track.title,
-                                        artist: track.artist,
-                                        album: track.album,
-                                        persistentID: track.persistentID,
-                                        artSize: min(geometry.size.width * 0.15, 45.0),
-                                        currentPage: $currentPage
-                                    )
-                                }
-                            }
+                        // ═══════════════════════════════════════════
+                        // MARK: - Up Next Section
+                        // ═══════════════════════════════════════════
+                        Text("Up Next")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 16)
+                            .padding(.bottom, 8)
+
+                        if musicController.upNextTracks.isEmpty {
+                            Text("Queue is empty")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 20)
                         } else {
-                            if musicController.upNextTracks.isEmpty {
-                                VStack(spacing: 12) {
-                                    Image(systemName: "music.note.list")
-                                        .font(.system(size: 40))
-                                        .foregroundColor(.white.opacity(0.3))
-
-                                    Text("Queue is empty")
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 60)
-                            } else {
-                                ForEach(Array(musicController.upNextTracks.enumerated()), id: \.offset) { index, track in
-                                    PlaylistItemRowCompact(
-                                        title: track.title,
-                                        artist: track.artist,
-                                        album: track.album,
-                                        persistentID: track.persistentID,
-                                        artSize: min(geometry.size.width * 0.15, 45.0),
-                                        currentPage: $currentPage
-                                    )
-                                }
+                            ForEach(Array(musicController.upNextTracks.enumerated()), id: \.offset) { index, track in
+                                PlaylistItemRowCompact(
+                                    title: track.title,
+                                    artist: track.artist,
+                                    album: track.album,
+                                    persistentID: track.persistentID,
+                                    artSize: min(geometry.size.width * 0.12, 40.0),
+                                    currentPage: $currentPage
+                                )
                             }
                         }
 
-                        Spacer().frame(height: 100)
+                        Spacer().frame(height: 120)
                     }
                 }
                 // 🔑 scroll检测逻辑：
