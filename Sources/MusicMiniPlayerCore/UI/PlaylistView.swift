@@ -128,6 +128,7 @@ public struct PlaylistView: View {
                                         .padding(.vertical, 7)
                                         .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
                                         .cornerRadius(16)
+                                        .contentShape(Capsule())
                                     }
                                     .buttonStyle(.plain)
 
@@ -145,6 +146,7 @@ public struct PlaylistView: View {
                                         .padding(.vertical, 7)
                                         .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
                                         .cornerRadius(16)
+                                        .contentShape(Capsule())
                                     }
                                     .buttonStyle(.plain)
 

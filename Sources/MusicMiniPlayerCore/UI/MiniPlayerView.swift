@@ -74,10 +74,26 @@ public struct MiniPlayerView: View {
                 // Tab 层 - 只在歌单页显示（集成Music/Hide按钮）
                 if currentPage == .playlist {
                     VStack(spacing: 0) {
-                        // 🔑 Tab栏 - 按钮区域 + 底部渐变模糊
-                        VStack(spacing: 0) {
-                            // 按钮内容区域（不透明背景）
-                            VStack(spacing: 4) {
+                        // 🔑 Tab栏 - 渐变模糊在底，按钮在上（与shared controls一致）
+                        ZStack(alignment: .top) {
+                            // 底层：渐变模糊背景
+                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                                .frame(height: 90)
+                                .mask(
+                                    LinearGradient(
+                                        gradient: Gradient(stops: [
+                                            .init(color: .black, location: 0),
+                                            .init(color: .black, location: 0.7),
+                                            .init(color: .black.opacity(0.4), location: 0.85),
+                                            .init(color: .clear, location: 1.0)
+                                        ]),
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+
+                            // 上层：按钮内容（完全清晰）
+                            VStack(spacing: 6) {
                                 // Music/Hide 按钮行
                                 HStack {
                                     MusicButtonView()
@@ -87,29 +103,12 @@ public struct MiniPlayerView: View {
                                 .padding(.horizontal, 12)
                                 .padding(.top, 8)
 
-                                // Tab Bar - 紧凑版
+                                // Tab Bar - 窄版
                                 PlaylistTabBarCompact(selectedTab: $playlistSelectedTab)
-                                    .padding(.horizontal, 50)
+                                    .padding(.horizontal, 70)
                             }
-                            .frame(height: 62)
-                            .background(VisualEffectView(material: .hudWindow, blendingMode: .withinWindow))
-
-                            // 底部渐变模糊过渡带
-                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .frame(height: 25)
-                                .mask(
-                                    LinearGradient(
-                                        gradient: Gradient(stops: [
-                                            .init(color: .black, location: 0),
-                                            .init(color: .black.opacity(0.5), location: 0.4),
-                                            .init(color: .black.opacity(0.15), location: 0.7),
-                                            .init(color: .clear, location: 1.0)
-                                        ]),
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
                         }
+                        .frame(height: 90)
 
                         Spacer()
                     }
@@ -496,24 +495,27 @@ public struct MiniPlayerView: View {
                         .clipped()
                     
                     // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
+                    // 底部模糊，往上逐渐清晰
                     if currentPage == .album && !isHovering {
                         Image(nsImage: artwork)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: artSize, height: artSize)
                             .clipped()
-                            .blur(radius: 35)
+                            .blur(radius: 40)
                             .mask(
-                                LinearGradient(
-                                    gradient: Gradient(stops: [
-                                        .init(color: .black, location: 0),
-                                        .init(color: .black, location: 0.45),
-                                        .init(color: .clear, location: 0.7),
-                                        .init(color: .clear, location: 1.0)
-                                    ]),
-                                    startPoint: .bottom,
-                                    endPoint: .top
-                                )
+                                VStack(spacing: 0) {
+                                    Color.clear  // 顶部：不显示模糊
+                                        .frame(height: artSize * 0.5)
+                                    LinearGradient(
+                                        colors: [.clear, .black],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                    .frame(height: artSize * 0.2)  // 过渡区域
+                                    Color.black  // 底部：显示模糊
+                                        .frame(height: artSize * 0.3)
+                                }
                             )
                             .id(artwork)  // 强制在artwork变化时重新创建
                     }
@@ -773,7 +775,7 @@ struct PlaylistTabBarIntegrated: View {
     }
 }
 
-// MARK: - Playlist Tab Bar (紧凑版)
+// MARK: - Playlist Tab Bar (窄版)
 
 struct PlaylistTabBarCompact: View {
     @Binding var selectedTab: Int
@@ -783,13 +785,13 @@ struct PlaylistTabBarCompact: View {
             // Background Capsule
             Capsule()
                 .fill(Color.white.opacity(0.1))
-                .frame(height: 24)
+                .frame(height: 28)
 
             // Selection Capsule
             GeometryReader { geo in
                 Capsule()
                     .fill(Color.white.opacity(0.25))
-                    .frame(width: geo.size.width / 2 - 2, height: 20)
+                    .frame(width: geo.size.width / 2 - 2, height: 24)
                     .offset(x: selectedTab == 0 ? 1 : geo.size.width / 2 + 1, y: 2)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
             }
@@ -798,7 +800,7 @@ struct PlaylistTabBarCompact: View {
             HStack(spacing: 0) {
                 Button(action: { selectedTab = 0 }) {
                     Text("History")
-                        .font(.system(size: 10, weight: selectedTab == 0 ? .semibold : .medium))
+                        .font(.system(size: 12, weight: selectedTab == 0 ? .semibold : .medium))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
@@ -807,7 +809,7 @@ struct PlaylistTabBarCompact: View {
 
                 Button(action: { selectedTab = 1 }) {
                     Text("Up Next")
-                        .font(.system(size: 10, weight: selectedTab == 1 ? .semibold : .medium))
+                        .font(.system(size: 12, weight: selectedTab == 1 ? .semibold : .medium))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
@@ -815,7 +817,7 @@ struct PlaylistTabBarCompact: View {
                 .buttonStyle(.plain)
             }
         }
-        .frame(height: 24)
+        .frame(height: 28)
     }
 }
 
