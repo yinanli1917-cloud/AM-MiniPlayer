@@ -82,9 +82,9 @@ public struct MiniPlayerView: View {
                                     LinearGradient(
                                         gradient: Gradient(stops: [
                                             .init(color: .black, location: 0),
-                                            .init(color: .black, location: 0.7),
-                                            .init(color: .black.opacity(0.5), location: 0.85),
-                                            .init(color: .black.opacity(0.15), location: 0.95),
+                                            .init(color: .black, location: 0.65),
+                                            .init(color: .black.opacity(0.5), location: 0.82),
+                                            .init(color: .black.opacity(0.15), location: 0.93),
                                             .init(color: .clear, location: 1.0)
                                         ]),
                                         startPoint: .top,
@@ -93,7 +93,7 @@ public struct MiniPlayerView: View {
                                 )
 
                             // 按钮内容 - 在模糊层上面
-                            VStack(spacing: 0) {
+                            VStack(spacing: 4) {
                                 // Music/Hide 按钮行
                                 HStack {
                                     MusicButtonView()
@@ -101,17 +101,16 @@ public struct MiniPlayerView: View {
                                     HideButtonView()
                                 }
                                 .padding(.horizontal, 12)
-                                .padding(.top, 10)
+                                .padding(.top, 8)
 
-                                Spacer()
-
-                                // Tab Bar
-                                PlaylistTabBarIntegrated(selectedTab: $playlistSelectedTab)
-                                    .padding(.bottom, 8)
+                                // Tab Bar - 紧凑版
+                                PlaylistTabBarCompact(selectedTab: $playlistSelectedTab)
+                                    .padding(.horizontal, 40)
+                                    .padding(.bottom, 6)
                             }
-                            .frame(height: 80)
+                            .frame(height: 70)
                         }
-                        .frame(height: 95)
+                        .frame(height: 82)
 
                         Spacer()
                     }
@@ -504,14 +503,13 @@ public struct MiniPlayerView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: artSize, height: artSize)
                             .clipped()
-                            .blur(radius: 28)
+                            .blur(radius: 35)
                             .mask(
                                 LinearGradient(
                                     gradient: Gradient(stops: [
                                         .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.35),
-                                        .init(color: .black.opacity(0.5), location: 0.6),
-                                        .init(color: .black.opacity(0.8), location: 0.8),
+                                        .init(color: .clear, location: 0.3),
+                                        .init(color: .black, location: 0.55),
                                         .init(color: .black, location: 1.0)
                                     ]),
                                     startPoint: .top,
@@ -773,6 +771,52 @@ struct PlaylistTabBarIntegrated: View {
             .frame(height: 32)
         }
         .padding(.horizontal, 50)
+    }
+}
+
+// MARK: - Playlist Tab Bar (紧凑版)
+
+struct PlaylistTabBarCompact: View {
+    @Binding var selectedTab: Int
+
+    var body: some View {
+        ZStack {
+            // Background Capsule
+            Capsule()
+                .fill(Color.white.opacity(0.1))
+                .frame(height: 26)
+
+            // Selection Capsule
+            GeometryReader { geo in
+                Capsule()
+                    .fill(Color.white.opacity(0.25))
+                    .frame(width: geo.size.width / 2 - 3, height: 22)
+                    .offset(x: selectedTab == 0 ? 2 : geo.size.width / 2 + 1, y: 2)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
+            }
+
+            // Tab Labels
+            HStack(spacing: 0) {
+                Button(action: { selectedTab = 0 }) {
+                    Text("History")
+                        .font(.system(size: 11, weight: selectedTab == 0 ? .semibold : .medium))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button(action: { selectedTab = 1 }) {
+                    Text("Up Next")
+                        .font(.system(size: 11, weight: selectedTab == 1 ? .semibold : .medium))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(height: 26)
     }
 }
 
