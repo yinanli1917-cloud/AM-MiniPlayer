@@ -18,8 +18,7 @@
 	<string>14.0</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Music Mini Player needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>Music Mini Player needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
+
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Music Mini Player needs access to your Apple Music library to display album artwork, track information, and lyrics.</string>
 	<key>CFBundleURLTypes</key>

@@ -555,6 +555,8 @@ public class MusicController: ObservableObject {
     }
 
     public func fetchMusicKitArtwork(title: String, artist: String, album: String) async -> NSImage? {
+        guard !isPreview else { return nil }
+
         // Check authorization status first
         let authStatus = MusicAuthorization.currentStatus
         logger.info("🔐 MusicKit auth status for artwork fetch: \(String(describing: authStatus))")
