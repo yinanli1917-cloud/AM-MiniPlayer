@@ -35,7 +35,7 @@ public enum ResizeEdge {
 public class WindowResizeHandler: NSObject {
     private weak var window: NSWindow?
     private let edgeSize: CGFloat = 12.0  // 增大边缘检测区域，让光标更容易触发
-    private let aspectRatio: CGFloat = 300.0 / 380.0
+    private let aspectRatio: CGFloat = 1.0  // 正方形窗口 (300x300)
 
     private var isResizing = false
     private var initialFrame: NSRect = .zero
