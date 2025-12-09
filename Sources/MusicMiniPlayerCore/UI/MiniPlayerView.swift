@@ -76,15 +76,16 @@ public struct MiniPlayerView: View {
                     VStack(spacing: 0) {
                         // 🔑 Tab栏 - 渐变模糊在底，按钮在上（与shared controls一致）
                         ZStack(alignment: .top) {
-                            // 底层：渐变模糊背景
+                            // 底层：渐变模糊背景（顶部不透明，底部渐变消失）
                             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .frame(height: 90)
+                                .frame(height: 100)
                                 .mask(
                                     LinearGradient(
                                         gradient: Gradient(stops: [
                                             .init(color: .black, location: 0),
-                                            .init(color: .black, location: 0.7),
-                                            .init(color: .black.opacity(0.4), location: 0.85),
+                                            .init(color: .black, location: 0.6),
+                                            .init(color: .black.opacity(0.5), location: 0.75),
+                                            .init(color: .black.opacity(0.2), location: 0.88),
                                             .init(color: .clear, location: 1.0)
                                         ]),
                                         startPoint: .top,
@@ -93,7 +94,7 @@ public struct MiniPlayerView: View {
                                 )
 
                             // 上层：按钮内容（完全清晰）
-                            VStack(spacing: 6) {
+                            VStack(spacing: 8) {
                                 // Music/Hide 按钮行
                                 HStack {
                                     MusicButtonView()
@@ -101,14 +102,14 @@ public struct MiniPlayerView: View {
                                     HideButtonView()
                                 }
                                 .padding(.horizontal, 12)
-                                .padding(.top, 8)
+                                .padding(.top, 10)
 
                                 // Tab Bar - 窄版
                                 PlaylistTabBarCompact(selectedTab: $playlistSelectedTab)
-                                    .padding(.horizontal, 70)
+                                    .padding(.horizontal, 65)
                             }
                         }
-                        .frame(height: 90)
+                        .frame(height: 100)
 
                         Spacer()
                     }
@@ -495,7 +496,7 @@ public struct MiniPlayerView: View {
                         .clipped()
                     
                     // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
-                    // 底部模糊，往上逐渐清晰
+                    // 顶部清晰，底部模糊（文字区域需要模糊背景）
                     if currentPage == .album && !isHovering {
                         Image(nsImage: artwork)
                             .resizable()
@@ -505,16 +506,16 @@ public struct MiniPlayerView: View {
                             .blur(radius: 40)
                             .mask(
                                 VStack(spacing: 0) {
-                                    Color.clear  // 顶部：不显示模糊
-                                        .frame(height: artSize * 0.5)
+                                    Color.black  // 顶部：显示模糊
+                                        .frame(height: artSize * 0.3)
                                     LinearGradient(
-                                        colors: [.clear, .black],
+                                        colors: [.black, .clear],
                                         startPoint: .top,
                                         endPoint: .bottom
                                     )
                                     .frame(height: artSize * 0.2)  // 过渡区域
-                                    Color.black  // 底部：显示模糊
-                                        .frame(height: artSize * 0.3)
+                                    Color.clear  // 底部：不显示模糊
+                                        .frame(height: artSize * 0.5)
                                 }
                             )
                             .id(artwork)  // 强制在artwork变化时重新创建
