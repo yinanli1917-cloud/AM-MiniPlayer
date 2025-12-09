@@ -513,5 +513,5 @@ struct PlaylistItemRowCompact: View {
     @Previewable @Namespace var namespace
     PlaylistView(currentPage: $currentPage, animationNamespace: namespace, selectedTab: $selectedTab, showControls: $showControls, isHovering: $isHovering, scrollOffset: $scrollOffset)
         .environmentObject(MusicController(preview: true))
-        .frame(width: 300, height: 380)
+        .frame(width: 300, height: 300)
 }

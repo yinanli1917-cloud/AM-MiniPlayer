@@ -100,7 +100,7 @@ class AppMain: NSObject, NSApplicationDelegate {
     // MARK: - Window
 
     func createFloatingWindow() {
-        let windowSize = NSSize(width: 300, height: 380)
+        let windowSize = NSSize(width: 300, height: 300)
         let screenFrame = NSScreen.main?.visibleFrame ?? .zero
         let windowRect = NSRect(
             x: screenFrame.maxX - windowSize.width - 20,
@@ -132,9 +132,9 @@ class AppMain: NSObject, NSApplicationDelegate {
         window.becomesKeyOnlyIfNeeded = true
 
         // 设置窗口比例和尺寸限制
-        window.aspectRatio = NSSize(width: 300, height: 380)
-        window.minSize = NSSize(width: 280, height: 354)
-        window.maxSize = NSSize(width: 450, height: 570)
+        window.aspectRatio = NSSize(width: 300, height: 300)
+        window.minSize = NSSize(width: 250, height: 250)
+        window.maxSize = NSSize(width: 450, height: 450)
 
         windowDelegate = FloatingWindowDelegate()
         window.delegate = windowDelegate
