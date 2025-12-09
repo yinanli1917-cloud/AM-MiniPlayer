@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import os.log
+import Glur
 
 public struct PlaylistView: View {
     @EnvironmentObject var musicController: MusicController
@@ -288,13 +289,22 @@ public struct PlaylistView: View {
                                 Spacer()
 
                                 ZStack(alignment: .bottom) {
-                                    // 🔑 渐变背景 - 遮罩效果
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                    .frame(height: 130)
+                                    // 🔑 渐变模糊背景 - 使用系统backdrop blur实时模糊下层内容
+                                    VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                                        .frame(height: 130)
+                                        .mask(
+                                            LinearGradient(
+                                                gradient: Gradient(stops: [
+                                                    .init(color: .clear, location: 0),
+                                                    .init(color: .black.opacity(0.3), location: 0.15),
+                                                    .init(color: .black.opacity(0.6), location: 0.3),
+                                                    .init(color: .black, location: 0.5),
+                                                    .init(color: .black, location: 1.0)
+                                                ]),
+                                                startPoint: .top,
+                                                endPoint: .bottom
+                                            )
+                                        )
 
                                     SharedBottomControls(
                                         currentPage: $currentPage,

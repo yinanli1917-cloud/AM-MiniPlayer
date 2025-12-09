@@ -74,11 +74,25 @@ public struct MiniPlayerView: View {
                 // Tab 层 - 只在歌单页显示（集成Music/Hide按钮）
                 if currentPage == .playlist {
                     VStack(spacing: 0) {
-                        // 🔑 Tab栏 - 使用withinWindow模糊创建遮挡效果
-                        ZStack {
-                            // 背景：withinWindow模糊 - 遮挡下层内容但与整体背景融合
+                        // 🔑 Tab栏 - 模糊层在底，按钮在上
+                        ZStack(alignment: .top) {
+                            // 背景：系统模糊效果（实时模糊下层内容）- 在最底层
                             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                                .mask(
+                                    LinearGradient(
+                                        gradient: Gradient(stops: [
+                                            .init(color: .black, location: 0),
+                                            .init(color: .black, location: 0.7),
+                                            .init(color: .black.opacity(0.5), location: 0.85),
+                                            .init(color: .black.opacity(0.15), location: 0.95),
+                                            .init(color: .clear, location: 1.0)
+                                        ]),
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
 
+                            // 按钮内容 - 在模糊层上面
                             VStack(spacing: 0) {
                                 // Music/Hide 按钮行
                                 HStack {
@@ -93,28 +107,11 @@ public struct MiniPlayerView: View {
 
                                 // Tab Bar
                                 PlaylistTabBarIntegrated(selectedTab: $playlistSelectedTab)
-                                    .padding(.bottom, 10)
+                                    .padding(.bottom, 8)
                             }
+                            .frame(height: 80)
                         }
-                        .frame(height: 80)
-
-                        // 🔑 底部模糊过渡带 - 使用更柔和的多段渐变mask
-                        VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                            .frame(height: 40)
-                            .mask(
-                                LinearGradient(
-                                    gradient: Gradient(stops: [
-                                        .init(color: .black, location: 0),
-                                        .init(color: .black.opacity(0.7), location: 0.15),
-                                        .init(color: .black.opacity(0.4), location: 0.35),
-                                        .init(color: .black.opacity(0.15), location: 0.6),
-                                        .init(color: .black.opacity(0.05), location: 0.8),
-                                        .init(color: .clear, location: 1.0)
-                                    ]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
+                        .frame(height: 95)
 
                         Spacer()
                     }
@@ -189,68 +186,34 @@ public struct MiniPlayerView: View {
             let maskY = artCenterY + (artSize / 2) - (maskHeight / 2)
 
             ZStack {
-                // 🎨 非hover状态：文字在封面底部（带渐变遮罩）
+                // 🎨 非hover状态：文字在封面底部（已删除黑色渐变遮罩，依靠底部模糊效果）
                 if !isHovering {
-                    VStack(spacing: 0) {
-                        // 🔑 使用多层渐变创建更柔和的遮罩效果
-                        ZStack {
-                            // 底层渐变 - 提供主要暗化效果
-                            LinearGradient(
-                                gradient: Gradient(colors: [
-                                    .clear,
-                                    .black.opacity(0.2),
-                                    .black.opacity(0.45)
-                                ]),
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(width: artSize, height: maskHeight)
-
-                            // 顶层渐变 - 柔化边缘
-                            LinearGradient(
-                                gradient: Gradient(stops: [
-                                    .init(color: .clear, location: 0),
-                                    .init(color: .clear, location: 0.3),
-                                    .init(color: .black.opacity(0.15), location: 0.7),
-                                    .init(color: .black.opacity(0.25), location: 1.0)
-                                ]),
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(width: artSize, height: maskHeight)
-                            .blendMode(.multiply)
-                        }
-                        .overlay(
-                            VStack(alignment: .leading, spacing: 2) {
-                                ScrollingText(
-                                    text: musicController.currentTrackTitle,
-                                    font: .system(size: 16, weight: .bold),
-                                    textColor: .white,
-                                    maxWidth: artSize - 24,
-                                    alignment: .leading
-                                )
-                                .matchedGeometryEffect(id: "track-title", in: animation)
-                                .shadow(radius: 2)
-
-                                ScrollingText(
-                                    text: musicController.currentArtist,
-                                    font: .system(size: 13, weight: .medium),
-                                    textColor: .white.opacity(0.9),
-                                    maxWidth: artSize - 24,
-                                    alignment: .leading
-                                )
-                                .matchedGeometryEffect(id: "track-artist", in: animation)
-                                .shadow(radius: 2)
-                            }
-                            .padding(.leading, 12)
-                            .padding(.bottom, 10)
-                            , alignment: .bottomLeading
+                    VStack(alignment: .leading, spacing: 2) {
+                        ScrollingText(
+                            text: musicController.currentTrackTitle,
+                            font: .system(size: 16, weight: .bold),
+                            textColor: .white,
+                            maxWidth: artSize - 24,
+                            alignment: .leading
                         )
-                        // 🔑 非hover状态的遮罩使用showOverlayContent控制opacity
-                        .opacity(showOverlayContent ? 0 : 1)
+                        .matchedGeometryEffect(id: "track-title", in: animation)
+                        .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
+
+                        ScrollingText(
+                            text: musicController.currentArtist,
+                            font: .system(size: 13, weight: .medium),
+                            textColor: .white.opacity(0.9),
+                            maxWidth: artSize - 24,
+                            alignment: .leading
+                        )
+                        .matchedGeometryEffect(id: "track-artist", in: animation)
+                        .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
                     }
-                    .cornerRadius(12, corners: [.bottomLeft, .bottomRight])
+                    .padding(.leading, 12)
+                    .padding(.bottom, 10)
+                    .frame(width: artSize, height: maskHeight, alignment: .bottomLeading)
                     .position(x: geo.size.width / 2, y: maskY)
+                    .opacity(showOverlayContent ? 0 : 1)
                     .allowsHitTesting(false)
                 }
 
@@ -541,19 +504,21 @@ public struct MiniPlayerView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: artSize, height: artSize)
                             .clipped()
-                            .blur(radius: 12)  // 使用系统模糊作为fallback
+                            .blur(radius: 28)
                             .mask(
                                 LinearGradient(
                                     gradient: Gradient(stops: [
                                         .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.5),
-                                        .init(color: .black.opacity(0.5), location: 0.75),
+                                        .init(color: .clear, location: 0.35),
+                                        .init(color: .black.opacity(0.5), location: 0.6),
+                                        .init(color: .black.opacity(0.8), location: 0.8),
                                         .init(color: .black, location: 1.0)
                                     ]),
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
                             )
+                            .id(artwork)  // 强制在artwork变化时重新创建
                     }
                 }
                 .cornerRadius(cornerRadius)

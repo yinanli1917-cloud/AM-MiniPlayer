@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Glur
 
 public struct LyricsView: View {
     @EnvironmentObject var musicController: MusicController
@@ -338,15 +339,24 @@ public struct LyricsView: View {
         VStack {
             Spacer()
 
-            // 渐变遮罩 + 控件区域（整体拦截点击，防止穿透）
+            // 渐变模糊 + 控件区域（整体拦截点击，防止穿透）
             ZStack(alignment: .bottom) {
-                // Gradient mask - 使用opacity动画而不是clipShape
-                LinearGradient(
-                    gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 80)
+                // 🔑 渐变模糊背景 - 使用系统backdrop blur实时模糊下层内容
+                VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                    .frame(height: 130)
+                    .mask(
+                        LinearGradient(
+                            gradient: Gradient(stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black.opacity(0.3), location: 0.15),
+                                .init(color: .black.opacity(0.6), location: 0.3),
+                                .init(color: .black, location: 0.5),
+                                .init(color: .black, location: 1.0)
+                            ]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
 
                 SharedBottomControls(
                     currentPage: $currentPage,
