@@ -452,21 +452,22 @@ public struct MiniPlayerView: View {
                         .clipped()
                     
                     // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
-                    // 顶部清晰，底部模糊（文字区域需要模糊背景作为底板）
+                    // 文字区域约占封面底部30%，模糊需要覆盖这个区域
                     if currentPage == .album && !isHovering {
                         Image(nsImage: artwork)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: artSize, height: artSize)
                             .clipped()
-                            .blur(radius: 40)
+                            .blur(radius: 50)  // 增大模糊值
                             .mask(
                                 LinearGradient(
                                     gradient: Gradient(stops: [
                                         .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.55),
-                                        .init(color: .black.opacity(0.5), location: 0.7),
-                                        .init(color: .black, location: 0.85),
+                                        .init(color: .clear, location: 0.45),  // 顶部45%完全清晰
+                                        .init(color: .black.opacity(0.3), location: 0.55),
+                                        .init(color: .black.opacity(0.7), location: 0.65),
+                                        .init(color: .black, location: 0.75),  // 底部25%完全模糊
                                         .init(color: .black, location: 1.0)
                                     ]),
                                     startPoint: .top,
