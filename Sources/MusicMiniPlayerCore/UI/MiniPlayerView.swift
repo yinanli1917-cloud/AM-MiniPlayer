@@ -1,4 +1,5 @@
 import SwiftUI
+import Glur
 
 // 移除自定义transition，使用SwiftUI官方transition避免icon消失bug
 
@@ -524,25 +525,51 @@ public struct MiniPlayerView: View {
             }()
 
             if currentPage != .lyrics {
-                Image(nsImage: artwork)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: artSize, height: artSize)
-                    .clipped()
-                    .cornerRadius(cornerRadius)
-                    .shadow(
-                        color: .black.opacity(0.5),
-                        radius: shadowRadius,
-                        x: 0,
-                        y: currentPage == .album ? 12 : 2
-                    )
-                    .matchedGeometryEffect(
-                        id: currentPage == .album ? "album-placeholder" : "playlist-placeholder",
-                        in: animation,
-                        isSource: false
-                    )
-                    .position(x: xPosition, y: yPosition)
-                    .allowsHitTesting(false)
+                // 🎯 封面图片 + 底部渐进模糊
+                ZStack {
+                    // 原始封面
+                    Image(nsImage: artwork)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: artSize, height: artSize)
+                        .clipped()
+                    
+                    // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
+                    if currentPage == .album && !isHovering {
+                        Image(nsImage: artwork)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: artSize, height: artSize)
+                            .clipped()
+                            .blur(radius: 12)  // 使用系统模糊作为fallback
+                            .mask(
+                                LinearGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .clear, location: 0.5),
+                                        .init(color: .black.opacity(0.5), location: 0.75),
+                                        .init(color: .black, location: 1.0)
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                    }
+                }
+                .cornerRadius(cornerRadius)
+                .shadow(
+                    color: .black.opacity(0.5),
+                    radius: shadowRadius,
+                    x: 0,
+                    y: currentPage == .album ? 12 : 2
+                )
+                .matchedGeometryEffect(
+                    id: currentPage == .album ? "album-placeholder" : "playlist-placeholder",
+                    in: animation,
+                    isSource: false
+                )
+                .position(x: xPosition, y: yPosition)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -784,5 +811,17 @@ struct PlaylistTabBarIntegrated: View {
     }
 }
 
+// MARK: - Conditional View Modifier
 
+extension View {
+    /// Applies a modifier conditionally
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
 
