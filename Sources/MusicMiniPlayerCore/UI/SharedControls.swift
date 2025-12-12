@@ -14,6 +14,25 @@ class NonDraggableNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
 }
 
+// MARK: - Window Draggable View
+// NSView wrapper that explicitly enables window dragging
+struct WindowDraggableView: NSViewRepresentable {
+    func makeNSView(context: Context) -> DraggableNSView {
+        return DraggableNSView()
+    }
+
+    func updateNSView(_ nsView: DraggableNSView, context: Context) {}
+}
+
+class DraggableNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        // Start window drag
+        window?.performDrag(with: event)
+    }
+}
+
 // MARK: - Custom Transitions
 
 extension AnyTransition {

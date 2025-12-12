@@ -27,9 +27,13 @@ public struct MiniPlayerView: View {
     @State private var showOverlayContent: Bool = false
 
     var openWindow: OpenWindowAction?
+    var onHide: (() -> Void)?
+    var onExpand: (() -> Void)?
 
-    public init(openWindow: OpenWindowAction? = nil) {
+    public init(openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
         self.openWindow = openWindow
+        self.onHide = onHide
+        self.onExpand = onExpand
     }
 
     public var body: some View {
@@ -38,12 +42,16 @@ public struct MiniPlayerView: View {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
 
+                // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
+                WindowDraggableView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
                 // 🔑 使用ZStack叠加所有页面，通过opacity和zIndex控制显示
                 // matchedGeometryEffect: 使用单个浮动Image + invisible placeholders避免crossfade
 
                 // Lyrics View (底层)
                 if currentPage == .lyrics {
-                    LyricsView(currentPage: $currentPage, openWindow: openWindow)
+                    LyricsView(currentPage: $currentPage, openWindow: openWindow, onHide: onHide, onExpand: onExpand)
                         .zIndex(1)
                 }
 
@@ -86,11 +94,29 @@ public struct MiniPlayerView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Hide按钮 - hover时显示
+            // Hide/Expand 按钮 - hover时显示
             if showControls {
-                HideButtonView()
+                // 根据模式显示不同按钮
+                if onExpand != nil {
+                    // 菜单栏模式：显示展开按钮
+                    ExpandButtonView(onExpand: onExpand!)
+                        .padding(12)
+                        .transition(.opacity)
+                } else if onHide != nil {
+                    // 浮窗模式：显示收起按钮
+                    HideButtonView(onHide: onHide!)
+                        .padding(12)
+                        .transition(.opacity)
+                } else {
+                    // 无回调时的默认行为
+                    HideButtonView(onHide: {
+                        if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
+                            window.orderOut(nil)
+                        }
+                    })
                     .padding(12)
                     .transition(.opacity)
+                }
             }
         }
         .onHover { hovering in
@@ -129,7 +155,7 @@ public struct MiniPlayerView: View {
         GeometryReader { geo in
             let artSize = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
             // 控件区域高度（与SharedBottomControls一致）
-            let controlsHeight: CGFloat = 100
+            let controlsHeight: CGFloat = 80
             // 可用高度（给封面居中用）
             let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
             // 封面中心Y
@@ -406,7 +432,7 @@ public struct MiniPlayerView: View {
         // 🔑 单个Image实例，通过计算位置实现流畅动画
         GeometryReader { geo in
             // 控件区域高度（与albumOverlayContent一致）
-            let controlsHeight: CGFloat = 100
+            let controlsHeight: CGFloat = 80
             let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
 
             // 根据当前页面计算尺寸和位置
@@ -502,7 +528,7 @@ public struct MiniPlayerView: View {
         if musicController.currentArtwork != nil {
             GeometryReader { geo in
                 // 控件区域高度（与albumOverlayContent一致）
-                let controlsHeight: CGFloat = 100
+                let controlsHeight: CGFloat = 80
                 // 封面可用高度
                 let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
                 // 🔑 与albumOverlayContent和floatingArtwork保持一致的尺寸
@@ -542,37 +568,41 @@ public struct MiniPlayerView: View {
     }
 }
 
-#Preview {
-    ZStack {
-        // Simulate Desktop Wallpaper (Purple)
-        if let wallpaperURL = Bundle.module.url(forResource: "wallpaper", withExtension: "jpg"),
-           let wallpaper = NSImage(contentsOf: wallpaperURL) {
-            Image(nsImage: wallpaper)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .ignoresSafeArea()
-        } else {
-            Color.purple
-                .ignoresSafeArea()
-        }
+#if DEBUG
+struct MiniPlayerView_Previews: PreviewProvider {
+    static var previews: some View {
+        ZStack {
+            // Simulate Desktop Wallpaper (Purple)
+            if let wallpaperURL = Bundle.module.url(forResource: "wallpaper", withExtension: "jpg"),
+               let wallpaper = NSImage(contentsOf: wallpaperURL) {
+                Image(nsImage: wallpaper)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .ignoresSafeArea()
+            } else {
+                Color.purple
+                    .ignoresSafeArea()
+            }
 
-        // The Player Window
-        MiniPlayerView()
-            .environmentObject({
-                let controller = MusicController(preview: true)
-                controller.currentTrackTitle = "Cariño"
-                controller.currentArtist = "The Marías"
-                if let artURL = Bundle.module.url(forResource: "album_cover", withExtension: "jpg"),
-                   let art = NSImage(contentsOf: artURL) {
-                    controller.currentArtwork = art
-                }
-                return controller
-            }())
-            .frame(width: 300, height: 300)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .shadow(radius: 20)
+            // The Player Window
+            MiniPlayerView()
+                .environmentObject({
+                    let controller = MusicController(preview: true)
+                    controller.currentTrackTitle = "Cariño"
+                    controller.currentArtist = "The Marías"
+                    if let artURL = Bundle.module.url(forResource: "album_cover", withExtension: "jpg"),
+                       let art = NSImage(contentsOf: artURL) {
+                        controller.currentArtwork = art
+                    }
+                    return controller
+                }())
+                .frame(width: 300, height: 300)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .shadow(radius: 20)
+        }
     }
 }
+#endif
 
 
 extension View {
@@ -654,10 +684,11 @@ struct MusicButtonView: View {
 
 struct HideButtonView: View {
     @State private var isHovering = false
+    var onHide: () -> Void
 
     var body: some View {
         Button(action: {
-            NSApplication.shared.keyWindow?.orderOut(nil)
+            onHide()
         }) {
             Image(systemName: "chevron.up")
                 .font(.system(size: 13, weight: .medium))
@@ -681,6 +712,40 @@ struct HideButtonView: View {
             }
         }
         .help("收起到菜单栏")
+    }
+}
+
+/// 展开按钮 - 从菜单栏视图展开为浮窗
+struct ExpandButtonView: View {
+    @State private var isHovering = false
+    var onExpand: () -> Void
+
+    var body: some View {
+        Button(action: {
+            onExpand()
+        }) {
+            Image(systemName: "pip.exit")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    ZStack {
+                        Color.white.opacity(isHovering ? 0.15 : 0.08)
+                        if isHovering {
+                            Color.white.opacity(0.05)
+                        }
+                    }
+                )
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+        .help("展开为浮窗")
     }
 }
 

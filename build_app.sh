@@ -73,19 +73,23 @@ cat > nanoPod.entitlements << 'ENTITLEMENTS'
 ENTITLEMENTS
 
 echo "🎨 Copying icon resources..."
-# Copy AppIcon.icon to app bundle and convert to .icns
-if [ -d "AppIcon.icon" ]; then
+# Try to use existing icns from previous build, or compile if Xcode is available
+if [ -f "nanoPod.app.bak/Contents/Resources/AppIcon.icns" ]; then
+    echo "🎨 Using existing AppIcon.icns from backup..."
+    cp nanoPod.app.bak/Contents/Resources/AppIcon.icns nanoPod.app/Contents/Resources/
+elif command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
     echo "🎨 Compiling AppIcon.icon using actool..."
-    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null
-
-    if [ -f "partial_info.plist" ]; then
-        echo "✅ AppIcon compiled successfully"
-        rm partial_info.plist
-    else
-        echo "⚠️  actool failed to generate partial info plist"
+    if [ -d "AppIcon.icon" ]; then
+        xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
+        if [ -f "partial_info.plist" ]; then
+            echo "✅ AppIcon compiled successfully"
+            rm partial_info.plist
+        else
+            echo "⚠️  actool failed, using placeholder icon"
+        fi
     fi
 else
-    echo "⚠️  AppIcon.icon not found"
+    echo "⚠️  No actool available (Xcode not installed), icon may be missing"
 fi
 
 # Ad-hoc code sign with entitlements (required for AppleScript automation on modern macOS)

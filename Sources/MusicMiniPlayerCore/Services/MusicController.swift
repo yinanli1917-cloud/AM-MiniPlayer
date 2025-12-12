@@ -56,8 +56,10 @@ public class MusicController: ObservableObject {
     private let userActionLockDuration: TimeInterval = 1.5
 
     public init(preview: Bool = false) {
+        fputs("🎬 [MusicController] init() called with preview=\(preview)\n", stderr)
         self.isPreview = preview
         if preview {
+            fputs("🎬 [MusicController] PREVIEW mode - returning early\n", stderr)
             logger.info("Initializing MusicController in PREVIEW mode")
             self.musicApp = nil
             self.isPlaying = false
@@ -81,27 +83,34 @@ public class MusicController: ObservableObject {
             return
         }
 
+        fputs("🎯 [MusicController] Initializing - isPreview=\(isPreview)\n", stderr)
         logger.info("🎯 Initializing MusicController - will connect after setup")
 
         setupNotifications()
         startPolling()
 
         // Auto-connect after a brief delay to ensure initialization is complete
+        fputs("🎯 [MusicController] Scheduling connect() in 0.2s\n", stderr)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            fputs("🎯 [MusicController] connect() timer fired\n", stderr)
             self?.connect()
         }
     }
     
     public func connect() {
+        fputs("🔌 [MusicController] connect() called\n", stderr)
         guard !isPreview else {
+            fputs("🔌 [MusicController] Preview mode - skipping\n", stderr)
             logger.info("Preview mode - skipping Music.app connection")
             return
         }
 
+        fputs("🔌 [MusicController] Attempting to connect to Music.app...\n", stderr)
         logger.info("🔌 connect() called - Attempting to connect to Music.app...")
 
         // Initialize SBApplication
         guard let app = SBApplication(bundleIdentifier: "com.apple.Music") else {
+            fputs("❌ [MusicController] Failed to create SBApplication\n", stderr)
             logger.error("❌ Failed to create SBApplication for Music.app")
             DispatchQueue.main.async {
                 self.currentTrackTitle = "Failed to Connect"
@@ -112,6 +121,7 @@ public class MusicController: ObservableObject {
 
         // Store the app reference directly
         self.musicApp = app
+        fputs("✅ [MusicController] SBApplication created successfully\n", stderr)
         logger.info("✅ Successfully created and stored SBApplication for Music.app")
 
         // Launch Music.app if it's not running
@@ -131,9 +141,11 @@ public class MusicController: ObservableObject {
             }
         }
 
-        Task {
-            await requestMusicKitAuthorization()
-        }
+        // 注意：在 macOS 15 上，MusicKit 授权检查可能导致崩溃
+        // 暂时禁用 MusicKit，完全使用 AppleScript
+        // Task {
+        //     await requestMusicKitAuthorization()
+        // }
     }
     
     deinit {
@@ -221,23 +233,35 @@ public class MusicController: ObservableObject {
     }
 
     private func startPolling() {
-        // Poll AppleScript every 1 second for state verification
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.updatePlayerState()
-        }
+        fputs("⏰ [startPolling] Setting up timers on thread: \(Thread.isMainThread ? "Main" : "Background")\n", stderr)
 
-        // Local interpolation timer (60fps) for smooth UI updates
-        interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
-            self?.interpolateTime()
-        }
+        // Ensure timers are created on main thread
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
 
-        // Queue hash check timer - lightweight check every 2 seconds
-        queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.checkQueueHashAndRefresh()
-        }
+            fputs("⏰ [startPolling] Creating polling timer (1s interval)\n", stderr)
+            // Poll AppleScript every 1 second for state verification
+            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.updatePlayerState()
+            }
+            // Fire immediately
+            self.pollingTimer?.fire()
 
-        // Setup MusicKit queue observer
-        setupMusicKitQueueObserver()
+            // Local interpolation timer (60fps) for smooth UI updates
+            self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+                self?.interpolateTime()
+            }
+
+            // Queue hash check timer - lightweight check every 2 seconds
+            self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                self?.checkQueueHashAndRefresh()
+            }
+
+            // Setup MusicKit queue observer
+            self.setupMusicKitQueueObserver()
+
+            fputs("⏰ [startPolling] All timers created\n", stderr)
+        }
     }
 
     // MARK: - Queue Sync (双层检测)
@@ -262,18 +286,32 @@ public class MusicController: ObservableObject {
             end tell
             """
 
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: hashScript) {
-                let descriptor = scriptObject.executeAndReturnError(&error)
-                if let hash = descriptor.stringValue, !hash.isEmpty {
+            // 使用 Process + osascript 替代 NSAppleScript
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", hashScript]
+
+            let outputPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                if !output.isEmpty && !output.hasPrefix("ERROR") {
                     DispatchQueue.main.async {
-                        if hash != self.lastQueueHash {
-                            self.logger.info("🔄 Queue hash changed: \(self.lastQueueHash) -> \(hash)")
-                            self.lastQueueHash = hash
+                        if output != self.lastQueueHash {
+                            self.logger.info("🔄 Queue hash changed: \(self.lastQueueHash) -> \(output)")
+                            self.lastQueueHash = output
                             self.fetchUpNextQueue()
                         }
                     }
                 }
+            } catch {
+                // 忽略错误，下次轮询会重试
             }
         }
     }
@@ -382,8 +420,22 @@ public class MusicController: ObservableObject {
         updatePlayerStateViaAppleScript()
     }
 
+    // 用于防止 AppleScript 调用重叠 - 使用时间戳而非布尔值以避免卡死
+    private var lastUpdateTime: Date = .distantPast
+    private let updateTimeout: TimeInterval = 0.8  // 0.8秒超时，因为轮询间隔是1秒
+
     /// 使用 AppleScript 获取播放状态（更可靠的方式）
     private func updatePlayerStateViaAppleScript() {
+        // 使用时间戳检测超时，而不是布尔值锁
+        let now = Date()
+        let timeSinceLastUpdate = now.timeIntervalSince(lastUpdateTime)
+        if timeSinceLastUpdate < updateTimeout {
+            // 上次更新还在进行中（未超时），跳过本次
+            return
+        }
+        lastUpdateTime = now
+        fputs("📊 [updatePlayerState] Called (last: \(String(format: "%.2f", timeSinceLastUpdate))s ago)\n", stderr)
+
         let script = """
         tell application "Music"
             try
@@ -413,91 +465,122 @@ public class MusicController: ObservableObject {
         end tell
         """
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // 使用 Process 执行 osascript，带超时机制
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
 
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: script) {
-                let descriptor = scriptObject.executeAndReturnError(&error)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
 
-                if let error = error {
-                    let errorMsg = error["NSAppleScriptErrorBriefMessage"] as? String ?? "Unknown error"
-                    self.logger.error("❌ AppleScript error: \(errorMsg)")
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+
+            do {
+                try process.run()
+            } catch {
+                fputs("❌ [updatePlayerState] Failed to launch osascript: \(error)\n", stderr)
+                return
+            }
+
+            // 设置超时 - 如果 0.5 秒内没完成就杀掉进程
+            let startTime = Date()
+            let processTimeout: TimeInterval = 0.5
+
+            while process.isRunning {
+                if Date().timeIntervalSince(startTime) > processTimeout {
+                    fputs("⏱️ [updatePlayerState] Timeout! Terminating osascript\n", stderr)
+                    process.terminate()
                     return
                 }
+                Thread.sleep(forTimeInterval: 0.01)  // 10ms 检查间隔
+            }
 
-                guard let resultString = descriptor.stringValue else {
-                    self.logger.error("❌ No result from AppleScript")
-                    return
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            guard let resultString = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                fputs("❌ [updatePlayerState] No output from osascript\n", stderr)
+                return
+            }
+
+            if resultString.isEmpty {
+                fputs("❌ [updatePlayerState] Empty output\n", stderr)
+                return
+            }
+
+            if resultString.hasPrefix("ERROR:") {
+                fputs("❌ [updatePlayerState] Script error: \(resultString)\n", stderr)
+                return
+            }
+
+            let parts = resultString.components(separatedBy: "|||")
+            guard parts.count >= 9 else {
+                fputs("❌ [updatePlayerState] Invalid format (\(parts.count) parts)\n", stderr)
+                return
+            }
+
+            // 成功获取数据
+            fputs("✅ [updatePlayerState] \(parts[1]) - pos:\(parts[6])\n", stderr)
+
+            let isPlaying = parts[0] == "true"
+            let trackName = parts[1]
+            let trackArtist = parts[2]
+            let trackAlbum = parts[3]
+            let trackDuration = Double(parts[4]) ?? 0
+            let persistentID = parts[5]
+            let position = Double(parts[6]) ?? 0
+            let bitRate = Int(parts[7]) ?? 0
+            let sampleRate = Int(parts[8]) ?? 0
+
+            // Determine audio quality
+            var quality: String? = nil
+            if sampleRate >= 176400 || bitRate >= 3000 {
+                quality = "Hi-Res Lossless"
+            } else if sampleRate >= 44100 && bitRate >= 1000 {
+                quality = "Lossless"
+            }
+
+            // 检测歌曲是否变化（包括首次启动时 currentPersistentID 为 nil 的情况）
+            let isFirstTrack = self.currentPersistentID == nil && !persistentID.isEmpty && trackName != "NOT_PLAYING"
+            let trackChanged = (persistentID != self.currentPersistentID && !persistentID.isEmpty && trackName != "NOT_PLAYING") || isFirstTrack
+
+            DispatchQueue.main.async {
+                // Update playing state
+                if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
+                    self.isPlaying = isPlaying
                 }
 
-                if resultString.hasPrefix("ERROR:") {
-                    self.logger.error("❌ AppleScript returned error: \(resultString)")
-                    return
-                }
+                if trackName == "NOT_PLAYING" {
+                    if self.currentTrackTitle != "Not Playing" {
+                        self.logger.info("⏹️ No track playing")
+                    }
+                    self.currentTrackTitle = "Not Playing"
+                    self.currentArtist = ""
+                    self.currentAlbum = ""
+                    self.duration = 0
+                    self.currentTime = 0
+                    self.audioQuality = nil
+                } else {
+                    self.currentTrackTitle = trackName
+                    self.currentArtist = trackArtist
+                    self.currentAlbum = trackAlbum
+                    self.duration = trackDuration
 
-                let parts = resultString.components(separatedBy: "|||")
-                guard parts.count >= 9 else {
-                    self.logger.error("❌ Invalid AppleScript result format (parts: \(parts.count), expected 9+): '\(resultString)'")
-                    return
-                }
-
-                let isPlaying = parts[0] == "true"
-                let trackName = parts[1]
-                let trackArtist = parts[2]
-                let trackAlbum = parts[3]
-                let trackDuration = Double(parts[4]) ?? 0
-                let persistentID = parts[5]
-                let position = Double(parts[6]) ?? 0
-                let bitRate = Int(parts[7]) ?? 0
-                let sampleRate = Int(parts[8]) ?? 0
-
-                // Determine audio quality
-                var quality: String? = nil
-                if sampleRate >= 176400 || bitRate >= 3000 {
-                    quality = "Hi-Res Lossless"
-                } else if sampleRate >= 44100 && bitRate >= 1000 {
-                    quality = "Lossless"
-                }
-
-                let trackChanged = persistentID != self.currentPersistentID && !persistentID.isEmpty && trackName != "NOT_PLAYING"
-
-                DispatchQueue.main.async {
-                    // Update playing state
-                    if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
-                        self.isPlaying = isPlaying
+                    // Only update time if difference is significant
+                    if abs(self.currentTime - position) > 0.5 || !self.isPlaying {
+                        self.currentTime = position
                     }
 
-                    if trackName == "NOT_PLAYING" {
-                        if self.currentTrackTitle != "Not Playing" {
-                            self.logger.info("⏹️ No track playing")
-                        }
-                        self.currentTrackTitle = "Not Playing"
-                        self.currentArtist = ""
-                        self.currentAlbum = ""
-                        self.duration = 0
-                        self.currentTime = 0
-                        self.audioQuality = nil
-                    } else {
-                        self.currentTrackTitle = trackName
-                        self.currentArtist = trackArtist
-                        self.currentAlbum = trackAlbum
-                        self.duration = trackDuration
+                    self.audioQuality = quality
+                    self.lastPollTime = Date()
 
-                        // Only update time if difference is significant
-                        if abs(self.currentTime - position) > 0.5 || !self.isPlaying {
-                            self.currentTime = position
-                        }
-
-                        self.audioQuality = quality
-                        self.lastPollTime = Date()
-
-                        // Fetch artwork if track changed
-                        if trackChanged {
-                            self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
-                            self.currentPersistentID = persistentID
-                            self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
-                        }
+                    // Fetch artwork if track changed or first track
+                    if trackChanged {
+                        fputs("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist) (first=\(isFirstTrack))\n", stderr)
+                        self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
+                        self.currentPersistentID = persistentID
+                        self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
                     }
                 }
             }
@@ -532,21 +615,20 @@ public class MusicController: ObservableObject {
                 return
             }
             
-            // 2. Try MusicKit as fallback (better for Apple Music tracks)
-            logger.info("🔄 AppleScript failed, trying MusicKit...")
-            if let musicKitImage = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                await MainActor.run {
-                    self.currentArtwork = musicKitImage
-                    // Cache the artwork
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(musicKitImage, forKey: persistentID as NSString)
-                    }
-                    self.logger.info("✅ Successfully fetched and cached artwork via MusicKit")
-                }
-                return
-            }
-            
-            // 3. Fallback to placeholder if all methods fail
+            // 2. MusicKit 在 macOS 15 上可能导致 TCC 崩溃，暂时跳过
+            // logger.info("🔄 AppleScript failed, trying MusicKit...")
+            // if let musicKitImage = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+            //     await MainActor.run {
+            //         self.currentArtwork = musicKitImage
+            //         if !persistentID.isEmpty {
+            //             self.artworkCache.setObject(musicKitImage, forKey: persistentID as NSString)
+            //         }
+            //         self.logger.info("✅ Successfully fetched and cached artwork via MusicKit")
+            //     }
+            //     return
+            // }
+
+            // 3. Fallback to placeholder if AppleScript fails
             await MainActor.run {
                 self.currentArtwork = self.createPlaceholder()
                 self.logger.warning("⚠️ Failed to fetch artwork from all sources - using placeholder")
@@ -557,17 +639,14 @@ public class MusicController: ObservableObject {
     public func fetchMusicKitArtwork(title: String, artist: String, album: String) async -> NSImage? {
         guard !isPreview else { return nil }
 
-        // Check authorization status first
+        // Check authorization status first - don't request if not authorized to avoid crashes
         let authStatus = MusicAuthorization.currentStatus
         logger.info("🔐 MusicKit auth status for artwork fetch: \(String(describing: authStatus))")
 
         if authStatus != .authorized {
-            logger.warning("⚠️ MusicKit not authorized, requesting authorization...")
-            let newStatus = await MusicAuthorization.request()
-            if newStatus != .authorized {
-                logger.error("❌ MusicKit authorization denied")
-                return nil
-            }
+            // Don't request authorization here - it should be done on main thread during app launch
+            logger.warning("⚠️ MusicKit not authorized (\(String(describing: authStatus))), skipping MusicKit artwork fetch")
+            return nil
         }
 
         do {
@@ -609,78 +688,173 @@ public class MusicController: ObservableObject {
     }
 
     private func fetchArtworkDataViaAppleScript() -> Data? {
+        // 使用 osascript 获取 artwork 数据 (NSAppleScript 在 macOS 15 上不稳定)
+        // 写入临时文件然后读取，因为 artwork 是二进制数据
+        let tempFile = "/tmp/nanopod_artwork_\(ProcessInfo.processInfo.processIdentifier).tiff"
+
         // 首先尝试获取 current track 的 artwork
-        let trackArtworkScript = "tell application \"Music\" to get data of artwork 1 of current track"
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: trackArtworkScript) {
-            let descriptor = scriptObject.executeAndReturnError(&error)
-            if error == nil {
-                let data = descriptor.data
-                if !data.isEmpty {
-                    return data
+        let trackArtworkScript = """
+        tell application "Music"
+            try
+                set artworkData to data of artwork 1 of current track
+                set filePath to POSIX file "\(tempFile)"
+                set fileRef to open for access filePath with write permission
+                set eof fileRef to 0
+                write artworkData to fileRef
+                close access fileRef
+                return "OK"
+            on error errMsg
+                try
+                    close access filePath
+                end try
+                return "ERROR:" & errMsg
+            end try
+        end tell
+        """
+
+        // 使用 Process + osascript 执行
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", trackArtworkScript]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if output == "OK" {
+                // 读取临时文件
+                if let data = FileManager.default.contents(atPath: tempFile) {
+                    try? FileManager.default.removeItem(atPath: tempFile)
+                    if !data.isEmpty {
+                        fputs("✅ [fetchArtwork] Got artwork from current track (\(data.count) bytes)\n", stderr)
+                        return data
+                    }
                 }
             }
+        } catch {
+            fputs("❌ [fetchArtwork] osascript failed: \(error)\n", stderr)
         }
 
+        // 清理临时文件
+        try? FileManager.default.removeItem(atPath: tempFile)
+
         // 对于电台/流媒体，尝试获取 current stream title 的封面
-        // Apple Music 电台可能需要不同的方法
         logger.info("🔄 Track artwork failed, trying stream artwork...")
 
         // 尝试从 current playlist 获取封面（电台场景）
         let playlistArtworkScript = """
         tell application "Music"
             try
-                return data of artwork 1 of current playlist
-            on error
-                return missing value
+                set artworkData to data of artwork 1 of current playlist
+                set filePath to POSIX file "\(tempFile)"
+                set fileRef to open for access filePath with write permission
+                set eof fileRef to 0
+                write artworkData to fileRef
+                close access fileRef
+                return "OK"
+            on error errMsg
+                try
+                    close access filePath
+                end try
+                return "ERROR:" & errMsg
             end try
         end tell
         """
 
-        error = nil
-        if let scriptObject = NSAppleScript(source: playlistArtworkScript) {
-            let descriptor = scriptObject.executeAndReturnError(&error)
-            if error == nil {
-                let data = descriptor.data
-                if !data.isEmpty {
-                    logger.info("✅ Got artwork from current playlist")
-                    return data
+        let process2 = Process()
+        process2.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process2.arguments = ["-e", playlistArtworkScript]
+
+        let outputPipe2 = Pipe()
+        process2.standardOutput = outputPipe2
+        process2.standardError = FileHandle.nullDevice
+
+        do {
+            try process2.run()
+            process2.waitUntilExit()
+
+            let output = String(data: outputPipe2.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if output == "OK" {
+                if let data = FileManager.default.contents(atPath: tempFile) {
+                    try? FileManager.default.removeItem(atPath: tempFile)
+                    if !data.isEmpty {
+                        fputs("✅ [fetchArtwork] Got artwork from current playlist (\(data.count) bytes)\n", stderr)
+                        return data
+                    }
                 }
             }
+        } catch {
+            fputs("❌ [fetchArtwork] playlist osascript failed: \(error)\n", stderr)
         }
 
-        logger.error("AppleScript Artwork Error: No artwork available from track or playlist")
+        // 清理临时文件
+        try? FileManager.default.removeItem(atPath: tempFile)
+
+        fputs("❌ [fetchArtwork] No artwork available from track or playlist\n", stderr)
         return nil
     }
     
-    // Fetch artwork by persistentID using AppleScript (for playlist items)
+    // Fetch artwork by persistentID using osascript (for playlist items)
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
         guard !isPreview, !persistentID.isEmpty else { return nil }
-        
+
+        let tempFile = "/tmp/nanopod_artwork_pid_\(ProcessInfo.processInfo.processIdentifier)_\(persistentID.prefix(8)).tiff"
+
         let script = """
         tell application "Music"
             try
                 set targetTrack to first track of current playlist whose persistent ID is "\(persistentID)"
-                return data of artwork 1 of targetTrack
-            on error
-                return missing value
+                set artworkData to data of artwork 1 of targetTrack
+                set filePath to POSIX file "\(tempFile)"
+                set fileRef to open for access filePath with write permission
+                set eof fileRef to 0
+                write artworkData to fileRef
+                close access fileRef
+                return "OK"
+            on error errMsg
+                try
+                    close access filePath
+                end try
+                return "ERROR:" & errMsg
             end try
         end tell
         """
-        
+
         return await Task.detached {
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: script) {
-                let descriptor = scriptObject.executeAndReturnError(&error)
-                if let error = error {
-                    self.logger.error("AppleScript Artwork Error (persistentID): \(error)")
-                    return nil
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+
+            let outputPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                if output == "OK" {
+                    if let data = FileManager.default.contents(atPath: tempFile) {
+                        try? FileManager.default.removeItem(atPath: tempFile)
+                        if !data.isEmpty, let image = NSImage(data: data) {
+                            return image
+                        }
+                    }
                 }
-                let data = descriptor.data
-                if !data.isEmpty, let image = NSImage(data: data) {
-                    return image
-                }
+            } catch {
+                fputs("❌ [fetchArtworkByPersistentID] osascript failed: \(error)\n", stderr)
             }
+
+            try? FileManager.default.removeItem(atPath: tempFile)
             return nil
         }.value
     }
@@ -701,13 +875,14 @@ public class MusicController: ObservableObject {
     // MARK: - Playback Controls (Pure AppleScript)
 
     public func togglePlayPause() {
+        print("🎵 [MusicController] togglePlayPause() called, isPreview=\(isPreview)")
         if isPreview {
             logger.info("Preview: togglePlayPause")
             isPlaying.toggle()
             return
         }
         runControlScript("playpause")
-        
+
         // Optimistic UI update & Lock
         DispatchQueue.main.async {
             self.lastUserActionTime = Date()
@@ -728,7 +903,12 @@ public class MusicController: ObservableObject {
             logger.info("Preview: previousTrack")
             return
         }
-        runControlScript("previous track")
+        // Apple Music 标准行为：播放超过3秒时按上一首会回到歌曲开头
+        if currentTime > 3.0 {
+            seek(to: 0)
+        } else {
+            runControlScript("previous track")
+        }
     }
 
     public func seek(to position: Double) {
@@ -767,20 +947,37 @@ public class MusicController: ObservableObject {
             logger.info("Preview: playTrack \(persistentID)")
             return
         }
-        
+
+        fputs("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n", stderr)
+
         let script = """
         tell application "Music"
             play (first track of current playlist whose persistent ID is "\(persistentID)")
         end tell
         """
-        
+
+        // 使用 Process + osascript 替代 NSAppleScript
         DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: script) {
-                scriptObject.executeAndReturnError(&error)
-                if let error = error {
-                    self.logger.error("Play Track Error: \(error)")
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+
+            let errorPipe = Pipe()
+            process.standardError = errorPipe
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                if process.terminationStatus == 0 {
+                    fputs("✅ [playTrack] Successfully started playing\n", stderr)
+                } else {
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorMsg = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    fputs("❌ [playTrack] Failed: \(errorMsg)\n", stderr)
                 }
+            } catch {
+                fputs("❌ [playTrack] Process launch failed: \(error)\n", stderr)
             }
         }
     }
@@ -831,29 +1028,31 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 🔑 优先使用 MusicKit 获取真实的 "Up Next" 播放队列（包括随机播放顺序）
+        // 在 macOS 15 上 MusicKit 可能导致 TCC 崩溃，完全使用 AppleScript
         Task {
-            await fetchUpNextViaMusicKit()
+            await fetchUpNextViaAppleScript()
         }
 
-        // 同时用 AppleScript 获取历史记录（MusicKit 不提供这个）
+        // 同时用 AppleScript 获取历史记录
         fetchRecentHistoryViaAppleScript()
     }
 
     /// 使用 MusicKit 获取真实的播放队列（包括随机播放顺序）
     private func fetchUpNextViaMusicKit() async {
-        // 检查 MusicKit 授权
+        // 检查 MusicKit 授权 - 必须先检查，否则访问 ApplicationMusicPlayer 会崩溃
         let authStatus = MusicAuthorization.currentStatus
         if authStatus != .authorized {
-            let newStatus = await MusicAuthorization.request()
-            if newStatus != .authorized {
-                logger.warning("⚠️ MusicKit not authorized, falling back to AppleScript for Up Next")
-                await fetchUpNextViaAppleScript()
-                return
+            // 如果未授权，直接回退到 AppleScript，不要请求授权（会在主线程处理）
+            if authStatus == .notDetermined {
+                logger.info("⚠️ MusicKit not yet determined, falling back to AppleScript")
+            } else {
+                logger.warning("⚠️ MusicKit not authorized (\(String(describing: authStatus))), falling back to AppleScript for Up Next")
             }
+            await fetchUpNextViaAppleScript()
+            return
         }
 
-        // 使用 ApplicationMusicPlayer 获取真实队列
+        // 使用 ApplicationMusicPlayer 获取真实队列 - 只有在已授权时才安全访问
         let player = ApplicationMusicPlayer.shared
         let queue = player.queue
 
@@ -929,13 +1128,23 @@ public class MusicController: ObservableObject {
         end tell
         """
 
+        // 使用 Process + osascript 替代 NSAppleScript
         DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", upNextScript]
 
-            // Fetch Up Next via AppleScript
-            if let scriptObject = NSAppleScript(source: upNextScript) {
-                let descriptor = scriptObject.executeAndReturnError(&error)
-                if error == nil, let resultString = descriptor.stringValue {
+            let outputPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let resultString = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                if !resultString.isEmpty {
                     let parsed = self.parseQueueResult(resultString)
                     DispatchQueue.main.async {
                         self.upNextTracks = parsed
@@ -947,9 +1156,9 @@ public class MusicController: ObservableObject {
                             LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
                         }
                     }
-                } else if let error = error {
-                    self.logger.error("❌ Up Next fetch error: \(error)")
                 }
+            } catch {
+                self.logger.error("❌ Up Next fetch error: \(error)")
             }
         }
     }
@@ -986,19 +1195,31 @@ public class MusicController: ObservableObject {
         end tell
         """
 
+        // 使用 Process + osascript 替代 NSAppleScript
         DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: historyScript) {
-                let descriptor = scriptObject.executeAndReturnError(&error)
-                if error == nil, let resultString = descriptor.stringValue {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", historyScript]
+
+            let outputPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let resultString = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                if !resultString.isEmpty {
                     let parsed = self.parseQueueResult(resultString)
                     DispatchQueue.main.async {
                         self.recentTracks = parsed
                         self.logger.info("✅ Fetched \(parsed.count) recent tracks")
                     }
-                } else if let error = error {
-                    self.logger.error("❌ History fetch error: \(error)")
                 }
+            } catch {
+                self.logger.error("❌ History fetch error: \(error)")
             }
         }
     }
@@ -1030,21 +1251,38 @@ public class MusicController: ObservableObject {
     private func runControlScript(_ command: String) {
         let script = "tell application \"Music\" to \(command)"
         logger.info("Running script: \(script)")
+        fputs("🎵 [runControlScript] Running: \(script)\n", stderr)
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: script) {
-                scriptObject.executeAndReturnError(&error)
-                if let error = error {
-                    self.logger.error("Script Error: \(error)")
-                    DispatchQueue.main.async {
-                        self.debugMessage = "Error: \(error["NSAppleScriptErrorBriefMessage"] ?? "Unknown")"
-                    }
-                } else {
+        // 使用 Process + osascript（比 NSAppleScript 更可靠）
+        DispatchQueue.global(qos: .userInteractive).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                if process.terminationStatus == 0 {
+                    fputs("✅ [runControlScript] Success: \(command)\n", stderr)
                     DispatchQueue.main.async {
                         self.debugMessage = "Command executed: \(command)"
                     }
+                } else {
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorString = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    fputs("❌ [runControlScript] Error: \(errorString)\n", stderr)
+                    DispatchQueue.main.async {
+                        self.debugMessage = "Error: \(errorString)"
+                    }
                 }
+            } catch {
+                fputs("❌ [runControlScript] Failed to launch osascript: \(error)\n", stderr)
             }
         }
     }

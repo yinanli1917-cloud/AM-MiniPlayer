@@ -17,6 +17,8 @@ public struct LyricsView: View {
     @State private var showLoadingDots: Bool = false
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
+    var onHide: (() -> Void)?
+    var onExpand: (() -> Void)?
     @State private var lastVelocity: CGFloat = 0  // 记录上一次速度
     @State private var scrollLocked: Bool = false  // 🔑 锁定快速滚动状态，防止检测衰减速度
     @State private var hasTriggeredSlowScroll: Bool = false  // 🔑 慢速滚动是否已触发过控件显示
@@ -25,9 +27,11 @@ public struct LyricsView: View {
     @State private var showDebugWindow: Bool = false
     @State private var debugMessages: [String] = []
 
-    public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil) {
+    public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
         self._currentPage = currentPage
         self.openWindow = openWindow
+        self.onHide = onHide
+        self.onExpand = onExpand
     }
 
     private func addDebugMessage(_ message: String) {
@@ -282,11 +286,28 @@ public struct LyricsView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Hide按钮 - overlay不接收hover事件，不改变布局
+            // Hide/Expand 按钮 - 根据模式显示不同按钮
             if showControls {
-                HideButtonView()
+                if onExpand != nil {
+                    // 菜单栏模式：显示展开按钮
+                    ExpandButtonView(onExpand: onExpand!)
+                        .padding(12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                } else if onHide != nil {
+                    // 浮窗模式：显示收起按钮
+                    HideButtonView(onHide: onHide!)
+                        .padding(12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                } else {
+                    // 无回调时的默认行为
+                    HideButtonView(onHide: {
+                        if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
+                            window.orderOut(nil)
+                        }
+                    })
                     .padding(12)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
             }
         }
         .onHover { hovering in
@@ -858,10 +879,13 @@ struct LoadingDotsLyricView: View {
 
 
 
-#Preview {
-    @Previewable @State var currentPage: PlayerPage = .lyrics
-    LyricsView(currentPage: $currentPage)
-        .environmentObject(MusicController(preview: true))
-        .frame(width: 300, height: 300)
-        .background(Color.black)
+#if DEBUG
+struct LyricsView_Previews: PreviewProvider {
+    static var previews: some View {
+        LyricsView(currentPage: .constant(.lyrics))
+            .environmentObject(MusicController(preview: true))
+            .frame(width: 300, height: 300)
+            .background(Color.black)
+    }
 }
+#endif
