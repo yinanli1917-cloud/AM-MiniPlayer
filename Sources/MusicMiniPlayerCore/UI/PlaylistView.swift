@@ -205,7 +205,7 @@ public struct PlaylistView: View {
                         ZStack(alignment: .bottom) {
                             // 渐变模糊背景
                             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .frame(height: 130)
+                                .frame(height: 80)
                                 .mask(
                                     LinearGradient(
                                         gradient: Gradient(stops: [
@@ -241,15 +241,12 @@ public struct PlaylistView: View {
         }
     }
 
-    // MARK: - Sticky Header (Blend with background)
+    // MARK: - Sticky Header (Pure Gaussian Blur)
     @ViewBuilder
     private func stickyHeader(_ title: String) -> some View {
         ZStack(alignment: .leading) {
-            // 背景模糊材质 + 半透明黑色层，融合背景色
+            // 纯高斯模糊背景，不添加任何颜色或透明度
             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-
-            // 添加半透明黑色层，让 header 更好地融入背景
-            Color.black.opacity(0.25)
 
             Text(title)
                 .font(.system(size: 13, weight: .bold))
@@ -492,17 +489,37 @@ struct SolidColorBackgroundView: View {
         if let artwork = artwork {
             DispatchQueue.global(qos: .userInitiated).async {
                 if let nsColor = artwork.dominantColor() {
+                    // 获取 RGB 值检查是否有效
+                    let red = nsColor.redComponent
+                    let green = nsColor.greenComponent
+                    let blue = nsColor.blueComponent
+
+                    // 如果颜色太暗（接近黑色），提高亮度
+                    let brightness = max(red, green, blue)
+
                     DispatchQueue.main.async {
                         withAnimation(.easeInOut(duration: 0.8)) {
-                            // 使用更高的不透明度以匹配专辑页面视觉效果
-                            self.dominantColor = Color(nsColor: nsColor)
+                            if brightness < 0.1 {
+                                // 颜色太暗，使用稍微亮一点的版本
+                                self.dominantColor = Color(nsColor: nsColor.withAlphaComponent(1.0)).opacity(0.7)
+                            } else {
+                                // 使用完整的主色调
+                                self.dominantColor = Color(nsColor: nsColor)
+                            }
+                        }
+                    }
+                } else {
+                    // 取色失败，使用深灰色而不是纯黑
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.6)) {
+                            self.dominantColor = Color(red: 0.2, green: 0.2, blue: 0.2)
                         }
                     }
                 }
             }
         } else {
             withAnimation(.easeInOut(duration: 0.6)) {
-                dominantColor = Color.black.opacity(0.9)
+                dominantColor = Color(red: 0.2, green: 0.2, blue: 0.2)
             }
         }
     }
