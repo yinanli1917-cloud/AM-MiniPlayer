@@ -1275,10 +1275,18 @@ public class MusicController: ObservableObject {
                 let album = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
                 let id = fields[3].trimmingCharacters(in: .whitespacesAndNewlines)
                 let durationSeconds = Double(fields[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0.0
-                tracks.append((title, artist, album, id, durationSeconds))
+
+                // 🔑 过滤掉空标题的track（避免显示空白行）
+                if !title.isEmpty {
+                    tracks.append((title, artist, album, id, durationSeconds))
+                    logger.info("✅ Parsed track: \(title) by \(artist)")
+                } else {
+                    logger.warning("⚠️ Skipping track with empty title")
+                }
             }
         }
 
+        logger.info("📊 Parsed \(tracks.count) valid tracks from AppleScript result")
         return tracks
     }
 
