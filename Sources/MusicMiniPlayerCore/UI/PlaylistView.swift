@@ -241,12 +241,15 @@ public struct PlaylistView: View {
         }
     }
 
-    // MARK: - Sticky Header (Pure Blur Material)
+    // MARK: - Sticky Header (Blend with background)
     @ViewBuilder
     private func stickyHeader(_ title: String) -> some View {
         ZStack(alignment: .leading) {
-            // 纯背景模糊材质（无渐变、无颜色、无不透明度调整）
+            // 背景模糊材质 + 半透明黑色层，融合背景色
             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+
+            // 添加半透明黑色层，让 header 更好地融入背景
+            Color.black.opacity(0.25)
 
             Text(title)
                 .font(.system(size: 13, weight: .bold))
@@ -350,7 +353,7 @@ public struct PlaylistView: View {
                 }
                 .padding(.top, 10)
                 .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                .padding(.bottom, 0)
             }
         }
     }
@@ -491,7 +494,8 @@ struct SolidColorBackgroundView: View {
                 if let nsColor = artwork.dominantColor() {
                     DispatchQueue.main.async {
                         withAnimation(.easeInOut(duration: 0.8)) {
-                            self.dominantColor = Color(nsColor: nsColor).opacity(0.85)
+                            // 使用更高的不透明度以匹配专辑页面视觉效果
+                            self.dominantColor = Color(nsColor: nsColor)
                         }
                     }
                 }
