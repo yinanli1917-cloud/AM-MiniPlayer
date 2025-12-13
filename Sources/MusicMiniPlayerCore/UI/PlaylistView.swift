@@ -116,7 +116,7 @@ public struct PlaylistView: View {
                             .id("upNextSection")
 
                             // 底部留白
-                            Spacer().frame(height: 120)
+                            Spacer().frame(height: 20)
                         }
                         .scrollTargetLayout()  // 🔑 启用 snap 目标
                     }
@@ -469,11 +469,11 @@ struct PlaylistItemRowCompact: View {
     }
 }
 
-// MARK: - Solid Color Background View (Album Art Color Extraction)
+// MARK: - Solid Color Background View (Album Art Color Extraction - 与 LiquidBackgroundView 相同算法)
 
 struct SolidColorBackgroundView: View {
     var artwork: NSImage?
-    @State private var dominantColor: Color = Color.black.opacity(0.9)
+    @State private var dominantColor: Color = .clear
 
     var body: some View {
         dominantColor
@@ -489,37 +489,17 @@ struct SolidColorBackgroundView: View {
         if let artwork = artwork {
             DispatchQueue.global(qos: .userInitiated).async {
                 if let nsColor = artwork.dominantColor() {
-                    // 获取 RGB 值检查是否有效
-                    let red = nsColor.redComponent
-                    let green = nsColor.greenComponent
-                    let blue = nsColor.blueComponent
-
-                    // 如果颜色太暗（接近黑色），提高亮度
-                    let brightness = max(red, green, blue)
-
                     DispatchQueue.main.async {
                         withAnimation(.easeInOut(duration: 0.8)) {
-                            if brightness < 0.1 {
-                                // 颜色太暗，使用稍微亮一点的版本
-                                self.dominantColor = Color(nsColor: nsColor.withAlphaComponent(1.0)).opacity(0.7)
-                            } else {
-                                // 使用完整的主色调
-                                self.dominantColor = Color(nsColor: nsColor)
-                            }
-                        }
-                    }
-                } else {
-                    // 取色失败，使用深灰色而不是纯黑
-                    DispatchQueue.main.async {
-                        withAnimation(.easeInOut(duration: 0.6)) {
-                            self.dominantColor = Color(red: 0.2, green: 0.2, blue: 0.2)
+                            // 🔑 使用与 LiquidBackgroundView 完全相同的逻辑
+                            self.dominantColor = Color(nsColor: nsColor)
                         }
                     }
                 }
             }
         } else {
             withAnimation(.easeInOut(duration: 0.6)) {
-                dominantColor = Color(red: 0.2, green: 0.2, blue: 0.2)
+                dominantColor = .clear
             }
         }
     }

@@ -1122,18 +1122,12 @@ public class MusicController: ObservableObject {
             throw NSError(domain: "MusicKit", code: -1, userInfo: [NSLocalizedDescriptionKey: "MusicKit not authorized"])
         }
 
-        // ❌ CRITICAL LIMITATION: MusicKit 在 macOS 上无法获取 Music.app 的真实队列
-        // - ApplicationMusicPlayer: 仅用于应用内播放，不控制 Music.app
-        // - SystemMusicPlayer: 在 macOS 上不可用（仅 iOS）
-        // - 没有官方 API 可以获取 Music.app 的真实 Up Next 队列
-        //
-        // 因此，MusicKit 队列功能在 macOS 上无法工作，必须使用 AppleScript fallback
-        logger.error("❌ [MusicKit] macOS does not support accessing Music.app queue via MusicKit")
-        logger.error("ℹ️  [MusicKit] Falling back to AppleScript for queue data")
-        throw NSError(domain: "MusicKit", code: -3, userInfo: [NSLocalizedDescriptionKey: "MusicKit cannot access Music.app queue on macOS"])
-
-        // 以下代码不会执行（已在上方 throw）
-        // macOS 上没有可用的 MusicKit API 来获取 Music.app 的队列
+        // ❌ macOS 上 MusicKit 无法访问 Music.app 的真实队列
+        // ApplicationMusicPlayer 只能播放自己应用内的音乐
+        // SystemMusicPlayer 只在 iOS 上可用
+        // MPMusicPlayerController 也标记为 API_UNAVAILABLE(macos)
+        logger.error("❌ MusicKit/MediaPlayer frameworks cannot access Music.app queue on macOS, falling back to AppleScript")
+        throw NSError(domain: "MusicKit", code: -3, userInfo: [NSLocalizedDescriptionKey: "MusicKit unavailable on macOS for system music control"])
     }
 
     /// AppleScript 方式获取 Up Next（回退方案）
