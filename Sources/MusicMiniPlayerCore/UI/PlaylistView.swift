@@ -39,7 +39,7 @@ public struct PlaylistView: View {
             let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
 
             ZStack {
-                // Background (Liquid Glass)
+                // Background (Liquid Glass with album art color)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                     .ignoresSafeArea()
 
@@ -74,9 +74,18 @@ public struct PlaylistView: View {
                             .id("historySection")
 
                             // ═══════════════════════════════════════════
-                            // MARK: - Now Playing Section（默认位置）
+                            // MARK: - Now Playing Section（默认位置，无 sticky header）
                             // ═══════════════════════════════════════════
-                            Section(header: stickyHeader("Now Playing")) {
+                            VStack(spacing: 0) {
+                                // Simple header (non-sticky)
+                                Text("Now Playing")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .frame(height: 36)
+
                                 nowPlayingCard(geometry: geometry, artSize: artSize)
                             }
                             .id("nowPlayingSection")
@@ -232,24 +241,12 @@ public struct PlaylistView: View {
         }
     }
 
-    // MARK: - Sticky Header (Progressive Blur)
+    // MARK: - Sticky Header (Pure Blur Material)
     @ViewBuilder
     private func stickyHeader(_ title: String) -> some View {
         ZStack(alignment: .leading) {
-            // Progressive blur 背景
+            // 纯背景模糊材质（无渐变、无颜色、无不透明度调整）
             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                .mask(
-                    LinearGradient(
-                        gradient: Gradient(stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black, location: 0.6),
-                            .init(color: .black.opacity(0.5), location: 0.8),
-                            .init(color: .clear, location: 1.0)
-                        ]),
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
 
             Text(title)
                 .font(.system(size: 13, weight: .bold))

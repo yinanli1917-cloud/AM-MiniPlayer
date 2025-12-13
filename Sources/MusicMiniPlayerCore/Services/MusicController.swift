@@ -144,11 +144,18 @@ public class MusicController: ObservableObject {
             }
         }
 
-        // 注意：在 macOS 15 上，MusicKit 授权检查可能导致崩溃
-        // 暂时禁用 MusicKit，完全使用 AppleScript
-        // Task {
-        //     await requestMusicKitAuthorization()
-        // }
+        // 🔑 尝试 MusicKit 授权（带安全检查）
+        logger.error("🔐 [MusicKit] Starting authorization task...")
+        Task { @MainActor in
+            self.logger.error("🔐 [MusicKit] Task started, calling requestMusicKitAuthorizationSafely")
+            do {
+                try await self.requestMusicKitAuthorizationSafely()
+                self.logger.error("🔐 [MusicKit] Authorization completed successfully")
+            } catch {
+                self.logger.error("❌ MusicKit authorization failed: \(error.localizedDescription)")
+                // 失败后自动使用 AppleScript fallback
+            }
+        }
     }
     
     deinit {
@@ -161,11 +168,24 @@ public class MusicController: ObservableObject {
 
     // MARK: - Setup
 
+    /// 安全的 MusicKit 授权请求（带异常捕获）
+    @MainActor
+    private func requestMusicKitAuthorizationSafely() async throws {
+        do {
+            await requestMusicKitAuthorization()
+        } catch {
+            logger.error("❌ MusicKit authorization threw error: \(error)")
+            throw error
+        }
+    }
+
     @MainActor
     private func requestMusicKitAuthorization() async {
+        logger.error("🔐 [MusicKit] requestMusicKitAuthorization() called")
+
         // 1. 检查当前状态
         let currentStatus = MusicAuthorization.currentStatus
-        logger.info("Current MusicKit status: \(String(describing: currentStatus))")
+        logger.error("🔐 [MusicKit] Current status: \(String(describing: currentStatus))")
 
         if currentStatus == .authorized {
             logger.info("✅ MusicKit already authorized!")
@@ -1073,9 +1093,14 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 在 macOS 15 上 MusicKit 可能导致 TCC 崩溃，完全使用 AppleScript
+        // 🔑 优先使用 MusicKit（真实队列），失败则回退到 AppleScript
         Task {
-            await fetchUpNextViaAppleScript()
+            do {
+                try await fetchUpNextViaMusicKit()
+            } catch {
+                logger.error("❌ MusicKit queue fetch failed: \(error.localizedDescription)")
+                await fetchUpNextViaAppleScript()
+            }
         }
 
         // 🔑 不再调用 fetchRecentHistoryViaAppleScript()
@@ -1084,23 +1109,26 @@ public class MusicController: ObservableObject {
     }
 
     /// 使用 MusicKit 获取真实的播放队列（包括随机播放顺序）
-    private func fetchUpNextViaMusicKit() async {
+    private func fetchUpNextViaMusicKit() async throws {
         // 检查 MusicKit 授权 - 必须先检查，否则访问 ApplicationMusicPlayer 会崩溃
         let authStatus = MusicAuthorization.currentStatus
         if authStatus != .authorized {
-            // 如果未授权，直接回退到 AppleScript，不要请求授权（会在主线程处理）
+            // 如果未授权，抛出错误让调用者回退到 AppleScript
             if authStatus == .notDetermined {
-                logger.info("⚠️ MusicKit not yet determined, falling back to AppleScript")
+                logger.info("⚠️ MusicKit not yet determined, will fallback to AppleScript")
             } else {
-                logger.warning("⚠️ MusicKit not authorized (\(String(describing: authStatus))), falling back to AppleScript for Up Next")
+                logger.warning("⚠️ MusicKit not authorized (\(String(describing: authStatus))), will fallback to AppleScript for Up Next")
             }
-            await fetchUpNextViaAppleScript()
-            return
+            throw NSError(domain: "MusicKit", code: -1, userInfo: [NSLocalizedDescriptionKey: "MusicKit not authorized"])
         }
 
         // 使用 ApplicationMusicPlayer 获取真实队列 - 只有在已授权时才安全访问
         let player = ApplicationMusicPlayer.shared
         let queue = player.queue
+
+        logger.error("🔐 [MusicKit] Queue entries count: \(queue.entries.count)")
+        let playbackStatus = String(describing: player.state.playbackStatus)
+        logger.error("🔐 [MusicKit] Player state: \(playbackStatus)")
 
         var trackList: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
 
@@ -1136,9 +1164,9 @@ public class MusicController: ObservableObject {
                 self.logger.info("✅ Fetched \(self.upNextTracks.count) up next tracks via MusicKit")
             }
         } else {
-            // MusicKit 队列为空，回退到 AppleScript
-            logger.info("⚠️ MusicKit queue empty, falling back to AppleScript")
-            await fetchUpNextViaAppleScript()
+            // MusicKit 队列为空，抛出错误让调用者回退到 AppleScript
+            logger.info("⚠️ MusicKit queue empty, will fallback to AppleScript")
+            throw NSError(domain: "MusicKit", code: -2, userInfo: [NSLocalizedDescriptionKey: "MusicKit queue is empty"])
         }
     }
 
