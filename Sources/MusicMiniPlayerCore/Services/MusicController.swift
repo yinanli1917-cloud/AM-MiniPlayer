@@ -51,6 +51,9 @@ public class MusicController: ObservableObject {
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
 
+    // 🔑 本地播放历史追踪（因为 AppleScript 无法获取真实播放历史）
+    private var localPlayHistory: [(title: String, artist: String, album: String, persistentID: String)] = []
+
     // State synchronization lock
     private var lastUserActionTime: Date = .distantPast
     private let userActionLockDuration: TimeInterval = 1.5
@@ -445,6 +448,15 @@ public class MusicController: ObservableObject {
                     set isPlaying to "true"
                 end if
 
+                -- Get shuffle and repeat state
+                set shuffleState to "false"
+                if shuffle enabled then
+                    set shuffleState to "true"
+                end if
+
+                set repeatState to song repeat as string
+                -- repeatState will be "off", "one", or "all"
+
                 if exists current track then
                     set trackName to name of current track
                     set trackArtist to artist of current track
@@ -455,9 +467,9 @@ public class MusicController: ObservableObject {
                     set trackBitRate to bit rate of current track as string
                     set trackSampleRate to sample rate of current track as string
 
-                    return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate
+                    return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate & "|||" & shuffleState & "|||" & repeatState
                 else
-                    return isPlaying & "|||NOT_PLAYING|||||||0||||||0|||0|||0"
+                    return isPlaying & "|||NOT_PLAYING|||||||0||||||0|||0|||0|||" & shuffleState & "|||" & repeatState
                 end if
             on error errMsg
                 return "ERROR:" & errMsg
@@ -515,13 +527,13 @@ public class MusicController: ObservableObject {
             }
 
             let parts = resultString.components(separatedBy: "|||")
-            guard parts.count >= 9 else {
+            guard parts.count >= 11 else {
                 fputs("❌ [updatePlayerState] Invalid format (\(parts.count) parts)\n", stderr)
                 return
             }
 
             // 成功获取数据
-            fputs("✅ [updatePlayerState] \(parts[1]) - pos:\(parts[6])\n", stderr)
+            fputs("✅ [updatePlayerState] \(parts[1]) - pos:\(parts[6]) shuffle:\(parts[9]) repeat:\(parts[10])\n", stderr)
 
             let isPlaying = parts[0] == "true"
             let trackName = parts[1]
@@ -532,6 +544,14 @@ public class MusicController: ObservableObject {
             let position = Double(parts[6]) ?? 0
             let bitRate = Int(parts[7]) ?? 0
             let sampleRate = Int(parts[8]) ?? 0
+            let shuffleState = parts[9] == "true"
+            let repeatStateStr = parts[10].trimmingCharacters(in: .whitespacesAndNewlines)
+            let repeatState: Int
+            switch repeatStateStr {
+            case "one": repeatState = 1
+            case "all": repeatState = 2
+            default: repeatState = 0  // "off"
+            }
 
             // Determine audio quality
             var quality: String? = nil
@@ -546,9 +566,12 @@ public class MusicController: ObservableObject {
             let trackChanged = (persistentID != self.currentPersistentID && !persistentID.isEmpty && trackName != "NOT_PLAYING") || isFirstTrack
 
             DispatchQueue.main.async {
-                // Update playing state
+                // Update playing state (only if not recently toggled by user)
                 if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
                     self.isPlaying = isPlaying
+                    // Sync shuffle and repeat state from system Music
+                    self.shuffleEnabled = shuffleState
+                    self.repeatMode = repeatState
                 }
 
                 if trackName == "NOT_PLAYING" {
@@ -579,6 +602,28 @@ public class MusicController: ObservableObject {
                     if trackChanged {
                         fputs("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist) (first=\(isFirstTrack))\n", stderr)
                         self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
+
+                        // 🔑 本地播放历史追踪：将上一首歌加入历史（非首次加载时）
+                        if !isFirstTrack && !self.currentTrackTitle.isEmpty && self.currentTrackTitle != "Not Playing" {
+                            let previousTrack = (
+                                title: self.currentTrackTitle,
+                                artist: self.currentArtist,
+                                album: self.currentAlbum,
+                                persistentID: self.currentPersistentID ?? ""
+                            )
+                            // 避免重复添加
+                            if self.localPlayHistory.first?.persistentID != previousTrack.persistentID {
+                                self.localPlayHistory.insert(previousTrack, at: 0)
+                                // 只保留最近 20 首
+                                if self.localPlayHistory.count > 20 {
+                                    self.localPlayHistory.removeLast()
+                                }
+                                // 更新 recentTracks
+                                self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, 0.0) }
+                                fputs("📜 [History] Added: \(previousTrack.title) - now \(self.localPlayHistory.count) items\n", stderr)
+                            }
+                        }
+
                         self.currentPersistentID = persistentID
                         self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
                     }
@@ -1033,8 +1078,9 @@ public class MusicController: ObservableObject {
             await fetchUpNextViaAppleScript()
         }
 
-        // 同时用 AppleScript 获取历史记录
-        fetchRecentHistoryViaAppleScript()
+        // 🔑 不再调用 fetchRecentHistoryViaAppleScript()
+        // 原因：AppleScript 只能获取播放列表中的歌曲顺序，不是真正的播放历史
+        // 现在使用 localPlayHistory 本地追踪来记录播放历史
     }
 
     /// 使用 MusicKit 获取真实的播放队列（包括随机播放顺序）

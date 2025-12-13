@@ -351,6 +351,6 @@ struct MenuBarPlayerView: View {
             MiniPlayerView(openWindow: nil, onHide: nil, onExpand: onExpand)
         }
         .frame(width: 300, height: 350)  // 高度改为 350
-        .clipShape(RoundedRectangle(cornerRadius: 8))  // 圆角改为 8pt 更贴合系统
+        .clipShape(RoundedRectangle(cornerRadius: 10))  // 圆角 10pt
     }
 }

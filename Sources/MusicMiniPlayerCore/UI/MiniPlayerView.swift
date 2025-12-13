@@ -86,16 +86,16 @@ public struct MiniPlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
-            // Music按钮 - hover时显示
-            if showControls {
+            // Music按钮 - hover时显示，但歌单页面不显示
+            if showControls && currentPage != .playlist {
                 MusicButtonView()
                     .padding(12)
                     .transition(.opacity)
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Hide/Expand 按钮 - hover时显示
-            if showControls {
+            // Hide/Expand 按钮 - hover时显示，但歌单页面不显示
+            if showControls && currentPage != .playlist {
                 // 根据模式显示不同按钮
                 if onExpand != nil {
                     // 菜单栏模式：显示展开按钮
@@ -449,16 +449,26 @@ public struct MiniPlayerView: View {
                         availableHeight / 2
                     )
                 } else if currentPage == .playlist {
-                    // Playlist页面：左上角小图
-                    let size = min(geo.size.width * 0.22, 70.0)
-                    // Now Playing 区域在 tab 下方
-                    // tab 高度约 90 + 正在播放区域的上padding
-                    let topOffset: CGFloat = 90 + 20 + size/2
+                    // 🔑 与 PlaylistView 中的 artSize 完全一致
+                    let size = min(geo.size.width * 0.18, 60.0)
+
+                    // 计算在 Now Playing 卡片内的位置：
+                    // - Section header 高度: 36
+                    // - 卡片上 padding(.top, 8): 8
+                    // - 卡片内 padding(12): 12
+                    let headerHeight: CGFloat = 36
+                    let cardTopPadding: CGFloat = 8
+                    let cardInnerPadding: CGFloat = 12
+                    let topOffset = headerHeight + cardTopPadding + cardInnerPadding + size/2
+
+                    // X 位置：外 padding 12 + 卡片内 padding 12 + size/2
+                    let xOffset = 12 + 12 + size/2
+
                     return (
                         size,
                         6.0,
                         3.0,
-                        24 + size/2,  // 左边距 24 + 半个封面宽度
+                        xOffset,
                         topOffset
                     )
                 } else {
