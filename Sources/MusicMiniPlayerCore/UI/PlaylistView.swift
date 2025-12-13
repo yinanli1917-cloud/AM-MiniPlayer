@@ -39,8 +39,8 @@ public struct PlaylistView: View {
             let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
 
             ZStack {
-                // Background (Solid color from album art)
-                SolidColorBackgroundView(artwork: musicController.currentArtwork)
+                // Background (Liquid Glass) - same as LyricsView and MiniPlayerView
+                LiquidBackgroundView(artwork: musicController.currentArtwork)
                     .ignoresSafeArea()
 
                 // 主内容 ScrollView
@@ -241,12 +241,16 @@ public struct PlaylistView: View {
         }
     }
 
-    // MARK: - Sticky Header (Pure Gaussian Blur)
+    // MARK: - Sticky Header (Background Color with Blur)
     @ViewBuilder
     private func stickyHeader(_ title: String) -> some View {
         ZStack(alignment: .leading) {
-            // 纯高斯模糊背景，不添加任何颜色或透明度
-            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+            // 使用背景色 + 透明度，然后覆盖模糊效果
+            Rectangle()
+                .fill(Color.black.opacity(0.3)) // 降低透明度使header更亮
+                .background(
+                    VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                )
 
             Text(title)
                 .font(.system(size: 13, weight: .bold))

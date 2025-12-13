@@ -1179,6 +1179,8 @@ public class MusicController: ObservableObject {
                 let resultString = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
                 if !resultString.isEmpty {
+                    // 输出原始结果用于调试
+                    self.logger.info("📝 Raw AppleScript result: \(resultString)")
                     let parsed = self.parseQueueResult(resultString)
                     DispatchQueue.main.async {
                         self.upNextTracks = parsed
