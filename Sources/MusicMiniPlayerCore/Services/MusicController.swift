@@ -1122,52 +1122,18 @@ public class MusicController: ObservableObject {
             throw NSError(domain: "MusicKit", code: -1, userInfo: [NSLocalizedDescriptionKey: "MusicKit not authorized"])
         }
 
-        // 使用 ApplicationMusicPlayer 获取真实队列 - 只有在已授权时才安全访问
-        let player = ApplicationMusicPlayer.shared
-        let queue = player.queue
+        // ❌ CRITICAL LIMITATION: MusicKit 在 macOS 上无法获取 Music.app 的真实队列
+        // - ApplicationMusicPlayer: 仅用于应用内播放，不控制 Music.app
+        // - SystemMusicPlayer: 在 macOS 上不可用（仅 iOS）
+        // - 没有官方 API 可以获取 Music.app 的真实 Up Next 队列
+        //
+        // 因此，MusicKit 队列功能在 macOS 上无法工作，必须使用 AppleScript fallback
+        logger.error("❌ [MusicKit] macOS does not support accessing Music.app queue via MusicKit")
+        logger.error("ℹ️  [MusicKit] Falling back to AppleScript for queue data")
+        throw NSError(domain: "MusicKit", code: -3, userInfo: [NSLocalizedDescriptionKey: "MusicKit cannot access Music.app queue on macOS"])
 
-        logger.error("🔐 [MusicKit] Queue entries count: \(queue.entries.count)")
-        let playbackStatus = String(describing: player.state.playbackStatus)
-        logger.error("🔐 [MusicKit] Player state: \(playbackStatus)")
-
-        var trackList: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
-
-        // 获取队列中的条目
-        for entry in queue.entries.prefix(15) {
-            if let item = entry.item {
-                switch item {
-                case .song(let song):
-                    trackList.append((
-                        title: song.title,
-                        artist: song.artistName,
-                        album: song.albumTitle ?? "",
-                        persistentID: song.id.rawValue,
-                        duration: song.duration ?? 0
-                    ))
-                default:
-                    break
-                }
-            }
-        }
-
-        // 创建不可变副本用于 MainActor
-        let tracks = trackList
-
-        if !tracks.isEmpty {
-            await MainActor.run {
-                // 移除当前正在播放的歌曲（队列第一个通常是当前歌曲）
-                if tracks.first?.title == self.currentTrackTitle {
-                    self.upNextTracks = Array(tracks.dropFirst())
-                } else {
-                    self.upNextTracks = tracks
-                }
-                self.logger.info("✅ Fetched \(self.upNextTracks.count) up next tracks via MusicKit")
-            }
-        } else {
-            // MusicKit 队列为空，抛出错误让调用者回退到 AppleScript
-            logger.info("⚠️ MusicKit queue empty, will fallback to AppleScript")
-            throw NSError(domain: "MusicKit", code: -2, userInfo: [NSLocalizedDescriptionKey: "MusicKit queue is empty"])
-        }
+        // 以下代码不会执行（已在上方 throw）
+        // macOS 上没有可用的 MusicKit API 来获取 Music.app 的队列
     }
 
     /// AppleScript 方式获取 Up Next（回退方案）

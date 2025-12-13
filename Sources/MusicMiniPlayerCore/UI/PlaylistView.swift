@@ -39,8 +39,8 @@ public struct PlaylistView: View {
             let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
 
             ZStack {
-                // Background (Liquid Glass with album art color)
-                LiquidBackgroundView(artwork: musicController.currentArtwork)
+                // Background (Solid color from album art)
+                SolidColorBackgroundView(artwork: musicController.currentArtwork)
                     .ignoresSafeArea()
 
                 // 主内容 ScrollView
@@ -464,6 +464,41 @@ struct PlaylistItemRowCompact: View {
                         artwork = fetchedArtwork
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Solid Color Background View (Album Art Color Extraction)
+
+struct SolidColorBackgroundView: View {
+    var artwork: NSImage?
+    @State private var dominantColor: Color = Color.black.opacity(0.9)
+
+    var body: some View {
+        dominantColor
+            .onAppear {
+                updateColor()
+            }
+            .onChange(of: artwork) { _ in
+                updateColor()
+            }
+    }
+
+    private func updateColor() {
+        if let artwork = artwork {
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let nsColor = artwork.dominantColor() {
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.8)) {
+                            self.dominantColor = Color(nsColor: nsColor).opacity(0.85)
+                        }
+                    }
+                }
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.6)) {
+                dominantColor = Color.black.opacity(0.9)
             }
         }
     }
