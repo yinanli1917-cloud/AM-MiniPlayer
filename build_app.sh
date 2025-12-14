@@ -73,23 +73,32 @@ cat > nanoPod.entitlements << 'ENTITLEMENTS'
 ENTITLEMENTS
 
 echo "🎨 Copying icon resources..."
-# Try to use existing icns from previous build, or compile if Xcode is available
-if [ -f "nanoPod.app.bak/Contents/Resources/AppIcon.icns" ]; then
-    echo "🎨 Using existing AppIcon.icns from backup..."
-    cp nanoPod.app.bak/Contents/Resources/AppIcon.icns nanoPod.app/Contents/Resources/
-elif command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
-    echo "🎨 Compiling AppIcon.icon using actool..."
-    if [ -d "AppIcon.icon" ]; then
-        xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
-        if [ -f "partial_info.plist" ]; then
-            echo "✅ AppIcon compiled successfully"
-            rm partial_info.plist
-        else
-            echo "⚠️  actool failed, using placeholder icon"
+# Copy all resources from Resources folder (icns + Assets.car)
+if [ -f "Resources/AppIcon.icns" ]; then
+    echo "🎨 Copying AppIcon.icns..."
+    cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/
+    echo "✅ AppIcon.icns copied"
+fi
+if [ -f "Resources/Assets.car" ]; then
+    echo "🎨 Copying Assets.car..."
+    cp Resources/Assets.car nanoPod.app/Contents/Resources/
+    echo "✅ Assets.car copied"
+fi
+if [ ! -f "Resources/AppIcon.icns" ] && [ ! -f "Resources/Assets.car" ]; then
+    if command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
+        echo "🎨 Compiling AppIcon.icon using actool..."
+        if [ -d "AppIcon.icon" ]; then
+            xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
+            if [ -f "partial_info.plist" ]; then
+                echo "✅ AppIcon compiled successfully"
+                rm partial_info.plist
+            else
+                echo "⚠️  actool failed, icon may be missing"
+            fi
         fi
+    else
+        echo "⚠️  No icon available (missing Resources and no Xcode)"
     fi
-else
-    echo "⚠️  No actool available (Xcode not installed), icon may be missing"
 fi
 
 # Ad-hoc code sign with entitlements (required for AppleScript automation on modern macOS)

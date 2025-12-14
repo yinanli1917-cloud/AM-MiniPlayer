@@ -141,7 +141,7 @@ public struct LyricsView: View {
 
                                 // Bottom spacer for centering last lyrics
                                 Spacer()
-                                    .frame(height: 80)  // 减小覆盖面积，只覆盖实际需要的控件空间
+                                    .frame(height: 100)
                             }
                             .drawingGroup()  // Performance optimization for smooth 60fps animations
                         }
@@ -364,7 +364,7 @@ public struct LyricsView: View {
             ZStack(alignment: .bottom) {
                 // 🔑 渐变模糊背景 - 使用系统backdrop blur实时模糊下层内容
                 VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                    .frame(height: 80)
+                    .frame(height: 100)
                     .mask(
                         LinearGradient(
                             gradient: Gradient(stops: [

@@ -59,7 +59,8 @@ public struct PlaylistView: View {
                                         .padding(.vertical, 20)
                                 } else {
                                     // 🔑 反转顺序：最近的在底部（靠近 Now Playing）
-                                    ForEach(Array(musicController.recentTracks.reversed().enumerated()), id: \.offset) { index, track in
+                                    // 使用 persistentID 作为稳定 ID，避免闪烁
+                                    ForEach(musicController.recentTracks.reversed(), id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
                                             title: track.title,
                                             artist: track.artist,
@@ -101,7 +102,8 @@ public struct PlaylistView: View {
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 20)
                                 } else {
-                                    ForEach(Array(musicController.upNextTracks.enumerated()), id: \.offset) { index, track in
+                                    // 使用 persistentID 作为稳定 ID，避免闪烁
+                                    ForEach(musicController.upNextTracks, id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
                                             title: track.title,
                                             artist: track.artist,
@@ -205,14 +207,14 @@ public struct PlaylistView: View {
                         ZStack(alignment: .bottom) {
                             // 渐变模糊背景
                             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .frame(height: 80)
+                                .frame(height: 100)
                                 .mask(
                                     LinearGradient(
                                         gradient: Gradient(stops: [
                                             .init(color: .clear, location: 0),
-                                            .init(color: .black.opacity(0.3), location: 0.15),
-                                            .init(color: .black.opacity(0.6), location: 0.3),
-                                            .init(color: .black, location: 0.5),
+                                            .init(color: .black.opacity(0.4), location: 0.25),
+                                            .init(color: .black.opacity(0.8), location: 0.5),
+                                            .init(color: .black, location: 0.7),
                                             .init(color: .black, location: 1.0)
                                         ]),
                                         startPoint: .top,
@@ -241,17 +243,16 @@ public struct PlaylistView: View {
         }
     }
 
-    // MARK: - Sticky Header (Background Color with Blur)
+    // MARK: - Sticky Header (透明模糊 + 边缘柔和)
     @ViewBuilder
     private func stickyHeader(_ title: String) -> some View {
         ZStack(alignment: .leading) {
-            // 使用背景色 + 透明度，然后覆盖模糊效果
-            Rectangle()
-                .fill(Color.black.opacity(0.3)) // 降低透明度使header更亮
-                .background(
-                    VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                )
+            // 背景层 - 只用毛玻璃，不加任何颜色
+            // 这样背景的渐变色会自然透过来
+            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                .opacity(0.7)  // 半透明，让背景渐变透出来
 
+            // 文字
             Text(title)
                 .font(.system(size: 13, weight: .bold))
                 .foregroundColor(.white)
@@ -260,6 +261,18 @@ public struct PlaylistView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 36)
+        // 底部边缘渐变遮罩 - 让边缘柔和
+        .mask(
+            VStack(spacing: 0) {
+                Color.black  // 上部完全不透明
+                LinearGradient(
+                    colors: [.black, .black.opacity(0.5), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 10)  // 底部 10px 渐变淡出
+            }
+        )
     }
 
     // MARK: - Now Playing Card
@@ -354,7 +367,7 @@ public struct PlaylistView: View {
                 }
                 .padding(.top, 10)
                 .padding(.horizontal, 12)
-                .padding(.bottom, 0)
+                .padding(.bottom, 16)  // 增加与 Up Next 的间距
             }
         }
     }

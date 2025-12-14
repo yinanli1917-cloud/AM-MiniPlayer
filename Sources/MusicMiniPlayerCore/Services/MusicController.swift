@@ -144,18 +144,11 @@ public class MusicController: ObservableObject {
             }
         }
 
-        // 🔑 尝试 MusicKit 授权（带安全检查）
-        logger.error("🔐 [MusicKit] Starting authorization task...")
-        Task { @MainActor in
-            self.logger.error("🔐 [MusicKit] Task started, calling requestMusicKitAuthorizationSafely")
-            do {
-                try await self.requestMusicKitAuthorizationSafely()
-                self.logger.error("🔐 [MusicKit] Authorization completed successfully")
-            } catch {
-                self.logger.error("❌ MusicKit authorization failed: \(error.localizedDescription)")
-                // 失败后自动使用 AppleScript fallback
-            }
-        }
+        // 🔑 不在启动时请求 MusicKit 授权
+        // 原因：swift build 的 debug 版本没有打包 Info.plist，会导致 TCC 崩溃
+        // MusicKit 授权改为按需请求（在 fetchMusicKitArtwork 等需要时才检查）
+        // AppleScript 是主要的控制方式，MusicKit 只用于辅助功能
+        logger.info("🔐 [MusicKit] Skipping startup authorization - will request on demand")
     }
     
     deinit {
@@ -624,12 +617,17 @@ public class MusicController: ObservableObject {
                         self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
 
                         // 🔑 本地播放历史追踪：将上一首歌加入历史（非首次加载时）
-                        if !isFirstTrack && !self.currentTrackTitle.isEmpty && self.currentTrackTitle != "Not Playing" {
+                        // 必须确保 persistentID 有效，否则封面无法获取
+                        if !isFirstTrack
+                           && !self.currentTrackTitle.isEmpty
+                           && self.currentTrackTitle != "Not Playing"
+                           && self.currentPersistentID != nil
+                           && !self.currentPersistentID!.isEmpty {
                             let previousTrack = (
                                 title: self.currentTrackTitle,
                                 artist: self.currentArtist,
                                 album: self.currentAlbum,
-                                persistentID: self.currentPersistentID ?? ""
+                                persistentID: self.currentPersistentID!  // 已检查非空
                             )
                             // 避免重复添加
                             if self.localPlayHistory.first?.persistentID != previousTrack.persistentID {
@@ -638,10 +636,12 @@ public class MusicController: ObservableObject {
                                 if self.localPlayHistory.count > 20 {
                                     self.localPlayHistory.removeLast()
                                 }
-                                // 更新 recentTracks
-                                self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, 0.0) }
-                                fputs("📜 [History] Added: \(previousTrack.title) - now \(self.localPlayHistory.count) items\n", stderr)
+                                // 更新 recentTracks，使用实际 duration
+                                self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, self.duration) }
+                                fputs("📜 [History] Added: \(previousTrack.title) (ID: \(previousTrack.persistentID)) - now \(self.localPlayHistory.count) items\n", stderr)
                             }
+                        } else if !isFirstTrack {
+                            fputs("⚠️ [History] Skipped: title=\(self.currentTrackTitle), persistentID=\(self.currentPersistentID ?? "nil")\n", stderr)
                         }
 
                         self.currentPersistentID = persistentID
