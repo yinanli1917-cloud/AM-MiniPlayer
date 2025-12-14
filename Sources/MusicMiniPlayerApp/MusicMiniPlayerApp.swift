@@ -14,6 +14,9 @@ class AppMain: NSObject, NSApplicationDelegate {
     let musicController = MusicController.shared
     private var windowDelegate: FloatingWindowDelegate?
 
+    // 自动隐藏计时器（可取消）
+    private var autoHideWorkItem: DispatchWorkItem?
+
     // 状态：是否显示为浮窗（true）还是菜单栏视图（false）
     @Published var isFloatingMode: Bool = true
 
@@ -297,9 +300,37 @@ class AppMain: NSObject, NSApplicationDelegate {
         floatingWindow?.orderOut(nil)
         showMenuBarPopover()
 
-        // 2秒后自动隐藏菜单栏弹窗
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+        // 开始自动隐藏计时
+        scheduleAutoHide()
+    }
+
+    /// 开始 2 秒自动隐藏计时
+    func scheduleAutoHide() {
+        // 取消之前的计时器
+        autoHideWorkItem?.cancel()
+
+        // 创建新的计时器
+        let workItem = DispatchWorkItem { [weak self] in
             self?.menuBarPopover?.close()
+        }
+        autoHideWorkItem = workItem
+
+        // 2 秒后执行
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
+    }
+
+    /// 取消自动隐藏计时
+    func cancelAutoHide() {
+        autoHideWorkItem?.cancel()
+        autoHideWorkItem = nil
+    }
+
+    /// 用户与 popover 交互时调用（鼠标进入时取消计时，离开时重新开始）
+    func userInteractingWithPopover(_ isInteracting: Bool) {
+        if isInteracting {
+            cancelAutoHide()
+        } else {
+            scheduleAutoHide()
         }
     }
 
@@ -318,9 +349,15 @@ class AppMain: NSObject, NSApplicationDelegate {
         menuBarPopover?.behavior = .transient
         menuBarPopover?.animates = true
 
-        let popoverContent = MenuBarPlayerView(onExpand: { [weak self] in
-            self?.expandToFloatingWindow()
-        })
+        let popoverContent = MenuBarPlayerView(
+            onExpand: { [weak self] in
+                self?.expandToFloatingWindow()
+            },
+            onHoverChanged: { [weak self] isHovering in
+                // 用户鼠标进入时取消自动隐藏，离开时重新开始计时
+                self?.userInteractingWithPopover(isHovering)
+            }
+        )
         .environmentObject(musicController)
 
         menuBarPopover?.contentViewController = NSHostingController(rootView: popoverContent)
@@ -364,6 +401,7 @@ struct MiniPlayerContentView: View {
 struct MenuBarPlayerView: View {
     @EnvironmentObject var musicController: MusicController
     var onExpand: (() -> Void)?
+    var onHoverChanged: ((Bool) -> Void)?
 
     var body: some View {
         ZStack {
@@ -372,5 +410,9 @@ struct MenuBarPlayerView: View {
         }
         .frame(width: 300, height: 350)  // 高度改为 350
         .clipShape(RoundedRectangle(cornerRadius: 10))  // 圆角 10pt
+        .onHover { isHovering in
+            // 通知 AppMain 用户是否在交互
+            onHoverChanged?(isHovering)
+        }
     }
 }

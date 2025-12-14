@@ -53,7 +53,8 @@ public class MusicController: ObservableObject {
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var lastPollTime: Date = .distantPast
-    private var currentPersistentID: String?
+    // 🔑 改为 public 以便 UI 层可以用 persistentID 精确匹配当前播放的歌曲
+    @Published public var currentPersistentID: String?
     private var artworkCache = NSCache<NSString, NSImage>()
     private var isPreview: Bool = false
 
@@ -62,7 +63,8 @@ public class MusicController: ObservableObject {
     private var queueObserverTask: Task<Void, Never>?
 
     // 🔑 本地播放历史追踪（因为 AppleScript 无法获取真实播放历史）
-    private var localPlayHistory: [(title: String, artist: String, album: String, persistentID: String)] = []
+    // 包含 duration 以便正确显示每首歌的时长
+    private var localPlayHistory: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
 
     // State synchronization lock
     private var lastUserActionTime: Date = .distantPast
@@ -608,6 +610,15 @@ public class MusicController: ObservableObject {
                     self.currentTime = 0
                     self.audioQuality = nil
                 } else {
+                    // 🔑 关键修复：在更新状态之前，先保存旧歌曲的信息用于历史记录
+                    // 之前的 bug：先更新 currentTrackTitle 等为新歌，再用旧的 persistentID 组合 → 信息错位
+                    let oldTitle = self.currentTrackTitle
+                    let oldArtist = self.currentArtist
+                    let oldAlbum = self.currentAlbum
+                    let oldDuration = self.duration
+                    let oldPersistentID = self.currentPersistentID
+
+                    // 现在更新为新歌曲信息
                     self.currentTrackTitle = trackName
                     self.currentArtist = trackArtist
                     self.currentAlbum = trackAlbum
@@ -627,31 +638,65 @@ public class MusicController: ObservableObject {
                         self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
 
                         // 🔑 本地播放历史追踪：将上一首歌加入历史（非首次加载时）
-                        // 必须确保 persistentID 有效，否则封面无法获取
+                        // 使用保存的旧歌曲信息，而不是已更新的 self.currentTrackTitle
                         if !isFirstTrack
-                           && !self.currentTrackTitle.isEmpty
-                           && self.currentTrackTitle != "Not Playing"
-                           && self.currentPersistentID != nil
-                           && !self.currentPersistentID!.isEmpty {
-                            let previousTrack = (
-                                title: self.currentTrackTitle,
-                                artist: self.currentArtist,
-                                album: self.currentAlbum,
-                                persistentID: self.currentPersistentID!  // 已检查非空
-                            )
-                            // 避免重复添加
-                            if self.localPlayHistory.first?.persistentID != previousTrack.persistentID {
-                                self.localPlayHistory.insert(previousTrack, at: 0)
-                                // 只保留最近 20 首
-                                if self.localPlayHistory.count > 20 {
-                                    self.localPlayHistory.removeLast()
-                                }
-                                // 更新 recentTracks，使用实际 duration
-                                self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, self.duration) }
-                                fputs("📜 [History] Added: \(previousTrack.title) (ID: \(previousTrack.persistentID)) - now \(self.localPlayHistory.count) items\n", stderr)
+                           && !oldTitle.isEmpty
+                           && oldTitle != "Not Playing"
+                           && oldPersistentID != nil
+                           && !oldPersistentID!.isEmpty {
+
+                            let previousPersistentID = oldPersistentID!
+
+                            // 🔑 确保不是把新歌误加入历史
+                            guard previousPersistentID != persistentID else {
+                                fputs("⚠️ [History] Skipped: same as new track \(persistentID)\n", stderr)
+                                self.currentPersistentID = persistentID
+                                self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
+                                return
                             }
+
+                            // 🔑 使用旧歌曲的信息（不是已更新的 self.currentTrackTitle）
+                            let previousTrack = (
+                                title: oldTitle,
+                                artist: oldArtist,
+                                album: oldAlbum,
+                                persistentID: previousPersistentID,
+                                duration: oldDuration
+                            )
+
+                            fputs("📜 [History] Preparing to add: '\(oldTitle)' by '\(oldArtist)' with ID '\(previousPersistentID)'\n", stderr)
+
+                            // 🔑 避免重复添加：移除相同 persistentID 的旧条目
+                            self.localPlayHistory.removeAll { $0.persistentID == previousTrack.persistentID }
+
+                            // 插入到顶部
+                            self.localPlayHistory.insert(previousTrack, at: 0)
+
+                            // 🔑 关键修复：移除当前正在播放的歌曲（如果它之前在历史中）
+                            // 这样正在播放的歌曲永远不会出现在 History 中
+                            self.localPlayHistory.removeAll { $0.persistentID == persistentID }
+
+                            // 只保留最近 20 首
+                            if self.localPlayHistory.count > 20 {
+                                self.localPlayHistory.removeLast()
+                            }
+
+                            // 🔑 更新 recentTracks
+                            self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, $0.duration) }
+                            fputs("📜 [History] Added: \(previousTrack.title) by \(previousTrack.artist) (ID: \(previousTrack.persistentID)) - now \(self.localPlayHistory.count) items\n", stderr)
+                            fputs("📜 [History] Current now playing: '\(trackName)' with ID '\(persistentID)' - removed from history if present\n", stderr)
                         } else if !isFirstTrack {
-                            fputs("⚠️ [History] Skipped: title=\(self.currentTrackTitle), persistentID=\(self.currentPersistentID ?? "nil")\n", stderr)
+                            fputs("⚠️ [History] Skipped: oldTitle=\(oldTitle), oldPersistentID=\(oldPersistentID ?? "nil")\n", stderr)
+                        }
+
+                        // 🔑 确保当前播放的歌曲不在历史中（额外检查）
+                        if !self.localPlayHistory.isEmpty {
+                            let beforeCount = self.localPlayHistory.count
+                            self.localPlayHistory.removeAll { $0.persistentID == persistentID }
+                            if self.localPlayHistory.count != beforeCount {
+                                self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, $0.duration) }
+                                fputs("📜 [History] Cleaned up: removed current track from history\n", stderr)
+                            }
                         }
 
                         self.currentPersistentID = persistentID
@@ -880,11 +925,18 @@ public class MusicController: ObservableObject {
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
         guard !isPreview, !persistentID.isEmpty else { return nil }
 
+        // 先检查缓存
+        if let cached = artworkCache.object(forKey: persistentID as NSString) {
+            return cached
+        }
+
         let tempFile = "/tmp/nanopod_artwork_pid_\(ProcessInfo.processInfo.processIdentifier)_\(persistentID.prefix(8)).tiff"
 
+        // 🔑 修改：先在 current playlist 中查找，失败则在整个资料库中查找
         let script = """
         tell application "Music"
             try
+                -- 先尝试在当前播放列表中查找
                 set targetTrack to first track of current playlist whose persistent ID is "\(persistentID)"
                 set artworkData to data of artwork 1 of targetTrack
                 set filePath to POSIX file "\(tempFile)"
@@ -893,16 +945,32 @@ public class MusicController: ObservableObject {
                 write artworkData to fileRef
                 close access fileRef
                 return "OK"
-            on error errMsg
+            on error
                 try
-                    close access filePath
+                    -- 如果在当前播放列表找不到，尝试在整个资料库中查找
+                    set allTracks to every track of library playlist 1 whose persistent ID is "\(persistentID)"
+                    if (count of allTracks) > 0 then
+                        set targetTrack to item 1 of allTracks
+                        set artworkData to data of artwork 1 of targetTrack
+                        set filePath to POSIX file "\(tempFile)"
+                        set fileRef to open for access filePath with write permission
+                        set eof fileRef to 0
+                        write artworkData to fileRef
+                        close access fileRef
+                        return "OK"
+                    end if
+                    return "ERROR:Track not found"
+                on error errMsg
+                    try
+                        close access filePath
+                    end try
+                    return "ERROR:" & errMsg
                 end try
-                return "ERROR:" & errMsg
             end try
         end tell
         """
 
-        return await Task.detached {
+        let image: NSImage? = await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             process.arguments = ["-e", script]
@@ -920,10 +988,13 @@ public class MusicController: ObservableObject {
                 if output == "OK" {
                     if let data = FileManager.default.contents(atPath: tempFile) {
                         try? FileManager.default.removeItem(atPath: tempFile)
-                        if !data.isEmpty, let image = NSImage(data: data) {
-                            return image
+                        if !data.isEmpty, let img = NSImage(data: data) {
+                            fputs("✅ [fetchArtworkByPersistentID] Got artwork for ID: \(persistentID.prefix(8))...\n", stderr)
+                            return img
                         }
                     }
+                } else {
+                    fputs("⚠️ [fetchArtworkByPersistentID] Failed for ID: \(persistentID.prefix(8))... - \(output)\n", stderr)
                 }
             } catch {
                 fputs("❌ [fetchArtworkByPersistentID] osascript failed: \(error)\n", stderr)
@@ -932,6 +1003,13 @@ public class MusicController: ObservableObject {
             try? FileManager.default.removeItem(atPath: tempFile)
             return nil
         }.value
+
+        // 缓存结果
+        if let image = image {
+            artworkCache.setObject(image, forKey: persistentID as NSString)
+        }
+
+        return image
     }
 
     private func createPlaceholder() -> NSImage {

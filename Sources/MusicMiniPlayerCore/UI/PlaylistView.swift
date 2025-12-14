@@ -393,8 +393,10 @@ struct PlaylistItemRowCompact: View {
     @State private var currentArtworkID: String = ""
     @EnvironmentObject var musicController: MusicController
 
+    // 🔑 使用 persistentID 精确匹配，而不是 title+artist
+    // 这样可以避免同名歌曲被错误标记为正在播放
     var isCurrentTrack: Bool {
-        title == musicController.currentTrackTitle && artist == musicController.currentArtist
+        persistentID == musicController.currentPersistentID
     }
 
     var body: some View {
