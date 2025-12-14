@@ -47,10 +47,6 @@ public struct LyricsView: View {
             LiquidBackgroundView(artwork: musicController.currentArtwork)
             .ignoresSafeArea()
 
-            // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
-            WindowDraggableView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
             // Main lyrics container
             VStack(spacing: 0) {
                 if lyricsService.isLoading {

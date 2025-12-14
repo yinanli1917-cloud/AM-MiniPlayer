@@ -296,6 +296,11 @@ class AppMain: NSObject, NSApplicationDelegate {
         isFloatingMode = false
         floatingWindow?.orderOut(nil)
         showMenuBarPopover()
+
+        // 2秒后自动隐藏菜单栏弹窗
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            self?.menuBarPopover?.close()
+        }
     }
 
     /// 从菜单栏展开为浮窗

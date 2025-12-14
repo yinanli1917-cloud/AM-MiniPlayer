@@ -10,6 +10,13 @@ import os
 // Note: We don't actually use protocols with ScriptingBridge in Swift
 // Instead, we use dynamic member lookup through SBApplication directly
 
+// MARK: - PlayerPage Enum (共享页面状态)
+public enum PlayerPage {
+    case album
+    case lyrics
+    case playlist
+}
+
 // MARK: - MusicController
 
 public class MusicController: ObservableObject {
@@ -36,6 +43,9 @@ public class MusicController: ObservableObject {
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
+
+    // 🔑 共享页面状态 - 浮窗和菜单栏弹窗同步
+    @Published public var currentPage: PlayerPage = .album
 
     // Private properties
     private var musicApp: SBApplication?

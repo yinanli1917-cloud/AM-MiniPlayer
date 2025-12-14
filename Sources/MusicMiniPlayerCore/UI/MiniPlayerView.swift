@@ -2,17 +2,11 @@ import SwiftUI
 import Glur
 
 // 移除自定义transition，使用SwiftUI官方transition避免icon消失bug
-
-// Page enumeration for three-page system
-public enum PlayerPage {
-    case album
-    case lyrics
-    case playlist
-}
+// PlayerPage enum 已移至 MusicController 以支持状态共享
 
 public struct MiniPlayerView: View {
     @EnvironmentObject var musicController: MusicController
-    @State private var currentPage: PlayerPage = .album
+    // 🔑 使用 musicController.currentPage 替代本地状态，实现浮窗/菜单栏同步
     @State private var isHovering: Bool = false
     @State private var showControls: Bool = false
     @State private var isProgressBarHovering: Bool = false
@@ -49,32 +43,32 @@ public struct MiniPlayerView: View {
                 // 🔑 使用ZStack叠加所有页面，通过opacity和zIndex控制显示
                 // matchedGeometryEffect: 使用单个浮动Image + invisible placeholders避免crossfade
 
-                // Lyrics View (底层)
-                if currentPage == .lyrics {
-                    LyricsView(currentPage: $currentPage, openWindow: openWindow, onHide: onHide, onExpand: onExpand)
-                        .zIndex(1)
-                }
+                // Lyrics View - 使用 opacity 模式与其他页面一致，避免阻挡 WindowDraggableView
+                LyricsView(currentPage: $musicController.currentPage, openWindow: openWindow, onHide: onHide, onExpand: onExpand)
+                    .opacity(musicController.currentPage == .lyrics ? 1 : 0)
+                    .zIndex(musicController.currentPage == .lyrics ? 1 : 0)
+                    .allowsHitTesting(musicController.currentPage == .lyrics)
 
                 // Playlist View - 始终存在以支持matchedGeometryEffect
-                PlaylistView(currentPage: $currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, scrollOffset: $playlistScrollOffset)
-                    .opacity(currentPage == .playlist ? 1 : 0)
-                    .zIndex(currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
-                    .allowsHitTesting(currentPage == .playlist)
+                PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, scrollOffset: $playlistScrollOffset)
+                    .opacity(musicController.currentPage == .playlist ? 1 : 0)
+                    .zIndex(musicController.currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
+                    .allowsHitTesting(musicController.currentPage == .playlist)
 
                 // Album View - 始终存在以支持matchedGeometryEffect
                 albumPageContent(geometry: geometry)
-                    .opacity(currentPage == .album ? 1 : 0)
-                    .zIndex(currentPage == .album ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
-                    .allowsHitTesting(currentPage == .album)
+                    .opacity(musicController.currentPage == .album ? 1 : 0)
+                    .zIndex(musicController.currentPage == .album ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
+                    .allowsHitTesting(musicController.currentPage == .album)
 
                 // 🎯 浮动的Artwork - 单个Image实例，通过matchedGeometry移动
                 if let artwork = musicController.currentArtwork {
                     floatingArtwork(artwork: artwork, geometry: geometry)
-                        .zIndex(currentPage == .album ? 50 : 1)  // 🔑 歌单页 1（同层），专辑页 50（遮住文字）
+                        .zIndex(musicController.currentPage == .album ? 50 : 1)  // 🔑 歌单页 1（同层），专辑页 50（遮住文字）
                 }
 
                 // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上
-                if currentPage == .album, musicController.currentArtwork != nil {
+                if musicController.currentPage == .album, musicController.currentArtwork != nil {
                     albumOverlayContent(geometry: geometry)
                         .zIndex(101)  // 在浮动artwork之上
                 }
@@ -87,7 +81,7 @@ public struct MiniPlayerView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
-            if showControls && currentPage != .playlist {
+            if showControls && musicController.currentPage != .playlist {
                 MusicButtonView()
                     .padding(12)
                     .transition(.opacity)
@@ -95,7 +89,7 @@ public struct MiniPlayerView: View {
         }
         .overlay(alignment: .topTrailing) {
             // Hide/Expand 按钮 - hover时显示，但歌单页面不显示
-            if showControls && currentPage != .playlist {
+            if showControls && musicController.currentPage != .playlist {
                 // 根据模式显示不同按钮
                 if onExpand != nil {
                     // 菜单栏模式：显示展开按钮
@@ -289,12 +283,12 @@ public struct MiniPlayerView: View {
                             // 播放控件
                             HStack(spacing: 12) {
                                 NavigationIconButton(
-                                    iconName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
-                                    isActive: currentPage == .lyrics
+                                    iconName: musicController.currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
+                                    isActive: musicController.currentPage == .lyrics
                                 ) {
                                     // 🔑 更快但不弹性的动画
                                     withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                                        currentPage = currentPage == .lyrics ? .album : .lyrics
+                                        musicController.currentPage = musicController.currentPage == .lyrics ? .album : .lyrics
                                     }
                                 }
                                 .frame(width: 28, height: 28)
@@ -319,12 +313,12 @@ public struct MiniPlayerView: View {
                                 Spacer()
 
                                 NavigationIconButton(
-                                    iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
-                                    isActive: currentPage == .playlist
+                                    iconName: musicController.currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
+                                    isActive: musicController.currentPage == .playlist
                                 ) {
                                     // 🔑 更快但不弹性的动画
                                     withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                                        currentPage = currentPage == .playlist ? .album : .playlist
+                                        musicController.currentPage = musicController.currentPage == .playlist ? .album : .playlist
                                     }
                                 }
                                 .frame(width: 28, height: 28)
@@ -437,7 +431,7 @@ public struct MiniPlayerView: View {
 
             // 根据当前页面计算尺寸和位置
             let (artSize, cornerRadius, shadowRadius, xPosition, yPosition): (CGFloat, CGFloat, CGFloat, CGFloat, CGFloat) = {
-                if currentPage == .album {
+                if musicController.currentPage == .album {
                     // Album页面：居中大图（在可用区域内居中）
                     // 🔑 与albumOverlayContent保持一致的尺寸
                     let size = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
@@ -448,7 +442,7 @@ public struct MiniPlayerView: View {
                         geo.size.width / 2,
                         availableHeight / 2
                     )
-                } else if currentPage == .playlist {
+                } else if musicController.currentPage == .playlist {
                     // 🔑 与 PlaylistView 中的 artSize 完全一致
                     let size = min(geo.size.width * 0.18, 60.0)
 
@@ -477,7 +471,7 @@ public struct MiniPlayerView: View {
                 }
             }()
 
-            if currentPage != .lyrics {
+            if musicController.currentPage != .lyrics {
                 // 🎯 封面图片 + 底部渐进模糊
                 ZStack {
                     // 原始封面
@@ -486,10 +480,10 @@ public struct MiniPlayerView: View {
                         .aspectRatio(contentMode: .fill)
                         .frame(width: artSize, height: artSize)
                         .clipped()
-                    
+
                     // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
                     // 文字区域约占封面底部30%，模糊需要覆盖这个区域
-                    if currentPage == .album && !isHovering {
+                    if musicController.currentPage == .album && !isHovering {
                         Image(nsImage: artwork)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
@@ -519,10 +513,10 @@ public struct MiniPlayerView: View {
                     color: .black.opacity(0.5),
                     radius: shadowRadius,
                     x: 0,
-                    y: currentPage == .album ? 12 : 2
+                    y: musicController.currentPage == .album ? 12 : 2
                 )
                 .matchedGeometryEffect(
-                    id: currentPage == .album ? "album-placeholder" : "playlist-placeholder",
+                    id: musicController.currentPage == .album ? "album-placeholder" : "playlist-placeholder",
                     in: animation,
                     isSource: false
                 )
@@ -552,7 +546,7 @@ public struct MiniPlayerView: View {
                     .onTapGesture {
                         // 🔑 快速但不弹性的动画
                         withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                            currentPage = currentPage == .album ? .lyrics : .album
+                            musicController.currentPage = musicController.currentPage == .album ? .lyrics : .album
                         }
                     }
                     .position(
