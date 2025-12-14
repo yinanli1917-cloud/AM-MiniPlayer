@@ -48,6 +48,9 @@ public class LyricsService: ObservableObject {
     private var currentSongID: String?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
 
+    // 🔑 追踪当前正在执行的 fetch Task，用于取消旧的请求防止竞态条件
+    private var currentFetchTask: Task<Void, Never>?
+
     // MARK: - Lyrics Cache
     private let lyricsCache = NSCache<NSString, CachedLyricsItem>()
 
@@ -88,11 +91,20 @@ public class LyricsService: ObservableObject {
 
         logger.info("🎤 Fetching lyrics for: \(title) - \(artist) (duration: \(Int(duration))s)")
 
-        Task {
+        // 🔑 取消之前的 fetch Task，防止竞态条件导致旧的失败结果覆盖新的成功结果
+        currentFetchTask?.cancel()
+
+        // 🔑 捕获当前 songID，用于在 Task 完成时验证
+        let expectedSongID = songID
+
+        currentFetchTask = Task {
             var fetchedLyrics: [LyricLine]? = nil
 
             // Try sources in priority order: AMLL-TTML-DB → LRCLIB → NetEase → lyrics.ovh
             do {
+                // 🔑 检查 Task 是否被取消
+                try Task.checkCancellation()
+
                 logger.info("🔍 Starting priority-based search...")
 
                 // Priority 1: AMLL-TTML-DB (best quality - word-level timing)
@@ -100,18 +112,27 @@ public class LyricsService: ObservableObject {
                     fetchedLyrics = lyrics
                     logger.info("✅ Found lyrics from AMLL-TTML-DB (priority 1)")
                 }
+
+                try Task.checkCancellation()
+
                 // Priority 2: LRCLIB (good quality - line-level timing)
-                else if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                if fetchedLyrics == nil, let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                     logger.info("✅ Found lyrics from LRCLIB (priority 2)")
                 }
+
+                try Task.checkCancellation()
+
                 // Priority 3: NetEase/163 Music (good for Chinese songs)
-                else if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                if fetchedLyrics == nil, let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                     logger.info("✅ Found lyrics from NetEase (priority 3)")
                 }
+
+                try Task.checkCancellation()
+
                 // Priority 4: lyrics.ovh (fallback - plain text)
-                else if let lyrics = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                if fetchedLyrics == nil, let lyrics = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                     logger.info("✅ Found lyrics from lyrics.ovh (priority 4)")
                 }
@@ -121,10 +142,17 @@ public class LyricsService: ObservableObject {
                 if let lyrics = fetchedLyrics, !lyrics.isEmpty {
                     // Cache the lyrics
                     let cacheItem = CachedLyricsItem(lyrics: lyrics)
-                    self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
-                    self.logger.info("💾 Cached lyrics for: \(songID)")
+                    self.lyricsCache.setObject(cacheItem, forKey: expectedSongID as NSString)
+                    self.logger.info("💾 Cached lyrics for: \(expectedSongID)")
 
                     await MainActor.run {
+                        // 🔑 关键：只在 songID 仍然匹配时才更新状态
+                        // 防止旧 Task 的结果覆盖新歌曲的状态
+                        guard self.currentSongID == expectedSongID else {
+                            self.logger.warning("⚠️ Song changed during fetch, discarding results for: \(expectedSongID)")
+                            return
+                        }
+
                         // 🎵 Insert a loading placeholder line at the beginning
                         // This allows smooth scroll animation from loading state to first lyric
                         let loadingLine = LyricLine(
@@ -141,8 +169,18 @@ public class LyricsService: ObservableObject {
                 } else {
                     throw NSError(domain: "LyricsService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Lyrics not found in any source"])
                 }
+            } catch is CancellationError {
+                // 🔑 Task 被取消，不更新任何状态
+                self.logger.info("🚫 Lyrics fetch cancelled for: \(expectedSongID)")
             } catch {
                 await MainActor.run {
+                    // 🔑 关键：只在 songID 仍然匹配时才设置错误状态
+                    // 防止旧 Task 的错误覆盖当前歌曲的正确歌词
+                    guard self.currentSongID == expectedSongID else {
+                        self.logger.warning("⚠️ Song changed during fetch, ignoring error for: \(expectedSongID)")
+                        return
+                    }
+
                     self.lyrics = []
                     self.isLoading = false
                     self.error = "No lyrics available"

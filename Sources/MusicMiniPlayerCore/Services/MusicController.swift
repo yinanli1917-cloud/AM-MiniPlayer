@@ -62,10 +62,6 @@ public class MusicController: ObservableObject {
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
 
-    // 🔑 本地播放历史追踪（因为 AppleScript 无法获取真实播放历史）
-    // 包含 duration 以便正确显示每首歌的时长
-    private var localPlayHistory: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
-
     // State synchronization lock
     private var lastUserActionTime: Date = .distantPast
     private let userActionLockDuration: TimeInterval = 1.5
@@ -610,15 +606,6 @@ public class MusicController: ObservableObject {
                     self.currentTime = 0
                     self.audioQuality = nil
                 } else {
-                    // 🔑 关键修复：在更新状态之前，先保存旧歌曲的信息用于历史记录
-                    // 之前的 bug：先更新 currentTrackTitle 等为新歌，再用旧的 persistentID 组合 → 信息错位
-                    let oldTitle = self.currentTrackTitle
-                    let oldArtist = self.currentArtist
-                    let oldAlbum = self.currentAlbum
-                    let oldDuration = self.duration
-                    let oldPersistentID = self.currentPersistentID
-
-                    // 现在更新为新歌曲信息
                     self.currentTrackTitle = trackName
                     self.currentArtist = trackArtist
                     self.currentAlbum = trackAlbum
@@ -636,68 +623,6 @@ public class MusicController: ObservableObject {
                     if trackChanged {
                         fputs("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist) (first=\(isFirstTrack))\n", stderr)
                         self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
-
-                        // 🔑 本地播放历史追踪：将上一首歌加入历史（非首次加载时）
-                        // 使用保存的旧歌曲信息，而不是已更新的 self.currentTrackTitle
-                        if !isFirstTrack
-                           && !oldTitle.isEmpty
-                           && oldTitle != "Not Playing"
-                           && oldPersistentID != nil
-                           && !oldPersistentID!.isEmpty {
-
-                            let previousPersistentID = oldPersistentID!
-
-                            // 🔑 确保不是把新歌误加入历史
-                            guard previousPersistentID != persistentID else {
-                                fputs("⚠️ [History] Skipped: same as new track \(persistentID)\n", stderr)
-                                self.currentPersistentID = persistentID
-                                self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
-                                return
-                            }
-
-                            // 🔑 使用旧歌曲的信息（不是已更新的 self.currentTrackTitle）
-                            let previousTrack = (
-                                title: oldTitle,
-                                artist: oldArtist,
-                                album: oldAlbum,
-                                persistentID: previousPersistentID,
-                                duration: oldDuration
-                            )
-
-                            fputs("📜 [History] Preparing to add: '\(oldTitle)' by '\(oldArtist)' with ID '\(previousPersistentID)'\n", stderr)
-
-                            // 🔑 避免重复添加：移除相同 persistentID 的旧条目
-                            self.localPlayHistory.removeAll { $0.persistentID == previousTrack.persistentID }
-
-                            // 插入到顶部
-                            self.localPlayHistory.insert(previousTrack, at: 0)
-
-                            // 🔑 关键修复：移除当前正在播放的歌曲（如果它之前在历史中）
-                            // 这样正在播放的歌曲永远不会出现在 History 中
-                            self.localPlayHistory.removeAll { $0.persistentID == persistentID }
-
-                            // 只保留最近 20 首
-                            if self.localPlayHistory.count > 20 {
-                                self.localPlayHistory.removeLast()
-                            }
-
-                            // 🔑 更新 recentTracks
-                            self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, $0.duration) }
-                            fputs("📜 [History] Added: \(previousTrack.title) by \(previousTrack.artist) (ID: \(previousTrack.persistentID)) - now \(self.localPlayHistory.count) items\n", stderr)
-                            fputs("📜 [History] Current now playing: '\(trackName)' with ID '\(persistentID)' - removed from history if present\n", stderr)
-                        } else if !isFirstTrack {
-                            fputs("⚠️ [History] Skipped: oldTitle=\(oldTitle), oldPersistentID=\(oldPersistentID ?? "nil")\n", stderr)
-                        }
-
-                        // 🔑 确保当前播放的歌曲不在历史中（额外检查）
-                        if !self.localPlayHistory.isEmpty {
-                            let beforeCount = self.localPlayHistory.count
-                            self.localPlayHistory.removeAll { $0.persistentID == persistentID }
-                            if self.localPlayHistory.count != beforeCount {
-                                self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, $0.duration) }
-                                fputs("📜 [History] Cleaned up: removed current track from history\n", stderr)
-                            }
-                        }
 
                         self.currentPersistentID = persistentID
                         self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
@@ -1191,9 +1116,8 @@ public class MusicController: ObservableObject {
             }
         }
 
-        // 🔑 不再调用 fetchRecentHistoryViaAppleScript()
-        // 原因：AppleScript 只能获取播放列表中的歌曲顺序，不是真正的播放历史
-        // 现在使用 localPlayHistory 本地追踪来记录播放历史
+        // 获取历史记录（通过 AppleScript 获取播放列表中当前歌曲之前的歌曲）
+        fetchRecentHistoryViaAppleScript()
     }
 
     /// 使用 MusicKit 获取真实的播放队列（包括随机播放顺序）

@@ -140,7 +140,19 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 删除onChange中的hover强制设置，让onHover自然控制状态
+        // 🔑 当从 playlist 切换到 album 页面时，如果鼠标在窗口内，恢复控件显示
+        .onChange(of: musicController.currentPage) { newPage in
+            if newPage == .album && isHovering {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
+                    showControls = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showOverlayContent = true
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Album Overlay Content (文字遮罩 + 底部控件)
