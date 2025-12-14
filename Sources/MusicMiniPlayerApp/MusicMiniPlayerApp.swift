@@ -132,6 +132,17 @@ class AppMain: NSObject, NSApplicationDelegate {
     func showContextMenu() {
         let menu = NSMenu()
 
+        // 浮窗显示/隐藏（仅在浮窗模式下显示）
+        if isFloatingMode {
+            let isWindowVisible = floatingWindow?.isVisible ?? false
+            let showHideItem = NSMenuItem(
+                title: isWindowVisible ? "隐藏浮窗" : "显示浮窗",
+                action: #selector(toggleFloatingWindowFromMenu),
+                keyEquivalent: ""
+            )
+            menu.addItem(showHideItem)
+        }
+
         // 模式切换
         let modeItem = NSMenuItem(
             title: isFloatingMode ? "收起到菜单栏" : "展开为浮窗",
@@ -187,6 +198,10 @@ class AppMain: NSObject, NSApplicationDelegate {
 
     @objc func toggleDockIcon() {
         showInDock.toggle()
+    }
+
+    @objc func toggleFloatingWindowFromMenu() {
+        toggleFloatingWindow()
     }
 
     @objc func togglePlayPause() { musicController.togglePlayPause() }
