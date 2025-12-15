@@ -271,8 +271,10 @@ public class MusicController: ObservableObject {
             // Fire immediately
             self.pollingTimer?.fire()
 
-            // Local interpolation timer (60fps) for smooth UI updates
-            self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+            // Local interpolation timer (10fps) for smooth UI updates
+            // 🔑 从 60fps (0.016s) 降低到 10fps (0.1s) 以减少 CPU 占用
+            // 10fps 对于进度条更新已经足够流畅，人眼几乎察觉不到差异
+            self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 self?.interpolateTime()
             }
 
@@ -381,15 +383,16 @@ public class MusicController: ObservableObject {
     
     private func interpolateTime() {
         guard isPlaying, !isPreview else { return }
-        
+
         // Increment time locally
         let timeSincePoll = Date().timeIntervalSince(lastPollTime)
-        
+
         // Only interpolate if we're within a reasonable window of the last poll (e.g. 3 seconds)
         // This prevents runaway time if polling stops
         if timeSincePoll < 3.0 {
-            currentTime += 0.016
-            
+            // 🔑 与 timer 间隔一致：0.1 秒增量（10fps）
+            currentTime += 0.1
+
             // Clamp to duration
             if duration > 0 && currentTime > duration {
                 currentTime = duration
@@ -611,8 +614,9 @@ public class MusicController: ObservableObject {
                     self.currentAlbum = trackAlbum
                     self.duration = trackDuration
 
-                    // Only update time if difference is significant
-                    if abs(self.currentTime - position) > 0.5 || !self.isPlaying {
+                    // 🔑 更频繁地同步时间，避免累积漂移导致歌词延迟
+                    // 阈值从 0.5s 降到 0.2s
+                    if abs(self.currentTime - position) > 0.2 || !self.isPlaying {
                         self.currentTime = position
                     }
 
@@ -950,7 +954,7 @@ public class MusicController: ObservableObject {
         return image
     }
 
-    // MARK: - Playback Controls (Pure AppleScript)
+    // MARK: - Playback Controls (使用已有的 musicApp 实例)
 
     public func togglePlayPause() {
         print("🎵 [MusicController] togglePlayPause() called, isPreview=\(isPreview)")
@@ -959,7 +963,14 @@ public class MusicController: ObservableObject {
             isPlaying.toggle()
             return
         }
-        runControlScript("playpause")
+
+        // 🔑 使用已有的 musicApp 实例（不使用 MusicBridge 避免重复创建 SBApplication）
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] togglePlayPause: musicApp not available\n", stderr)
+            return
+        }
+        fputs("▶️ [MusicController] togglePlayPause() executing\n", stderr)
+        app.perform(Selector(("playpause")))
 
         // Optimistic UI update & Lock
         DispatchQueue.main.async {
@@ -973,7 +984,12 @@ public class MusicController: ObservableObject {
             logger.info("Preview: nextTrack")
             return
         }
-        runControlScript("next track")
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] nextTrack: musicApp not available\n", stderr)
+            return
+        }
+        fputs("⏭️ [MusicController] nextTrack() executing\n", stderr)
+        app.perform(Selector(("nextTrack")))
     }
 
     public func previousTrack() {
@@ -985,7 +1001,12 @@ public class MusicController: ObservableObject {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
-            runControlScript("previous track")
+            guard let app = musicApp, app.isRunning else {
+                fputs("⚠️ [MusicController] previousTrack: musicApp not available\n", stderr)
+                return
+            }
+            fputs("⏮️ [MusicController] previousTrack() executing\n", stderr)
+            app.perform(Selector(("previousTrack")))
         }
     }
 
@@ -995,7 +1016,12 @@ public class MusicController: ObservableObject {
             currentTime = position
             return
         }
-        runControlScript("set player position to \(position)")
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] seek: musicApp not available\n", stderr)
+            return
+        }
+        fputs("⏩ [MusicController] seek(to: \(position)) executing\n", stderr)
+        app.setValue(position, forKey: "playerPosition")
         currentTime = position
     }
 
@@ -1006,8 +1032,14 @@ public class MusicController: ObservableObject {
             return
         }
 
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] toggleShuffle: musicApp not available\n", stderr)
+            return
+        }
+
         let newShuffleState = !shuffleEnabled
-        runControlScript("set shuffle enabled to \(newShuffleState)")
+        app.setValue(newShuffleState, forKey: "shuffleEnabled")
+        fputs("🔀 [MusicController] toggleShuffle() set to \(newShuffleState)\n", stderr)
 
         // Optimistic UI update
         DispatchQueue.main.async {
@@ -1067,18 +1099,21 @@ public class MusicController: ObservableObject {
             return
         }
 
-        let newMode = (repeatMode + 1) % 3
-        let modeString: String
-        switch newMode {
-        case 0:
-            modeString = "off"
-        case 1:
-            modeString = "one"
-        default:
-            modeString = "all"
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] cycleRepeatMode: musicApp not available\n", stderr)
+            return
         }
 
-        runControlScript("set song repeat to \(modeString)")
+        let newMode = (repeatMode + 1) % 3
+        // MusicERpt: off = 0x6b52704f, one = 0x6b527031, all = 0x6b52416c
+        let rawValue: Int
+        switch newMode {
+        case 1: rawValue = 0x6b527031  // one
+        case 2: rawValue = 0x6b52416c  // all
+        default: rawValue = 0x6b52704f // off
+        }
+        app.setValue(rawValue, forKey: "songRepeat")
+        fputs("🔁 [MusicController] cycleRepeatMode() set to \(newMode) (raw: \(rawValue))\n", stderr)
 
         // Optimistic UI update
         DispatchQueue.main.async {
@@ -1350,8 +1385,13 @@ public class MusicController: ObservableObject {
             logger.info("Preview: setVolume to \(level)")
             return
         }
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] setVolume: musicApp not available\n", stderr)
+            return
+        }
         let clamped = max(0, min(100, level))
-        runControlScript("set sound volume to \(clamped)")
+        app.setValue(clamped, forKey: "soundVolume")
+        fputs("🔊 [MusicController] setVolume(\(clamped))\n", stderr)
     }
 
     public func toggleMute() {
@@ -1359,7 +1399,13 @@ public class MusicController: ObservableObject {
             logger.info("Preview: toggleMute")
             return
         }
-        runControlScript("set mute to not mute")
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] toggleMute: musicApp not available\n", stderr)
+            return
+        }
+        let currentMute = (app.value(forKey: "mute") as? Bool) ?? false
+        app.setValue(!currentMute, forKey: "mute")
+        fputs("🔇 [MusicController] toggleMute() set to \(!currentMute)\n", stderr)
     }
 
     // MARK: - Library & Favorites
@@ -1400,8 +1446,18 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // Toggle loved status
-        runControlScript("set loved of current track to not (loved of current track)")
+        // 🔑 使用 musicApp 实例
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] toggleStar: musicApp not available\n", stderr)
+            return
+        }
+
+        // 获取 currentTrack 并切换 loved 状态
+        if let track = app.value(forKey: "currentTrack") as? SBObject {
+            let currentLoved = (track.value(forKey: "loved") as? Bool) ?? false
+            track.setValue(!currentLoved, forKey: "loved")
+            fputs("❤️ [MusicController] toggleStar() set to \(!currentLoved)\n", stderr)
+        }
         logger.info("✅ Toggled loved status of current track")
     }
 }

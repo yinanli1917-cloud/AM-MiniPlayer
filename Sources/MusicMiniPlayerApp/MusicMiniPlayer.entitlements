@@ -2,9 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- ✅ 启用沙盒（App Store 必须） -->
 	<key>com.apple.security.app-sandbox</key>
-	<false/>
+	<true/>
+
+	<!-- ✅ AppleScript/AppleEvents 权限（控制 Music.app） -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+
+	<!-- ✅ 网络访问权限（MusicKit API 需要） -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- ✅ 临时文件读写权限（用于 artwork 缓存） -->
+	<!-- 注意：这是临时例外，App Store 审核可能需要说明原因 -->
+	<!-- 原因：AppleScript 获取的 artwork 数据需要通过临时文件传输 -->
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/tmp/</string>
+	</array>
 </dict>
 </plist>

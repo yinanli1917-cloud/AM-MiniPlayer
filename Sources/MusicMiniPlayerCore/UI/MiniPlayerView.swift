@@ -459,7 +459,7 @@ public struct MiniPlayerView: View {
                     let size = min(geo.size.width * 0.18, 60.0)
 
                     // 计算在 Now Playing 卡片内的位置：
-                    // - Section header 高度: 36
+                    // - Now Playing header 高度: 36
                     // - 卡片上 padding(.top, 8): 8
                     // - 卡片内 padding(12): 12
                     let headerHeight: CGFloat = 36
@@ -494,22 +494,21 @@ public struct MiniPlayerView: View {
                         .clipped()
 
                     // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
-                    // 文字区域约占封面底部30%，模糊需要覆盖这个区域
                     if musicController.currentPage == .album && !isHovering {
                         Image(nsImage: artwork)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: artSize, height: artSize)
                             .clipped()
-                            .blur(radius: 50)  // 增大模糊值
+                            .blur(radius: 50)
                             .mask(
                                 LinearGradient(
                                     gradient: Gradient(stops: [
                                         .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.45),  // 顶部45%完全清晰
+                                        .init(color: .clear, location: 0.45),
                                         .init(color: .black.opacity(0.3), location: 0.55),
                                         .init(color: .black.opacity(0.7), location: 0.65),
-                                        .init(color: .black, location: 0.75),  // 底部25%完全模糊
+                                        .init(color: .black, location: 0.75),
                                         .init(color: .black, location: 1.0)
                                     ]),
                                     startPoint: .top,
