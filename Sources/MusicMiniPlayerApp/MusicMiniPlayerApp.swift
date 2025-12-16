@@ -230,12 +230,25 @@ class AppMain: NSObject, NSApplicationDelegate {
             height: windowSize.height
         )
 
-        floatingWindow = NSPanel(
+        // 🔑 使用 SnappablePanel 替代 NSPanel，实现物理惯性拖拽
+        let snappableWindow = SnappablePanel(
             contentRect: windowRect,
             styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
+        
+        // 配置惯性参数
+        snappableWindow.cornerMargin = 16
+        snappableWindow.projectionFactor = 0.15
+        snappableWindow.snapToCorners = true
+        
+        // 🔑 提供当前页面状态，用于判断是否允许双指拖拽（只在专辑页面生效）
+        snappableWindow.currentPageProvider = { [weak self] in
+            return self?.musicController.currentPage ?? .album
+        }
+        
+        floatingWindow = snappableWindow
 
         guard let window = floatingWindow else { return }
 
@@ -245,7 +258,8 @@ class AppMain: NSObject, NSApplicationDelegate {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = true
-        window.isMovableByWindowBackground = true
+        // 🔑 禁用系统默认拖拽，由 SnappablePanel 完全接管
+        window.isMovableByWindowBackground = false
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.hidesOnDeactivate = false
@@ -273,7 +287,7 @@ class AppMain: NSObject, NSApplicationDelegate {
         hostingView.autoresizingMask = [.width, .height]
         window.contentView = hostingView
 
-        fputs("[AppMain] Floating window created\n", stderr)
+        fputs("[AppMain] Floating window created with SnappablePanel\n", stderr)
     }
 
     func showFloatingWindow() {

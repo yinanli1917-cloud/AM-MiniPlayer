@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 // NSView wrapper that prevents window dragging
+// 🔑 用于标记不可拖拽区域（如进度条、滚动视图等）
 struct NonDraggableView: NSViewRepresentable {
     func makeNSView(context: Context) -> NonDraggableNSView {
         return NonDraggableNSView()
@@ -12,10 +13,21 @@ struct NonDraggableView: NSViewRepresentable {
 
 class NonDraggableNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
+    
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.identifier = NSUserInterfaceItemIdentifier("non-draggable")
+    }
+    
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        self.identifier = NSUserInterfaceItemIdentifier("non-draggable")
+    }
 }
 
 // MARK: - Window Draggable View
-// NSView wrapper that explicitly enables window dragging
+// NSView wrapper that marks area as draggable
+// SnappablePanel will handle all drag logic via sendEvent
 struct WindowDraggableView: NSViewRepresentable {
     func makeNSView(context: Context) -> DraggableNSView {
         return DraggableNSView()
@@ -26,10 +38,15 @@ struct WindowDraggableView: NSViewRepresentable {
 
 class DraggableNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        // Start window drag
-        window?.performDrag(with: event)
+    
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.identifier = NSUserInterfaceItemIdentifier("window-draggable")
+    }
+    
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        self.identifier = NSUserInterfaceItemIdentifier("window-draggable")
     }
 }
 

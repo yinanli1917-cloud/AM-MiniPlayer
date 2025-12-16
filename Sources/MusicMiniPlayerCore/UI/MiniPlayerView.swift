@@ -484,40 +484,33 @@ public struct MiniPlayerView: View {
             }()
 
             if musicController.currentPage != .lyrics {
-                // 🎯 封面图片 + 底部渐进模糊
+                // 🎯 封面图片 + 底部渐进模糊 (使用 Glur - App Store 合规)
                 ZStack {
-                    // 原始封面
+                    // 原始封面（始终显示）
                     Image(nsImage: artwork)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: artSize, height: artSize)
                         .clipped()
 
-                    // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
-                    if musicController.currentPage == .album && !isHovering {
-                        Image(nsImage: artwork)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: artSize, height: artSize)
-                            .clipped()
-                            .blur(radius: 50)
-                            .mask(
-                                LinearGradient(
-                                    gradient: Gradient(stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.45),
-                                        .init(color: .black.opacity(0.3), location: 0.55),
-                                        .init(color: .black.opacity(0.7), location: 0.65),
-                                        .init(color: .black, location: 0.75),
-                                        .init(color: .black, location: 1.0)
-                                    ]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .allowsHitTesting(false)
-                            .id(artwork)
-                    }
+                    // 🔑 带 Glur 渐进模糊的封面层 - 只在album页面非hover时显示
+                    // 关键：radius 保持固定值，通过 opacity 控制显示/隐藏
+                    // （Glur 的 radius 动态变化会导致图片消失，这是 SwiftUI Shader API 的限制）
+                    Image(nsImage: artwork)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: artSize, height: artSize)
+                        .clipped()
+                        .glur(
+                            radius: 16.0,        // 固定值，不能动态变化
+                            offset: 0.5,         // 从50%位置开始模糊
+                            interpolation: 0.35, // 35%的过渡区域
+                            direction: .down,    // 向下渐进（底部模糊）
+                            noise: 0.0,          // 不添加噪点
+                            drawingGroup: false  // 避免栅格化问题
+                        )
+                        .opacity(musicController.currentPage == .album && !isHovering ? 1 : 0)
+                        .allowsHitTesting(false)
                 }
                 .cornerRadius(cornerRadius)
                 .shadow(
