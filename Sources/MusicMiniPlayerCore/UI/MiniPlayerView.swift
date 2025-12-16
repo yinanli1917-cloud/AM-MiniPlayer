@@ -23,11 +23,13 @@ public struct MiniPlayerView: View {
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
+    var cornerRadius: CGFloat  // 🔑 可配置圆角
 
-    public init(openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
+    public init(openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil, cornerRadius: CGFloat = 16) {
         self.openWindow = openWindow
         self.onHide = onHide
         self.onExpand = onExpand
+        self.cornerRadius = cornerRadius
     }
 
     public var body: some View {
@@ -78,7 +80,7 @@ public struct MiniPlayerView: View {
         }
         // 移除固定尺寸，让视图自动填充窗口以支持缩放
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {

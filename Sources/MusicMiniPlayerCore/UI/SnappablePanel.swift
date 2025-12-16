@@ -340,12 +340,11 @@ public class SnappablePanel: NSPanel {
         let current = frame.origin
         let target = animationTarget
         
-        // 弹簧参数说明:
-        // stiffness: 刚度，越大回弹越快
-        // damping: 阻尼，越大回弹越小（更快停止）
-        // 要减少回弹夸张感，增加 damping
-        let stiffness: CGFloat = 120
-        let damping: CGFloat = 14       // 增加阻尼，减少回弹
+        // 弹簧参数 - 调快速度
+        // stiffness: 刚度，越大越快
+        // damping: 阻尼，越大回弹越小
+        let stiffness: CGFloat = 280    // 从 120 提高到 280，更快
+        let damping: CGFloat = 14       // 从 14 提高到 22，减少回弹
         let mass: CGFloat = 1.0
         let dt: CGFloat = 1.0 / 120.0
         

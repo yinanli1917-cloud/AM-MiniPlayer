@@ -1,5 +1,13 @@
 # nanoPod - AI Agent 开发指南
 
+## 项目信息
+
+- **GitHub**: https://github.com/yinanli1917-cloud/AM-MiniPlayer
+- **作者**: yinanli1917-cloud
+- **邮箱**: yinanli1917@gmail.com
+
+> **注意**: 仅在用户明确要求时才执行 git push，不要每次修改都自动推送。
+
 ## 项目概述
 
 nanoPod 是一个 macOS 菜单栏/浮窗音乐播放器，类似 iOS PiP 风格。使用 SwiftUI + AppKit 混合开发。
@@ -174,14 +182,15 @@ swift package clean
 **核心功能**：
 1. **惯性拖拽** - 拖拽时记录速度，释放后根据速度计算投射落点
 2. **四角吸附** - 根据投射落点所在象限选择最近的屏幕角落
-3. **落地微弹** - 到达角落后有轻微向上浮动再回落的动画
+3. **弹簧动画** - 使用高 stiffness (280) + damping (22) 实现快速但平滑的动画
 4. **贴边隐藏** - 拖到屏幕左/右边缘可隐藏，只露出 20px
-5. **拖拽时保持 hover** - 拖拽过程中保持控件显示，动画完成后 2 秒才恢复
+5. **双指拖拽** - 只在专辑页面生效，歌词/歌单页面不响应
+6. **进度条保护** - 底部 100px 控件区域不触发窗口拖拽
 
 **关键实现**：
-- 使用 CVDisplayLink 实现高性能动画（与显示器刷新率同步）
-- 通过 `onDragStateChanged` 回调通知 MusicController
-- MiniPlayerView 监听 `musicController.isWindowDragging` 状态
+- 使用 120Hz Timer 实现流畅弹簧动画
+- `currentPageProvider` 回调判断当前页面
+- `isInBottomControlsArea` 保护进度条交互
 
 ## 待办功能
 

@@ -419,11 +419,10 @@ struct MenuBarPlayerView: View {
 
     var body: some View {
         ZStack {
-            // 使用完整的 MiniPlayerView
-            MiniPlayerView(openWindow: nil, onHide: nil, onExpand: onExpand)
+            // 使用完整的 MiniPlayerView，圆角 6pt 匹配 NSPopover
+            MiniPlayerView(openWindow: nil, onHide: nil, onExpand: onExpand, cornerRadius: 6)
         }
         .frame(width: 300, height: 350)  // 高度改为 350
-        .clipShape(RoundedRectangle(cornerRadius: 10))  // 圆角 10pt
         .onHover { isHovering in
             // 通知 AppMain 用户是否在交互
             onHoverChanged?(isHovering)
