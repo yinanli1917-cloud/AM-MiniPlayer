@@ -145,19 +145,27 @@ public class MusicController: ObservableObject {
         logger.info("✅ Successfully created and stored SBApplication for Music.app")
 
         // Launch Music.app if it's not running
-        if !(app.isRunning) {
-            logger.info("🚀 Music.app is not running, launching it...")
+        fputs("🔍 [connect] Checking app.isRunning...\n", stderr)
+        let isRunning = app.isRunning
+        fputs("🔍 [connect] app.isRunning = \(isRunning)\n", stderr)
+
+        if !isRunning {
+            fputs("🚀 [connect] Music.app is not running, launching it...\n", stderr)
             app.activate()
 
             // Wait a bit for Music.app to launch
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.updatePlayerState()
+                // 🔑 启动后也获取队列
+                self.fetchUpNextQueue()
             }
         } else {
-            logger.info("✅ Music.app is already running")
+            fputs("✅ [connect] Music.app is already running\n", stderr)
             // Trigger immediate update
             DispatchQueue.main.async {
                 self.updatePlayerState()
+                // 🔑 连接成功后立即获取队列
+                self.fetchUpNextQueue()
             }
         }
 
@@ -287,6 +295,8 @@ public class MusicController: ObservableObject {
             self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.checkQueueHashAndRefresh()
             }
+            // 🔑 立即触发一次，获取初始队列
+            self.queueCheckTimer?.fire()
 
             // Setup MusicKit queue observer
             self.setupMusicKitQueueObserver()
@@ -323,15 +333,23 @@ public class MusicController: ObservableObject {
     private func checkQueueHashAndRefresh() {
         guard !isPreview else { return }
 
+        fputs("🔍 [checkQueueHash] Timer fired, musicApp=\(musicApp != nil)\n", stderr)
+
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            guard let self = self, let app = self.musicApp, app.isRunning else {
+                fputs("⚠️ [checkQueueHash] musicApp not available\n", stderr)
+                return
+            }
 
             // 🔑 使用自己的 musicApp 实例获取 queue hash
-            guard let hash = self.getQueueHashFromApp(app) else { return }
+            guard let hash = self.getQueueHashFromApp(app) else {
+                fputs("⚠️ [checkQueueHash] Failed to get queue hash\n", stderr)
+                return
+            }
 
             DispatchQueue.main.async {
                 if hash != self.lastQueueHash {
-                    self.logger.info("🔄 Queue hash changed: \(self.lastQueueHash) -> \(hash)")
+                    fputs("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n", stderr)
                     self.lastQueueHash = hash
                     self.fetchUpNextQueue()
                 }
@@ -341,11 +359,21 @@ public class MusicController: ObservableObject {
 
     /// 从 SBApplication 获取队列 hash
     private func getQueueHashFromApp(_ app: SBApplication) -> String? {
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let playlistName = playlist.value(forKey: "name") as? String,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject else {
+            fputs("⚠️ [getQueueHash] No currentPlaylist\n", stderr)
+            return nil
+        }
+        guard let playlistName = playlist.value(forKey: "name") as? String else {
+            fputs("⚠️ [getQueueHash] No playlist name\n", stderr)
+            return nil
+        }
+        guard let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+            fputs("⚠️ [getQueueHash] No tracks\n", stderr)
+            return nil
+        }
+        guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
               let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+            fputs("⚠️ [getQueueHash] No currentTrack\n", stderr)
             return nil
         }
         return "\(playlistName):\(tracks.count):\(currentID)"
@@ -1046,40 +1074,24 @@ public class MusicController: ObservableObject {
 
         fputs("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n", stderr)
 
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] playTrack: musicApp not available\n", stderr)
-            return
-        }
+        // 🔑 使用 AppleScript 播放指定歌曲（避免 ScriptingBridge 遍历阻塞）
+        DispatchQueue.global(qos: .userInteractive).async {
+            let script = """
+            tell application "Music"
+                set targetTrack to first track of current playlist whose persistent ID is "\(persistentID)"
+                play targetTrack
+            end tell
+            """
 
-        // 🔑 在后台线程执行 ScriptingBridge 操作，避免阻塞主线程
-        DispatchQueue.global(qos: .userInteractive).async { [app] in
-            // 通过当前播放列表查找并播放
-            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
-                return
-            }
-
-            // 🔑 使用 NSPredicate 过滤（更快）
-            let predicate = NSPredicate(format: "persistentID == %@", persistentID)
-            if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
-               filteredTracks.count > 0,
-               let track = filteredTracks.object(at: 0) as? NSObject {
-                fputs("▶️ [MusicController] playTrack found (filtered), playing...\n", stderr)
-                track.perform(Selector(("playOnce:")), with: nil)
-                return
-            }
-
-            // 回退：遍历查找
-            for i in 0..<min(tracks.count, 500) {
-                if let track = tracks.object(at: i) as? NSObject,
-                   let trackID = track.value(forKey: "persistentID") as? String,
-                   trackID == persistentID {
-                    fputs("▶️ [MusicController] playTrack found (iterate), playing...\n", stderr)
-                    track.perform(Selector(("playOnce:")), with: nil)
-                    return
+            var error: NSDictionary?
+            if let appleScript = NSAppleScript(source: script) {
+                appleScript.executeAndReturnError(&error)
+                if let error = error {
+                    fputs("⚠️ [playTrack] AppleScript error: \(error)\n", stderr)
+                } else {
+                    fputs("▶️ [playTrack] Started playing via AppleScript\n", stderr)
                 }
             }
-            fputs("⚠️ [MusicController] playTrack: track not found\n", stderr)
         }
     }
 
@@ -1118,6 +1130,8 @@ public class MusicController: ObservableObject {
     }
 
     public func fetchUpNextQueue() {
+        fputs("📋 [fetchUpNextQueue] Called, isPreview=\(isPreview)\n", stderr)
+
         guard !isPreview else {
             // Preview data
             upNextTracks = [
@@ -1143,7 +1157,11 @@ public class MusicController: ObservableObject {
 
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
     private func fetchUpNextViaBridge() async {
-        guard let app = musicApp, app.isRunning else { return }
+        fputs("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n", stderr)
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [fetchUpNextViaBridge] musicApp not available\n", stderr)
+            return
+        }
 
         let tracks = await Task.detached { [app] in
             self.getUpNextTracksFromApp(app, limit: 10)
