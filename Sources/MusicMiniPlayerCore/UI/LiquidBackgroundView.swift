@@ -24,7 +24,11 @@ struct LiquidGlassEffectView: NSViewRepresentable {
 public struct LiquidBackgroundView: View {
     var artwork: NSImage?
     @State private var dominantColor: Color = .clear
+    @State private var lastArtworkHash: Int = 0  // 🔑 缓存上次的 artwork hash
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LiquidBackground")
+
+    // 🔑 静态颜色缓存，避免重复计算
+    private static var colorCache = NSCache<NSNumber, NSColor>()
 
     public init(artwork: NSImage? = nil) {
         self.artwork = artwork
@@ -90,35 +94,42 @@ public struct LiquidBackgroundView: View {
     }
 
     private func updateColor() {
-        print("🎨 updateColor called, artwork available: \(artwork != nil)")
-
         if let artwork = artwork {
+            // 🔑 使用 hash 检测是否是同一张图片
+            let artworkHash = artwork.hashValue
+            if artworkHash == lastArtworkHash && dominantColor != .clear {
+                // 相同的 artwork，跳过计算
+                return
+            }
+
+            // 🔑 检查缓存
+            if let cachedColor = Self.colorCache.object(forKey: NSNumber(value: artworkHash)) {
+                DispatchQueue.main.async {
+                    self.lastArtworkHash = artworkHash
+                    withAnimation(.easeInOut(duration: 0.5)) {
+                        self.dominantColor = Color(nsColor: cachedColor)
+                    }
+                }
+                return
+            }
+
+            // 计算颜色
             DispatchQueue.global(qos: .userInitiated).async {
                 if let nsColor = artwork.dominantColor() {
-                    // Log the extracted color for debugging
-                    var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
-                    nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-
-                    // Also log RGB values
-                    let red = nsColor.redComponent
-                    let green = nsColor.greenComponent
-                    let blue = nsColor.blueComponent
-
-                    print("🎨 Extracted dominant color - RGB: R=\(String(format: "%.2f", red)) G=\(String(format: "%.2f", green)) B=\(String(format: "%.2f", blue)) HSB: H=\(String(format: "%.2f", hue)) S=\(String(format: "%.2f", saturation)) B=\(String(format: "%.2f", brightness))")
+                    // 缓存结果
+                    Self.colorCache.setObject(nsColor, forKey: NSNumber(value: artworkHash))
 
                     DispatchQueue.main.async {
-                        withAnimation(.easeInOut(duration: 0.8)) {
+                        self.lastArtworkHash = artworkHash
+                        withAnimation(.easeInOut(duration: 0.5)) {
                             self.dominantColor = Color(nsColor: nsColor)
                         }
-                        print("🎨 Color applied to background")
                     }
-                } else {
-                    print("⚠️ Failed to extract dominant color")
                 }
             }
         } else {
-            print("🔄 No artwork - clearing color")
-            withAnimation(.easeInOut(duration: 0.6)) {
+            lastArtworkHash = 0
+            withAnimation(.easeInOut(duration: 0.4)) {
                 dominantColor = .clear
             }
         }

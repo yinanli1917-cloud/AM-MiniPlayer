@@ -292,54 +292,36 @@ public class MusicController: ObservableObject {
 
     // MARK: - Queue Sync (双层检测)
 
-    /// 轻量级队列hash检测 - 通过playlist ID + track count检测变化
+    /// 轻量级队列hash检测 - 通过 ScriptingBridge 检测变化
     private func checkQueueHashAndRefresh() {
         guard !isPreview else { return }
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, let app = self.musicApp, app.isRunning else { return }
 
-            let hashScript = """
-            tell application "Music"
-                try
-                    set playlistName to name of current playlist
-                    set trackCount to count of tracks of current playlist
-                    set currentID to persistent ID of current track
-                    return playlistName & ":" & trackCount & ":" & currentID
-                on error
-                    return ""
-                end try
-            end tell
-            """
+            // 🔑 使用自己的 musicApp 实例获取 queue hash
+            guard let hash = self.getQueueHashFromApp(app) else { return }
 
-            // 使用 Process + osascript 替代 NSAppleScript
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", hashScript]
-
-            let outputPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                if !output.isEmpty && !output.hasPrefix("ERROR") {
-                    DispatchQueue.main.async {
-                        if output != self.lastQueueHash {
-                            self.logger.info("🔄 Queue hash changed: \(self.lastQueueHash) -> \(output)")
-                            self.lastQueueHash = output
-                            self.fetchUpNextQueue()
-                        }
-                    }
+            DispatchQueue.main.async {
+                if hash != self.lastQueueHash {
+                    self.logger.info("🔄 Queue hash changed: \(self.lastQueueHash) -> \(hash)")
+                    self.lastQueueHash = hash
+                    self.fetchUpNextQueue()
                 }
-            } catch {
-                // 忽略错误，下次轮询会重试
             }
         }
+    }
+
+    /// 从 SBApplication 获取队列 hash
+    private func getQueueHashFromApp(_ app: SBApplication) -> String? {
+        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+              let playlistName = playlist.value(forKey: "name") as? String,
+              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+            return nil
+        }
+        return "\(playlistName):\(tracks.count):\(currentID)"
     }
 
     /// MusicKit队列观察器 - 使用DistributedNotificationCenter监听Apple Music变化
@@ -450,25 +432,98 @@ public class MusicController: ObservableObject {
     func updatePlayerState() {
         guard !isPreview else { return }
 
-        // 使用 AppleScript 获取状态（比 ScriptingBridge 更可靠）
+        // 🔑 直接使用 AppleScript（更可靠，不会阻塞主线程）
+        // ScriptingBridge 在主线程调用时可能导致卡死
         updatePlayerStateViaAppleScript()
     }
 
-    // 用于防止 AppleScript 调用重叠 - 使用时间戳而非布尔值以避免卡死
+    /// 处理播放器状态更新（共用逻辑）
+    private func processPlayerState(
+        isPlaying: Bool,
+        position: Double,
+        shuffle: Bool,
+        repeatMode: Int,
+        trackName: String,
+        trackArtist: String,
+        trackAlbum: String,
+        trackDuration: Double,
+        persistentID: String,
+        bitRate: Int,
+        sampleRate: Int
+    ) {
+        // Determine audio quality
+        var quality: String? = nil
+        if sampleRate >= 176400 || bitRate >= 3000 {
+            quality = "Hi-Res Lossless"
+        } else if sampleRate >= 44100 && bitRate >= 1000 {
+            quality = "Lossless"
+        }
+
+        // 检测歌曲是否变化
+        let isFirstTrack = self.currentPersistentID == nil && !persistentID.isEmpty
+        let trackChanged = (persistentID != self.currentPersistentID && !persistentID.isEmpty) || isFirstTrack
+
+        DispatchQueue.main.async {
+            // Update playing state (only if not recently toggled by user)
+            if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
+                self.isPlaying = isPlaying
+                self.shuffleEnabled = shuffle
+                self.repeatMode = repeatMode
+            }
+
+            if !trackName.isEmpty && trackName != "NOT_PLAYING" {
+                self.currentTrackTitle = trackName
+                self.currentArtist = trackArtist
+                self.currentAlbum = trackAlbum
+                self.duration = trackDuration
+
+                // Only update time if difference is significant
+                if abs(self.internalCurrentTime - position) > 0.5 || !self.isPlaying {
+                    self.currentTime = position
+                    self.internalCurrentTime = position
+                }
+
+                self.audioQuality = quality
+                self.lastPollTime = Date()
+
+                // Fetch artwork if track changed
+                if trackChanged {
+                    fputs("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist)\n", stderr)
+                    self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
+
+                    self.currentPersistentID = persistentID
+                    self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
+                }
+            } else {
+                // No track playing
+                if self.currentTrackTitle != "Not Playing" {
+                    self.logger.info("⏹️ No track playing")
+                }
+                self.currentTrackTitle = "Not Playing"
+                self.currentArtist = ""
+                self.currentAlbum = ""
+                self.duration = 0
+                self.currentTime = 0
+                self.internalCurrentTime = 0
+                self.audioQuality = nil
+            }
+        }
+    }
+
+    // 用于防止状态更新重叠 - 使用时间戳而非布尔值以避免卡死
     private var lastUpdateTime: Date = .distantPast
     private let updateTimeout: TimeInterval = 0.8  // 0.8秒超时，因为轮询间隔是1秒
 
-    /// 使用 AppleScript 获取播放状态（更可靠的方式）
+    /// 使用 AppleScript 获取播放状态（回退方式）
     private func updatePlayerStateViaAppleScript() {
         // 使用时间戳检测超时，而不是布尔值锁
         let now = Date()
         let timeSinceLastUpdate = now.timeIntervalSince(lastUpdateTime)
         if timeSinceLastUpdate < updateTimeout {
-            // 上次更新还在进行中（未超时），跳过本次
             return
         }
         lastUpdateTime = now
-        fputs("📊 [updatePlayerState] Called (last: \(String(format: "%.2f", timeSinceLastUpdate))s ago)\n", stderr)
+        fputs("📊 [updatePlayerState] Fallback to AppleScript (last: \(String(format: "%.2f", timeSinceLastUpdate))s ago)\n", stderr)
 
         let script = """
         tell application "Music"
@@ -479,14 +534,12 @@ public class MusicController: ObservableObject {
                     set isPlaying to "true"
                 end if
 
-                -- Get shuffle and repeat state
                 set shuffleState to "false"
                 if shuffle enabled then
                     set shuffleState to "true"
                 end if
 
                 set repeatState to song repeat as string
-                -- repeatState will be "off", "one", or "all"
 
                 if exists current track then
                     set trackName to name of current track
@@ -508,7 +561,6 @@ public class MusicController: ObservableObject {
         end tell
         """
 
-        // 使用 Process 执行 osascript，带超时机制
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let self = self else { return }
 
@@ -517,9 +569,8 @@ public class MusicController: ObservableObject {
             process.arguments = ["-e", script]
 
             let outputPipe = Pipe()
-            let errorPipe = Pipe()
             process.standardOutput = outputPipe
-            process.standardError = errorPipe
+            process.standardError = FileHandle.nullDevice
 
             do {
                 try process.run()
@@ -528,43 +579,27 @@ public class MusicController: ObservableObject {
                 return
             }
 
-            // 设置超时 - 如果 0.5 秒内没完成就杀掉进程
             let startTime = Date()
             let processTimeout: TimeInterval = 0.5
 
             while process.isRunning {
                 if Date().timeIntervalSince(startTime) > processTimeout {
-                    fputs("⏱️ [updatePlayerState] Timeout! Terminating osascript\n", stderr)
+                    fputs("⏱️ [updatePlayerState] Timeout!\n", stderr)
                     process.terminate()
                     return
                 }
-                Thread.sleep(forTimeInterval: 0.01)  // 10ms 检查间隔
+                Thread.sleep(forTimeInterval: 0.01)
             }
 
             let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            guard let resultString = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
-                fputs("❌ [updatePlayerState] No output from osascript\n", stderr)
-                return
-            }
-
-            if resultString.isEmpty {
-                fputs("❌ [updatePlayerState] Empty output\n", stderr)
-                return
-            }
-
-            if resultString.hasPrefix("ERROR:") {
-                fputs("❌ [updatePlayerState] Script error: \(resultString)\n", stderr)
+            guard let resultString = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !resultString.isEmpty,
+                  !resultString.hasPrefix("ERROR:") else {
                 return
             }
 
             let parts = resultString.components(separatedBy: "|||")
-            guard parts.count >= 11 else {
-                fputs("❌ [updatePlayerState] Invalid format (\(parts.count) parts)\n", stderr)
-                return
-            }
-
-            // 成功获取数据
-            fputs("✅ [updatePlayerState] \(parts[1]) - pos:\(parts[6]) shuffle:\(parts[9]) repeat:\(parts[10])\n", stderr)
+            guard parts.count >= 11 else { return }
 
             let isPlaying = parts[0] == "true"
             let trackName = parts[1]
@@ -581,71 +616,26 @@ public class MusicController: ObservableObject {
             switch repeatStateStr {
             case "one": repeatState = 1
             case "all": repeatState = 2
-            default: repeatState = 0  // "off"
+            default: repeatState = 0
             }
 
-            // Determine audio quality
-            var quality: String? = nil
-            if sampleRate >= 176400 || bitRate >= 3000 {
-                quality = "Hi-Res Lossless"
-            } else if sampleRate >= 44100 && bitRate >= 1000 {
-                quality = "Lossless"
-            }
-
-            // 检测歌曲是否变化（包括首次启动时 currentPersistentID 为 nil 的情况）
-            let isFirstTrack = self.currentPersistentID == nil && !persistentID.isEmpty && trackName != "NOT_PLAYING"
-            let trackChanged = (persistentID != self.currentPersistentID && !persistentID.isEmpty && trackName != "NOT_PLAYING") || isFirstTrack
-
-            DispatchQueue.main.async {
-                // Update playing state (only if not recently toggled by user)
-                if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
-                    self.isPlaying = isPlaying
-                    // Sync shuffle and repeat state from system Music
-                    self.shuffleEnabled = shuffleState
-                    self.repeatMode = repeatState
-                }
-
-                if trackName == "NOT_PLAYING" {
-                    if self.currentTrackTitle != "Not Playing" {
-                        self.logger.info("⏹️ No track playing")
-                    }
-                    self.currentTrackTitle = "Not Playing"
-                    self.currentArtist = ""
-                    self.currentAlbum = ""
-                    self.duration = 0
-                    self.currentTime = 0
-                    self.internalCurrentTime = 0  // 🔑 同步内部时间
-                    self.audioQuality = nil
-                } else {
-                    // 现在更新为新歌曲信息
-                    self.currentTrackTitle = trackName
-                    self.currentArtist = trackArtist
-                    self.currentAlbum = trackAlbum
-                    self.duration = trackDuration
-
-                    // Only update time if difference is significant
-                    if abs(self.internalCurrentTime - position) > 0.5 || !self.isPlaying {
-                        self.currentTime = position
-                        self.internalCurrentTime = position  // 🔑 同步内部时间
-                    }
-
-                    self.audioQuality = quality
-                    self.lastPollTime = Date()
-
-                    // Fetch artwork if track changed or first track
-                    if trackChanged {
-                        fputs("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist) (first=\(isFirstTrack))\n", stderr)
-                        self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
-
-                        self.currentPersistentID = persistentID
-                        self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
-                    }
-                }
-            }
+            self.processPlayerState(
+                isPlaying: isPlaying,
+                position: position,
+                shuffle: shuffleState,
+                repeatMode: repeatState,
+                trackName: trackName,
+                trackArtist: trackArtist,
+                trackAlbum: trackAlbum,
+                trackDuration: trackDuration,
+                persistentID: persistentID,
+                bitRate: bitRate,
+                sampleRate: sampleRate
+            )
         }
     }
 
-    // MARK: - Artwork Management (MusicKit > AppleScript)
+    // MARK: - Artwork Management (ScriptingBridge > MusicKit > Placeholder)
 
     private func fetchArtwork(for title: String, artist: String, album: String, persistentID: String) {
         // Check cache first
@@ -657,41 +647,56 @@ public class MusicController: ObservableObject {
 
         logger.info("🎨 Fetching artwork for \(title) by \(artist)")
 
-        // Try multiple sources in order: AppleScript -> MusicKit -> Placeholder
-        Task {
-            // 1. Try AppleScript first (most reliable for local tracks)
-            if let appleScriptData = self.fetchArtworkDataViaAppleScript(),
-               let image = NSImage(data: appleScriptData) {
-                await MainActor.run {
+        // 在后台线程获取封面，避免阻塞主线程
+        // 🔑 使用自己的 musicApp 实例，避免多个 SBApplication 实例冲突
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+
+            // 1. Try ScriptingBridge (App Store 合规，参考 Tuneful)
+            if let image = self.getArtworkImageFromApp(app) {
+                DispatchQueue.main.async {
                     self.currentArtwork = image
-                    // Cache the artwork
                     if !persistentID.isEmpty {
                         self.artworkCache.setObject(image, forKey: persistentID as NSString)
                     }
-                    self.logger.info("✅ Successfully fetched and cached artwork via AppleScript")
+                    self.logger.info("✅ Successfully fetched artwork via ScriptingBridge")
                 }
                 return
             }
-            
-            // 2. MusicKit 在 macOS 15 上可能导致 TCC 崩溃，暂时跳过
-            // logger.info("🔄 AppleScript failed, trying MusicKit...")
-            // if let musicKitImage = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-            //     await MainActor.run {
-            //         self.currentArtwork = musicKitImage
-            //         if !persistentID.isEmpty {
-            //             self.artworkCache.setObject(musicKitImage, forKey: persistentID as NSString)
-            //         }
-            //         self.logger.info("✅ Successfully fetched and cached artwork via MusicKit")
-            //     }
-            //     return
-            // }
 
-            // 3. Fallback to placeholder if AppleScript fails
-            await MainActor.run {
+            // 2. Fallback to placeholder
+            DispatchQueue.main.async {
                 self.currentArtwork = self.createPlaceholder()
-                self.logger.warning("⚠️ Failed to fetch artwork from all sources - using placeholder")
+                self.logger.warning("⚠️ Failed to fetch artwork - using placeholder")
             }
         }
+    }
+
+    /// 从 SBApplication 获取封面图片（使用共享的 musicApp 实例）
+    private func getArtworkImageFromApp(_ app: SBApplication) -> NSImage? {
+        guard let track = app.value(forKey: "currentTrack") as? NSObject,
+              let artworks = track.value(forKey: "artworks") as? SBElementArray,
+              artworks.count > 0,
+              let artwork = artworks.object(at: 0) as? NSObject else {
+            fputs("⚠️ [MusicController] No artwork found for current track\n", stderr)
+            return nil
+        }
+
+        // Tuneful 方式：artwork.data 直接返回 NSImage
+        if let image = artwork.value(forKey: "data") as? NSImage {
+            fputs("✅ [MusicController] Got artwork as NSImage\n", stderr)
+            return image
+        }
+
+        // 回退：尝试 rawData 作为 Data
+        if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
+           let image = NSImage(data: rawData) {
+            fputs("✅ [MusicController] Got artwork via rawData (\(rawData.count) bytes)\n", stderr)
+            return image
+        }
+
+        fputs("⚠️ [MusicController] Could not extract artwork image\n", stderr)
+        return nil
     }
 
     public func fetchMusicKitArtwork(title: String, artist: String, album: String) async -> NSImage? {
@@ -745,201 +750,18 @@ public class MusicController: ObservableObject {
         return nil
     }
 
-    private func fetchArtworkDataViaAppleScript() -> Data? {
-        // 使用 osascript 获取 artwork 数据 (NSAppleScript 在 macOS 15 上不稳定)
-        // 写入临时文件然后读取，因为 artwork 是二进制数据
-        let tempFile = "/tmp/nanopod_artwork_\(ProcessInfo.processInfo.processIdentifier).tiff"
-
-        // 首先尝试获取 current track 的 artwork
-        let trackArtworkScript = """
-        tell application "Music"
-            try
-                set artworkData to data of artwork 1 of current track
-                set filePath to POSIX file "\(tempFile)"
-                set fileRef to open for access filePath with write permission
-                set eof fileRef to 0
-                write artworkData to fileRef
-                close access fileRef
-                return "OK"
-            on error errMsg
-                try
-                    close access filePath
-                end try
-                return "ERROR:" & errMsg
-            end try
-        end tell
-        """
-
-        // 使用 Process + osascript 执行
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", trackArtworkScript]
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-
-            let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-            if output == "OK" {
-                // 读取临时文件
-                if let data = FileManager.default.contents(atPath: tempFile) {
-                    try? FileManager.default.removeItem(atPath: tempFile)
-                    if !data.isEmpty {
-                        fputs("✅ [fetchArtwork] Got artwork from current track (\(data.count) bytes)\n", stderr)
-                        return data
-                    }
-                }
-            }
-        } catch {
-            fputs("❌ [fetchArtwork] osascript failed: \(error)\n", stderr)
-        }
-
-        // 清理临时文件
-        try? FileManager.default.removeItem(atPath: tempFile)
-
-        // 对于电台/流媒体，尝试获取 current stream title 的封面
-        logger.info("🔄 Track artwork failed, trying stream artwork...")
-
-        // 尝试从 current playlist 获取封面（电台场景）
-        let playlistArtworkScript = """
-        tell application "Music"
-            try
-                set artworkData to data of artwork 1 of current playlist
-                set filePath to POSIX file "\(tempFile)"
-                set fileRef to open for access filePath with write permission
-                set eof fileRef to 0
-                write artworkData to fileRef
-                close access fileRef
-                return "OK"
-            on error errMsg
-                try
-                    close access filePath
-                end try
-                return "ERROR:" & errMsg
-            end try
-        end tell
-        """
-
-        let process2 = Process()
-        process2.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process2.arguments = ["-e", playlistArtworkScript]
-
-        let outputPipe2 = Pipe()
-        process2.standardOutput = outputPipe2
-        process2.standardError = FileHandle.nullDevice
-
-        do {
-            try process2.run()
-            process2.waitUntilExit()
-
-            let output = String(data: outputPipe2.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-            if output == "OK" {
-                if let data = FileManager.default.contents(atPath: tempFile) {
-                    try? FileManager.default.removeItem(atPath: tempFile)
-                    if !data.isEmpty {
-                        fputs("✅ [fetchArtwork] Got artwork from current playlist (\(data.count) bytes)\n", stderr)
-                        return data
-                    }
-                }
-            }
-        } catch {
-            fputs("❌ [fetchArtwork] playlist osascript failed: \(error)\n", stderr)
-        }
-
-        // 清理临时文件
-        try? FileManager.default.removeItem(atPath: tempFile)
-
-        fputs("❌ [fetchArtwork] No artwork available from track or playlist\n", stderr)
-        return nil
-    }
-    
-    // Fetch artwork by persistentID using osascript (for playlist items)
+    // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
-        guard !isPreview, !persistentID.isEmpty else { return nil }
+        guard !isPreview, !persistentID.isEmpty, let app = musicApp, app.isRunning else { return nil }
 
         // 先检查缓存
         if let cached = artworkCache.object(forKey: persistentID as NSString) {
             return cached
         }
 
-        let tempFile = "/tmp/nanopod_artwork_pid_\(ProcessInfo.processInfo.processIdentifier)_\(persistentID.prefix(8)).tiff"
-
-        // 🔑 修改：先在 current playlist 中查找，失败则在整个资料库中查找
-        let script = """
-        tell application "Music"
-            try
-                -- 先尝试在当前播放列表中查找
-                set targetTrack to first track of current playlist whose persistent ID is "\(persistentID)"
-                set artworkData to data of artwork 1 of targetTrack
-                set filePath to POSIX file "\(tempFile)"
-                set fileRef to open for access filePath with write permission
-                set eof fileRef to 0
-                write artworkData to fileRef
-                close access fileRef
-                return "OK"
-            on error
-                try
-                    -- 如果在当前播放列表找不到，尝试在整个资料库中查找
-                    set allTracks to every track of library playlist 1 whose persistent ID is "\(persistentID)"
-                    if (count of allTracks) > 0 then
-                        set targetTrack to item 1 of allTracks
-                        set artworkData to data of artwork 1 of targetTrack
-                        set filePath to POSIX file "\(tempFile)"
-                        set fileRef to open for access filePath with write permission
-                        set eof fileRef to 0
-                        write artworkData to fileRef
-                        close access fileRef
-                        return "OK"
-                    end if
-                    return "ERROR:Track not found"
-                on error errMsg
-                    try
-                        close access filePath
-                    end try
-                    return "ERROR:" & errMsg
-                end try
-            end try
-        end tell
-        """
-
-        let image: NSImage? = await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-
-            let outputPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                if output == "OK" {
-                    if let data = FileManager.default.contents(atPath: tempFile) {
-                        try? FileManager.default.removeItem(atPath: tempFile)
-                        if !data.isEmpty, let img = NSImage(data: data) {
-                            fputs("✅ [fetchArtworkByPersistentID] Got artwork for ID: \(persistentID.prefix(8))...\n", stderr)
-                            return img
-                        }
-                    }
-                } else {
-                    fputs("⚠️ [fetchArtworkByPersistentID] Failed for ID: \(persistentID.prefix(8))... - \(output)\n", stderr)
-                }
-            } catch {
-                fputs("❌ [fetchArtworkByPersistentID] osascript failed: \(error)\n", stderr)
-            }
-
-            try? FileManager.default.removeItem(atPath: tempFile)
-            return nil
+        // 使用自己的 musicApp 实例获取（App Store 合规）
+        let image: NSImage? = await Task.detached { [app] in
+            self.getArtworkImageByPersistentID(app, persistentID: persistentID)
         }.value
 
         // 缓存结果
@@ -948,6 +770,84 @@ public class MusicController: ObservableObject {
         }
 
         return image
+    }
+
+    /// 从 SBApplication 获取指定 persistentID 的封面
+    private func getArtworkImageByPersistentID(_ app: SBApplication, persistentID: String) -> NSImage? {
+        // 辅助函数：从 track 对象提取封面
+        func extractArtwork(from track: NSObject) -> NSImage? {
+            guard let artworks = track.value(forKey: "artworks") as? SBElementArray,
+                  artworks.count > 0,
+                  let artwork = artworks.object(at: 0) as? NSObject else {
+                return nil
+            }
+
+            // 尝试 data 属性（Tuneful 方式）
+            if let image = artwork.value(forKey: "data") as? NSImage {
+                return image
+            }
+            // 尝试 rawData 属性
+            if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
+               let image = NSImage(data: rawData) {
+                return image
+            }
+            return nil
+        }
+
+        // 1. 先在 currentPlaylist 中查找（更快）
+        if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+           let tracks = playlist.value(forKey: "tracks") as? SBElementArray {
+            // 🔑 限制搜索范围，避免遍历太多曲目
+            let searchLimit = min(tracks.count, 200)
+            for i in 0..<searchLimit {
+                if let track = tracks.object(at: i) as? NSObject,
+                   let trackID = track.value(forKey: "persistentID") as? String,
+                   trackID == persistentID {
+                    if let image = extractArtwork(from: track) {
+                        fputs("✅ [getArtworkByPersistentID] Found in currentPlaylist: \(persistentID.prefix(8))...\n", stderr)
+                        return image
+                    }
+                }
+            }
+        }
+
+        // 2. 尝试使用 ScriptingBridge 的 whose 查询（类似 AppleScript whose）
+        // 这比遍历整个 library 更高效
+        if let sources = app.value(forKey: "sources") as? SBElementArray, sources.count > 0,
+           let source = sources.object(at: 0) as? NSObject,
+           let libraryPlaylists = source.value(forKey: "libraryPlaylists") as? SBElementArray,
+           libraryPlaylists.count > 0,
+           let libraryPlaylist = libraryPlaylists.object(at: 0) as? NSObject,
+           let tracks = libraryPlaylist.value(forKey: "tracks") as? SBElementArray {
+
+            // 🔑 使用 SBElementArray 的 objectWithID 方法（如果可用）
+            // 或者使用 whose 查询
+            let predicate = NSPredicate(format: "persistentID == %@", persistentID)
+            if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
+               filteredTracks.count > 0,
+               let track = filteredTracks.object(at: 0) as? NSObject {
+                if let image = extractArtwork(from: track) {
+                    fputs("✅ [getArtworkByPersistentID] Found in library (filtered): \(persistentID.prefix(8))...\n", stderr)
+                    return image
+                }
+            }
+
+            // 🔑 如果 filter 不工作，回退到有限遍历
+            let librarySearchLimit = min(tracks.count, 500)
+            for i in 0..<librarySearchLimit {
+                if let track = tracks.object(at: i) as? NSObject,
+                   let trackID = track.value(forKey: "persistentID") as? String,
+                   trackID == persistentID {
+                    if let image = extractArtwork(from: track) {
+                        fputs("✅ [getArtworkByPersistentID] Found in library (iterate): \(persistentID.prefix(8))...\n", stderr)
+                        return image
+                    }
+                }
+            }
+        }
+
+        fputs("⚠️ [getArtworkByPersistentID] Not found via ScriptingBridge: \(persistentID.prefix(8))...\n", stderr)
+        return nil
     }
 
     private func createPlaceholder() -> NSImage {
@@ -963,7 +863,7 @@ public class MusicController: ObservableObject {
         return image
     }
 
-    // MARK: - Playback Controls (Pure AppleScript)
+    // MARK: - Playback Controls (ScriptingBridge 在后台线程执行，避免阻塞主线程)
 
     public func togglePlayPause() {
         print("🎵 [MusicController] togglePlayPause() called, isPreview=\(isPreview)")
@@ -972,12 +872,19 @@ public class MusicController: ObservableObject {
             isPlaying.toggle()
             return
         }
-        runControlScript("playpause")
 
-        // Optimistic UI update & Lock
-        DispatchQueue.main.async {
-            self.lastUserActionTime = Date()
-            self.isPlaying.toggle()
+        // 🔑 Optimistic UI update FIRST (before async call)
+        self.lastUserActionTime = Date()
+        self.isPlaying.toggle()
+
+        // 🔑 ScriptingBridge 调用放到后台线程，使用 perform(Selector) 方式
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let app = self?.musicApp, app.isRunning else {
+                fputs("⚠️ [MusicController] togglePlayPause: app not available\n", stderr)
+                return
+            }
+            fputs("▶️ [MusicController] togglePlayPause() executing on background thread\n", stderr)
+            app.perform(Selector(("playpause")))
         }
     }
 
@@ -986,7 +893,14 @@ public class MusicController: ObservableObject {
             logger.info("Preview: nextTrack")
             return
         }
-        runControlScript("next track")
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let app = self?.musicApp, app.isRunning else {
+                fputs("⚠️ [MusicController] nextTrack: app not available\n", stderr)
+                return
+            }
+            fputs("⏭️ [MusicController] nextTrack() executing on background thread\n", stderr)
+            app.perform(Selector(("nextTrack")))
+        }
     }
 
     public func previousTrack() {
@@ -998,7 +912,14 @@ public class MusicController: ObservableObject {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
-            runControlScript("previous track")
+            DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+                guard let app = self?.musicApp, app.isRunning else {
+                    fputs("⚠️ [MusicController] previousTrack: app not available\n", stderr)
+                    return
+                }
+                fputs("⏮️ [MusicController] previousTrack() executing on background thread\n", stderr)
+                app.perform(Selector(("backTrack")))
+            }
         }
     }
 
@@ -1006,12 +927,21 @@ public class MusicController: ObservableObject {
         if isPreview {
             logger.info("Preview: seek to \(position)")
             currentTime = position
-            internalCurrentTime = position  // 🔑 同步内部时间
+            internalCurrentTime = position
             return
         }
-        runControlScript("set player position to \(position)")
+        // Optimistic UI update
         currentTime = position
-        internalCurrentTime = position  // 🔑 同步内部时间
+        internalCurrentTime = position
+
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let app = self?.musicApp, app.isRunning else {
+                fputs("⚠️ [MusicController] seek: app not available\n", stderr)
+                return
+            }
+            fputs("⏩ [MusicController] seek(to: \(position)) executing on background thread\n", stderr)
+            app.setValue(position, forKey: "playerPosition")
+        }
     }
 
     public func toggleShuffle() {
@@ -1022,11 +952,16 @@ public class MusicController: ObservableObject {
         }
 
         let newShuffleState = !shuffleEnabled
-        runControlScript("set shuffle enabled to \(newShuffleState)")
-
         // Optimistic UI update
-        DispatchQueue.main.async {
-            self.shuffleEnabled = newShuffleState
+        self.shuffleEnabled = newShuffleState
+
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let app = self?.musicApp, app.isRunning else {
+                fputs("⚠️ [MusicController] toggleShuffle: app not available\n", stderr)
+                return
+            }
+            fputs("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on background thread\n", stderr)
+            app.setValue(newShuffleState, forKey: "shuffleEnabled")
         }
 
         // Wait a moment for Music.app to apply shuffle, then refresh queue
@@ -1034,7 +969,7 @@ public class MusicController: ObservableObject {
             self.fetchUpNextQueue()
         }
     }
-    
+
     public func playTrack(persistentID: String) {
         if isPreview {
             logger.info("Preview: playTrack \(persistentID)")
@@ -1043,34 +978,24 @@ public class MusicController: ObservableObject {
 
         fputs("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n", stderr)
 
-        let script = """
-        tell application "Music"
-            play (first track of current playlist whose persistent ID is "\(persistentID)")
-        end tell
-        """
+        guard let app = musicApp, app.isRunning else {
+            fputs("⚠️ [MusicController] playTrack: musicApp not available\n", stderr)
+            return
+        }
 
-        // 使用 Process + osascript 替代 NSAppleScript
-        DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
+        // 通过当前播放列表查找并播放
+        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+              let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+            return
+        }
 
-            let errorPipe = Pipe()
-            process.standardError = errorPipe
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                if process.terminationStatus == 0 {
-                    fputs("✅ [playTrack] Successfully started playing\n", stderr)
-                } else {
-                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errorMsg = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-                    fputs("❌ [playTrack] Failed: \(errorMsg)\n", stderr)
-                }
-            } catch {
-                fputs("❌ [playTrack] Process launch failed: \(error)\n", stderr)
+        for i in 0..<tracks.count {
+            if let track = tracks.object(at: i) as? NSObject,
+               let trackID = track.value(forKey: "persistentID") as? String,
+               trackID == persistentID {
+                fputs("▶️ [MusicController] playTrack found, playing...\n", stderr)
+                track.perform(Selector(("playOnce:")), with: nil)
+                return
             }
         }
     }
@@ -1083,21 +1008,24 @@ public class MusicController: ObservableObject {
         }
 
         let newMode = (repeatMode + 1) % 3
-        let modeString: String
+        // songRepeat values: 0x6B52704F = off, 0x6B527031 = one, 0x6B52416C = all
+        let repeatValue: Int
         switch newMode {
-        case 0:
-            modeString = "off"
-        case 1:
-            modeString = "one"
-        default:
-            modeString = "all"
+        case 1: repeatValue = 0x6B527031  // one
+        case 2: repeatValue = 0x6B52416C  // all
+        default: repeatValue = 0x6B52704F // off
         }
 
-        runControlScript("set song repeat to \(modeString)")
-
         // Optimistic UI update
-        DispatchQueue.main.async {
-            self.repeatMode = newMode
+        self.repeatMode = newMode
+
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let app = self?.musicApp, app.isRunning else {
+                fputs("⚠️ [MusicController] cycleRepeatMode: app not available\n", stderr)
+                return
+            }
+            fputs("🔁 [MusicController] setRepeat(\(newMode)) -> 0x\(String(repeatValue, radix: 16)) on background thread\n", stderr)
+            app.setValue(repeatValue, forKey: "songRepeat")
         }
 
         // Refresh queue after repeat mode change
@@ -1121,241 +1049,116 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 🔑 优先使用 MusicKit（真实队列），失败则回退到 AppleScript
+        // 使用 ScriptingBridge 获取队列（App Store 合规）
         Task {
-            do {
-                try await fetchUpNextViaMusicKit()
-            } catch {
-                logger.error("❌ MusicKit queue fetch failed: \(error.localizedDescription)")
-                await fetchUpNextViaAppleScript()
-            }
+            await fetchUpNextViaBridge()
         }
 
-        // 🔑 使用 AppleScript 获取播放历史
-        fetchRecentHistoryViaAppleScript()
+        // 获取播放历史
+        fetchRecentHistoryViaBridge()
     }
 
-    /// 使用 MusicKit 获取真实的播放队列（包括随机播放顺序）
-    private func fetchUpNextViaMusicKit() async throws {
-        // 检查 MusicKit 授权 - 必须先检查，否则访问 ApplicationMusicPlayer 会崩溃
-        let authStatus = MusicAuthorization.currentStatus
-        if authStatus != .authorized {
-            // 如果未授权，抛出错误让调用者回退到 AppleScript
-            if authStatus == .notDetermined {
-                logger.info("⚠️ MusicKit not yet determined, will fallback to AppleScript")
-            } else {
-                logger.warning("⚠️ MusicKit not authorized (\(String(describing: authStatus))), will fallback to AppleScript for Up Next")
+    /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
+    private func fetchUpNextViaBridge() async {
+        guard let app = musicApp, app.isRunning else { return }
+
+        let tracks = await Task.detached { [app] in
+            self.getUpNextTracksFromApp(app, limit: 10)
+        }.value
+
+        await MainActor.run {
+            self.upNextTracks = tracks
+            self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
+
+            // Trigger lyrics preloading for upcoming tracks
+            let tracksToPreload = Array(tracks.prefix(3)).map { (title: $0.title, artist: $0.artist, duration: $0.duration) }
+            if !tracksToPreload.isEmpty {
+                LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
             }
-            throw NSError(domain: "MusicKit", code: -1, userInfo: [NSLocalizedDescriptionKey: "MusicKit not authorized"])
+        }
+    }
+
+    /// 从 SBApplication 获取 Up Next tracks
+    private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+            return []
         }
 
-        // ❌ macOS 上 MusicKit 无法访问 Music.app 的真实队列
-        // ApplicationMusicPlayer 只能播放自己应用内的音乐
-        // SystemMusicPlayer 只在 iOS 上可用
-        // MPMusicPlayerController 也标记为 API_UNAVAILABLE(macos)
-        logger.error("❌ MusicKit/MediaPlayer frameworks cannot access Music.app queue on macOS, falling back to AppleScript")
-        throw NSError(domain: "MusicKit", code: -3, userInfo: [NSLocalizedDescriptionKey: "MusicKit unavailable on macOS for system music control"])
-    }
+        var result: [(String, String, String, String, Double)] = []
+        var foundCurrent = false
 
-    /// AppleScript 方式获取 Up Next（回退方案）
-    private func fetchUpNextViaAppleScript() async {
-        let upNextScript = """
-        tell application "Music"
-            set output to ""
-            try
-                set queueTracks to tracks of current playlist
-                set trackCount to count of queueTracks
+        for i in 0..<tracks.count {
+            guard let track = tracks.object(at: i) as? NSObject,
+                  let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-                -- Find current track index
-                set currentTrackID to persistent ID of current track
-                set currentIndex to 0
-                repeat with i from 1 to trackCount
-                    if persistent ID of item i of queueTracks is currentTrackID then
-                        set currentIndex to i
-                        exit repeat
-                    end if
-                end repeat
+            if foundCurrent {
+                let name = track.value(forKey: "name") as? String ?? ""
+                let artist = track.value(forKey: "artist") as? String ?? ""
+                let album = track.value(forKey: "album") as? String ?? ""
+                let duration = track.value(forKey: "duration") as? Double ?? 0
 
-                -- Get next 10 tracks
-                if currentIndex > 0 then
-                    repeat with i from (currentIndex + 1) to (currentIndex + 10)
-                        if i > trackCount then exit repeat
-                        set t to item i of queueTracks
-                        set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & "|||" & (duration of t) & ":::"
-                    end repeat
-                end if
-            end try
-            return output
-        end tell
-        """
-
-        // 使用 Process + osascript 替代 NSAppleScript
-        DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", upNextScript]
-
-            let outputPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let resultString = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                if !resultString.isEmpty {
-                    // 输出原始结果用于调试
-                    self.logger.info("📝 Raw AppleScript result: \(resultString)")
-                    let parsed = self.parseQueueResult(resultString)
-                    DispatchQueue.main.async {
-                        self.upNextTracks = parsed
-                        self.logger.info("✅ Fetched \(parsed.count) up next tracks via AppleScript fallback")
-
-                        // Trigger lyrics preloading for upcoming tracks (first 3 only to avoid hammering APIs)
-                        let tracksToPreload = Array(parsed.prefix(3)).map { (title: $0.title, artist: $0.artist, duration: $0.duration) }
-                        if !tracksToPreload.isEmpty {
-                            LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
-                        }
-                    }
+                if !name.isEmpty {
+                    result.append((name, artist, album, trackID, duration))
+                    if result.count >= limit { break }
                 }
-            } catch {
-                self.logger.error("❌ Up Next fetch error: \(error)")
+            } else if trackID == currentID {
+                foundCurrent = true
+            }
+        }
+
+        return result
+    }
+
+    /// 使用 ScriptingBridge 获取播放历史（使用自己的 musicApp 实例）
+    private func fetchRecentHistoryViaBridge() {
+        guard let app = musicApp, app.isRunning else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, app] in
+            guard let self = self else { return }
+
+            let tracks = self.getRecentTracksFromApp(app, limit: 10)
+
+            DispatchQueue.main.async {
+                self.recentTracks = tracks
+                self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
             }
         }
     }
 
-    /// 使用 AppleScript 获取历史记录
-    private func fetchRecentHistoryViaAppleScript() {
-        let historyScript = """
-        tell application "Music"
-            set output to ""
-            try
-                set queueTracks to tracks of current playlist
-                set trackCount to count of queueTracks
-
-                -- Find current track index
-                set currentTrackID to persistent ID of current track
-                set currentIndex to 0
-                repeat with i from 1 to trackCount
-                    if persistent ID of item i of queueTracks is currentTrackID then
-                        set currentIndex to i
-                        exit repeat
-                    end if
-                end repeat
-
-                -- Get previous 10 tracks (in reverse order)
-                if currentIndex > 1 then
-                    repeat with i from (currentIndex - 1) to 1 by -1
-                        set t to item i of queueTracks
-                        set output to output & (name of t) & "|||" & (artist of t) & "|||" & (album of t) & "|||" & (persistent ID of t) & "|||" & (duration of t) & ":::"
-                        if (currentIndex - i) >= 10 then exit repeat
-                    end repeat
-                end if
-            end try
-            return output
-        end tell
-        """
-
-        // 使用 Process + osascript 替代 NSAppleScript
-        DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", historyScript]
-
-            let outputPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let resultString = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                if !resultString.isEmpty {
-                    let parsed = self.parseQueueResult(resultString)
-                    DispatchQueue.main.async {
-                        self.recentTracks = parsed
-                        self.logger.info("✅ Fetched \(parsed.count) recent tracks")
-                    }
-                }
-            } catch {
-                self.logger.error("❌ History fetch error: \(error)")
-            }
+    /// 从 SBApplication 获取播放历史
+    private func getRecentTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+            return []
         }
-    }
 
-    private func parseQueueResult(_ resultString: String) -> [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] {
-        var tracks: [(String, String, String, String, TimeInterval)] = []
+        var recentList: [(String, String, String, String, Double)] = []
 
-        // Split by track separator
-        let trackStrings = resultString.components(separatedBy: ":::")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        for i in 0..<tracks.count {
+            guard let track = tracks.object(at: i) as? NSObject,
+                  let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-        for trackString in trackStrings {
-            // Split by field separator
-            let fields = trackString.components(separatedBy: "|||")
-            if fields.count >= 5 {
-                let title = fields[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                let artist = fields[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                let album = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                let id = fields[3].trimmingCharacters(in: .whitespacesAndNewlines)
-                let durationSeconds = Double(fields[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0.0
+            if trackID == currentID {
+                break  // 到达当前歌曲，停止
+            }
 
-                // 🔑 过滤掉空标题的track（避免显示空白行）
-                if !title.isEmpty {
-                    tracks.append((title, artist, album, id, durationSeconds))
-                    logger.info("✅ Parsed track: \(title) by \(artist)")
-                } else {
-                    logger.warning("⚠️ Skipping track with empty title")
-                }
+            let name = track.value(forKey: "name") as? String ?? ""
+            let artist = track.value(forKey: "artist") as? String ?? ""
+            let album = track.value(forKey: "album") as? String ?? ""
+            let duration = track.value(forKey: "duration") as? Double ?? 0
+
+            if !name.isEmpty {
+                recentList.append((name, artist, album, trackID, duration))
             }
         }
 
-        logger.info("📊 Parsed \(tracks.count) valid tracks from AppleScript result")
-        return tracks
-    }
-
-    private func runControlScript(_ command: String) {
-        let script = "tell application \"Music\" to \(command)"
-        logger.info("Running script: \(script)")
-        fputs("🎵 [runControlScript] Running: \(script)\n", stderr)
-
-        // 使用 Process + osascript（比 NSAppleScript 更可靠）
-        DispatchQueue.global(qos: .userInteractive).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                if process.terminationStatus == 0 {
-                    fputs("✅ [runControlScript] Success: \(command)\n", stderr)
-                    DispatchQueue.main.async {
-                        self.debugMessage = "Command executed: \(command)"
-                    }
-                } else {
-                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errorString = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-                    fputs("❌ [runControlScript] Error: \(errorString)\n", stderr)
-                    DispatchQueue.main.async {
-                        self.debugMessage = "Error: \(errorString)"
-                    }
-                }
-            } catch {
-                fputs("❌ [runControlScript] Failed to launch osascript: \(error)\n", stderr)
-            }
-        }
+        // 返回最后 limit 个，倒序（最近播放的在前）
+        return Array(recentList.suffix(limit).reversed())
     }
 
     // MARK: - Volume Control
@@ -1366,7 +1169,10 @@ public class MusicController: ObservableObject {
             return
         }
         let clamped = max(0, min(100, level))
-        runControlScript("set sound volume to \(clamped)")
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let app = self?.musicApp else { return }
+            app.setValue(clamped, forKey: "soundVolume")
+        }
     }
 
     public func toggleMute() {
@@ -1374,7 +1180,11 @@ public class MusicController: ObservableObject {
             logger.info("Preview: toggleMute")
             return
         }
-        runControlScript("set mute to not mute")
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let app = self?.musicApp else { return }
+            let currentMute = app.value(forKey: "mute") as? Bool ?? false
+            app.setValue(!currentMute, forKey: "mute")
+        }
     }
 
     // MARK: - Library & Favorites
@@ -1404,8 +1214,9 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // AppleScript to add current track to library
-        runControlScript("duplicate current track to source \"Library\"")
+        guard let app = musicApp, app.isRunning,
+              let track = app.value(forKey: "currentTrack") as? NSObject else { return }
+        track.perform(Selector(("duplicateTo:")), with: app.value(forKey: "sources"))
         logger.info("✅ Added current track to library")
     }
 
@@ -1415,8 +1226,10 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // Toggle loved status
-        runControlScript("set loved of current track to not (loved of current track)")
+        guard let app = musicApp, app.isRunning,
+              let track = app.value(forKey: "currentTrack") as? NSObject else { return }
+        let currentLoved = track.value(forKey: "loved") as? Bool ?? false
+        track.setValue(!currentLoved, forKey: "loved")
         logger.info("✅ Toggled loved status of current track")
     }
 }

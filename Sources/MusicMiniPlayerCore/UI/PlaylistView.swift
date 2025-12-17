@@ -19,6 +19,8 @@ public struct PlaylistView: View {
     @State private var scrollLocked: Bool = false
     @State private var hasTriggeredSlowScroll: Bool = false
 
+    @State private var hasScrolledToNowPlaying: Bool = false
+
     @Binding var scrollOffset: CGFloat
 
     // 🔑 统一的 artSize 常量（与 MiniPlayerView 同步）
@@ -123,13 +125,25 @@ public struct PlaylistView: View {
                         .scrollTargetLayout()  // 🔑 恢复 snap 支持
                     }
                     .scrollTargetBehavior(.viewAligned)  // 🔑 恢复 snap 行为
+                    .opacity(hasScrolledToNowPlaying ? 1 : 0)  // 🔑 防止闪烁
                     .onAppear {
-                        // 🔑 默认滚动到 Now Playing 位置
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
+                        // 🔑 首次加载时滚动到 Now Playing
+                        scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                            hasScrolledToNowPlaying = true
                         }
                     }
-                    .onChange(of: musicController.currentTrackTitle) { _ in
+                    .onChange(of: currentPage) { _, newPage in
+                        // 🔑 每次切换到 playlist 页面时都滚动到 Now Playing
+                        if newPage == .playlist {
+                            hasScrolledToNowPlaying = false
+                            scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                                hasScrolledToNowPlaying = true
+                            }
+                        }
+                    }
+                    .onChange(of: musicController.currentTrackTitle) { _, _ in
                         // 歌曲切换时也滚动到 Now Playing
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             withAnimation(.easeOut(duration: 0.3)) {

@@ -409,11 +409,15 @@ struct MenuBarPlayerView: View {
 
     var body: some View {
         ZStack {
+            // 🔑 背景取色 - 使用 LiquidBackgroundView
+            LiquidBackgroundView(artwork: musicController.currentArtwork)
+                .ignoresSafeArea()
+
             // 使用完整的 MiniPlayerView
             MiniPlayerView(openWindow: nil, onHide: nil, onExpand: onExpand)
         }
         .frame(width: 300, height: 350)  // 高度改为 350
-        .clipShape(RoundedRectangle(cornerRadius: 10))  // 圆角 10pt
+        .clipShape(RoundedRectangle(cornerRadius: 6))  // 圆角 6pt
         .onHover { isHovering in
             // 通知 AppMain 用户是否在交互
             onHoverChanged?(isHovering)

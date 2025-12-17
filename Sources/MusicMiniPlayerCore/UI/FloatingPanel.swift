@@ -38,7 +38,7 @@ class FloatingPanel<Content: View>: NSPanel {
         let hostingView = NSHostingView(rootView: view()
             .ignoresSafeArea()
             .environment(\.floatingPanel, self))
-        hostingView.layer?.cornerRadius = 12
+        hostingView.layer?.cornerRadius = 6
         hostingView.layer?.masksToBounds = true
         self.contentView = hostingView
     }

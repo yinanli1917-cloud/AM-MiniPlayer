@@ -15,15 +15,9 @@ public enum ResizeEdge {
         case .top, .bottom:
             return NSCursor.resizeUpDown
         case .topLeft, .bottomRight:
-            // 尝试获取对角线光标
-            if let cursor = NSCursor.perform(NSSelectorFromString("_windowResizeNorthWestSouthEastCursor"))?.takeUnretainedValue() as? NSCursor {
-                return cursor
-            }
+            // App Store 合规：使用标准光标（私有 API 已移除）
             return NSCursor.crosshair
         case .topRight, .bottomLeft:
-            if let cursor = NSCursor.perform(NSSelectorFromString("_windowResizeNorthEastSouthWestCursor"))?.takeUnretainedValue() as? NSCursor {
-                return cursor
-            }
             return NSCursor.crosshair
         case .none:
             return NSCursor.arrow

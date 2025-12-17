@@ -14,12 +14,10 @@
 	<key>com.apple.security.network.client</key>
 	<true/>
 
-	<!-- ✅ 临时文件读写权限（用于 artwork 缓存） -->
-	<!-- 注意：这是临时例外，App Store 审核可能需要说明原因 -->
-	<!-- 原因：AppleScript 获取的 artwork 数据需要通过临时文件传输 -->
-	<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+	<!-- ✅ 指定可控制的 App (App Store 要求) -->
+	<key>com.apple.security.temporary-exception.apple-events</key>
 	<array>
-		<string>/tmp/</string>
+		<string>com.apple.Music</string>
 	</array>
 </dict>
 </plist>
