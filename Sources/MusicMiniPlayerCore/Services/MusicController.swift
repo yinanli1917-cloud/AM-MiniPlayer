@@ -56,13 +56,20 @@ public class MusicController: ObservableObject {
     private var internalCurrentTime: Double = 0  // 🔑 内部精确时间，不触发重绘
     // 🔑 改为 public 以便 UI 层可以用 persistentID 精确匹配当前播放的歌曲
     @Published public var currentPersistentID: String?
-    private var artworkCache = NSCache<NSString, NSImage>()
+    private var artworkCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 100  // 最多缓存 100 张封面
+        cache.totalCostLimit = 100 * 1024 * 1024  // 100MB 内存限制
+        return cache
+    }()
     private var isPreview: Bool = false
 
     // Queue sync state
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
 
+    // 🔑 Timer 动态控制状态
+    private var interpolationTimerActive = false
 
     // State synchronization lock
     private var lastUserActionTime: Date = .distantPast
@@ -273,10 +280,8 @@ public class MusicController: ObservableObject {
             // Fire immediately
             self.pollingTimer?.fire()
 
-            // Local interpolation timer (60fps) for smooth UI updates
-            self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
-                self?.interpolateTime()
-            }
+            // Local interpolation timer - 动态启动（仅在播放时运行）
+            // 不在此处初始化，由 updateTimerState() 动态控制
 
             // Queue hash check timer - lightweight check every 2 seconds
             self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -287,6 +292,28 @@ public class MusicController: ObservableObject {
             self.setupMusicKitQueueObserver()
 
             fputs("⏰ [startPolling] All timers created\n", stderr)
+        }
+    }
+
+    /// 🔑 根据播放状态动态启停高频 Timer（减少 CPU 占用）
+    private func updateTimerState() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            if self.isPlaying && !self.interpolationTimerActive {
+                // 开始播放 -> 启动高频 Timer
+                self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+                    self?.interpolateTime()
+                }
+                self.interpolationTimerActive = true
+                self.logger.debug("⏱️ interpolationTimer started")
+            } else if !self.isPlaying && self.interpolationTimerActive {
+                // 停止播放 -> 停止高频 Timer
+                self.interpolationTimer?.invalidate()
+                self.interpolationTimer = nil
+                self.interpolationTimerActive = false
+                self.logger.debug("⏱️ interpolationTimer stopped")
+            }
         }
     }
 
@@ -393,38 +420,48 @@ public class MusicController: ObservableObject {
 
     @objc private func playerInfoChanged(_ notification: Notification) {
         guard let userInfo = notification.userInfo as? [String: Any] else { return }
-        
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            
+
+            // 播放状态
             if let state = userInfo["Player State"] as? String {
                 // Only update if we haven't performed a user action recently
                 if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
                     self.isPlaying = (state == "Playing")
                 }
             }
-            if let name = userInfo["Name"] as? String {
+
+            // 🔑 先提取新值（在更新属性之前）
+            let newName = userInfo["Name"] as? String
+            let newArtist = userInfo["Artist"] as? String
+            let newAlbum = userInfo["Album"] as? String
+
+            // 🔑 在更新属性之前检测变化
+            let trackChanged = (newName != nil && newName != self.currentTrackTitle) ||
+                              (newArtist != nil && newArtist != self.currentArtist)
+
+            // 更新属性
+            if let name = newName {
                 self.currentTrackTitle = name
             }
-            if let artist = userInfo["Artist"] as? String {
+            if let artist = newArtist {
                 self.currentArtist = artist
             }
-            if let album = userInfo["Album"] as? String {
+            if let album = newAlbum {
                 self.currentAlbum = album
             }
             if let totalTime = userInfo["Total Time"] as? Int {
                 self.duration = Double(totalTime) / 1000.0
             }
-            
-            // Trigger artwork fetch if track changed (based on title/artist)
-            if let name = userInfo["Name"] as? String,
-               let artist = userInfo["Artist"] as? String,
-               let album = userInfo["Album"] as? String {
-                if name != self.currentTrackTitle {
-                     self.fetchArtwork(for: name, artist: artist, album: album, persistentID: "")
-                }
+
+            // 🔑 歌曲变化时获取封面
+            if trackChanged, let name = newName, let artist = newArtist {
+                let album = newAlbum ?? self.currentAlbum
+                self.logger.info("🎵 Track changed: \(name) - \(artist)")
+                self.fetchArtwork(for: name, artist: artist, album: album, persistentID: "")
             }
-            
+
             self.updatePlayerState()
         }
     }
@@ -507,6 +544,9 @@ public class MusicController: ObservableObject {
                 self.internalCurrentTime = 0
                 self.audioQuality = nil
             }
+
+            // 🔑 根据播放状态动态启停高频 Timer
+            self.updateTimerState()
         }
     }
 
@@ -794,25 +834,36 @@ public class MusicController: ObservableObject {
             return nil
         }
 
-        // 1. 先在 currentPlaylist 中查找（更快）
+        let predicate = NSPredicate(format: "persistentID == %@", persistentID)
+
+        // 1. 先在 currentPlaylist 中用 NSPredicate 查找（最快）
         if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
            let tracks = playlist.value(forKey: "tracks") as? SBElementArray {
-            // 🔑 限制搜索范围，避免遍历太多曲目
-            let searchLimit = min(tracks.count, 200)
+
+            // 🔑 优先使用 NSPredicate 过滤（O(1) 或 O(log n)）
+            if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
+               filteredTracks.count > 0,
+               let track = filteredTracks.object(at: 0) as? NSObject,
+               let image = extractArtwork(from: track) {
+                fputs("✅ [getArtworkByPersistentID] Found in currentPlaylist (filtered): \(persistentID.prefix(8))...\n", stderr)
+                return image
+            }
+
+            // 回退：遍历搜索（扩大到 500）
+            let searchLimit = min(tracks.count, 500)
             for i in 0..<searchLimit {
                 if let track = tracks.object(at: i) as? NSObject,
                    let trackID = track.value(forKey: "persistentID") as? String,
                    trackID == persistentID {
                     if let image = extractArtwork(from: track) {
-                        fputs("✅ [getArtworkByPersistentID] Found in currentPlaylist: \(persistentID.prefix(8))...\n", stderr)
+                        fputs("✅ [getArtworkByPersistentID] Found in currentPlaylist (iterate): \(persistentID.prefix(8))...\n", stderr)
                         return image
                     }
                 }
             }
         }
 
-        // 2. 尝试使用 ScriptingBridge 的 whose 查询（类似 AppleScript whose）
-        // 这比遍历整个 library 更高效
+        // 2. 在 library 中查找
         if let sources = app.value(forKey: "sources") as? SBElementArray, sources.count > 0,
            let source = sources.object(at: 0) as? NSObject,
            let libraryPlaylists = source.value(forKey: "libraryPlaylists") as? SBElementArray,
@@ -820,9 +871,7 @@ public class MusicController: ObservableObject {
            let libraryPlaylist = libraryPlaylists.object(at: 0) as? NSObject,
            let tracks = libraryPlaylist.value(forKey: "tracks") as? SBElementArray {
 
-            // 🔑 使用 SBElementArray 的 objectWithID 方法（如果可用）
-            // 或者使用 whose 查询
-            let predicate = NSPredicate(format: "persistentID == %@", persistentID)
+            // 🔑 使用 NSPredicate 过滤
             if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
                filteredTracks.count > 0,
                let track = filteredTracks.object(at: 0) as? NSObject {
@@ -832,8 +881,8 @@ public class MusicController: ObservableObject {
                 }
             }
 
-            // 🔑 如果 filter 不工作，回退到有限遍历
-            let librarySearchLimit = min(tracks.count, 500)
+            // 回退：有限遍历（扩大到 1000）
+            let librarySearchLimit = min(tracks.count, 1000)
             for i in 0..<librarySearchLimit {
                 if let track = tracks.object(at: i) as? NSObject,
                    let trackID = track.value(forKey: "persistentID") as? String,

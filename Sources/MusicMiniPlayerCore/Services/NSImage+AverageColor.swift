@@ -1,12 +1,15 @@
 import AppKit
 
 extension NSImage {
+    // 🔑 共享 CIContext，避免重复创建（性能优化）
+    private static let sharedCIContext = CIContext(options: [.useSoftwareRenderer: false])
+
     func dominantColor() -> NSColor? {
-        // Resize to small grid for performance
-        let size = CGSize(width: 50, height: 50)
+        // 🔑 减小采样尺寸：50x50 -> 30x30（减少 64% 像素计算）
+        let size = CGSize(width: 30, height: 30)
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
 
-        let context = CIContext(options: nil)
+        let context = Self.sharedCIContext  // 🔑 复用共享 context
         let inputImage = CIImage(cgImage: cgImage)
         let filter = CIFilter(name: "CILanczosScaleTransform")
         filter?.setValue(inputImage, forKey: kCIInputImageKey)
@@ -118,7 +121,7 @@ extension NSImage {
         guard let outputImage = filter.outputImage else { return nil }
 
         var bitmap = [UInt8](repeating: 0, count: 4)
-        let context = CIContext(options: [.workingColorSpace: kCFNull!])
+        let context = Self.sharedCIContext  // 🔑 复用共享 context
 
         context.render(outputImage,
                        toBitmap: &bitmap,

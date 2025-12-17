@@ -28,7 +28,11 @@ public struct LiquidBackgroundView: View {
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LiquidBackground")
 
     // 🔑 静态颜色缓存，避免重复计算
-    private static var colorCache = NSCache<NSNumber, NSColor>()
+    private static var colorCache: NSCache<NSNumber, NSColor> = {
+        let cache = NSCache<NSNumber, NSColor>()
+        cache.countLimit = 50  // 最多缓存 50 个颜色
+        return cache
+    }()
 
     public init(artwork: NSImage? = nil) {
         self.artwork = artwork

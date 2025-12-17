@@ -392,7 +392,8 @@ public class SnappablePanel: NSPanel {
         stopAllAnimations()
         isAnimating = true
 
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/120.0, repeats: true) { [weak self] _ in
+        // 🔑 60fps（从 120fps 降低，减少 CPU 占用）
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] _ in
             self?.updatePeekAnimation()
         }
         RunLoop.main.add(animationTimer!, forMode: .common)
@@ -404,7 +405,7 @@ public class SnappablePanel: NSPanel {
         let current = frame.origin
         let target = animationTarget
 
-        let dt: CGFloat = 1.0 / 120.0
+        let dt: CGFloat = 1.0 / 60.0  // 🔑 60fps
 
         let dx = target.x - current.x
         let dy = target.y - current.y
@@ -423,7 +424,8 @@ public class SnappablePanel: NSPanel {
         let distance = hypot(dx, dy)
         let speed = hypot(springVelocityX, springVelocityY)
 
-        if distance < 0.3 && speed < 2 {
+        // 🔑 提高收敛阈值，更快结束动画
+        if distance < 0.5 && speed < 5 {
             setFrameOrigin(target)
             isAnimating = false
             animationTimer?.invalidate()
@@ -443,8 +445,8 @@ public class SnappablePanel: NSPanel {
         stopAllAnimations()
         isAnimating = true
 
-        // 使用高频 Timer (120Hz) 实现流畅动画
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/120.0, repeats: true) { [weak self] _ in
+        // 🔑 60fps（从 120fps 降低，减少 CPU 占用）
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] _ in
             self?.updateSpringAnimation()
         }
         RunLoop.main.add(animationTimer!, forMode: .common)
@@ -459,7 +461,7 @@ public class SnappablePanel: NSPanel {
         let stiffness: CGFloat = 280
         let damping: CGFloat = 24
         let mass: CGFloat = 1.0
-        let dt: CGFloat = 1.0 / 120.0
+        let dt: CGFloat = 1.0 / 60.0  // 🔑 60fps
 
         let dx = target.x - current.x
         let dy = target.y - current.y
@@ -478,7 +480,8 @@ public class SnappablePanel: NSPanel {
         let distance = hypot(dx, dy)
         let speed = hypot(springVelocityX, springVelocityY)
 
-        if distance < 0.3 && speed < 2 {
+        // 🔑 提高收敛阈值，更快结束动画
+        if distance < 0.5 && speed < 5 {
             setFrameOrigin(target)
             isAnimating = false
             animationTimer?.invalidate()
