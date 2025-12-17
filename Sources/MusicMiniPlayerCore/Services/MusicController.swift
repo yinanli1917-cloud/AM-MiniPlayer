@@ -455,11 +455,30 @@ public class MusicController: ObservableObject {
                 self.duration = Double(totalTime) / 1000.0
             }
 
-            // 🔑 歌曲变化时获取封面
+            // 🔑 歌曲变化时获取封面（在后台线程获取 persistentID）
             if trackChanged, let name = newName, let artist = newArtist {
                 let album = newAlbum ?? self.currentAlbum
-                self.logger.info("🎵 Track changed: \(name) - \(artist)")
-                self.fetchArtwork(for: name, artist: artist, album: album, persistentID: "")
+                self.logger.info("🎵 Track changed (notification): \(name) - \(artist)")
+                fputs("🎵 [playerInfoChanged] Track changed: \(name) - \(artist)\n", stderr)
+
+                // 🔑 在后台获取 persistentID 然后 fetchArtwork
+                DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+                    guard let self = self, let app = self.musicApp, app.isRunning else { return }
+
+                    var persistentID = ""
+                    if let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+                       let trackID = currentTrack.value(forKey: "persistentID") as? String {
+                        persistentID = trackID
+                        DispatchQueue.main.async {
+                            self.currentPersistentID = persistentID
+                        }
+                    }
+
+                    // 回主线程执行 fetchArtwork
+                    DispatchQueue.main.async {
+                        self.fetchArtwork(for: name, artist: artist, album: album, persistentID: persistentID)
+                    }
+                }
             }
 
             self.updatePlayerState()
@@ -1032,20 +1051,35 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 通过当前播放列表查找并播放
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
-            return
-        }
+        // 🔑 在后台线程执行 ScriptingBridge 操作，避免阻塞主线程
+        DispatchQueue.global(qos: .userInteractive).async { [app] in
+            // 通过当前播放列表查找并播放
+            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+                return
+            }
 
-        for i in 0..<tracks.count {
-            if let track = tracks.object(at: i) as? NSObject,
-               let trackID = track.value(forKey: "persistentID") as? String,
-               trackID == persistentID {
-                fputs("▶️ [MusicController] playTrack found, playing...\n", stderr)
+            // 🔑 使用 NSPredicate 过滤（更快）
+            let predicate = NSPredicate(format: "persistentID == %@", persistentID)
+            if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
+               filteredTracks.count > 0,
+               let track = filteredTracks.object(at: 0) as? NSObject {
+                fputs("▶️ [MusicController] playTrack found (filtered), playing...\n", stderr)
                 track.perform(Selector(("playOnce:")), with: nil)
                 return
             }
+
+            // 回退：遍历查找
+            for i in 0..<min(tracks.count, 500) {
+                if let track = tracks.object(at: i) as? NSObject,
+                   let trackID = track.value(forKey: "persistentID") as? String,
+                   trackID == persistentID {
+                    fputs("▶️ [MusicController] playTrack found (iterate), playing...\n", stderr)
+                    track.perform(Selector(("playOnce:")), with: nil)
+                    return
+                }
+            }
+            fputs("⚠️ [MusicController] playTrack: track not found\n", stderr)
         }
     }
 
@@ -1133,11 +1167,16 @@ public class MusicController: ObservableObject {
               let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
               let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
               let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+            fputs("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n", stderr)
             return []
         }
 
+        let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
+        fputs("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(tracks.count) tracks\n", stderr)
+
         var result: [(String, String, String, String, Double)] = []
         var foundCurrent = false
+        var currentIndex = -1
 
         for i in 0..<tracks.count {
             guard let track = tracks.object(at: i) as? NSObject,
@@ -1155,9 +1194,11 @@ public class MusicController: ObservableObject {
                 }
             } else if trackID == currentID {
                 foundCurrent = true
+                currentIndex = i
             }
         }
 
+        fputs("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), returning \(result.count) tracks\n", stderr)
         return result
     }
 
