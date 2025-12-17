@@ -122,9 +122,9 @@ public struct PlaylistView: View {
                             // 底部留白
                             Spacer().frame(height: 20)
                         }
-                        .scrollTargetLayout()  // 🔑 启用 snap 目标
+                        .scrollTargetLayout()
                     }
-                    .scrollTargetBehavior(.viewAligned)  // 🔑 snap 效果
+                    .scrollTargetBehavior(.viewAligned)
                     .opacity(hasScrolledToNowPlaying ? 1 : 0)  // 🔑 防止闪烁
                     .onAppear {
                         // 🔑 首次加载时滚动到 Now Playing

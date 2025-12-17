@@ -76,13 +76,21 @@ public class SnappablePanel: NSPanel {
             handleMouseDragged(event)
         case .leftMouseUp:
             handleMouseUp(event)
-        // 双指拖拽支持
+        // 双指拖拽支持（仅专辑页面）
         case .scrollWheel:
+            // 🔑 非专辑页面：所有滚动事件直接传递给 ScrollView（包括惯性）
+            if let provider = currentPageProvider, provider() != .album {
+                super.sendEvent(event)
+                return
+            }
+            
+            // 专辑页面：用于窗口拖拽
             if event.phase == .began || event.phase == .changed {
                 handleScrollDrag(event)
             } else if event.phase == .ended {
                 handleScrollEnd(event)
             } else {
+                // 惯性阶段等其他情况
                 super.sendEvent(event)
             }
         default:
@@ -187,14 +195,11 @@ public class SnappablePanel: NSPanel {
     private var scrollVelocityY: CGFloat = 0
     
     private func handleScrollDrag(_ event: NSEvent) {
-        // 🔑 只在专辑页面允许双指拖拽
-        if let provider = currentPageProvider, provider() != .album {
+        // 检查是否是双指手势（触控板）
+        guard abs(event.scrollingDeltaX) > 0 || abs(event.scrollingDeltaY) > 0 else {
             super.sendEvent(event)
             return
         }
-        
-        // 检查是否是双指手势（触控板）
-        guard abs(event.scrollingDeltaX) > 0 || abs(event.scrollingDeltaY) > 0 else { return }
         
         if !isScrollDragging {
             // 开始双指拖拽
@@ -344,7 +349,7 @@ public class SnappablePanel: NSPanel {
         // stiffness: 刚度，越大越快
         // damping: 阻尼，越大回弹越小
         let stiffness: CGFloat = 280    // 从 120 提高到 280，更快
-        let damping: CGFloat = 14       // 从 14 提高到 22，减少回弹
+        let damping: CGFloat = 24       // 减少回弹，更干脆
         let mass: CGFloat = 1.0
         let dt: CGFloat = 1.0 / 120.0
         
