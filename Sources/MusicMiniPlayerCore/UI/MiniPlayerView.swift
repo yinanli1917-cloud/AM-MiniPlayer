@@ -23,13 +23,11 @@ public struct MiniPlayerView: View {
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
-    var cornerRadius: CGFloat  // 🔑 可配置圆角
 
-    public init(openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil, cornerRadius: CGFloat = 16) {
+    public init(openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
         self.openWindow = openWindow
         self.onHide = onHide
         self.onExpand = onExpand
-        self.cornerRadius = cornerRadius
     }
 
     public var body: some View {
@@ -80,7 +78,7 @@ public struct MiniPlayerView: View {
         }
         // 移除固定尺寸，让视图自动填充窗口以支持缩放
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
@@ -142,19 +140,7 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 当从 playlist 切换到 album 页面时，如果鼠标在窗口内，恢复控件显示
-        .onChange(of: musicController.currentPage) { newPage in
-            if newPage == .album && isHovering {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
-                    showControls = true
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showOverlayContent = true
-                    }
-                }
-            }
-        }
+        // 🔑 删除onChange中的hover强制设置，让onHover自然控制状态
     }
 
     // MARK: - Album Overlay Content (文字遮罩 + 底部控件)
@@ -205,142 +191,94 @@ public struct MiniPlayerView: View {
                     .allowsHitTesting(false)
                 }
 
-                // 🎨 hover状态：歌曲信息行 + SharedBottomControls风格的控件
+                // 🎨 hover状态：歌曲信息行 + SharedBottomControls
                 if isHovering && showControls {
                     VStack(spacing: 0) {
                         Spacer()
 
-                        // 🔑 歌曲信息行：标题/艺术家 (左) + Shuffle/Repeat (右)
-                        // 🔑 使用.center对齐，文字和按钮在同一个frame里垂直居中
-                        HStack(alignment: .center) {
-                            // 🔑 缩小文字间距和字体，让整体更紧凑
-                            VStack(alignment: .leading, spacing: 1) {
-                                ScrollingText(
-                                    text: musicController.currentTrackTitle,
-                                    font: .system(size: 13, weight: .bold),  // 🔑 从14改为13
-                                    textColor: .white,
-                                    maxWidth: geo.size.width * 0.50,
-                                    alignment: .leading
+                        // 🔑 渐变模糊背景（与LyricsView、PlaylistView一致）
+                        ZStack(alignment: .bottom) {
+                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                                .frame(height: 140)
+                                .mask(
+                                    LinearGradient(
+                                        gradient: Gradient(stops: [
+                                            .init(color: .clear, location: 0),
+                                            .init(color: .black.opacity(0.3), location: 0.15),
+                                            .init(color: .black.opacity(0.6), location: 0.3),
+                                            .init(color: .black, location: 0.5),
+                                            .init(color: .black, location: 1.0)
+                                        ]),
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
                                 )
-                                .matchedGeometryEffect(id: "track-title", in: animation)
 
-                                ScrollingText(
-                                    text: musicController.currentArtist,
-                                    font: .system(size: 11, weight: .medium),  // 🔑 从10改回11
-                                    textColor: .white.opacity(0.7),
-                                    maxWidth: geo.size.width * 0.50,
-                                    alignment: .leading
-                                )
-                                .matchedGeometryEffect(id: "track-artist", in: animation)
-                            }
-                            .frame(height: 26)  // 🔑 固定高度与按钮一致
+                            VStack(spacing: 0) {
+                                // 🔑 歌曲信息行：标题/艺术家 (左) + Shuffle/Repeat (右)
+                                HStack(alignment: .center) {  // 🔑 居中对齐
+                                    VStack(alignment: .leading, spacing: -2) {  // 🔑 spacing=-2 负间距更紧凑
+                                        ScrollingText(
+                                            text: musicController.currentTrackTitle,
+                                            font: .system(size: 12, weight: .bold),
+                                            textColor: .white,
+                                            maxWidth: geo.size.width * 0.50,
+                                            height: 15,  // 🔑 紧凑高度
+                                            alignment: .leading
+                                        )
+                                        .matchedGeometryEffect(id: "track-title", in: animation)
 
-                            Spacer()
-
-                            HStack(spacing: 8) {
-                                // 🔑 主题色（Apple Music红）
-                                let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                                // 🔑 背景：主题色20%不透明度
-                                let themeBackground = themeColor.opacity(0.20)
-
-                                Button(action: { musicController.toggleShuffle() }) {
-                                    Image(systemName: "shuffle")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.5))
-                                        .frame(width: 26, height: 26)
-                                        .background(Circle().fill(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1)))
-                                }
-                                .buttonStyle(.plain)
-
-                                Button(action: { musicController.cycleRepeatMode() }) {
-                                    Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.5))
-                                        .frame(width: 26, height: 26)
-                                        .background(Circle().fill(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1)))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 40)  // 🔑 与进度条左右端点对齐
-                        .padding(.bottom, 8)  // 🔑 歌曲信息行下边padding改为8
-
-                        // 🔑 与SharedBottomControls完全一致的控件布局
-                        VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
-                            // 进度条 + 时间标签（时间在进度条下方）
-                            VStack(spacing: 2) {  // 🔑 进度条与时间间距=2
-                                // 进度条 - 放在最上面
-                                progressBarView(geo: geo)
-
-                                // 时间标签 - 移到进度条下方，padding与进度条一致
-                                HStack {
-                                    Text(formatTime(musicController.currentTime))
-                                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                                        .foregroundColor(.white.opacity(0.6))
-
-                                    Spacer()
-
-                                    if let quality = musicController.audioQuality {
-                                        qualityBadge(quality)
+                                        ScrollingText(
+                                            text: musicController.currentArtist,
+                                            font: .system(size: 10, weight: .medium),
+                                            textColor: .white.opacity(0.7),
+                                            maxWidth: geo.size.width * 0.50,
+                                            height: 13,  // 🔑 紧凑高度
+                                            alignment: .leading
+                                        )
+                                        .matchedGeometryEffect(id: "track-artist", in: animation)
                                     }
 
                                     Spacer()
 
-                                    Text("-" + formatTime(musicController.duration - musicController.currentTime))
-                                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                                        .foregroundColor(.white.opacity(0.6))
-                                }
-                                .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
-                            }
-                            .background(NonDraggableView())
+                                    HStack(spacing: 7) {
+                                        let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+                                        let themeBackground = themeColor.opacity(0.20)
 
-                            // 播放控件
-                            HStack(spacing: 12) {
-                                NavigationIconButton(
-                                    iconName: musicController.currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
-                                    isActive: musicController.currentPage == .lyrics
-                                ) {
-                                    // 🔑 更快但不弹性的动画
-                                    withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                                        musicController.currentPage = musicController.currentPage == .lyrics ? .album : .lyrics
+                                        Button(action: { musicController.toggleShuffle() }) {
+                                            Image(systemName: "shuffle")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.5))
+                                                .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
+                                                .background(Circle().fill(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1)))
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        Button(action: { musicController.cycleRepeatMode() }) {
+                                            Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.5))
+                                                .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
+                                                .background(Circle().fill(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1)))
+                                        }
+                                        .buttonStyle(.plain)
                                     }
                                 }
-                                .frame(width: 28, height: 28)
+                                .padding(.horizontal, 32)  // 🔑 12 + 20 = 32，与进度条对齐
+                                .padding(.bottom, 3)  // 🔑 距离进度条更近
 
-                                Spacer()
-
-                                HoverableControlButton(iconName: "backward.fill", size: 18) {
-                                    musicController.previousTrack()
-                                }
-                                .frame(width: 32, height: 32)
-
-                                HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 22) {
-                                    musicController.togglePlayPause()
-                                }
-                                .frame(width: 32, height: 32)
-
-                                HoverableControlButton(iconName: "forward.fill", size: 18) {
-                                    musicController.nextTrack()
-                                }
-                                .frame(width: 32, height: 32)
-
-                                Spacer()
-
-                                NavigationIconButton(
-                                    iconName: musicController.currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
-                                    isActive: musicController.currentPage == .playlist
-                                ) {
-                                    // 🔑 更快但不弹性的动画
-                                    withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                                        musicController.currentPage = musicController.currentPage == .playlist ? .album : .playlist
-                                    }
-                                }
-                                .frame(width: 28, height: 28)
+                                // 🔑 使用 SharedBottomControls
+                                SharedBottomControls(
+                                    currentPage: $musicController.currentPage,
+                                    isHovering: $isHovering,
+                                    showControls: $showControls,
+                                    isProgressBarHovering: $isProgressBarHovering,
+                                    dragPosition: $dragPosition
+                                )
                             }
-                            .buttonStyle(.plain)
                         }
-                        .padding(.horizontal, 20)  // 🔑 与SharedBottomControls一致
-                        .padding(.bottom, 20)  // 🔑 底部padding减小（32→20）
+                        .contentShape(Rectangle())
+                        .allowsHitTesting(true)
                     }
                     // 🔑 hover状态的控件使用showOverlayContent控制延迟显示
                     .opacity(showOverlayContent ? 1 : 0)
@@ -351,87 +289,6 @@ public struct MiniPlayerView: View {
             .animation(.spring(response: 0.3, dampingFraction: 0.82), value: showControls)
             .animation(.easeInOut(duration: 0.2), value: showOverlayContent)
         }
-    }
-
-    // 进度条视图（与SharedBottomControls完全一致，padding固定为20）
-    @ViewBuilder
-    private func progressBarView(geo: GeometryProxy) -> some View {
-        let barHeight: CGFloat = isProgressBarHovering ? 12 : 7  // 🔑 hover前7px，hover后12px
-
-        GeometryReader { barGeo in
-            let currentProgress: CGFloat = {
-                if musicController.duration > 0 {
-                    return dragPosition ?? CGFloat(musicController.currentTime / musicController.duration)
-                }
-                return 0
-            }()
-
-            // 🔑 使用遮罩实现圆角不拉伸效果
-            ZStack {
-                // Background Track - 从中心向上下扩展
-                Capsule()
-                    .fill(Color.white.opacity(0.2))
-                    .frame(height: barHeight)
-
-                // Active Progress - 使用遮罩保持圆角不变形
-                Capsule()
-                    .fill(Color.white)
-                    .frame(height: barHeight)
-                    .mask(
-                        HStack(spacing: 0) {
-                            Rectangle()
-                                .frame(width: barGeo.size.width * currentProgress)
-                            Spacer(minLength: 0)
-                        }
-                    )
-            }
-            .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
-            .contentShape(Capsule())
-            .onHover { hovering in
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    isProgressBarHovering = hovering
-                }
-            }
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged({ value in
-                        dragPosition = min(max(0, value.location.x / barGeo.size.width), 1)
-                    })
-                    .onEnded({ value in
-                        let percentage = min(max(0, value.location.x / barGeo.size.width), 1)
-                        musicController.seek(to: percentage * musicController.duration)
-                        dragPosition = nil
-                    })
-            )
-        }
-        .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
-        .padding(.horizontal, 20)  // 🔑 固定padding=20，与SharedBottomControls完全一致
-    }
-
-    // 音质标签
-    private func qualityBadge(_ quality: String) -> some View {
-        HStack(spacing: 2) {
-            if quality == "Hi-Res Lossless" {
-                Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 8))
-            } else if quality == "Dolby Atmos" {
-                Image(systemName: "spatial.audio.badge.checkmark").font(.system(size: 8))
-            } else {
-                Image(systemName: "waveform").font(.system(size: 8))
-            }
-            Text(quality).font(.system(size: 9, weight: .semibold))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(.ultraThinMaterial)
-        .cornerRadius(4)
-        .foregroundColor(.white.opacity(0.9))
-    }
-
-    // 时间格式化
-    private func formatTime(_ time: Double) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
     }
 
     // MARK: - Floating Artwork (单个Image实例避免crossfade)
@@ -461,7 +318,7 @@ public struct MiniPlayerView: View {
                     let size = min(geo.size.width * 0.18, 60.0)
 
                     // 计算在 Now Playing 卡片内的位置：
-                    // - Now Playing header 高度: 36
+                    // - Section header 高度: 36
                     // - 卡片上 padding(.top, 8): 8
                     // - 卡片内 padding(12): 12
                     let headerHeight: CGFloat = 36
@@ -486,33 +343,41 @@ public struct MiniPlayerView: View {
             }()
 
             if musicController.currentPage != .lyrics {
-                // 🎯 封面图片 + 底部渐进模糊 (使用 Glur - App Store 合规)
+                // 🎯 封面图片 + 底部渐进模糊
                 ZStack {
-                    // 原始封面（始终显示）
+                    // 原始封面
                     Image(nsImage: artwork)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: artSize, height: artSize)
                         .clipped()
 
-                    // 🔑 带 Glur 渐进模糊的封面层 - 只在album页面非hover时显示
-                    // 关键：radius 保持固定值，通过 opacity 控制显示/隐藏
-                    // （Glur 的 radius 动态变化会导致图片消失，这是 SwiftUI Shader API 的限制）
-                    Image(nsImage: artwork)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: artSize, height: artSize)
-                        .clipped()
-                        .glur(
-                            radius: 16.0,        // 固定值，不能动态变化
-                            offset: 0.5,         // 从50%位置开始模糊
-                            interpolation: 0.35, // 35%的过渡区域
-                            direction: .down,    // 向下渐进（底部模糊）
-                            noise: 0.0,          // 不添加噪点
-                            drawingGroup: false  // 避免栅格化问题
-                        )
-                        .opacity(musicController.currentPage == .album && !isHovering ? 1 : 0)
-                        .allowsHitTesting(false)
+                    // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
+                    // 文字区域约占封面底部30%，模糊需要覆盖这个区域
+                    if musicController.currentPage == .album && !isHovering {
+                        Image(nsImage: artwork)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: artSize, height: artSize)
+                            .clipped()
+                            .blur(radius: 50)  // 增大模糊值
+                            .mask(
+                                LinearGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .clear, location: 0.45),  // 顶部45%完全清晰
+                                        .init(color: .black.opacity(0.3), location: 0.55),
+                                        .init(color: .black.opacity(0.7), location: 0.65),
+                                        .init(color: .black, location: 0.75),  // 底部25%完全模糊
+                                        .init(color: .black, location: 1.0)
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .allowsHitTesting(false)
+                            .id(artwork)
+                    }
                 }
                 .cornerRadius(cornerRadius)
                 .shadow(

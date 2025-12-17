@@ -62,6 +62,10 @@ public class MusicController: ObservableObject {
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
 
+    // 🔑 本地播放历史追踪（因为 AppleScript 无法获取真实播放历史）
+    // 包含 duration 以便正确显示每首歌的时长
+    private var localPlayHistory: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
+
     // State synchronization lock
     private var lastUserActionTime: Date = .distantPast
     private let userActionLockDuration: TimeInterval = 1.5
@@ -271,10 +275,8 @@ public class MusicController: ObservableObject {
             // Fire immediately
             self.pollingTimer?.fire()
 
-            // Local interpolation timer (10fps) for smooth UI updates
-            // 🔑 从 60fps (0.016s) 降低到 10fps (0.1s) 以减少 CPU 占用
-            // 10fps 对于进度条更新已经足够流畅，人眼几乎察觉不到差异
-            self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            // Local interpolation timer (60fps) for smooth UI updates
+            self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
                 self?.interpolateTime()
             }
 
@@ -383,16 +385,15 @@ public class MusicController: ObservableObject {
     
     private func interpolateTime() {
         guard isPlaying, !isPreview else { return }
-
+        
         // Increment time locally
         let timeSincePoll = Date().timeIntervalSince(lastPollTime)
-
+        
         // Only interpolate if we're within a reasonable window of the last poll (e.g. 3 seconds)
         // This prevents runaway time if polling stops
         if timeSincePoll < 3.0 {
-            // 🔑 与 timer 间隔一致：0.1 秒增量（10fps）
-            currentTime += 0.1
-
+            currentTime += 0.016
+            
             // Clamp to duration
             if duration > 0 && currentTime > duration {
                 currentTime = duration
@@ -609,14 +610,22 @@ public class MusicController: ObservableObject {
                     self.currentTime = 0
                     self.audioQuality = nil
                 } else {
+                    // 🔑 关键修复：在更新状态之前，先保存旧歌曲的信息用于历史记录
+                    // 之前的 bug：先更新 currentTrackTitle 等为新歌，再用旧的 persistentID 组合 → 信息错位
+                    let oldTitle = self.currentTrackTitle
+                    let oldArtist = self.currentArtist
+                    let oldAlbum = self.currentAlbum
+                    let oldDuration = self.duration
+                    let oldPersistentID = self.currentPersistentID
+
+                    // 现在更新为新歌曲信息
                     self.currentTrackTitle = trackName
                     self.currentArtist = trackArtist
                     self.currentAlbum = trackAlbum
                     self.duration = trackDuration
 
-                    // 🔑 更频繁地同步时间，避免累积漂移导致歌词延迟
-                    // 阈值从 0.5s 降到 0.2s
-                    if abs(self.currentTime - position) > 0.2 || !self.isPlaying {
+                    // Only update time if difference is significant
+                    if abs(self.currentTime - position) > 0.5 || !self.isPlaying {
                         self.currentTime = position
                     }
 
@@ -627,6 +636,68 @@ public class MusicController: ObservableObject {
                     if trackChanged {
                         fputs("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist) (first=\(isFirstTrack))\n", stderr)
                         self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
+
+                        // 🔑 本地播放历史追踪：将上一首歌加入历史（非首次加载时）
+                        // 使用保存的旧歌曲信息，而不是已更新的 self.currentTrackTitle
+                        if !isFirstTrack
+                           && !oldTitle.isEmpty
+                           && oldTitle != "Not Playing"
+                           && oldPersistentID != nil
+                           && !oldPersistentID!.isEmpty {
+
+                            let previousPersistentID = oldPersistentID!
+
+                            // 🔑 确保不是把新歌误加入历史
+                            guard previousPersistentID != persistentID else {
+                                fputs("⚠️ [History] Skipped: same as new track \(persistentID)\n", stderr)
+                                self.currentPersistentID = persistentID
+                                self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
+                                return
+                            }
+
+                            // 🔑 使用旧歌曲的信息（不是已更新的 self.currentTrackTitle）
+                            let previousTrack = (
+                                title: oldTitle,
+                                artist: oldArtist,
+                                album: oldAlbum,
+                                persistentID: previousPersistentID,
+                                duration: oldDuration
+                            )
+
+                            fputs("📜 [History] Preparing to add: '\(oldTitle)' by '\(oldArtist)' with ID '\(previousPersistentID)'\n", stderr)
+
+                            // 🔑 避免重复添加：移除相同 persistentID 的旧条目
+                            self.localPlayHistory.removeAll { $0.persistentID == previousTrack.persistentID }
+
+                            // 插入到顶部
+                            self.localPlayHistory.insert(previousTrack, at: 0)
+
+                            // 🔑 关键修复：移除当前正在播放的歌曲（如果它之前在历史中）
+                            // 这样正在播放的歌曲永远不会出现在 History 中
+                            self.localPlayHistory.removeAll { $0.persistentID == persistentID }
+
+                            // 只保留最近 20 首
+                            if self.localPlayHistory.count > 20 {
+                                self.localPlayHistory.removeLast()
+                            }
+
+                            // 🔑 更新 recentTracks
+                            self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, $0.duration) }
+                            fputs("📜 [History] Added: \(previousTrack.title) by \(previousTrack.artist) (ID: \(previousTrack.persistentID)) - now \(self.localPlayHistory.count) items\n", stderr)
+                            fputs("📜 [History] Current now playing: '\(trackName)' with ID '\(persistentID)' - removed from history if present\n", stderr)
+                        } else if !isFirstTrack {
+                            fputs("⚠️ [History] Skipped: oldTitle=\(oldTitle), oldPersistentID=\(oldPersistentID ?? "nil")\n", stderr)
+                        }
+
+                        // 🔑 确保当前播放的歌曲不在历史中（额外检查）
+                        if !self.localPlayHistory.isEmpty {
+                            let beforeCount = self.localPlayHistory.count
+                            self.localPlayHistory.removeAll { $0.persistentID == persistentID }
+                            if self.localPlayHistory.count != beforeCount {
+                                self.recentTracks = self.localPlayHistory.map { ($0.title, $0.artist, $0.album, $0.persistentID, $0.duration) }
+                                fputs("📜 [History] Cleaned up: removed current track from history\n", stderr)
+                            }
+                        }
 
                         self.currentPersistentID = persistentID
                         self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
@@ -954,7 +1025,7 @@ public class MusicController: ObservableObject {
         return image
     }
 
-    // MARK: - Playback Controls (使用已有的 musicApp 实例)
+    // MARK: - Playback Controls (Pure AppleScript)
 
     public func togglePlayPause() {
         print("🎵 [MusicController] togglePlayPause() called, isPreview=\(isPreview)")
@@ -963,14 +1034,7 @@ public class MusicController: ObservableObject {
             isPlaying.toggle()
             return
         }
-
-        // 🔑 使用已有的 musicApp 实例（不使用 MusicBridge 避免重复创建 SBApplication）
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] togglePlayPause: musicApp not available\n", stderr)
-            return
-        }
-        fputs("▶️ [MusicController] togglePlayPause() executing\n", stderr)
-        app.perform(Selector(("playpause")))
+        runControlScript("playpause")
 
         // Optimistic UI update & Lock
         DispatchQueue.main.async {
@@ -984,12 +1048,7 @@ public class MusicController: ObservableObject {
             logger.info("Preview: nextTrack")
             return
         }
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] nextTrack: musicApp not available\n", stderr)
-            return
-        }
-        fputs("⏭️ [MusicController] nextTrack() executing\n", stderr)
-        app.perform(Selector(("nextTrack")))
+        runControlScript("next track")
     }
 
     public func previousTrack() {
@@ -1001,12 +1060,7 @@ public class MusicController: ObservableObject {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
-            guard let app = musicApp, app.isRunning else {
-                fputs("⚠️ [MusicController] previousTrack: musicApp not available\n", stderr)
-                return
-            }
-            fputs("⏮️ [MusicController] previousTrack() executing\n", stderr)
-            app.perform(Selector(("previousTrack")))
+            runControlScript("previous track")
         }
     }
 
@@ -1016,12 +1070,7 @@ public class MusicController: ObservableObject {
             currentTime = position
             return
         }
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] seek: musicApp not available\n", stderr)
-            return
-        }
-        fputs("⏩ [MusicController] seek(to: \(position)) executing\n", stderr)
-        app.setValue(position, forKey: "playerPosition")
+        runControlScript("set player position to \(position)")
         currentTime = position
     }
 
@@ -1032,14 +1081,8 @@ public class MusicController: ObservableObject {
             return
         }
 
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] toggleShuffle: musicApp not available\n", stderr)
-            return
-        }
-
         let newShuffleState = !shuffleEnabled
-        app.setValue(newShuffleState, forKey: "shuffleEnabled")
-        fputs("🔀 [MusicController] toggleShuffle() set to \(newShuffleState)\n", stderr)
+        runControlScript("set shuffle enabled to \(newShuffleState)")
 
         // Optimistic UI update
         DispatchQueue.main.async {
@@ -1099,21 +1142,18 @@ public class MusicController: ObservableObject {
             return
         }
 
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] cycleRepeatMode: musicApp not available\n", stderr)
-            return
+        let newMode = (repeatMode + 1) % 3
+        let modeString: String
+        switch newMode {
+        case 0:
+            modeString = "off"
+        case 1:
+            modeString = "one"
+        default:
+            modeString = "all"
         }
 
-        let newMode = (repeatMode + 1) % 3
-        // MusicERpt: off = 0x6b52704f, one = 0x6b527031, all = 0x6b52416c
-        let rawValue: Int
-        switch newMode {
-        case 1: rawValue = 0x6b527031  // one
-        case 2: rawValue = 0x6b52416c  // all
-        default: rawValue = 0x6b52704f // off
-        }
-        app.setValue(rawValue, forKey: "songRepeat")
-        fputs("🔁 [MusicController] cycleRepeatMode() set to \(newMode) (raw: \(rawValue))\n", stderr)
+        runControlScript("set song repeat to \(modeString)")
 
         // Optimistic UI update
         DispatchQueue.main.async {
@@ -1151,8 +1191,9 @@ public class MusicController: ObservableObject {
             }
         }
 
-        // 获取历史记录（通过 AppleScript 获取播放列表中当前歌曲之前的歌曲）
-        fetchRecentHistoryViaAppleScript()
+        // 🔑 不再调用 fetchRecentHistoryViaAppleScript()
+        // 原因：AppleScript 只能获取播放列表中的歌曲顺序，不是真正的播放历史
+        // 现在使用 localPlayHistory 本地追踪来记录播放历史
     }
 
     /// 使用 MusicKit 获取真实的播放队列（包括随机播放顺序）
@@ -1385,13 +1426,8 @@ public class MusicController: ObservableObject {
             logger.info("Preview: setVolume to \(level)")
             return
         }
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] setVolume: musicApp not available\n", stderr)
-            return
-        }
         let clamped = max(0, min(100, level))
-        app.setValue(clamped, forKey: "soundVolume")
-        fputs("🔊 [MusicController] setVolume(\(clamped))\n", stderr)
+        runControlScript("set sound volume to \(clamped)")
     }
 
     public func toggleMute() {
@@ -1399,13 +1435,7 @@ public class MusicController: ObservableObject {
             logger.info("Preview: toggleMute")
             return
         }
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] toggleMute: musicApp not available\n", stderr)
-            return
-        }
-        let currentMute = (app.value(forKey: "mute") as? Bool) ?? false
-        app.setValue(!currentMute, forKey: "mute")
-        fputs("🔇 [MusicController] toggleMute() set to \(!currentMute)\n", stderr)
+        runControlScript("set mute to not mute")
     }
 
     // MARK: - Library & Favorites
@@ -1446,18 +1476,8 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 🔑 使用 musicApp 实例
-        guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicController] toggleStar: musicApp not available\n", stderr)
-            return
-        }
-
-        // 获取 currentTrack 并切换 loved 状态
-        if let track = app.value(forKey: "currentTrack") as? SBObject {
-            let currentLoved = (track.value(forKey: "loved") as? Bool) ?? false
-            track.setValue(!currentLoved, forKey: "loved")
-            fputs("❤️ [MusicController] toggleStar() set to \(!currentLoved)\n", stderr)
-        }
+        // Toggle loved status
+        runControlScript("set loved of current track to not (loved of current track)")
         logger.info("✅ Toggled loved status of current track")
     }
 }

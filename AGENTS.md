@@ -91,7 +91,10 @@ Sources/
         ├── SnappablePanel.swift    # 惯性拖拽窗口
         ├── SharedControls.swift    # 共享控件（进度条、按钮等）
         ├── FloatingPanel.swift     # 浮动窗口基类
-        └── LiquidBackgroundView.swift # 动态背景
+        ├── LiquidBackgroundView.swift # 动态背景
+        ├── LayoutConstants.swift   # 布局常量（响应式断点、字体、间距）
+        ├── CircularProgressView.swift # Compact 模式圆环进度条
+        └── EdgePeekIndicator.swift # 贴边隐藏边缘指示器
 ```
 
 ## 关键实现细节
@@ -192,8 +195,71 @@ swift package clean
 - `currentPageProvider` 回调判断当前页面
 - `isInBottomControlsArea` 保护进度条交互
 
+### 5. 响应式布局系统
+
+**Compact 模式** (窗口宽度 < 200px):
+
+专辑页面：
+- 非 hover：封面铺满窗口
+- hover：圆形进度条 (CircularProgressView) + 三点菜单 (歌词/歌单/收起)
+- 隐藏 Music 按钮
+- 歌曲信息居中显示
+
+歌单页面：
+- Shuffle/Repeat 按钮只显示图标（圆形），不显示文字
+
+**布局常量** (`LayoutConstants.swift`):
+```swift
+horizontalPadding = 16      // 统一水平边距
+compactBreakpoint = 200     // Compact 模式断点
+minimumWidth = 180          // 最小窗口宽度
+
+Typography:
+- titleHover = 12           // hover 时标题字号
+- artistHover = 10          // hover 时艺术家字号
+
+Spacing:
+- titleToArtist = 0         // 标题和艺术家间距
+- songInfoToProgress = 2    // 歌曲信息到进度条间距
+- progressToControls = 6    // 进度条到控件间距
+- progressToTime = 4        // 进度条到时间标签间距
+
+ProgressBar:
+- heightNormal = 4          // 进度条正常高度
+- heightHover = 6           // 进度条 hover 高度
+- containerHeight = 14      // 进度条容器高度
+
+Compact:
+- circularProgressSize = 56 // 圆环进度条尺寸
+- circularProgressLineWidth = 4
+- circularProgressLineWidthHover = 5
+```
+
+**窗口宽度监听** (`MusicMiniPlayerApp.swift`):
+- 监听 `NSWindow.didResizeNotification`
+- 更新 `musicController.windowWidth`
+- `isCompactMode` 计算属性自动判断
+
+### 6. 贴边隐藏重构
+
+**完全隐藏模式**:
+- `edgeHiddenVisibleWidth = 0` - 窗口完全隐藏到屏幕外
+- 独立的边缘指示器小窗口 (EdgePeekIndicator)
+- 与主窗口粘连，同步位置
+
+**边缘指示器交互**:
+- hover：触发主窗口偷看动画 (`peekAmount = 40`)
+- 拖拽：chevron 变为竖线 + 拖出恢复主窗口
+- 方向：左边隐藏显示 chevron.right，右边显示 chevron.left
+
+**动画参数**:
+- `peekStiffness = 400` - 快速响应
+- `peekDamping = 28` - 轻微回弹
+
 ## 待办功能
 
+- [x] 响应式 Compact 模式
+- [x] 贴边隐藏重构
 - [ ] 更真实的弹簧动画（当前使用贝塞尔曲线近似）
 - [ ] 多显示器支持优化
 - [ ] 窗口位置记忆

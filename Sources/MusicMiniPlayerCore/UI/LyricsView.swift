@@ -61,12 +61,12 @@ public struct LyricsView: View {
                             }
                         )
                 } else if let error = lyricsService.error {
-                    VStack(spacing: 16) {
+                    VStack(spacing: 12) {  // 🔑 缩小: 16→12
                         Image(systemName: "music.note")
-                            .font(.system(size: 48))
+                            .font(.system(size: 36))  // 🔑 缩小: 48→36
                             .foregroundColor(.white.opacity(0.3))
                         Text(error)
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))  // 🔑 缩小: 16→13
                             .foregroundColor(.white.opacity(0.5))
 
                         // Retry button
@@ -78,19 +78,19 @@ public struct LyricsView: View {
                                 forceRefresh: true
                             )
                         }) {
-                            HStack(spacing: 6) {
+                            HStack(spacing: 5) {  // 🔑 缩小: 6→5
                                 Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.system(size: 10, weight: .semibold))  // 🔑 缩小: 12→10
                                 Text("Retry")
-                                    .font(.system(size: 14, weight: .semibold))
+                                    .font(.system(size: 12, weight: .semibold))  // 🔑 缩小: 14→12
                             }
                             .foregroundColor(.white)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 16)  // 🔑 缩小: 20→16
+                            .padding(.vertical, 8)  // 🔑 缩小: 10→8
                             .background(Color.white.opacity(0.2))
-                            .cornerRadius(8)
+                            .cornerRadius(6)  // 🔑 缩小: 8→6
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8)
+                                RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.white.opacity(0.3), lineWidth: 1)
                             )
                         }
@@ -326,7 +326,17 @@ public struct LyricsView: View {
             }
             // 滚动时鼠标进入不自动显示控件（由scroll逻辑控制）
         }
-          .onAppear {
+        // 🔑 当切换到歌词页面时，显示控件（因为是从hover状态切换过来的）
+        .onChange(of: currentPage) { _, newPage in
+            if newPage == .lyrics {
+                // 🔑 假设是从 hover 状态切换过来的，设置 isHovering = true
+                isHovering = true
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showControls = true
+                }
+            }
+        }
+        .onAppear {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
@@ -343,14 +353,14 @@ public struct LyricsView: View {
     }
     
     // MARK: - Subviews
-    
+
     private var emptyStateView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {  // 🔑 缩小: 12→10
             Image(systemName: "music.note")
-                .font(.system(size: 48))
+                .font(.system(size: 36))  // 🔑 缩小: 48→36
                 .foregroundColor(.white.opacity(0.3))
             Text("No lyrics available")
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 13, weight: .medium))  // 🔑 缩小: 16→13
                 .foregroundColor(.white.opacity(0.5))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)

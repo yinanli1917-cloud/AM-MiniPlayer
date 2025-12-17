@@ -2,7 +2,6 @@ import SwiftUI
 import AppKit
 
 // NSView wrapper that prevents window dragging
-// 🔑 用于标记不可拖拽区域（如进度条、滚动视图等）
 struct NonDraggableView: NSViewRepresentable {
     func makeNSView(context: Context) -> NonDraggableNSView {
         return NonDraggableNSView()
@@ -13,21 +12,10 @@ struct NonDraggableView: NSViewRepresentable {
 
 class NonDraggableNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
-    
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        self.identifier = NSUserInterfaceItemIdentifier("non-draggable")
-    }
-    
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        self.identifier = NSUserInterfaceItemIdentifier("non-draggable")
-    }
 }
 
 // MARK: - Window Draggable View
-// NSView wrapper that marks area as draggable
-// SnappablePanel will handle all drag logic via sendEvent
+// NSView wrapper that explicitly enables window dragging
 struct WindowDraggableView: NSViewRepresentable {
     func makeNSView(context: Context) -> DraggableNSView {
         return DraggableNSView()
@@ -38,15 +26,10 @@ struct WindowDraggableView: NSViewRepresentable {
 
 class DraggableNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
-    
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        self.identifier = NSUserInterfaceItemIdentifier("window-draggable")
-    }
-    
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        self.identifier = NSUserInterfaceItemIdentifier("window-draggable")
+
+    override func mouseDown(with event: NSEvent) {
+        // Start window drag
+        window?.performDrag(with: event)
     }
 }
 
@@ -121,41 +104,41 @@ struct SharedBottomControls: View {
             .background(NonDraggableView())
 
             // Playback Controls
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 // Left navigation button
                 leftNavigationButton
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
 
                 Spacer()
 
                 // Previous Track
-                HoverableControlButton(iconName: "backward.fill", size: 18) {
+                HoverableControlButton(iconName: "backward.fill", size: 17) {
                     musicController.previousTrack()
                 }
-                .frame(width: 32, height: 32)
+                .frame(width: 30, height: 30)
 
                 // Play/Pause
-                HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 22) {
+                HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
                     musicController.togglePlayPause()
                 }
-                .frame(width: 32, height: 32)
+                .frame(width: 30, height: 30)
 
                 // Next Track
-                HoverableControlButton(iconName: "forward.fill", size: 18) {
+                HoverableControlButton(iconName: "forward.fill", size: 17) {
                     musicController.nextTrack()
                 }
-                .frame(width: 32, height: 32)
+                .frame(width: 30, height: 30)
 
                 Spacer()
 
                 // Right navigation button
                 playlistNavigationButton
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 20)  // 🔑 底部padding减小（32→20）
+        .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
+        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .bottom)
         // 🔑 跟踪整个控件区域的hover状态
         .onHover { hovering in
@@ -267,7 +250,7 @@ struct SharedBottomControls: View {
             )
         }
         .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 20)  // 🔑 进度条额外padding
     }
 
     private func qualityBadge(_ quality: String) -> some View {
@@ -332,9 +315,9 @@ struct NavigationIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: iconName)
-                .font(.system(size: 16))
+                .font(.system(size: 15))
                 .foregroundColor(isActive ? .white : (isHovering ? .white.opacity(0.9) : .white.opacity(0.7)))
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .background(
                     Circle()
                         .fill(Color.white.opacity((isActive || isHovering) ? 0.15 : 0))

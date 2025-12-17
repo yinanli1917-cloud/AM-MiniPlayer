@@ -19,8 +19,6 @@ public struct PlaylistView: View {
     @State private var scrollLocked: Bool = false
     @State private var hasTriggeredSlowScroll: Bool = false
 
-    @State private var hasScrolledToNowPlaying: Bool = false
-
     @Binding var scrollOffset: CGFloat
 
     // 🔑 统一的 artSize 常量（与 MiniPlayerView 同步）
@@ -122,28 +120,16 @@ public struct PlaylistView: View {
                             // 底部留白
                             Spacer().frame(height: 20)
                         }
-                        .scrollTargetLayout()
+                        .scrollTargetLayout()  // 🔑 启用 snap 目标
                     }
-                    .scrollTargetBehavior(.viewAligned)
-                    .opacity(hasScrolledToNowPlaying ? 1 : 0)  // 🔑 防止闪烁
+                    .scrollTargetBehavior(.viewAligned)  // 🔑 snap 效果
                     .onAppear {
-                        // 🔑 首次加载时滚动到 Now Playing
-                        scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                            hasScrolledToNowPlaying = true
-                        }
-                    }
-                    .onChange(of: currentPage) { _, newPage in
-                        // 🔑 每次切换到 playlist 页面时都滚动到 Now Playing
-                        if newPage == .playlist {
-                            hasScrolledToNowPlaying = false
+                        // 🔑 默认滚动到 Now Playing 位置
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                             scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                                hasScrolledToNowPlaying = true
-                            }
                         }
                     }
-                    .onChange(of: musicController.currentTrackTitle) { _, _ in
+                    .onChange(of: musicController.currentTrackTitle) { _ in
                         // 歌曲切换时也滚动到 Now Playing
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             withAnimation(.easeOut(duration: 0.3)) {
@@ -212,47 +198,44 @@ public struct PlaylistView: View {
                     },
                     isEnabled: currentPage == .playlist
                 )
-                .overlay(
-                    // 底部控件 overlay - 使用 Group + if 确保 transition 正常工作
-                    Group {
-                        if showControls {
-                            VStack {
-                                Spacer()
 
-                                ZStack(alignment: .bottom) {
-                                    // 渐变模糊背景
-                                    VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                        .frame(height: 100)
-                                        .mask(
-                                            LinearGradient(
-                                                gradient: Gradient(stops: [
-                                                    .init(color: .clear, location: 0),
-                                                    .init(color: .black.opacity(0.4), location: 0.25),
-                                                    .init(color: .black.opacity(0.8), location: 0.5),
-                                                    .init(color: .black, location: 0.7),
-                                                    .init(color: .black, location: 1.0)
-                                                ]),
-                                                startPoint: .top,
-                                                endPoint: .bottom
-                                            )
-                                        )
+                // 底部控件 overlay
+                if showControls {
+                    VStack {
+                        Spacer()
 
-                                    SharedBottomControls(
-                                        currentPage: $currentPage,
-                                        isHovering: $isHovering,
-                                        showControls: $showControls,
-                                        isProgressBarHovering: $isProgressBarHovering,
-                                        dragPosition: $dragPosition
+                        ZStack(alignment: .bottom) {
+                            // 渐变模糊背景
+                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                                .frame(height: 100)
+                                .mask(
+                                    LinearGradient(
+                                        gradient: Gradient(stops: [
+                                            .init(color: .clear, location: 0),
+                                            .init(color: .black.opacity(0.4), location: 0.25),
+                                            .init(color: .black.opacity(0.8), location: 0.5),
+                                            .init(color: .black, location: 0.7),
+                                            .init(color: .black, location: 1.0)
+                                        ]),
+                                        startPoint: .top,
+                                        endPoint: .bottom
                                     )
-                                    .padding(.bottom, 0)
-                                }
-                                .contentShape(Rectangle())
-                                .allowsHitTesting(true)
-                            }
-                            .transition(.opacity.combined(with: .offset(y: 20)))
+                                )
+
+                            SharedBottomControls(
+                                currentPage: $currentPage,
+                                isHovering: $isHovering,
+                                showControls: $showControls,
+                                isProgressBarHovering: $isProgressBarHovering,
+                                dragPosition: $dragPosition
+                            )
+                            .padding(.bottom, 0)
                         }
+                        .contentShape(Rectangle())
+                        .allowsHitTesting(true)
                     }
-                )
+                    .transition(.opacity.combined(with: .offset(y: 20)))
+                }
             }
             .onAppear {
                 musicController.fetchUpNextQueue()
@@ -305,8 +288,7 @@ public struct PlaylistView: View {
                     }
                 }) {
                     HStack(alignment: .center, spacing: 12) {
-                        // 🔑 Album art placeholder（用于 matchedGeometryEffect）
-                        // 浮动的封面图片会通过 matchedGeometryEffect 飞到这个位置
+                        // Album art placeholder（用于 matchedGeometryEffect）
                         if musicController.currentArtwork != nil {
                             Color.clear
                                 .frame(width: artSize, height: artSize)
@@ -316,11 +298,6 @@ public struct PlaylistView: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .fill(Color.gray.opacity(0.3))
                                 .frame(width: artSize, height: artSize)
-                                .overlay(
-                                    Image(systemName: "music.note")
-                                        .font(.system(size: artSize * 0.4))
-                                        .foregroundColor(.white.opacity(0.3))
-                                )
                         }
 
                         // Track info
@@ -522,7 +499,7 @@ struct SolidColorBackgroundView: View {
             .onAppear {
                 updateColor()
             }
-            .onChange(of: artwork) { _, _ in
+            .onChange(of: artwork) { _ in
                 updateColor()
             }
     }

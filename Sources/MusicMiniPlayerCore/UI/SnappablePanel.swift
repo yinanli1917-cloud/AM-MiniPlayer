@@ -5,14 +5,14 @@ import SwiftUI
 public class SnappablePanel: NSPanel {
     
     // MARK: - Configuration
-    
+
     public var cornerMargin: CGFloat = 16
     public var projectionFactor: CGFloat = 0.12
     public var snapToCorners: Bool = true
-    public var edgeHiddenVisibleWidth: CGFloat = 20
-    
+    public var edgeHiddenVisibleWidth: CGFloat = 6  // 🔑 贴边隐藏时露出的宽度
+
     // MARK: - Callbacks
-    
+
     public var onDragStateChanged: ((Bool) -> Void)?
     public var onEdgeHiddenChanged: ((Bool) -> Void)?
     /// 获取当前页面状态（用于判断是否允许双指拖拽）
@@ -39,9 +39,9 @@ public class SnappablePanel: NSPanel {
     
     // 贴边隐藏状态
     private(set) public var isEdgeHidden = false
-    private var hiddenEdge: Edge = .none
+    private(set) public var hiddenEdge: Edge = .none
     
-    private enum Edge {
+    public enum Edge {
         case none, left, right
     }
     
@@ -53,6 +53,7 @@ public class SnappablePanel: NSPanel {
                          defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
         self.isMovableByWindowBackground = false
+        self.acceptsMouseMovedEvents = true
     }
     
     deinit {
@@ -76,6 +77,9 @@ public class SnappablePanel: NSPanel {
             handleMouseDragged(event)
         case .leftMouseUp:
             handleMouseUp(event)
+        // 🔑 鼠标移动 - 用于贴边隐藏的 hover 效果
+        case .mouseMoved:
+            handleMouseMoved(event)
         // 双指拖拽支持（仅专辑页面）
         case .scrollWheel:
             // 🔑 非专辑页面：所有滚动事件直接传递给 ScrollView（包括惯性）
@@ -281,95 +285,199 @@ public class SnappablePanel: NSPanel {
     private func hideToEdge(_ edge: Edge) {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
-        
+
         hiddenEdge = edge
-        
+
+        // 🔑 贴边隐藏，露出 edgeHiddenVisibleWidth
         let targetX: CGFloat = edge == .left
             ? visible.minX - frame.width + edgeHiddenVisibleWidth
             : visible.maxX - edgeHiddenVisibleWidth
-        
+
         let isTop = frame.origin.y + frame.height / 2 > visible.midY
         let targetY = isTop ? visible.maxY - frame.height - cornerMargin : visible.minY + cornerMargin
-        
+
         animationTarget = NSPoint(x: targetX, y: targetY)
         springVelocityX = 0
         springVelocityY = 0
         startSpringAnimation()
-        
+
         isEdgeHidden = true
         onEdgeHiddenChanged?(true)
     }
-    
+
     private func restoreFromEdge() {
         guard isEdgeHidden, let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
-        
+
         let isTop = frame.origin.y + frame.height / 2 > visible.midY
         let wasLeft = hiddenEdge == .left
-        
+
         let targetX = wasLeft ? visible.minX + cornerMargin : visible.maxX - frame.width - cornerMargin
         let targetY = isTop ? visible.maxY - frame.height - cornerMargin : visible.minY + cornerMargin
-        
+
         animationTarget = NSPoint(x: targetX, y: targetY)
         springVelocityX = 0
         springVelocityY = 0
         startSpringAnimation()
-        
+
         isEdgeHidden = false
         hiddenEdge = .none
+        isEdgePeeking = false
         onEdgeHiddenChanged?(false)
+    }
+
+    // MARK: - Edge Peek (hover 时偷看效果)
+
+    private var isEdgePeeking = false
+    private let peekAmount: CGFloat = 30  // hover 时露出的额外宽度
+
+    // 🔑 peek 动画参数（更快更干脆）
+    private let peekStiffness: CGFloat = 500
+    private let peekDamping: CGFloat = 30
+
+    private func handleMouseMoved(_ event: NSEvent) {
+        // 只在贴边隐藏状态下处理
+        guard isEdgeHidden else {
+            super.sendEvent(event)
+            return
+        }
+
+        let mouseInWindow = frame.contains(NSEvent.mouseLocation)
+
+        if mouseInWindow && !isEdgePeeking {
+            // 鼠标进入，开始偷看
+            isEdgePeeking = true
+            peekFromEdge()
+        } else if !mouseInWindow && isEdgePeeking {
+            // 鼠标离开，结束偷看
+            isEdgePeeking = false
+            hideBackToEdge()
+        }
+
+        super.sendEvent(event)
+    }
+
+    /// 偷看：稍微露出窗口
+    private func peekFromEdge() {
+        guard let screen = screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+
+        let targetX: CGFloat = hiddenEdge == .left
+            ? visible.minX - frame.width + edgeHiddenVisibleWidth + peekAmount
+            : visible.maxX - edgeHiddenVisibleWidth - peekAmount
+
+        animationTarget = NSPoint(x: targetX, y: frame.origin.y)
+        springVelocityX = 0
+        springVelocityY = 0
+        startPeekAnimation()  // 🔑 使用更快的 peek 动画
+    }
+
+    /// 回到贴边隐藏状态
+    private func hideBackToEdge() {
+        guard let screen = screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+
+        let targetX: CGFloat = hiddenEdge == .left
+            ? visible.minX - frame.width + edgeHiddenVisibleWidth
+            : visible.maxX - edgeHiddenVisibleWidth
+
+        animationTarget = NSPoint(x: targetX, y: frame.origin.y)
+        springVelocityX = 0
+        springVelocityY = 0
+        startPeekAnimation()  // 🔑 使用更快的 peek 动画
+    }
+
+    // 🔑 专门用于 peek 的快速动画
+    private func startPeekAnimation() {
+        stopAllAnimations()
+        isAnimating = true
+
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/120.0, repeats: true) { [weak self] _ in
+            self?.updatePeekAnimation()
+        }
+        RunLoop.main.add(animationTimer!, forMode: .common)
+    }
+
+    private func updatePeekAnimation() {
+        guard isAnimating else { return }
+
+        let current = frame.origin
+        let target = animationTarget
+
+        let dt: CGFloat = 1.0 / 120.0
+
+        let dx = target.x - current.x
+        let dy = target.y - current.y
+
+        let forceX = peekStiffness * dx - peekDamping * springVelocityX
+        let forceY = peekStiffness * dy - peekDamping * springVelocityY
+
+        springVelocityX += forceX * dt
+        springVelocityY += forceY * dt
+
+        let newX = current.x + springVelocityX * dt
+        let newY = current.y + springVelocityY * dt
+
+        setFrameOrigin(NSPoint(x: newX, y: newY))
+
+        let distance = hypot(dx, dy)
+        let speed = hypot(springVelocityX, springVelocityY)
+
+        if distance < 0.3 && speed < 2 {
+            setFrameOrigin(target)
+            isAnimating = false
+            animationTimer?.invalidate()
+            animationTimer = nil
+        }
     }
     
     // MARK: - Spring Animation
-    
+
     private func stopAllAnimations() {
         isAnimating = false
         animationTimer?.invalidate()
         animationTimer = nil
     }
-    
+
     private func startSpringAnimation() {
         stopAllAnimations()
         isAnimating = true
-        
+
         // 使用高频 Timer (120Hz) 实现流畅动画
         animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/120.0, repeats: true) { [weak self] _ in
             self?.updateSpringAnimation()
         }
         RunLoop.main.add(animationTimer!, forMode: .common)
     }
-    
+
     private func updateSpringAnimation() {
         guard isAnimating else { return }
-        
+
         let current = frame.origin
         let target = animationTarget
-        
-        // 弹簧参数 - 调快速度
-        // stiffness: 刚度，越大越快
-        // damping: 阻尼，越大回弹越小
-        let stiffness: CGFloat = 280    // 从 120 提高到 280，更快
-        let damping: CGFloat = 24       // 减少回弹，更干脆
+
+        let stiffness: CGFloat = 280
+        let damping: CGFloat = 24
         let mass: CGFloat = 1.0
         let dt: CGFloat = 1.0 / 120.0
-        
+
         let dx = target.x - current.x
         let dy = target.y - current.y
-        
+
         let forceX = stiffness * dx - damping * springVelocityX
         let forceY = stiffness * dy - damping * springVelocityY
-        
+
         springVelocityX += (forceX / mass) * dt
         springVelocityY += (forceY / mass) * dt
-        
+
         let newX = current.x + springVelocityX * dt
         let newY = current.y + springVelocityY * dt
-        
+
         setFrameOrigin(NSPoint(x: newX, y: newY))
-        
+
         let distance = hypot(dx, dy)
         let speed = hypot(springVelocityX, springVelocityY)
-        
+
         if distance < 0.3 && speed < 2 {
             setFrameOrigin(target)
             isAnimating = false

@@ -221,7 +221,7 @@ class AppMain: NSObject, NSApplicationDelegate {
     // MARK: - Floating Window (浮动窗口)
 
     func createFloatingWindow() {
-        let windowSize = NSSize(width: 300, height: 380)
+        let windowSize = NSSize(width: 250, height: 316)
         let screenFrame = NSScreen.main?.visibleFrame ?? .zero
         let windowRect = NSRect(
             x: screenFrame.maxX - windowSize.width - 20,
@@ -230,53 +230,43 @@ class AppMain: NSObject, NSApplicationDelegate {
             height: windowSize.height
         )
 
-        // 🔑 使用 SnappablePanel 替代 NSPanel，实现物理惯性拖拽
         let snappableWindow = SnappablePanel(
             contentRect: windowRect,
             styleMask: [.titled, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        
-        // 配置惯性参数
-        snappableWindow.cornerMargin = 16
-        snappableWindow.projectionFactor = 0.15
-        snappableWindow.snapToCorners = true
-        
-        // 🔑 提供当前页面状态，用于判断是否允许双指拖拽（只在专辑页面生效）
+        floatingWindow = snappableWindow
+
+        snappableWindow.isFloatingPanel = true
+        snappableWindow.level = .floating
+        snappableWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        snappableWindow.backgroundColor = .clear
+        snappableWindow.isOpaque = false
+        snappableWindow.hasShadow = true
+        snappableWindow.isMovableByWindowBackground = false  // 🔑 禁用系统拖拽，由 SnappablePanel 接管
+        snappableWindow.titlebarAppearsTransparent = true
+        snappableWindow.titleVisibility = .hidden
+        snappableWindow.hidesOnDeactivate = false
+        snappableWindow.acceptsMouseMovedEvents = true
+        snappableWindow.becomesKeyOnlyIfNeeded = true
+
+        // 设置窗口比例和尺寸限制
+        snappableWindow.aspectRatio = NSSize(width: 250, height: 316)
+        snappableWindow.minSize = NSSize(width: 180, height: 228)
+        snappableWindow.maxSize = NSSize(width: 400, height: 506)
+
+        // 🔑 设置当前页面provider，用于判断双指拖拽是否生效
         snappableWindow.currentPageProvider = { [weak self] in
             return self?.musicController.currentPage ?? .album
         }
-        
-        floatingWindow = snappableWindow
-
-        guard let window = floatingWindow else { return }
-
-        window.isFloatingPanel = true
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        window.backgroundColor = .clear
-        window.isOpaque = false
-        window.hasShadow = true
-        // 🔑 禁用系统默认拖拽，由 SnappablePanel 完全接管
-        window.isMovableByWindowBackground = false
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.hidesOnDeactivate = false
-        window.acceptsMouseMovedEvents = true
-        window.becomesKeyOnlyIfNeeded = true
-
-        // 设置窗口比例和尺寸限制
-        window.aspectRatio = NSSize(width: 300, height: 380)
-        window.minSize = NSSize(width: 250, height: 316)
-        window.maxSize = NSSize(width: 450, height: 570)
 
         windowDelegate = FloatingWindowDelegate()
-        window.delegate = windowDelegate
+        snappableWindow.delegate = windowDelegate
 
-        window.standardWindowButton(.closeButton)?.isHidden = true
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
+        snappableWindow.standardWindowButton(.closeButton)?.isHidden = true
+        snappableWindow.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        snappableWindow.standardWindowButton(.zoomButton)?.isHidden = true
 
         let contentView = MiniPlayerContentView(onHide: { [weak self] in
             self?.collapseToMenuBar()
@@ -285,9 +275,9 @@ class AppMain: NSObject, NSApplicationDelegate {
 
         let hostingView = NSHostingView(rootView: contentView)
         hostingView.autoresizingMask = [.width, .height]
-        window.contentView = hostingView
+        snappableWindow.contentView = hostingView
 
-        fputs("[AppMain] Floating window created with SnappablePanel\n", stderr)
+        fputs("[AppMain] Floating window created\n", stderr)
     }
 
     func showFloatingWindow() {
@@ -419,10 +409,11 @@ struct MenuBarPlayerView: View {
 
     var body: some View {
         ZStack {
-            // 使用完整的 MiniPlayerView，圆角 6pt 匹配 NSPopover
-            MiniPlayerView(openWindow: nil, onHide: nil, onExpand: onExpand, cornerRadius: 6)
+            // 使用完整的 MiniPlayerView
+            MiniPlayerView(openWindow: nil, onHide: nil, onExpand: onExpand)
         }
         .frame(width: 300, height: 350)  // 高度改为 350
+        .clipShape(RoundedRectangle(cornerRadius: 10))  // 圆角 10pt
         .onHover { isHovering in
             // 通知 AppMain 用户是否在交互
             onHoverChanged?(isHovering)

@@ -35,7 +35,7 @@ public enum ResizeEdge {
 public class WindowResizeHandler: NSObject {
     private weak var window: NSWindow?
     private let edgeSize: CGFloat = 12.0  // 增大边缘检测区域，让光标更容易触发
-    private let aspectRatio: CGFloat = 300.0 / 380.0  // 窗口比例 (300x380)
+    private let aspectRatio: CGFloat = 250.0 / 316.0  // 窗口比例 (250x316)
 
     private var isResizing = false
     private var initialFrame: NSRect = .zero
@@ -65,8 +65,8 @@ public class WindowResizeHandler: NSObject {
     private func configureWindow() {
         guard let window = window else { return }
         // 设置合理的最小/最大尺寸
-        window.minSize = NSSize(width: 250, height: 250 / aspectRatio)  // 最小 250px
-        window.maxSize = NSSize(width: 500, height: 500 / aspectRatio)  // 最大 500px
+        window.minSize = NSSize(width: 180, height: 180 / aspectRatio)  // 最小 180px (compact)
+        window.maxSize = NSSize(width: 400, height: 400 / aspectRatio)  // 最大 400px
     }
 
     private func setupEventMonitors() {
@@ -246,7 +246,7 @@ public class WindowResizeHandler: NSObject {
         }
 
         // 限制宽度范围（与 configureWindow 一致）
-        newWidth = max(250, min(500, newWidth))
+        newWidth = max(180, min(400, newWidth))
         let newHeight = newWidth / aspectRatio
 
         // 计算X坐标

@@ -5,6 +5,7 @@ struct ScrollingText: View {
     let font: Font
     let textColor: Color
     let maxWidth: CGFloat
+    var height: CGFloat = 16  // 🔑 可自定义高度，默认16
 
     var alignment: Alignment = .center // Default to center, but can be overridden
 
@@ -53,7 +54,7 @@ struct ScrollingText: View {
                     .frame(maxWidth: maxWidth, alignment: alignment)
             }
         }
-        .frame(height: 20)
+        .frame(height: height)  // 🔑 使用可配置高度
         .clipped()
         .background(
             // Measure text width
