@@ -87,8 +87,8 @@ public struct LiquidBackgroundView: View {
                 endPoint: .bottom
             )
             .ignoresSafeArea()
-            .allowsHitTesting(false)
         }
+        .allowsHitTesting(false)  // 🔑 整个背景不拦截点击，让点击穿透到前景内容
         .onAppear {
             updateColor()
         }

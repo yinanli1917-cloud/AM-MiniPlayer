@@ -234,6 +234,7 @@ public struct PlaylistView: View {
                                     endPoint: .bottom
                                 )
                             )
+                            .allowsHitTesting(false)  // 🔑 渐变背景不拦截点击
 
                         SharedBottomControls(
                             currentPage: $currentPage,
@@ -244,9 +245,8 @@ public struct PlaylistView: View {
                         )
                         .padding(.bottom, 0)
                     }
-                    .contentShape(Rectangle())
-                    .allowsHitTesting(true)
                 }
+                .allowsHitTesting(showControls)  // 🔑 只有显示时才拦截点击
                 .opacity(showControls ? 1 : 0)  // 🔑 使用 opacity 而非 if，确保动画生效
                 .offset(y: showControls ? 0 : 20)  // 🔑 使用 offset 实现滑动效果
                 .animation(.easeInOut(duration: 0.3), value: showControls)  // 🔑 动画绑定到控件本身
@@ -414,71 +414,74 @@ struct PlaylistItemRowCompact: View {
     }
 
     var body: some View {
-        Button(action: {
-            if isCurrentTrack {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    currentPage = .album
-                }
+        HStack(spacing: 8) {
+            if let artwork = artwork, currentArtworkID == persistentID {
+                Image(nsImage: artwork)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: artSize, height: artSize)
+                    .cornerRadius(4)
             } else {
-                musicController.playTrack(persistentID: persistentID)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(width: artSize, height: artSize)
+                    .overlay(
+                        Image(systemName: "music.note")
+                            .font(.system(size: artSize * 0.35))
+                            .foregroundColor(.white.opacity(0.3))
+                    )
             }
-        }) {
-            HStack(spacing: 8) {
-                if let artwork = artwork, currentArtworkID == persistentID {
-                    Image(nsImage: artwork)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: artSize, height: artSize)
-                        .cornerRadius(4)
-                } else {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.gray.opacity(0.2))
-                        .frame(width: artSize, height: artSize)
-                        .overlay(
-                            Image(systemName: "music.note")
-                                .font(.system(size: artSize * 0.35))
-                                .foregroundColor(.white.opacity(0.3))
-                        )
-                }
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 11, weight: isCurrentTrack ? .bold : .medium))
-                        .foregroundColor(isCurrentTrack ? Color(red: 0.99, green: 0.24, blue: 0.27) : .white)
-                        .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 11, weight: isCurrentTrack ? .bold : .medium))
+                    .foregroundColor(isCurrentTrack ? Color(red: 0.99, green: 0.24, blue: 0.27) : .white)
+                    .lineLimit(1)
 
-                    Text(artist)
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.white.opacity(0.7))
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                if isCurrentTrack {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(red: 0.99, green: 0.24, blue: 0.27))
-                        .padding(.trailing, 8)
-                } else if isHovering {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.white)
-                        .padding(.trailing, 8)
-                }
+                Text(artist)
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(isHovering ? Color.white.opacity(0.08) : Color.clear)
-            .contentShape(Rectangle())
+
+            Spacer()
+
+            if isCurrentTrack {
+                Image(systemName: "waveform")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(red: 0.99, green: 0.24, blue: 0.27))
+                    .padding(.trailing, 8)
+            } else if isHovering {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white)
+                    .padding(.trailing, 8)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(isHovering ? Color.white.opacity(0.08) : Color.clear)
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                fputs("🎯 [PlaylistItemRowCompact] Tapped: \(title), isCurrentTrack=\(isCurrentTrack), persistentID=\(persistentID)\n", stderr)
+                if isCurrentTrack {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        currentPage = .album
+                    }
+                } else {
+                    fputs("🎯 [PlaylistItemRowCompact] Calling playTrack...\n", stderr)
+                    musicController.playTrack(persistentID: persistentID)
+                }
+            }
+        )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
         }
         .task(id: persistentID) {
+            fputs("📷 [PlaylistItemRowCompact] .task triggered for: \(title) (\(persistentID.prefix(8))...)\n", stderr)
             if currentArtworkID != persistentID {
                 artwork = nil
                 currentArtworkID = persistentID
@@ -488,6 +491,7 @@ struct PlaylistItemRowCompact: View {
                 await MainActor.run {
                     if currentArtworkID == persistentID {
                         artwork = fetchedArtwork
+                        fputs("📷 [PlaylistItemRowCompact] Got artwork for: \(title)\n", stderr)
                     }
                 }
             } else {

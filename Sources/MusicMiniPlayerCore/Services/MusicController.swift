@@ -64,6 +64,9 @@ public class MusicController: ObservableObject {
     }()
     private var isPreview: Bool = false
 
+    // 🔑 串行队列：防止多个 ScriptingBridge 请求并发导致阻塞
+    private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .userInitiated)
+
     // Queue sync state
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
@@ -505,6 +508,8 @@ public class MusicController: ObservableObject {
                     // 回主线程执行 fetchArtwork
                     DispatchQueue.main.async {
                         self.fetchArtwork(for: name, artist: artist, album: album, persistentID: persistentID)
+                        // 🔑 歌曲切换时也刷新 Up Next 队列
+                        self.fetchUpNextQueue()
                     }
                 }
             }
@@ -839,21 +844,37 @@ public class MusicController: ObservableObject {
 
     // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
-        guard !isPreview, !persistentID.isEmpty, let app = musicApp, app.isRunning else { return nil }
+        guard !isPreview, !persistentID.isEmpty, let app = musicApp, app.isRunning else {
+            fputs("⚠️ [fetchArtworkByPersistentID] Guard failed for \(persistentID.prefix(8))...\n", stderr)
+            return nil
+        }
 
         // 先检查缓存
         if let cached = artworkCache.object(forKey: persistentID as NSString) {
+            fputs("📦 [fetchArtworkByPersistentID] Cache hit for \(persistentID.prefix(8))...\n", stderr)
             return cached
         }
 
-        // 使用自己的 musicApp 实例获取（App Store 合规）
-        let image: NSImage? = await Task.detached { [app] in
-            self.getArtworkImageByPersistentID(app, persistentID: persistentID)
-        }.value
+        fputs("🔍 [fetchArtworkByPersistentID] Fetching for \(persistentID.prefix(8))...\n", stderr)
+
+        // 🔑 使用串行队列防止并发 ScriptingBridge 请求阻塞
+        let image: NSImage? = await withCheckedContinuation { continuation in
+            artworkFetchQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let result = self.getArtworkImageByPersistentID(app, persistentID: persistentID)
+                continuation.resume(returning: result)
+            }
+        }
 
         // 缓存结果
         if let image = image {
             artworkCache.setObject(image, forKey: persistentID as NSString)
+            fputs("✅ [fetchArtworkByPersistentID] Got artwork for \(persistentID.prefix(8))...\n", stderr)
+        } else {
+            fputs("⚠️ [fetchArtworkByPersistentID] No image returned for \(persistentID.prefix(8))...\n", stderr)
         }
 
         return image
@@ -861,6 +882,8 @@ public class MusicController: ObservableObject {
 
     /// 从 SBApplication 获取指定 persistentID 的封面
     private func getArtworkImageByPersistentID(_ app: SBApplication, persistentID: String) -> NSImage? {
+        let startTime = CFAbsoluteTimeGetCurrent()
+
         // 辅助函数：从 track 对象提取封面
         func extractArtwork(from track: NSObject) -> NSImage? {
             guard let artworks = track.value(forKey: "artworks") as? SBElementArray,
@@ -881,36 +904,27 @@ public class MusicController: ObservableObject {
             return nil
         }
 
-        let predicate = NSPredicate(format: "persistentID == %@", persistentID)
-
-        // 1. 先在 currentPlaylist 中用 NSPredicate 查找（最快）
+        // 1. 先在 currentPlaylist 中查找（限制搜索范围为前 100 首，因为 Up Next 只显示 10 首）
         if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
            let tracks = playlist.value(forKey: "tracks") as? SBElementArray {
 
-            // 🔑 优先使用 NSPredicate 过滤（O(1) 或 O(log n)）
-            if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
-               filteredTracks.count > 0,
-               let track = filteredTracks.object(at: 0) as? NSObject,
-               let image = extractArtwork(from: track) {
-                fputs("✅ [getArtworkByPersistentID] Found in currentPlaylist (filtered): \(persistentID.prefix(8))...\n", stderr)
-                return image
-            }
-
-            // 回退：遍历搜索（扩大到 500）
-            let searchLimit = min(tracks.count, 500)
+            // 🔑 只遍历前 100 首（Up Next 只显示当前歌曲后的 10 首）
+            let searchLimit = min(tracks.count, 100)
             for i in 0..<searchLimit {
                 if let track = tracks.object(at: i) as? NSObject,
                    let trackID = track.value(forKey: "persistentID") as? String,
                    trackID == persistentID {
                     if let image = extractArtwork(from: track) {
-                        fputs("✅ [getArtworkByPersistentID] Found in currentPlaylist (iterate): \(persistentID.prefix(8))...\n", stderr)
+                        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                        fputs("✅ [getArtworkByPersistentID] Found at index \(i) in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n", stderr)
                         return image
                     }
                 }
             }
         }
 
-        // 2. 在 library 中查找
+        // 2. 如果在当前播放列表的前 100 首中没找到，尝试用 NSPredicate 在 library 中查找
+        let predicate = NSPredicate(format: "persistentID == %@", persistentID)
         if let sources = app.value(forKey: "sources") as? SBElementArray, sources.count > 0,
            let source = sources.object(at: 0) as? NSObject,
            let libraryPlaylists = source.value(forKey: "libraryPlaylists") as? SBElementArray,
@@ -918,31 +932,20 @@ public class MusicController: ObservableObject {
            let libraryPlaylist = libraryPlaylists.object(at: 0) as? NSObject,
            let tracks = libraryPlaylist.value(forKey: "tracks") as? SBElementArray {
 
-            // 🔑 使用 NSPredicate 过滤
+            // 🔑 使用 NSPredicate 过滤（这个在 library 中效率更高）
             if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
                filteredTracks.count > 0,
                let track = filteredTracks.object(at: 0) as? NSObject {
                 if let image = extractArtwork(from: track) {
-                    fputs("✅ [getArtworkByPersistentID] Found in library (filtered): \(persistentID.prefix(8))...\n", stderr)
+                    let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                    fputs("✅ [getArtworkByPersistentID] Found in library in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n", stderr)
                     return image
-                }
-            }
-
-            // 回退：有限遍历（扩大到 1000）
-            let librarySearchLimit = min(tracks.count, 1000)
-            for i in 0..<librarySearchLimit {
-                if let track = tracks.object(at: i) as? NSObject,
-                   let trackID = track.value(forKey: "persistentID") as? String,
-                   trackID == persistentID {
-                    if let image = extractArtwork(from: track) {
-                        fputs("✅ [getArtworkByPersistentID] Found in library (iterate): \(persistentID.prefix(8))...\n", stderr)
-                        return image
-                    }
                 }
             }
         }
 
-        fputs("⚠️ [getArtworkByPersistentID] Not found via ScriptingBridge: \(persistentID.prefix(8))...\n", stderr)
+        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        fputs("⚠️ [getArtworkByPersistentID] Not found in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n", stderr)
         return nil
     }
 
