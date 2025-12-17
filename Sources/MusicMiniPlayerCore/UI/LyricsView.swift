@@ -686,8 +686,13 @@ struct LyricLineView: View {
 // MARK: - Time-Based Loading Dots View (三等分前奏时间点亮动画)
 
 struct TimeBasedLoadingDotsView: View {
-    let currentTime: TimeInterval
+    let currentTime: TimeInterval  // 🔑 仅用于初始化和重置
     let endTime: TimeInterval
+
+    // 🔑 内部状态：使用 Timer 驱动动画
+    @State private var animationTime: TimeInterval = 0
+    @State private var animationTimer: Timer?
+    @State private var initialTime: TimeInterval = 0  // 🔑 记录初始时间
 
     var body: some View {
         let duration = endTime // 前奏总时长
@@ -698,13 +703,13 @@ struct TimeBasedLoadingDotsView: View {
             let dotStartTime = segmentDuration * Double(index)
             let dotEndTime = segmentDuration * Double(index + 1)
 
-            if currentTime <= dotStartTime {
+            if animationTime <= dotStartTime {
                 return 0.0
-            } else if currentTime >= dotEndTime {
+            } else if animationTime >= dotEndTime {
                 return 1.0
             } else {
                 // 平滑渐变函数
-                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
+                let progress = (animationTime - dotStartTime) / (dotEndTime - dotStartTime)
                 return CGFloat(progress * progress * (3.0 - 2.0 * progress)) // Smoothstep
             }
         }
@@ -713,12 +718,12 @@ struct TimeBasedLoadingDotsView: View {
         let overallOpacity: CGFloat = {
             let fadeOutDuration: TimeInterval = 3.5 // 与LyricsService的tolerance同步
 
-            if currentTime >= endTime {
+            if animationTime >= endTime {
                 // 已经超过结束时间，完全透明
                 return 0.0
-            } else if currentTime >= endTime - fadeOutDuration {
+            } else if animationTime >= endTime - fadeOutDuration {
                 // 进入淡出阶段，与第一句歌词滚动进入同步
-                let fadeProgress = (endTime - currentTime) / fadeOutDuration
+                let fadeProgress = (endTime - animationTime) / fadeOutDuration
                 return CGFloat(fadeProgress) // 从1.0淡到0.0
             } else {
                 // 正常显示
@@ -734,20 +739,57 @@ struct TimeBasedLoadingDotsView: View {
                     .frame(width: 10, height: 10)
                     .opacity(0.35 + progress * 0.65) // 从0.35渐变到1.0
                     .scaleEffect(1.0 + progress * 0.3) // 从1.0渐变到1.3
+                    .animation(.easeInOut(duration: 0.3), value: progress)  // 🔑 添加平滑动画
             }
         }
         .scaleEffect(0.8) // 整体缩小到0.8x
         .frame(height: 24) // Match lyric text height
         .opacity(overallOpacity) // 🔑 应用整体淡出效果
+        .onAppear {
+            startAnimation()
+        }
+        .onDisappear {
+            stopAnimation()
+        }
+        .onChange(of: currentTime) { _, newTime in
+            // 🔑 外部时间跳变时重新同步
+            if abs(newTime - animationTime) > 1.0 {
+                initialTime = newTime
+                animationTime = newTime
+            }
+        }
+    }
+
+    private func startAnimation() {
+        initialTime = currentTime
+        animationTime = currentTime
+        animationTimer?.invalidate()
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [self] _ in
+            // 🔑 每帧递增 1/60 秒
+            animationTime += 1.0/60.0
+        }
+        if let timer = animationTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private func stopAnimation() {
+        animationTimer?.invalidate()
+        animationTimer = nil
     }
 }
 
 // MARK: - Interlude Loading Dots View (间奏加载动画)
 
 struct InterludeLoadingDotsView: View {
-    let currentTime: TimeInterval
+    let currentTime: TimeInterval  // 🔑 仅用于初始化和重置
     let startTime: TimeInterval  // 间奏开始时间（上一句结束）
     let endTime: TimeInterval    // 间奏结束时间（下一句开始）
+
+    // 🔑 内部状态：使用 Timer 驱动动画
+    @State private var animationTime: TimeInterval = 0
+    @State private var animationTimer: Timer?
+    @State private var initialTime: TimeInterval = 0  // 🔑 记录初始时间
 
     var body: some View {
         let duration = endTime - startTime // 间奏总时长
@@ -758,13 +800,13 @@ struct InterludeLoadingDotsView: View {
             let dotStartTime = startTime + segmentDuration * Double(index)
             let dotEndTime = startTime + segmentDuration * Double(index + 1)
 
-            if currentTime <= dotStartTime {
+            if animationTime <= dotStartTime {
                 return 0.0
-            } else if currentTime >= dotEndTime {
+            } else if animationTime >= dotEndTime {
                 return 1.0
             } else {
                 // 平滑渐变函数
-                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
+                let progress = (animationTime - dotStartTime) / (dotEndTime - dotStartTime)
                 return CGFloat(progress * progress * (3.0 - 2.0 * progress)) // Smoothstep
             }
         }
@@ -774,19 +816,19 @@ struct InterludeLoadingDotsView: View {
             let fadeInDuration: TimeInterval = min(1.0, duration / 6.0) // 快速淡入（最多1秒）
             let fadeOutDuration: TimeInterval = 3.5 // 3.5秒淡出，同时下一句歌词进入
 
-            if currentTime < startTime {
+            if animationTime < startTime {
                 // 还没到间奏，完全透明
                 return 0.0
-            } else if currentTime < startTime + fadeInDuration {
+            } else if animationTime < startTime + fadeInDuration {
                 // 快速淡入
-                let fadeProgress = (currentTime - startTime) / fadeInDuration
+                let fadeProgress = (animationTime - startTime) / fadeInDuration
                 return CGFloat(fadeProgress)
-            } else if currentTime >= endTime {
+            } else if animationTime >= endTime {
                 // 已过间奏，完全透明
                 return 0.0
-            } else if currentTime >= endTime - fadeOutDuration {
+            } else if animationTime >= endTime - fadeOutDuration {
                 // 淡出阶段（与下一句歌词进入同步）
-                let fadeProgress = (endTime - currentTime) / fadeOutDuration
+                let fadeProgress = (endTime - animationTime) / fadeOutDuration
                 return CGFloat(fadeProgress)
             } else {
                 // 间奏播放中，完全不透明
@@ -802,6 +844,7 @@ struct InterludeLoadingDotsView: View {
                     .frame(width: 10, height: 10)
                     .opacity(0.35 + progress * 0.65) // 从0.35渐变到1.0
                     .scaleEffect(1.0 + progress * 0.3) // 从1.0渐变到1.3
+                    .animation(.easeInOut(duration: 0.3), value: progress)  // 🔑 添加平滑动画
             }
         }
         .scaleEffect(0.8) // 整体缩小到0.8x
@@ -809,6 +852,37 @@ struct InterludeLoadingDotsView: View {
         .opacity(overallOpacity) // 🔑 应用整体淡入淡出效果
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            startAnimation()
+        }
+        .onDisappear {
+            stopAnimation()
+        }
+        .onChange(of: currentTime) { _, newTime in
+            // 🔑 外部时间跳变时重新同步
+            if abs(newTime - animationTime) > 1.0 {
+                initialTime = newTime
+                animationTime = newTime
+            }
+        }
+    }
+
+    private func startAnimation() {
+        initialTime = currentTime
+        animationTime = currentTime
+        animationTimer?.invalidate()
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [self] _ in
+            // 🔑 每帧递增 1/60 秒
+            animationTime += 1.0/60.0
+        }
+        if let timer = animationTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private func stopAnimation() {
+        animationTimer?.invalidate()
+        animationTimer = nil
     }
 }
 

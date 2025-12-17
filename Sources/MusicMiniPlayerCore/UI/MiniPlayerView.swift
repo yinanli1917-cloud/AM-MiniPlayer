@@ -196,90 +196,69 @@ public struct MiniPlayerView: View {
                     VStack(spacing: 0) {
                         Spacer()
 
-                        // 🔑 渐变模糊背景（与LyricsView、PlaylistView一致）
-                        ZStack(alignment: .bottom) {
-                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .frame(height: 140)
-                                .mask(
-                                    LinearGradient(
-                                        gradient: Gradient(stops: [
-                                            .init(color: .clear, location: 0),
-                                            .init(color: .black.opacity(0.3), location: 0.15),
-                                            .init(color: .black.opacity(0.6), location: 0.3),
-                                            .init(color: .black, location: 0.5),
-                                            .init(color: .black, location: 1.0)
-                                        ]),
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
+                        // 🔑 歌曲信息行：标题/艺术家 (左) + Shuffle/Repeat (右)
+                        HStack(alignment: .center) {  // 🔑 居中对齐
+                            VStack(alignment: .leading, spacing: -2) {  // 🔑 spacing=-2 负间距更紧凑
+                                ScrollingText(
+                                    text: musicController.currentTrackTitle,
+                                    font: .system(size: 12, weight: .bold),
+                                    textColor: .white,
+                                    maxWidth: geo.size.width * 0.50,
+                                    height: 15,  // 🔑 紧凑高度
+                                    alignment: .leading
                                 )
+                                .matchedGeometryEffect(id: "track-title", in: animation)
 
-                            VStack(spacing: 0) {
-                                // 🔑 歌曲信息行：标题/艺术家 (左) + Shuffle/Repeat (右)
-                                HStack(alignment: .center) {  // 🔑 居中对齐
-                                    VStack(alignment: .leading, spacing: -2) {  // 🔑 spacing=-2 负间距更紧凑
-                                        ScrollingText(
-                                            text: musicController.currentTrackTitle,
-                                            font: .system(size: 12, weight: .bold),
-                                            textColor: .white,
-                                            maxWidth: geo.size.width * 0.50,
-                                            height: 15,  // 🔑 紧凑高度
-                                            alignment: .leading
-                                        )
-                                        .matchedGeometryEffect(id: "track-title", in: animation)
+                                ScrollingText(
+                                    text: musicController.currentArtist,
+                                    font: .system(size: 10, weight: .medium),
+                                    textColor: .white.opacity(0.7),
+                                    maxWidth: geo.size.width * 0.50,
+                                    height: 13,  // 🔑 紧凑高度
+                                    alignment: .leading
+                                )
+                                .matchedGeometryEffect(id: "track-artist", in: animation)
+                            }
 
-                                        ScrollingText(
-                                            text: musicController.currentArtist,
-                                            font: .system(size: 10, weight: .medium),
-                                            textColor: .white.opacity(0.7),
-                                            maxWidth: geo.size.width * 0.50,
-                                            height: 13,  // 🔑 紧凑高度
-                                            alignment: .leading
-                                        )
-                                        .matchedGeometryEffect(id: "track-artist", in: animation)
-                                    }
+                            Spacer()
 
-                                    Spacer()
+                            HStack(spacing: 4) {
+                                let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+                                let themeBackground = themeColor.opacity(0.20)
 
-                                    HStack(spacing: 7) {
-                                        let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                                        let themeBackground = themeColor.opacity(0.20)
-
-                                        Button(action: { musicController.toggleShuffle() }) {
-                                            Image(systemName: "shuffle")
-                                                .font(.system(size: 11, weight: .semibold))
-                                                .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.5))
-                                                .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
-                                                .background(Circle().fill(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1)))
-                                        }
-                                        .buttonStyle(.plain)
-
-                                        Button(action: { musicController.cycleRepeatMode() }) {
-                                            Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                                .font(.system(size: 11, weight: .semibold))
-                                                .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.5))
-                                                .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
-                                                .background(Circle().fill(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1)))
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
+                                Button(action: { musicController.toggleShuffle() }) {
+                                    Image(systemName: "shuffle")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.5))
+                                        .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
+                                        .background(Circle().fill(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1)))
                                 }
-                                .padding(.horizontal, 32)  // 🔑 12 + 20 = 32，与进度条对齐
-                                .padding(.bottom, 3)  // 🔑 距离进度条更近
+                                .buttonStyle(.plain)
 
-                                // 🔑 使用 SharedBottomControls
-                                SharedBottomControls(
-                                    currentPage: $musicController.currentPage,
-                                    isHovering: $isHovering,
-                                    showControls: $showControls,
-                                    isProgressBarHovering: $isProgressBarHovering,
-                                    dragPosition: $dragPosition
-                                )
+                                Button(action: { musicController.cycleRepeatMode() }) {
+                                    Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.5))
+                                        .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
+                                        .background(Circle().fill(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1)))
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .contentShape(Rectangle())
-                        .allowsHitTesting(true)
+                        .padding(.horizontal, 32)  // 🔑 12 + 20 = 32，与进度条对齐
+                        .padding(.bottom, 4)  // 🔑 距离进度条更近
+
+                        // 🔑 使用 SharedBottomControls
+                        SharedBottomControls(
+                            currentPage: $musicController.currentPage,
+                            isHovering: $isHovering,
+                            showControls: $showControls,
+                            isProgressBarHovering: $isProgressBarHovering,
+                            dragPosition: $dragPosition
+                        )
                     }
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(true)
                     // 🔑 hover状态的控件使用showOverlayContent控制延迟显示
                     .opacity(showOverlayContent ? 1 : 0)
                     .transition(.opacity)

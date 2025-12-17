@@ -118,11 +118,11 @@ public struct PlaylistView: View {
                             .id("upNextSection")
 
                             // 底部留白
-                            Spacer().frame(height: 20)
+                            Spacer().frame(height: 120)  // 🔑 增加留白，给控件腾出空间
                         }
-                        .scrollTargetLayout()  // 🔑 启用 snap 目标
+                        .scrollTargetLayout()  // 🔑 恢复 snap 支持
                     }
-                    .scrollTargetBehavior(.viewAligned)  // 🔑 snap 效果
+                    .scrollTargetBehavior(.viewAligned)  // 🔑 恢复 snap 行为
                     .onAppear {
                         // 🔑 默认滚动到 Now Playing 位置
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -200,42 +200,42 @@ public struct PlaylistView: View {
                 )
 
                 // 底部控件 overlay
-                if showControls {
-                    VStack {
-                        Spacer()
+                VStack {
+                    Spacer()
 
-                        ZStack(alignment: .bottom) {
-                            // 渐变模糊背景
-                            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                .frame(height: 100)
-                                .mask(
-                                    LinearGradient(
-                                        gradient: Gradient(stops: [
-                                            .init(color: .clear, location: 0),
-                                            .init(color: .black.opacity(0.4), location: 0.25),
-                                            .init(color: .black.opacity(0.8), location: 0.5),
-                                            .init(color: .black, location: 0.7),
-                                            .init(color: .black, location: 1.0)
-                                        ]),
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
+                    ZStack(alignment: .bottom) {
+                        // 渐变模糊背景
+                        VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                            .frame(height: 100)
+                            .mask(
+                                LinearGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .black.opacity(0.4), location: 0.25),
+                                        .init(color: .black.opacity(0.8), location: 0.5),
+                                        .init(color: .black, location: 0.7),
+                                        .init(color: .black, location: 1.0)
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
                                 )
-
-                            SharedBottomControls(
-                                currentPage: $currentPage,
-                                isHovering: $isHovering,
-                                showControls: $showControls,
-                                isProgressBarHovering: $isProgressBarHovering,
-                                dragPosition: $dragPosition
                             )
-                            .padding(.bottom, 0)
-                        }
-                        .contentShape(Rectangle())
-                        .allowsHitTesting(true)
+
+                        SharedBottomControls(
+                            currentPage: $currentPage,
+                            isHovering: $isHovering,
+                            showControls: $showControls,
+                            isProgressBarHovering: $isProgressBarHovering,
+                            dragPosition: $dragPosition
+                        )
+                        .padding(.bottom, 0)
                     }
-                    .transition(.opacity.combined(with: .offset(y: 20)))
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(true)
                 }
+                .opacity(showControls ? 1 : 0)  // 🔑 使用 opacity 而非 if，确保动画生效
+                .offset(y: showControls ? 0 : 20)  // 🔑 使用 offset 实现滑动效果
+                .animation(.easeInOut(duration: 0.3), value: showControls)  // 🔑 动画绑定到控件本身
             }
             .onAppear {
                 musicController.fetchUpNextQueue()
