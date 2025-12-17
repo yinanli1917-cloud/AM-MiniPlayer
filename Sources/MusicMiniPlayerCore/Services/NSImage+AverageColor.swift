@@ -85,7 +85,6 @@ extension NSImage {
 
         // Fallback to average if no vibrant color found
         if bestColor.score == -1 {
-            print("⚠️ No vibrant color found, using average")
             return self.averageColor()
         }
 
@@ -102,7 +101,6 @@ extension NSImage {
         let finalAlpha: CGFloat = 0.7  // 70% transparency for Liquid Glass layering
 
         let finalColor = NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: finalAlpha)
-        print("🎨 Enhanced color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness) A=\(finalAlpha)")
         return finalColor
     }
 
@@ -142,7 +140,6 @@ extension NSImage {
         let enhancedBrightness = max(brightness * 0.75, 0.40)  // Retain 75% brightness, min 40%
         let alphaValue: CGFloat = 0.7  // 70% transparency for Liquid Glass layering
 
-        print("🎨 Enhanced average color: H=\(hue) S=\(saturation)→\(enhancedSaturation) B=\(brightness)→\(enhancedBrightness) A=\(alphaValue)")
         return NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: alphaValue)
     }
 }

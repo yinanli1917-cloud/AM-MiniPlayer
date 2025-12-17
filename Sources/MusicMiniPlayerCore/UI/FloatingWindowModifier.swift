@@ -26,7 +26,7 @@ private struct WindowAccessor: NSViewRepresentable {
                 window.standardWindowButton(.miniaturizeButton)?.isHidden = true
                 window.standardWindowButton(.zoomButton)?.isHidden = true
             } else {
-                print("DEBUG: WindowAccessor failed to find window")
+                // Window not found - this can happen during view initialization
             }
         }
         return view

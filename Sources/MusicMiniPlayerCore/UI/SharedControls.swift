@@ -156,10 +156,8 @@ struct SharedBottomControls: View {
             iconName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
             isActive: currentPage == .lyrics
         ) {
-            print("💬 Lyrics button clicked - current page: \(currentPage)")
             // 🔑 快速但不弹性的动画
             withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                let oldPage = currentPage
                 if currentPage == .album {
                     currentPage = .lyrics
                 } else if currentPage == .lyrics {
@@ -167,7 +165,6 @@ struct SharedBottomControls: View {
                 } else if currentPage == .playlist {
                     currentPage = .lyrics
                 }
-                print("💬 Page changed from \(oldPage) to \(currentPage)")
             }
         }
     }
@@ -177,10 +174,8 @@ struct SharedBottomControls: View {
             iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
             isActive: currentPage == .playlist
         ) {
-            print("🎵 Playlist button clicked - current page: \(currentPage)")
             // 🔑 快速但不弹性的动画
             withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                let oldPage = currentPage
                 if currentPage == .album {
                     currentPage = .playlist
                 } else if currentPage == .playlist {
@@ -188,7 +183,6 @@ struct SharedBottomControls: View {
                 } else {
                     currentPage = .playlist
                 }
-                print("🎵 Page changed from \(oldPage) to \(currentPage)")
             }
         }
     }

@@ -506,59 +506,6 @@ struct PlaylistItemRowCompact: View {
     }
 }
 
-// MARK: - Solid Color Background View (Album Art Color Extraction - 与 LiquidBackgroundView 相同算法)
-
-struct SolidColorBackgroundView: View {
-    var artwork: NSImage?
-    @State private var dominantColor: Color = .clear
-
-    var body: some View {
-        dominantColor
-            .onAppear {
-                updateColor()
-            }
-            .onChange(of: artwork) { _ in
-                updateColor()
-            }
-    }
-
-    private func updateColor() {
-        print("🎨 [PlaylistView] updateColor called, artwork available: \(artwork != nil)")
-
-        if let artwork = artwork {
-            DispatchQueue.global(qos: .userInitiated).async {
-                if let nsColor = artwork.dominantColor() {
-                    // Log the extracted color for debugging
-                    var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
-                    nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-
-                    let red = nsColor.redComponent
-                    let green = nsColor.greenComponent
-                    let blue = nsColor.blueComponent
-
-                    print("🎨 [PlaylistView] Extracted dominant color - RGB: R=\(String(format: "%.2f", red)) G=\(String(format: "%.2f", green)) B=\(String(format: "%.2f", blue)) HSB: H=\(String(format: "%.2f", hue)) S=\(String(format: "%.2f", saturation)) B=\(String(format: "%.2f", brightness))")
-
-                    DispatchQueue.main.async {
-                        withAnimation(.easeInOut(duration: 0.8)) {
-                            // 🔑 使用与 LiquidBackgroundView 完全相同的逻辑
-                            self.dominantColor = Color(nsColor: nsColor)
-                        }
-                        print("🎨 [PlaylistView] Color applied to background")
-                    }
-                } else {
-                    print("⚠️ [PlaylistView] Failed to extract dominant color")
-                }
-            }
-        } else {
-            print("🔄 [PlaylistView] No artwork - clearing color")
-            withAnimation(.easeInOut(duration: 0.6)) {
-                dominantColor = .clear
-            }
-        }
-    }
-}
-
-
 #if DEBUG
 struct PlaylistView_Previews: PreviewProvider {
     @Namespace static var namespace

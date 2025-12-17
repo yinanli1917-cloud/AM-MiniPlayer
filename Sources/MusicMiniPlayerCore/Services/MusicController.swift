@@ -965,7 +965,6 @@ public class MusicController: ObservableObject {
     // MARK: - Playback Controls (ScriptingBridge 在后台线程执行，避免阻塞主线程)
 
     public func togglePlayPause() {
-        print("🎵 [MusicController] togglePlayPause() called, isPreview=\(isPreview)")
         if isPreview {
             logger.info("Preview: togglePlayPause")
             isPlaying.toggle()
