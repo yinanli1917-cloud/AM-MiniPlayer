@@ -1,5 +1,5 @@
 import Foundation
-import ScriptingBridge
+@preconcurrency import ScriptingBridge
 import AppKit
 
 // MARK: - Music.app ScriptingBridge Protocol Definitions

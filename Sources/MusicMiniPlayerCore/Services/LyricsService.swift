@@ -260,9 +260,8 @@ public class LyricsService: ObservableObject {
     func updateCurrentTime(_ time: TimeInterval) {
         // 🔑 智能歌词时间轴匹配：
         // - 前奏期间：保持显示占位符（index 0），让三等分点亮动画完整播放
-        // - 歌词滚动：提前 1.5 秒切换，为 scrollTo 动画预留时间
-        //   （滚动动画本身需要 0.5-0.8 秒，加上视觉感知时间，1.5 秒是合理的）
-        let scrollAnimationLeadTime: TimeInterval = 1.5
+        // - 歌词滚动：提前 0.6 秒触发，与动画时长完全同步
+        let scrollAnimationLeadTime: TimeInterval = 0.6
 
         guard !lyrics.isEmpty else {
             currentLineIndex = nil
@@ -277,7 +276,7 @@ public class LyricsService: ObservableObject {
             let firstRealLyricIndex = 1  // 第二行是第一句真正的歌词
             let firstRealLyricStartTime = lyrics[firstRealLyricIndex].startTime
 
-            // 🔑 在第一句歌词开始前 1.5 秒才切换，让前奏动画播放大部分后再滚动
+            // 🔑 在第一句歌词开始前保持显示占位符
             if time < (firstRealLyricStartTime - scrollAnimationLeadTime) {
                 bestMatch = 0  // 保持显示占位符（三等分点亮动画）
             }
@@ -310,6 +309,10 @@ public class LyricsService: ObservableObject {
         // Update if we found a match and it's different
         if let newIndex = bestMatch {
             if currentLineIndex != newIndex {
+                // 🐛 调试：输出歌词切换时的时间信息
+                let lyricStartTime = lyrics[newIndex].startTime
+                let lyricText = String(lyrics[newIndex].text.prefix(20))
+                fputs("🎤 [LyricsService] 切换到歌词 \(newIndex): \"\(lyricText)...\" | 当前时间: \(String(format: "%.2f", time))s | 歌词开始: \(String(format: "%.2f", lyricStartTime))s | 提前量: \(String(format: "%.2f", lyricStartTime - time))s\n", stderr)
                 currentLineIndex = newIndex
             }
         } else {

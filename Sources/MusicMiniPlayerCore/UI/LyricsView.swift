@@ -147,19 +147,11 @@ public struct LyricsView: View {
                         }
                         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
                             if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
-                                // 检查是否是第一句歌词（从nil或0切换到0）
-                                let isFirstLine = (oldValue == nil || oldValue == 0) && newValue == 0
-
-                                if isFirstLine {
-                                    // 第一句使用更平滑的spring动画
-                                    withAnimation(.spring(response: 0.8, dampingFraction: 0.75, blendDuration: 0.3)) {
-                                        proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
-                                    }
-                                } else {
-                                    // 其他行使用标准的缓动曲线
-                                    withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.5)) {
-                                        proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
-                                    }
+                                // 🔑 统一动画：滚动和视觉变化使用完全相同的动画曲线
+                                // 动画时长 0.6s，配合 0.6s 提前量实现同步
+                                let animationDuration = 0.6
+                                withAnimation(.timingCurve(0.25, 0.1, 0.25, 1.0, duration: animationDuration)) {
+                                    proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
                                 }
                             }
                         }
@@ -662,7 +654,7 @@ struct LyricLineView: View {
         .opacity(opacity)
         .offset(y: yOffset)
         .animation(
-            .timingCurve(0.2, 0.0, 0.0, 1.0, duration: 1.2),
+            .timingCurve(0.25, 0.1, 0.25, 1.0, duration: 0.6),  // 🔑 与滚动动画完全同步
             value: currentIndex
         )
         .animation(
@@ -714,9 +706,9 @@ struct TimeBasedLoadingDotsView: View {
             }
         }
 
-        // 🔑 计算整体淡出透明度：与第一句歌词滚动同步（1.5s tolerance）
+        // 🔑 计算整体淡出透明度：与第一句歌词滚动同步
         let overallOpacity: CGFloat = {
-            let fadeOutDuration: TimeInterval = 1.5 // 与LyricsService的scrollAnimationLeadTime同步
+            let fadeOutDuration: TimeInterval = 0.6 // 与LyricsService的scrollAnimationLeadTime同步
 
             if animationTime >= endTime {
                 // 已经超过结束时间，完全透明

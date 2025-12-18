@@ -1,5 +1,5 @@
 import Foundation
-import ScriptingBridge
+@preconcurrency import ScriptingBridge
 import Combine
 import SwiftUI
 import MusicKit
@@ -440,8 +440,9 @@ public class MusicController: ObservableObject {
             // 🔑 preciseCurrentTime 以 60fps 更新，用于动画（歌词页面三个点等）
             // 已移除 - 动画组件现在使用内部 Timer 驱动
 
-            // 🔑 currentTime 只在变化超过 0.5 秒时才更新，减少其他 UI 重绘频率
-            if abs(internalCurrentTime - currentTime) >= 0.5 {
+            // 🔑 currentTime 更新频率：0.15秒阈值，平衡歌词同步和性能
+            // 歌词页面用这个值驱动，其他UI影响较小
+            if abs(internalCurrentTime - currentTime) >= 0.15 {
                 currentTime = internalCurrentTime
             }
         }
