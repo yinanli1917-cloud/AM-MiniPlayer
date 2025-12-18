@@ -123,20 +123,23 @@ public struct LyricsView: View {
                                     .frame(height: 160)
 
                                 ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
-                                    LyricLineView(
-                                        line: line,
-                                        index: index,
-                                        currentIndex: lyricsService.currentLineIndex ?? 0,
-                                        currentTime: musicController.currentTime,
-                                        isScrolling: isManualScrolling
-                                    )
-                                    .id(line.id)
-                                    .onTapGesture {
-                                        musicController.seek(to: line.startTime)
-                                    }
+                                    // 🔑 跳过元信息行（作词、作曲等）- 只显示 index 0（占位符）和 >= firstRealLyricIndex 的真正歌词
+                                    if index == 0 || index >= lyricsService.firstRealLyricIndex {
+                                        LyricLineView(
+                                            line: line,
+                                            index: index,
+                                            currentIndex: lyricsService.currentLineIndex ?? 0,
+                                            currentTime: musicController.currentTime,
+                                            isScrolling: isManualScrolling
+                                        )
+                                        .id(line.id)
+                                        .onTapGesture {
+                                            musicController.seek(to: line.startTime)
+                                        }
 
-                                    // 检测间奏：上一句结束时间到下一句开始时间的间隔
-                                    checkAndShowInterlude(at: index, currentTime: musicController.currentTime)
+                                        // 检测间奏：上一句结束时间到下一句开始时间的间隔
+                                        checkAndShowInterlude(at: index, currentTime: musicController.currentTime)
+                                    }
                                 }
 
                                 // Bottom spacer for centering last lyrics
@@ -147,10 +150,9 @@ public struct LyricsView: View {
                         }
                         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
                             if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
-                                // 🔑 统一动画：滚动和视觉变化使用完全相同的动画曲线
-                                // 动画时长 0.6s，配合 0.6s 提前量实现同步
-                                let animationDuration = 0.6
-                                withAnimation(.timingCurve(0.25, 0.1, 0.25, 1.0, duration: animationDuration)) {
+                                // 🔑 使用更短、更果断的动画，避免"不自信"的感觉
+                                // 0.35s 的动画时长足够平滑，但不会在快节奏歌曲中叠加
+                                withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.35)) {
                                     proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
                                 }
                             }
@@ -625,7 +627,15 @@ struct LyricLineView: View {
                         currentTime: currentTime,
                         endTime: line.endTime
                     )
+                } else if isCurrent && line.hasSyllableSync {
+                    // 🎵 当前行 + 有逐字数据：使用逐字高亮效果
+                    SyllableHighlightText(
+                        line: line,
+                        currentTime: currentTime,
+                        isCurrent: true
+                    )
                 } else {
+                    // 普通文字显示
                     Text(line.text)
                         .font(.system(size: 24, weight: .semibold, design: .rounded))
                         .foregroundColor(.white)
@@ -654,7 +664,7 @@ struct LyricLineView: View {
         .opacity(opacity)
         .offset(y: yOffset)
         .animation(
-            .timingCurve(0.25, 0.1, 0.25, 1.0, duration: 0.6),  // 🔑 与滚动动画完全同步
+            .timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.35),  // 🔑 与滚动动画完全同步，更短更果断
             value: currentIndex
         )
         .animation(
@@ -672,6 +682,93 @@ struct LyricLineView: View {
                 isHovering = hovering
             }
         }
+    }
+}
+
+// MARK: - Syllable Highlight Text View (逐字高亮歌词)
+struct SyllableHighlightText: View {
+    let line: LyricLine
+    let currentTime: TimeInterval
+    let isCurrent: Bool
+
+    // 计算高亮进度（在 body 外部计算，确保响应式更新）
+    private var highlightProgress: CGFloat {
+        guard line.hasSyllableSync, !line.words.isEmpty else {
+            // 没有逐字数据，使用行级别进度
+            if !isCurrent { return 0 }
+            return simpleLineProgress
+        }
+
+        // 逐字进度
+        var totalLength: CGFloat = 0
+        var highlightedLength: CGFloat = 0
+
+        for word in line.words {
+            let charLength = CGFloat(word.word.count)
+            totalLength += charLength
+
+            let progress = word.progress(at: currentTime)
+            highlightedLength += charLength * progress
+        }
+
+        guard totalLength > 0 else { return 0 }
+        return highlightedLength / totalLength
+    }
+
+    private var simpleLineProgress: CGFloat {
+        guard line.endTime > line.startTime else {
+            return currentTime >= line.startTime ? 1.0 : 0.0
+        }
+        if currentTime <= line.startTime { return 0.0 }
+        if currentTime >= line.endTime { return 1.0 }
+        return (currentTime - line.startTime) / (line.endTime - line.startTime)
+    }
+
+    var body: some View {
+        let progress = highlightProgress
+        let gradientWidth: CGFloat = 20 // 渐变边缘宽度
+
+        ZStack(alignment: .leading) {
+            // 底层：未高亮的灰色文字
+            Text(line.text)
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .foregroundColor(.white.opacity(0.35))
+
+            // 顶层：高亮的白色文字 + 渐变遮罩
+            Text(line.text)
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .foregroundColor(.white)
+                .mask(alignment: .leading) {
+                    GeometryReader { geometry in
+                        let highlightWidth = geometry.size.width * progress
+
+                        // 使用 LinearGradient 创建平滑的渐变边缘
+                        HStack(spacing: 0) {
+                            // 已高亮区域（全白）
+                            if highlightWidth > gradientWidth {
+                                Rectangle()
+                                    .fill(Color.white)
+                                    .frame(width: highlightWidth - gradientWidth)
+                            }
+
+                            // 渐变边缘（从白到透明）
+                            if highlightWidth > 0 {
+                                LinearGradient(
+                                    colors: [.white, .clear],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                                .frame(width: min(gradientWidth, highlightWidth))
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+        }
+        .lineLimit(nil)
+        .multilineTextAlignment(.leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -708,7 +805,7 @@ struct TimeBasedLoadingDotsView: View {
 
         // 🔑 计算整体淡出透明度：与第一句歌词滚动同步
         let overallOpacity: CGFloat = {
-            let fadeOutDuration: TimeInterval = 0.6 // 与LyricsService的scrollAnimationLeadTime同步
+            let fadeOutDuration: TimeInterval = 0.35 // 与动画时长同步
 
             if animationTime >= endTime {
                 // 已经超过结束时间，完全透明

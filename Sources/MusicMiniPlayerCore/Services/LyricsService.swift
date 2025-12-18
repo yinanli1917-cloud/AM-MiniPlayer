@@ -4,16 +4,43 @@ import os
 
 // MARK: - Models
 
+/// 单个字/词的时间信息（用于逐字歌词）
+public struct LyricWord: Identifiable, Equatable {
+    public let id = UUID()
+    public let word: String
+    public let startTime: TimeInterval  // 秒
+    public let endTime: TimeInterval    // 秒
+
+    public init(word: String, startTime: TimeInterval, endTime: TimeInterval) {
+        self.word = word
+        self.startTime = startTime
+        self.endTime = endTime
+    }
+
+    /// 计算当前时间对应的进度 (0.0 - 1.0)
+    public func progress(at time: TimeInterval) -> Double {
+        guard endTime > startTime else { return time >= startTime ? 1.0 : 0.0 }
+        if time <= startTime { return 0.0 }
+        if time >= endTime { return 1.0 }
+        return (time - startTime) / (endTime - startTime)
+    }
+}
+
 public struct LyricLine: Identifiable, Equatable {
     public let id = UUID()
     public let text: String
     public let startTime: TimeInterval
     public let endTime: TimeInterval
+    /// 逐字时间信息（如果有的话）
+    public let words: [LyricWord]
+    /// 是否有逐字时间轴
+    public var hasSyllableSync: Bool { !words.isEmpty }
 
-    public init(text: String, startTime: TimeInterval, endTime: TimeInterval) {
+    public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = []) {
         self.text = text
         self.startTime = startTime
         self.endTime = endTime
+        self.words = words
     }
 }
 
@@ -44,6 +71,9 @@ public class LyricsService: ObservableObject {
     @Published public var currentLineIndex: Int? = nil
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
+
+    // 🔧 第一句真正歌词的索引（跳过作词作曲等元信息）
+    public var firstRealLyricIndex: Int = 1
 
     private var currentSongID: String?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
@@ -112,6 +142,80 @@ public class LyricsService: ObservableObject {
         }
     }
 
+    // MARK: - Lyrics Processing
+
+    /// 元信息关键字（作词、作曲等，这些行应该被跳过）
+    private let metadataPatterns = ["作词", "作曲", "编曲", "制作", "混音", "录音", "母带", "监制", "出品", "发行", "OP:", "SP:", "ISRC", "Publisher", "Executive", "词：", "曲：", "词:", "曲:"]
+
+    /// 处理原始歌词：识别元信息、修复 endTime、添加前奏占位符
+    /// - Parameter rawLyrics: 原始歌词行
+    /// - Returns: (处理后的歌词数组, 第一句真正歌词的索引)
+    private func processLyrics(_ rawLyrics: [LyricLine]) -> (lyrics: [LyricLine], firstRealLyricIndex: Int) {
+        guard !rawLyrics.isEmpty else {
+            return ([], 0)
+        }
+
+        var processedLyrics = rawLyrics
+
+        // 1. 识别元信息行，找到第一句真正歌词的索引
+        var foundFirstRealLyricIndex = 0
+        for (index, line) in processedLyrics.enumerated() {
+            let text = line.text.trimmingCharacters(in: .whitespaces)
+            let isMetadata = metadataPatterns.contains { text.contains($0) }
+            if !isMetadata && !text.isEmpty {
+                foundFirstRealLyricIndex = index
+                break
+            }
+        }
+
+        // 2. 修复 endTime - 确保 endTime >= startTime
+        for i in 0..<processedLyrics.count {
+            let currentStart = processedLyrics[i].startTime
+            let currentEnd = processedLyrics[i].endTime
+
+            // 找下一个时间更大的行作为 endTime 参考
+            var nextValidStart = currentStart + 10.0
+            for j in (i + 1)..<processedLyrics.count {
+                if processedLyrics[j].startTime > currentStart {
+                    nextValidStart = processedLyrics[j].startTime
+                    break
+                }
+            }
+
+            let fixedEnd = (currentEnd > currentStart) ? currentEnd : nextValidStart
+            processedLyrics[i] = LyricLine(
+                text: processedLyrics[i].text,
+                startTime: currentStart,
+                endTime: fixedEnd,
+                words: processedLyrics[i].words  // 🔑 保留逐字时间信息！
+            )
+        }
+
+        // 3. 插入前奏占位符
+        let firstRealLyricStartTime = processedLyrics[foundFirstRealLyricIndex].startTime
+        let loadingLine = LyricLine(
+            text: "⋯",
+            startTime: 0,
+            endTime: firstRealLyricStartTime
+        )
+
+        let finalLyrics = [loadingLine] + processedLyrics
+        let finalFirstRealLyricIndex = foundFirstRealLyricIndex + 1  // +1 因为加了 loadingLine
+
+        return (finalLyrics, finalFirstRealLyricIndex)
+    }
+
+    /// 写入调试日志文件
+    private func writeDebugLyricTimeline(lyrics: [LyricLine], firstRealLyricIndex: Int, source: String) {
+        var debugOutput = "📜 歌词时间轴 (\(source), 共 \(lyrics.count) 行, 第一句真正歌词在 index \(firstRealLyricIndex))\n"
+        for (index, line) in lyrics.enumerated() {
+            let text = String(line.text.prefix(20))
+            let marker = (index == firstRealLyricIndex) ? " ← 第一句" : ""
+            debugOutput += "  [\(index)] \(String(format: "%6.2f", line.startTime))s - \(String(format: "%6.2f", line.endTime))s: \"\(text)\"\(marker)\n"
+        }
+        try? debugOutput.write(toFile: "/tmp/nanopod_lyrics_debug.log", atomically: true, encoding: .utf8)
+    }
+
     func fetchLyrics(for title: String, artist: String, duration: TimeInterval, forceRefresh: Bool = false) {
         debugLog("🎤 fetchLyrics: '\(title)' by '\(artist)', duration: \(Int(duration))s")
 
@@ -127,16 +231,15 @@ public class LyricsService: ObservableObject {
         if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
             logger.info("✅ Using cached lyrics for: \(title) - \(artist)")
 
-            // Apply cached lyrics with loading line
-            let loadingLine = LyricLine(
-                text: "⋯",
-                startTime: 0,
-                endTime: cached.lyrics[0].startTime
-            )
-            self.lyrics = [loadingLine] + cached.lyrics
+            // 使用统一的歌词处理函数
+            let result = processLyrics(cached.lyrics)
+            self.lyrics = result.lyrics
+            self.firstRealLyricIndex = result.firstRealLyricIndex
             self.isLoading = false
             self.error = nil
             self.currentLineIndex = nil
+
+            writeDebugLyricTimeline(lyrics: self.lyrics, firstRealLyricIndex: self.firstRealLyricIndex, source: "从缓存")
             return
         }
 
@@ -220,18 +323,15 @@ public class LyricsService: ObservableObject {
                             return
                         }
 
-                        // 🎵 Insert a loading placeholder line at the beginning
-                        // This allows smooth scroll animation from loading state to first lyric
-                        let loadingLine = LyricLine(
-                            text: "⋯", // Three dots as placeholder
-                            startTime: 0,
-                            endTime: lyrics[0].startTime
-                        )
-
-                        self.lyrics = [loadingLine] + lyrics
+                        // 使用统一的歌词处理函数
+                        let result = self.processLyrics(lyrics)
+                        self.lyrics = result.lyrics
+                        self.firstRealLyricIndex = result.firstRealLyricIndex
                         self.isLoading = false
                         self.error = nil
-                        self.logger.info("✅ Successfully fetched \(lyrics.count) lyric lines (+ 1 loading line)")
+                        self.logger.info("✅ Successfully fetched \(lyrics.count) lyric lines (+ 1 loading line), first real lyric at index \(self.firstRealLyricIndex)")
+
+                        self.writeDebugLyricTimeline(lyrics: self.lyrics, firstRealLyricIndex: self.firstRealLyricIndex, source: "新获取")
                     }
                 } else {
                     throw NSError(domain: "LyricsService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Lyrics not found in any source"])
@@ -258,64 +358,53 @@ public class LyricsService: ObservableObject {
     }
 
     func updateCurrentTime(_ time: TimeInterval) {
-        // 🔑 智能歌词时间轴匹配：
-        // - 前奏期间：保持显示占位符（index 0），让三等分点亮动画完整播放
-        // - 歌词滚动：提前 0.6 秒触发，与动画时长完全同步
-        let scrollAnimationLeadTime: TimeInterval = 0.6
+        // 🔑 歌词时间轴匹配
+        // - 前奏期间：显示占位符（index 0）
+        // - 歌词滚动：提前 0.35 秒触发，等于动画时长
+        let scrollAnimationLeadTime: TimeInterval = 0.35
 
         guard !lyrics.isEmpty else {
             currentLineIndex = nil
             return
         }
 
-        var bestMatch: Int? = nil
-
-        // 🔑 特殊处理前奏：让三等分点亮动画完整播放
-        // 第一行是占位符 "⋯"，第二行才是第一句真正的歌词
-        if lyrics.count > 1 {
-            let firstRealLyricIndex = 1  // 第二行是第一句真正的歌词
+        // 🔑 前奏处理：在第一句真正歌词开始前显示占位符
+        if lyrics.count > firstRealLyricIndex {
             let firstRealLyricStartTime = lyrics[firstRealLyricIndex].startTime
-
-            // 🔑 在第一句歌词开始前保持显示占位符
             if time < (firstRealLyricStartTime - scrollAnimationLeadTime) {
-                bestMatch = 0  // 保持显示占位符（三等分点亮动画）
-            }
-        }
-
-        // 如果还没确定 bestMatch，进行正常的时间匹配
-        if bestMatch == nil {
-            for (index, line) in lyrics.enumerated() {
-                // 跳过占位符的正常匹配逻辑（它已经在上面特殊处理了）
-                if index == 0 {
-                    continue
+                if currentLineIndex != 0 {
+                    currentLineIndex = 0
                 }
-
-                // Check if current time is within this line's range (with tolerance)
-                if time >= (line.startTime - scrollAnimationLeadTime) && time < line.endTime {
-                    bestMatch = index
-                    break
-                }
+                return
             }
         }
 
-        // 🔑 如果没有找到匹配，但时间在最后一行之后，保持显示最后一行
-        if bestMatch == nil && !lyrics.isEmpty {
-            let lastLine = lyrics[lyrics.count - 1]
-            if time >= lastLine.startTime {
-                bestMatch = lyrics.count - 1
+        // 🔑 简单时间匹配：找到最后一个 startTime <= time 的歌词行
+        var bestMatch: Int? = nil
+        for index in firstRealLyricIndex..<lyrics.count {
+            let triggerTime = lyrics[index].startTime - scrollAnimationLeadTime
+            if time >= triggerTime {
+                bestMatch = index
+            } else {
+                break  // 时间戳递增，后面的行时间更晚，停止搜索
             }
         }
 
-        // Update if we found a match and it's different
-        if let newIndex = bestMatch {
-            if currentLineIndex != newIndex {
-                // 🐛 调试：输出歌词切换时的时间信息
-                let lyricStartTime = lyrics[newIndex].startTime
-                let lyricText = String(lyrics[newIndex].text.prefix(20))
-                fputs("🎤 [LyricsService] 切换到歌词 \(newIndex): \"\(lyricText)...\" | 当前时间: \(String(format: "%.2f", time))s | 歌词开始: \(String(format: "%.2f", lyricStartTime))s | 提前量: \(String(format: "%.2f", lyricStartTime - time))s\n", stderr)
-                currentLineIndex = newIndex
+        // 更新当前行索引
+        if let newIndex = bestMatch, currentLineIndex != newIndex {
+            // 🐛 调试：输出歌词切换信息到文件
+            let lyricStartTime = lyrics[newIndex].startTime
+            let lyricText = String(lyrics[newIndex].text.prefix(20))
+            let oldIndex = currentLineIndex ?? -1
+            let debugLine = "🎤 切换: \(oldIndex) → \(newIndex) | 时间: \(String(format: "%.2f", time))s | 歌词: \"\(lyricText)\" (开始: \(String(format: "%.2f", lyricStartTime))s)\n"
+            if let data = debugLine.data(using: .utf8),
+               let handle = FileHandle(forWritingAtPath: "/tmp/nanopod_lyrics_debug.log") {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
             }
-        } else {
+            currentLineIndex = newIndex
+        } else if bestMatch == nil {
             currentLineIndex = nil
         }
     }
@@ -510,6 +599,20 @@ public class LyricsService: ObservableObject {
         debugLog("🔍 AMLL search: '\(title)' by '\(artist)'")
         logger.info("🌐 Searching AMLL-TTML-DB: \(title) by \(artist)")
 
+        // 🔑 优先尝试：通过 Apple Music Catalog ID 直接查询
+        if let amTrackId = try? await getAppleMusicTrackId(title: title, artist: artist, duration: duration) {
+            debugLog("🍎 Found Apple Music trackId: \(amTrackId)")
+            logger.info("🍎 Found Apple Music trackId: \(amTrackId)")
+
+            // 直接尝试获取 am-lyrics/{trackId}.ttml
+            if let lyrics = try? await fetchAMLLByTrackId(trackId: amTrackId, platform: "am-lyrics") {
+                debugLog("✅ AMLL direct hit via Apple Music ID: \(amTrackId)")
+                logger.info("✅ AMLL direct hit via Apple Music ID: \(amTrackId)")
+                return lyrics
+            }
+        }
+
+        // 🔑 回退：通过索引搜索（支持所有平台）
         // 确保索引已加载
         if amllIndex.isEmpty {
             await loadAMLLIndex()
@@ -1132,7 +1235,21 @@ public class LyricsService: ObservableObject {
     }
 
     private func fetchNetEaseLyrics(songId: Int) async throws -> [LyricLine]? {
-        // NetEase lyrics API
+        // 🔑 优先尝试新版 API 获取 YRC 逐字歌词（更精确的时间轴）
+        if let yrcLyrics = try? await fetchNetEaseYRC(songId: songId) {
+            let syllableCount = yrcLyrics.filter { $0.hasSyllableSync }.count
+            debugLog("✅ NetEase YRC: \(yrcLyrics.count) lines (\(syllableCount) with syllable sync)")
+            if let firstSyllable = yrcLyrics.first(where: { $0.hasSyllableSync }) {
+                debugLog("📝 Sample line: \"\(firstSyllable.text)\" words=\(firstSyllable.words.count)")
+                if let firstWord = firstSyllable.words.first {
+                    debugLog("   First word: \"\(firstWord.word)\" \(firstWord.startTime)s-\(firstWord.endTime)s")
+                }
+            }
+            logger.info("✅ Found NetEase YRC lyrics (\(yrcLyrics.count) lines)")
+            return yrcLyrics
+        }
+
+        // 回退到旧版 API 获取 LRC 行级歌词
         let urlString = "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1"
         guard let url = URL(string: urlString) else { return nil }
 
@@ -1158,7 +1275,7 @@ public class LyricsService: ObservableObject {
         if let lrc = json["lrc"] as? [String: Any],
            let lyricText = lrc["lyric"] as? String,
            !lyricText.isEmpty {
-            logger.info("✅ Found NetEase synced lyrics (\(lyricText.count) chars)")
+            logger.info("✅ Found NetEase LRC lyrics (\(lyricText.count) chars)")
             return parseLRC(lyricText)
         }
 
@@ -1174,6 +1291,137 @@ public class LyricsService: ObservableObject {
         return nil
     }
 
+    // MARK: - NetEase YRC (Syllable-Level Lyrics) - 新版 API
+
+    /// 使用新版 API 获取 YRC 逐字歌词
+    /// YRC 格式提供每个字的精确时间轴，比 LRC 行级歌词更精确
+    private func fetchNetEaseYRC(songId: Int) async throws -> [LyricLine]? {
+        // 🔑 新版 API 地址（与 Lyricify 相同）
+        // 参数说明：yv=1 请求 YRC 格式，lv=1 请求 LRC 格式
+        let urlString = "https://music.163.com/api/song/lyric/v1?id=\(songId)&lv=1&yv=1&tv=0&rv=0"
+        guard let url = URL(string: urlString) else { return nil }
+
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        request.timeoutInterval = 10.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            return nil
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        // 🔑 优先获取 YRC 逐字歌词
+        if let yrc = json["yrc"] as? [String: Any],
+           let yrcText = yrc["lyric"] as? String,
+           !yrcText.isEmpty {
+            debugLog("📝 Parsing YRC format (\(yrcText.count) chars)")
+            return parseYRC(yrcText)
+        }
+
+        return nil
+    }
+
+    // MARK: - YRC Parser (NetEase Syllable-Level Lyrics)
+
+    /// 解析 YRC 格式歌词（支持逐字时间轴）
+    /// YRC 格式：[行开始毫秒,行持续毫秒](字开始毫秒,字持续毫秒,0)字(字开始毫秒,字持续毫秒,0)字...
+    /// 例如：[600,5040](600,470,0)有(1070,470,0)些(1540,510,0)话
+    private func parseYRC(_ yrcText: String) -> [LyricLine]? {
+        var lines: [LyricLine] = []
+        let yrcLines = yrcText.components(separatedBy: .newlines)
+
+        // 🔑 YRC 行格式正则：[行开始时间,行持续时间]内容
+        let linePattern = "^\\[(\\d+),(\\d+)\\](.*)$"
+        guard let lineRegex = try? NSRegularExpression(pattern: linePattern) else {
+            logger.error("Failed to create YRC line regex")
+            return nil
+        }
+
+        // 🔑 字级时间戳格式：(开始毫秒,持续毫秒,0)字
+        // 注意：字在括号后面！
+        let wordPattern = "\\((\\d+),(\\d+),(\\d+)\\)([^(]+)"
+        let wordRegex = try? NSRegularExpression(pattern: wordPattern)
+
+        for line in yrcLines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmedLine.isEmpty else { continue }
+
+            // 跳过元信息行（以 { 开头的 JSON 行）
+            if trimmedLine.hasPrefix("{") { continue }
+
+            let range = NSRange(trimmedLine.startIndex..., in: trimmedLine)
+            guard let match = lineRegex.firstMatch(in: trimmedLine, range: range),
+                  match.numberOfRanges >= 4 else { continue }
+
+            // 提取行时间戳
+            guard let startRange = Range(match.range(at: 1), in: trimmedLine),
+                  let durationRange = Range(match.range(at: 2), in: trimmedLine),
+                  let contentRange = Range(match.range(at: 3), in: trimmedLine) else { continue }
+
+            let lineStartMs = Int(trimmedLine[startRange]) ?? 0
+            let lineDurationMs = Int(trimmedLine[durationRange]) ?? 0
+            let content = String(trimmedLine[contentRange])
+
+            // 🔑 提取每个字的文本和时间信息
+            var lineText = ""
+            var words: [LyricWord] = []
+
+            if let wordRegex = wordRegex {
+                let contentNSRange = NSRange(content.startIndex..., in: content)
+                let wordMatches = wordRegex.matches(in: content, range: contentNSRange)
+
+                for wordMatch in wordMatches {
+                    if wordMatch.numberOfRanges >= 5,
+                       let wordStartRange = Range(wordMatch.range(at: 1), in: content),
+                       let wordDurationRange = Range(wordMatch.range(at: 2), in: content),
+                       let charRange = Range(wordMatch.range(at: 4), in: content) {
+
+                        let wordStartMs = Int(content[wordStartRange]) ?? 0
+                        let wordDurationMs = Int(content[wordDurationRange]) ?? 0
+                        let wordText = String(content[charRange])
+
+                        lineText += wordText
+
+                        // 保存字级时间信息（毫秒 → 秒）
+                        let wordStartTime = Double(wordStartMs) / 1000.0
+                        let wordEndTime = Double(wordStartMs + wordDurationMs) / 1000.0
+                        words.append(LyricWord(word: wordText, startTime: wordStartTime, endTime: wordEndTime))
+                    }
+                }
+            }
+
+            // 如果正则提取失败，回退到简单清理
+            if lineText.isEmpty {
+                let simplePattern = "\\(\\d+,\\d+,\\d+\\)"
+                lineText = content.replacingOccurrences(of: simplePattern, with: "", options: .regularExpression)
+            }
+
+            lineText = lineText.trimmingCharacters(in: .whitespaces)
+            guard !lineText.isEmpty else { continue }
+
+            // 转换时间（毫秒 → 秒）
+            let startTime = Double(lineStartMs) / 1000.0
+            let endTime = Double(lineStartMs + lineDurationMs) / 1000.0
+
+            lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
+        }
+
+        // 按时间排序
+        lines.sort { $0.startTime < $1.startTime }
+
+        let syllableCount = lines.filter { $0.hasSyllableSync }.count
+        logger.info("✅ Parsed \(lines.count) lines from YRC (\(syllableCount) with syllable sync)")
+        debugLog("✅ YRC parsed: \(lines.count) lines, \(syllableCount) syllable-synced")
+        return lines.isEmpty ? nil : lines
+    }
+
     // MARK: - Helper Functions
 
     /// 繁体中文转简体中文
@@ -1182,5 +1430,106 @@ public class LyricsService: ObservableObject {
         let mutableString = NSMutableString(string: text)
         CFStringTransform(mutableString, nil, "Traditional-Simplified" as CFString, false)
         return mutableString as String
+    }
+
+    // MARK: - Apple Music Catalog ID Lookup
+
+    /// 通过 iTunes Search API 获取 Apple Music Catalog Track ID
+    /// 这个 ID 可以用于直接查询 AMLL 的 am-lyrics 目录
+    private func getAppleMusicTrackId(title: String, artist: String, duration: TimeInterval) async throws -> Int? {
+        // 构建搜索查询
+        let searchTerm = "\(title) \(artist)"
+        guard let encodedTerm = searchTerm.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            return nil
+        }
+
+        // iTunes Search API（支持全球，无需认证）
+        let urlString = "https://itunes.apple.com/search?term=\(encodedTerm)&entity=song&limit=10"
+        guard let url = URL(string: urlString) else { return nil }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8.0
+        request.setValue("nanoPod/1.0", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            return nil
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [[String: Any]] else {
+            return nil
+        }
+
+        // 查找最佳匹配
+        let titleLower = title.lowercased()
+        let artistLower = artist.lowercased()
+
+        for result in results {
+            guard let trackId = result["trackId"] as? Int,
+                  let trackName = result["trackName"] as? String,
+                  let artistName = result["artistName"] as? String else { continue }
+
+            let trackDuration = (result["trackTimeMillis"] as? Double ?? 0) / 1000.0
+
+            // 标题和艺术家匹配
+            let titleMatch = trackName.lowercased().contains(titleLower) ||
+                            titleLower.contains(trackName.lowercased())
+            let artistMatch = artistName.lowercased().contains(artistLower) ||
+                             artistLower.contains(artistName.lowercased())
+            let durationMatch = abs(trackDuration - duration) < 3.0
+
+            // 完全匹配或标题+时长匹配
+            if (titleMatch && artistMatch) || (titleMatch && durationMatch) {
+                return trackId
+            }
+        }
+
+        return nil
+    }
+
+    /// 通过 Track ID 直接获取 AMLL TTML 歌词
+    private func fetchAMLLByTrackId(trackId: Int, platform: String) async throws -> [LyricLine]? {
+        let ttmlFilename = "\(trackId).ttml"
+
+        // 尝试所有镜像源
+        for i in 0..<amllMirrorBaseURLs.count {
+            let mirrorIndex = (currentMirrorIndex + i) % amllMirrorBaseURLs.count
+            let mirror = amllMirrorBaseURLs[mirrorIndex]
+
+            let ttmlURLString = "\(mirror.baseURL)\(platform)/\(ttmlFilename)"
+            guard let ttmlURL = URL(string: ttmlURLString) else { continue }
+
+            do {
+                var request = URLRequest(url: ttmlURL)
+                request.timeoutInterval = 10.0
+                request.setValue("nanoPod/1.0", forHTTPHeaderField: "User-Agent")
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse else { continue }
+
+                // 404 表示没有这首歌，直接返回 nil
+                if httpResponse.statusCode == 404 {
+                    return nil
+                }
+
+                guard (200...299).contains(httpResponse.statusCode),
+                      let ttmlString = String(data: data, encoding: .utf8) else {
+                    continue
+                }
+
+                // 成功！更新镜像索引
+                self.currentMirrorIndex = mirrorIndex
+                return parseTTML(ttmlString)
+
+            } catch {
+                continue
+            }
+        }
+
+        return nil
     }
 }
