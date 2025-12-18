@@ -714,9 +714,9 @@ struct TimeBasedLoadingDotsView: View {
             }
         }
 
-        // 🔑 计算整体淡出透明度：与第一句歌词滚动同步（3.5s tolerance）
+        // 🔑 计算整体淡出透明度：与第一句歌词滚动同步（1.5s tolerance）
         let overallOpacity: CGFloat = {
-            let fadeOutDuration: TimeInterval = 3.5 // 与LyricsService的tolerance同步
+            let fadeOutDuration: TimeInterval = 1.5 // 与LyricsService的scrollAnimationLeadTime同步
 
             if animationTime >= endTime {
                 // 已经超过结束时间，完全透明

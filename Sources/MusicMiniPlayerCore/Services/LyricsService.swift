@@ -156,7 +156,7 @@ public class LyricsService: ObservableObject {
         currentFetchTask = Task {
             var fetchedLyrics: [LyricLine]? = nil
 
-            // Try sources in priority order: AMLL-TTML-DB → LRCLIB → NetEase → lyrics.ovh
+            // Try sources in priority order: AMLL-TTML-DB → NetEase → LRCLIB → lyrics.ovh
             do {
                 try Task.checkCancellation()
                 logger.info("🔍 Starting priority-based search...")
@@ -170,23 +170,23 @@ public class LyricsService: ObservableObject {
 
                 try Task.checkCancellation()
 
-                // Priority 2: LRCLIB (good quality - line-level timing)
+                // Priority 2: NetEase/163 Music (good for Chinese songs, has synced lyrics)
                 if fetchedLyrics == nil {
-                    if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                    if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                         fetchedLyrics = lyrics
-                        self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
-                        logger.info("✅ Found lyrics from LRCLIB (priority 2)")
+                        self.debugLog("✅ NetEase: \(lyrics.count) lines")
+                        logger.info("✅ Found lyrics from NetEase (priority 2)")
                     }
                 }
 
                 try Task.checkCancellation()
 
-                // Priority 3: NetEase/163 Music (good for Chinese songs)
+                // Priority 3: LRCLIB (line-level timing, but only if has synced lyrics)
                 if fetchedLyrics == nil {
-                    if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                    if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                         fetchedLyrics = lyrics
-                        self.debugLog("✅ NetEase: \(lyrics.count) lines")
-                        logger.info("✅ Found lyrics from NetEase (priority 3)")
+                        self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
+                        logger.info("✅ Found lyrics from LRCLIB (priority 3)")
                     }
                 }
 
@@ -258,21 +258,52 @@ public class LyricsService: ObservableObject {
     }
 
     func updateCurrentTime(_ time: TimeInterval) {
-        // IMPORTANT: 3.5 second tolerance for smooth animation
-        // This was determined through extensive testing to account for:
-        // 1. Animation lead time for scroll-to-center effect
-        // 2. User perception delay
-        // 3. Network/processing latency
-        // DO NOT REMOVE THIS TOLERANCE without discussing with user
-        let tolerance: TimeInterval = 3.5
+        // 🔑 智能歌词时间轴匹配：
+        // - 前奏期间：保持显示占位符（index 0），让三等分点亮动画完整播放
+        // - 歌词滚动：提前 1.5 秒切换，为 scrollTo 动画预留时间
+        //   （滚动动画本身需要 0.5-0.8 秒，加上视觉感知时间，1.5 秒是合理的）
+        let scrollAnimationLeadTime: TimeInterval = 1.5
+
+        guard !lyrics.isEmpty else {
+            currentLineIndex = nil
+            return
+        }
 
         var bestMatch: Int? = nil
 
-        for (index, line) in lyrics.enumerated() {
-            // Check if current time is within this line's range (with tolerance)
-            if time >= (line.startTime - tolerance) && time < line.endTime {
-                bestMatch = index
-                break
+        // 🔑 特殊处理前奏：让三等分点亮动画完整播放
+        // 第一行是占位符 "⋯"，第二行才是第一句真正的歌词
+        if lyrics.count > 1 {
+            let firstRealLyricIndex = 1  // 第二行是第一句真正的歌词
+            let firstRealLyricStartTime = lyrics[firstRealLyricIndex].startTime
+
+            // 🔑 在第一句歌词开始前 1.5 秒才切换，让前奏动画播放大部分后再滚动
+            if time < (firstRealLyricStartTime - scrollAnimationLeadTime) {
+                bestMatch = 0  // 保持显示占位符（三等分点亮动画）
+            }
+        }
+
+        // 如果还没确定 bestMatch，进行正常的时间匹配
+        if bestMatch == nil {
+            for (index, line) in lyrics.enumerated() {
+                // 跳过占位符的正常匹配逻辑（它已经在上面特殊处理了）
+                if index == 0 {
+                    continue
+                }
+
+                // Check if current time is within this line's range (with tolerance)
+                if time >= (line.startTime - scrollAnimationLeadTime) && time < line.endTime {
+                    bestMatch = index
+                    break
+                }
+            }
+        }
+
+        // 🔑 如果没有找到匹配，但时间在最后一行之后，保持显示最后一行
+        if bestMatch == nil && !lyrics.isEmpty {
+            let lastLine = lyrics[lyrics.count - 1]
+            if time >= lastLine.startTime {
+                bestMatch = lyrics.count - 1
             }
         }
 
@@ -282,7 +313,6 @@ public class LyricsService: ObservableObject {
                 currentLineIndex = newIndex
             }
         } else {
-            // No line matches - set to nil (will trigger loading dots)
             currentLineIndex = nil
         }
     }
@@ -313,12 +343,12 @@ public class LyricsService: ObservableObject {
                 if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
-                // Priority 2: LRCLIB
-                else if let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                // Priority 2: NetEase (good for Chinese songs, has synced lyrics)
+                else if let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
-                // Priority 3: NetEase
-                else if let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                // Priority 3: LRCLIB (only synced lyrics)
+                else if let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
                 // Priority 4: lyrics.ovh
@@ -803,13 +833,9 @@ public class LyricsService: ObservableObject {
             return parseLRC(syncedLyrics)
         }
 
-        // Fallback to plain lyrics if synced not available
-        if let plainLyrics = json["plainLyrics"] as? String, !plainLyrics.isEmpty {
-            logger.info("⚠️ Only plain lyrics available, creating basic timing")
-            return createUnsyncedLyrics(plainLyrics, duration: duration)
-        }
-
-        logger.warning("No lyrics content in response")
+        // 🔑 如果没有同步歌词，返回 nil 让其他源继续尝试
+        // 不使用 plainLyrics 创建假的时间轴，因为那样会导致前奏没有等待
+        logger.warning("⚠️ LRCLIB has plain lyrics only (no sync), skipping")
         return nil
     }
 
