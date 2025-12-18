@@ -474,6 +474,7 @@ public class LyricsService: ObservableObject {
 
     /// 从 AMLL-TTML-DB 获取歌词
     private func fetchFromAMLLTTMLDB(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🔍 AMLL search: '\(title)' by '\(artist)'")
         logger.info("🌐 Searching AMLL-TTML-DB: \(title) by \(artist)")
 
         // 确保索引已加载
@@ -490,11 +491,12 @@ public class LyricsService: ObservableObject {
         let titleLower = title.lowercased()
         let artistLower = artist.lowercased()
 
-        // 评分匹配
+        // 评分匹配 - 🔑 要求艺术家必须匹配才能返回结果
         var bestMatch: (entry: AMLLIndexEntry, score: Int)?
 
         for entry in amllIndex {
             var score = 0
+            var artistMatched = false
 
             // 标题匹配
             let entryTitleLower = entry.musicName.lowercased()
@@ -506,16 +508,24 @@ public class LyricsService: ObservableObject {
                 continue  // 标题不匹配，跳过
             }
 
-            // 艺术家匹配
+            // 艺术家匹配 - 🔑 严格要求艺术家必须有匹配
             let entryArtistsLower = entry.artists.map { $0.lowercased() }
             for entryArtist in entryArtistsLower {
                 if entryArtist == artistLower {
                     score += 80  // 完全匹配
+                    artistMatched = true
                     break
                 } else if entryArtist.contains(artistLower) || artistLower.contains(entryArtist) {
                     score += 40  // 部分匹配
+                    artistMatched = true
                     break
                 }
+            }
+
+            // 🔑 如果艺术家不匹配，跳过这个结果（避免同名但不同艺术家的歌曲）
+            if !artistMatched {
+                debugLog("⚠️ AMLL skip: '\(entry.musicName)' by '\(entry.artists.joined(separator: ", "))' - artist mismatch")
+                continue
             }
 
             // 更新最佳匹配
@@ -525,10 +535,12 @@ public class LyricsService: ObservableObject {
         }
 
         guard let match = bestMatch else {
+            debugLog("❌ AMLL: No match for '\(title)' by '\(artist)'")
             logger.warning("⚠️ No match found in AMLL-TTML-DB for: \(title) - \(artist)")
             return nil
         }
 
+        debugLog("✅ AMLL match: '\(match.entry.musicName)' by '\(match.entry.artists.joined(separator: ", "))' (score: \(match.score))")
         logger.info("✅ AMLL match: \(match.entry.musicName) by \(match.entry.artists.joined(separator: ", ")) [\(match.entry.platform)] (score: \(match.score))")
 
         // 🔑 使用镜像源获取 TTML 文件（使用正确的平台路径）
