@@ -1005,6 +1005,7 @@ public class LyricsService: ObservableObject {
 
         // Find best match by comparing title, artist, and duration
         var bestDurationMatch: (id: Int, name: String, artist: String, duration: Double)?
+        var bestArtistDurationMatch: (id: Int, name: String, artist: String, duration: Double)?
 
         for song in songs {
             guard let songId = song["id"] as? Int,
@@ -1050,13 +1051,33 @@ public class LyricsService: ObservableObject {
                 return songId
             }
 
-            // 记录最佳时长匹配（用于 fallback）
+            // 优先3：艺术家匹配 + 时长精确匹配（1秒内）- 用于中英文标题不同的情况
+            // 例如: "Sent" (Apple Music) vs "決定不想你" (NetEase)
+            if artistMatch && durationDiff < 1 {
+                debugLog("✅ NetEase match: '\(songName)' by '\(songArtist)' (artist+duration)")
+                logger.info("✅ NetEase artist+duration match: \(songName) by \(songArtist)")
+                return songId
+            }
+
+            // 记录最佳艺术家+时长匹配（2秒内）
+            if artistMatch && durationDiff < 2 && (bestArtistDurationMatch == nil || durationDiff < abs(bestArtistDurationMatch!.duration - duration)) {
+                bestArtistDurationMatch = (songId, songName, songArtist, songDuration)
+            }
+
+            // 记录最佳时长匹配（2秒内）- 最后备选
             if durationDiff < 2 && (bestDurationMatch == nil || durationDiff < abs(bestDurationMatch!.duration - duration)) {
                 bestDurationMatch = (songId, songName, songArtist, songDuration)
             }
         }
 
-        // 备选3：时长精确匹配（2秒内）- 用于英文系统下的中文歌曲
+        // 备选4：艺术家 + 时长接近（2秒内）
+        if let match = bestArtistDurationMatch {
+            debugLog("✅ NetEase match: '\(match.name)' by '\(match.artist)' (artist+duration fallback)")
+            logger.info("✅ NetEase artist+duration fallback: \(match.name) by \(match.artist)")
+            return match.id
+        }
+
+        // 备选5：时长精确匹配（2秒内）- 用于搜索结果中只有时长匹配的情况
         if let match = bestDurationMatch {
             debugLog("✅ NetEase match: '\(match.name)' by '\(match.artist)' (duration-only)")
             logger.info("✅ NetEase duration-only match: \(match.name) by \(match.artist)")
