@@ -365,8 +365,8 @@ public class LyricsService: ObservableObject {
     func updateCurrentTime(_ time: TimeInterval) {
         // 🔑 歌词时间轴匹配
         // - 前奏期间：显示占位符（index 0）
-        // - 歌词滚动：提前 0.15 秒触发（减少提前量，让同步更精确）
-        let scrollAnimationLeadTime: TimeInterval = 0.15
+        // - 歌词滚动：提前 0.05 秒触发（进一步减少提前量，让同步更精确）
+        let scrollAnimationLeadTime: TimeInterval = 0.05
 
         guard !lyrics.isEmpty else {
             currentLineIndex = nil
@@ -1223,9 +1223,9 @@ public class LyricsService: ObservableObject {
 
         debugLog("📦 NetEase returned \(songs.count) results for '\(keyword)'")
 
-        // Find best match by comparing title, artist, and duration
-        var bestDurationMatch: (id: Int, name: String, artist: String, duration: Double)?
-        var bestArtistDurationMatch: (id: Int, name: String, artist: String, duration: Double)?
+        // 🔑 以时长为主要基准的匹配逻辑
+        // 收集所有候选项，按时长差排序
+        var candidates: [(id: Int, name: String, artist: String, duration: Double, durationDiff: Double, titleMatch: Bool, artistMatch: Bool)] = []
 
         for song in songs {
             guard let songId = song["id"] as? Int,
@@ -1241,8 +1241,12 @@ public class LyricsService: ObservableObject {
 
             // Get duration (in milliseconds)
             let songDuration = (song["duration"] as? Double ?? 0) / 1000.0
+            let durationDiff = abs(songDuration - duration)
 
-            // 🔑 匹配逻辑
+            // 🔑 时长差超过 5 秒的直接跳过
+            guard durationDiff < 5 else { continue }
+
+            // 匹配标题和艺术家
             let titleLower = title.lowercased()
             let simplifiedTitleLower = convertToSimplified(title).lowercased()
             let songNameLower = songName.lowercased()
@@ -1255,57 +1259,56 @@ public class LyricsService: ObservableObject {
             let artistMatch = songArtist.lowercased().contains(artist.lowercased()) ||
                              artist.lowercased().contains(songArtist.lowercased())
 
-            let durationDiff = abs(songDuration - duration)
+            candidates.append((songId, songName, songArtist, songDuration, durationDiff, titleMatch, artistMatch))
+        }
 
-            // 优先1：标题 + 艺术家都匹配
-            if titleMatch && artistMatch {
-                debugLog("✅ NetEase match: '\(songName)' by '\(songArtist)' (exact)")
-                logger.info("✅ NetEase exact match: \(songName) by \(songArtist)")
-                return songId
-            }
+        // 🔑 按时长差排序（最接近的在前）
+        candidates.sort { $0.durationDiff < $1.durationDiff }
 
-            // 优先2：标题匹配 + 时长匹配（3秒内）
-            if titleMatch && durationDiff < 3 {
-                debugLog("✅ NetEase match: '\(songName)' by '\(songArtist)' (title+duration)")
-                logger.info("✅ NetEase title+duration match: \(songName) by \(songArtist)")
-                return songId
-            }
+        // 🔑 匹配优先级：
+        // 1. 时长差 < 1秒 且 (标题匹配 或 艺术家匹配)
+        // 2. 时长差 < 2秒 且 艺术家匹配
+        // 3. 时长差 < 1秒（纯时长匹配）
+        // 4. 时长差 < 3秒 且 标题匹配
 
-            // 优先3：艺术家匹配 + 时长精确匹配（1秒内）- 用于中英文标题不同的情况
-            // 例如: "Sent" (Apple Music) vs "決定不想你" (NetEase)
-            if artistMatch && durationDiff < 1 {
-                debugLog("✅ NetEase match: '\(songName)' by '\(songArtist)' (artist+duration)")
-                logger.info("✅ NetEase artist+duration match: \(songName) by \(songArtist)")
-                return songId
-            }
-
-            // 记录最佳艺术家+时长匹配（2秒内）
-            if artistMatch && durationDiff < 2 && (bestArtistDurationMatch == nil || durationDiff < abs(bestArtistDurationMatch!.duration - duration)) {
-                bestArtistDurationMatch = (songId, songName, songArtist, songDuration)
-            }
-
-            // 记录最佳时长匹配（2秒内）- 最后备选
-            if durationDiff < 2 && (bestDurationMatch == nil || durationDiff < abs(bestDurationMatch!.duration - duration)) {
-                bestDurationMatch = (songId, songName, songArtist, songDuration)
+        for candidate in candidates {
+            // 优先1：时长差 < 1秒 且 (标题匹配 或 艺术家匹配)
+            if candidate.durationDiff < 1 && (candidate.titleMatch || candidate.artistMatch) {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title/artist)")
+                logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
+                return candidate.id
             }
         }
 
-        // 备选4：艺术家 + 时长接近（2秒内）
-        if let match = bestArtistDurationMatch {
-            debugLog("✅ NetEase match: '\(match.name)' by '\(match.artist)' (artist+duration fallback)")
-            logger.info("✅ NetEase artist+duration fallback: \(match.name) by \(match.artist)")
-            return match.id
+        for candidate in candidates {
+            // 优先2：时长差 < 2秒 且 艺术家匹配
+            if candidate.durationDiff < 2 && candidate.artistMatch {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<2s + artist)")
+                logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
+                return candidate.id
+            }
         }
 
-        // 备选5：时长精确匹配（2秒内）- 用于搜索结果中只有时长匹配的情况
-        if let match = bestDurationMatch {
-            debugLog("✅ NetEase match: '\(match.name)' by '\(match.artist)' (duration-only)")
-            logger.info("✅ NetEase duration-only match: \(match.name) by \(match.artist)")
-            return match.id
+        for candidate in candidates {
+            // 优先3：时长差 < 1秒（纯时长匹配）- 适用于中英文标题完全不同的情况
+            if candidate.durationDiff < 1 {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s only)")
+                logger.info("✅ NetEase duration match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
+                return candidate.id
+            }
+        }
+
+        for candidate in candidates {
+            // 优先4：时长差 < 3秒 且 标题匹配
+            if candidate.durationDiff < 3 && candidate.titleMatch {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<3s + title)")
+                logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
+                return candidate.id
+            }
         }
 
         // ❌ 没有找到匹配
-        debugLog("❌ NetEase: No match found in \(songs.count) results")
+        debugLog("❌ NetEase: No match found in \(songs.count) results (candidates after duration filter: \(candidates.count))")
         logger.warning("⚠️ No match found in NetEase search results")
         return nil
     }

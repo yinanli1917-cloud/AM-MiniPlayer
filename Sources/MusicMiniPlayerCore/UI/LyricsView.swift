@@ -127,10 +127,22 @@ public struct LyricsView: View {
                                     if index == 0 || index >= lyricsService.firstRealLyricIndex {
                                         // 🔑 检测前奏省略号（"..."、"⋯"、"…" 等）替换为加载动画
                                         if isPreludeEllipsis(line.text) {
-                                            // 前奏加载动画
+                                            // 🔑 前奏加载动画：endTime 应该是下一句歌词的开始时间
+                                            let nextLineStartTime: TimeInterval = {
+                                                // 找到下一个非省略号的歌词行
+                                                for nextIndex in (index + 1)..<lyricsService.lyrics.count {
+                                                    let nextLine = lyricsService.lyrics[nextIndex]
+                                                    if !isPreludeEllipsis(nextLine.text) {
+                                                        return nextLine.startTime
+                                                    }
+                                                }
+                                                // 如果没找到，用当前行的 endTime
+                                                return line.endTime
+                                            }()
+
                                             PreludeDotsView(
                                                 startTime: line.startTime,
-                                                endTime: line.endTime,
+                                                endTime: nextLineStartTime,
                                                 musicController: musicController
                                             )
                                             .id(line.id)
@@ -593,7 +605,7 @@ struct LyricLineView: View {
 
         HStack(spacing: 0) {
             Text(line.text)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .font(.system(size: 24, weight: .semibold))  // 🔑 去掉 .rounded，让中文使用苹方而非 SF Rounded fallback
                 .foregroundColor(.white)
                 .lineLimit(nil)
                 .multilineTextAlignment(.leading)
@@ -669,7 +681,7 @@ struct InterludeDotsView: View {
         let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
         let segmentDuration = dotsActiveDuration / 3.0
 
-        // 计算每个点的精细进度（带呼吸效果）
+        // 计算每个点的精细进度
         let dotProgresses: [CGFloat] = (0..<3).map { index in
             let dotStartTime = startTime + segmentDuration * Double(index)
             let dotEndTime = startTime + segmentDuration * Double(index + 1)
@@ -680,7 +692,6 @@ struct InterludeDotsView: View {
                 return 1.0
             } else {
                 let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
-                // 🔑 柔和的 sin 曲线（呼吸感）
                 return CGFloat(sin(progress * .pi / 2))
             }
         }
@@ -701,16 +712,22 @@ struct InterludeDotsView: View {
         let overallOpacity = isInInterlude ? (1.0 - fadeOutProgress) : 0.0
         let overallBlur = fadeOutProgress * 8
 
-        HStack(spacing: 6) {  // 🔑 减小间距
+        // 🔑 呼吸动画：降低频率到 0.8Hz（更慢更柔和）
+        let breathingPhase = sin(currentTime * .pi * 0.8)
+
+        HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { dotIndex in
                 let progress = dotProgresses[dotIndex]
+                // 🔑 只有正在点亮过程中的点（0 < progress < 1）才有呼吸动画
+                let isLightingUp = progress > 0.0 && progress < 1.0
+                let breathingScale: CGFloat = isLightingUp ? (1.0 + CGFloat(breathingPhase) * 0.06) : 1.0
+
                 Circle()
                     .fill(Color.white)
                     .frame(width: 8, height: 8)
-                    // 🔑 呼吸式点亮
                     .opacity(0.25 + progress * 0.75)
-                    .scaleEffect(0.85 + progress * 0.15)
-                    .animation(.easeOut(duration: 0.4), value: progress)
+                    .scaleEffect((0.85 + progress * 0.15) * breathingScale)
+                    .animation(.easeOut(duration: 0.3), value: progress)
             }
         }
         .padding(.horizontal, 32)
@@ -718,14 +735,13 @@ struct InterludeDotsView: View {
         .opacity(overallOpacity)
         .blur(radius: overallBlur)
         .animation(.easeOut(duration: 0.2), value: isInInterlude)
-        .animation(.easeOut(duration: 0.15), value: overallOpacity)
     }
 }
 
 /// 前奏加载点视图 - 替换 "..." 省略号歌词
 struct PreludeDotsView: View {
     let startTime: TimeInterval  // 前奏/间奏开始时间
-    let endTime: TimeInterval    // 前奏/间奏结束时间
+    let endTime: TimeInterval    // 前奏/间奏结束时间（下一句歌词开始时间）
     @ObservedObject var musicController: MusicController
 
     // 🔑 淡出动画时长（算入总时长）
@@ -741,7 +757,7 @@ struct PreludeDotsView: View {
         let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
         let segmentDuration = dotsActiveDuration / 3.0
 
-        // 计算每个点的精细进度（带呼吸效果）
+        // 计算每个点的精细进度
         let dotProgresses: [CGFloat] = (0..<3).map { index in
             let dotStartTime = startTime + segmentDuration * Double(index)
             let dotEndTime = startTime + segmentDuration * Double(index + 1)
@@ -752,8 +768,6 @@ struct PreludeDotsView: View {
                 return 1.0
             } else {
                 let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
-                // 🔑 更柔和的缓动曲线（呼吸感）
-                // 使用 sin 曲线实现柔和的渐入效果
                 return CGFloat(sin(progress * .pi / 2))
             }
         }
@@ -762,9 +776,9 @@ struct PreludeDotsView: View {
         let fadeOutProgress: CGFloat = {
             let fadeStartTime = startTime + dotsActiveDuration
             if currentTime < fadeStartTime {
-                return 0.0  // 还没到淡出阶段
+                return 0.0
             } else if currentTime >= endTime {
-                return 1.0  // 完全淡出
+                return 1.0
             } else {
                 let progress = (currentTime - fadeStartTime) / fadeOutDuration
                 return CGFloat(progress)
@@ -772,21 +786,25 @@ struct PreludeDotsView: View {
         }()
 
         let overallOpacity = 1.0 - fadeOutProgress
-        let overallBlur = fadeOutProgress * 8  // 最大模糊 8pt
+        let overallBlur = fadeOutProgress * 8
+
+        // 🔑 呼吸动画：降低频率到 0.8Hz
+        let breathingPhase = sin(currentTime * .pi * 0.8)
 
         HStack(spacing: 0) {
-            HStack(spacing: 6) {  // 🔑 减小间距：10 → 6
+            HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
                     let progress = dotProgresses[index]
+                    // 🔑 只有正在点亮过程中的点（0 < progress < 1）才有呼吸动画
+                    let isLightingUp = progress > 0.0 && progress < 1.0
+                    let breathingScale: CGFloat = isLightingUp ? (1.0 + CGFloat(breathingPhase) * 0.06) : 1.0
+
                     Circle()
                         .fill(Color.white)
                         .frame(width: 8, height: 8)
-                        // 🔑 呼吸式点亮：从 0.25 到 1.0
                         .opacity(0.25 + progress * 0.75)
-                        // 🔑 轻微缩放：从 0.85 到 1.0
-                        .scaleEffect(0.85 + progress * 0.15)
-                        // 🔑 柔和的动画
-                        .animation(.easeOut(duration: 0.4), value: progress)
+                        .scaleEffect((0.85 + progress * 0.15) * breathingScale)
+                        .animation(.easeOut(duration: 0.3), value: progress)
                 }
             }
             Spacer(minLength: 0)
@@ -795,7 +813,6 @@ struct PreludeDotsView: View {
         .padding(.vertical, 8)
         .opacity(overallOpacity)
         .blur(radius: overallBlur)
-        .animation(.easeOut(duration: 0.15), value: overallOpacity)
     }
 }
 
@@ -1068,7 +1085,7 @@ struct LoadingDotsLyricView: View {
                         )
                 }
             }
-            .font(.system(size: 23, weight: .medium, design: .rounded)) // Same size as lyric lines
+            .font(.system(size: 23, weight: .medium)) // 🔑 去掉 .rounded，与歌词字体保持一致
             .foregroundColor(.white)
             .padding(.horizontal, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
