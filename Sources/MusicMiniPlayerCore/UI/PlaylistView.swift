@@ -299,6 +299,9 @@ public struct PlaylistView: View {
                     withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                         isCoverAnimating = true
                         currentPage = .album
+                        // 🔑 切换回 album 页面时确保控件可见
+                        isHovering = true
+                        showControls = true
                     }
                 }) {
                     HStack(alignment: .center, spacing: 12) {

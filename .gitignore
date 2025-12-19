@@ -15,3 +15,9 @@ Packages/
 Package.pins
 Package.resolved
 .build/
+
+# Sensitive files
+config.json
+*.env
+.env*
+secrets/
