@@ -74,6 +74,9 @@ public class MusicController: ObservableObject {
     // 🔑 Timer 动态控制状态
     private var interpolationTimerActive = false
 
+    // 🔑 Seek 标记：执行 seek 后立即同步时间
+    private var seekPending = false
+
     // State synchronization lock
     private var lastUserActionTime: Date = .distantPast
     private let userActionLockDuration: TimeInterval = 1.5
@@ -283,9 +286,10 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            fputs("⏰ [startPolling] Creating polling timer (1s interval)\n", stderr)
-            // Poll AppleScript every 1 second for state verification
-            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            fputs("⏰ [startPolling] Creating polling timer (0.5s interval)\n", stderr)
+            // 🔑 Poll AppleScript every 0.5 second for better lyrics sync
+            // 原来 1.0s 会导致歌词延迟，因为真实时间每秒才同步一次
+            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                 self?.updatePlayerState()
             }
             // Fire immediately
@@ -424,26 +428,26 @@ public class MusicController: ObservableObject {
     private func interpolateTime() {
         guard isPlaying, !isPreview else { return }
 
-        // Increment time locally
-        let timeSincePoll = Date().timeIntervalSince(lastPollTime)
+        // 🔑 使用实际经过的时间计算当前播放位置
+        let elapsed = Date().timeIntervalSince(lastPollTime)
 
         // Only interpolate if we're within a reasonable window of the last poll (e.g. 3 seconds)
-        // This prevents runaway time if polling stops
-        if timeSincePoll < 3.0 {
-            internalCurrentTime += 0.016
+        if elapsed < 3.0 && elapsed >= 0 {
+            // 🔑 基于上次轮询的真实时间 + 经过时间
+            // internalCurrentTime 存储的是上次轮询时 Music.app 返回的真实位置
+            let interpolatedTime = internalCurrentTime + elapsed
 
             // Clamp to duration
-            if duration > 0 && internalCurrentTime > duration {
-                internalCurrentTime = duration
-            }
+            let clampedTime = duration > 0 ? min(interpolatedTime, duration) : interpolatedTime
 
-            // 🔑 preciseCurrentTime 以 60fps 更新，用于动画（歌词页面三个点等）
-            // 已移除 - 动画组件现在使用内部 Timer 驱动
-
-            // 🔑 currentTime 更新频率：0.15秒阈值，平衡歌词同步和性能
-            // 歌词页面用这个值驱动，其他UI影响较小
-            if abs(internalCurrentTime - currentTime) >= 0.15 {
-                currentTime = internalCurrentTime
+            // 🔑 关键修复：只允许时间单调递增（不能后退）
+            // 这避免了轮询更新时时间跳回的问题
+            // 除非差距太大（>2秒），说明用户 seek 了
+            if clampedTime >= currentTime || (currentTime - clampedTime) > 2.0 {
+                // 🔑 只有当显示时间变化足够大时才更新（避免频繁重绘）
+                if abs(clampedTime - currentTime) >= 0.05 {
+                    currentTime = clampedTime
+                }
             }
         }
     }
@@ -567,14 +571,26 @@ public class MusicController: ObservableObject {
                 self.currentAlbum = trackAlbum
                 self.duration = trackDuration
 
-                // Only update time if difference is significant
-                if abs(self.internalCurrentTime - position) > 0.5 || !self.isPlaying {
+                // 🔑 时间同步策略：
+                // - internalCurrentTime 总是更新为轮询返回的真实位置
+                // - lastPollTime 更新为当前时间
+                // - currentTime 的更新由 interpolateTime() 负责（单调递增）
+                // - 只有在以下情况强制更新 currentTime：
+                //   1. seekPending 为 true（用户 seek 了）
+                //   2. 暂停状态
+                //   3. 时间差距太大（>2秒，说明播放器跳转了）
+                let timeDiff = abs(position - self.currentTime)
+
+                self.internalCurrentTime = position
+                self.lastPollTime = Date()
+
+                // 🔑 只有在 seek、暂停、或时间差太大时才强制更新显示时间
+                if self.seekPending || !self.isPlaying || timeDiff > 2.0 {
                     self.currentTime = position
-                    self.internalCurrentTime = position
+                    self.seekPending = false
                 }
 
                 self.audioQuality = quality
-                self.lastPollTime = Date()
 
                 // Fetch artwork if track changed
                 if trackChanged {
@@ -605,7 +621,7 @@ public class MusicController: ObservableObject {
 
     // 用于防止状态更新重叠 - 使用时间戳而非布尔值以避免卡死
     private var lastUpdateTime: Date = .distantPast
-    private let updateTimeout: TimeInterval = 0.8  // 0.8秒超时，因为轮询间隔是1秒
+    private let updateTimeout: TimeInterval = 0.4  // 0.4秒超时，因为轮询间隔是0.5秒
 
     /// 使用 AppleScript 获取播放状态（回退方式）
     private func updatePlayerStateViaAppleScript() {
@@ -1032,6 +1048,8 @@ public class MusicController: ObservableObject {
         // Optimistic UI update
         currentTime = position
         internalCurrentTime = position
+        // 🔑 标记 seek 执行中，下次轮询时立即同步
+        seekPending = true
 
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {

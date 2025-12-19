@@ -125,20 +125,41 @@ public struct LyricsView: View {
                                 ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                                     // 🔑 跳过元信息行（作词、作曲等）- 只显示 index 0（占位符）和 >= firstRealLyricIndex 的真正歌词
                                     if index == 0 || index >= lyricsService.firstRealLyricIndex {
-                                        LyricLineView(
-                                            line: line,
-                                            index: index,
-                                            currentIndex: lyricsService.currentLineIndex ?? 0,
-                                            currentTime: musicController.currentTime,
-                                            isScrolling: isManualScrolling
-                                        )
-                                        .id(line.id)
-                                        .onTapGesture {
-                                            musicController.seek(to: line.startTime)
+                                        // 🔑 检测前奏省略号（"..."、"⋯"、"…" 等）替换为加载动画
+                                        if isPreludeEllipsis(line.text) {
+                                            // 前奏加载动画
+                                            PreludeDotsView(
+                                                startTime: line.startTime,
+                                                endTime: line.endTime,
+                                                musicController: musicController
+                                            )
+                                            .id(line.id)
+                                        } else {
+                                            LyricLineView(
+                                                line: line,
+                                                index: index,
+                                                currentIndex: lyricsService.currentLineIndex ?? 0,
+                                                isScrolling: isManualScrolling
+                                            )
+                                            .id(line.id)
+                                            .onTapGesture {
+                                                musicController.seek(to: line.startTime)
+                                            }
                                         }
 
-                                        // 检测间奏：上一句结束时间到下一句开始时间的间隔
-                                        checkAndShowInterlude(at: index, currentTime: musicController.currentTime)
+                                        // 🔑 间奏检测：检查当前行和下一行之间的间隔
+                                        if index < lyricsService.lyrics.count - 1 {
+                                            let nextLine = lyricsService.lyrics[index + 1]
+                                            let gap = nextLine.startTime - line.endTime
+                                            if gap >= 5.0 && line.text != "⋯" && nextLine.text != "⋯" {
+                                                InterludeDotsView(
+                                                    startTime: line.endTime,
+                                                    endTime: nextLine.startTime,
+                                                    musicController: musicController
+                                                )
+                                                .id("interlude-\(index)")
+                                            }
+                                        }
                                     }
                                 }
 
@@ -150,9 +171,17 @@ public struct LyricsView: View {
                         }
                         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
                             if !isManualScrolling, let currentIndex = newValue, currentIndex < lyricsService.lyrics.count {
-                                // 🔑 使用更短、更果断的动画，避免"不自信"的感觉
-                                // 0.35s 的动画时长足够平滑，但不会在快节奏歌曲中叠加
-                                withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.35)) {
+                                // 🔑 慢而柔和的滚动动画
+                                // 同步触发精确，但动画过渡要慢且流畅
+                                // - mass 2.0 = 较大惯性，动画更从容
+                                // - stiffness 25 = 很软的弹簧，动画更慢
+                                // - damping 10 = 低阻尼，保持柔和的弹性
+                                withAnimation(.interpolatingSpring(
+                                    mass: 2.0,
+                                    stiffness: 25,
+                                    damping: 10,
+                                    initialVelocity: 0
+                                )) {
                                     proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
                                 }
                             }
@@ -516,22 +545,12 @@ public struct LyricsView: View {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
-    @ViewBuilder
-    private func checkAndShowInterlude(at index: Int, currentTime: TimeInterval) -> some View {
-        if index < lyricsService.lyrics.count - 1 {
-            let currentLine = lyricsService.lyrics[index]
-            let nextLine = lyricsService.lyrics[index + 1]
-            let interludeGap = nextLine.startTime - currentLine.endTime
-
-            if interludeGap >= 5.0 && currentLine.text != "⋯" && nextLine.text != "⋯" {
-                InterludeLoadingDotsView(
-                    currentTime: currentTime,
-                    startTime: currentLine.endTime,
-                    endTime: nextLine.startTime
-                )
-                .id("interlude-\(index)")
-            }
-        }
+    /// 🔑 检测是否为前奏/间奏省略号占位符
+    private func isPreludeEllipsis(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        // 检测各种省略号格式: "...", "…", "⋯", "。。。", "..." 等
+        let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・"]
+        return ellipsisPatterns.contains(trimmed) || trimmed.isEmpty
     }
 }
 
@@ -541,143 +560,84 @@ struct LyricLineView: View {
     let line: LyricLine
     let index: Int
     let currentIndex: Int
-    let currentTime: TimeInterval
-    let isScrolling: Bool // Add parameter to know if user is scrolling
+    let isScrolling: Bool
 
     @State private var isHovering: Bool = false
 
+    private var distance: Int { index - currentIndex }
+    private var isCurrent: Bool { distance == 0 }
+    private var isPast: Bool { distance < 0 }
+    private var absDistance: Int { abs(distance) }
+
     var body: some View {
-        let distance = index - currentIndex
-        let isCurrent = distance == 0
-        let isPast = distance < 0
-        let absDistance = abs(distance)
-
-        // Enhanced Visual State Calculations with smoother transitions
-        // 使用scaleEffect而不是动态字体，保持文本排版一致性
-        // 手动滚动时，所有歌词使用统一的"未选中"样式（scale=0.92）
         let scale: CGFloat = {
-            // 手动滚动时所有歌词使用统一的"未选中"大小
             if isScrolling { return 0.92 }
-
-            if isCurrent {
-                return 1.08
-            } else if absDistance == 1 {
-                return 0.96
-            } else {
-                return 0.92
-            }
+            if isCurrent { return 1.0 }
+            return 0.97
         }()
 
         let blur: CGFloat = {
-            // 手动滚动时完全清晰，无模糊
             if isScrolling { return 0 }
-
-            // Progressive blur based on distance when not scrolling
             if isCurrent { return 0 }
-
-            if isPast {
-                // Past lines: gentle blur that increases with distance
-                let blurAmount = min(CGFloat(absDistance) * 0.4, 2.5)
-                return blurAmount
-            } else {
-                // Future lines: stronger blur for depth effect
-                let blurAmount = min(CGFloat(absDistance) * 0.7, 5.0)
-                return blurAmount
-            }
+            return 1.0 + CGFloat(absDistance) * 0.8
         }()
 
         let opacity: CGFloat = {
-            // 手动滚动时所有歌词统一透明度 100%（完全不透明）
             if isScrolling { return 1.0 }
-
-            if isCurrent {
-                return 1.0
-            }
-
-            if isPast {
-                // Past lines: fade gracefully but remain readable
-                let fadeAmount = max(0.4, 1.0 - Double(absDistance) * 0.15)
-                return fadeAmount
-            } else {
-                // Future lines: progressive fade with smoother curve
-                let fadeAmount = max(0.25, 0.95 - Double(absDistance) * 0.10)
-                return fadeAmount
-            }
+            if isCurrent { return 1.0 }
+            if isPast { return 0.85 }
+            return max(0.2, 1.0 - Double(absDistance) * 0.15)
         }()
-        
-        // Enhanced yOffset with smoother transitions
-        let yOffset: CGFloat = {
-            if isCurrent {
-                return -3 // Slightly more lift for emphasis
-            } else if absDistance == 1 {
-                return -1 // Subtle lift for adjacent lines
-            } else {
-                return 0
-            }
-        }()
-        
-        // 🔑 关键修复：所有歌词使用完全一致的字体（24pt + semibold）
-        // 字体大小、粗细、行间距完全相同，确保所有歌词的文本排版100%一致
-        // 只通过scaleEffect改变视觉大小，不触发任何布局重新计算
+
+        let yOffset: CGFloat = isCurrent && !isScrolling ? -2 : 0
+
         HStack(spacing: 0) {
-            Group {
-                if line.text == "⋯" {
-                    // 特殊处理：加载占位符显示基于时间的三等分点亮动画
-                    TimeBasedLoadingDotsView(
-                        currentTime: currentTime,
-                        endTime: line.endTime
-                    )
-                } else if isCurrent && line.hasSyllableSync {
-                    // 🎵 当前行 + 有逐字数据：使用逐字高亮效果
-                    SyllableHighlightText(
-                        line: line,
-                        currentTime: currentTime,
-                        isCurrent: true
-                    )
-                } else {
-                    // 普通文字显示
-                    Text(line.text)
-                        .font(.system(size: 24, weight: .semibold, design: .rounded))
-                        .foregroundColor(.white)
-                        .lineLimit(nil)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .scaleEffect(scale, anchor: .leading)  // 🔑 在文字上直接应用scale，anchor为leading
+            Text(line.text)
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .foregroundColor(.white)
+                .lineLimit(nil)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .scaleEffect(scale, anchor: .leading)
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 32)  // 先应用左右padding
-        .padding(.vertical, 8)  // 增加垂直 padding 让 hover 背景有空间
+        .padding(.horizontal, 32)
+        .padding(.vertical, 8)
         .background(
-            // 🎨 macOS 26 Liquid Glass hover 效果
             Group {
                 if isScrolling && isHovering && line.text != "⋯" {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.white.opacity(0.08))
-                        .padding(.horizontal, 8)  // 背景左右留出8px空间
+                        .padding(.horizontal, 8)
                 }
             }
         )
         .blur(radius: blur)
         .opacity(opacity)
         .offset(y: yOffset)
-        .animation(
-            .timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.35),  // 🔑 与滚动动画完全同步，更短更果断
-            value: currentIndex
-        )
-        .animation(
-            .easeInOut(duration: 0.3),
-            value: isScrolling
-        )
-        .animation(
-            .easeInOut(duration: 0.2),
-            value: isHovering
-        )
+        // 🔑 AMLL scale spring 参数: mass=2, damping=25, stiffness=100
+        // 为 scale/blur/opacity 添加独立的 spring 动画
+        .animation(.interpolatingSpring(
+            mass: 2,
+            stiffness: 100,
+            damping: 25,
+            initialVelocity: 0
+        ), value: scale)
+        .animation(.interpolatingSpring(
+            mass: 2,
+            stiffness: 100,
+            damping: 25,
+            initialVelocity: 0
+        ), value: blur)
+        .animation(.interpolatingSpring(
+            mass: 2,
+            stiffness: 100,
+            damping: 25,
+            initialVelocity: 0
+        ), value: opacity)
         .contentShape(Rectangle())
         .onHover { hovering in
-            // 只在手动滚动时启用 hover 效果
             if isScrolling {
                 isHovering = hovering
             }
@@ -685,90 +645,157 @@ struct LyricLineView: View {
     }
 }
 
-// MARK: - Syllable Highlight Text View (逐字高亮歌词)
-struct SyllableHighlightText: View {
-    let line: LyricLine
-    let currentTime: TimeInterval
-    let isCurrent: Bool
+/// 间奏加载点视图 - 基于播放时间精确控制动画
+struct InterludeDotsView: View {
+    let startTime: TimeInterval  // 间奏开始时间（前一句歌词结束时间）
+    let endTime: TimeInterval    // 间奏结束时间（下一句歌词开始时间）
+    @ObservedObject var musicController: MusicController
 
-    // 计算高亮进度（在 body 外部计算，确保响应式更新）
-    private var highlightProgress: CGFloat {
-        guard line.hasSyllableSync, !line.words.isEmpty else {
-            // 没有逐字数据，使用行级别进度
-            if !isCurrent { return 0 }
-            return simpleLineProgress
-        }
+    // 🔑 淡出动画时长（算入总时长）
+    private let fadeOutDuration: TimeInterval = 0.7
 
-        // 逐字进度
-        var totalLength: CGFloat = 0
-        var highlightedLength: CGFloat = 0
-
-        for word in line.words {
-            let charLength = CGFloat(word.word.count)
-            totalLength += charLength
-
-            let progress = word.progress(at: currentTime)
-            highlightedLength += charLength * progress
-        }
-
-        guard totalLength > 0 else { return 0 }
-        return highlightedLength / totalLength
+    private var currentTime: TimeInterval {
+        musicController.currentTime
     }
 
-    private var simpleLineProgress: CGFloat {
-        guard line.endTime > line.startTime else {
-            return currentTime >= line.startTime ? 1.0 : 0.0
-        }
-        if currentTime <= line.startTime { return 0.0 }
-        if currentTime >= line.endTime { return 1.0 }
-        return (currentTime - line.startTime) / (line.endTime - line.startTime)
+    // 🔑 是否在间奏时间范围内
+    private var isInInterlude: Bool {
+        currentTime >= startTime && currentTime < endTime
     }
 
     var body: some View {
-        let progress = highlightProgress
-        let gradientWidth: CGFloat = 20 // 渐变边缘宽度
+        // 🔑 总时长，三个点只占用 (总时长 - 淡出时长)
+        let totalDuration = endTime - startTime
+        let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
+        let segmentDuration = dotsActiveDuration / 3.0
 
-        ZStack(alignment: .leading) {
-            // 底层：未高亮的灰色文字
-            Text(line.text)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundColor(.white.opacity(0.35))
+        // 计算每个点的精细进度（带呼吸效果）
+        let dotProgresses: [CGFloat] = (0..<3).map { index in
+            let dotStartTime = startTime + segmentDuration * Double(index)
+            let dotEndTime = startTime + segmentDuration * Double(index + 1)
 
-            // 顶层：高亮的白色文字 + 渐变遮罩
-            Text(line.text)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundColor(.white)
-                .mask(alignment: .leading) {
-                    GeometryReader { geometry in
-                        let highlightWidth = geometry.size.width * progress
-
-                        // 使用 LinearGradient 创建平滑的渐变边缘
-                        HStack(spacing: 0) {
-                            // 已高亮区域（全白）
-                            if highlightWidth > gradientWidth {
-                                Rectangle()
-                                    .fill(Color.white)
-                                    .frame(width: highlightWidth - gradientWidth)
-                            }
-
-                            // 渐变边缘（从白到透明）
-                            if highlightWidth > 0 {
-                                LinearGradient(
-                                    colors: [.white, .clear],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                                .frame(width: min(gradientWidth, highlightWidth))
-                            }
-
-                            Spacer(minLength: 0)
-                        }
-                    }
-                }
+            if currentTime <= dotStartTime {
+                return 0.0
+            } else if currentTime >= dotEndTime {
+                return 1.0
+            } else {
+                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
+                // 🔑 柔和的 sin 曲线（呼吸感）
+                return CGFloat(sin(progress * .pi / 2))
+            }
         }
-        .lineLimit(nil)
-        .multilineTextAlignment(.leading)
-        .fixedSize(horizontal: false, vertical: true)
+
+        // 🔑 计算整体淡出透明度和模糊
+        let fadeOutProgress: CGFloat = {
+            let fadeStartTime = startTime + dotsActiveDuration
+            if currentTime < fadeStartTime {
+                return 0.0
+            } else if currentTime >= endTime {
+                return 1.0
+            } else {
+                let progress = (currentTime - fadeStartTime) / fadeOutDuration
+                return CGFloat(progress)
+            }
+        }()
+
+        let overallOpacity = isInInterlude ? (1.0 - fadeOutProgress) : 0.0
+        let overallBlur = fadeOutProgress * 8
+
+        HStack(spacing: 6) {  // 🔑 减小间距
+            ForEach(0..<3, id: \.self) { dotIndex in
+                let progress = dotProgresses[dotIndex]
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 8, height: 8)
+                    // 🔑 呼吸式点亮
+                    .opacity(0.25 + progress * 0.75)
+                    .scaleEffect(0.85 + progress * 0.15)
+                    .animation(.easeOut(duration: 0.4), value: progress)
+            }
+        }
+        .padding(.horizontal, 32)
+        .padding(.vertical, 12)
+        .opacity(overallOpacity)
+        .blur(radius: overallBlur)
+        .animation(.easeOut(duration: 0.2), value: isInInterlude)
+        .animation(.easeOut(duration: 0.15), value: overallOpacity)
+    }
+}
+
+/// 前奏加载点视图 - 替换 "..." 省略号歌词
+struct PreludeDotsView: View {
+    let startTime: TimeInterval  // 前奏/间奏开始时间
+    let endTime: TimeInterval    // 前奏/间奏结束时间
+    @ObservedObject var musicController: MusicController
+
+    // 🔑 淡出动画时长（算入总时长）
+    private let fadeOutDuration: TimeInterval = 0.7
+
+    private var currentTime: TimeInterval {
+        musicController.currentTime
+    }
+
+    var body: some View {
+        // 🔑 总时长 = 原时长，但三个点只占用 (总时长 - 淡出时长)
+        let totalDuration = endTime - startTime
+        let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
+        let segmentDuration = dotsActiveDuration / 3.0
+
+        // 计算每个点的精细进度（带呼吸效果）
+        let dotProgresses: [CGFloat] = (0..<3).map { index in
+            let dotStartTime = startTime + segmentDuration * Double(index)
+            let dotEndTime = startTime + segmentDuration * Double(index + 1)
+
+            if currentTime <= dotStartTime {
+                return 0.0
+            } else if currentTime >= dotEndTime {
+                return 1.0
+            } else {
+                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
+                // 🔑 更柔和的缓动曲线（呼吸感）
+                // 使用 sin 曲线实现柔和的渐入效果
+                return CGFloat(sin(progress * .pi / 2))
+            }
+        }
+
+        // 🔑 计算整体淡出透明度和模糊
+        let fadeOutProgress: CGFloat = {
+            let fadeStartTime = startTime + dotsActiveDuration
+            if currentTime < fadeStartTime {
+                return 0.0  // 还没到淡出阶段
+            } else if currentTime >= endTime {
+                return 1.0  // 完全淡出
+            } else {
+                let progress = (currentTime - fadeStartTime) / fadeOutDuration
+                return CGFloat(progress)
+            }
+        }()
+
+        let overallOpacity = 1.0 - fadeOutProgress
+        let overallBlur = fadeOutProgress * 8  // 最大模糊 8pt
+
+        HStack(spacing: 0) {
+            HStack(spacing: 6) {  // 🔑 减小间距：10 → 6
+                ForEach(0..<3, id: \.self) { index in
+                    let progress = dotProgresses[index]
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 8, height: 8)
+                        // 🔑 呼吸式点亮：从 0.25 到 1.0
+                        .opacity(0.25 + progress * 0.75)
+                        // 🔑 轻微缩放：从 0.85 到 1.0
+                        .scaleEffect(0.85 + progress * 0.15)
+                        // 🔑 柔和的动画
+                        .animation(.easeOut(duration: 0.4), value: progress)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 32)
+        .padding(.vertical, 8)
+        .opacity(overallOpacity)
+        .blur(radius: overallBlur)
+        .animation(.easeOut(duration: 0.15), value: overallOpacity)
     }
 }
 

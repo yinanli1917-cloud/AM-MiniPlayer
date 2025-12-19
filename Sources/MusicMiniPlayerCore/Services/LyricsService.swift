@@ -72,6 +72,11 @@ public class LyricsService: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
 
+    // 🔑 整首歌是否有逐字歌词（任意一行有即为 true）
+    public var hasSyllableSyncLyrics: Bool {
+        lyrics.contains { $0.hasSyllableSync }
+    }
+
     // 🔧 第一句真正歌词的索引（跳过作词作曲等元信息）
     public var firstRealLyricIndex: Int = 1
 
@@ -360,8 +365,8 @@ public class LyricsService: ObservableObject {
     func updateCurrentTime(_ time: TimeInterval) {
         // 🔑 歌词时间轴匹配
         // - 前奏期间：显示占位符（index 0）
-        // - 歌词滚动：提前 0.35 秒触发，等于动画时长
-        let scrollAnimationLeadTime: TimeInterval = 0.35
+        // - 歌词滚动：提前 0.15 秒触发（减少提前量，让同步更精确）
+        let scrollAnimationLeadTime: TimeInterval = 0.15
 
         guard !lyrics.isEmpty else {
             currentLineIndex = nil
@@ -756,12 +761,12 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        // Pattern to match <span> tags (excluding translation and roman)
-        // 排除 ttm:role="x-translation" 和 ttm:role="x-roman"
-        let spanPattern = "<span[^>]*(?<!ttm:role=\"x-translation\")(?<!ttm:role=\"x-roman\")>([^<]*)</span>"
-        let spanRegex = try? NSRegularExpression(pattern: spanPattern, options: [])
+        // 🔑 新增：提取带时间的 span（用于逐字歌词）
+        // <span begin="00:21.400" end="00:22.010">低</span>
+        let timedSpanPattern = "<span[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>([^<]+)</span>"
+        let timedSpanRegex = try? NSRegularExpression(pattern: timedSpanPattern, options: [])
 
-        // Simpler approach: extract text from spans that don't have ttm:role
+        // Pattern to match <span> tags without timing (fallback)
         let cleanSpanPattern = "<span[^>]*>([^<]+)</span>"
         let cleanSpanRegex = try? NSRegularExpression(pattern: cleanSpanPattern, options: [])
 
@@ -782,61 +787,90 @@ public class LyricsService: ObservableObject {
             guard let contentRange = Range(match.range(at: 3), in: ttmlString) else { continue }
             let content = String(ttmlString[contentRange])
 
-            // 提取所有 span 文本，但排除翻译和罗马音
-            var text = ""
+            // 🔑 关键修改：尝试提取逐字时间信息
+            var words: [LyricWord] = []
+            var lineText = ""
 
-            // 方法1：尝试提取没有 ttm:role 的 span
-            if let spanRegex = cleanSpanRegex {
-                let spanMatches = spanRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+            // 方法1：提取带时间戳的 span（逐字歌词）
+            if let timedSpanRegex = timedSpanRegex {
+                let spanMatches = timedSpanRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
 
                 for spanMatch in spanMatches {
-                    // 检查这个 span 是否包含 ttm:role（翻译或罗马音）
+                    guard spanMatch.numberOfRanges >= 4 else { continue }
+
+                    // 检查是否包含 ttm:role（翻译或罗马音）
                     guard let fullSpanRange = Range(spanMatch.range, in: content) else { continue }
                     let fullSpan = String(content[fullSpanRange])
-
-                    // 跳过翻译和罗马音
                     if fullSpan.contains("ttm:role") { continue }
 
-                    // 提取 span 内的文本
-                    if spanMatch.numberOfRanges >= 2,
-                       let textRange = Range(spanMatch.range(at: 1), in: content) {
-                        text += String(content[textRange])
+                    // 提取 span 的 begin 和 end 时间
+                    guard let spanBeginRange = Range(spanMatch.range(at: 1), in: content),
+                          let spanEndRange = Range(spanMatch.range(at: 2), in: content),
+                          let spanTextRange = Range(spanMatch.range(at: 3), in: content) else { continue }
+
+                    let spanBegin = String(content[spanBeginRange])
+                    let spanEnd = String(content[spanEndRange])
+                    let spanText = String(content[spanTextRange])
+
+                    // 解析时间并创建 LyricWord
+                    if let wordStart = parseTTMLTime(spanBegin),
+                       let wordEnd = parseTTMLTime(spanEnd) {
+                        words.append(LyricWord(word: spanText, startTime: wordStart, endTime: wordEnd))
+                        lineText += spanText
                     }
                 }
             }
 
-            // 方法2：如果没有找到 span，直接清理标签
-            if text.isEmpty {
-                text = content
-                // 移除翻译 span
-                text = text.replacingOccurrences(of: "<span[^>]*ttm:role=\"x-translation\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
-                // 移除罗马音 span
-                text = text.replacingOccurrences(of: "<span[^>]*ttm:role=\"x-roman\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
-                // 移除所有剩余标签
-                text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            // 方法2：如果没有逐字时间，回退到普通 span 提取
+            if words.isEmpty {
+                if let spanRegex = cleanSpanRegex {
+                    let spanMatches = spanRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+
+                    for spanMatch in spanMatches {
+                        guard let fullSpanRange = Range(spanMatch.range, in: content) else { continue }
+                        let fullSpan = String(content[fullSpanRange])
+                        if fullSpan.contains("ttm:role") { continue }
+
+                        if spanMatch.numberOfRanges >= 2,
+                           let textRange = Range(spanMatch.range(at: 1), in: content) {
+                            lineText += String(content[textRange])
+                        }
+                    }
+                }
+            }
+
+            // 方法3：如果仍然没有文本，直接清理标签
+            if lineText.isEmpty {
+                lineText = content
+                lineText = lineText.replacingOccurrences(of: "<span[^>]*ttm:role=\"x-translation\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
+                lineText = lineText.replacingOccurrences(of: "<span[^>]*ttm:role=\"x-roman\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
+                lineText = lineText.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
             }
 
             // 解码 HTML 实体
-            text = text.replacingOccurrences(of: "&lt;", with: "<")
-            text = text.replacingOccurrences(of: "&gt;", with: ">")
-            text = text.replacingOccurrences(of: "&amp;", with: "&")
-            text = text.replacingOccurrences(of: "&quot;", with: "\"")
-            text = text.replacingOccurrences(of: "&apos;", with: "'")
-            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            lineText = lineText.replacingOccurrences(of: "&lt;", with: "<")
+            lineText = lineText.replacingOccurrences(of: "&gt;", with: ">")
+            lineText = lineText.replacingOccurrences(of: "&amp;", with: "&")
+            lineText = lineText.replacingOccurrences(of: "&quot;", with: "\"")
+            lineText = lineText.replacingOccurrences(of: "&apos;", with: "'")
+            lineText = lineText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            guard !text.isEmpty else { continue }
+            guard !lineText.isEmpty else { continue }
 
             // Parse time format: MM:SS.mmm (AMLL format) or HH:MM:SS.mmm
             if let startTime = parseTTMLTime(beginString),
                let endTime = parseTTMLTime(endString) {
-                lines.append(LyricLine(text: text, startTime: startTime, endTime: endTime))
+                // 🔑 关键：传入 words 数组！
+                lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
             }
         }
 
         // Sort by start time to ensure correct order
         lines.sort { $0.startTime < $1.startTime }
 
-        logger.info("✅ Parsed \(lines.count) lyric lines from TTML")
+        let syllableCount = lines.filter { $0.hasSyllableSync }.count
+        logger.info("✅ Parsed \(lines.count) lyric lines from TTML (\(syllableCount) with syllable sync)")
+        debugLog("✅ TTML parsed: \(lines.count) lines, \(syllableCount) syllable-synced")
         return lines.isEmpty ? nil : lines
     }
 
@@ -1103,18 +1137,58 @@ public class LyricsService: ObservableObject {
         let simplifiedTitle = convertToSimplified(title)
         let simplifiedArtist = convertToSimplified(artist)
 
-        // NetEase search API - 使用简体搜索
-        let searchKeyword = "\(simplifiedTitle) \(simplifiedArtist)"
+        // 🔑 检测标题是否主要是非中文（英文/拉丁字符）
+        // 如果是，先尝试只用艺术家搜索（因为 NetEase 里的歌曲标题可能是中文）
+        let isNonChineseTitle = !containsChineseCharacters(title)
 
-        debugLog("🔍 NetEase: '\(searchKeyword)', duration: \(Int(duration))s")
-        logger.info("🔍 NetEase search: '\(searchKeyword)'")
+        // 🔑 搜索策略：
+        // 1. 如果标题是英文，先尝试"艺术家名"搜索（因为 NetEase 里可能只有中文标题）
+        // 2. 然后尝试"标题 + 艺术家"搜索
+        var searchKeywords: [String] = []
 
+        if isNonChineseTitle {
+            // 英文标题：优先只用艺术家搜索
+            searchKeywords.append(simplifiedArtist)
+            searchKeywords.append("\(simplifiedTitle) \(simplifiedArtist)")
+        } else {
+            // 中文标题：正常搜索顺序
+            searchKeywords.append("\(simplifiedTitle) \(simplifiedArtist)")
+            searchKeywords.append(simplifiedArtist)
+        }
+
+        for searchKeyword in searchKeywords {
+            debugLog("🔍 NetEase: '\(searchKeyword)', duration: \(Int(duration))s")
+            logger.info("🔍 NetEase search: '\(searchKeyword)'")
+
+            if let songId = try await performNetEaseSearch(keyword: searchKeyword, title: title, artist: artist, duration: duration) {
+                return songId
+            }
+        }
+
+        return nil
+    }
+
+    /// 检测字符串是否包含中文字符
+    private func containsChineseCharacters(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            // CJK Unified Ideographs: U+4E00 - U+9FFF
+            // CJK Unified Ideographs Extension A: U+3400 - U+4DBF
+            if (0x4E00...0x9FFF).contains(scalar.value) ||
+               (0x3400...0x4DBF).contains(scalar.value) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 执行 NetEase 搜索请求
+    private func performNetEaseSearch(keyword: String, title: String, artist: String, duration: TimeInterval) async throws -> Int? {
         // 🔑 使用 URLComponents 正确构建 URL（关键修复！）
         var components = URLComponents(string: "https://music.163.com/api/search/get")!
         components.queryItems = [
-            URLQueryItem(name: "s", value: searchKeyword),
+            URLQueryItem(name: "s", value: keyword),
             URLQueryItem(name: "type", value: "1"),
-            URLQueryItem(name: "limit", value: "10")
+            URLQueryItem(name: "limit", value: "20")  // 🔑 增加搜索结果数量
         ]
 
         guard let url = components.url else { return nil }
@@ -1146,6 +1220,8 @@ public class LyricsService: ObservableObject {
             logger.error("Failed to parse NetEase search response")
             return nil
         }
+
+        debugLog("📦 NetEase returned \(songs.count) results for '\(keyword)'")
 
         // Find best match by comparing title, artist, and duration
         var bestDurationMatch: (id: Int, name: String, artist: String, duration: Double)?
