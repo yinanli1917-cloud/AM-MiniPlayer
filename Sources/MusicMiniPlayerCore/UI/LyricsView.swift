@@ -126,10 +126,14 @@ public struct LyricsView: View {
                                     if index == 0 || index >= lyricsService.firstRealLyricIndex {
                                         // 🔑 检测前奏省略号（"..."、"⋯"、"…" 等）替换为加载动画
                                         if isPreludeEllipsis(line.text) {
-                                            // 🔑 前奏加载动画：endTime 应该是下一句歌词的开始时间
+                                            // 🔑 前奏加载动画：endTime 应该是第一句真正歌词的开始时间
                                             let nextLineStartTime: TimeInterval = {
-                                                // 找到下一个非省略号的歌词行
-                                                for nextIndex in (index + 1)..<lyricsService.lyrics.count {
+                                                // 🔑 对于前奏占位符（index 0），直接使用 firstRealLyricIndex 的开始时间
+                                                if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
+                                                    return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
+                                                }
+                                                // 对于间奏省略号，找到下一个非省略号的真正歌词行
+                                                for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
                                                     let nextLine = lyricsService.lyrics[nextIndex]
                                                     if !isPreludeEllipsis(nextLine.text) {
                                                         return nextLine.startTime

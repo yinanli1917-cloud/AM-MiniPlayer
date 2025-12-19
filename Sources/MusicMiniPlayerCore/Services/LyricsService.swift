@@ -264,10 +264,15 @@ public class LyricsService: ObservableObject {
         currentFetchTask = Task {
             var fetchedLyrics: [LyricLine]? = nil
 
-            // Try sources in priority order: AMLL-TTML-DB → NetEase → LRCLIB → lyrics.ovh
+            // 🔑 检测是否为中文歌曲（标题或艺术家包含中文字符）
+            let isChinese = containsChineseCharacters(title) || containsChineseCharacters(artist)
+
+            // Try sources in priority order:
+            // - 中文歌: AMLL-TTML-DB → NetEase → LRCLIB → lyrics.ovh
+            // - 英文歌: AMLL-TTML-DB → LRCLIB → NetEase → lyrics.ovh (NetEase 对英文歌匹配不准)
             do {
                 try Task.checkCancellation()
-                logger.info("🔍 Starting priority-based search...")
+                logger.info("🔍 Starting priority-based search... (isChinese: \(isChinese))")
 
                 // Priority 1: AMLL-TTML-DB (best quality - word-level timing)
                 if let lyrics = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
@@ -278,23 +283,43 @@ public class LyricsService: ObservableObject {
 
                 try Task.checkCancellation()
 
-                // Priority 2: NetEase/163 Music (good for Chinese songs, has synced lyrics)
-                if fetchedLyrics == nil {
-                    if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                        fetchedLyrics = lyrics
-                        self.debugLog("✅ NetEase: \(lyrics.count) lines")
-                        logger.info("✅ Found lyrics from NetEase (priority 2)")
+                if isChinese {
+                    // 🔑 中文歌：NetEase 优先（有更好的中文歌词库）
+                    if fetchedLyrics == nil {
+                        if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                            fetchedLyrics = lyrics
+                            self.debugLog("✅ NetEase: \(lyrics.count) lines")
+                            logger.info("✅ Found lyrics from NetEase (priority 2 - Chinese)")
+                        }
                     }
-                }
 
-                try Task.checkCancellation()
+                    try Task.checkCancellation()
 
-                // Priority 3: LRCLIB (line-level timing, but only if has synced lyrics)
-                if fetchedLyrics == nil {
-                    if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                        fetchedLyrics = lyrics
-                        self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
-                        logger.info("✅ Found lyrics from LRCLIB (priority 3)")
+                    if fetchedLyrics == nil {
+                        if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                            fetchedLyrics = lyrics
+                            self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
+                            logger.info("✅ Found lyrics from LRCLIB (priority 3 - Chinese)")
+                        }
+                    }
+                } else {
+                    // 🔑 英文歌：LRCLIB 优先（NetEase 容易匹配到翻唱或错误版本）
+                    if fetchedLyrics == nil {
+                        if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                            fetchedLyrics = lyrics
+                            self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
+                            logger.info("✅ Found lyrics from LRCLIB (priority 2 - English)")
+                        }
+                    }
+
+                    try Task.checkCancellation()
+
+                    if fetchedLyrics == nil {
+                        if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                            fetchedLyrics = lyrics
+                            self.debugLog("✅ NetEase: \(lyrics.count) lines")
+                            logger.info("✅ Found lyrics from NetEase (priority 3 - English)")
+                        }
                     }
                 }
 
@@ -436,20 +461,34 @@ public class LyricsService: ObservableObject {
                 // Fetch lyrics in background using priority order
                 var fetchedLyrics: [LyricLine]? = nil
 
+                // 🔑 检测是否为中文歌曲
+                let isChinese = containsChineseCharacters(track.title) || containsChineseCharacters(track.artist)
+
                 // Priority 1: AMLL-TTML-DB (best quality)
                 if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
-                // Priority 2: NetEase (good for Chinese songs, has synced lyrics)
-                else if let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
-                    fetchedLyrics = lyrics
+
+                if isChinese {
+                    // 中文歌：NetEase → LRCLIB
+                    if fetchedLyrics == nil, let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                        fetchedLyrics = lyrics
+                    }
+                    if fetchedLyrics == nil, let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                        fetchedLyrics = lyrics
+                    }
+                } else {
+                    // 英文歌：LRCLIB → NetEase
+                    if fetchedLyrics == nil, let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                        fetchedLyrics = lyrics
+                    }
+                    if fetchedLyrics == nil, let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+                        fetchedLyrics = lyrics
+                    }
                 }
-                // Priority 3: LRCLIB (only synced lyrics)
-                else if let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
-                    fetchedLyrics = lyrics
-                }
-                // Priority 4: lyrics.ovh
-                else if let lyrics = try? await fetchFromLyricsOVH(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
+
+                // Fallback: lyrics.ovh
+                if fetchedLyrics == nil, let lyrics = try? await fetchFromLyricsOVH(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                     fetchedLyrics = lyrics
                 }
 
