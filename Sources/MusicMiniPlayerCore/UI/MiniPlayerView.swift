@@ -1,5 +1,4 @@
 import SwiftUI
-import Glur
 
 // 移除自定义transition，使用SwiftUI官方transition避免icon消失bug
 // PlayerPage enum 已移至 MusicController 以支持状态共享

@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import Glur
 
 public struct LyricsView: View {
     @EnvironmentObject var musicController: MusicController

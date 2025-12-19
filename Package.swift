@@ -16,13 +16,11 @@ let package = Package(
             name: "MusicMiniPlayerCore",
             targets: ["MusicMiniPlayerCore"]),
     ],
-    dependencies: [
-        .package(url: "https://github.com/joogps/Glur.git", from: "1.0.0"),
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "MusicMiniPlayerCore",
-            dependencies: ["Glur"],
+            dependencies: [],
             path: "Sources/MusicMiniPlayerCore",
             resources: [
                 .process("Resources")
