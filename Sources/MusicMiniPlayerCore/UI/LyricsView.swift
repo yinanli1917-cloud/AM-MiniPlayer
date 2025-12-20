@@ -979,53 +979,69 @@ struct ProgressClipShape: Shape {
     }
 }
 
-// MARK: - Single Word View with Highlight Animation
+// MARK: - Single Word View with Highlight Animation (AMLL-style)
 
 struct SyllableWordView: View {
     let word: LyricWord
     let currentTime: TimeInterval
     let fontSize: CGFloat
 
+    // AMLL 参数直接翻译
+    private let brightOpacity: CGFloat = 1.0      // AMLL: 0.85 → 我们用全白
+    private let darkOpacity: CGFloat = 0.35       // AMLL: 0.25 → 稍微亮一点
+    private let emphasisScale: CGFloat = 1.07     // AMLL: 1.07-1.1
+    private let liftAmount: CGFloat = -1.2        // AMLL: -0.05em ≈ -1.2pt (24pt font)
+
     private var progress: CGFloat {
         CGFloat(word.progress(at: currentTime))
     }
 
+    // 是否正在高亮（0 < progress < 1）
     private var isHighlighting: Bool {
         progress > 0 && progress < 1
     }
 
+    // 是否完成高亮（progress >= 1）
+    private var isCompleted: Bool {
+        progress >= 1
+    }
+
+    // 是否为强调词（AMLL: duration >= 1s, charCount 1-7）
     private var isEmphasis: Bool {
         let duration = word.endTime - word.startTime
         let charCount = word.word.count
         return duration >= 1.0 && charCount >= 1 && charCount <= 7
     }
 
-    private var emphasisScale: CGFloat {
+    // 当前缩放比例
+    private var currentScale: CGFloat {
         guard isEmphasis && isHighlighting else { return 1.0 }
-        return 1.0 + sin(progress * .pi) * 0.05
+        // 使用 sin 曲线实现平滑的放大缩小
+        return 1.0 + sin(progress * .pi) * (emphasisScale - 1.0)
     }
 
-    private var liftOffset: CGFloat {
-        isHighlighting ? -2 : 0
+    // 当前 Y 轴偏移（高亮时上移）
+    private var currentLift: CGFloat {
+        isHighlighting ? liftAmount : 0
     }
 
     var body: some View {
-        // 🔑 关键：用 ZStack 让两层文字完全重叠，用 clipShape 裁剪（不改变布局）
-        ZStack(alignment: .leading) {
-            // 底层：半透明（未高亮）
-            Text(word.word)
-                .font(.system(size: fontSize, weight: .semibold))
-                .foregroundColor(.white.opacity(0.4))
-
-            // 顶层：白色 + clipShape 裁剪（不改变Text布局！）
-            Text(word.word)
-                .font(.system(size: fontSize, weight: .semibold))
-                .foregroundColor(.white)
-                .clipShape(ProgressClipShape(progress: progress))  // 🔑 用Shape裁剪，不用frame
-        }
-        .scaleEffect(emphasisScale, anchor: .center)
-        .offset(y: liftOffset)
-        .animation(.easeOut(duration: 0.1), value: liftOffset)
+        // 使用 overlay + ProgressClipShape 实现从左到右的高亮效果
+        Text(word.word)
+            .font(.system(size: fontSize, weight: .semibold))
+            .foregroundColor(.white.opacity(darkOpacity))  // 底层：暗色
+            .overlay(
+                // 顶层：亮色 + clipShape 裁剪
+                Text(word.word)
+                    .font(.system(size: fontSize, weight: .semibold))
+                    .foregroundColor(.white.opacity(brightOpacity))
+                    .clipShape(ProgressClipShape(progress: progress))
+                , alignment: .leading
+            )
+            // 先测试基础高亮效果，暂时移除 scale 和 lift
+            // .scaleEffect(currentScale, anchor: .leading)  // 用 .leading 避免向右扩张
+            .offset(y: currentLift)
+            .animation(.easeOut(duration: 0.15), value: currentLift)
     }
 }
 
