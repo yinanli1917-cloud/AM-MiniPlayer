@@ -167,6 +167,7 @@ public struct MiniPlayerView: View {
                             font: .system(size: 16, weight: .bold),
                             textColor: .white,
                             maxWidth: artSize - 24,
+                            height: 20,  // 🔑 明确高度，防止被裁剪
                             alignment: .leading
                         )
                         .matchedGeometryEffect(id: "track-title", in: animation)
@@ -177,13 +178,14 @@ public struct MiniPlayerView: View {
                             font: .system(size: 13, weight: .medium),
                             textColor: .white.opacity(0.9),
                             maxWidth: artSize - 24,
+                            height: 16,  // 🔑 明确高度，防止被裁剪
                             alignment: .leading
                         )
                         .matchedGeometryEffect(id: "track-artist", in: animation)
                         .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
                     }
                     .padding(.leading, 12)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 12)  // 🔑 增加底部padding，防止文字被裁剪
                     .frame(width: artSize, height: maskHeight, alignment: .bottomLeading)
                     .position(x: geo.size.width / 2, y: maskY)
                     .opacity(showOverlayContent ? 0 : 1)
@@ -323,39 +325,83 @@ public struct MiniPlayerView: View {
             if musicController.currentPage != .lyrics {
                 // 🎯 封面图片 + 底部渐进模糊
                 ZStack {
-                    // 原始封面
+                    // 原图始终存在
                     Image(nsImage: artwork)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: artSize, height: artSize)
                         .clipped()
 
-                    // 🔑 底部渐进模糊overlay - 只在album页面非hover时显示
-                    // 文字区域约占封面底部30%，模糊需要覆盖这个区域
-                    if musicController.currentPage == .album && !isHovering {
+                    // 🔑 底部渐进模糊 - 用 opacity 控制显示/隐藏，实现平滑过渡
+                    // 只在 album 页面非 hover 时显示
+                    // 范围略高于文字区域，模糊从 8px 开始递减
+                    Group {
+                        // 第1层：模糊 8px，覆盖底部 ~15%
                         Image(nsImage: artwork)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
+                            .frame(width: artSize + 24, height: artSize + 24)
+                            .blur(radius: 8)
                             .frame(width: artSize, height: artSize)
                             .clipped()
-                            .blur(radius: 50)  // 增大模糊值
                             .mask(
                                 LinearGradient(
-                                    gradient: Gradient(stops: [
+                                    stops: [
                                         .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.45),  // 顶部45%完全清晰
-                                        .init(color: .black.opacity(0.3), location: 0.55),
-                                        .init(color: .black.opacity(0.7), location: 0.65),
-                                        .init(color: .black, location: 0.75),  // 底部25%完全模糊
+                                        .init(color: .clear, location: 0.82),
+                                        .init(color: .black, location: 0.92),
                                         .init(color: .black, location: 1.0)
-                                    ]),
+                                    ],
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
                             )
-                            .allowsHitTesting(false)
-                            .id(artwork)
+
+                        // 第2层：模糊 5px，覆盖底部 ~20%
+                        Image(nsImage: artwork)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: artSize + 16, height: artSize + 16)
+                            .blur(radius: 5)
+                            .frame(width: artSize, height: artSize)
+                            .clipped()
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .clear, location: 0.77),
+                                        .init(color: .black, location: 0.87),
+                                        .init(color: .black, location: 1.0)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+
+                        // 第3层：模糊 2px，覆盖底部 ~25%
+                        Image(nsImage: artwork)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: artSize + 8, height: artSize + 8)
+                            .blur(radius: 2)
+                            .frame(width: artSize, height: artSize)
+                            .clipped()
+                            .mask(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .clear, location: 0.72),
+                                        .init(color: .black, location: 0.82),
+                                        .init(color: .black, location: 1.0)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
                     }
+                    .opacity(musicController.currentPage == .album && !isHovering ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.25), value: isHovering)
+                    .allowsHitTesting(false)
                 }
                 .cornerRadius(cornerRadius)
                 .shadow(

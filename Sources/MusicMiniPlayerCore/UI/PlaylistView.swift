@@ -119,7 +119,7 @@ public struct PlaylistView: View {
                             .id("upNextSection")
 
                             // 底部留白
-                            Spacer().frame(height: 120)  // 🔑 增加留白，给控件腾出空间
+                            Spacer().frame(height: 120)  // 🔑 给控件腾出空间
                         }
                         .scrollTargetLayout()  // 🔑 恢复 snap 支持
                     }
@@ -219,21 +219,21 @@ public struct PlaylistView: View {
                     ZStack(alignment: .bottom) {
                         // 渐变模糊背景
                         VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                            .frame(height: 100)
+                            .frame(height: 120)
                             .mask(
                                 LinearGradient(
                                     gradient: Gradient(stops: [
                                         .init(color: .clear, location: 0),
-                                        .init(color: .black.opacity(0.4), location: 0.25),
-                                        .init(color: .black.opacity(0.8), location: 0.5),
-                                        .init(color: .black, location: 0.7),
+                                        .init(color: .black.opacity(0.3), location: 0.15),
+                                        .init(color: .black.opacity(0.6), location: 0.3),
+                                        .init(color: .black, location: 0.5),
                                         .init(color: .black, location: 1.0)
                                     ]),
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
                             )
-                            .allowsHitTesting(false)  // 🔑 渐变背景不拦截点击
+                            .allowsHitTesting(false)
 
                         SharedBottomControls(
                             currentPage: $currentPage,
@@ -260,10 +260,9 @@ public struct PlaylistView: View {
     @ViewBuilder
     private func stickyHeader(_ title: String) -> some View {
         ZStack(alignment: .leading) {
-            // 背景层 - 只用毛玻璃，不加任何颜色
-            // 这样背景的渐变色会自然透过来
+            // 背景层 - 毛玻璃效果
             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                .opacity(0.7)  // 半透明，让背景渐变透出来
+                .opacity(0.7)
 
             // 文字
             Text(title)

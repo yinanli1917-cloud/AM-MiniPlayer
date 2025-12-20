@@ -410,9 +410,9 @@ public struct LyricsView: View {
 
             // 渐变模糊 + 控件区域（整体拦截点击，防止穿透）
             ZStack(alignment: .bottom) {
-                // 🔑 渐变模糊背景 - 使用系统backdrop blur实时模糊下层内容
+                // 渐变模糊背景
                 VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                    .frame(height: 100)
+                    .frame(height: 120)
                     .mask(
                         LinearGradient(
                             gradient: Gradient(stops: [
