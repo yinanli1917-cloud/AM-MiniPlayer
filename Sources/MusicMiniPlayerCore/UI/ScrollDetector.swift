@@ -235,4 +235,39 @@ extension View {
             isEnabled: isEnabled
         ))
     }
+
+    /// 🔑 简单的滚轮事件监听（用于歌词手动滚动）
+    func onScrollWheel(_ handler: @escaping (CGFloat) -> Void) -> some View {
+        self.background(
+            ScrollWheelEventView(onScroll: handler)
+        )
+    }
+}
+
+// MARK: - Simple Scroll Wheel Event View
+
+struct ScrollWheelEventView: NSViewRepresentable {
+    let onScroll: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> ScrollWheelNSView {
+        let view = ScrollWheelNSView()
+        view.onScroll = onScroll
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrollWheelNSView, context: Context) {
+        nsView.onScroll = onScroll
+    }
+
+    class ScrollWheelNSView: NSView {
+        var onScroll: ((CGFloat) -> Void)?
+
+        override func scrollWheel(with event: NSEvent) {
+            let deltaY = event.scrollingDeltaY
+            if abs(deltaY) > 0.5 {
+                onScroll?(deltaY)
+            }
+            super.scrollWheel(with: event)
+        }
+    }
 }

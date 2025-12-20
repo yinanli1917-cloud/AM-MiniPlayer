@@ -11,17 +11,20 @@ public struct LyricsView: View {
     @State private var autoScrollTimer: Timer? = nil
     @State private var showControls: Bool = true
     @State private var lastDragLocation: CGFloat = 0
-    @State private var dragOffset: CGFloat = 0
-    @State private var dragVelocity: CGFloat = 0
-    @State private var wasFastScrolling: Bool = false  // 🔑 防抖：追踪是否刚经历快速滚动
+    @State private var wasFastScrolling: Bool = false
     @State private var showLoadingDots: Bool = false
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
-    @State private var lastVelocity: CGFloat = 0  // 记录上一次速度
-    @State private var scrollLocked: Bool = false  // 🔑 锁定快速滚动状态，防止检测衰减速度
-    @State private var hasTriggeredSlowScroll: Bool = false  // 🔑 慢速滚动是否已触发过控件显示
+    @State private var lastVelocity: CGFloat = 0
+    @State private var scrollLocked: Bool = false
+    @State private var hasTriggeredSlowScroll: Bool = false
+
+    // 🔑 手动滚动 Y 轴偏移量
+    @State private var manualScrollOffset: CGFloat = 0
+    // 🔑 行高度缓存（用于精确计算位置）
+    @State private var lineHeights: [Int: CGFloat] = [:]
 
     // 🐛 调试窗口状态
     @State private var showDebugWindow: Bool = false
@@ -61,12 +64,12 @@ public struct LyricsView: View {
                             }
                         )
                 } else if let error = lyricsService.error {
-                    VStack(spacing: 12) {  // 🔑 缩小: 16→12
+                    VStack(spacing: 12) {
                         Image(systemName: "music.note")
-                            .font(.system(size: 36))  // 🔑 缩小: 48→36
+                            .font(.system(size: 36))
                             .foregroundColor(.white.opacity(0.3))
                         Text(error)
-                            .font(.system(size: 13, weight: .medium))  // 🔑 缩小: 16→13
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundColor(.white.opacity(0.5))
 
                         // Retry button
@@ -78,17 +81,17 @@ public struct LyricsView: View {
                                 forceRefresh: true
                             )
                         }) {
-                            HStack(spacing: 5) {  // 🔑 缩小: 6→5
+                            HStack(spacing: 5) {
                                 Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 10, weight: .semibold))  // 🔑 缩小: 12→10
+                                    .font(.system(size: 10, weight: .semibold))
                                 Text("Retry")
-                                    .font(.system(size: 12, weight: .semibold))  // 🔑 缩小: 14→12
+                                    .font(.system(size: 12, weight: .semibold))
                             }
                             .foregroundColor(.white)
-                            .padding(.horizontal, 16)  // 🔑 缩小: 20→16
-                            .padding(.vertical, 8)  // 🔑 缩小: 10→8
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
                             .background(Color.white.opacity(0.2))
-                            .cornerRadius(6)  // 🔑 缩小: 8→6
+                            .cornerRadius(6)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.white.opacity(0.3), lineWidth: 1)
@@ -114,24 +117,26 @@ public struct LyricsView: View {
                             }
                         )
                 } else {
-                    // 🔑 AMLL 风格：手动 Y 轴布局（不用 ScrollView）
+                    // 🔑 AMLL 风格：ZStack 固定行高布局 + Y 轴整体偏移
                     GeometryReader { geo in
                         let containerHeight = geo.size.height
                         let controlBarHeight: CGFloat = 120
                         let currentIndex = lyricsService.currentLineIndex ?? 0
 
-                        // 布局参数
-                        let lineHeight: CGFloat = 40        // 每行基础高度
-                        let lineSpacing: CGFloat = 20       // 行间距
-                        let anchorPosition: CGFloat = 0.38  // 当前行锚点位置（0=顶, 0.5=中, 1=底）
-                        let anchorY = (containerHeight - controlBarHeight) * anchorPosition
+                        // 🔑 固定布局参数（不依赖动态测量）
+                        let lineHeight: CGFloat = 60        // 每行固定高度
+                        let lineSpacing: CGFloat = 24       // 行间距
+                        let totalLineHeight = lineHeight + lineSpacing
+
+                        // 🔑 锚点位置：当前行应该在容器的 18% 高度处（靠近顶部）
+                        let anchorY = (containerHeight - controlBarHeight) * 0.18
 
                         ZStack(alignment: .topLeading) {
                             ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                                 if index == 0 || index >= lyricsService.firstRealLyricIndex {
                                     let distance = index - currentIndex
-                                    // 🔑 Y 轴偏移 = 锚点 + 距离 * (行高 + 间距)
-                                    let yOffset = anchorY + CGFloat(distance) * (lineHeight + lineSpacing)
+                                    // 🔑 Y 轴偏移 = 锚点 + 距离 * 总行高 + 手动滚动偏移
+                                    let yOffset = anchorY + CGFloat(distance) * totalLineHeight + manualScrollOffset
 
                                     Group {
                                         if isPreludeEllipsis(line.text) {
@@ -169,77 +174,49 @@ public struct LyricsView: View {
                                     }
                                     .padding(.horizontal, 32)
                                     .offset(y: yOffset)
-                                    // 🔑 核心：Y 轴弹簧动画
-                                    .animation(.interpolatingSpring(
-                                        mass: 2,
-                                        stiffness: 100,
-                                        damping: 25,
-                                        initialVelocity: 0
-                                    ), value: currentIndex)
                                 }
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()  // 裁剪超出容器的内容
+                        .clipped()
+                        // 🔑 整体弹簧动画（不在每行上单独设置）
+                        .animation(.interpolatingSpring(
+                            mass: 1,
+                            stiffness: 100,
+                            damping: 16.5,
+                            initialVelocity: 0
+                        ), value: currentIndex)
                     }
-                    // 🔑 手动滚动监听（用于控制控件显示/隐藏）
-                    .scrollDetectionWithVelocity(
-                        onScrollStarted: {
+                    // 🔑 简单的滚轮监听（替代 scrollDetectionWithVelocity，性能更好）
+                    .onScrollWheel { deltaY in
+                        // 累加手动滚动偏移（不使用动画，直接设置）
+                        manualScrollOffset += deltaY
+
+                        if !isManualScrolling {
                             isManualScrolling = true
-                            lastVelocity = 0
-                            scrollLocked = false
-                            hasTriggeredSlowScroll = false
-                            autoScrollTimer?.invalidate()
-                        },
-                        onScrollEnded: {
-                            autoScrollTimer?.invalidate()
-                            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                        }
+
+                        // 重置自动恢复计时器
+                        autoScrollTimer?.invalidate()
+                        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                            // 🔑 2秒后恢复到当前播放位置
+                            withAnimation(.interpolatingSpring(
+                                mass: 1,
+                                stiffness: 100,
+                                damping: 16.5,
+                                initialVelocity: 0
+                            )) {
+                                manualScrollOffset = 0
                                 isManualScrolling = false
-                                lastVelocity = 0
-                                scrollLocked = false
-                                hasTriggeredSlowScroll = false
-
-                                if !isHovering {
-                                    withAnimation(.easeInOut(duration: 0.3)) {
-                                        showControls = false
-                                    }
-                                }
-                            }
-                        },
-                        onScrollWithVelocity: { deltaY, velocity in
-                            // 🔑 控件显示/隐藏逻辑
-                            let absVelocity = abs(velocity)
-                            let threshold: CGFloat = 800
-
-                            if deltaY < 0 {
-                                if showControls {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = false
-                                    }
-                                }
-                                scrollLocked = true
-                            } else if absVelocity >= threshold {
-                                if !scrollLocked {
-                                    scrollLocked = true
-                                }
-                                if showControls {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = false
-                                    }
-                                }
-                            } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
-                                hasTriggeredSlowScroll = true
-                                if !showControls {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = true
-                                    }
-                                }
                             }
 
-                            lastVelocity = absVelocity
-                        },
-                        isEnabled: currentPage == .lyrics
-                    )
+                            if !isHovering {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    showControls = false
+                                }
+                            }
+                        }
+                    }
                     // 🔑 底部控件 overlay（与 PlaylistView 相同实现 + 滑入滑出动画）
                     .overlay(
                         VStack {
@@ -598,6 +575,40 @@ struct LyricLineView: View {
             .trimmingCharacters(in: .whitespaces)
     }
 
+    // 🔑 构建逐字高亮的 AttributedString
+    private var highlightedText: AttributedString {
+        var result = AttributedString()
+
+        if line.hasSyllableSync && isCurrent && !isScrolling {
+            // 🔑 逐字高亮模式
+            for word in line.words {
+                let progress = word.progress(at: currentTime)
+                var attr = AttributedString(word.word)
+
+                // 🔑 根据进度设置颜色
+                if progress >= 1.0 {
+                    // 完全高亮
+                    attr.foregroundColor = .white
+                } else if progress > 0 {
+                    // 部分高亮 - 用亮色表示正在唱
+                    attr.foregroundColor = .white
+                } else {
+                    // 未高亮
+                    attr.foregroundColor = .white.opacity(0.35)
+                }
+
+                result.append(attr)
+            }
+        } else {
+            // 普通模式
+            var attr = AttributedString(cleanedText)
+            attr.foregroundColor = .white
+            result = attr
+        }
+
+        return result
+    }
+
     var body: some View {
         let scale: CGFloat = {
             if isScrolling { return 0.95 }
@@ -617,61 +628,12 @@ struct LyricLineView: View {
             return max(0.15, 0.5 - Double(absDistance) * 0.1)
         }()
 
-        // 🔑 计算整行的高亮进度（基于当前时间在行内的位置）
-        let lineProgress: CGFloat = {
-            guard line.hasSyllableSync && isCurrent && !isScrolling else { return 0 }
-            guard !line.words.isEmpty else { return 0 }
-
-            // 找到当前正在高亮的字
-            var totalChars = 0
-            var highlightedChars: CGFloat = 0
-
-            for word in line.words {
-                let charCount = word.word.count
-                let wordProgress = CGFloat(word.progress(at: currentTime))
-                highlightedChars += CGFloat(charCount) * wordProgress
-                totalChars += charCount
-            }
-
-            return totalChars > 0 ? highlightedChars / CGFloat(totalChars) : 0
-        }()
-
-        // 🔑 是否显示逐字高亮效果
-        let showSyllableHighlight = line.hasSyllableSync && isCurrent && !isScrolling
-
-        // 🔑 内容自适应布局（hug content）- 使用单个 Text 保持换行能力
+        // 🔑 内容自适应布局（hug content）
         HStack(spacing: 0) {
-            if showSyllableHighlight {
-                // 🔑 逐字高亮 - 用整行 Text + mask 实现，保持换行
-                Text(cleanedText)
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.35))  // 底层：暗色
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .overlay(
-                        // 顶层：亮色 + 从左到右 mask
-                        Text(cleanedText)
-                            .font(.system(size: 24, weight: .semibold))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .mask(
-                                GeometryReader { geo in
-                                    Rectangle()
-                                        .frame(width: geo.size.width * lineProgress)
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                                }
-                            )
-                        , alignment: .leading
-                    )
-            } else {
-                // 🔑 普通文本
-                Text(cleanedText)
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)  // 🔑 hug content
-            }
+            Text(highlightedText)
+                .font(.system(size: 24, weight: .semibold))
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
         }

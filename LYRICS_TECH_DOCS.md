@@ -18,43 +18,57 @@ nanoPod 是一个 macOS 平台的 Apple Music 迷你播放器，使用 SwiftUI �
 | frame(width:).clipped() | `.frame(width: w * progress).clipped()` | 改变 Text 布局，导致文字压缩/换行 |
 | @State 测量宽度 | `@State var measuredWidth: CGFloat` | 异步更新导致布局闪烁 |
 | ZStack + clipShape | `ZStack { Text; Text.clipShape(...) }` | 可能因 scaleEffect/offset 导致重叠 |
+| scrollDetectionWithVelocity | 用全局事件监听手动滚动 | 性能极差，阻尼大，卡顿严重 |
+| 每行单独 animation | `.animation(..., value: x)` 在每行上 | 性能差，应该在容器上设置一次 |
 
 ### 正确实现方案 (AMLL 风格)
 
 **🔴 核心原则（必须遵守）**:
 1. **滚动必须用 Y 轴 offset 实现，禁止使用 ScrollView**
-2. **逐字高亮必须用整行 Text + mask，禁止使用 HStack 拆分（会破坏换行）**
+2. **逐字高亮必须用 AttributedString，保持换行能力**
 3. **Spring 动画参数必须与 AMLL 一致**
+4. **手动滚动用 onScrollWheel（NSView scrollWheel），不用 scrollDetectionWithVelocity**
+5. **animation modifier 放在容器上，不要放在每行上**
 
 **SwiftUI 正确实现**:
 ```swift
-// ✅ 正确: 使用整行 Text + overlay mask (保持换行能力)
-Text(cleanedText)
+// ✅ 正确: 使用 AttributedString 逐字高亮
+private var highlightedText: AttributedString {
+    var result = AttributedString()
+    for word in line.words {
+        let progress = word.progress(at: currentTime)
+        var attr = AttributedString(word.word)
+        attr.foregroundColor = progress > 0 ? .white : .white.opacity(0.35)
+        result.append(attr)
+    }
+    return result
+}
+
+Text(highlightedText)
     .font(.system(size: 24, weight: .semibold))
-    .foregroundColor(.white.opacity(0.35))  // 底层：暗色
     .multilineTextAlignment(.leading)
     .fixedSize(horizontal: false, vertical: true)
-    .overlay(
-        Text(cleanedText)
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundColor(.white)  // 顶层：亮色
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .mask(
-                GeometryReader { geo in
-                    Rectangle()
-                        .frame(width: geo.size.width * lineProgress)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                }
-            )
-        , alignment: .leading
-    )
 
-// ❌ 错误: HStack 拆分每个字（会导致多行变单行）
-HStack(spacing: 0) {
-    ForEach(words) { word in
-        Text(word.word)  // 这样会破坏换行！
+// ✅ 正确: 手动滚动用 onScrollWheel
+.onScrollWheel { deltaY in
+    manualScrollOffset += deltaY
+    // 2秒后恢复
+    autoScrollTimer?.invalidate()
+    autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+        withAnimation(.interpolatingSpring(...)) {
+            manualScrollOffset = 0
+        }
     }
+}
+
+// ✅ 正确: animation 放在容器上
+ZStack { ... }
+    .animation(.interpolatingSpring(...), value: currentIndex)
+
+// ❌ 错误: animation 放在每行上（性能差）
+ForEach(lyrics) { line in
+    LyricLineView(...)
+        .animation(.interpolatingSpring(...), value: currentIndex)  // 不要这样！
 }
 ```
 
