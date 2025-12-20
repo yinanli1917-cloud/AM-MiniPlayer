@@ -119,8 +119,8 @@ GeometryReader { geo in
 
     // 布局参数
     let lineHeight: CGFloat = 40        // 每行基础高度
-    let lineSpacing: CGFloat = 20       // 行间距
-    let anchorPosition: CGFloat = 0.38  // 当前行锚点位置（0=顶, 0.5=中, 1=底）
+    let lineSpacing: CGFloat = 24       // 行间距
+    let anchorPosition: CGFloat = 0.22  // 当前行锚点位置（0=顶, 0.5=中, 1=底）
     let anchorY = (containerHeight - controlBarHeight) * anchorPosition
 
     ZStack(alignment: .topLeading) {
@@ -165,19 +165,19 @@ export const Spring = {
 
 **SwiftUI 对应实现:**
 ```swift
-// Y 轴滚动动画（当前采用，稍微增加阻尼使动画更稳定）
+// Y 轴滚动动画（AMLL 原版参数）
 .interpolatingSpring(
-    mass: 2,        // AMLL: 1 → 增大惯性更从容
+    mass: 1,        // AMLL: 1
     stiffness: 100, // 与 AMLL 一致
-    damping: 25,    // AMLL: 16.5 → 增大阻尼减少弹跳
+    damping: 16.5,  // AMLL: 16.5
     initialVelocity: 0
 )
 
 // 视觉状态动画 (scale/blur/opacity)
 .interpolatingSpring(
-    mass: 2,
+    mass: 1,
     stiffness: 100,
-    damping: 25,
+    damping: 20,
     initialVelocity: 0
 )
 ```
