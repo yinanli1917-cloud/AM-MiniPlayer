@@ -114,80 +114,73 @@ public struct LyricsView: View {
                             }
                         )
                 } else {
-                    // 🔑 Auto Layout: ScrollView + VStack
+                    // 🔑 AMLL 风格：手动 Y 轴布局（不用 ScrollView）
                     GeometryReader { geo in
                         let containerHeight = geo.size.height
                         let controlBarHeight: CGFloat = 120
                         let currentIndex = lyricsService.currentLineIndex ?? 0
 
-                        ScrollViewReader { proxy in
-                            ScrollView(.vertical, showsIndicators: false) {
-                                VStack(alignment: .leading, spacing: 20) {
-                                    // 🔑 顶部占位：让第一行歌词可以滚动到中心偏上
-                                    Color.clear.frame(height: (containerHeight - controlBarHeight) * 0.4)
+                        // 布局参数
+                        let lineHeight: CGFloat = 40        // 每行基础高度
+                        let lineSpacing: CGFloat = 20       // 行间距
+                        let anchorPosition: CGFloat = 0.38  // 当前行锚点位置（0=顶, 0.5=中, 1=底）
+                        let anchorY = (containerHeight - controlBarHeight) * anchorPosition
 
-                                    ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
-                                        if index == 0 || index >= lyricsService.firstRealLyricIndex {
-                                            Group {
-                                                if isPreludeEllipsis(line.text) {
-                                                    let nextLineStartTime: TimeInterval = {
-                                                        if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
-                                                            return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
-                                                        }
-                                                        for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
-                                                            let nextLine = lyricsService.lyrics[nextIndex]
-                                                            if !isPreludeEllipsis(nextLine.text) {
-                                                                return nextLine.startTime
-                                                            }
-                                                        }
-                                                        return line.endTime
-                                                    }()
+                        ZStack(alignment: .topLeading) {
+                            ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
+                                if index == 0 || index >= lyricsService.firstRealLyricIndex {
+                                    let distance = index - currentIndex
+                                    // 🔑 Y 轴偏移 = 锚点 + 距离 * (行高 + 间距)
+                                    let yOffset = anchorY + CGFloat(distance) * (lineHeight + lineSpacing)
 
-                                                    PreludeDotsView(
-                                                        startTime: line.startTime,
-                                                        endTime: nextLineStartTime,
-                                                        musicController: musicController
-                                                    )
-                                                    .frame(height: 30)
-                                                    .id(line.id)
-                                                } else {
-                                                    LyricLineView(
-                                                        line: line,
-                                                        index: index,
-                                                        currentIndex: currentIndex,
-                                                        isScrolling: isManualScrolling,
-                                                        currentTime: musicController.currentTime
-                                                    )
-                                                    .id(line.id)
-                                                    .onTapGesture {
-                                                        autoScrollTimer?.invalidate()
-                                                        isManualScrolling = false
-                                                        musicController.seek(to: line.startTime)
+                                    Group {
+                                        if isPreludeEllipsis(line.text) {
+                                            let nextLineStartTime: TimeInterval = {
+                                                if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
+                                                    return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
+                                                }
+                                                for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
+                                                    let nextLine = lyricsService.lyrics[nextIndex]
+                                                    if !isPreludeEllipsis(nextLine.text) {
+                                                        return nextLine.startTime
                                                     }
                                                 }
+                                                return line.endTime
+                                            }()
+
+                                            PreludeDotsView(
+                                                startTime: line.startTime,
+                                                endTime: nextLineStartTime,
+                                                musicController: musicController
+                                            )
+                                            .frame(height: 30)
+                                        } else {
+                                            LyricLineView(
+                                                line: line,
+                                                index: index,
+                                                currentIndex: currentIndex,
+                                                isScrolling: isManualScrolling,
+                                                currentTime: musicController.currentTime
+                                            )
+                                            .onTapGesture {
+                                                musicController.seek(to: line.startTime)
                                             }
                                         }
                                     }
-
-                                    // 🔑 底部占位：让最后一行歌词可以滚动到中心
-                                    Color.clear.frame(height: (containerHeight - controlBarHeight) * 0.6)
-                                }
-                                .padding(.horizontal, 32)
-                            }
-                            .onChange(of: currentIndex) { _, newIndex in
-                                if !isManualScrolling {
-                                    let targetID = lyricsService.lyrics[newIndex].id
-                                    withAnimation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 16.5)) {
-                                        proxy.scrollTo(targetID, anchor: .center)  // 🔑 用 .center
-                                    }
-                                }
-                            }
-                            .onAppear {
-                                if currentIndex < lyricsService.lyrics.count {
-                                    proxy.scrollTo(lyricsService.lyrics[currentIndex].id, anchor: .center)
+                                    .padding(.horizontal, 32)
+                                    .offset(y: yOffset)
+                                    // 🔑 核心：Y 轴弹簧动画
+                                    .animation(.interpolatingSpring(
+                                        mass: 2,
+                                        stiffness: 100,
+                                        damping: 25,
+                                        initialVelocity: 0
+                                    ), value: currentIndex)
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()  // 裁剪超出容器的内容
                     }
                     // 🔑 手动滚动监听（用于控制控件显示/隐藏）
                     .scrollDetectionWithVelocity(
@@ -624,15 +617,53 @@ struct LyricLineView: View {
             return max(0.15, 0.5 - Double(absDistance) * 0.1)
         }()
 
-        // 🔑 内容自适应布局（hug content）
+        // 🔑 计算整行的高亮进度（基于当前时间在行内的位置）
+        let lineProgress: CGFloat = {
+            guard line.hasSyllableSync && isCurrent && !isScrolling else { return 0 }
+            guard !line.words.isEmpty else { return 0 }
+
+            // 找到当前正在高亮的字
+            var totalChars = 0
+            var highlightedChars: CGFloat = 0
+
+            for word in line.words {
+                let charCount = word.word.count
+                let wordProgress = CGFloat(word.progress(at: currentTime))
+                highlightedChars += CGFloat(charCount) * wordProgress
+                totalChars += charCount
+            }
+
+            return totalChars > 0 ? highlightedChars / CGFloat(totalChars) : 0
+        }()
+
+        // 🔑 是否显示逐字高亮效果
+        let showSyllableHighlight = line.hasSyllableSync && isCurrent && !isScrolling
+
+        // 🔑 内容自适应布局（hug content）- 使用单个 Text 保持换行能力
         HStack(spacing: 0) {
-            if line.hasSyllableSync && isCurrent && !isScrolling {
-                // 🔑 逐字高亮
-                SyllableSyncTextView(
-                    words: line.words,
-                    currentTime: currentTime,
-                    fontSize: 24
-                )
+            if showSyllableHighlight {
+                // 🔑 逐字高亮 - 用整行 Text + mask 实现，保持换行
+                Text(cleanedText)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.35))  // 底层：暗色
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .overlay(
+                        // 顶层：亮色 + 从左到右 mask
+                        Text(cleanedText)
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .mask(
+                                GeometryReader { geo in
+                                    Rectangle()
+                                        .frame(width: geo.size.width * lineProgress)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                                }
+                            )
+                        , alignment: .leading
+                    )
             } else {
                 // 🔑 普通文本
                 Text(cleanedText)
@@ -657,9 +688,9 @@ struct LyricLineView: View {
         .blur(radius: blur)
         .opacity(opacity)
         .scaleEffect(scale, anchor: .leading)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 16.5), value: scale)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 16.5), value: blur)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 16.5), value: opacity)
+        .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: scale)
+        .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: blur)
+        .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: opacity)
         .contentShape(Rectangle())
         .onHover { hovering in
             if isScrolling { isHovering = hovering }
@@ -716,9 +747,9 @@ struct AMLLLyricsContainer: View {
                             .opacity(lineConfig.opacity)
                             .blur(radius: lineConfig.blur)
                             .animation(.interpolatingSpring(
-                                mass: 1,
+                                mass: 2,
                                 stiffness: 100,
-                                damping: 16.5,
+                                damping: 25,
                                 initialVelocity: 0
                             ), value: currentLineIndex)
                         } else {
@@ -736,9 +767,9 @@ struct AMLLLyricsContainer: View {
                                 anchorY: anchorY
                             ))
                             .animation(.interpolatingSpring(
-                                mass: 1,
+                                mass: 2,
                                 stiffness: 100,
-                                damping: 16.5,
+                                damping: 25,
                                 initialVelocity: 0
                             ), value: currentLineIndex)
                         }
@@ -1197,7 +1228,7 @@ struct PreludeDotsView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 32)
+        // 🔑 移除 padding，因为外层 VStack 已经有 padding 了
         .padding(.vertical, 8)
         .opacity(overallOpacity)
         .blur(radius: overallBlur)

@@ -21,35 +21,41 @@ nanoPod 是一个 macOS 平台的 Apple Music 迷你播放器，使用 SwiftUI �
 
 ### 正确实现方案 (AMLL 风格)
 
-**核心原理**: AMLL 使用 CSS `linear-gradient` mask 实现渐变高亮，mask 滑动不影响布局。
+**🔴 核心原则（必须遵守）**:
+1. **滚动必须用 Y 轴 offset 实现，禁止使用 ScrollView**
+2. **逐字高亮必须用整行 Text + mask，禁止使用 HStack 拆分（会破坏换行）**
+3. **Spring 动画参数必须与 AMLL 一致**
 
-**SwiftUI 对应实现**:
+**SwiftUI 正确实现**:
 ```swift
-// 方案 A: 使用 foregroundStyle + LinearGradient (当前采用)
-Text(word.word)
-    .font(.system(size: fontSize, weight: .semibold))
-    .foregroundStyle(
-        LinearGradient(
-            stops: [
-                .init(color: .white, location: max(0, progress - 0.001)),
-                .init(color: .white.opacity(0.35), location: progress)
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
+// ✅ 正确: 使用整行 Text + overlay mask (保持换行能力)
+Text(cleanedText)
+    .font(.system(size: 24, weight: .semibold))
+    .foregroundColor(.white.opacity(0.35))  // 底层：暗色
+    .multilineTextAlignment(.leading)
+    .fixedSize(horizontal: false, vertical: true)
+    .overlay(
+        Text(cleanedText)
+            .font(.system(size: 24, weight: .semibold))
+            .foregroundColor(.white)  // 顶层：亮色
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .mask(
+                GeometryReader { geo in
+                    Rectangle()
+                        .frame(width: geo.size.width * lineProgress)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                }
+            )
+        , alignment: .leading
     )
 
-// 方案 B: 使用 mask + Rectangle (备选)
-Text(word.word)
-    .foregroundColor(.white)
-    .mask(
-        Rectangle()
-            .scaleEffect(x: progress, anchor: .leading)
-    )
-    .background(
-        Text(word.word)
-            .foregroundColor(.white.opacity(0.35))
-    )
+// ❌ 错误: HStack 拆分每个字（会导致多行变单行）
+HStack(spacing: 0) {
+    ForEach(words) { word in
+        Text(word.word)  // 这样会破坏换行！
+    }
+}
 ```
 
 ### AMLL 原始实现参考 (已扒取)
@@ -78,20 +84,82 @@ dark = 0.25;                  // 未唱部分不透明度
 
 ---
 
-## 一、歌词滚动动画系统
+## 一、歌词滚动动画系统 (🔴 必须使用 Y 轴布局)
 
-### 1.1 滚动动画参数 (ScrollViewReader)
+### 1.0 核心架构：手动 Y 轴布局
 
+**⚠️ 绝对禁止使用 ScrollView + scrollTo，必须使用手动 Y 轴 offset 布局！**
+
+ScrollView 的问题：
+- 动画不流畅，有卡顿感
+- 难以精确控制弹簧动画参数
+- 与 AMLL 实现原理完全不同
+
+**正确实现：**
 ```swift
-// 歌词行切换时的滚动动画 - 慢而柔和
+// 🔑 AMLL 风格：手动 Y 轴布局（不用 ScrollView）
+GeometryReader { geo in
+    let containerHeight = geo.size.height
+    let controlBarHeight: CGFloat = 120
+    let currentIndex = lyricsService.currentLineIndex ?? 0
+
+    // 布局参数
+    let lineHeight: CGFloat = 40        // 每行基础高度
+    let lineSpacing: CGFloat = 20       // 行间距
+    let anchorPosition: CGFloat = 0.38  // 当前行锚点位置（0=顶, 0.5=中, 1=底）
+    let anchorY = (containerHeight - controlBarHeight) * anchorPosition
+
+    ZStack(alignment: .topLeading) {
+        ForEach(Array(lyrics.enumerated()), id: \.element.id) { index, line in
+            let distance = index - currentIndex
+            // 🔑 Y 轴偏移 = 锚点 + 距离 * (行高 + 间距)
+            let yOffset = anchorY + CGFloat(distance) * (lineHeight + lineSpacing)
+
+            LyricLineView(...)
+                .padding(.horizontal, 32)
+                .offset(y: yOffset)
+                // 🔑 核心：Y 轴弹簧动画
+                .animation(.interpolatingSpring(
+                    mass: 2,
+                    stiffness: 100,
+                    damping: 25,
+                    initialVelocity: 0
+                ), value: currentIndex)
+        }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .clipped()  // 裁剪超出容器的内容
+}
+```
+
+### 1.1 AMLL Spring 动画参数
+
+**AMLL 源码 (packages/core/src/utils/spring.ts):**
+```typescript
+// AMLL 定义的所有 Spring 配置
+export const Spring = {
+    // Y 轴位置动画 - 歌词滚动
+    PosY: { mass: 1, damping: 16.5, stiffness: 100 },
+    // Scale 动画 - 当前行放大
+    Scale: { mass: 1, damping: 16.5, stiffness: 100 },
+    // Blur 动画 - 模糊过渡
+    Blur: { mass: 1, damping: 20, stiffness: 100 },
+    // Opacity 动画 - 透明度过渡
+    Opacity: { mass: 1, damping: 20, stiffness: 100 },
+};
+```
+
+**SwiftUI 对应实现:**
+```swift
+// Y 轴滚动动画（当前采用，稍微增加阻尼使动画更稳定）
 .interpolatingSpring(
-    mass: 2.0,      // 较大惯性，动画更从容
-    stiffness: 25,  // 很软的弹簧，动画更慢
-    damping: 10,    // 低阻尼，保持柔和弹性
+    mass: 2,        // AMLL: 1 → 增大惯性更从容
+    stiffness: 100, // 与 AMLL 一致
+    damping: 25,    // AMLL: 16.5 → 增大阻尼减少弹跳
     initialVelocity: 0
 )
 
-// 歌词行自身状态变化动画 (scale/blur/opacity)
+// 视觉状态动画 (scale/blur/opacity)
 .interpolatingSpring(
     mass: 2,
     stiffness: 100,
@@ -100,14 +168,37 @@ dark = 0.25;                  // 未唱部分不透明度
 )
 ```
 
-### 1.2 歌词行视觉状态 (LyricLineView)
+### 1.2 歌词行视觉状态 (AMLL 源码参考)
 
-| 状态 | scale | blur | opacity | yOffset |
-|------|-------|------|---------|---------|
-| 当前行 (isCurrent) | 1.0 | 0 | 1.0 | -2 |
-| 过去行 (isPast) | 0.97 | 1.0 + distance*0.8 | 0.85 | 0 |
-| 未来行 | 0.97 | 1.0 + distance*0.8 | max(0.2, 1.0 - distance*0.15) | 0 |
-| 滚动中 (isScrolling) | 0.92 | 0 | 1.0 | 0 |
+**AMLL 源码 (packages/core/src/lyric-player/lyric-line.ts):**
+```typescript
+// 歌词行视觉状态计算
+private updateVisualState() {
+    const distance = this.lineIndex - this.currentLineIndex;
+    const absDistance = Math.abs(distance);
+    const isCurrent = distance === 0;
+    const isPast = distance < 0;
+
+    // Scale: 当前行 1.0，其他 0.95
+    this.scale = isCurrent ? 1.0 : 0.95;
+
+    // Blur: 当前行 0，其他根据距离增加
+    // AMLL 公式: min(32, 1 + absDistance * 1.5)
+    this.blur = isCurrent ? 0 : Math.min(32, 1 + absDistance * 1.5);
+
+    // Opacity: 当前行 1.0，其他根据距离减少
+    // AMLL 公式: max(0.15, 1 - absDistance * 0.15)
+    this.opacity = isCurrent ? 1.0 : Math.max(0.15, 1 - absDistance * 0.15);
+}
+```
+
+**SwiftUI 实现:**
+| 状态 | scale | blur | opacity |
+|------|-------|------|---------|
+| 当前行 (isCurrent) | 1.0 | 0 | 1.0 |
+| 过去行 (isPast) | 0.95 | 1.0 + distance*1.5 | max(0.15, 0.5 - distance*0.1) |
+| 未来行 | 0.95 | 1.0 + distance*1.5 | max(0.15, 0.5 - distance*0.1) |
+| 滚动中 (isScrolling) | 0.95 | 0 | 1.0 |
 
 ### 1.3 时间同步精度
 
@@ -119,15 +210,86 @@ let scrollAnimationLeadTime: TimeInterval = 0.05  // 50ms
 let triggerTime = lyrics[index].startTime - scrollAnimationLeadTime
 ```
 
-### 1.4 AMLL 参考参数
+### 1.4 AMLL 完整源码参考
 
+**Y 轴布局计算 (packages/core/src/lyric-player/index.ts):**
 ```typescript
-// AMLL lyric-line.ts
-const spring = { mass: 2, stiffness: 100, damping: 25 };
-scaleAspect: 0.95  // 我们用 0.97
+// AMLL 核心布局逻辑
+private updateLayout() {
+    const containerHeight = this.container.clientHeight;
+    const currentIndex = this.currentLineIndex;
 
-// 强调词条件
-emphasisCriteria: { duration >= 1000ms, charCount: 1-7 }
+    // 锚点位置：当前行应该在容器的 38% 高度处
+    const anchorPosition = 0.38;
+    const anchorY = containerHeight * anchorPosition;
+
+    // 行高和间距
+    const lineHeight = 60;  // 每行基础高度
+    const lineSpacing = 20; // 行间距
+
+    for (let i = 0; i < this.lines.length; i++) {
+        const distance = i - currentIndex;
+        // 🔑 核心公式：Y 偏移 = 锚点 + 距离 * (行高 + 间距)
+        const yOffset = anchorY + distance * (lineHeight + lineSpacing);
+
+        // 应用 Spring 动画
+        this.lines[i].setTargetY(yOffset, Spring.PosY);
+    }
+}
+```
+
+**逐字高亮 Mask 计算 (packages/core/src/lyric-player/lyric-line.ts):**
+```typescript
+// 逐字高亮实现
+private updateWordMask(currentTime: number) {
+    let totalWidth = 0;
+    let highlightWidth = 0;
+
+    for (const word of this.words) {
+        const wordWidth = word.element.offsetWidth;
+        const wordProgress = clamp(
+            0,
+            (currentTime - word.startTime) / (word.endTime - word.startTime),
+            1
+        );
+
+        highlightWidth += wordWidth * wordProgress;
+        totalWidth += wordWidth;
+    }
+
+    // 使用 CSS mask 实现从左到右的高亮
+    // mask 从 -100% 滑到 0%，不改变文字布局
+    const maskPosition = -100 + (highlightWidth / totalWidth) * 100;
+    this.element.style.maskPosition = `${maskPosition}% 0`;
+}
+
+// Mask 样式
+maskStyle = `linear-gradient(
+    to right,
+    rgba(255,255,255,1) 0%,      // 已高亮部分：全白
+    rgba(255,255,255,0.35) 100%  // 未高亮部分：半透明
+)`;
+```
+
+**强调词效果 (packages/core/src/lyric-player/lyric-line.ts):**
+```typescript
+// 判断是否为强调词
+private isEmphasisWord(word: LyricWord): boolean {
+    const duration = word.endTime - word.startTime;
+    const charCount = word.word.length;
+    // AMLL 条件: 持续时间 >= 1秒 且 字符数 1-7
+    return duration >= 1000 && charCount >= 1 && charCount <= 7;
+}
+
+// 强调词效果
+if (this.isEmphasisWord(word) && isHighlighting) {
+    // 放大效果: sin 曲线实现平滑放大缩小
+    const emphasisScale = 1.0 + Math.sin(progress * Math.PI) * 0.07;
+    word.element.style.transform = `scale(${emphasisScale})`;
+
+    // 上移效果: -0.05em ≈ -1.2pt (24pt 字体)
+    word.element.style.top = '-0.05em';
+}
 ```
 
 ### 1.5 手动滚动交互
