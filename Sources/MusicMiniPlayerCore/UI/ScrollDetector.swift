@@ -244,14 +244,24 @@ extension View {
     }
 }
 
-// MARK: - Simple Scroll Wheel Event View
+// MARK: - Simple Scroll Wheel Event View (使用全局事件监听)
 
 struct ScrollWheelEventView: NSViewRepresentable {
     let onScroll: (CGFloat) -> Void
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    class Coordinator {
+        var eventMonitor: Any?
+    }
+
     func makeNSView(context: Context) -> ScrollWheelNSView {
         let view = ScrollWheelNSView()
         view.onScroll = onScroll
+        view.coordinator = context.coordinator
+        view.setupEventMonitor()
         return view
     }
 
@@ -261,13 +271,41 @@ struct ScrollWheelEventView: NSViewRepresentable {
 
     class ScrollWheelNSView: NSView {
         var onScroll: ((CGFloat) -> Void)?
+        weak var coordinator: Coordinator?
 
-        override func scrollWheel(with event: NSEvent) {
-            let deltaY = event.scrollingDeltaY
-            if abs(deltaY) > 0.5 {
-                onScroll?(deltaY)
+        func setupEventMonitor() {
+            guard coordinator?.eventMonitor == nil else { return }
+
+            // 🔑 使用全局事件监听器捕获滚动事件
+            coordinator?.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                self?.handleScrollEvent(event)
+                return event  // 不消费事件
             }
-            super.scrollWheel(with: event)
+        }
+
+        func removeEventMonitor() {
+            if let monitor = coordinator?.eventMonitor {
+                NSEvent.removeMonitor(monitor)
+                coordinator?.eventMonitor = nil
+            }
+        }
+
+        private func handleScrollEvent(_ event: NSEvent) {
+            // 检查事件是否发生在当前窗口内
+            guard let window = self.window, event.window == window else { return }
+
+            let deltaY = event.scrollingDeltaY
+
+            // 忽略极小的滚动量
+            if abs(deltaY) > 0.5 {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onScroll?(deltaY)
+                }
+            }
+        }
+
+        deinit {
+            removeEventMonitor()
         }
     }
 }

@@ -117,27 +117,19 @@ public struct LyricsView: View {
                             }
                         )
                 } else {
-                    // 🔑 AMLL 风格：ZStack 固定行高布局 + Y 轴整体偏移
+                    // 🔑 AMLL 风格：VStack 自适应高度 + Y 轴整体偏移
                     GeometryReader { geo in
                         let containerHeight = geo.size.height
                         let controlBarHeight: CGFloat = 120
                         let currentIndex = lyricsService.currentLineIndex ?? 0
 
-                        // 🔑 固定布局参数（不依赖动态测量）
-                        let lineHeight: CGFloat = 60        // 每行固定高度
-                        let lineSpacing: CGFloat = 24       // 行间距
-                        let totalLineHeight = lineHeight + lineSpacing
-
                         // 🔑 锚点位置：当前行应该在容器的 18% 高度处（靠近顶部）
                         let anchorY = (containerHeight - controlBarHeight) * 0.18
 
-                        ZStack(alignment: .topLeading) {
+                        // 🔑 使用 VStack 自动处理高度 + 整体 offset 控制位置
+                        VStack(alignment: .leading, spacing: 24) {
                             ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                                 if index == 0 || index >= lyricsService.firstRealLyricIndex {
-                                    let distance = index - currentIndex
-                                    // 🔑 Y 轴偏移 = 锚点 + 距离 * 总行高 + 手动滚动偏移
-                                    let yOffset = anchorY + CGFloat(distance) * totalLineHeight + manualScrollOffset
-
                                     Group {
                                         if isPreludeEllipsis(line.text) {
                                             let nextLineStartTime: TimeInterval = {
@@ -165,35 +157,62 @@ public struct LyricsView: View {
                                                 index: index,
                                                 currentIndex: currentIndex,
                                                 isScrolling: isManualScrolling,
-                                                currentTime: musicController.currentTime
+                                                currentTime: musicController.currentTime,
+                                                onTap: {
+                                                    // 🔑 点击跳转：先清零偏移，避免动画割裂
+                                                    manualScrollOffset = 0
+                                                    isManualScrolling = false
+                                                    autoScrollTimer?.invalidate()
+                                                    musicController.seek(to: line.startTime)
+                                                }
                                             )
-                                            .onTapGesture {
-                                                musicController.seek(to: line.startTime)
-                                            }
                                         }
                                     }
                                     .padding(.horizontal, 32)
-                                    .offset(y: yOffset)
+                                    // 🔑 存储每行高度用于计算偏移
+                                    .background(
+                                        GeometryReader { lineGeo in
+                                            Color.clear.onAppear {
+                                                lineHeights[index] = lineGeo.size.height
+                                            }
+                                            .onChange(of: lineGeo.size.height) { _, newHeight in
+                                                lineHeights[index] = newHeight
+                                            }
+                                        }
+                                    )
                                 }
                             }
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        // 🔑 整体弹簧动画（不在每行上单独设置）
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        // 🔑 计算当前行之前所有行的累积高度
+                        .offset(y: anchorY - calculateAccumulatedHeight(upTo: currentIndex) + manualScrollOffset)
+                        // 🔑 整体弹簧动画
                         .animation(.interpolatingSpring(
                             mass: 1,
                             stiffness: 100,
                             damping: 16.5,
                             initialVelocity: 0
                         ), value: currentIndex)
+                        .animation(.interpolatingSpring(
+                            mass: 1,
+                            stiffness: 100,
+                            damping: 16.5,
+                            initialVelocity: 0
+                        ), value: manualScrollOffset)
                     }
-                    // 🔑 简单的滚轮监听（替代 scrollDetectionWithVelocity，性能更好）
+                    .clipped()
+                    // 🔑 滚轮事件监听（放在最外层，不被内部视图拦截）
+                    .contentShape(Rectangle())
                     .onScrollWheel { deltaY in
-                        // 累加手动滚动偏移（不使用动画，直接设置）
+                        // 累加手动滚动偏移
                         manualScrollOffset += deltaY
 
                         if !isManualScrolling {
                             isManualScrolling = true
+                            // 🔑 滚动开始时显示控件
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showControls = true
+                            }
                         }
 
                         // 重置自动恢复计时器
@@ -550,6 +569,32 @@ public struct LyricsView: View {
         let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・"]
         return ellipsisPatterns.contains(trimmed) || trimmed.isEmpty
     }
+
+    /// 🔑 计算从第一行到指定行的累积高度（用于 VStack offset）
+    private func calculateAccumulatedHeight(upTo targetIndex: Int) -> CGFloat {
+        let spacing: CGFloat = 24
+        var totalHeight: CGFloat = 0
+        let defaultHeight: CGFloat = 36  // 默认行高（用于尚未测量的行）
+
+        // 获取实际渲染的行索引列表
+        let renderedIndices = lyricsService.lyrics.enumerated()
+            .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
+            .map { $0.offset }
+
+        // 计算目标行在渲染列表中的位置
+        guard let targetPosition = renderedIndices.firstIndex(of: targetIndex) else {
+            return 0
+        }
+
+        // 累加目标行之前所有行的高度 + 间距
+        for i in 0..<targetPosition {
+            let lineIndex = renderedIndices[i]
+            let height = lineHeights[lineIndex] ?? defaultHeight
+            totalHeight += height + spacing
+        }
+
+        return totalHeight
+    }
 }
 
 // MARK: - Lyric Line View
@@ -560,6 +605,7 @@ struct LyricLineView: View {
     let currentIndex: Int
     let isScrolling: Bool
     var currentTime: TimeInterval = 0
+    var onTap: (() -> Void)? = nil  // 🔑 点击回调
 
     @State private var isHovering: Bool = false
 
@@ -653,7 +699,13 @@ struct LyricLineView: View {
         .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: scale)
         .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: blur)
         .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: opacity)
-        .contentShape(Rectangle())
+        // 🔑 使用 overlay + 透明按钮来处理点击，不阻挡滚动
+        .overlay(
+            Button(action: { onTap?() }) {
+                Color.clear
+            }
+            .buttonStyle(.plain)
+        )
         .onHover { hovering in
             if isScrolling { isHovering = hovering }
         }
