@@ -125,11 +125,17 @@ public struct LyricsView: View {
                         let controlBarHeight: CGFloat = 120
                         let currentIndex = lyricsService.currentLineIndex ?? 0
 
-                        // 🔑 锚点位置：当前行在容器的 22% 高度处
-                        let anchorY = (containerHeight - controlBarHeight) * 0.22
+                        // 🔑 锚点位置：当前行在容器的 24% 高度处
+                        let anchorY = (containerHeight - controlBarHeight) * 0.24
+
+                        // 🔑 计算页面超出回弹边界
+                        let visibleHeight = containerHeight - controlBarHeight
+                        let totalContentHeight = calculateTotalContentHeight()
+                        let headOverscroll = visibleHeight * 0.10  // 上 10%
+                        let tailOverscroll = visibleHeight * 0.20  // 下 20%
 
                         // 🔑 使用 VStack 自动处理高度 + 整体 offset 控制位置
-                        VStack(alignment: .leading, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 4) {  // 🔑 减小行间距
                             ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                                 if index == 0 || index >= lyricsService.firstRealLyricIndex {
                                     Group {
@@ -153,6 +159,8 @@ public struct LyricsView: View {
                                                 musicController: musicController
                                             )
                                             .frame(height: 30)
+                                            .padding(.horizontal, 32)
+                                            .padding(.vertical, 8)  // 🔑 前奏点的 padding
                                         } else {
                                             LyricLineView(
                                                 line: line,
@@ -161,20 +169,35 @@ public struct LyricsView: View {
                                                 isScrolling: isManualScrolling,
                                                 currentTime: musicController.currentTime,
                                                 onTap: {
-                                                    // 🔑 点击跳转：先清零偏移，避免动画割裂
+                                                    // 🐛 调试：输出歌词时间信息
+                                                    fputs("🐛 [DEBUG] Line \(index): text=\"\(line.text.prefix(20))...\" start=\(String(format: "%.2f", line.startTime))s end=\(String(format: "%.2f", line.endTime))s hasSyllable=\(line.hasSyllableSync) words=\(line.words.count)\n", stderr)
+                                                    if line.hasSyllableSync {
+                                                        for (i, word) in line.words.prefix(5).enumerated() {
+                                                            fputs("   word[\(i)]: \"\(word.word)\" \(String(format: "%.2f", word.startTime))-\(String(format: "%.2f", word.endTime))s\n", stderr)
+                                                        }
+                                                    }
+                                                    fputs("🎵 [LyricsView] Tapped line \(index): \"\(line.text)\" -> seek to \(line.startTime)s\n", stderr)
+                                                    // 🔑 点击跳转：取消当前计时器，立即跳转
+                                                    autoScrollTimer?.invalidate()
+                                                    autoScrollTimer = nil
+
+                                                    // 🔑 先执行 seek，让音乐跳转
+                                                    musicController.seek(to: line.startTime)
+                                                    fputs("🎵 [LyricsView] Seek called, resetting offset\n", stderr)
+
+                                                    // 🔑 然后清零偏移，恢复自动跟随
                                                     withAnimation(.interpolatingSpring(
                                                         mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
                                                     )) {
                                                         manualScrollOffset = 0
                                                         isManualScrolling = false
                                                     }
-                                                    autoScrollTimer?.invalidate()
-                                                    musicController.seek(to: line.startTime)
                                                 }
                                             )
+                                            .padding(.horizontal, 32)
+                                            // 🔑 VStack spacing=4 已经提供了行间距，这里不再加 vertical padding
                                         }
                                     }
-                                    .padding(.horizontal, 32)
                                     // 🔑 存储每行高度用于计算偏移
                                     .background(
                                         GeometryReader { lineGeo in
@@ -190,10 +213,10 @@ public struct LyricsView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        // 🔑 计算当前行之前所有行的累积高度
+                        // 🔑 计算当前行之前所有行的累积高度 + 手动滚动偏移
                         .offset(y: anchorY - calculateAccumulatedHeight(upTo: currentIndex) + manualScrollOffset)
-                        // 🔑 整体弹簧动画（只对 currentIndex 变化）
-                        .animation(.interpolatingSpring(
+                        // 🔑 只对 currentIndex 变化应用动画，manualScrollOffset 由 withAnimation 控制
+                        .animation(isManualScrolling ? nil : .interpolatingSpring(
                             mass: 1,
                             stiffness: 100,
                             damping: 16.5,
@@ -201,11 +224,99 @@ public struct LyricsView: View {
                         ), value: currentIndex)
                     }
                     .clipped()
-                    // 🔑 滚轮事件监听
+                    // 🔑 滚轮事件监听（与 PlaylistView 一致）
                     .contentShape(Rectangle())
-                    .onScrollWheel { deltaY in
-                        handleScrollWheel(deltaY: deltaY)
-                    }
+                    .scrollDetectionWithVelocity(
+                        onScrollStarted: {
+                            isManualScrolling = true
+                            lastVelocity = 0
+                            scrollLocked = false
+                            hasTriggeredSlowScroll = false
+                            autoScrollTimer?.invalidate()
+                        },
+                        onScrollEnded: {
+                            autoScrollTimer?.invalidate()
+                            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                                // 🔑 2秒后恢复到当前播放位置
+                                withAnimation(.interpolatingSpring(
+                                    mass: 1,
+                                    stiffness: 100,
+                                    damping: 16.5,
+                                    initialVelocity: 0
+                                )) {
+                                    manualScrollOffset = 0
+                                    isManualScrolling = false
+                                }
+                                scrollLocked = false
+                                hasTriggeredSlowScroll = false
+
+                                // 🔑 恢复后如果鼠标在窗口内则显示控件
+                                if isHovering {
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        showControls = true
+                                    }
+                                }
+                            }
+                        },
+                        onScrollWithVelocity: { deltaY, velocity in
+                            // 🔑 计算滚动边界：基于内容高度和当前行位置
+                            let totalContentHeight = calculateTotalContentHeight()
+                            let localCurrentIndex = lyricsService.currentLineIndex ?? 0
+                            let currentLineOffset = calculateAccumulatedHeight(upTo: localCurrentIndex)
+
+                            // 🔑 简化边界计算：允许向上滚动到第一行，向下滚动到最后一行
+                            // 上边界 = 当前行之前的所有内容高度（可以滚动回到开头）
+                            let maxScrollUp = currentLineOffset
+                            // 下边界 = 当前行之后的所有内容高度（可以滚动到结尾）
+                            let maxScrollDown = max(0, totalContentHeight - currentLineOffset - 200)
+
+                            var newOffset = manualScrollOffset + deltaY
+                            // 🔑 超出边界时应用阻尼（橡皮筋效果）
+                            if newOffset > maxScrollUp {
+                                let overscroll = newOffset - maxScrollUp
+                                newOffset = maxScrollUp + overscroll * 0.3
+                            } else if newOffset < -maxScrollDown {
+                                let overscroll = -maxScrollDown - newOffset
+                                newOffset = -maxScrollDown - overscroll * 0.3
+                            }
+                            manualScrollOffset = newOffset
+
+                            let absVelocity = abs(velocity)
+                            let threshold: CGFloat = 800
+
+                            // 🔑 与 PlaylistView 完全一致的逻辑
+                            if deltaY < 0 {
+                                // 往上滚：隐藏控件
+                                if showControls {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = false
+                                    }
+                                }
+                                scrollLocked = true
+                            } else if absVelocity >= threshold {
+                                // 快速滚动：隐藏控件
+                                if !scrollLocked {
+                                    scrollLocked = true
+                                }
+                                if showControls {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = false
+                                    }
+                                }
+                            } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
+                                // 慢速往下滚：显示控件
+                                hasTriggeredSlowScroll = true
+                                if !showControls {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = true
+                                    }
+                                }
+                            }
+
+                            lastVelocity = absVelocity
+                        },
+                        isEnabled: currentPage == .lyrics
+                    )
                     // 🔑 底部控件 overlay（与 PlaylistView 相同实现 + 滑入滑出动画）
                     .overlay(
                         VStack {
@@ -542,7 +653,7 @@ public struct LyricsView: View {
 
     /// 🔑 计算从第一行到指定行的累积高度（用于 VStack offset）
     private func calculateAccumulatedHeight(upTo targetIndex: Int) -> CGFloat {
-        let spacing: CGFloat = 24
+        let spacing: CGFloat = 4  // 🔑 与 VStack spacing 保持一致
         var totalHeight: CGFloat = 0
         let defaultHeight: CGFloat = 36  // 默认行高（用于尚未测量的行）
 
@@ -568,7 +679,7 @@ public struct LyricsView: View {
 
     /// 🔑 计算内容总高度
     private func calculateTotalContentHeight() -> CGFloat {
-        let spacing: CGFloat = 24
+        let spacing: CGFloat = 4  // 🔑 与 VStack spacing 保持一致
         var totalHeight: CGFloat = 0
         let defaultHeight: CGFloat = 36
 
@@ -585,71 +696,6 @@ public struct LyricsView: View {
         }
 
         return totalHeight
-    }
-
-    /// 🔑 处理滚轮事件（流畅滚动 + 超出回弹 + 控件隐藏逻辑）
-    private func handleScrollWheel(deltaY: CGFloat) {
-        // 🔑 直接累加偏移（不使用动画，保证流畅）
-        manualScrollOffset += deltaY
-
-        // 计算速度（用于控件显示逻辑）
-        let currentTime = CACurrentMediaTime()
-        let timeDelta = currentTime - lastScrollTime
-        var velocity: CGFloat = 0
-        if timeDelta > 0 && timeDelta < 0.5 {
-            velocity = abs(deltaY / CGFloat(timeDelta))
-        }
-        lastScrollTime = currentTime
-        lastVelocity = velocity
-
-        if !isManualScrolling {
-            isManualScrolling = true
-            scrollLocked = false
-            hasTriggeredSlowScroll = false
-        }
-
-        // 🔑 控件显示/隐藏逻辑（与 PlaylistView 相同）
-        let velocityThreshold: CGFloat = 800
-
-        if velocity >= velocityThreshold {
-            // 快速滚动：隐藏控件，锁定本轮
-            if !scrollLocked {
-                scrollLocked = true
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showControls = false
-                }
-            }
-        } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll && isHovering {
-            // 慢速下滑且鼠标在窗口内：显示控件
-            hasTriggeredSlowScroll = true
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showControls = true
-            }
-        }
-
-        // 重置自动恢复计时器
-        autoScrollTimer?.invalidate()
-        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-            // 🔑 2秒后恢复到当前播放位置
-            withAnimation(.interpolatingSpring(
-                mass: 1,
-                stiffness: 100,
-                damping: 16.5,
-                initialVelocity: 0
-            )) {
-                manualScrollOffset = 0
-                isManualScrolling = false
-            }
-            scrollLocked = false
-            hasTriggeredSlowScroll = false
-
-            // 鼠标不在窗口内则隐藏控件
-            if !isHovering {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    showControls = false
-                }
-            }
-        }
     }
 }
 
@@ -677,34 +723,49 @@ struct LyricLineView: View {
             .trimmingCharacters(in: .whitespaces)
     }
 
-    // 🔑 构建逐字高亮的 AttributedString
-    private var highlightedText: AttributedString {
+    // 🔑 AMLL 风格 float 动画：当前行上浮 0.05em（约 1.2pt @ 24pt 字体）
+    private let floatAmount: CGFloat = 24 * 0.05  // 0.05em
+
+    // 🔑 计算当前正在唱的字的索引（用于逐字上浮）
+    private var currentWordIndex: Int? {
+        guard line.hasSyllableSync else { return nil }
+        for (index, word) in line.words.enumerated() {
+            let progress = word.progress(at: currentTime)
+            if progress > 0 && progress < 1 {
+                return index
+            }
+        }
+        return nil
+    }
+
+    // 🔑 AMLL 风格逐字高亮：遮罩拂过效果 + 逐字上浮
+    private func buildHighlightedText() -> AttributedString {
         var result = AttributedString()
 
         if line.hasSyllableSync && isCurrent && !isScrolling {
-            // 🔑 逐字高亮模式
-            for word in line.words {
+            for (index, word) in line.words.enumerated() {
                 let progress = word.progress(at: currentTime)
                 var attr = AttributedString(word.word)
 
-                // 🔑 根据进度设置颜色
+                // 🔑 AMLL 风格遮罩拂过：
+                let wordOpacity: CGFloat
                 if progress >= 1.0 {
-                    // 完全高亮
-                    attr.foregroundColor = .white
+                    wordOpacity = 1.0
                 } else if progress > 0 {
-                    // 部分高亮 - 用亮色表示正在唱
-                    attr.foregroundColor = .white
+                    // 🔑 smoothstep 过渡
+                    let t = progress
+                    let smoothed = t * t * (3.0 - 2.0 * t)
+                    wordOpacity = 0.35 + 0.65 * CGFloat(smoothed)
                 } else {
-                    // 未高亮
-                    attr.foregroundColor = .white.opacity(0.35)
+                    wordOpacity = 0.35
                 }
 
+                attr.foregroundColor = .white.opacity(wordOpacity)
                 result.append(attr)
             }
         } else {
-            // 普通模式
             var attr = AttributedString(cleanedText)
-            attr.foregroundColor = .white
+            attr.foregroundColor = isCurrent && !isScrolling ? .white : .white.opacity(0.35)
             result = attr
         }
 
@@ -730,9 +791,12 @@ struct LyricLineView: View {
             return max(0.15, 0.5 - Double(absDistance) * 0.1)
         }()
 
-        // 🔑 内容自适应布局（hug content）
+        // 🔑 AMLL 风格 float：当前行上浮，其他行不浮动
+        let floatOffset: CGFloat = (isCurrent && !isScrolling) ? -floatAmount : 0
+
+        // 🔑 使用 AttributedString 保持换行能力
         HStack(spacing: 0) {
-            Text(highlightedText)
+            Text(buildHighlightedText())
                 .font(.system(size: 24, weight: .semibold))
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -740,28 +804,30 @@ struct LyricLineView: View {
             Spacer(minLength: 0)
         }
         // 🔑 不设固定高度，让内容自然决定高度
+        .padding(.vertical, 8)  // 🔑 每句歌词的内部 padding（hover 背景用）
+        .padding(.horizontal, 8)
         .background(
             Group {
                 if isScrolling && isHovering && line.text != "⋯" {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.white.opacity(0.08))
-                        .padding(.horizontal, -8)
                 }
             }
         )
+        .padding(.horizontal, -8)  // 🔑 抵消内部 padding，保持文字对齐
         .blur(radius: blur)
         .opacity(opacity)
         .scaleEffect(scale, anchor: .leading)
-        .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: scale)
-        .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: blur)
-        .animation(.interpolatingSpring(mass: 2, stiffness: 100, damping: 25), value: opacity)
-        // 🔑 使用 overlay + 透明按钮来处理点击，不阻挡滚动
-        .overlay(
-            Button(action: { onTap?() }) {
-                Color.clear
-            }
-            .buttonStyle(.plain)
-        )
+        .offset(y: floatOffset)  // 🔑 AMLL float 动画
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: opacity)
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 16.5), value: floatOffset)  // 🔑 AMLL Spring 参数
+        // 🔑 点击整个区域触发跳转
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap?()
+        }
         .onHover { hovering in
             if isScrolling { isHovering = hovering }
         }
@@ -1091,8 +1157,19 @@ struct SyllableWordView: View {
     private let brightOpacity: CGFloat = 1.0       // 已唱部分不透明度
     private let darkOpacity: CGFloat = 0.35        // 未唱部分不透明度
 
+    // 🔑 AMLL 风格：进度根据时间轴精确计算（线性插值）
     private var progress: CGFloat {
-        CGFloat(word.progress(at: currentTime))
+        let wordDuration = word.endTime - word.startTime
+        guard wordDuration > 0 else { return currentTime >= word.startTime ? 1.0 : 0.0 }
+
+        if currentTime < word.startTime {
+            return 0.0
+        } else if currentTime >= word.endTime {
+            return 1.0
+        } else {
+            // 🔑 线性进度：直接按时间比例
+            return CGFloat((currentTime - word.startTime) / wordDuration)
+        }
     }
 
     // 是否正在高亮（0 < progress < 1）
@@ -1135,38 +1212,44 @@ struct SyllableWordView: View {
     // 当前缩放比例（sin 曲线平滑）
     private var currentScale: CGFloat {
         guard isEmphasis && isHighlighting else { return 1.0 }
+        // 🔑 使用 sin 曲线让缩放更自然
         return 1.0 + sin(progress * .pi) * (emphasisScale - 1.0)
     }
 
-    // 🔑 当前 Y 轴偏移（高亮时上移）
+    // 🔑 当前 Y 轴偏移（高亮时上移，完成后保持）
     private var currentLift: CGFloat {
-        guard isHighlighting || isCompleted else { return 0 }
         if isHighlighting {
             // 正在高亮：逐渐上抬
             return -liftAmount * progress
+        } else if isCompleted {
+            // 已完成：保持上抬位置
+            return -liftAmount
         } else {
-            // 已完成：保持上抬位置然后恢复
-            return 0  // 已完成后恢复
+            return 0
+        }
+    }
+
+    // 🔑 计算文字颜色：根据进度决定亮度
+    private var textColor: Color {
+        if isCompleted {
+            return .white.opacity(brightOpacity)
+        } else if isHighlighting {
+            // 🔑 正在高亮的字：整体变亮（简化实现，不截断）
+            return .white.opacity(darkOpacity + (brightOpacity - darkOpacity) * progress)
+        } else {
+            return .white.opacity(darkOpacity)
         }
     }
 
     var body: some View {
-        // 使用 overlay + ProgressClipShape 实现从左到右的高亮效果
+        // 🔑 简单实现：根据进度改变整个字的亮度，不使用 mask 避免截断
         Text(word.word)
             .font(.system(size: fontSize, weight: .semibold))
-            .foregroundColor(.white.opacity(darkOpacity))  // 底层：暗色
-            .overlay(
-                // 顶层：亮色 + clipShape 裁剪
-                Text(word.word)
-                    .font(.system(size: fontSize, weight: .semibold))
-                    .foregroundColor(.white.opacity(brightOpacity))
-                    .clipShape(ProgressClipShape(progress: progress))
-                , alignment: .leading
-            )
+            .foregroundColor(textColor)
             // 🔑 AMLL 风格：强调词缩放 + 上抬动画
             .scaleEffect(currentScale, anchor: .bottom)
             .offset(y: currentLift)
-            .animation(.easeOut(duration: 0.15), value: isHighlighting)
+            // 🔑 不使用显式动画，让进度直接跟随 currentTime 变化
     }
 }
 

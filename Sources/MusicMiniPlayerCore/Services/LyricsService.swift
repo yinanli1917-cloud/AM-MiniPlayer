@@ -1455,6 +1455,10 @@ public class LyricsService: ObservableObject {
         var lines: [LyricLine] = []
         let yrcLines = yrcText.components(separatedBy: .newlines)
 
+        // 🐛 调试：输出原始 YRC 前几行
+        debugLog("🐛 [YRC] Raw text preview (first 500 chars):")
+        debugLog(String(yrcText.prefix(500)))
+
         // 🔑 YRC 行格式正则：[行开始时间,行持续时间]内容
         let linePattern = "^\\[(\\d+),(\\d+)\\](.*)$"
         guard let lineRegex = try? NSRegularExpression(pattern: linePattern) else {
@@ -1537,6 +1541,17 @@ public class LyricsService: ObservableObject {
         let syllableCount = lines.filter { $0.hasSyllableSync }.count
         logger.info("✅ Parsed \(lines.count) lines from YRC (\(syllableCount) with syllable sync)")
         debugLog("✅ YRC parsed: \(lines.count) lines, \(syllableCount) syllable-synced")
+
+        // 🐛 调试：输出前几行的时间信息
+        for (i, line) in lines.prefix(5).enumerated() {
+            debugLog("🐛 [YRC] Line \(i): \(String(format: "%.2f", line.startTime))s-\(String(format: "%.2f", line.endTime))s \"\(line.text.prefix(20))...\" words=\(line.words.count)")
+            if !line.words.isEmpty {
+                let firstWord = line.words[0]
+                let lastWord = line.words.last!
+                debugLog("   first word: \"\(firstWord.word)\" \(String(format: "%.2f", firstWord.startTime))s, last word: \"\(lastWord.word)\" \(String(format: "%.2f", lastWord.endTime))s")
+            }
+        }
+
         return lines.isEmpty ? nil : lines
     }
 

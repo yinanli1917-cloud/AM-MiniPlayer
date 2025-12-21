@@ -20,6 +20,35 @@ nanoPod 是一个 macOS 平台的 Apple Music 迷你播放器，使用 SwiftUI �
 | ZStack + clipShape | `ZStack { Text; Text.clipShape(...) }` | 可能因 scaleEffect/offset 导致重叠 |
 | scrollDetectionWithVelocity | 用全局事件监听手动滚动 | 性能极差，阻尼大，卡顿严重 |
 | 每行单独 animation | `.animation(..., value: x)` 在每行上 | 性能差，应该在容器上设置一次 |
+| overlay + clipShape(ProgressClipShape) | `.overlay(Text.clipShape(ProgressClipShape(progress)))` | **文字被硬裁剪截断**，不柔和 |
+| padding 放在 Group 外 | `Group { ... }.padding(.vertical, 6)` | **padding 对 Group 无效**，需放在具体 View 上 |
+| ZStack + mask + LinearGradient | `.mask(GeometryReader { LinearGradient... })` | **文字依然被截断**，mask 不可靠 |
+| HStack + ForEach(SyllableWordView) | `HStack { ForEach(words) { SyllableWordView } }` | **HStack 不能换行**，多行歌词变单行截断！ |
+| 整字亮度渐变 | `foregroundColor(opacity变化)` | **配合 HStack 仍然导致单行截断** |
+| AttributedString 逐字高亮 | `Text(AttributedString)` 每字不同颜色 | **功能正常，但需求是逐行高亮，不是逐字** |
+
+### deltaY 方向说明（重要！）
+
+**macOS scrollingDeltaY 方向** (与 PlaylistView 一致):
+- `deltaY < 0`: 手指往上滑 → 内容往上滚 → **隐藏控件**
+- `deltaY > 0`: 手指往下滑 → 内容往下滚 → **显示控件**
+
+### 正确的歌词高亮方案
+
+**必须使用逐行高亮（不是逐字高亮）！**
+
+```swift
+// ✅ 正确: 整行高亮，当前行全白，其他行暗
+Text(cleanedText)
+    .font(.system(size: 24, weight: .semibold))
+    .foregroundColor(isCurrent ? .white : .white.opacity(0.35))  // 简单的行级高亮
+    .multilineTextAlignment(.leading)
+    .fixedSize(horizontal: false, vertical: true)  // 允许换行
+
+// ❌ 错误: 逐字高亮 - 用户明确拒绝
+Text(AttributedString) // 每个字不同颜色
+HStack { ForEach(words) { ... } }  // HStack 不能换行
+```
 
 ### 正确实现方案 (AMLL 风格)
 

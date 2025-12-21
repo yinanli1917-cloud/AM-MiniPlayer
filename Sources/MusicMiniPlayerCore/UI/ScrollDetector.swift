@@ -276,6 +276,7 @@ struct ScrollWheelEventView: NSViewRepresentable {
         func setupEventMonitor() {
             guard coordinator?.eventMonitor == nil else { return }
 
+            fputs("📜 [ScrollWheelNSView] Setting up global event monitor for lyrics\n", stderr)
             // 🔑 使用全局事件监听器捕获滚动事件
             coordinator?.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 self?.handleScrollEvent(event)
@@ -291,16 +292,15 @@ struct ScrollWheelEventView: NSViewRepresentable {
         }
 
         private func handleScrollEvent(_ event: NSEvent) {
-            // 检查事件是否发生在当前窗口内
-            guard let window = self.window, event.window == window else { return }
+            // 🔑 只检查事件窗口是否存在，不严格匹配（因为 self.window 可能还没设置）
+            guard event.window != nil else { return }
 
             let deltaY = event.scrollingDeltaY
 
             // 忽略极小的滚动量
             if abs(deltaY) > 0.5 {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onScroll?(deltaY)
-                }
+                fputs("📜 [ScrollWheelNSView] handleScrollEvent deltaY: \(deltaY)\n", stderr)
+                onScroll?(deltaY)
             }
         }
 
