@@ -76,17 +76,17 @@ public struct LiquidBackgroundView: View {
             .ignoresSafeArea()
             .blendMode(.overlay)
 
-            // 第五层：深度渐变
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    Color.white.opacity(0.04),
-                    Color.clear,
-                    Color.black.opacity(0.08)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            // 第五层：深度渐变（已禁用 - 会导致底部出现额外黑色层）
+            // LinearGradient(
+            //     gradient: Gradient(colors: [
+            //         Color.white.opacity(0.04),
+            //         Color.clear,
+            //         Color.black.opacity(0.08)
+            //     ]),
+            //     startPoint: .top,
+            //     endPoint: .bottom
+            // )
+            // .ignoresSafeArea()
         }
         .allowsHitTesting(false)  // 🔑 整个背景不拦截点击，让点击穿透到前景内容
         .onAppear {

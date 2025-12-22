@@ -159,10 +159,14 @@ struct SharedBottomControls: View {
             // 🔑 快速但不弹性的动画
             withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
                 if currentPage == .album {
+                    // 🔑 用户手动打开歌词页面
+                    musicController.userManuallyOpenedLyrics = true
                     currentPage = .lyrics
                 } else if currentPage == .lyrics {
                     currentPage = .album
                 } else if currentPage == .playlist {
+                    // 🔑 用户手动打开歌词页面
+                    musicController.userManuallyOpenedLyrics = true
                     currentPage = .lyrics
                 }
             }

@@ -47,6 +47,10 @@ public class MusicController: ObservableObject {
     // 🔑 共享页面状态 - 浮窗和菜单栏弹窗同步
     @Published public var currentPage: PlayerPage = .album
 
+    // 🔑 追踪用户是否手动打开了歌词页面
+    // 用于判断 No Lyrics 时是否自动跳回专辑页面
+    @Published public var userManuallyOpenedLyrics: Bool = false
+
     // Private properties
     private var musicApp: SBApplication?
     private var pollingTimer: Timer?
@@ -599,6 +603,10 @@ public class MusicController: ObservableObject {
 
                     self.currentPersistentID = persistentID
                     self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
+
+                    // 🔑 歌曲切换时重置"用户手动打开歌词"标记
+                    fputs("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(self.userManuallyOpenedLyrics))\n", stderr)
+                    self.userManuallyOpenedLyrics = false
                 }
             } else {
                 // No track playing
@@ -1227,9 +1235,12 @@ public class MusicController: ObservableObject {
                 let album = track.value(forKey: "album") as? String ?? ""
                 let duration = track.value(forKey: "duration") as? Double ?? 0
 
-                if !name.isEmpty {
+                // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
+                if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
                     result.append((name, artist, album, trackID, duration))
                     if result.count >= limit { break }
+                } else if !name.isEmpty {
+                    fputs("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n", stderr)
                 }
             } else if trackID == currentID {
                 foundCurrent = true
@@ -1281,8 +1292,13 @@ public class MusicController: ObservableObject {
             let album = track.value(forKey: "album") as? String ?? ""
             let duration = track.value(forKey: "duration") as? Double ?? 0
 
-            if !name.isEmpty {
+            // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
+            // 某些较新添加的歌曲可能元数据未完全加载
+            if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
                 recentList.append((name, artist, album, trackID, duration))
+            } else if !name.isEmpty {
+                // 🐛 调试：记录异常的歌曲名称
+                fputs("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n", stderr)
             }
         }
 

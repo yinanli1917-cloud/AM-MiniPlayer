@@ -441,7 +441,13 @@ public struct MiniPlayerView: View {
                     .onTapGesture {
                         // 🔑 快速但不弹性的动画
                         withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
-                            musicController.currentPage = musicController.currentPage == .album ? .lyrics : .album
+                            if musicController.currentPage == .album {
+                                // 🔑 用户手动打开歌词页面
+                                musicController.userManuallyOpenedLyrics = true
+                                musicController.currentPage = .lyrics
+                            } else {
+                                musicController.currentPage = .album
+                            }
                         }
                     }
                     .position(

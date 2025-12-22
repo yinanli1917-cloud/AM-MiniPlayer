@@ -8,6 +8,27 @@ nanoPod 是一个 macOS 平台的 Apple Music 迷你播放器，使用 SwiftUI �
 
 ---
 
+## 🔴 核心要求 (绝对禁止违反)
+
+### 逐字高亮效果必须遵守的规则
+
+1. **不允许字挤在一起** - 字符间距必须正常，不能因为任何布局方案导致文字压缩
+2. **不允许逐个词直接亮起来或者显示** - 不能用 opacity 让整个字瞬间变亮，必须是从左到右拂过的效果
+3. **不允许同一句歌词多行里直接多行一起从左到右遮罩** - 多行歌词必须逐行拂过，不能整体一起从左到右
+4. **要保证滚动前后排版一致** - 无论是自动滚动还是手动滚动，文字排版不能有任何变化
+5. **要保证即使是多行歌词也是逐行遮罩按照逐词歌词的时间轴逐字从左到右拂过** - 这是最核心的要求
+6. **拂过的字是 float 的** - 正在被高亮的字应该有轻微上浮动画 (AMLL: 0.05em)
+7. **具体参数参考 AMLL** - 所有动画参数、时间曲线都必须参考 AMLL 实现
+
+### 实现原则
+
+- **Apple 自己就是用 SwiftUI 写的**，所以一定有正确的实现方式
+- **AMLL 只是从前端逆向的参考**，不是唯一方案，但参数可以借鉴
+- **多研究 AMLL 的实现方案**，理解其原理后再动手实现
+- **决不允许再犯同一个错误**
+
+---
+
 ## 核心需求与实现路径 (避免重复犯错)
 
 ### 逐字高亮实现 - 历史错误记录
@@ -35,61 +56,30 @@ nanoPod 是一个 macOS 平台的 Apple Music 迷你播放器，使用 SwiftUI �
 
 ### 正确的歌词高亮方案
 
-**必须使用逐行高亮（不是逐字高亮）！**
+**当前实现：行级高亮（稳定版本）**
 
 ```swift
-// ✅ 正确: 整行高亮，当前行全白，其他行暗
+// 🔑 当前稳定版本：整行高亮
 Text(cleanedText)
     .font(.system(size: 24, weight: .semibold))
-    .foregroundColor(isCurrent ? .white : .white.opacity(0.35))  // 简单的行级高亮
+    .foregroundColor(isCurrent ? .white : .white.opacity(0.35))
     .multilineTextAlignment(.leading)
-    .fixedSize(horizontal: false, vertical: true)  // 允许换行
-
-// ❌ 错误: 逐字高亮 - 用户明确拒绝
-Text(AttributedString) // 每个字不同颜色
-HStack { ForEach(words) { ... } }  // HStack 不能换行
+    .fixedSize(horizontal: false, vertical: true)
 ```
 
-### 正确实现方案 (AMLL 风格)
+**目标实现：AMLL 风格逐字拂过（待实现）**
+
+需要研究正确的实现方案，满足核心要求中的所有规则。
+
+### 滚动与动画实现原则
 
 **🔴 核心原则（必须遵守）**:
 1. **滚动必须用 Y 轴 offset 实现，禁止使用 ScrollView**
-2. **逐字高亮必须用 AttributedString，保持换行能力**
-3. **Spring 动画参数必须与 AMLL 一致**
-4. **手动滚动用 onScrollWheel（NSView scrollWheel），不用 scrollDetectionWithVelocity**
-5. **animation modifier 放在容器上，不要放在每行上**
+2. **Spring 动画参数必须与 AMLL 一致**
+3. **animation modifier 放在容器上，不要放在每行上**
 
-**SwiftUI 正确实现**:
+**SwiftUI 滚动实现示例**:
 ```swift
-// ✅ 正确: 使用 AttributedString 逐字高亮
-private var highlightedText: AttributedString {
-    var result = AttributedString()
-    for word in line.words {
-        let progress = word.progress(at: currentTime)
-        var attr = AttributedString(word.word)
-        attr.foregroundColor = progress > 0 ? .white : .white.opacity(0.35)
-        result.append(attr)
-    }
-    return result
-}
-
-Text(highlightedText)
-    .font(.system(size: 24, weight: .semibold))
-    .multilineTextAlignment(.leading)
-    .fixedSize(horizontal: false, vertical: true)
-
-// ✅ 正确: 手动滚动用 onScrollWheel
-.onScrollWheel { deltaY in
-    manualScrollOffset += deltaY
-    // 2秒后恢复
-    autoScrollTimer?.invalidate()
-    autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
-        withAnimation(.interpolatingSpring(...)) {
-            manualScrollOffset = 0
-        }
-    }
-}
-
 // ✅ 正确: animation 放在容器上
 ZStack { ... }
     .animation(.interpolatingSpring(...), value: currentIndex)
@@ -335,16 +325,138 @@ if (this.isEmphasisWord(word) && isHighlighting) {
 }
 ```
 
-### 1.5 手动滚动交互
+### 1.5 AMLL 波浪效果 (Wave Animation) - ✅ 已实现
 
-#### 滚动状态切换
+**原理**：当歌词行切换时，每行的动画启动时间有微小延迟，形成从**屏幕可见顶部**向下扩散的"波浪"视觉效果。
+
+**AMLL 源码 (packages/core/src/lyric-player/base.ts):**
+```typescript
+// calcLayout 方法中的延迟累加逻辑
+let delay = 0;
+let baseDelay = sync ? 0 : 0.05;  // 基础延迟 50ms
+
+this.currentLyricLineObjects.forEach((lineObj, i) => {
+    lineObj.setTransform(curPos, targetScale, targetOpacity, blurLevel, false, delay);
+
+    if (curPos >= 0 && !this.isSeeking) {
+        if (!line.isBG) delay += baseDelay;
+        if (i >= this.scrollToIndex) baseDelay /= 1.05;  // 甩尾加速
+    }
+});
+```
+
+**✅ nanoPod 实际实现 (LyricsView.swift):**
+
+```swift
+/// 核心数据结构：每行独立的目标索引
+@State private var lineTargetIndices: [Int: Int] = [:]  // [lineIndex: targetCurrentIndex]
+@State private var lockedLineTargetIndices: [Int: Int] = [:]  // 手动滚动时的快照
+
+/// 触发波浪动画（在 currentLineIndex 变化时调用）
+private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
+    guard !isManualScrolling else { return }
+
+    // 获取实际渲染的行索引列表
+    let renderedIndices = lyricsService.lyrics.enumerated()
+        .filter { idx, _ in idx == 0 || idx >= lyricsService.firstRealLyricIndex }
+        .map { $0.offset }
+
+    // 🔑 AMLL 核心：波浪从屏幕可见区域顶部开始（高亮行上方约 3 行）
+    let visibleTopLineIndex = max(0, newIndex - 3)
+    let startPosition = renderedIndices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
+
+    var delay: Double = 0
+    var currentDelayStep: Double = 0.05  // 基础延迟 50ms
+
+    // 🔑 从屏幕顶部开始向下遍历
+    for i in startPosition..<renderedIndices.count {
+        let lineIndex = renderedIndices[i]
+
+        if delay < 0.01 {
+            // 屏幕顶部第一行：立即更新
+            lineTargetIndices[lineIndex] = newIndex
+        } else {
+            // 其他行：延迟更新
+            let capturedDelay = delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + capturedDelay) {
+                guard !self.isManualScrolling else { return }
+                self.lineTargetIndices[lineIndex] = newIndex
+            }
+        }
+
+        delay += currentDelayStep
+
+        // 🔑 甩尾加速：高亮行及之后，延迟步长逐渐变小
+        if lineIndex >= newIndex {
+            currentDelayStep /= 1.05
+        }
+    }
+
+    // 屏幕顶部之上的行：立即更新，无延迟
+    for i in 0..<startPosition {
+        lineTargetIndices[renderedIndices[i]] = newIndex
+    }
+}
+
+/// 计算每行的 Y 偏移（使用该行自己的目标索引）
+private func lineOffset(for index: Int, anchorY: CGFloat) -> CGFloat {
+    if isManualScrolling {
+        // 🔑 手动滚动时冻结状态
+        let frozenTargetIndex = lockedLineTargetIndices[index] ?? lockedLineIndex ?? currentIndex
+        return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex) + manualScrollOffset
+    }
+
+    // 🔑 使用每行独立的目标索引
+    let targetIndex = lineTargetIndices[index] ?? currentIndex
+    return anchorY - calculateAccumulatedHeight(upTo: targetIndex)
+}
+```
+
+**关键设计要点**:
+1. **每行独立动画** - `lineTargetIndices` 字典让每行有自己的目标索引
+2. **波浪从屏幕顶部开始** - `visibleTopLineIndex = max(0, newIndex - 3)`
+3. **甩尾加速** - 高亮行之后的延迟步长 `/= 1.05`
+4. **手动滚动保护** - `guard !self.isManualScrolling` 防止动画中断
+
+**效果说明**:
+- 屏幕顶部第一行：立即开始动画（delay=0）
+- 第 2 行：延迟 50ms
+- 第 3 行：延迟 ~100ms
+- 高亮行及之后：延迟递增但步长递减（甩尾加速）
+- 屏幕外的行：立即更新，无波浪延迟
+
+### 1.6 手动滚动交互 - ✅ 已实现
+
+#### 滚动状态切换与锁定
 ```swift
 @State private var isManualScrolling: Bool = false
+@State private var manualScrollOffset: CGFloat = 0  // 手动滚动累计偏移
+@State private var lockedLineIndex: Int? = nil  // 锁定的当前行索引
+@State private var lockedLineTargetIndices: [Int: Int] = [:]  // 锁定时的波浪状态快照
 
-// 手动滚动时：
-// - 暂停自动滚动（不响应 currentLineIndex 变化）
-// - 歌词行视觉状态切换为 isScrolling 模式
+// 🔑 手动滚动开始时（ScrollDetector 回调）
+func onScrollStarted() {
+    isManualScrolling = true
+    lockedLineIndex = lyricsService.currentLineIndex
+    lockedLineTargetIndices = lineTargetIndices  // 快照波浪状态
+}
+
+// 🔑 手动滚动中：歌词位置完全冻结
+// lineOffset 计算使用 lockedLineTargetIndices 而非实时的 lineTargetIndices
+
+// 🔑 手动滚动结束时
+func onScrollEnded() {
+    // 2 秒后恢复自动滚动
+    autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+        isManualScrolling = false
+        manualScrollOffset = 0
+        // 重新触发波浪动画以平滑回到当前位置
+    }
+}
+
+// 手动滚动时视觉状态：
 // - 所有歌词行 blur=0, opacity=1.0, scale=0.92
+// - 歌词行可 hover 显示背景
 ```
 
 #### 滚动时 Hover 高亮

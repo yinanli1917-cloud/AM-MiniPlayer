@@ -121,9 +121,9 @@ public struct PlaylistView: View {
                             // 底部留白
                             Spacer().frame(height: 120)  // 🔑 给控件腾出空间
                         }
-                        .scrollTargetLayout()  // 🔑 恢复 snap 支持
+                        .scrollTargetLayout()  // 🔑 snap 支持
                     }
-                    .scrollTargetBehavior(.viewAligned)  // 🔑 恢复 snap 行为
+                    .scrollTargetBehavior(.viewAligned)  // 🔑 snap 行为
                     .opacity(hasScrolledToNowPlaying ? 1 : 0)  // 🔑 防止闪烁
                     .onAppear {
                         // 🔑 首次加载时滚动到 Now Playing
@@ -256,7 +256,7 @@ public struct PlaylistView: View {
         }
     }
 
-    // MARK: - Sticky Header (透明模糊 + 边缘柔和)
+    // MARK: - Sticky Header (带模糊背景，会吸附在顶部)
     @ViewBuilder
     private func stickyHeader(_ title: String) -> some View {
         ZStack(alignment: .leading) {
@@ -285,6 +285,18 @@ public struct PlaylistView: View {
                 .frame(height: 10)  // 底部 10px 渐变淡出
             }
         )
+    }
+
+    // MARK: - Simple Header (纯文字 + 阴影，不 sticky)
+    @ViewBuilder
+    private func simpleHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundColor(.white)
+            .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
     }
 
     // MARK: - Now Playing Card

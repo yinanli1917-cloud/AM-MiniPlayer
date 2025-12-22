@@ -49,16 +49,20 @@ public struct LyricLine: Identifiable, Equatable {
 class CachedLyricsItem: NSObject {
     let lyrics: [LyricLine]
     let timestamp: Date
+    let isNoLyrics: Bool  // 🔑 标记是否为"无歌词"缓存
 
-    init(lyrics: [LyricLine]) {
+    init(lyrics: [LyricLine], isNoLyrics: Bool = false) {
         self.lyrics = lyrics
+        self.isNoLyrics = isNoLyrics
         self.timestamp = Date()
         super.init()
     }
 
     var isExpired: Bool {
-        // Cache expires after 24 hours
-        return Date().timeIntervalSince(timestamp) > 86400
+        // 🔑 No Lyrics 缓存 6 小时过期（比有歌词的短，以便后续可能有歌词时能刷新）
+        // 有歌词的缓存 24 小时过期
+        let expirationTime: TimeInterval = isNoLyrics ? 21600 : 86400
+        return Date().timeIntervalSince(timestamp) > expirationTime
     }
 }
 
@@ -234,6 +238,17 @@ public class LyricsService: ObservableObject {
 
         // Check cache first
         if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+            // 🔑 处理 No Lyrics 缓存
+            if cached.isNoLyrics {
+                logger.info("⏭️ Skipping fetch - cached as No Lyrics: \(title) - \(artist)")
+                debugLog("⏭️ No Lyrics (cached): '\(title)'")
+                self.lyrics = []
+                self.isLoading = false
+                self.error = "No lyrics available"
+                self.currentLineIndex = nil
+                return
+            }
+
             logger.info("✅ Using cached lyrics for: \(title) - \(artist)")
 
             // 使用统一的歌词处理函数
@@ -268,8 +283,8 @@ public class LyricsService: ObservableObject {
             let isChinese = containsChineseCharacters(title) || containsChineseCharacters(artist)
 
             // Try sources in priority order:
-            // - 中文歌: AMLL-TTML-DB → NetEase → LRCLIB → lyrics.ovh
-            // - 英文歌: AMLL-TTML-DB → LRCLIB → NetEase → lyrics.ovh (NetEase 对英文歌匹配不准)
+            // - 中文歌: AMLL-TTML-DB → NetEase (带质量检测) → LRCLIB → lyrics.ovh
+            // - 英文歌: AMLL-TTML-DB → LRCLIB → NetEase (带质量检测) → lyrics.ovh
             do {
                 try Task.checkCancellation()
                 logger.info("🔍 Starting priority-based search... (isChinese: \(isChinese))")
@@ -284,7 +299,7 @@ public class LyricsService: ObservableObject {
                 try Task.checkCancellation()
 
                 if isChinese {
-                    // 🔑 中文歌：NetEase 优先（有更好的中文歌词库）
+                    // 🔑 中文歌：NetEase 优先（有更好的中文歌词库，带质量检测）
                     if fetchedLyrics == nil {
                         if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                             fetchedLyrics = lyrics
@@ -303,7 +318,7 @@ public class LyricsService: ObservableObject {
                         }
                     }
                 } else {
-                    // 🔑 英文歌：LRCLIB 优先（NetEase 容易匹配到翻唱或错误版本）
+                    // 🔑 英文歌：LRCLIB 优先，NetEase 作为后备（带质量检测）
                     if fetchedLyrics == nil {
                         if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                             fetchedLyrics = lyrics
@@ -364,6 +379,11 @@ public class LyricsService: ObservableObject {
                         self.writeDebugLyricTimeline(lyrics: self.lyrics, firstRealLyricIndex: self.firstRealLyricIndex, source: "新获取")
                     }
                 } else {
+                    // 🔑 缓存 No Lyrics 状态，避免重复请求
+                    let noLyricsCacheItem = CachedLyricsItem(lyrics: [], isNoLyrics: true)
+                    self.lyricsCache.setObject(noLyricsCacheItem, forKey: expectedSongID as NSString)
+                    self.logger.info("💾 Cached No Lyrics state for: \(expectedSongID)")
+                    self.debugLog("💾 Cached No Lyrics: '\(title)'")
                     throw NSError(domain: "LyricsService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Lyrics not found in any source"])
                 }
             } catch is CancellationError {
@@ -470,7 +490,7 @@ public class LyricsService: ObservableObject {
                 }
 
                 if isChinese {
-                    // 中文歌：NetEase → LRCLIB
+                    // 中文歌：NetEase → LRCLIB（NetEase 带质量检测）
                     if fetchedLyrics == nil, let lyrics = try? await fetchFromNetEase(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                         fetchedLyrics = lyrics
                     }
@@ -478,7 +498,7 @@ public class LyricsService: ObservableObject {
                         fetchedLyrics = lyrics
                     }
                 } else {
-                    // 英文歌：LRCLIB → NetEase
+                    // 英文歌：LRCLIB → NetEase（NetEase 带质量检测）
                     if fetchedLyrics == nil, let lyrics = try? await fetchFromLRCLIB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
                         fetchedLyrics = lyrics
                     }
@@ -955,6 +975,7 @@ public class LyricsService: ObservableObject {
     // MARK: - LRCLIB API (Free, Open-Source Lyrics Database)
 
     private func fetchFromLRCLIB(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🌐 Fetching from LRCLIB: '\(title)' by '\(artist)'")
         logger.info("🌐 Fetching from LRCLIB: \(title) by \(artist)")
 
         // Build URL with parameters
@@ -966,6 +987,7 @@ public class LyricsService: ObservableObject {
         ]
 
         guard let url = components.url else {
+            debugLog("❌ LRCLIB: Invalid URL")
             logger.error("Invalid LRCLIB URL")
             return nil
         }
@@ -975,6 +997,7 @@ public class LyricsService: ObservableObject {
         var request = URLRequest(url: url)
         request.setValue("MusicMiniPlayer/1.0 (https://github.com/yourusername/MusicMiniPlayer)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 15.0  // 🔑 添加超时时间
 
         let session = URLSession.shared
         let (data, response) = try await session.data(for: request)
@@ -988,6 +1011,7 @@ public class LyricsService: ObservableObject {
 
         // Check for 404 - no lyrics found
         if httpResponse.statusCode == 404 {
+            debugLog("❌ LRCLIB: 404 Not found")
             logger.warning("No lyrics found in LRCLIB database")
             return nil
         }
@@ -1008,12 +1032,14 @@ public class LyricsService: ObservableObject {
 
         // LRCLIB returns synced lyrics in "syncedLyrics" field as LRC format string
         if let syncedLyrics = json["syncedLyrics"] as? String, !syncedLyrics.isEmpty {
+            debugLog("✅ LRCLIB: Found synced lyrics (\(syncedLyrics.count) chars)")
             logger.info("✅ Found synced lyrics (\(syncedLyrics.count) chars)")
             return parseLRC(syncedLyrics)
         }
 
         // 🔑 如果没有同步歌词，返回 nil 让其他源继续尝试
         // 不使用 plainLyrics 创建假的时间轴，因为那样会导致前奏没有等待
+        debugLog("⚠️ LRCLIB: Plain lyrics only (no sync), skipping")
         logger.warning("⚠️ LRCLIB has plain lyrics only (no sync), skipping")
         return nil
     }
@@ -1073,17 +1099,20 @@ public class LyricsService: ObservableObject {
     // MARK: - lyrics.ovh API (Free, Simple Alternative)
 
     private func fetchFromLyricsOVH(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🌐 Fetching from lyrics.ovh: '\(title)' by '\(artist)'")
         logger.info("🌐 Fetching from lyrics.ovh: \(title) by \(artist)")
 
         // URL encode artist and title
         guard let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            debugLog("❌ lyrics.ovh: Failed to encode artist/title")
             logger.error("Failed to encode artist/title for lyrics.ovh")
             return nil
         }
 
         let urlString = "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)"
         guard let url = URL(string: urlString) else {
+            debugLog("❌ lyrics.ovh: Invalid URL")
             logger.error("Invalid lyrics.ovh URL")
             return nil
         }
@@ -1092,6 +1121,7 @@ public class LyricsService: ObservableObject {
 
         var request = URLRequest(url: url)
         request.setValue("MusicMiniPlayer/1.0", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15.0  // 🔑 添加超时时间
 
         let session = URLSession.shared
         let (data, response) = try await session.data(for: request)
@@ -1105,12 +1135,14 @@ public class LyricsService: ObservableObject {
 
         // Check for 404 - no lyrics found
         if httpResponse.statusCode == 404 {
+            debugLog("❌ lyrics.ovh: 404 Not found")
             logger.warning("No lyrics found in lyrics.ovh")
             return nil
         }
 
         // Check for other errors
         guard (200...299).contains(httpResponse.statusCode) else {
+            debugLog("❌ lyrics.ovh: HTTP error \(httpResponse.statusCode)")
             logger.error("HTTP error from lyrics.ovh: \(httpResponse.statusCode)")
             return nil
         }
@@ -1118,10 +1150,12 @@ public class LyricsService: ObservableObject {
         // Parse JSON response
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let lyricsText = json["lyrics"] as? String, !lyricsText.isEmpty else {
+            debugLog("❌ lyrics.ovh: No lyrics content")
             logger.warning("No lyrics content in lyrics.ovh response")
             return nil
         }
 
+        debugLog("✅ lyrics.ovh: Found lyrics (\(lyricsText.count) chars)")
         logger.info("✅ Found lyrics from lyrics.ovh (\(lyricsText.count) chars)")
 
         // lyrics.ovh returns plain text, create unsynced lyrics
@@ -1149,6 +1183,88 @@ public class LyricsService: ObservableObject {
 
         logger.info("Created \(lines.count) unsynced lyric lines")
         return lines
+    }
+
+    // MARK: - Lyrics Quality Validation
+
+    /// 🔑 验证歌词质量，检测常见问题
+    /// 返回 (是否有效, 问题列表)
+    private func validateLyricsQuality(_ lyrics: [LyricLine]) -> (Bool, [String]) {
+        var issues: [String] = []
+
+        // 🔑 过滤掉非歌词行（前奏省略号 + 元信息行）
+        let realLyrics = lyrics.filter { line in
+            let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+
+            // 跳过空行和省略号
+            let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・", ""]
+            if ellipsisPatterns.contains(trimmed) {
+                return false
+            }
+
+            // 🔑 跳过元信息行（作词、作曲等）
+            let isMetadata = metadataPatterns.contains { trimmed.contains($0) }
+            if isMetadata {
+                return false
+            }
+
+            return true
+        }
+
+        guard realLyrics.count >= 3 else {
+            issues.append("太少歌词行(\(realLyrics.count))")
+            return (false, issues)
+        }
+
+        var timeReverseCount = 0  // 时间倒退次数
+        var tooShortLineCount = 0  // 持续时间太短的行数
+        var overlapCount = 0  // 时间重叠次数
+
+        for i in 1..<realLyrics.count {
+            let prev = realLyrics[i - 1]
+            let curr = realLyrics[i]
+
+            // 检测时间倒退（当前行开始时间比上一行早）
+            if curr.startTime < prev.startTime - 0.1 {  // 允许 0.1s 误差
+                timeReverseCount += 1
+            }
+
+            // 检测时间重叠（当前行开始时间早于上一行结束时间超过阈值）
+            if curr.startTime < prev.endTime - 0.5 {  // 允许 0.5s 重叠
+                overlapCount += 1
+            }
+
+            // 检测持续时间太短（小于 0.1 秒）
+            let duration = curr.endTime - curr.startTime
+            if duration > 0 && duration < 0.1 {
+                tooShortLineCount += 1
+            }
+        }
+
+        // 计算问题比例
+        let totalLines = realLyrics.count
+        let reverseRatio = Double(timeReverseCount) / Double(totalLines)
+        let overlapRatio = Double(overlapCount) / Double(totalLines)
+        let shortRatio = Double(tooShortLineCount) / Double(totalLines)
+
+        // 判断是否通过质量检���
+        // 允许少量问题（<5%），但如果问题太多则拒绝
+        if reverseRatio > 0.05 {
+            issues.append("时间倒退(\(timeReverseCount)/\(totalLines)=\(String(format: "%.1f", reverseRatio * 100))%)")
+        }
+        if overlapRatio > 0.1 {
+            issues.append("时间重叠(\(overlapCount)/\(totalLines)=\(String(format: "%.1f", overlapRatio * 100))%)")
+        }
+        if shortRatio > 0.2 {
+            issues.append("太短行(\(tooShortLineCount)/\(totalLines)=\(String(format: "%.1f", shortRatio * 100))%)")
+        }
+
+        let isValid = issues.isEmpty
+        if isValid {
+            debugLog("✅ 歌词质量检测通过 (\(totalLines) 行)")
+        }
+
+        return (isValid, issues)
     }
 
     // MARK: - NetEase (163 Music) API - Best for Chinese songs
@@ -1363,6 +1479,15 @@ public class LyricsService: ObservableObject {
                     debugLog("   First word: \"\(firstWord.word)\" \(firstWord.startTime)s-\(firstWord.endTime)s")
                 }
             }
+
+            // 🔑 质量检测：过滤有问题的歌词
+            let (isValid, issues) = validateLyricsQuality(yrcLyrics)
+            if !isValid {
+                debugLog("❌ NetEase YRC rejected: \(issues.joined(separator: ", "))")
+                logger.warning("❌ NetEase YRC quality check failed: \(issues.joined(separator: ", "))")
+                return nil  // 拒绝使用有问题的歌词
+            }
+
             logger.info("✅ Found NetEase YRC lyrics (\(yrcLyrics.count) lines)")
             return yrcLyrics
         }
@@ -1393,8 +1518,18 @@ public class LyricsService: ObservableObject {
         if let lrc = json["lrc"] as? [String: Any],
            let lyricText = lrc["lyric"] as? String,
            !lyricText.isEmpty {
+            let lrcLyrics = parseLRC(lyricText)
+
+            // 🔑 质量检测：过滤有问题的歌词
+            let (isValid, issues) = validateLyricsQuality(lrcLyrics)
+            if !isValid {
+                debugLog("❌ NetEase LRC rejected: \(issues.joined(separator: ", "))")
+                logger.warning("❌ NetEase LRC quality check failed: \(issues.joined(separator: ", "))")
+                return nil
+            }
+
             logger.info("✅ Found NetEase LRC lyrics (\(lyricText.count) chars)")
-            return parseLRC(lyricText)
+            return lrcLyrics
         }
 
         // Fallback to translated lyrics if available
