@@ -153,10 +153,7 @@ public class LyricsService: ObservableObject {
 
     // MARK: - Lyrics Processing
 
-    /// 元信息关键字（作词、作曲等，这些行应该被跳过）
-    private let metadataPatterns = ["作词", "作曲", "编曲", "制作", "混音", "录音", "母带", "监制", "出品", "发行", "OP:", "SP:", "ISRC", "Publisher", "Executive", "词：", "曲：", "词:", "曲:"]
-
-    /// 处理原始歌词：识别元信息、修复 endTime、添加前奏占位符
+    /// 处理原始歌词：移除元信息、修复 endTime、添加前奏占位符
     /// - Parameter rawLyrics: 原始歌词行
     /// - Returns: (处理后的歌词数组, 第一句真正歌词的索引)
     private func processLyrics(_ rawLyrics: [LyricLine]) -> (lyrics: [LyricLine], firstRealLyricIndex: Int) {
@@ -164,52 +161,77 @@ public class LyricsService: ObservableObject {
             return ([], 0)
         }
 
-        var processedLyrics = rawLyrics
+        // 1. 🔑 移除开头的元信息行
+        // 判断标准：在歌曲开头 + 时长极短(< 3秒) + 包含冒号（中文：或英文:）
+        var filteredLyrics: [LyricLine] = []
+        var firstRealLyricStartTime: TimeInterval = 0
+        var foundFirstRealLyric = false
+        var consecutiveMetadataEnd: TimeInterval = 0  // 连续元信息的结束时间
 
-        // 1. 识别元信息行，找到第一句真正歌词的索引
-        var foundFirstRealLyricIndex = 0
-        for (index, line) in processedLyrics.enumerated() {
-            let text = line.text.trimmingCharacters(in: .whitespaces)
-            let isMetadata = metadataPatterns.contains { text.contains($0) }
-            if !isMetadata && !text.isEmpty {
-                foundFirstRealLyricIndex = index
-                break
+        for line in rawLyrics {
+            let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+            let duration = line.endTime - line.startTime
+            let hasColon = trimmed.contains("：") || trimmed.contains(":")
+            let hasTitleSeparator = trimmed.contains(" - ") && trimmed.count < 50
+
+            // 🔑 元信息判断：在开头 + 短时长 + 包含冒号/标题分隔符
+            let isMetadata = !foundFirstRealLyric && (
+                trimmed.isEmpty ||
+                (duration < 3.0 && hasColon) ||
+                hasTitleSeparator
+            )
+
+            if isMetadata {
+                consecutiveMetadataEnd = line.endTime
+                continue  // 跳过元信息行
+            } else {
+                // 这是真正的歌词行
+                if !foundFirstRealLyric {
+                    foundFirstRealLyric = true
+                    firstRealLyricStartTime = line.startTime
+                }
+                filteredLyrics.append(line)
             }
         }
 
+        // 如果所有行都被过滤掉了，返回原始歌词
+        if filteredLyrics.isEmpty {
+            filteredLyrics = rawLyrics
+            firstRealLyricStartTime = rawLyrics.first?.startTime ?? 0
+        }
+
         // 2. 修复 endTime - 确保 endTime >= startTime
-        for i in 0..<processedLyrics.count {
-            let currentStart = processedLyrics[i].startTime
-            let currentEnd = processedLyrics[i].endTime
+        for i in 0..<filteredLyrics.count {
+            let currentStart = filteredLyrics[i].startTime
+            let currentEnd = filteredLyrics[i].endTime
 
             // 找下一个时间更大的行作为 endTime 参考
             var nextValidStart = currentStart + 10.0
-            for j in (i + 1)..<processedLyrics.count {
-                if processedLyrics[j].startTime > currentStart {
-                    nextValidStart = processedLyrics[j].startTime
+            for j in (i + 1)..<filteredLyrics.count {
+                if filteredLyrics[j].startTime > currentStart {
+                    nextValidStart = filteredLyrics[j].startTime
                     break
                 }
             }
 
             let fixedEnd = (currentEnd > currentStart) ? currentEnd : nextValidStart
-            processedLyrics[i] = LyricLine(
-                text: processedLyrics[i].text,
+            filteredLyrics[i] = LyricLine(
+                text: filteredLyrics[i].text,
                 startTime: currentStart,
                 endTime: fixedEnd,
-                words: processedLyrics[i].words  // 🔑 保留逐字时间信息！
+                words: filteredLyrics[i].words  // 🔑 保留逐字时间信息！
             )
         }
 
         // 3. 插入前奏占位符
-        let firstRealLyricStartTime = processedLyrics[foundFirstRealLyricIndex].startTime
         let loadingLine = LyricLine(
             text: "⋯",
             startTime: 0,
             endTime: firstRealLyricStartTime
         )
 
-        let finalLyrics = [loadingLine] + processedLyrics
-        let finalFirstRealLyricIndex = foundFirstRealLyricIndex + 1  // +1 因为加了 loadingLine
+        let finalLyrics = [loadingLine] + filteredLyrics
+        let finalFirstRealLyricIndex = 1  // 第一句真正歌词在 index 1
 
         return (finalLyrics, finalFirstRealLyricIndex)
     }
@@ -1222,9 +1244,8 @@ public class LyricsService: ObservableObject {
                 return false
             }
 
-            // 🔑 跳过元信息行（作词、作曲等）
-            let isMetadata = metadataPatterns.contains { trimmed.contains($0) }
-            if isMetadata {
+            // 🔑 跳过元信息行（包含冒号且较短的行）
+            if (trimmed.contains("：") || trimmed.contains(":")) && trimmed.count < 30 {
                 return false
             }
 
@@ -1564,14 +1585,78 @@ public class LyricsService: ObservableObject {
         return nil
     }
 
+    // MARK: - iTunes CN Metadata (获取中文歌名/艺术家名)
+
+    /// 通过 iTunes Search API (中国区) 获取歌曲的中文元数据
+    /// 用于解决 Apple Music 英文界面显示英文名，但实际是中文歌的问题
+    private func fetchChineseMetadata(title: String, artist: String, duration: TimeInterval) async -> (chineseTitle: String, chineseArtist: String)? {
+        debugLog("🇨🇳 Fetching Chinese metadata from iTunes CN: '\(artist)'")
+
+        // 用艺术家名搜索中国区 iTunes
+        guard var components = URLComponents(string: "https://itunes.apple.com/search") else { return nil }
+        components.queryItems = [
+            URLQueryItem(name: "term", value: artist),
+            URLQueryItem(name: "country", value: "CN"),
+            URLQueryItem(name: "media", value: "music"),
+            URLQueryItem(name: "limit", value: "20")
+        ]
+
+        guard let url = components.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10.0
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            return nil
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [[String: Any]] else {
+            return nil
+        }
+
+        // 🔑 用时长匹配找到正确的歌曲
+        for result in results {
+            guard let trackName = result["trackName"] as? String,
+                  let artistName = result["artistName"] as? String,
+                  let trackTimeMillis = result["trackTimeMillis"] as? Int else {
+                continue
+            }
+
+            let trackDuration = Double(trackTimeMillis) / 1000.0
+            let durationDiff = abs(trackDuration - duration)
+
+            // 时长差 < 2秒，认为是同一首歌
+            if durationDiff < 2 {
+                debugLog("✅ iTunes CN match: '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.1f", durationDiff))s)")
+                return (trackName, artistName)
+            }
+        }
+
+        debugLog("❌ iTunes CN: No duration match found")
+        return nil
+    }
+
     // MARK: - QQ Music Lyrics
 
     private func fetchFromQQMusic(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
         debugLog("🌐 Fetching from QQ Music: '\(title)' by '\(artist)'")
         logger.info("🌐 Fetching from QQ Music: \(title) by \(artist)")
 
+        // 🔑 Step 0: 尝试获取中文元数据（解决 MoreFeel → 莫非定律乐团 的问题）
+        var searchTitle = title
+        var searchArtist = artist
+
+        if let chineseMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
+            searchTitle = chineseMetadata.chineseTitle
+            searchArtist = chineseMetadata.chineseArtist
+            debugLog("🇨🇳 Using Chinese metadata: '\(searchTitle)' by '\(searchArtist)'")
+        }
+
         // Step 1: Search for the song
-        guard let songMid = try await searchQQMusicSong(title: title, artist: artist, duration: duration) else {
+        guard let songMid = try await searchQQMusicSong(title: searchTitle, artist: searchArtist, duration: duration) else {
             debugLog("❌ QQ Music: No matching song found")
             logger.warning("No matching song found on QQ Music")
             return nil
@@ -1589,114 +1674,113 @@ public class LyricsService: ObservableObject {
         let simplifiedTitle = convertToSimplified(title)
         let simplifiedArtist = convertToSimplified(artist)
 
-        // 搜索关键词
-        let searchKeyword = "\(simplifiedTitle) \(simplifiedArtist)"
+        // 🔑 多轮搜索策略：
+        // Round 1: title + artist（需要验证艺术家相关性）
+        // Round 2: artist only（搜索结果应该都是该艺术家的歌，用时长匹配）
+        // Round 3: title only（需要验证艺术家或歌名相关性）
 
-        debugLog("🔍 QQ Music search: '\(searchKeyword)'")
+        struct SearchRound {
+            let keyword: String
+            let requireArtistMatch: Bool  // 是否需要验证艺术家匹配
+            let description: String
+        }
 
-        var components = URLComponents(string: "https://c.y.qq.com/soso/fcgi-bin/client_search_cp")!
-        components.queryItems = [
-            URLQueryItem(name: "p", value: "1"),
-            URLQueryItem(name: "n", value: "20"),
-            URLQueryItem(name: "w", value: searchKeyword),
-            URLQueryItem(name: "format", value: "json")
+        let searchRounds = [
+            SearchRound(keyword: "\(simplifiedTitle) \(simplifiedArtist)", requireArtistMatch: true, description: "title+artist"),
+            SearchRound(keyword: simplifiedArtist, requireArtistMatch: false, description: "artist only"),
+            SearchRound(keyword: simplifiedTitle, requireArtistMatch: true, description: "title only")
         ]
 
-        guard let url = components.url else { return nil }
+        for (roundIndex, round) in searchRounds.enumerated() {
+            debugLog("🔍 QQ Music round \(roundIndex + 1) (\(round.description)): '\(round.keyword)'")
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
-        request.setValue("https://y.qq.com/portal/player.html", forHTTPHeaderField: "Referer")
-        request.timeoutInterval = 10.0
+            var components = URLComponents(string: "https://c.y.qq.com/soso/fcgi-bin/client_search_cp")!
+            components.queryItems = [
+                URLQueryItem(name: "p", value: "1"),
+                URLQueryItem(name: "n", value: "20"),
+                URLQueryItem(name: "w", value: round.keyword),
+                URLQueryItem(name: "format", value: "json")
+            ]
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+            guard let url = components.url else { continue }
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            return nil
-        }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+            request.setValue("https://y.qq.com/portal/player.html", forHTTPHeaderField: "Referer")
+            request.timeoutInterval = 10.0
 
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataDict = json["data"] as? [String: Any],
-              let songDict = dataDict["song"] as? [String: Any],
-              let songs = songDict["list"] as? [[String: Any]] else {
-            return nil
-        }
-
-        debugLog("📦 QQ Music returned \(songs.count) results")
-
-        // 🔑 匹配逻辑：以时长为主要基准
-        var candidates: [(mid: String, name: String, artist: String, duration: Double, durationDiff: Double, titleMatch: Bool, artistMatch: Bool)] = []
-
-        for song in songs {
-            guard let songMid = song["songmid"] as? String,
-                  let songName = song["songname"] as? String else { continue }
-
-            // Get artist
-            var songArtist = ""
-            if let singers = song["singer"] as? [[String: Any]],
-               let firstSinger = singers.first,
-               let singerName = firstSinger["name"] as? String {
-                songArtist = singerName
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                continue
             }
 
-            // Get duration (in seconds)
-            let songDuration = Double(song["interval"] as? Int ?? 0)
-            let durationDiff = abs(songDuration - duration)
-
-            // 🔑 时长差超过 5 秒的直接跳过
-            guard durationDiff < 5 else { continue }
-
-            // 匹配标题和艺术家
-            let titleLower = title.lowercased()
-            let simplifiedTitleLower = simplifiedTitle.lowercased()
-            let songNameLower = songName.lowercased()
-
-            let titleMatch = songNameLower.contains(titleLower) ||
-                            titleLower.contains(songNameLower) ||
-                            songNameLower.contains(simplifiedTitleLower) ||
-                            simplifiedTitleLower.contains(songNameLower)
-
-            let artistMatch = songArtist.lowercased().contains(artist.lowercased()) ||
-                             artist.lowercased().contains(songArtist.lowercased())
-
-            candidates.append((songMid, songName, songArtist, songDuration, durationDiff, titleMatch, artistMatch))
-        }
-
-        // 🔑 按时长差排序
-        candidates.sort { $0.durationDiff < $1.durationDiff }
-
-        // 🔑 匹配优先级
-        for candidate in candidates {
-            if candidate.durationDiff < 1 && (candidate.titleMatch || candidate.artistMatch) {
-                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title/artist)")
-                return candidate.mid
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dataDict = json["data"] as? [String: Any],
+                  let songDict = dataDict["song"] as? [String: Any],
+                  let songs = songDict["list"] as? [[String: Any]] else {
+                continue
             }
-        }
 
-        for candidate in candidates {
-            if candidate.durationDiff < 2 && candidate.artistMatch {
-                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<2s + artist)")
-                return candidate.mid
+            debugLog("📦 QQ Music round \(roundIndex + 1) returned \(songs.count) results")
+
+            // 🔑 收集候选项
+            var candidates: [(mid: String, name: String, artist: String, durationDiff: Double, isArtistMatch: Bool)] = []
+
+            for song in songs {
+                guard let songMid = song["songmid"] as? String,
+                      let songName = song["songname"] as? String else { continue }
+
+                var songArtist = ""
+                if let singers = song["singer"] as? [[String: Any]],
+                   let firstSinger = singers.first,
+                   let singerName = firstSinger["name"] as? String {
+                    songArtist = singerName
+                }
+
+                let songDuration = Double(song["interval"] as? Int ?? 0)
+                let durationDiff = abs(songDuration - duration)
+
+                // 🔑 时长差超过 3 秒的跳过
+                guard durationDiff < 3 else { continue }
+
+                // 🔑 检查艺术家相关性（搜索词是否在艺术家名中，或艺术家名是否在搜索词中）
+                let searchKeywordLower = round.keyword.lowercased()
+                let artistLower = songArtist.lowercased()
+                let titleLower = simplifiedTitle.lowercased()
+                let inputArtistLower = simplifiedArtist.lowercased()
+
+                // 艺术家匹配条件：搜索词包含艺术家名，或艺术家名包含输入的艺术家名
+                let isArtistMatch = searchKeywordLower.contains(artistLower) ||
+                                   artistLower.contains(inputArtistLower) ||
+                                   inputArtistLower.contains(artistLower) ||
+                                   songName.lowercased().contains(titleLower) ||
+                                   titleLower.contains(songName.lowercased())
+
+                candidates.append((songMid, songName, songArtist, durationDiff, isArtistMatch))
             }
-        }
 
-        for candidate in candidates {
-            if candidate.durationDiff < 1 {
-                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s only)")
-                return candidate.mid
-            }
-        }
+            // 🔑 按时长差排序
+            candidates.sort { $0.durationDiff < $1.durationDiff }
 
-        for candidate in candidates {
-            if candidate.durationDiff < 3 && candidate.titleMatch {
-                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<3s + title)")
-                return candidate.mid
+            // 🔑 选择最佳匹配
+            for candidate in candidates {
+                // Round 2 (artist only): 不需要额外验证，搜索结果应该都是相关艺术家的歌
+                // Round 1, 3: 需要验证艺术家或歌名匹配
+                if round.requireArtistMatch && !candidate.isArtistMatch {
+                    debugLog("⚠️ QQ skip: '\(candidate.name)' by '\(candidate.artist)' - no artist/title match")
+                    continue
+                }
+
+                if candidate.durationDiff < 2 {
+                    debugLog("✅ QQ Music match (round \(roundIndex + 1)): '\(candidate.name)' by '\(candidate.artist)' (duration diff: \(String(format: "%.1f", candidate.durationDiff))s)")
+                    return candidate.mid
+                }
             }
         }
 
-        debugLog("❌ QQ Music: No match found in \(songs.count) results")
+        debugLog("❌ QQ Music: No match found after all search rounds")
         return nil
     }
 
