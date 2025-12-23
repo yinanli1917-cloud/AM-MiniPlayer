@@ -299,102 +299,25 @@ public class LyricsService: ObservableObject {
         let expectedSongID = songID
 
         currentFetchTask = Task {
-            var fetchedLyrics: [LyricLine]? = nil
-
             // 🔑 检测是否为中文歌曲（标题或艺术家包含中文字符）
             let isChinese = containsChineseCharacters(title) || containsChineseCharacters(artist)
 
-            // Try sources in priority order:
-            // - 中文歌: AMLL-TTML-DB → NetEase (带质量检测) → LRCLIB → lyrics.ovh
-            // - 英文歌: AMLL-TTML-DB → LRCLIB → NetEase (带质量检测) → lyrics.ovh
             do {
                 try Task.checkCancellation()
-                logger.info("🔍 Starting priority-based search... (isChinese: \(isChinese))")
+                logger.info("🔍 Starting parallel lyrics search... (isChinese: \(isChinese))")
+                self.debugLog("🔍 并行搜索开始: '\(title)' by '\(artist)'")
 
-                // Priority 1: AMLL-TTML-DB (best quality - word-level timing)
-                if let lyrics = try? await fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                    fetchedLyrics = lyrics
-                    self.debugLog("✅ AMLL-TTML-DB: \(lyrics.count) lines")
-                    logger.info("✅ Found lyrics from AMLL-TTML-DB (priority 1)")
-                }
-
-                try Task.checkCancellation()
-
-                if isChinese {
-                    // 🔑 中文歌优先级：QQ音乐 → NetEase → LRCLIB
-                    if fetchedLyrics == nil {
-                        if let lyrics = try? await fetchFromQQMusic(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                            fetchedLyrics = lyrics
-                            self.debugLog("✅ QQ Music: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from QQ Music (priority 2 - Chinese)")
-                        }
-                    }
-
-                    try Task.checkCancellation()
-
-                    if fetchedLyrics == nil {
-                        if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                            fetchedLyrics = lyrics
-                            self.debugLog("✅ NetEase: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from NetEase (priority 3 - Chinese)")
-                        }
-                    }
-
-                    try Task.checkCancellation()
-
-                    if fetchedLyrics == nil {
-                        if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                            fetchedLyrics = lyrics
-                            self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from LRCLIB (priority 4 - Chinese)")
-                        }
-                    }
-                } else {
-                    // 🔑 英文歌优先级：LRCLIB → QQ音乐 → NetEase
-                    if fetchedLyrics == nil {
-                        if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                            fetchedLyrics = lyrics
-                            self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from LRCLIB (priority 2 - English)")
-                        }
-                    }
-
-                    try Task.checkCancellation()
-
-                    if fetchedLyrics == nil {
-                        if let lyrics = try? await fetchFromQQMusic(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                            fetchedLyrics = lyrics
-                            self.debugLog("✅ QQ Music: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from QQ Music (priority 3 - English)")
-                        }
-                    }
-
-                    try Task.checkCancellation()
-
-                    if fetchedLyrics == nil {
-                        if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                            fetchedLyrics = lyrics
-                            self.debugLog("✅ NetEase: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from NetEase (priority 4 - English)")
-                        }
-                    }
-                }
+                // 🔑 并行请求所有歌词源
+                let bestLyrics = await self.parallelFetchAndSelectBest(
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    isChinese: isChinese
+                )
 
                 try Task.checkCancellation()
 
-                // Priority 4: lyrics.ovh (fallback - plain text)
-                if fetchedLyrics == nil {
-                    if let lyrics = try? await fetchFromLyricsOVH(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
-                        fetchedLyrics = lyrics
-                        self.debugLog("✅ lyrics.ovh: \(lyrics.count) lines")
-                        logger.info("✅ Found lyrics from lyrics.ovh (priority 4)")
-                    }
-                }
-
-                if fetchedLyrics == nil {
-                    self.debugLog("❌ No lyrics found for '\(title)' by '\(artist)'")
-                }
-                logger.info("🎤 Priority search completed")
+                let fetchedLyrics = bestLyrics
 
                 if let lyrics = fetchedLyrics, !lyrics.isEmpty {
                     // Cache the lyrics
@@ -499,6 +422,157 @@ public class LyricsService: ObservableObject {
         } else if bestMatch == nil {
             currentLineIndex = nil
         }
+    }
+
+    // MARK: - Parallel Lyrics Search & Quality Scoring
+
+    /// 歌词搜索结果（带来源标识）
+    private struct LyricsResult {
+        let lyrics: [LyricLine]
+        let source: String
+        let score: Double  // 质量评分 0-100
+    }
+
+    /// 🔑 计算歌词质量评分（0-100分）
+    /// 评分标准：
+    /// - 逐字时间轴: +40分（最高质量）
+    /// - 行数: 每行+0.5分，最多+20分
+    /// - 时间轴覆盖度: 最多+20分
+    /// - 来源加成: AMLL +15, NetEase +10, QQ +8, LRCLIB +5, lyrics.ovh +0
+    private func calculateLyricsScore(_ lyrics: [LyricLine], source: String, duration: TimeInterval) -> Double {
+        guard !lyrics.isEmpty else { return 0 }
+
+        var score: Double = 0
+
+        // 1. 逐字时间轴加分（最重要的质量指标）
+        let syllableSyncCount = lyrics.filter { $0.hasSyllableSync }.count
+        let syllableSyncRatio = Double(syllableSyncCount) / Double(lyrics.count)
+        score += syllableSyncRatio * 40  // 最多 40 分
+
+        // 2. 行数加分（更多行通常意味着更完整）
+        let lineScore = min(Double(lyrics.count) * 0.5, 20)  // 最多 20 分
+        score += lineScore
+
+        // 3. 时间轴覆盖度（歌词覆盖歌曲时长的比例）
+        if duration > 0 {
+            let lastLyricEnd = lyrics.last?.endTime ?? 0
+            let firstLyricStart = lyrics.first?.startTime ?? 0
+            let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
+            score += coverageRatio * 20  // 最多 20 分
+        }
+
+        // 4. 来源加成
+        switch source {
+        case "AMLL":
+            score += 15  // AMLL 通常是最高质量
+        case "NetEase":
+            score += 10  // 网易云 YRC 质量很好
+        case "QQ":
+            score += 8   // QQ 音乐质量也不错
+        case "LRCLIB":
+            score += 5   // LRCLIB 质量一般
+        case "lyrics.ovh":
+            score += 0   // 纯文本，无时间轴
+        default:
+            break
+        }
+
+        return min(score, 100)  // 最高 100 分
+    }
+
+    /// 🔑 并行请求所有歌词源，比较质量，选择最佳结果
+    private func parallelFetchAndSelectBest(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        isChinese: Bool
+    ) async -> [LyricLine]? {
+
+        // 🔑 使用 TaskGroup 并行请求所有源
+        var results: [LyricsResult] = []
+
+        await withTaskGroup(of: LyricsResult?.self) { group in
+            // 1. AMLL-TTML-DB（始终尝试，质量最高）
+            group.addTask {
+                if let lyrics = try? await self.fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration),
+                   !lyrics.isEmpty {
+                    let score = self.calculateLyricsScore(lyrics, source: "AMLL", duration: duration)
+                    self.debugLog("📊 AMLL: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
+                    return LyricsResult(lyrics: lyrics, source: "AMLL", score: score)
+                }
+                return nil
+            }
+
+            // 2. NetEase（YRC 逐字歌词质量很好）
+            group.addTask {
+                if let lyrics = try? await self.fetchFromNetEase(title: title, artist: artist, duration: duration),
+                   !lyrics.isEmpty {
+                    let score = self.calculateLyricsScore(lyrics, source: "NetEase", duration: duration)
+                    self.debugLog("📊 NetEase: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
+                    return LyricsResult(lyrics: lyrics, source: "NetEase", score: score)
+                }
+                return nil
+            }
+
+            // 3. QQ Music
+            group.addTask {
+                if let lyrics = try? await self.fetchFromQQMusic(title: title, artist: artist, duration: duration),
+                   !lyrics.isEmpty {
+                    let score = self.calculateLyricsScore(lyrics, source: "QQ", duration: duration)
+                    self.debugLog("📊 QQ Music: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
+                    return LyricsResult(lyrics: lyrics, source: "QQ", score: score)
+                }
+                return nil
+            }
+
+            // 4. LRCLIB
+            group.addTask {
+                if let lyrics = try? await self.fetchFromLRCLIB(title: title, artist: artist, duration: duration),
+                   !lyrics.isEmpty {
+                    let score = self.calculateLyricsScore(lyrics, source: "LRCLIB", duration: duration)
+                    self.debugLog("📊 LRCLIB: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
+                    return LyricsResult(lyrics: lyrics, source: "LRCLIB", score: score)
+                }
+                return nil
+            }
+
+            // 5. lyrics.ovh（最后的备选）
+            group.addTask {
+                if let lyrics = try? await self.fetchFromLyricsOVH(title: title, artist: artist, duration: duration),
+                   !lyrics.isEmpty {
+                    let score = self.calculateLyricsScore(lyrics, source: "lyrics.ovh", duration: duration)
+                    self.debugLog("📊 lyrics.ovh: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
+                    return LyricsResult(lyrics: lyrics, source: "lyrics.ovh", score: score)
+                }
+                return nil
+            }
+
+            // 收集所有结果
+            for await result in group {
+                if let r = result {
+                    results.append(r)
+                }
+            }
+        }
+
+        // 🔑 按评分排序，选择最佳结果
+        results.sort { $0.score > $1.score }
+
+        if let best = results.first {
+            debugLog("🏆 最佳歌词: \(best.source) (评分 \(String(format: "%.1f", best.score)), \(best.lyrics.count) 行)")
+            logger.info("🏆 Selected best lyrics from \(best.source) with score \(String(format: "%.1f", best.score))")
+
+            // 打印所有结果对比
+            if results.count > 1 {
+                let comparison = results.map { "\($0.source):\(String(format: "%.0f", $0.score))" }.joined(separator: " > ")
+                debugLog("📊 评分对比: \(comparison)")
+            }
+
+            return best.lyrics
+        }
+
+        debugLog("❌ 所有歌词源均未找到结果")
+        return nil
     }
 
     // MARK: - Preloading
