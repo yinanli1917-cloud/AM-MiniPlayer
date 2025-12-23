@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import os
+import Translation
 
 // MARK: - Models
 
@@ -84,6 +85,9 @@ public class LyricsService: ObservableObject {
     // 🔑 翻译相关
     @Published public var showTranslation: Bool = false
     @Published public var translationLanguage: String = Locale.current.language.languageCode?.identifier ?? "zh"
+    @Published public var isTranslating: Bool = false
+    @Published public var translationSessionConfig: Any? = nil  // TranslationSession.Configuration on macOS 15+
+    private var translationTask: Task<Void, Never>? = nil
 
     // 🔑 整首歌是否有逐字歌词（任意一行有即为 true）
     public var hasSyllableSyncLyrics: Bool {
@@ -145,6 +149,123 @@ public class LyricsService: ObservableObject {
         Task {
             await loadAMLLIndex()
         }
+
+        // 🔑 监听 showTranslation 变化，触发翻译
+        Task { @MainActor in
+            for await _ in $showTranslation.values {
+                if showTranslation && !hasTranslation {
+                    await translateCurrentLyrics()
+                }
+            }
+        }
+
+        // 🔑 监听 translationLanguage 变化，重新翻译
+        Task { @MainActor in
+            for await _ in $translationLanguage.values {
+                if showTranslation {
+                    await translateCurrentLyrics()
+                }
+            }
+        }
+    }
+
+    /// 翻译当前歌词（由 translationTask modifier 调用）
+    /// - Parameter session: SwiftUI 提供的翻译会话
+    @available(macOS 15.0, *)
+    @MainActor
+    public func performTranslation(with session: TranslationSession) async {
+        debugLog("🎯 performTranslation() called with session")
+        guard !lyrics.isEmpty else {
+            debugLog("❌ performTranslation: No lyrics")
+            return
+        }
+        guard !isTranslating else {
+            debugLog("⚠️ performTranslation: Already translating")
+            return
+        }
+
+        // 🔑 检查是否已经有翻译了（来自歌词源）
+        if hasTranslation {
+            debugLog("ℹ️ Lyrics already have translation from source")
+            return
+        }
+
+        isTranslating = true
+        debugLog("🌐 Starting translation with session")
+
+        // 提取所有歌词文本
+        let lyricTexts = lyrics.map { $0.text }
+
+        // 使用 TranslationService 执行翻译
+        guard let translations = await TranslationService.translationTask(session, lyrics: lyricTexts) else {
+            isTranslating = false
+            debugLog("❌ Translation failed")
+            return
+        }
+
+        // 更新歌词，添加翻译
+        guard translations.count == lyrics.count else {
+            debugLog("⚠️ Translation count mismatch: \(translations.count) vs \(lyrics.count)")
+            isTranslating = false
+            return
+        }
+
+        // 创建新的歌词数组，加入翻译
+        lyrics = zip(lyrics, translations).map { line, translation in
+            LyricLine(
+                text: line.text,
+                startTime: line.startTime,
+                endTime: line.endTime,
+                words: line.words,
+                translation: translation
+            )
+        }
+
+        isTranslating = false
+        debugLog("✅ Translation completed: \(translations.count) lines")
+    }
+
+    /// 准备翻译配置（当用户开启翻译时触发）
+    @MainActor
+    public func translateCurrentLyrics() async {
+        debugLog("🔄 translateCurrentLyrics() called, lyrics count: \(lyrics.count)")
+        guard !lyrics.isEmpty else {
+            debugLog("❌ No lyrics to translate")
+            return
+        }
+
+        // 🔑 检查是否已经有翻译了（来自歌词源）
+        if hasTranslation {
+            debugLog("ℹ️ Lyrics already have translation from source")
+            return
+        }
+
+        // 🔑 检查 macOS 版本
+        guard #available(macOS 15.0, *) else {
+            debugLog("❌ Translation requires macOS 15.0 or later")
+            return
+        }
+
+        // 🔑 检测歌词语言并配置翻译会话
+        let lyricTexts = lyrics.map { $0.text }
+        debugLog("🔍 Detecting language for \(lyricTexts.count) lines")
+        guard let sourceLanguage = TranslationService.detectLanguage(for: lyricTexts) else {
+            debugLog("⚠️ Failed to detect source language")
+            return
+        }
+
+        let targetLang = Locale.Language.systemLanguages.first ?? Locale.Language(identifier: translationLanguage)
+        debugLog("🌐 Preparing translation config: \(sourceLanguage.languageCode?.identifier ?? "unknown") -> \(targetLang.languageCode?.identifier ?? "system")")
+
+        // 如果源语言和目标语言相同，不需要翻译
+        if sourceLanguage == targetLang {
+            debugLog("ℹ️ Source and target languages are the same, skipping translation")
+            return
+        }
+
+        // 🔑 设置翻译配置（这将触发 SwiftUI 的 .translationTask modifier）
+        translationSessionConfig = TranslationSession.Configuration(source: sourceLanguage, target: targetLang)
+        debugLog("✅ Translation config set, waiting for translationTask modifier to trigger...")
     }
 
     // 🐛 调试：写入文件
@@ -2024,61 +2145,15 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        // 🔑 解析翻译歌词（如果有）
-        var translationMap: [Int: String] = [:]  // 时间戳(秒*100) -> 翻译文本
-        if let tlyric = json["tlyric"] as? [String: Any],
-           let tlyricText = tlyric["lyric"] as? String,
-           !tlyricText.isEmpty {
-            translationMap = parseTranslationLRC(tlyricText)
-            debugLog("📝 Found translation: \(translationMap.count) lines")
-        }
-
         // 🔑 优先获取 YRC 逐字歌词
         if let yrc = json["yrc"] as? [String: Any],
            let yrcText = yrc["lyric"] as? String,
            !yrcText.isEmpty {
             debugLog("📝 Parsing YRC format (\(yrcText.count) chars)")
-            return parseYRC(yrcText, translations: translationMap)
+            return parseYRC(yrcText)
         }
 
         return nil
-    }
-
-    /// 解析翻译 LRC 格式，返回时间戳到翻译文本的映射
-    private func parseTranslationLRC(_ lrcText: String) -> [Int: String] {
-        var translations: [Int: String] = [:]
-        let lines = lrcText.components(separatedBy: .newlines)
-
-        // LRC 时间戳格式: [mm:ss.xx] 或 [mm:ss.xxx]
-        let pattern = "\\[(\\d+):(\\d+)[.:](\\d+)\\](.+)"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return translations }
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let range = NSRange(trimmed.startIndex..., in: trimmed)
-
-            guard let match = regex.firstMatch(in: trimmed, range: range),
-                  match.numberOfRanges >= 5 else { continue }
-
-            guard let minRange = Range(match.range(at: 1), in: trimmed),
-                  let secRange = Range(match.range(at: 2), in: trimmed),
-                  let msRange = Range(match.range(at: 3), in: trimmed),
-                  let textRange = Range(match.range(at: 4), in: trimmed) else { continue }
-
-            let min = Int(trimmed[minRange]) ?? 0
-            let sec = Int(trimmed[secRange]) ?? 0
-            var ms = Int(trimmed[msRange]) ?? 0
-            if ms < 100 { ms *= 10 }  // 两位数转三位数
-
-            let text = String(trimmed[textRange]).trimmingCharacters(in: .whitespaces)
-            if text.isEmpty { continue }
-
-            // 用秒*100作为key（精确到0.01秒）
-            let timeKey = min * 6000 + sec * 100 + ms / 10
-            translations[timeKey] = text
-        }
-
-        return translations
     }
 
     // MARK: - YRC Parser (NetEase Syllable-Level Lyrics)
@@ -2086,10 +2161,7 @@ public class LyricsService: ObservableObject {
     /// 解析 YRC 格式歌词（支持逐字时间轴）
     /// YRC 格式：[行开始毫秒,行持续毫秒](字开始毫秒,字持续毫秒,0)字(字开始毫秒,字持续毫秒,0)字...
     /// 例如：[600,5040](600,470,0)有(1070,470,0)些(1540,510,0)话
-    /// - Parameters:
-    ///   - yrcText: YRC 格式的歌词文本
-    ///   - translations: 时间戳到翻译文本的映射（可选）
-    private func parseYRC(_ yrcText: String, translations: [Int: String] = [:]) -> [LyricLine]? {
+    private func parseYRC(_ yrcText: String) -> [LyricLine]? {
         var lines: [LyricLine] = []
         let yrcLines = yrcText.components(separatedBy: .newlines)
 
@@ -2170,29 +2242,7 @@ public class LyricsService: ObservableObject {
             let startTime = Double(lineStartMs) / 1000.0
             let endTime = Double(lineStartMs + lineDurationMs) / 1000.0
 
-            // 🔑 查找对应的翻译（使用秒*100作为key，允许±0.5秒的误差匹配）
-            var translation: String? = nil
-            if !translations.isEmpty {
-                let timeKey = Int(startTime * 100)
-                // 精确匹配
-                if let trans = translations[timeKey] {
-                    translation = trans
-                } else {
-                    // 模糊匹配（±50，即±0.5秒）
-                    for offset in 1...50 {
-                        if let trans = translations[timeKey + offset] {
-                            translation = trans
-                            break
-                        }
-                        if let trans = translations[timeKey - offset] {
-                            translation = trans
-                            break
-                        }
-                    }
-                }
-            }
-
-            lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words, translation: translation))
+            lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
         }
 
         // 按时间排序

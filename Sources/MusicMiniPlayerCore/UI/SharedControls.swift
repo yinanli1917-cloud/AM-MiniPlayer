@@ -83,7 +83,7 @@ struct SharedBottomControls: View {
                     translationButton
                 }
                 .padding(.trailing, 12)
-                .padding(.bottom, 5)
+                .padding(.bottom, 10)  // 从进度条往上 10px
             }
 
             VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4

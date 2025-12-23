@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 
 // 移除自定义transition，使用SwiftUI官方transition避免icon消失bug
 // PlayerPage enum 已移至 MusicController 以支持状态共享
@@ -141,10 +142,30 @@ public struct MiniPlayerView: View {
         }
         // 🔑 删除onChange中的hover强制设置，让onHover自然控制状态
     }
+}
 
+// MARK: - Translation Wrapper
+@available(macOS 15.0, *)
+private struct TranslationWrapper<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .translationTask(LyricsService.shared.translationSessionConfig as? TranslationSession.Configuration) { session in
+                await LyricsService.shared.performTranslation(with: session)
+            }
+    }
+}
+
+// MARK: - MiniPlayerView Methods
+extension MiniPlayerView {
     // MARK: - Album Overlay Content (文字遮罩 + 底部控件)
     @ViewBuilder
-    private func albumOverlayContent(geometry: GeometryProxy) -> some View {
+    func albumOverlayContent(geometry: GeometryProxy) -> some View {
         GeometryReader { geo in
             let artSize = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
             // 控件区域高度（与SharedBottomControls一致）
@@ -654,70 +675,39 @@ struct ExpandButtonView: View {
     }
 }
 
-/// 翻译按钮 - 显示/隐藏歌词翻译，带语言选择菜单
+/// 翻译按钮 - 显示/隐藏歌词翻译（直接toggle，无二级菜单）
 struct TranslationButtonView: View {
     @ObservedObject var lyricsService: LyricsService
     @State private var isHovering = false
 
-    // 🔑 支持的翻译语言
-    private let languages: [(code: String, name: String)] = [
-        ("zh", "中文"),
-        ("en", "English"),
-        ("ja", "日本語"),
-        ("ko", "한국어"),
-    ]
-
     var body: some View {
-        Menu {
-            // 🔑 翻译开关
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    lyricsService.showTranslation.toggle()
-                }
-            }) {
-                HStack {
-                    Text(lyricsService.showTranslation ? "Hide Translation" : "Show Translation")
-                    if lyricsService.showTranslation {
-                        Image(systemName: "checkmark")
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                lyricsService.showTranslation.toggle()
+                // 手动触发翻译（以防监听器没工作）
+                if lyricsService.showTranslation {
+                    Task {
+                        await lyricsService.translateCurrentLyrics()
                     }
                 }
             }
-            .disabled(!lyricsService.hasTranslation)
-
-            Divider()
-
-            // 🔑 语言选择（仅在有翻译时可用）
-            ForEach(languages, id: \.code) { language in
-                Button(action: {
-                    lyricsService.translationLanguage = language.code
-                }) {
-                    HStack {
-                        Text(language.name)
-                        if lyricsService.translationLanguage == language.code {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
-        } label: {
-            Image(systemName: lyricsService.showTranslation ? "translate" : "translate")
-                .font(.system(size: 15))
-                .foregroundColor(lyricsService.hasTranslation ? (isHovering ? .white : .white.opacity(0.7)) : .white.opacity(0.3))
-                .frame(width: 26, height: 26)
+        }) {
+            Image(systemName: "translate")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(lyricsService.showTranslation ? .white : (isHovering ? .white.opacity(0.95) : .white.opacity(0.8)))
+                .frame(width: 32, height: 32)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity(isHovering ? 0.15 : 0))
+                        .fill(Color.white.opacity((lyricsService.showTranslation || isHovering) ? 0.2 : 0.12))  // 🔑 常驻底色 0.12，激活/hover 0.2
                 )
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .buttonStyle(.plain)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
         }
-        .help(lyricsService.hasTranslation ? "Translation" : "No translation available")
+        .help("Toggle Translation")
     }
 }
 

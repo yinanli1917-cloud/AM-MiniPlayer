@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Translation
 
 public struct LyricsView: View {
     @EnvironmentObject var musicController: MusicController
@@ -536,7 +537,7 @@ public struct LyricsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
+
     // MARK: - Subviews
 
     private var emptyStateView: some View {
@@ -1132,3 +1133,33 @@ struct LyricsView_Previews: PreviewProvider {
     }
 }
 #endif
+
+// MARK: - Translation Modifier for LyricsView
+@available(macOS 15.0, *)
+private struct LyricsTranslationModifier: ViewModifier {
+    @ObservedObject var lyricsService = LyricsService.shared
+
+    func body(content: Content) -> some View {
+        Group {
+            if let config = lyricsService.translationSessionConfig as? TranslationSession.Configuration {
+                content
+                    .translationTask(config) { session in
+                        fputs("🎯 [TranslationModifier] translationTask triggered!\n", stderr)
+                        await lyricsService.performTranslation(with: session)
+                    }
+            } else {
+                content
+            }
+        }
+        .onAppear {
+            fputs("🔧 [TranslationModifier] onAppear, config type: \(type(of: lyricsService.translationSessionConfig))\n", stderr)
+        }
+    }
+}
+
+@available(macOS, obsoleted: 15.0)
+private struct LyricsTranslationModifierLegacy: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+    }
+}
