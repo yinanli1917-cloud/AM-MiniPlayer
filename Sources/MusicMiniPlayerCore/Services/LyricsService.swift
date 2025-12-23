@@ -299,12 +299,22 @@ public class LyricsService: ObservableObject {
                 try Task.checkCancellation()
 
                 if isChinese {
-                    // 🔑 中文歌：NetEase 优先（有更好的中文歌词库，带质量检测）
+                    // 🔑 中文歌优先级：QQ音乐 → NetEase → LRCLIB
+                    if fetchedLyrics == nil {
+                        if let lyrics = try? await fetchFromQQMusic(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                            fetchedLyrics = lyrics
+                            self.debugLog("✅ QQ Music: \(lyrics.count) lines")
+                            logger.info("✅ Found lyrics from QQ Music (priority 2 - Chinese)")
+                        }
+                    }
+
+                    try Task.checkCancellation()
+
                     if fetchedLyrics == nil {
                         if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                             fetchedLyrics = lyrics
                             self.debugLog("✅ NetEase: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from NetEase (priority 2 - Chinese)")
+                            logger.info("✅ Found lyrics from NetEase (priority 3 - Chinese)")
                         }
                     }
 
@@ -314,11 +324,11 @@ public class LyricsService: ObservableObject {
                         if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                             fetchedLyrics = lyrics
                             self.debugLog("✅ LRCLIB: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from LRCLIB (priority 3 - Chinese)")
+                            logger.info("✅ Found lyrics from LRCLIB (priority 4 - Chinese)")
                         }
                     }
                 } else {
-                    // 🔑 英文歌：LRCLIB 优先，NetEase 作为后备（带质量检测）
+                    // 🔑 英文歌优先级：LRCLIB → QQ音乐 → NetEase
                     if fetchedLyrics == nil {
                         if let lyrics = try? await fetchFromLRCLIB(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                             fetchedLyrics = lyrics
@@ -330,10 +340,20 @@ public class LyricsService: ObservableObject {
                     try Task.checkCancellation()
 
                     if fetchedLyrics == nil {
+                        if let lyrics = try? await fetchFromQQMusic(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
+                            fetchedLyrics = lyrics
+                            self.debugLog("✅ QQ Music: \(lyrics.count) lines")
+                            logger.info("✅ Found lyrics from QQ Music (priority 3 - English)")
+                        }
+                    }
+
+                    try Task.checkCancellation()
+
+                    if fetchedLyrics == nil {
                         if let lyrics = try? await fetchFromNetEase(title: title, artist: artist, duration: duration), !lyrics.isEmpty {
                             fetchedLyrics = lyrics
                             self.debugLog("✅ NetEase: \(lyrics.count) lines")
-                            logger.info("✅ Found lyrics from NetEase (priority 3 - English)")
+                            logger.info("✅ Found lyrics from NetEase (priority 4 - English)")
                         }
                     }
                 }
@@ -1542,6 +1562,186 @@ public class LyricsService: ObservableObject {
 
         logger.warning("No lyrics content in NetEase response")
         return nil
+    }
+
+    // MARK: - QQ Music Lyrics
+
+    private func fetchFromQQMusic(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🌐 Fetching from QQ Music: '\(title)' by '\(artist)'")
+        logger.info("🌐 Fetching from QQ Music: \(title) by \(artist)")
+
+        // Step 1: Search for the song
+        guard let songMid = try await searchQQMusicSong(title: title, artist: artist, duration: duration) else {
+            debugLog("❌ QQ Music: No matching song found")
+            logger.warning("No matching song found on QQ Music")
+            return nil
+        }
+
+        debugLog("✅ QQ Music found song mid: \(songMid)")
+        logger.info("🎵 Found QQ Music song mid: \(songMid)")
+
+        // Step 2: Get lyrics for the song
+        return try await fetchQQMusicLyrics(songMid: songMid)
+    }
+
+    private func searchQQMusicSong(title: String, artist: String, duration: TimeInterval) async throws -> String? {
+        // 🔑 繁体转简体
+        let simplifiedTitle = convertToSimplified(title)
+        let simplifiedArtist = convertToSimplified(artist)
+
+        // 搜索关键词
+        let searchKeyword = "\(simplifiedTitle) \(simplifiedArtist)"
+
+        debugLog("🔍 QQ Music search: '\(searchKeyword)'")
+
+        var components = URLComponents(string: "https://c.y.qq.com/soso/fcgi-bin/client_search_cp")!
+        components.queryItems = [
+            URLQueryItem(name: "p", value: "1"),
+            URLQueryItem(name: "n", value: "20"),
+            URLQueryItem(name: "w", value: searchKeyword),
+            URLQueryItem(name: "format", value: "json")
+        ]
+
+        guard let url = components.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://y.qq.com/portal/player.html", forHTTPHeaderField: "Referer")
+        request.timeoutInterval = 10.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            return nil
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataDict = json["data"] as? [String: Any],
+              let songDict = dataDict["song"] as? [String: Any],
+              let songs = songDict["list"] as? [[String: Any]] else {
+            return nil
+        }
+
+        debugLog("📦 QQ Music returned \(songs.count) results")
+
+        // 🔑 匹配逻辑：以时长为主要基准
+        var candidates: [(mid: String, name: String, artist: String, duration: Double, durationDiff: Double, titleMatch: Bool, artistMatch: Bool)] = []
+
+        for song in songs {
+            guard let songMid = song["songmid"] as? String,
+                  let songName = song["songname"] as? String else { continue }
+
+            // Get artist
+            var songArtist = ""
+            if let singers = song["singer"] as? [[String: Any]],
+               let firstSinger = singers.first,
+               let singerName = firstSinger["name"] as? String {
+                songArtist = singerName
+            }
+
+            // Get duration (in seconds)
+            let songDuration = Double(song["interval"] as? Int ?? 0)
+            let durationDiff = abs(songDuration - duration)
+
+            // 🔑 时长差超过 5 秒的直接跳过
+            guard durationDiff < 5 else { continue }
+
+            // 匹配标题和艺术家
+            let titleLower = title.lowercased()
+            let simplifiedTitleLower = simplifiedTitle.lowercased()
+            let songNameLower = songName.lowercased()
+
+            let titleMatch = songNameLower.contains(titleLower) ||
+                            titleLower.contains(songNameLower) ||
+                            songNameLower.contains(simplifiedTitleLower) ||
+                            simplifiedTitleLower.contains(songNameLower)
+
+            let artistMatch = songArtist.lowercased().contains(artist.lowercased()) ||
+                             artist.lowercased().contains(songArtist.lowercased())
+
+            candidates.append((songMid, songName, songArtist, songDuration, durationDiff, titleMatch, artistMatch))
+        }
+
+        // 🔑 按时长差排序
+        candidates.sort { $0.durationDiff < $1.durationDiff }
+
+        // 🔑 匹配优先级
+        for candidate in candidates {
+            if candidate.durationDiff < 1 && (candidate.titleMatch || candidate.artistMatch) {
+                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title/artist)")
+                return candidate.mid
+            }
+        }
+
+        for candidate in candidates {
+            if candidate.durationDiff < 2 && candidate.artistMatch {
+                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<2s + artist)")
+                return candidate.mid
+            }
+        }
+
+        for candidate in candidates {
+            if candidate.durationDiff < 1 {
+                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s only)")
+                return candidate.mid
+            }
+        }
+
+        for candidate in candidates {
+            if candidate.durationDiff < 3 && candidate.titleMatch {
+                debugLog("✅ QQ Music match: '\(candidate.name)' by '\(candidate.artist)' (duration<3s + title)")
+                return candidate.mid
+            }
+        }
+
+        debugLog("❌ QQ Music: No match found in \(songs.count) results")
+        return nil
+    }
+
+    private func fetchQQMusicLyrics(songMid: String) async throws -> [LyricLine]? {
+        var components = URLComponents(string: "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg")!
+        components.queryItems = [
+            URLQueryItem(name: "songmid", value: songMid),
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "nobase64", value: "1")
+        ]
+
+        guard let url = components.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://y.qq.com/portal/player.html", forHTTPHeaderField: "Referer")
+        request.timeoutInterval = 10.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            return nil
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let lyricText = json["lyric"] as? String,
+              !lyricText.isEmpty else {
+            logger.warning("No lyrics content in QQ Music response")
+            return nil
+        }
+
+        let lyrics = parseLRC(lyricText)
+
+        // 🔑 质量检测
+        let (isValid, issues) = validateLyricsQuality(lyrics)
+        if !isValid {
+            debugLog("❌ QQ Music lyrics rejected: \(issues.joined(separator: ", "))")
+            logger.warning("❌ QQ Music quality check failed: \(issues.joined(separator: ", "))")
+            return nil
+        }
+
+        logger.info("✅ Found QQ Music lyrics (\(lyrics.count) lines)")
+        return lyrics
     }
 
     // MARK: - NetEase YRC (Syllable-Level Lyrics) - 新版 API
