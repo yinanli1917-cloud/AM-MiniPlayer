@@ -204,7 +204,8 @@ public struct LyricsView: View {
                                                         lockedLineIndex = nil
                                                         manualScrollOffset = 0
                                                         musicController.seek(to: line.startTime)
-                                                    }
+                                                    },
+                                                    showTranslation: lyricsService.showTranslation
                                                 )
                                                 .padding(.horizontal, 32)
 
@@ -444,28 +445,35 @@ public struct LyricsView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Hide/Expand 按钮 - 根据模式显示不同按钮
+            // 🔑 翻译按钮 + Hide/Expand 按钮 - 横向排列
             if showControls {
-                if onExpand != nil {
-                    // 菜单栏模式：显示展开按钮
-                    ExpandButtonView(onExpand: onExpand!)
-                        .padding(12)
+                HStack(spacing: 8) {
+                    // 🔑 翻译按钮（仅在歌词页面且有歌词时显示）
+                    if currentPage == .lyrics && !lyricsService.lyrics.isEmpty {
+                        TranslationButtonView(lyricsService: lyricsService)
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    }
+
+                    // Hide/Expand 按钮
+                    if onExpand != nil {
+                        // 菜单栏模式：显示展开按钮
+                        ExpandButtonView(onExpand: onExpand!)
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    } else if onHide != nil {
+                        // 浮窗模式：显示收起按钮
+                        HideButtonView(onHide: onHide!)
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    } else {
+                        // 无回调时的默认行为
+                        HideButtonView(onHide: {
+                            if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
+                                window.orderOut(nil)
+                            }
+                        })
                         .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                } else if onHide != nil {
-                    // 浮窗模式：显示收起按钮
-                    HideButtonView(onHide: onHide!)
-                        .padding(12)
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                } else {
-                    // 无回调时的默认行为
-                    HideButtonView(onHide: {
-                        if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
-                            window.orderOut(nil)
-                        }
-                    })
-                    .padding(12)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    }
                 }
+                .padding(12)
             }
         }
         .onHover { hovering in
@@ -875,6 +883,7 @@ struct LyricLineView: View {
     let isScrolling: Bool
     var currentTime: TimeInterval = 0  // 保留用于将来逐字高亮
     var onTap: (() -> Void)? = nil  // 🔑 点击回调
+    var showTranslation: Bool = false  // 🔑 是否显示翻译
 
     @State private var isHovering: Bool = false
 
@@ -911,14 +920,31 @@ struct LyricLineView: View {
         }()
 
         // 🔑 稳定版本：简单的行级高亮（等待正确的逐字高亮实现）
-        HStack(spacing: 0) {
-            Text(cleanedText)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundColor(.white.opacity(textOpacity))
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 2) {
+            // 🔑 主歌词行
+            HStack(spacing: 0) {
+                Text(cleanedText)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundColor(.white.opacity(textOpacity))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
+            }
+
+            // 🔑 翻译行（如果有翻译且开启显示）
+            if showTranslation, let translation = line.translation, !translation.isEmpty {
+                HStack(spacing: 0) {
+                    Text(translation)
+                        .font(.system(size: 12, weight: .medium))  // 50% 大小
+                        .foregroundColor(.white.opacity(textOpacity * 0.7))  // 稍微透明一点
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
+            }
         }
         // 🔑 不设固定高度，让内容自然决定高度
         .padding(.vertical, 8)  // 🔑 每句歌词的内部 padding（hover 背景用）

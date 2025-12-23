@@ -33,14 +33,19 @@ public struct LyricLine: Identifiable, Equatable {
     public let endTime: TimeInterval
     /// 逐字时间信息（如果有的话）
     public let words: [LyricWord]
+    /// 翻译文本（如果有的话）
+    public let translation: String?
     /// 是否有逐字时间轴
     public var hasSyllableSync: Bool { !words.isEmpty }
+    /// 是否有翻译
+    public var hasTranslation: Bool { translation != nil && !translation!.isEmpty }
 
-    public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = []) {
+    public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = [], translation: String? = nil) {
         self.text = text
         self.startTime = startTime
         self.endTime = endTime
         self.words = words
+        self.translation = translation
     }
 }
 
@@ -76,9 +81,18 @@ public class LyricsService: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
 
+    // 🔑 翻译相关
+    @Published public var showTranslation: Bool = false
+    @Published public var translationLanguage: String = Locale.current.language.languageCode?.identifier ?? "zh"
+
     // 🔑 整首歌是否有逐字歌词（任意一行有即为 true）
     public var hasSyllableSyncLyrics: Bool {
         lyrics.contains { $0.hasSyllableSync }
+    }
+
+    // 🔑 整首歌是否有翻译（任意一行有即为 true）
+    public var hasTranslation: Bool {
+        lyrics.contains { $0.hasTranslation }
     }
 
     // 🔧 第一句真正歌词的索引（跳过作词作曲等元信息）
@@ -1362,15 +1376,16 @@ public class LyricsService: ObservableObject {
         let overlapRatio = Double(overlapCount) / Double(totalLines)
         let shortRatio = Double(tooShortLineCount) / Double(totalLines)
 
-        // 判断是否通过质量检���
-        // 允许少量问题（<5%），但如果问题太多则拒绝
-        if reverseRatio > 0.05 {
+        // 判断是否通过质量检测
+        // 🔑 放宽阈值：很多歌词有重复段落（如副歌），会导致时间倒退
+        // 时间倒退 < 20%，时间重叠 < 15%，太短行 < 25%
+        if reverseRatio > 0.20 {
             issues.append("时间倒退(\(timeReverseCount)/\(totalLines)=\(String(format: "%.1f", reverseRatio * 100))%)")
         }
-        if overlapRatio > 0.1 {
+        if overlapRatio > 0.15 {
             issues.append("时间重叠(\(overlapCount)/\(totalLines)=\(String(format: "%.1f", overlapRatio * 100))%)")
         }
-        if shortRatio > 0.2 {
+        if shortRatio > 0.25 {
             issues.append("太短行(\(tooShortLineCount)/\(totalLines)=\(String(format: "%.1f", shortRatio * 100))%)")
         }
 
@@ -1691,7 +1706,9 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        // 🔑 用时长匹配找到正确的歌曲
+        // 🔑 用时长 + 艺术家名匹配找到正确的歌曲
+        let inputArtistLower = artist.lowercased()
+
         for result in results {
             guard let trackName = result["trackName"] as? String,
                   let artistName = result["artistName"] as? String,
@@ -1702,14 +1719,21 @@ public class LyricsService: ObservableObject {
             let trackDuration = Double(trackTimeMillis) / 1000.0
             let durationDiff = abs(trackDuration - duration)
 
-            // 时长差 < 2秒，认为是同一首歌
-            if durationDiff < 2 {
+            // 🔑 必须同时满足：时长差 < 2秒 AND 艺术家名相关
+            // 艺术家名相关：输入艺术家名包含结果艺术家名，或结果艺术家名包含输入艺术家名的某部分
+            let resultArtistLower = artistName.lowercased()
+            let artistMatch = inputArtistLower.contains(resultArtistLower) ||
+                              resultArtistLower.contains(inputArtistLower) ||
+                              inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) } ||
+                              inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
+
+            if durationDiff < 2 && artistMatch {
                 debugLog("✅ iTunes CN match: '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.1f", durationDiff))s)")
                 return (trackName, artistName)
             }
         }
 
-        debugLog("❌ iTunes CN: No duration match found")
+        debugLog("❌ iTunes CN: No duration+artist match found")
         return nil
     }
 
@@ -1904,12 +1928,12 @@ public class LyricsService: ObservableObject {
 
     // MARK: - NetEase YRC (Syllable-Level Lyrics) - 新版 API
 
-    /// 使用新版 API 获取 YRC 逐字歌词
+    /// 使用新版 API 获取 YRC 逐字歌词（包含翻译）
     /// YRC 格式提供每个字的精确时间轴，比 LRC 行级歌词更精确
     private func fetchNetEaseYRC(songId: Int) async throws -> [LyricLine]? {
         // 🔑 新版 API 地址（与 Lyricify 相同）
-        // 参数说明：yv=1 请求 YRC 格式，lv=1 请求 LRC 格式
-        let urlString = "https://music.163.com/api/song/lyric/v1?id=\(songId)&lv=1&yv=1&tv=0&rv=0"
+        // 参数说明：yv=1 请求 YRC 格式，lv=1 请求 LRC 格式，tv=1 请求翻译
+        let urlString = "https://music.163.com/api/song/lyric/v1?id=\(songId)&lv=1&yv=1&tv=1&rv=0"
         guard let url = URL(string: urlString) else { return nil }
 
         var request = URLRequest(url: url)
@@ -1928,15 +1952,61 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
+        // 🔑 解析翻译歌词（如果有）
+        var translationMap: [Int: String] = [:]  // 时间戳(秒*100) -> 翻译文本
+        if let tlyric = json["tlyric"] as? [String: Any],
+           let tlyricText = tlyric["lyric"] as? String,
+           !tlyricText.isEmpty {
+            translationMap = parseTranslationLRC(tlyricText)
+            debugLog("📝 Found translation: \(translationMap.count) lines")
+        }
+
         // 🔑 优先获取 YRC 逐字歌词
         if let yrc = json["yrc"] as? [String: Any],
            let yrcText = yrc["lyric"] as? String,
            !yrcText.isEmpty {
             debugLog("📝 Parsing YRC format (\(yrcText.count) chars)")
-            return parseYRC(yrcText)
+            return parseYRC(yrcText, translations: translationMap)
         }
 
         return nil
+    }
+
+    /// 解析翻译 LRC 格式，返回时间戳到翻译文本的映射
+    private func parseTranslationLRC(_ lrcText: String) -> [Int: String] {
+        var translations: [Int: String] = [:]
+        let lines = lrcText.components(separatedBy: .newlines)
+
+        // LRC 时间戳格式: [mm:ss.xx] 或 [mm:ss.xxx]
+        let pattern = "\\[(\\d+):(\\d+)[.:](\\d+)\\](.+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return translations }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let range = NSRange(trimmed.startIndex..., in: trimmed)
+
+            guard let match = regex.firstMatch(in: trimmed, range: range),
+                  match.numberOfRanges >= 5 else { continue }
+
+            guard let minRange = Range(match.range(at: 1), in: trimmed),
+                  let secRange = Range(match.range(at: 2), in: trimmed),
+                  let msRange = Range(match.range(at: 3), in: trimmed),
+                  let textRange = Range(match.range(at: 4), in: trimmed) else { continue }
+
+            let min = Int(trimmed[minRange]) ?? 0
+            let sec = Int(trimmed[secRange]) ?? 0
+            var ms = Int(trimmed[msRange]) ?? 0
+            if ms < 100 { ms *= 10 }  // 两位数转三位数
+
+            let text = String(trimmed[textRange]).trimmingCharacters(in: .whitespaces)
+            if text.isEmpty { continue }
+
+            // 用秒*100作为key（精确到0.01秒）
+            let timeKey = min * 6000 + sec * 100 + ms / 10
+            translations[timeKey] = text
+        }
+
+        return translations
     }
 
     // MARK: - YRC Parser (NetEase Syllable-Level Lyrics)
@@ -1944,7 +2014,10 @@ public class LyricsService: ObservableObject {
     /// 解析 YRC 格式歌词（支持逐字时间轴）
     /// YRC 格式：[行开始毫秒,行持续毫秒](字开始毫秒,字持续毫秒,0)字(字开始毫秒,字持续毫秒,0)字...
     /// 例如：[600,5040](600,470,0)有(1070,470,0)些(1540,510,0)话
-    private func parseYRC(_ yrcText: String) -> [LyricLine]? {
+    /// - Parameters:
+    ///   - yrcText: YRC 格式的歌词文本
+    ///   - translations: 时间戳到翻译文本的映射（可选）
+    private func parseYRC(_ yrcText: String, translations: [Int: String] = [:]) -> [LyricLine]? {
         var lines: [LyricLine] = []
         let yrcLines = yrcText.components(separatedBy: .newlines)
 
@@ -2025,7 +2098,29 @@ public class LyricsService: ObservableObject {
             let startTime = Double(lineStartMs) / 1000.0
             let endTime = Double(lineStartMs + lineDurationMs) / 1000.0
 
-            lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
+            // 🔑 查找对应的翻译（使用秒*100作为key，允许±0.5秒的误差匹配）
+            var translation: String? = nil
+            if !translations.isEmpty {
+                let timeKey = Int(startTime * 100)
+                // 精确匹配
+                if let trans = translations[timeKey] {
+                    translation = trans
+                } else {
+                    // 模糊匹配（±50，即±0.5秒）
+                    for offset in 1...50 {
+                        if let trans = translations[timeKey + offset] {
+                            translation = trans
+                            break
+                        }
+                        if let trans = translations[timeKey - offset] {
+                            translation = trans
+                            break
+                        }
+                    }
+                }
+            }
+
+            lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words, translation: translation))
         }
 
         // 按时间排序

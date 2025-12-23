@@ -654,6 +654,78 @@ struct ExpandButtonView: View {
     }
 }
 
+/// 翻译按钮 - 显示/隐藏歌词翻译，带语言选择菜单
+struct TranslationButtonView: View {
+    @ObservedObject var lyricsService: LyricsService
+    @State private var isHovering = false
+
+    // 🔑 支持的翻译语言
+    private let languages: [(code: String, name: String)] = [
+        ("zh", "中文"),
+        ("en", "English"),
+        ("ja", "日本語"),
+        ("ko", "한국어"),
+    ]
+
+    var body: some View {
+        Menu {
+            // 🔑 翻译开关
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    lyricsService.showTranslation.toggle()
+                }
+            }) {
+                HStack {
+                    Text(lyricsService.showTranslation ? "Hide Translation" : "Show Translation")
+                    if lyricsService.showTranslation {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            .disabled(!lyricsService.hasTranslation)
+
+            Divider()
+
+            // 🔑 语言选择（仅在有翻译时可用）
+            ForEach(languages, id: \.code) { language in
+                Button(action: {
+                    lyricsService.translationLanguage = language.code
+                }) {
+                    HStack {
+                        Text(language.name)
+                        if lyricsService.translationLanguage == language.code {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: lyricsService.showTranslation ? "character.bubble.fill" : "character.bubble")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(lyricsService.hasTranslation ? (isHovering ? .white : .white.opacity(0.7)) : .white.opacity(0.3))
+                .frame(width: 28, height: 28)
+                .background(
+                    ZStack {
+                        Color.white.opacity(isHovering ? 0.15 : 0.08)
+                        if isHovering {
+                            Color.white.opacity(0.05)
+                        }
+                    }
+                )
+                .clipShape(Circle())  // 🔑 圆形背景
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+        .help(lyricsService.hasTranslation ? "Translation" : "No translation available")
+    }
+}
+
 // MARK: - Playlist Tab Bar (集成版，带透明背景)
 
 struct PlaylistTabBarIntegrated: View {
