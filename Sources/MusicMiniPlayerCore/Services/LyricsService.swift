@@ -188,12 +188,21 @@ public class LyricsService: ObservableObject {
             let hasColon = trimmed.contains("：") || trimmed.contains(":")
             let hasTitleSeparator = trimmed.contains(" - ") && trimmed.count < 50
 
-            // 🔑 元信息判断：在开头 + 短时长 + 包含冒号/标题分隔符
+            // 🔑 元信息判断：在开头 + (空行 OR (短时长 AND 有冒号) OR 有标题分隔符)
             let isMetadata = !foundFirstRealLyric && (
                 trimmed.isEmpty ||
                 (duration < 3.0 && hasColon) ||
                 hasTitleSeparator
             )
+
+            // 🔑 额外检查：如果有冒号，但时长较长（>=3秒），也可能是元信息，检查是否在开头的连续短行区域
+            if !isMetadata && !foundFirstRealLyric && hasColon && consecutiveMetadataEnd > 0 && line.startTime < consecutiveMetadataEnd + 5.0 {
+                // 在连续元信息区域后的5秒内，仍然可能是元信息
+                if duration < 5.0 && trimmed.count < 30 {
+                    // 短行且有冒号，视为元信息
+                    continue
+                }
+            }
 
             if isMetadata {
                 consecutiveMetadataEnd = line.endTime
@@ -447,12 +456,13 @@ public class LyricsService: ObservableObject {
         let score: Double  // 质量评分 0-100
     }
 
-    /// 🔑 计算歌词质量评分（0-100分）
+    /// 🔑 计算歌词综合评分（0-100分）
     /// 评分标准：
-    /// - 逐字时间轴: +40分（最高质量）
-    /// - 行数: 每行+0.5分，最多+20分
-    /// - 时间轴覆盖度: 最多+20分
-    /// - 来源加成: AMLL +15, NetEase +10, QQ +8, LRCLIB +5, lyrics.ovh +0
+    /// - 逐字时间轴: +30分
+    /// - 质量分析分: 0-30分（时间倒退/重叠/短行惩罚）
+    /// - 行数: 每行+0.5分，最多+15分
+    /// - 时间轴覆盖度: 最多+15分
+    /// - 来源加成: AMLL +10, NetEase +8, QQ +6, LRCLIB +3, lyrics.ovh +0
     private func calculateLyricsScore(_ lyrics: [LyricLine], source: String, duration: TimeInterval) -> Double {
         guard !lyrics.isEmpty else { return 0 }
 
@@ -461,30 +471,34 @@ public class LyricsService: ObservableObject {
         // 1. 逐字时间轴加分（最重要的质量指标）
         let syllableSyncCount = lyrics.filter { $0.hasSyllableSync }.count
         let syllableSyncRatio = Double(syllableSyncCount) / Double(lyrics.count)
-        score += syllableSyncRatio * 40  // 最多 40 分
+        score += syllableSyncRatio * 30  // 最多 30 分
 
-        // 2. 行数加分（更多行通常意味着更完整）
-        let lineScore = min(Double(lyrics.count) * 0.5, 20)  // 最多 20 分
+        // 2. 质量分析分（整合到评分系统中）
+        let qualityAnalysis = analyzeLyricsQuality(lyrics)
+        score += (qualityAnalysis.qualityScore / 100.0) * 30  // 最多 30 分
+
+        // 3. 行数加分（更多行通常意味着更完整）
+        let lineScore = min(Double(lyrics.count) * 0.5, 15)  // 最多 15 分
         score += lineScore
 
-        // 3. 时间轴覆盖度（歌词覆盖歌曲时长的比例）
+        // 4. 时间轴覆盖度（歌词覆盖歌曲时长的比例）
         if duration > 0 {
             let lastLyricEnd = lyrics.last?.endTime ?? 0
             let firstLyricStart = lyrics.first?.startTime ?? 0
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
-            score += coverageRatio * 20  // 最多 20 分
+            score += coverageRatio * 15  // 最多 15 分
         }
 
-        // 4. 来源加成
+        // 5. 来源加成
         switch source {
         case "AMLL":
-            score += 15  // AMLL 通常是最高质量
+            score += 10  // AMLL 通常是最高质量
         case "NetEase":
-            score += 10  // 网易云 YRC 质量很好
+            score += 8   // 网易云 YRC 质量很好
         case "QQ":
-            score += 8   // QQ 音乐质量也不错
+            score += 6   // QQ 音乐质量也不错
         case "LRCLIB":
-            score += 5   // LRCLIB 质量一般
+            score += 3   // LRCLIB 质量一般
         case "lyrics.ovh":
             score += 0   // 纯文本，无时间轴
         default:
@@ -495,6 +509,10 @@ public class LyricsService: ObservableObject {
     }
 
     /// 🔑 并行请求所有歌词源，比较质量，选择最佳结果
+    /// 优化策略：
+    /// 1. 降低超时时间（加快响应）
+    /// 2. 按评分排序选择最佳
+    /// 3. 最终质量过滤（确保最低标准）
     private func parallelFetchAndSelectBest(
         title: String,
         artist: String,
@@ -572,16 +590,36 @@ public class LyricsService: ObservableObject {
         // 🔑 按评分排序，选择最佳结果
         results.sort { $0.score > $1.score }
 
-        if let best = results.first {
-            debugLog("🏆 最佳歌词: \(best.source) (评分 \(String(format: "%.1f", best.score)), \(best.lyrics.count) 行)")
-            logger.info("🏆 Selected best lyrics from \(best.source) with score \(String(format: "%.1f", best.score))")
+        // 🔑 遍历排序后的结果，找到第一个通过最低质量标准的歌词
+        for result in results {
+            let qualityAnalysis = analyzeLyricsQuality(result.lyrics)
 
-            // 打印所有结果对比
-            if results.count > 1 {
-                let comparison = results.map { "\($0.source):\(String(format: "%.0f", $0.score))" }.joined(separator: " > ")
-                debugLog("📊 评分对比: \(comparison)")
+            // 打印详细评分信息
+            debugLog("🔍 \(result.source): 评分 \(String(format: "%.1f", result.score)), 质量 \(String(format: "%.0f", qualityAnalysis.qualityScore)), 有效: \(qualityAnalysis.isValid)")
+            if !qualityAnalysis.issues.isEmpty {
+                debugLog("   问题: \(qualityAnalysis.issues.joined(separator: ", ")))")
             }
 
+            // 🔑 使用第一个通过最低质量标准的结果
+            if qualityAnalysis.isValid {
+                debugLog("🏆 最佳歌词: \(result.source) (评分 \(String(format: "%.1f", result.score)), 质量 \(String(format: "%.0f", qualityAnalysis.qualityScore)), \(result.lyrics.count) 行)")
+                logger.info("🏆 Selected best lyrics from \(result.source) (score: \(String(format: "%.1f", result.score)), quality: \(String(format: "%.0f", qualityAnalysis.qualityScore)))")
+
+                // 打印所有结果对比
+                if results.count > 1 {
+                    let comparison = results.map { "\($0.source):\(String(format: "%.0f", $0.score))" }.joined(separator: " > ")
+                    debugLog("📊 评分对比: \(comparison)")
+                }
+
+                return result.lyrics
+            }
+        }
+
+        // 🔑 如果所有结果都未通过质量检测，返回评分最高的（勉强可用）
+        if let best = results.first {
+            let qualityAnalysis = analyzeLyricsQuality(best.lyrics)
+            debugLog("⚠️ 所有歌词源均有质量问题，使用最佳可用: \(best.source) (评分 \(String(format: "%.1f", best.score)), 质量 \(String(format: "%.0f", qualityAnalysis.qualityScore)))")
+            logger.warning("⚠️ Using best available lyrics from \(best.source) despite quality issues: \(qualityAnalysis.issues.joined(separator: ", "))")
             return best.lyrics
         }
 
@@ -691,7 +729,7 @@ public class LyricsService: ObservableObject {
 
                 do {
                     var request = URLRequest(url: indexURL)
-                    request.timeoutInterval = 15.0
+                    request.timeoutInterval = 5.0  // 🔑 降低超时：8s → 5s  // 🔑 降低超时：15s → 8s
                     request.setValue("nanoPod/1.0", forHTTPHeaderField: "User-Agent")
 
                     let (data, response) = try await URLSession.shared.data(for: request)
@@ -890,7 +928,7 @@ public class LyricsService: ObservableObject {
 
             do {
                 var request = URLRequest(url: ttmlURL)
-                request.timeoutInterval = 15.0
+                request.timeoutInterval = 5.0  // 🔑 降低超时：8s → 5s  // 🔑 降低超时：15s → 8s
                 request.setValue("nanoPod/1.0", forHTTPHeaderField: "User-Agent")
 
                 let (data, response) = try await URLSession.shared.data(for: request)
@@ -1127,7 +1165,7 @@ public class LyricsService: ObservableObject {
         var request = URLRequest(url: url)
         request.setValue("MusicMiniPlayer/1.0 (https://github.com/yourusername/MusicMiniPlayer)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 15.0  // 🔑 添加超时时间
+        request.timeoutInterval = 6.0  // 🔑 降低超时：15s → 6s
 
         let session = URLSession.shared
         let (data, response) = try await session.data(for: request)
@@ -1251,7 +1289,7 @@ public class LyricsService: ObservableObject {
 
         var request = URLRequest(url: url)
         request.setValue("MusicMiniPlayer/1.0", forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 15.0  // 🔑 添加超时时间
+        request.timeoutInterval = 6.0  // 🔑 降低超时：15s → 6s
 
         let session = URLSession.shared
         let (data, response) = try await session.data(for: request)
@@ -1317,9 +1355,34 @@ public class LyricsService: ObservableObject {
 
     // MARK: - Lyrics Quality Validation
 
-    /// 🔑 验证歌词质量，检测常见问题
-    /// 返回 (是否有效, 问题列表)
-    private func validateLyricsQuality(_ lyrics: [LyricLine]) -> (Bool, [String]) {
+    /// 🔑 歌词质量分析结果（用于评分和过滤）
+    private struct QualityAnalysis {
+        let isValid: Bool                      // 是否通过最低质量标准
+        let timeReverseRatio: Double           // 时间倒退比例 (0-1)
+        let timeOverlapRatio: Double           // 时间重叠比例 (0-1)
+        let shortLineRatio: Double             // 太短行比例 (0-1)
+        let realLyricCount: Int                // 真实歌词行数
+        let issues: [String]                   // 问题列表
+
+        /// 计算质量评分因子 (0-100, 越高越好)
+        var qualityScore: Double {
+            var score = 100.0
+
+            // 时间倒退惩罚：每 1% 扣 3 分
+            score -= timeReverseRatio * 300
+
+            // 时间重叠惩罚：每 1% 扣 2 分
+            score -= timeOverlapRatio * 200
+
+            // 太短行惩罚：每 1% 扣 1 分
+            score -= shortLineRatio * 100
+
+            return max(0, score)
+        }
+    }
+
+    /// 🔑 分析歌词质量（返回详细分析结果，用于评分和过滤）
+    private func analyzeLyricsQuality(_ lyrics: [LyricLine]) -> QualityAnalysis {
         var issues: [String] = []
 
         // 🔑 过滤掉非歌词行（前奏省略号 + 元信息行）
@@ -1332,7 +1395,7 @@ public class LyricsService: ObservableObject {
                 return false
             }
 
-            // 🔑 跳过元信息行（包含冒号且较短的行）
+            // 🔑 跳过元信息行（包含中文或英文冒号且较短的行）
             if (trimmed.contains("：") || trimmed.contains(":")) && trimmed.count < 30 {
                 return false
             }
@@ -1340,13 +1403,20 @@ public class LyricsService: ObservableObject {
             return true
         }
 
-        guard realLyrics.count >= 3 else {
-            issues.append("太少歌词行(\(realLyrics.count))")
-            return (false, issues)
+        let realLyricCount = realLyrics.count
+        guard realLyricCount >= 3 else {
+            return QualityAnalysis(
+                isValid: false,
+                timeReverseRatio: 1.0,
+                timeOverlapRatio: 1.0,
+                shortLineRatio: 1.0,
+                realLyricCount: realLyricCount,
+                issues: ["太少歌词行(\(realLyricCount))"]
+            )
         }
 
         var timeReverseCount = 0  // 时间倒退次数
-        var tooShortLineCount = 0  // 持续时间太短的行数
+        var tooShortLineCount = 0  // 持续时间太短的行数（时长<0.5秒）
         var overlapCount = 0  // 时间重叠次数
 
         for i in 1..<realLyrics.count {
@@ -1363,38 +1433,44 @@ public class LyricsService: ObservableObject {
                 overlapCount += 1
             }
 
-            // 检测持续时间太短（小于 0.1 秒）
+            // 检测持续时间太短（小于 0.5 秒）
             let duration = curr.endTime - curr.startTime
-            if duration > 0 && duration < 0.1 {
+            if duration > 0 && duration < 0.5 {
                 tooShortLineCount += 1
             }
         }
 
         // 计算问题比例
-        let totalLines = realLyrics.count
-        let reverseRatio = Double(timeReverseCount) / Double(totalLines)
-        let overlapRatio = Double(overlapCount) / Double(totalLines)
-        let shortRatio = Double(tooShortLineCount) / Double(totalLines)
+        let timeReverseRatio = Double(timeReverseCount) / Double(realLyricCount)
+        let timeOverlapRatio = Double(overlapCount) / Double(realLyricCount)
+        let shortLineRatio = Double(tooShortLineCount) / Double(realLyricCount)
 
-        // 判断是否通过质量检测
+        // 判断是否通过最低质量标准
         // 🔑 放宽阈值：很多歌词有重复段落（如副歌），会导致时间倒退
-        // 时间倒退 < 20%，时间重叠 < 15%，太短行 < 25%
-        if reverseRatio > 0.20 {
-            issues.append("时间倒退(\(timeReverseCount)/\(totalLines)=\(String(format: "%.1f", reverseRatio * 100))%)")
+        // 时间倒退 < 25%，时间重叠 < 20%，太短行 < 30%
+        if timeReverseRatio > 0.25 {
+            issues.append("时间倒退(\(timeReverseCount)/\(realLyricCount)=\(String(format: "%.1f", timeReverseRatio * 100))%)")
         }
-        if overlapRatio > 0.15 {
-            issues.append("时间重叠(\(overlapCount)/\(totalLines)=\(String(format: "%.1f", overlapRatio * 100))%)")
+        if timeOverlapRatio > 0.20 {
+            issues.append("时间重叠(\(overlapCount)/\(realLyricCount)=\(String(format: "%.1f", timeOverlapRatio * 100))%)")
         }
-        if shortRatio > 0.25 {
-            issues.append("太短行(\(tooShortLineCount)/\(totalLines)=\(String(format: "%.1f", shortRatio * 100))%)")
+        if shortLineRatio > 0.30 {
+            issues.append("太短行(\(tooShortLineCount)/\(realLyricCount)=\(String(format: "%.1f", shortLineRatio * 100))%)")
         }
 
         let isValid = issues.isEmpty
         if isValid {
-            debugLog("✅ 歌词质量检测通过 (\(totalLines) 行)")
+            debugLog("✅ 歌词质量分析通过 (\(realLyricCount) 行, 质量分: \(String(format: "%.0f", QualityAnalysis(isValid: true, timeReverseRatio: timeReverseRatio, timeOverlapRatio: timeOverlapRatio, shortLineRatio: shortLineRatio, realLyricCount: realLyricCount, issues: []).qualityScore)))")
         }
 
-        return (isValid, issues)
+        return QualityAnalysis(
+            isValid: isValid,
+            timeReverseRatio: timeReverseRatio,
+            timeOverlapRatio: timeOverlapRatio,
+            shortLineRatio: shortLineRatio,
+            realLyricCount: realLyricCount,
+            issues: issues
+        )
     }
 
     // MARK: - NetEase (163 Music) API - Best for Chinese songs
@@ -1482,7 +1558,7 @@ public class LyricsService: ObservableObject {
         request.httpMethod = "GET"
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
-        request.timeoutInterval = 10.0
+        request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
         // 🔑 使用独立的 URLSession，避免缓存干扰
@@ -1610,15 +1686,15 @@ public class LyricsService: ObservableObject {
                 }
             }
 
-            // 🔑 质量检测：过滤有问题的歌词
-            let (isValid, issues) = validateLyricsQuality(yrcLyrics)
-            if !isValid {
-                debugLog("❌ NetEase YRC rejected: \(issues.joined(separator: ", "))")
-                logger.warning("❌ NetEase YRC quality check failed: \(issues.joined(separator: ", "))")
-                return nil  // 拒绝使用有问题的歌词
+            // 🔑 质量分析：仅用于日志，不再在这里过滤（由评分系统处理）
+            let qualityAnalysis = analyzeLyricsQuality(yrcLyrics)
+            if !qualityAnalysis.isValid {
+                debugLog("⚠️ NetEase YRC has quality issues: \(qualityAnalysis.issues.joined(separator: ", "))")
+                logger.warning("⚠️ NetEase YRC quality issues: \(qualityAnalysis.issues.joined(separator: ", "))")
+                // 🔑 不再直接返回 nil，让评分系统决定
             }
 
-            logger.info("✅ Found NetEase YRC lyrics (\(yrcLyrics.count) lines)")
+            logger.info("✅ Found NetEase YRC lyrics (\(yrcLyrics.count) lines, quality: \(String(format: "%.0f", qualityAnalysis.qualityScore)))")
             return yrcLyrics
         }
 
@@ -1629,7 +1705,7 @@ public class LyricsService: ObservableObject {
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
-        request.timeoutInterval = 10.0
+        request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -1650,15 +1726,13 @@ public class LyricsService: ObservableObject {
            !lyricText.isEmpty {
             let lrcLyrics = parseLRC(lyricText)
 
-            // 🔑 质量检测：过滤有问题的歌词
-            let (isValid, issues) = validateLyricsQuality(lrcLyrics)
-            if !isValid {
-                debugLog("❌ NetEase LRC rejected: \(issues.joined(separator: ", "))")
-                logger.warning("❌ NetEase LRC quality check failed: \(issues.joined(separator: ", "))")
-                return nil
+            // 🔑 质量分析：仅用于日志
+            let qualityAnalysis = analyzeLyricsQuality(lrcLyrics)
+            if !qualityAnalysis.isValid {
+                debugLog("⚠️ NetEase LRC has quality issues: \(qualityAnalysis.issues.joined(separator: ", "))")
             }
 
-            logger.info("✅ Found NetEase LRC lyrics (\(lyricText.count) chars)")
+            logger.info("✅ Found NetEase LRC lyrics (\(lyricText.count) chars, quality: \(String(format: "%.0f", qualityAnalysis.qualityScore)))")
             return lrcLyrics
         }
 
@@ -1693,7 +1767,7 @@ public class LyricsService: ObservableObject {
         guard let url = components.url else { return nil }
 
         var request = URLRequest(url: url)
-        request.timeoutInterval = 10.0
+        request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let httpResponse = response as? HTTPURLResponse,
@@ -1806,7 +1880,7 @@ public class LyricsService: ObservableObject {
             request.httpMethod = "GET"
             request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
             request.setValue("https://y.qq.com/portal/player.html", forHTTPHeaderField: "Referer")
-            request.timeoutInterval = 10.0
+            request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
 
             guard let (data, response) = try? await URLSession.shared.data(for: request),
                   let httpResponse = response as? HTTPURLResponse,
@@ -1896,7 +1970,7 @@ public class LyricsService: ObservableObject {
         request.httpMethod = "GET"
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
         request.setValue("https://y.qq.com/portal/player.html", forHTTPHeaderField: "Referer")
-        request.timeoutInterval = 10.0
+        request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -1914,15 +1988,13 @@ public class LyricsService: ObservableObject {
 
         let lyrics = parseLRC(lyricText)
 
-        // 🔑 质量检测
-        let (isValid, issues) = validateLyricsQuality(lyrics)
-        if !isValid {
-            debugLog("❌ QQ Music lyrics rejected: \(issues.joined(separator: ", "))")
-            logger.warning("❌ QQ Music quality check failed: \(issues.joined(separator: ", "))")
-            return nil
+        // 🔑 质量分析：仅用于日志
+        let qualityAnalysis = analyzeLyricsQuality(lyrics)
+        if !qualityAnalysis.isValid {
+            debugLog("⚠️ QQ Music lyrics has quality issues: \(qualityAnalysis.issues.joined(separator: ", "))")
         }
 
-        logger.info("✅ Found QQ Music lyrics (\(lyrics.count) lines)")
+        logger.info("✅ Found QQ Music lyrics (\(lyrics.count) lines, quality: \(String(format: "%.0f", qualityAnalysis.qualityScore)))")
         return lyrics
     }
 
@@ -1939,7 +2011,7 @@ public class LyricsService: ObservableObject {
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
-        request.timeoutInterval = 10.0
+        request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -2169,7 +2241,7 @@ public class LyricsService: ObservableObject {
         guard let url = URL(string: urlString) else { return nil }
 
         var request = URLRequest(url: url)
-        request.timeoutInterval = 8.0
+        request.timeoutInterval = 5.0  // 🔑 降低超时：8s → 5s
         request.setValue("nanoPod/1.0", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -2225,7 +2297,7 @@ public class LyricsService: ObservableObject {
 
             do {
                 var request = URLRequest(url: ttmlURL)
-                request.timeoutInterval = 10.0
+                request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
                 request.setValue("nanoPod/1.0", forHTTPHeaderField: "User-Agent")
 
                 let (data, response) = try await URLSession.shared.data(for: request)

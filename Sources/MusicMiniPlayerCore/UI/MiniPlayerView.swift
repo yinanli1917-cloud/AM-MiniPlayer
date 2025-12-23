@@ -700,19 +700,14 @@ struct TranslationButtonView: View {
                 }
             }
         } label: {
-            Image(systemName: lyricsService.showTranslation ? "character.bubble.fill" : "character.bubble")
-                .font(.system(size: 12, weight: .medium))
+            Image(systemName: lyricsService.showTranslation ? "translate" : "translate")
+                .font(.system(size: 15))
                 .foregroundColor(lyricsService.hasTranslation ? (isHovering ? .white : .white.opacity(0.7)) : .white.opacity(0.3))
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .background(
-                    ZStack {
-                        Color.white.opacity(isHovering ? 0.15 : 0.08)
-                        if isHovering {
-                            Color.white.opacity(0.05)
-                        }
-                    }
+                    Circle()
+                        .fill(Color.white.opacity(isHovering ? 0.15 : 0))
                 )
-                .clipShape(Circle())  // 🔑 圆形背景
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

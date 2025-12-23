@@ -672,6 +672,262 @@ CFStringTransform(mutableString, nil, "Traditional-Simplified", false)
 // 用于直接查询 AMLL am-lyrics 目录
 ```
 
+### 3.9 并行搜索与质量评分系统
+
+#### 3.9.1 并行请求策略
+
+使用 Swift Concurrency 的 `TaskGroup` 并行请求所有歌词源：
+
+```swift
+private func parallelFetchAndSelectBest(...) async -> [LyricLine]? {
+    var results: [LyricsResult] = []
+
+    await withTaskGroup(of: LyricsResult?.self) { group in
+        group.addTask { /* AMLL */ }
+        group.addTask { /* NetEase */ }
+        group.addTask { /* QQ Music */ }
+        group.addTask { /* LRCLIB */ }
+        group.addTask { /* lyrics.ovh */ }
+
+        for await result in group {
+            if let r = result { results.append(r) }
+        }
+    }
+
+    // 按评分排序选择最佳
+    results.sort { $0.score > $1.score }
+
+    // 选择第一个通过质量检测的结果
+    for result in results {
+        if analyzeLyricsQuality(result.lyrics).isValid {
+            return result.lyrics
+        }
+    }
+
+    // 如果都未通过，返回评分最高的
+    return results.first?.lyrics
+}
+```
+
+**优化要点**:
+- 降低超时时间（5-6秒）提升响应速度
+- 并行请求避免串行等待
+- 评分系统确保选择最佳结果
+
+#### 3.9.2 综合评分算法（0-100分）
+
+**评分维度**:
+
+1. **逐字时间轴** (30分)
+   - 计算逐字歌词行的比例
+   - `syllableSyncRatio * 30`
+
+2. **质量分析分** (30分)
+   - 基于质量检测结果的评分因子
+   - `(qualityScore / 100.0) * 30`
+   - 详见下方质量分析部分
+
+3. **行数** (15分)
+   - 更多行通常意味着更完整
+   - `min(lyrics.count * 0.5, 15)`
+
+4. **时间轴覆盖度** (15分)
+   - 歌词覆盖歌曲时长的比例
+   - `coverageRatio * 15`
+
+5. **来源加成** (10分)
+   - AMLL: +10分（最高质量）
+   - NetEase: +8分（YRC 质量好）
+   - QQ Music: +6分（质量不错）
+   - LRCLIB: +3分（质量一般）
+   - lyrics.ovh: +0分（纯文本）
+
+```swift
+private func calculateLyricsScore(_ lyrics: [LyricLine], source: String, duration: TimeInterval) -> Double {
+    var score = 0.0
+
+    // 1. 逐字时间轴（30分）
+    let syllableSyncRatio = Double(lyrics.filter { $0.hasSyllableSync }.count) / Double(lyrics.count)
+    score += syllableSyncRatio * 30
+
+    // 2. 质量分析分（30分）
+    let qualityAnalysis = analyzeLyricsQuality(lyrics)
+    score += (qualityAnalysis.qualityScore / 100.0) * 30
+
+    // 3. 行数（15分）
+    score += min(Double(lyrics.count) * 0.5, 15)
+
+    // 4. 时间轴覆盖度（15分）
+    let coverageRatio = (lyrics.last?.endTime ?? 0) / duration
+    score += min(coverageRatio, 1.0) * 15
+
+    // 5. 来源加成（10分）
+    score += sourceBonus(source)
+
+    return score
+}
+```
+
+#### 3.9.3 质量分析系统
+
+**QualityAnalysis 结构**:
+
+```swift
+private struct QualityAnalysis {
+    let isValid: Bool                      // 是否通过最低质量标准
+    let timeReverseRatio: Double           // 时间倒退比例 (0-1)
+    let timeOverlapRatio: Double           // 时间重叠比例 (0-1)
+    let shortLineRatio: Double             // 太短行比例 (0-1)
+    let realLyricCount: Int                // 真实歌词行数（过滤元信息后）
+    let issues: [String]                   // 问题列表
+
+    /// 质量评分因子 (0-100, 越高越好)
+    var qualityScore: Double {
+        var score = 100.0
+
+        // 时间倒退惩罚：每 1% 扣 3 分
+        score -= timeReverseRatio * 300
+
+        // 时间重叠惩罚：每 1% 扣 2 分
+        score -= timeOverlapRatio * 200
+
+        // 太短行惩罚：每 1% 扣 1 分
+        score -= shortLineRatio * 100
+
+        return max(0, score)
+    }
+}
+```
+
+**质量检测逻辑**:
+
+```swift
+private func analyzeLyricsQuality(_ lyrics: [LyricLine]) -> QualityAnalysis {
+    // 1. 过滤元信息和前奏占位符
+    let realLyrics = lyrics.filter { line in
+        let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+        // 跳过前奏占位符 "⋯"
+        if trimmed == "⋯" || trimmed == "..." { return false }
+        // 跳过元信息行（包含冒号且较短）
+        if (trimmed.contains("：") || trimmed.contains(":")) && trimmed.count < 30 {
+            return false
+        }
+        return true
+    }
+
+    // 2. 检测各种问题
+    var timeReverseCount = 0   // 时间倒退次数
+    var tooShortLineCount = 0  // 时长 < 0.5秒的行数
+    var overlapCount = 0       // 时间重叠次数
+
+    for i in 1..<realLyrics.count {
+        let prev = realLyrics[i - 1]
+        let curr = realLyrics[i]
+
+        // 检测时间倒退
+        if curr.startTime < prev.startTime {
+            timeReverseCount += 1
+        }
+
+        // 检测时间重叠
+        if curr.startTime < prev.endTime {
+            overlapCount += 1
+        }
+
+        // 检测持续时间太短（< 0.5秒）
+        let duration = curr.endTime - curr.startTime
+        if duration > 0 && duration < 0.5 {
+            tooShortLineCount += 1
+        }
+    }
+
+    // 3. 计算问题比例
+    let timeReverseRatio = Double(timeReverseCount) / Double(realLyrics.count)
+    let timeOverlapRatio = Double(overlapCount) / Double(realLyrics.count)
+    let shortLineRatio = Double(tooShortLineCount) / Double(realLyrics.count)
+
+    // 4. 判断是否通过最低质量标准
+    // 🔑 放宽阈值（很多歌词有重复段落导致时间倒退）
+    var issues: [String] = []
+    if timeReverseRatio > 0.25 {  // 25%
+        issues.append("时间倒退(\(String(format: "%.1f", timeReverseRatio * 100))%)")
+    }
+    if timeOverlapRatio > 0.20 {  // 20%
+        issues.append("时间重叠(\(String(format: "%.1f", timeOverlapRatio * 100))%)")
+    }
+    if shortLineRatio > 0.30 {    // 30%
+        issues.append("太短行(\(String(format: "%.1f", shortLineRatio * 100))%)")
+    }
+
+    return QualityAnalysis(
+        isValid: issues.isEmpty,
+        timeReverseRatio: timeReverseRatio,
+        timeOverlapRatio: timeOverlapRatio,
+        shortLineRatio: shortLineRatio,
+        realLyricCount: realLyrics.count,
+        issues: issues
+    )
+}
+```
+
+**阈值设置** (v2.0优化版):
+
+| 检测项 | 旧阈值 | 新阈值 | 说明 |
+|-------|--------|--------|------|
+| 时间倒退 | 20% | **25%** | 副歌重复段落会导致时间倒退 |
+| 时间重叠 | 15% | **20%** | 部分歌词有意重叠（和声） |
+| 太短行 | 25% | **30%** | 语气词、间奏词可能很短 |
+| 短行定义 | 0.1秒 | **0.5秒** | 更合理的最小行时长 |
+
+**质量过滤策略**:
+
+```swift
+// 🔑 旧策略：单个源直接拒绝不合格歌词
+if !isValid {
+    logger.warning("❌ Quality check failed")
+    return nil  // ❌ 可能丢失可用歌词
+}
+
+// 🔑 新策略：评分系统统一处理
+if !qualityAnalysis.isValid {
+    logger.warning("⚠️ Quality issues: \(issues)")
+    // ✅ 不直接拒绝，让评分系统决定
+}
+
+// 在并行搜索结果中，选择第一个通过质量检测的
+// 如果都未通过，返回评分最高的（勉强可用）
+```
+
+#### 3.9.4 元信息过滤优化
+
+**优化版元信息检测**:
+
+```swift
+// 在开头 + (空行 OR (短时长 AND 有冒号) OR 有标题分隔符)
+let isMetadata = !foundFirstRealLyric && (
+    trimmed.isEmpty ||
+    (duration < 3.0 && hasColon) ||
+    hasTitleSeparator
+)
+
+// 🔑 额外检查：连续元信息区域后 5 秒内的短行
+if !isMetadata && !foundFirstRealLyric && hasColon &&
+   line.startTime < consecutiveMetadataEnd + 5.0 {
+    if duration < 5.0 && trimmed.count < 30 {
+        continue  // 视为元信息
+    }
+}
+```
+
+**元信息判断标准**:
+
+1. **基本条件**: 在歌曲开头（`!foundFirstRealLyric`）
+2. **触发条件** (满足任一):
+   - 空行
+   - 时长 < 3秒 且包含冒号（：或:）
+   - 包含 " - " 且长度 < 50（标题分隔符）
+3. **扩展检测**: 连续元信息区域后 5 秒内的短行（< 5秒且 < 30字符）
+
 ---
 
 ## 四、滚动检测系统 (ScrollDetector)

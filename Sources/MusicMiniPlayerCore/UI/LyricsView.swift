@@ -383,7 +383,8 @@ public struct LyricsView: View {
                                     isHovering: $isHovering,
                                     showControls: $showControls,
                                     isProgressBarHovering: $isProgressBarHovering,
-                                    dragPosition: $dragPosition
+                                    dragPosition: $dragPosition,
+                                    translationButton: !lyricsService.lyrics.isEmpty ? AnyView(TranslationButtonView(lyricsService: lyricsService)) : nil
                                 )
                             }
                             // 🔑 滑入滑出动画（从下往上）
@@ -445,15 +446,9 @@ public struct LyricsView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            // 🔑 翻译按钮 + Hide/Expand 按钮 - 横向排列
+            // 🔑 Hide/Expand 按钮 - 翻译按钮已移到底部进度条上方
             if showControls {
                 HStack(spacing: 8) {
-                    // 🔑 翻译按钮（仅在歌词页面且有歌词时显示）
-                    if currentPage == .lyrics && !lyricsService.lyrics.isEmpty {
-                        TranslationButtonView(lyricsService: lyricsService)
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    }
-
                     // Hide/Expand 按钮
                     if onExpand != nil {
                         // 菜单栏模式：显示展开按钮

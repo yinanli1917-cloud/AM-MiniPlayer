@@ -70,41 +70,53 @@ struct SharedBottomControls: View {
     @Binding var isProgressBarHovering: Bool
     @Binding var dragPosition: CGFloat?
     var onControlsHoverChanged: ((Bool) -> Void)? = nil  // 🔑 可选回调：控件hover状态变化
+    var translationButton: AnyView? = nil  // 🔑 可选的翻译按钮
     @State private var isDraggingProgressBar: Bool = false
     @State private var isControlAreaHovering: Bool = false  // 🔑 整个控件区域的hover状态
 
     var body: some View {
-        VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
-            // Progress Bar & Time - 🔑 时间显示移到进度条下方
-            VStack(spacing: 2) {  // 🔑 进度条与时间间距=2
-                // Progress Bar - 放在最上面
-                progressBar
-
-                // Time labels - 移到进度条下方，padding与进度条一致
+        VStack(spacing: 0) {  // 🔑 spacing=0 让翻译按钮紧贴进度条
+            // 🔑 翻译按钮 - 进度条上方（如果有）
+            if let translationButton = translationButton {
                 HStack {
-                    Text(formatTime(musicController.currentTime))
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundColor(.white.opacity(0.6))
-
                     Spacer()
-
-                    // Audio quality badge
-                    if let quality = musicController.audioQuality {
-                        qualityBadge(quality)
-                    }
-
-                    Spacer()
-
-                    Text("-" + formatTime(musicController.duration - musicController.currentTime))
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundColor(.white.opacity(0.6))
+                    translationButton
                 }
-                .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
+                .padding(.trailing, 12)
+                .padding(.bottom, 5)
             }
-            .background(NonDraggableView())
 
-            // Playback Controls
-            HStack(spacing: 10) {
+            VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
+                // Progress Bar & Time - 🔑 时间显示移到进度条下方
+                VStack(spacing: 2) {  // 🔑 进度条与时间间距=2
+                    // Progress Bar - 放在最上面
+                    progressBar
+
+                    // Time labels - 移到进度条下方，padding与进度条一致
+                    HStack {
+                        Text(formatTime(musicController.currentTime))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundColor(.white.opacity(0.6))
+
+                        Spacer()
+
+                        // Audio quality badge
+                        if let quality = musicController.audioQuality {
+                            qualityBadge(quality)
+                        }
+
+                        Spacer()
+
+                        Text("-" + formatTime(musicController.duration - musicController.currentTime))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
+                }
+                .background(NonDraggableView())
+
+                // Playback Controls
+                HStack(spacing: 10) {
                 // Left navigation button
                 leftNavigationButton
                     .frame(width: 26, height: 26)
@@ -134,11 +146,12 @@ struct SharedBottomControls: View {
                 // Right navigation button
                 playlistNavigationButton
                     .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
+            .padding(.bottom, 16)
         }
-        .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
-        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .bottom)
         // 🔑 跟踪整个控件区域的hover状态
         .onHover { hovering in
