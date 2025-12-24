@@ -34,8 +34,8 @@ public struct LyricLine: Identifiable, Equatable {
     public let endTime: TimeInterval
     /// 逐字时间信息（如果有的话）
     public let words: [LyricWord]
-    /// 翻译文本（如果有的话）
-    public let translation: String?
+    /// 翻译文本（如果有的话）- var 以支持系统翻译更新
+    public var translation: String?
     /// 是否有逐字时间轴
     public var hasSyllableSync: Bool { !words.isEmpty }
     /// 是否有翻译
@@ -256,9 +256,9 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        // 🔑 检查是否已经有翻译了（来自歌词源）
+        // 🔑 优先：检查是否已经有翻译了（来自歌词源）
         if hasTranslation {
-            debugLog("ℹ️ Lyrics already have translation from source")
+            debugLog("ℹ️ Lyrics already have translation from source (NetEase/QQ/AMLL)")
             return
         }
 
@@ -268,25 +268,45 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        // 🔑 检测歌词语言
+        debugLog("ℹ️ No translation from lyrics source, system translation will be handled by SwiftUI .translationTask()")
+    }
+
+    /// 🔑 执行系统翻译（由 SwiftUI .translationTask() 调用）
+    /// - Parameter session: SwiftUI 提供的翻译会话
+    @MainActor
+    public func performSystemTranslation(session: TranslationSession) async {
+        guard !lyrics.isEmpty else { return }
+
+        // 🔑 优先：检查是否已经有翻译了（来自歌词源）
+        if hasTranslation {
+            debugLog("ℹ️ 歌词源已有翻译，跳过系统翻译")
+            return
+        }
+
+        // 🔑 检查翻译开关是否开启
+        guard showTranslation else {
+            debugLog("ℹ️ 翻译开关未开启，跳过系统翻译")
+            return
+        }
+
+        debugLog("🔄 开始系统翻译（\(lyrics.count) 行）")
+        isTranslating = true
+
         let lyricTexts = lyrics.map { $0.text }
-        debugLog("🔍 Detecting language for \(lyricTexts.count) lines")
-        guard let sourceLanguage = TranslationService.detectLanguage(for: lyricTexts) else {
-            debugLog("⚠️ Failed to detect source language")
+
+        guard let translatedTexts = await TranslationService.translationTask(session, lyrics: lyricTexts) else {
+            debugLog("❌ 系统翻译失败")
+            isTranslating = false
             return
         }
 
-        let targetLang = Locale.Language.systemLanguages.first ?? Locale.Language(identifier: translationLanguage)
-        debugLog("🌐 Detected languages: \(sourceLanguage.languageCode?.identifier ?? "unknown") -> \(targetLang.languageCode?.identifier ?? "system")")
-
-        // 如果源语言和目标语言相同，不需要翻译
-        if sourceLanguage == targetLang {
-            debugLog("ℹ️ Source and target languages are the same, skipping translation")
-            return
+        // 合并翻译到歌词
+        for i in 0..<min(lyrics.count, translatedTexts.count) {
+            lyrics[i].translation = translatedTexts[i]
         }
 
-        debugLog("⚠️ Translation API requires using .translationTask() modifier in SwiftUI views")
-        debugLog("❌ Direct translation not supported - this feature requires deeper SwiftUI integration")
+        debugLog("✅ 系统翻译完成 (\(translatedTexts.count) 行)")
+        isTranslating = false
     }
 
     // 🐛 调试：写入文件

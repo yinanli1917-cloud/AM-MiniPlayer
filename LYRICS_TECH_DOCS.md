@@ -1238,7 +1238,184 @@ cat /tmp/nanopod_lyrics_debug.log
 
 ---
 
-## 十二、问题排查清单
+## 十二、翻译系统 (Translation System) ✅ 已实现
+
+### 12.1 翻译优先级策略
+
+**核心原则**: 优先使用歌词源自带的翻译，系统翻译作为备用
+
+```
+1. 歌词源自带翻译 (NetEase tlyric, QQ trans, AMLL x-translation)
+   ↓ 质量最高，时间轴对齐准确
+2. Apple 系统翻译 (macOS 15+ Translation API)
+   ↓ 备用方案，自动语言检测
+```
+
+### 12.2 歌词源翻译提取
+
+#### NetEase (网易云) LRC 翻译
+```swift
+// tlyric 字段包含中文翻译
+{
+  "lrc": { "lyric": "[00:00.00]Original lyrics..." },
+  "tlyric": { "lyric": "[00:00.00]中文翻译..." }
+}
+
+// 合并逻辑：按时间戳 [mm:ss.xx] 匹配翻译
+lyrics = mergeLyricsWithTranslation(original: lrcLyrics, translated: tlyricLyrics)
+```
+
+#### QQ Music 翻译
+```swift
+// trans 字段包含翻译
+{
+  "lyric": "...",
+  "trans": "[00:00.00]中文翻译..."
+}
+```
+
+#### AMLL TTML 翻译
+```xml
+<!-- 翻译 span 没有时间信息，但有 ttm:role="x-translation" -->
+<span ttm:role="x-translation">中文翻译</span>
+```
+
+**关键修复**: TTML 中空格在 span 标签外，解析时需要补空格
+```swift
+// ❌ 错误：Theclubisn'tthebestp
+// ✅ 正确：The club isn't the best
+lineText += spanText + " "  // 每个单词后加空格
+```
+
+### 12.3 Apple 系统翻译集成
+
+**参考项目**: [LyricFever](https://github.com/aviwad/LyricFever)
+
+```swift
+import Translation
+
+// SwiftUI .translationTask() modifier
+.translationTask(translationSessionConfig) { session in
+    await lyricsService.performSystemTranslation(session: session)
+}
+```
+
+**配置结构**:
+```swift
+// TranslationSession.Configuration
+struct Configuration {
+    source: Locale.Language?  // nil = 自动检测
+    target: Locale.Language    // 目标语言
+}
+
+// 自动语言检测
+let lyricTexts = lyrics.map { $0.text }
+let sourceLanguage = TranslationService.detectLanguage(for: lyricTexts)
+
+// NLLanguageRecognizer
+// 返回出现 >=3 次的主要语言
+```
+
+### 12.4 翻译语言设置
+
+**UserDefaults 持久化**:
+```swift
+// 默认跟随系统语言
+@Published public var translationLanguage: String {
+    get { _translationLanguage }
+    set {
+        _translationLanguage = newValue
+        UserDefaults.standard.set(newValue, forKey: "translationLanguage")
+    }
+}
+
+// 菜单栏设置 (右键菜单 → 翻译语言)
+// 支持: 中文、英文、日文、韩文、法文、德文、西班牙文、俄文、葡萄牙文、意大利文
+```
+
+### 12.5 翻译显示样式
+
+```swift
+// 翻译行样式（参考 AMLL/LyricFever）
+VStack(alignment: .leading, spacing: 4) {
+    // 主歌词行: 24pt
+    Text(line.text)
+        .font(.system(size: 24, weight: .semibold))
+
+    // 翻译行: 16pt (65%)
+    if showTranslation, let translation = line.translation {
+        Text(translation)
+            .font(.system(size: 16, weight: .regular))
+            .foregroundColor(.white.opacity(0.6))
+            .lineSpacing(4)
+    }
+}
+```
+
+### 12.6 翻译评分加成
+
+**评分系统优化**: 当用户开启翻译时，有翻译的歌词源获得 +15 分加成
+
+```swift
+// calculateLyricsScore() 中
+if showTranslation {
+    let hasTranslation = lyrics.contains { $0.hasTranslation }
+    if hasTranslation {
+        score += 15  // 翻译加成
+    }
+}
+```
+
+**效果**:
+- NetEase (有翻译): 61 + 15 = **76 分** ✅ 被选中
+- QQ Music (无翻译): **62 分** 未被选中
+
+### 12.7 翻译数据模型
+
+```swift
+public struct LyricLine {
+    public var translation: String?  // var 以支持系统翻译更新
+
+    public var hasTranslation: Bool {
+        translation != nil && !translation!.isEmpty
+    }
+}
+```
+
+---
+
+## 十三、元信息过滤优化 (Metadata Filtering) ✅ 已改进
+
+### 13.1 过滤策略
+
+**关键词检测 + 位置检测**:
+```swift
+// 元信息关键词列表
+let metadataKeywords = [
+    "作词", "作曲", "编曲", "制作人", "和声", "录音", "混音", "母带",
+    "吉他", "贝斯", "鼓", "钢琴", "键盘", "弦乐", "管乐",
+    "Lyrics", "Music", "Arrangement", "Producer", "Vocals",
+    // ...
+]
+
+// 过滤条件
+let isMetadata = !foundFirstRealLyric && (
+    trimmed.isEmpty ||                          // 空行
+    (duration < 3.0 && hasColon) ||             // 短时长+冒号
+    hasTitleSeparator ||                        // " - " 标题分隔符
+    hasMetadataKeyword                          // 🔑 包含关键词
+)
+```
+
+### 13.2 调试日志
+
+```swift
+debugLog("🔍 过滤元信息行: \"\(trimmed)\" (duration: \(duration)s)")
+```
+
+---
+
+## 十四、问题排查清单
 
 如果逐字高亮看起来不对：
 
