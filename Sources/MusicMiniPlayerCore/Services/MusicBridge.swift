@@ -78,11 +78,11 @@ public class MusicBridge {
 
     private func setupMusicApp() {
         guard let app = SBApplication(bundleIdentifier: bundleIdentifier) else {
-            fputs("❌ [MusicBridge] Failed to create SBApplication for Music.app\n", stderr)
+            debugPrint("❌ [MusicBridge] Failed to create SBApplication for Music.app\n")
             return
         }
         musicApp = app
-        fputs("✅ [MusicBridge] SBApplication created successfully\n", stderr)
+        debugPrint("✅ [MusicBridge] SBApplication created successfully\n")
     }
 
     // MARK: - Connection Check
@@ -95,82 +95,82 @@ public class MusicBridge {
     public func playPause() {
         ensureConnection()
         guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicBridge] playPause: app not available\n", stderr)
+            debugPrint("⚠️ [MusicBridge] playPause: app not available\n")
             return
         }
-        fputs("▶️ [MusicBridge] playPause() called\n", stderr)
+        debugPrint("▶️ [MusicBridge] playPause() called\n")
         app.perform(Selector(("playpause")))
     }
 
     public func play() {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return }
-        fputs("▶️ [MusicBridge] play() called\n", stderr)
+        debugPrint("▶️ [MusicBridge] play() called\n")
         app.perform(Selector(("play")))
     }
 
     public func pause() {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return }
-        fputs("⏸️ [MusicBridge] pause() called\n", stderr)
+        debugPrint("⏸️ [MusicBridge] pause() called\n")
         app.perform(Selector(("pause")))
     }
 
     public func stop() {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return }
-        fputs("⏹️ [MusicBridge] stop() called\n", stderr)
+        debugPrint("⏹️ [MusicBridge] stop() called\n")
         app.perform(Selector(("stop")))
     }
 
     public func nextTrack() {
         ensureConnection()
         guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicBridge] nextTrack: app not available\n", stderr)
+            debugPrint("⚠️ [MusicBridge] nextTrack: app not available\n")
             return
         }
-        fputs("⏭️ [MusicBridge] nextTrack() called\n", stderr)
+        debugPrint("⏭️ [MusicBridge] nextTrack() called\n")
         app.perform(Selector(("nextTrack")))
     }
 
     public func previousTrack() {
         ensureConnection()
         guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicBridge] previousTrack: app not available\n", stderr)
+            debugPrint("⚠️ [MusicBridge] previousTrack: app not available\n")
             return
         }
-        fputs("⏮️ [MusicBridge] previousTrack() called\n", stderr)
+        debugPrint("⏮️ [MusicBridge] previousTrack() called\n")
         app.perform(Selector(("previousTrack")))
     }
 
     public func backTrack() {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return }
-        fputs("⏮️ [MusicBridge] backTrack() called\n", stderr)
+        debugPrint("⏮️ [MusicBridge] backTrack() called\n")
         app.perform(Selector(("backTrack")))
     }
 
     public func seek(to position: Double) {
         ensureConnection()
         guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [MusicBridge] seek: app not available\n", stderr)
+            debugPrint("⚠️ [MusicBridge] seek: app not available\n")
             return
         }
-        fputs("⏩ [MusicBridge] seek(to: \(position)) called\n", stderr)
+        debugPrint("⏩ [MusicBridge] seek(to: \(position)) called\n")
         app.setValue(position, forKey: "playerPosition")
     }
 
     // MARK: - Connection Helper
     private func ensureConnection() {
         if musicApp == nil {
-            fputs("🔄 [MusicBridge] Reconnecting...\n", stderr)
+            debugPrint("🔄 [MusicBridge] Reconnecting...\n")
             setupMusicApp()
         }
     }
 
     // MARK: - Refresh Connection
     public func refreshConnection() {
-        fputs("🔄 [MusicBridge] refreshConnection() called\n", stderr)
+        debugPrint("🔄 [MusicBridge] refreshConnection() called\n")
         setupMusicApp()
     }
 
@@ -227,24 +227,24 @@ public class MusicBridge {
               let artworks = track.value(forKey: "artworks") as? SBElementArray,
               artworks.count > 0,
               let artwork = artworks.object(at: 0) as? NSObject else {
-            fputs("⚠️ [MusicBridge] No artwork found for current track\n", stderr)
+            debugPrint("⚠️ [MusicBridge] No artwork found for current track\n")
             return nil
         }
 
         // Tuneful 方式：artwork.data 直接返回 NSImage
         if let image = artwork.value(forKey: "data") as? NSImage {
-            fputs("✅ [MusicBridge] Got artwork as NSImage\n", stderr)
+            debugPrint("✅ [MusicBridge] Got artwork as NSImage\n")
             return image
         }
 
         // 回退：尝试 rawData 作为 Data
         if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
            let image = NSImage(data: rawData) {
-            fputs("✅ [MusicBridge] Got artwork via rawData (\(rawData.count) bytes)\n", stderr)
+            debugPrint("✅ [MusicBridge] Got artwork via rawData (\(rawData.count) bytes)\n")
             return image
         }
 
-        fputs("⚠️ [MusicBridge] Could not extract artwork image\n", stderr)
+        debugPrint("⚠️ [MusicBridge] Could not extract artwork image\n")
         return nil
     }
 
@@ -364,7 +364,7 @@ public class MusicBridge {
     public func setShuffle(_ enabled: Bool) {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return }
-        fputs("🔀 [MusicBridge] setShuffle(\(enabled))\n", stderr)
+        debugPrint("🔀 [MusicBridge] setShuffle(\(enabled))\n")
         app.setValue(enabled, forKey: "shuffleEnabled")
     }
 
@@ -381,7 +381,7 @@ public class MusicBridge {
         default: repeatValue = 0x6B52704F // off
         }
 
-        fputs("🔁 [MusicBridge] setRepeat(\(mode)) -> 0x\(String(repeatValue, radix: 16))\n", stderr)
+        debugPrint("🔁 [MusicBridge] setRepeat(\(mode)) -> 0x\(String(repeatValue, radix: 16))\n")
         app.setValue(repeatValue, forKey: "songRepeat")
     }
 
@@ -399,7 +399,7 @@ public class MusicBridge {
             if let track = tracks.object(at: i) as? NSObject,
                let trackID = track.value(forKey: "persistentID") as? String,
                trackID == persistentID {
-                fputs("▶️ [MusicBridge] playTrack(\(persistentID.prefix(8))...)\n", stderr)
+                debugPrint("▶️ [MusicBridge] playTrack(\(persistentID.prefix(8))...)\n")
                 track.perform(Selector(("playOnce:")), with: nil)
                 return
             }
@@ -429,7 +429,7 @@ public class MusicBridge {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return }
         let clamped = max(0, min(100, level))
-        fputs("🔊 [MusicBridge] setVolume(\(clamped))\n", stderr)
+        debugPrint("🔊 [MusicBridge] setVolume(\(clamped))\n")
         app.setValue(clamped, forKey: "soundVolume")
     }
 
@@ -438,7 +438,7 @@ public class MusicBridge {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return }
         let currentMute = app.value(forKey: "mute") as? Bool ?? false
-        fputs("🔇 [MusicBridge] toggleMute() -> \(!currentMute)\n", stderr)
+        debugPrint("🔇 [MusicBridge] toggleMute() -> \(!currentMute)\n")
         app.setValue(!currentMute, forKey: "mute")
     }
 
@@ -450,7 +450,7 @@ public class MusicBridge {
         guard let app = musicApp, app.isRunning,
               let track = app.value(forKey: "currentTrack") as? NSObject else { return }
         let currentLoved = track.value(forKey: "loved") as? Bool ?? false
-        fputs("❤️ [MusicBridge] toggleLoved() -> \(!currentLoved)\n", stderr)
+        debugPrint("❤️ [MusicBridge] toggleLoved() -> \(!currentLoved)\n")
         track.setValue(!currentLoved, forKey: "loved")
     }
 
@@ -459,7 +459,7 @@ public class MusicBridge {
         ensureConnection()
         guard let app = musicApp, app.isRunning,
               let track = app.value(forKey: "currentTrack") as? NSObject else { return }
-        fputs("📚 [MusicBridge] addCurrentTrackToLibrary()\n", stderr)
+        debugPrint("📚 [MusicBridge] addCurrentTrackToLibrary()\n")
         // 使用 duplicate 方法 - ScriptingBridge 可能不支持复杂操作
         // 这个功能可能需要保留 osascript 作为回退
         track.perform(Selector(("duplicateTo:")), with: app.value(forKey: "sources"))

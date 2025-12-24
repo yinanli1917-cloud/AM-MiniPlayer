@@ -477,13 +477,13 @@ struct PlaylistItemRowCompact: View {
         .contentShape(Rectangle())
         .simultaneousGesture(
             TapGesture().onEnded {
-                fputs("🎯 [PlaylistItemRowCompact] Tapped: \(title), isCurrentTrack=\(isCurrentTrack), persistentID=\(persistentID)\n", stderr)
+                debugPrint("🎯 [PlaylistItemRowCompact] Tapped: \(title), isCurrentTrack=\(isCurrentTrack), persistentID=\(persistentID)\n")
                 if isCurrentTrack {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         currentPage = .album
                     }
                 } else {
-                    fputs("🎯 [PlaylistItemRowCompact] Calling playTrack...\n", stderr)
+                    debugPrint("🎯 [PlaylistItemRowCompact] Calling playTrack...\n")
                     musicController.playTrack(persistentID: persistentID)
                 }
             }
@@ -494,7 +494,7 @@ struct PlaylistItemRowCompact: View {
             }
         }
         .task(id: persistentID) {
-            fputs("📷 [PlaylistItemRowCompact] .task triggered for: \(title) (\(persistentID.prefix(8))...)\n", stderr)
+            debugPrint("📷 [PlaylistItemRowCompact] .task triggered for: \(title) (\(persistentID.prefix(8))...)\n")
             if currentArtworkID != persistentID {
                 artwork = nil
                 currentArtworkID = persistentID
@@ -504,7 +504,7 @@ struct PlaylistItemRowCompact: View {
                 await MainActor.run {
                     if currentArtworkID == persistentID {
                         artwork = fetchedArtwork
-                        fputs("📷 [PlaylistItemRowCompact] Got artwork for: \(title)\n", stderr)
+                        debugPrint("📷 [PlaylistItemRowCompact] Got artwork for: \(title)\n")
                     }
                 }
             } else {

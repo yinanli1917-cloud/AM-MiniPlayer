@@ -356,8 +356,17 @@ public class LyricsService: ObservableObject {
         isTranslating = false
     }
 
-    // 🐛 调试：写入文件
+    // 🐛 调试日志（生产环境禁用）
+    // 设置为 true 启用调试日志写入 /tmp/nanopod_lyrics_debug.log
+    #if DEBUG
+    private let enableDebugLog = false  // 开发时设为 true 启用日志
+    #else
+    private let enableDebugLog = false
+    #endif
+
+    @inline(__always)
     private func debugLog(_ message: String) {
+        guard enableDebugLog else { return }
         let logPath = "/tmp/nanopod_lyrics_debug.log"
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         let line = "[\(timestamp)] \(message)\n"

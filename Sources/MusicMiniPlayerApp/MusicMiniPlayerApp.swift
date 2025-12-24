@@ -46,7 +46,7 @@ class AppMain: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        fputs("[AppMain] Application launched\n", stderr)
+        debugPrint("[AppMain] Application launched\n")
 
         // 更新 Dock 可见性
         updateDockVisibility()
@@ -63,7 +63,7 @@ class AppMain: NSObject, NSApplicationDelegate {
         // 默认显示浮窗
         showFloatingWindow()
 
-        fputs("[AppMain] Setup complete\n", stderr)
+        debugPrint("[AppMain] Setup complete\n")
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -88,7 +88,7 @@ class AppMain: NSObject, NSApplicationDelegate {
         statusItem.isVisible = true
 
         guard let button = statusItem.button else {
-            fputs("[AppMain] ERROR: Failed to get status item button\n", stderr)
+            debugPrint("[AppMain] ERROR: Failed to get status item button\n")
             return
         }
 
@@ -100,7 +100,7 @@ class AppMain: NSObject, NSApplicationDelegate {
         button.target = self
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-        fputs("[AppMain] Status item created\n", stderr)
+        debugPrint("[AppMain] Status item created\n")
     }
 
     func updateStatusItemIcon() {
@@ -277,10 +277,10 @@ class AppMain: NSObject, NSApplicationDelegate {
         if langCode == "system" {
             // 使用系统语言
             targetLangCode = Locale.current.language.languageCode?.identifier ?? "zh"
-            fputs("🌐 翻译语言设置为: 跟随系统 (\(targetLangCode))\n", stderr)
+            debugPrint("🌐 翻译语言设置为: 跟随系统 (\(targetLangCode))\n")
         } else {
             targetLangCode = langCode
-            fputs("🌐 翻译语言设置为: \(targetLangCode)\n", stderr)
+            debugPrint("🌐 翻译语言设置为: \(targetLangCode)\n")
         }
 
         // 设置语言
@@ -305,12 +305,12 @@ class AppMain: NSObject, NSApplicationDelegate {
 
         switch status {
         case .installed:
-            fputs("🌐 翻译语言包已安装: \(langCode)\n", stderr)
+            debugPrint("🌐 翻译语言包已安装: \(langCode)\n")
         case .supported:
-            fputs("🌐 翻译语言包需要下载: \(langCode)，将在首次翻译时提示下载\n", stderr)
+            debugPrint("🌐 翻译语言包需要下载: \(langCode)，将在首次翻译时提示下载\n")
             // 系统会在下次使用 .translationTask() 时自动提示下载
         case .unsupported:
-            fputs("⚠️ 翻译语言不支持: \(langCode)\n", stderr)
+            debugPrint("⚠️ 翻译语言不支持: \(langCode)\n")
         @unknown default:
             break
         }
@@ -382,7 +382,7 @@ class AppMain: NSObject, NSApplicationDelegate {
         hostingView.autoresizingMask = [.width, .height]
         snappableWindow.contentView = hostingView
 
-        fputs("[AppMain] Floating window created\n", stderr)
+        debugPrint("[AppMain] Floating window created\n")
     }
 
     func showFloatingWindow() {

@@ -49,7 +49,7 @@ public class WindowResizeHandler: NSObject {
         configureWindow()
         setupEventMonitors()
 
-        fputs("[WindowResizeHandler] Initialized with global event monitors\n", stderr)
+        debugPrint("[WindowResizeHandler] Initialized with global event monitors\n")
     }
 
     deinit {
@@ -156,7 +156,7 @@ public class WindowResizeHandler: NSObject {
         // 临时禁用窗口拖动
         window.isMovableByWindowBackground = false
 
-        fputs("[WindowResizeHandler] Started resize - edge: \(edge)\n", stderr)
+        debugPrint("[WindowResizeHandler] Started resize - edge: \(edge)\n")
         return true
     }
 
@@ -183,7 +183,7 @@ public class WindowResizeHandler: NSObject {
             NSCursor.arrow.set()
         }
 
-        fputs("[WindowResizeHandler] Completed resize\n", stderr)
+        debugPrint("[WindowResizeHandler] Completed resize\n")
         return true
     }
 

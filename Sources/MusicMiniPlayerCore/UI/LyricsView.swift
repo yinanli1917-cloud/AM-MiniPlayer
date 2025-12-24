@@ -55,16 +55,26 @@ public struct LyricsView: View {
         self.onExpand = onExpand
     }
 
+    // 🐛 调试日志（生产环境禁用）
+    #if DEBUG
+    private let enableDebugLog = false  // 开发时设为 true 启用日志
+    #else
+    private let enableDebugLog = false
+    #endif
+
     private func addDebugMessage(_ message: String) {
+        guard enableDebugLog else { return }
         debugMessages.append(message)
         if debugMessages.count > 100 {
             debugMessages.removeFirst(50)
         }
     }
 
+    @inline(__always)
     private func debugLog(_ message: String) {
+        guard enableDebugLog else { return }
         addDebugMessage(message)
-        fputs("🔄 [LyricsView] \(message)\n", stderr)
+        debugPrint("🔄 [LyricsView] \(message)\n")
     }
 
     // 🔑 更新翻译会话配置 (仅 macOS 15.0+)
@@ -308,7 +318,6 @@ public struct LyricsView: View {
                         onScrollEnded: {
                             autoScrollTimer?.invalidate()
                             autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-                                fputs("🔓 [LyricsView] Scroll ended: unlocking, returning to current position\n", stderr)
                                 // 🔑 2秒后恢复到当前播放位置
                                 // 先解锁，再用动画恢复
                                 isManualScrolling = false
@@ -575,13 +584,9 @@ public struct LyricsView: View {
         }
         // 🔑 No Lyrics 时自动跳回专辑页面（除非用户手动打开了歌词页面）
         .onChange(of: lyricsService.error) { _, newError in
-            // 🐛 调试日志
-            fputs("🔄 [LyricsView] lyricsService.error changed to: \(newError ?? "nil"), currentPage=\(currentPage), userManuallyOpenedLyrics=\(musicController.userManuallyOpenedLyrics)\n", stderr)
-
             // 只有当：1. 有错误（No lyrics）2. 用户没有手动打开歌词页面 3. 当前在歌词页面
             // 才自动跳回专辑页面
             if newError != nil && !musicController.userManuallyOpenedLyrics && currentPage == .lyrics {
-                fputs("🔄 [LyricsView] Auto-jumping back to album page\n", stderr)
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                     currentPage = .album
                 }

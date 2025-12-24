@@ -86,10 +86,10 @@ public class MusicController: ObservableObject {
     private let userActionLockDuration: TimeInterval = 1.5
 
     public init(preview: Bool = false) {
-        fputs("🎬 [MusicController] init() called with preview=\(preview)\n", stderr)
+        debugPrint("🎬 [MusicController] init() called with preview=\(preview)\n")
         self.isPreview = preview
         if preview {
-            fputs("🎬 [MusicController] PREVIEW mode - returning early\n", stderr)
+            debugPrint("🎬 [MusicController] PREVIEW mode - returning early\n")
             logger.info("Initializing MusicController in PREVIEW mode")
             self.musicApp = nil
             self.isPlaying = false
@@ -113,34 +113,34 @@ public class MusicController: ObservableObject {
             return
         }
 
-        fputs("🎯 [MusicController] Initializing - isPreview=\(isPreview)\n", stderr)
+        debugPrint("🎯 [MusicController] Initializing - isPreview=\(isPreview)\n")
         logger.info("🎯 Initializing MusicController - will connect after setup")
 
         setupNotifications()
         startPolling()
 
         // Auto-connect after a brief delay to ensure initialization is complete
-        fputs("🎯 [MusicController] Scheduling connect() in 0.2s\n", stderr)
+        debugPrint("🎯 [MusicController] Scheduling connect() in 0.2s\n")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            fputs("🎯 [MusicController] connect() timer fired\n", stderr)
+            debugPrint("🎯 [MusicController] connect() timer fired\n")
             self?.connect()
         }
     }
     
     public func connect() {
-        fputs("🔌 [MusicController] connect() called\n", stderr)
+        debugPrint("🔌 [MusicController] connect() called\n")
         guard !isPreview else {
-            fputs("🔌 [MusicController] Preview mode - skipping\n", stderr)
+            debugPrint("🔌 [MusicController] Preview mode - skipping\n")
             logger.info("Preview mode - skipping Music.app connection")
             return
         }
 
-        fputs("🔌 [MusicController] Attempting to connect to Music.app...\n", stderr)
+        debugPrint("🔌 [MusicController] Attempting to connect to Music.app...\n")
         logger.info("🔌 connect() called - Attempting to connect to Music.app...")
 
         // Initialize SBApplication
         guard let app = SBApplication(bundleIdentifier: "com.apple.Music") else {
-            fputs("❌ [MusicController] Failed to create SBApplication\n", stderr)
+            debugPrint("❌ [MusicController] Failed to create SBApplication\n")
             logger.error("❌ Failed to create SBApplication for Music.app")
             DispatchQueue.main.async {
                 self.currentTrackTitle = "Failed to Connect"
@@ -151,16 +151,16 @@ public class MusicController: ObservableObject {
 
         // Store the app reference directly
         self.musicApp = app
-        fputs("✅ [MusicController] SBApplication created successfully\n", stderr)
+        debugPrint("✅ [MusicController] SBApplication created successfully\n")
         logger.info("✅ Successfully created and stored SBApplication for Music.app")
 
         // Launch Music.app if it's not running
-        fputs("🔍 [connect] Checking app.isRunning...\n", stderr)
+        debugPrint("🔍 [connect] Checking app.isRunning...\n")
         let isRunning = app.isRunning
-        fputs("🔍 [connect] app.isRunning = \(isRunning)\n", stderr)
+        debugPrint("🔍 [connect] app.isRunning = \(isRunning)\n")
 
         if !isRunning {
-            fputs("🚀 [connect] Music.app is not running, launching it...\n", stderr)
+            debugPrint("🚀 [connect] Music.app is not running, launching it...\n")
             app.activate()
 
             // Wait a bit for Music.app to launch
@@ -170,7 +170,7 @@ public class MusicController: ObservableObject {
                 self.fetchUpNextQueue()
             }
         } else {
-            fputs("✅ [connect] Music.app is already running\n", stderr)
+            debugPrint("✅ [connect] Music.app is already running\n")
             // Trigger immediate update
             DispatchQueue.main.async {
                 self.updatePlayerState()
@@ -284,13 +284,13 @@ public class MusicController: ObservableObject {
     }
 
     private func startPolling() {
-        fputs("⏰ [startPolling] Setting up timers on thread: \(Thread.isMainThread ? "Main" : "Background")\n", stderr)
+        debugPrint("⏰ [startPolling] Setting up timers on thread: \(Thread.isMainThread ? "Main" : "Background")\n")
 
         // Ensure timers are created on main thread
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            fputs("⏰ [startPolling] Creating polling timer (0.5s interval)\n", stderr)
+            debugPrint("⏰ [startPolling] Creating polling timer (0.5s interval)\n")
             // 🔑 Poll AppleScript every 0.5 second for better lyrics sync
             // 原来 1.0s 会导致歌词延迟，因为真实时间每秒才同步一次
             self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -312,7 +312,7 @@ public class MusicController: ObservableObject {
             // Setup MusicKit queue observer
             self.setupMusicKitQueueObserver()
 
-            fputs("⏰ [startPolling] All timers created\n", stderr)
+            debugPrint("⏰ [startPolling] All timers created\n")
         }
     }
 
@@ -344,23 +344,23 @@ public class MusicController: ObservableObject {
     private func checkQueueHashAndRefresh() {
         guard !isPreview else { return }
 
-        fputs("🔍 [checkQueueHash] Timer fired, musicApp=\(musicApp != nil)\n", stderr)
+        debugPrint("🔍 [checkQueueHash] Timer fired, musicApp=\(musicApp != nil)\n")
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self, let app = self.musicApp, app.isRunning else {
-                fputs("⚠️ [checkQueueHash] musicApp not available\n", stderr)
+                debugPrint("⚠️ [checkQueueHash] musicApp not available\n")
                 return
             }
 
             // 🔑 使用自己的 musicApp 实例获取 queue hash
             guard let hash = self.getQueueHashFromApp(app) else {
-                fputs("⚠️ [checkQueueHash] Failed to get queue hash\n", stderr)
+                debugPrint("⚠️ [checkQueueHash] Failed to get queue hash\n")
                 return
             }
 
             DispatchQueue.main.async {
                 if hash != self.lastQueueHash {
-                    fputs("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n", stderr)
+                    debugPrint("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n")
                     self.lastQueueHash = hash
                     self.fetchUpNextQueue()
                 }
@@ -371,20 +371,20 @@ public class MusicController: ObservableObject {
     /// 从 SBApplication 获取队列 hash
     private func getQueueHashFromApp(_ app: SBApplication) -> String? {
         guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject else {
-            fputs("⚠️ [getQueueHash] No currentPlaylist\n", stderr)
+            debugPrint("⚠️ [getQueueHash] No currentPlaylist\n")
             return nil
         }
         guard let playlistName = playlist.value(forKey: "name") as? String else {
-            fputs("⚠️ [getQueueHash] No playlist name\n", stderr)
+            debugPrint("⚠️ [getQueueHash] No playlist name\n")
             return nil
         }
         guard let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
-            fputs("⚠️ [getQueueHash] No tracks\n", stderr)
+            debugPrint("⚠️ [getQueueHash] No tracks\n")
             return nil
         }
         guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
               let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            fputs("⚠️ [getQueueHash] No currentTrack\n", stderr)
+            debugPrint("⚠️ [getQueueHash] No currentTrack\n")
             return nil
         }
         return "\(playlistName):\(tracks.count):\(currentID)"
@@ -499,7 +499,7 @@ public class MusicController: ObservableObject {
             if trackChanged, let name = newName, let artist = newArtist {
                 let album = newAlbum ?? self.currentAlbum
                 self.logger.info("🎵 Track changed (notification): \(name) - \(artist)")
-                fputs("🎵 [playerInfoChanged] Track changed: \(name) - \(artist)\n", stderr)
+                debugPrint("🎵 [playerInfoChanged] Track changed: \(name) - \(artist)\n")
 
                 // 🔑 在后台获取 persistentID 然后 fetchArtwork
                 DispatchQueue.global(qos: .userInteractive).async { [weak self] in
@@ -598,14 +598,14 @@ public class MusicController: ObservableObject {
 
                 // Fetch artwork if track changed
                 if trackChanged {
-                    fputs("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist)\n", stderr)
+                    debugPrint("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist)\n")
                     self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
 
                     self.currentPersistentID = persistentID
                     self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
 
                     // 🔑 歌曲切换时重置"用户手动打开歌词"标记
-                    fputs("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(self.userManuallyOpenedLyrics))\n", stderr)
+                    debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(self.userManuallyOpenedLyrics))\n")
                     self.userManuallyOpenedLyrics = false
                 }
             } else {
@@ -640,7 +640,7 @@ public class MusicController: ObservableObject {
             return
         }
         lastUpdateTime = now
-        fputs("📊 [updatePlayerState] Fallback to AppleScript (last: \(String(format: "%.2f", timeSinceLastUpdate))s ago)\n", stderr)
+        debugPrint("📊 [updatePlayerState] Fallback to AppleScript (last: \(String(format: "%.2f", timeSinceLastUpdate))s ago)\n")
 
         let script = """
         tell application "Music"
@@ -692,7 +692,7 @@ public class MusicController: ObservableObject {
             do {
                 try process.run()
             } catch {
-                fputs("❌ [updatePlayerState] Failed to launch osascript: \(error)\n", stderr)
+                debugPrint("❌ [updatePlayerState] Failed to launch osascript: \(error)\n")
                 return
             }
 
@@ -701,7 +701,7 @@ public class MusicController: ObservableObject {
 
             while process.isRunning {
                 if Date().timeIntervalSince(startTime) > processTimeout {
-                    fputs("⏱️ [updatePlayerState] Timeout!\n", stderr)
+                    debugPrint("⏱️ [updatePlayerState] Timeout!\n")
                     process.terminate()
                     return
                 }
@@ -795,24 +795,24 @@ public class MusicController: ObservableObject {
               let artworks = track.value(forKey: "artworks") as? SBElementArray,
               artworks.count > 0,
               let artwork = artworks.object(at: 0) as? NSObject else {
-            fputs("⚠️ [MusicController] No artwork found for current track\n", stderr)
+            debugPrint("⚠️ [MusicController] No artwork found for current track\n")
             return nil
         }
 
         // Tuneful 方式：artwork.data 直接返回 NSImage
         if let image = artwork.value(forKey: "data") as? NSImage {
-            fputs("✅ [MusicController] Got artwork as NSImage\n", stderr)
+            debugPrint("✅ [MusicController] Got artwork as NSImage\n")
             return image
         }
 
         // 回退：尝试 rawData 作为 Data
         if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
            let image = NSImage(data: rawData) {
-            fputs("✅ [MusicController] Got artwork via rawData (\(rawData.count) bytes)\n", stderr)
+            debugPrint("✅ [MusicController] Got artwork via rawData (\(rawData.count) bytes)\n")
             return image
         }
 
-        fputs("⚠️ [MusicController] Could not extract artwork image\n", stderr)
+        debugPrint("⚠️ [MusicController] Could not extract artwork image\n")
         return nil
     }
 
@@ -870,17 +870,17 @@ public class MusicController: ObservableObject {
     // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
         guard !isPreview, !persistentID.isEmpty, let app = musicApp, app.isRunning else {
-            fputs("⚠️ [fetchArtworkByPersistentID] Guard failed for \(persistentID.prefix(8))...\n", stderr)
+            debugPrint("⚠️ [fetchArtworkByPersistentID] Guard failed for \(persistentID.prefix(8))...\n")
             return nil
         }
 
         // 先检查缓存
         if let cached = artworkCache.object(forKey: persistentID as NSString) {
-            fputs("📦 [fetchArtworkByPersistentID] Cache hit for \(persistentID.prefix(8))...\n", stderr)
+            debugPrint("📦 [fetchArtworkByPersistentID] Cache hit for \(persistentID.prefix(8))...\n")
             return cached
         }
 
-        fputs("🔍 [fetchArtworkByPersistentID] Fetching for \(persistentID.prefix(8))...\n", stderr)
+        debugPrint("🔍 [fetchArtworkByPersistentID] Fetching for \(persistentID.prefix(8))...\n")
 
         // 🔑 使用串行队列防止并发 ScriptingBridge 请求阻塞
         let image: NSImage? = await withCheckedContinuation { continuation in
@@ -897,9 +897,9 @@ public class MusicController: ObservableObject {
         // 缓存结果
         if let image = image {
             artworkCache.setObject(image, forKey: persistentID as NSString)
-            fputs("✅ [fetchArtworkByPersistentID] Got artwork for \(persistentID.prefix(8))...\n", stderr)
+            debugPrint("✅ [fetchArtworkByPersistentID] Got artwork for \(persistentID.prefix(8))...\n")
         } else {
-            fputs("⚠️ [fetchArtworkByPersistentID] No image returned for \(persistentID.prefix(8))...\n", stderr)
+            debugPrint("⚠️ [fetchArtworkByPersistentID] No image returned for \(persistentID.prefix(8))...\n")
         }
 
         return image
@@ -941,7 +941,7 @@ public class MusicController: ObservableObject {
                    trackID == persistentID {
                     if let image = extractArtwork(from: track) {
                         let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                        fputs("✅ [getArtworkByPersistentID] Found at index \(i) in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n", stderr)
+                        debugPrint("✅ [getArtworkByPersistentID] Found at index \(i) in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
                         return image
                     }
                 }
@@ -963,14 +963,14 @@ public class MusicController: ObservableObject {
                let track = filteredTracks.object(at: 0) as? NSObject {
                 if let image = extractArtwork(from: track) {
                     let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                    fputs("✅ [getArtworkByPersistentID] Found in library in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n", stderr)
+                    debugPrint("✅ [getArtworkByPersistentID] Found in library in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
                     return image
                 }
             }
         }
 
         let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-        fputs("⚠️ [getArtworkByPersistentID] Not found in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n", stderr)
+        debugPrint("⚠️ [getArtworkByPersistentID] Not found in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
         return nil
     }
 
@@ -1003,10 +1003,10 @@ public class MusicController: ObservableObject {
         // 🔑 ScriptingBridge 调用放到后台线程，使用 perform(Selector) 方式
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
-                fputs("⚠️ [MusicController] togglePlayPause: app not available\n", stderr)
+                debugPrint("⚠️ [MusicController] togglePlayPause: app not available\n")
                 return
             }
-            fputs("▶️ [MusicController] togglePlayPause() executing on background thread\n", stderr)
+            debugPrint("▶️ [MusicController] togglePlayPause() executing on background thread\n")
             app.perform(Selector(("playpause")))
         }
     }
@@ -1018,10 +1018,10 @@ public class MusicController: ObservableObject {
         }
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
-                fputs("⚠️ [MusicController] nextTrack: app not available\n", stderr)
+                debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
                 return
             }
-            fputs("⏭️ [MusicController] nextTrack() executing on background thread\n", stderr)
+            debugPrint("⏭️ [MusicController] nextTrack() executing on background thread\n")
             app.perform(Selector(("nextTrack")))
         }
     }
@@ -1037,10 +1037,10 @@ public class MusicController: ObservableObject {
         } else {
             DispatchQueue.global(qos: .userInteractive).async { [weak self] in
                 guard let app = self?.musicApp, app.isRunning else {
-                    fputs("⚠️ [MusicController] previousTrack: app not available\n", stderr)
+                    debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
                     return
                 }
-                fputs("⏮️ [MusicController] previousTrack() executing on background thread\n", stderr)
+                debugPrint("⏮️ [MusicController] previousTrack() executing on background thread\n")
                 app.perform(Selector(("backTrack")))
             }
         }
@@ -1061,10 +1061,10 @@ public class MusicController: ObservableObject {
 
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
-                fputs("⚠️ [MusicController] seek: app not available\n", stderr)
+                debugPrint("⚠️ [MusicController] seek: app not available\n")
                 return
             }
-            fputs("⏩ [MusicController] seek(to: \(position)) executing on background thread\n", stderr)
+            debugPrint("⏩ [MusicController] seek(to: \(position)) executing on background thread\n")
             app.setValue(position, forKey: "playerPosition")
         }
     }
@@ -1082,10 +1082,10 @@ public class MusicController: ObservableObject {
 
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
-                fputs("⚠️ [MusicController] toggleShuffle: app not available\n", stderr)
+                debugPrint("⚠️ [MusicController] toggleShuffle: app not available\n")
                 return
             }
-            fputs("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on background thread\n", stderr)
+            debugPrint("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on background thread\n")
             app.setValue(newShuffleState, forKey: "shuffleEnabled")
         }
 
@@ -1101,7 +1101,7 @@ public class MusicController: ObservableObject {
             return
         }
 
-        fputs("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n", stderr)
+        debugPrint("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n")
 
         // 🔑 使用 AppleScript 播放指定歌曲（避免 ScriptingBridge 遍历阻塞）
         DispatchQueue.global(qos: .userInteractive).async {
@@ -1116,9 +1116,9 @@ public class MusicController: ObservableObject {
             if let appleScript = NSAppleScript(source: script) {
                 appleScript.executeAndReturnError(&error)
                 if let error = error {
-                    fputs("⚠️ [playTrack] AppleScript error: \(error)\n", stderr)
+                    debugPrint("⚠️ [playTrack] AppleScript error: \(error)\n")
                 } else {
-                    fputs("▶️ [playTrack] Started playing via AppleScript\n", stderr)
+                    debugPrint("▶️ [playTrack] Started playing via AppleScript\n")
                 }
             }
         }
@@ -1145,10 +1145,10 @@ public class MusicController: ObservableObject {
 
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
-                fputs("⚠️ [MusicController] cycleRepeatMode: app not available\n", stderr)
+                debugPrint("⚠️ [MusicController] cycleRepeatMode: app not available\n")
                 return
             }
-            fputs("🔁 [MusicController] setRepeat(\(newMode)) -> 0x\(String(repeatValue, radix: 16)) on background thread\n", stderr)
+            debugPrint("🔁 [MusicController] setRepeat(\(newMode)) -> 0x\(String(repeatValue, radix: 16)) on background thread\n")
             app.setValue(repeatValue, forKey: "songRepeat")
         }
 
@@ -1159,7 +1159,7 @@ public class MusicController: ObservableObject {
     }
 
     public func fetchUpNextQueue() {
-        fputs("📋 [fetchUpNextQueue] Called, isPreview=\(isPreview)\n", stderr)
+        debugPrint("📋 [fetchUpNextQueue] Called, isPreview=\(isPreview)\n")
 
         guard !isPreview else {
             // Preview data
@@ -1186,9 +1186,9 @@ public class MusicController: ObservableObject {
 
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
     private func fetchUpNextViaBridge() async {
-        fputs("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n", stderr)
+        debugPrint("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n")
         guard let app = musicApp, app.isRunning else {
-            fputs("⚠️ [fetchUpNextViaBridge] musicApp not available\n", stderr)
+            debugPrint("⚠️ [fetchUpNextViaBridge] musicApp not available\n")
             return
         }
 
@@ -1214,12 +1214,12 @@ public class MusicController: ObservableObject {
               let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
               let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
               let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            fputs("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n", stderr)
+            debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n")
             return []
         }
 
         let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
-        fputs("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(tracks.count) tracks\n", stderr)
+        debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(tracks.count) tracks\n")
 
         var result: [(String, String, String, String, Double)] = []
         var foundCurrent = false
@@ -1240,7 +1240,7 @@ public class MusicController: ObservableObject {
                     result.append((name, artist, album, trackID, duration))
                     if result.count >= limit { break }
                 } else if !name.isEmpty {
-                    fputs("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n", stderr)
+                    debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
                 }
             } else if trackID == currentID {
                 foundCurrent = true
@@ -1248,7 +1248,7 @@ public class MusicController: ObservableObject {
             }
         }
 
-        fputs("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), returning \(result.count) tracks\n", stderr)
+        debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), returning \(result.count) tracks\n")
         return result
     }
 
@@ -1298,7 +1298,7 @@ public class MusicController: ObservableObject {
                 recentList.append((name, artist, album, trackID, duration))
             } else if !name.isEmpty {
                 // 🐛 调试：记录异常的歌曲名称
-                fputs("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n", stderr)
+                debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
             }
         }
 

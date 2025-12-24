@@ -276,7 +276,7 @@ struct ScrollWheelEventView: NSViewRepresentable {
         func setupEventMonitor() {
             guard coordinator?.eventMonitor == nil else { return }
 
-            fputs("📜 [ScrollWheelNSView] Setting up global event monitor for lyrics\n", stderr)
+            debugPrint("📜 [ScrollWheelNSView] Setting up global event monitor for lyrics\n")
             // 🔑 使用全局事件监听器捕获滚动事件
             coordinator?.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 self?.handleScrollEvent(event)
@@ -299,7 +299,7 @@ struct ScrollWheelEventView: NSViewRepresentable {
 
             // 忽略极小的滚动量
             if abs(deltaY) > 0.5 {
-                fputs("📜 [ScrollWheelNSView] handleScrollEvent deltaY: \(deltaY)\n", stderr)
+                debugPrint("📜 [ScrollWheelNSView] handleScrollEvent deltaY: \(deltaY)\n")
                 onScroll?(deltaY)
             }
         }

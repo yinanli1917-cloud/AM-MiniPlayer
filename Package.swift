@@ -31,6 +31,10 @@ let package = Package(
             name: "MusicMiniPlayer",
             dependencies: ["MusicMiniPlayerCore"],
             path: "Sources/MusicMiniPlayerApp",
+            exclude: [
+                "Info.plist",
+                "MusicMiniPlayer.entitlements"
+            ],
             linkerSettings: [
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
