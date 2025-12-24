@@ -142,6 +142,36 @@ public class LyricsService: ObservableObject {
     // MARK: - Lyrics Cache
     private let lyricsCache = NSCache<NSString, CachedLyricsItem>()
 
+    // MARK: - 正则表达式缓存（避免重复编译）
+    private static let ttmlPRegex = try? NSRegularExpression(
+        pattern: "<p[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>(.*?)</p>",
+        options: [.dotMatchesLineSeparators]
+    )
+    private static let ttmlTimedSpanRegex = try? NSRegularExpression(
+        pattern: "<span[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>([^<]+)</span>",
+        options: []
+    )
+    private static let ttmlTranslationSpanRegex = try? NSRegularExpression(
+        pattern: "<span[^>]*ttm:role=\"x-translation\"[^>]*>([^<]+)</span>",
+        options: []
+    )
+    private static let ttmlCleanSpanRegex = try? NSRegularExpression(
+        pattern: "<span[^>]*>([^<]+)</span>",
+        options: []
+    )
+    private static let lrcRegex = try? NSRegularExpression(
+        pattern: "\\[(\\d{2}):(\\d{2})[:.](\\d{2,3})\\](.+)",
+        options: []
+    )
+    private static let yrcLineRegex = try? NSRegularExpression(
+        pattern: "\\[(\\d+),(\\d+)\\](.+)",
+        options: []
+    )
+    private static let yrcWordRegex = try? NSRegularExpression(
+        pattern: "\\((\\d+),(\\d+),\\d+\\)([^(]+)",
+        options: []
+    )
+
     // MARK: - AMLL Index Cache
     private var amllIndex: [AMLLIndexEntry] = []
     private var amllIndexLastUpdate: Date?
@@ -1310,27 +1340,15 @@ public class LyricsService: ObservableObject {
 
         var lines: [LyricLine] = []
 
-        // Pattern to match <p> tags with begin and end attributes
-        let pPattern = "<p[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>(.*?)</p>"
-
-        guard let pRegex = try? NSRegularExpression(pattern: pPattern, options: [.dotMatchesLineSeparators]) else {
+        // 🔑 使用缓存的正则表达式
+        guard let pRegex = Self.ttmlPRegex else {
             logger.error("Failed to create TTML p regex")
             return nil
         }
 
-        // 🔑 新增：提取带时间的 span（用于逐字歌词）
-        // <span begin="00:21.400" end="00:22.010">低</span>
-        let timedSpanPattern = "<span[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>([^<]+)</span>"
-        let timedSpanRegex = try? NSRegularExpression(pattern: timedSpanPattern, options: [])
-
-        // 🔑 新增：提取翻译 span（没有 begin/end，但有 ttm:role="x-translation"）
-        // <span ttm:role="x-translation" xml:lang="zh-CN">翻译内容</span>
-        let translationSpanPattern = "<span[^>]*ttm:role=\"x-translation\"[^>]*>([^<]+)</span>"
-        let translationSpanRegex = try? NSRegularExpression(pattern: translationSpanPattern, options: [])
-
-        // Pattern to match <span> tags without timing (fallback)
-        let cleanSpanPattern = "<span[^>]*>([^<]+)</span>"
-        let cleanSpanRegex = try? NSRegularExpression(pattern: cleanSpanPattern, options: [])
+        let timedSpanRegex = Self.ttmlTimedSpanRegex
+        let translationSpanRegex = Self.ttmlTranslationSpanRegex
+        let cleanSpanRegex = Self.ttmlCleanSpanRegex
 
         let matches = pRegex.matches(in: ttmlString, range: NSRange(ttmlString.startIndex..., in: ttmlString))
 
@@ -1583,10 +1601,8 @@ public class LyricsService: ObservableObject {
     private func parseLRC(_ lrcText: String) -> [LyricLine] {
         var lines: [LyricLine] = []
 
-        // LRC format: [mm:ss.xx]Lyric text
-        // Pattern: [minutes:seconds.centiseconds]text
-        let pattern = "\\[(\\d{2}):(\\d{2})[:.](\\d{2,3})\\](.+)"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        // 🔑 使用缓存的正则表达式
+        guard let regex = Self.lrcRegex else {
             logger.error("Failed to create LRC regex")
             return []
         }
@@ -2559,17 +2575,13 @@ public class LyricsService: ObservableObject {
         debugLog("🐛 [YRC] Raw text preview (first 500 chars):")
         debugLog(String(yrcText.prefix(500)))
 
-        // 🔑 YRC 行格式正则：[行开始时间,行持续时间]内容
-        let linePattern = "^\\[(\\d+),(\\d+)\\](.*)$"
-        guard let lineRegex = try? NSRegularExpression(pattern: linePattern) else {
+        // 🔑 使用缓存的正则表达式
+        guard let lineRegex = Self.yrcLineRegex else {
             logger.error("Failed to create YRC line regex")
             return nil
         }
 
-        // 🔑 字级时间戳格式：(开始毫秒,持续毫秒,0)字
-        // 注意：字在括号后面！
-        let wordPattern = "\\((\\d+),(\\d+),(\\d+)\\)([^(]+)"
-        let wordRegex = try? NSRegularExpression(pattern: wordPattern)
+        let wordRegex = Self.yrcWordRegex
 
         // 🔑 调试：显示前5行原始 YRC 内容
         var debugLineCount = 0

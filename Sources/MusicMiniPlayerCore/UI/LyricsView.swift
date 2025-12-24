@@ -39,6 +39,8 @@ public struct LyricsView: View {
     @State private var lineTargetIndices: [Int: Int] = [:]
     // 🔑 上一次的 currentIndex（用于检测变化并触发波浪）
     @State private var lastCurrentIndex: Int = -1
+    // 🔑 波浪动画 Work Item（用于取消未完成的动画）
+    @State private var waveAnimationWorkItems: [DispatchWorkItem] = []
 
     // 🐛 调试窗口状态
     @State private var showDebugWindow: Bool = false
@@ -553,6 +555,11 @@ public struct LyricsView: View {
             }
         }
           .onChange(of: musicController.currentTrackTitle) {
+            // 🔑 歌曲切换时取消未完成的波浪动画
+            cancelWaveAnimations()
+            lineTargetIndices.removeAll()
+            lastCurrentIndex = -1
+
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
@@ -882,22 +889,29 @@ public struct LyricsView: View {
         let totalLines = lyricsService.lyrics.count
         guard totalLines > 0 else { return }
 
+        // 🔑 取消之前未完成的波浪动画
+        for workItem in waveAnimationWorkItems {
+            workItem.cancel()
+        }
+        waveAnimationWorkItems.removeAll()
+
         // 获取实际渲染的行索引列表（按顺序）
         let renderedIndices = lyricsService.lyrics.enumerated()
             .filter { idx, _ in idx == 0 || idx >= lyricsService.firstRealLyricIndex }
             .map { $0.offset }
 
         // 🔑 AMLL 核心：波浪从当前屏幕可见区域的顶部开始
-        // 高亮行在 24% 位置，假设每行约 40px，屏幕高度约 400px
-        // 屏幕顶部大约是高亮行往上 2-3 行
-        // 找到当前可见区域顶部的行索引
-        let visibleTopLineIndex = max(0, newIndex - 3)  // 高亮行上方约 3 行是屏幕顶部
-
-        // 找到 visibleTopLineIndex 在 renderedIndices 中的位置
+        let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = renderedIndices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
         var delay: Double = 0
         var currentDelayStep: Double = 0.05  // 基础延迟步长 50ms
+
+        // 🔑 屏幕顶部之上的行（已滚出屏幕）：立即更新，无延迟
+        for i in 0..<startPosition {
+            let lineIndex = renderedIndices[i]
+            lineTargetIndices[lineIndex] = newIndex
+        }
 
         // 🔑 从屏幕顶部开始向下遍历
         for i in startPosition..<renderedIndices.count {
@@ -907,12 +921,13 @@ public struct LyricsView: View {
                 // 🔑 屏幕顶部第一行：立即更新目标索引
                 lineTargetIndices[lineIndex] = newIndex
             } else {
-                // 🔑 其他行：延迟更新目标索引
-                let capturedDelay = delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + capturedDelay) {
-                    guard !self.isManualScrolling else { return }
-                    self.lineTargetIndices[lineIndex] = newIndex
+                // 🔑 其他行：使用 DispatchWorkItem 以便可以取消
+                let workItem = DispatchWorkItem { [self] in
+                    guard !isManualScrolling else { return }
+                    lineTargetIndices[lineIndex] = newIndex
                 }
+                waveAnimationWorkItems.append(workItem)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             }
 
             // 🔑 累加延迟
@@ -923,12 +938,14 @@ public struct LyricsView: View {
                 currentDelayStep /= 1.05
             }
         }
+    }
 
-        // 🔑 屏幕顶部之上的行（已滚出屏幕）：立即更新，无延迟
-        for i in 0..<startPosition {
-            let lineIndex = renderedIndices[i]
-            lineTargetIndices[lineIndex] = newIndex
+    /// 🔑 取消所有未完成的波浪动画
+    private func cancelWaveAnimations() {
+        for workItem in waveAnimationWorkItems {
+            workItem.cancel()
         }
+        waveAnimationWorkItems.removeAll()
     }
 }
 

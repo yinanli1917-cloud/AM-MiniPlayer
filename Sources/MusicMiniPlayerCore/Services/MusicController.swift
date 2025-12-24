@@ -37,7 +37,6 @@ public class MusicController: ObservableObject {
     @Published public var duration: Double = 0
     @Published public var currentTime: Double = 0
     @Published public var connectionError: String? = nil
-    @Published public var debugMessage: String = "Initializing..."
     @Published public var audioQuality: String? = nil // "Lossless", "Hi-Res Lossless", "Dolby Atmos", nil
     @Published public var shuffleEnabled: Bool = false
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
