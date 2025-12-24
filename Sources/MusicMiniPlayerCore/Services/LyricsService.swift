@@ -113,6 +113,13 @@ public class LyricsService: ObservableObject {
     @Published public var isTranslating: Bool = false
     private var translationTask: Task<Void, Never>? = nil
 
+    // 🔑 标记当前翻译是否来自歌词源（而非系统翻译）
+    // 用于区分：歌词源自带翻译（不需要重新翻译）vs 系统翻译结果（语言变化时需要重新翻译）
+    private var translationsAreFromLyricsSource: Bool = false
+
+    // 🔑 记录上次系统翻译的目标语言，用于检测语言变化
+    private var lastSystemTranslationLanguage: String?
+
     // 🔑 整首歌是否有逐字歌词（任意一行有即为 true）
     public var hasSyllableSyncLyrics: Bool {
         lyrics.contains { $0.hasSyllableSync }
@@ -285,19 +292,47 @@ public class LyricsService: ObservableObject {
     public func performSystemTranslation(session: TranslationSession) async {
         guard !lyrics.isEmpty else { return }
 
-        // 🔑 优先：检查是否已经有翻译了（来自歌词源）
-        if hasTranslation {
-            debugLog("ℹ️ 歌词源已有翻译，跳过系统翻译")
-            return
-        }
-
         // 🔑 检查翻译开关是否开启
         guard showTranslation else {
             debugLog("ℹ️ 翻译开关未开启，跳过系统翻译")
             return
         }
 
-        debugLog("🔄 开始系统翻译（\(lyrics.count) 行）")
+        // 🔑 检查用户目标语言是否为中文
+        let isTargetChinese = translationLanguage.hasPrefix("zh")
+
+        // 🔑 检查是否已经有翻译了
+        if hasTranslation {
+            // 🔑 如果翻译来自歌词源（NetEase/QQ/AMLL 的中文翻译）
+            if translationsAreFromLyricsSource {
+                // 🔑 只有用户选择中文时，才优先使用歌词源翻译
+                // 否则清除歌词源翻译，使用系统翻译到用户选择的语言
+                if isTargetChinese {
+                    debugLog("ℹ️ 歌词源已有中文翻译，用户目标也是中文，跳过系统翻译")
+                    return
+                } else {
+                    debugLog("🔄 用户目标语言非中文 (\(translationLanguage))，清除歌词源翻译，使用系统翻译")
+                    for i in 0..<lyrics.count {
+                        lyrics[i].translation = nil
+                    }
+                    translationsAreFromLyricsSource = false
+                }
+            } else {
+                // 🔑 如果翻译来自系统翻译，检查语言是否变化
+                if let lastLang = lastSystemTranslationLanguage, lastLang == translationLanguage {
+                    debugLog("ℹ️ 已有系统翻译且语言未变化 (\(translationLanguage))，跳过重新翻译")
+                    return
+                }
+
+                // 🔑 语言已变化，清除旧的系统翻译
+                debugLog("🔄 翻译语言已变化: \(lastSystemTranslationLanguage ?? "nil") → \(translationLanguage)，清除旧翻译")
+                for i in 0..<lyrics.count {
+                    lyrics[i].translation = nil
+                }
+            }
+        }
+
+        debugLog("🔄 开始系统翻译（\(lyrics.count) 行），目标语言: \(translationLanguage)")
         isTranslating = true
 
         let lyricTexts = lyrics.map { $0.text }
@@ -313,7 +348,11 @@ public class LyricsService: ObservableObject {
             lyrics[i].translation = translatedTexts[i]
         }
 
-        debugLog("✅ 系统翻译完成 (\(translatedTexts.count) 行)")
+        // 🔑 记录这次系统翻译的目标语言
+        lastSystemTranslationLanguage = translationLanguage
+        translationsAreFromLyricsSource = false  // 标记为系统翻译
+
+        debugLog("✅ 系统翻译完成 (\(translatedTexts.count) 行)，目标语言: \(translationLanguage)")
         isTranslating = false
     }
 
@@ -549,8 +588,14 @@ public class LyricsService: ObservableObject {
             if !lyricsWithTranslation.isEmpty {
                 debugLog("🌐 歌词源包含翻译（缓存）：\(lyricsWithTranslation.count)/\(self.lyrics.count) 行有翻译")
                 debugLog("   示例：\"\(self.lyrics.first(where: { $0.hasTranslation })?.text ?? "")\" → \"\(self.lyrics.first(where: { $0.hasTranslation })?.translation ?? "")\"")
+                // 🔑 标记翻译来自歌词源
+                translationsAreFromLyricsSource = true
+                lastSystemTranslationLanguage = nil
             } else {
                 debugLog("❌ 歌词源不包含翻译（缓存）")
+                // 🔑 重置翻译来源标记
+                translationsAreFromLyricsSource = false
+                lastSystemTranslationLanguage = nil
             }
             return
         }
@@ -618,8 +663,14 @@ public class LyricsService: ObservableObject {
                         if !lyricsWithTranslation.isEmpty {
                             self.debugLog("🌐 歌词源包含翻译：\(lyricsWithTranslation.count)/\(self.lyrics.count) 行有翻译")
                             self.debugLog("   示例：\"\(self.lyrics.first(where: { $0.hasTranslation })?.text ?? "")\" → \"\(self.lyrics.first(where: { $0.hasTranslation })?.translation ?? "")\"")
+                            // 🔑 标记翻译来自歌词源
+                            self.translationsAreFromLyricsSource = true
+                            self.lastSystemTranslationLanguage = nil
                         } else {
                             self.debugLog("❌ 歌词源不包含翻译")
+                            // 🔑 重置翻译来源标记
+                            self.translationsAreFromLyricsSource = false
+                            self.lastSystemTranslationLanguage = nil
                         }
                     }
                 } else {
@@ -1547,12 +1598,22 @@ public class LyricsService: ObservableObject {
 
                 let minute = Int(line[minuteRange]) ?? 0
                 let second = Int(line[secondRange]) ?? 0
-                let centisecond = Int(line[centisecondRange]) ?? 0
+                let subsecondStr = String(line[centisecondRange])
+                let subsecond = Int(subsecondStr) ?? 0
 
                 let text = String(line[textRange]).trimmingCharacters(in: .whitespaces)
                 guard !text.isEmpty else { continue }
 
-                let startTime = Double(minute * 60) + Double(second) + Double(centisecond) / 100.0
+                // 🔑 修复：正确处理 2 位（厘秒）和 3 位（毫秒）的小数部分
+                // [01:23.45] → 45 厘秒 = 0.45 秒
+                // [01:23.456] → 456 毫秒 = 0.456 秒
+                let subsecondValue: Double
+                if subsecondStr.count == 3 {
+                    subsecondValue = Double(subsecond) / 1000.0  // 毫秒
+                } else {
+                    subsecondValue = Double(subsecond) / 100.0   // 厘秒
+                }
+                let startTime = Double(minute * 60) + Double(second) + subsecondValue
 
                 lines.append(LyricLine(text: text, startTime: startTime, endTime: startTime + 5.0))
 
@@ -1717,6 +1778,20 @@ public class LyricsService: ObservableObject {
             // 跳过空行和省略号
             let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・", ""]
             if ellipsisPatterns.contains(trimmed) {
+                return false
+            }
+
+            // 🔑 跳过纯音乐提示（这类提示应视为无歌词）
+            let instrumentalPatterns = [
+                "此歌曲为没有填词的纯音乐",
+                "纯音乐，请欣赏",
+                "纯音乐，请您欣赏",
+                "此歌曲为纯音乐",
+                "Instrumental",
+                "This song is instrumental",
+                "No lyrics available"
+            ]
+            if instrumentalPatterns.contains(where: { trimmed.contains($0) }) {
                 return false
             }
 
@@ -2179,8 +2254,11 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        // 🔑 用时长 + 艺术家名匹配找到正确的歌曲
+        // 🔑 用时长 + 艺术家名 + 标题匹配找到正确的歌曲
         let inputArtistLower = artist.lowercased()
+        let inputTitleLower = title.lowercased()
+        // 🔑 清理标题：移除括号内容如 "(2021 Remaster)"
+        let cleanedInputTitle = inputTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
 
         for result in results {
             guard let trackName = result["trackName"] as? String,
@@ -2192,21 +2270,31 @@ public class LyricsService: ObservableObject {
             let trackDuration = Double(trackTimeMillis) / 1000.0
             let durationDiff = abs(trackDuration - duration)
 
-            // 🔑 必须同时满足：时长差 < 2秒 AND 艺术家名相关
-            // 艺术家名相关：输入艺术家名包含结果艺术家名，或结果艺术家名包含输入艺术家名的某部分
+            // 🔑 必须同时满足：时长差 < 2秒 AND 艺术家名相关 AND 标题相关
             let resultArtistLower = artistName.lowercased()
             let artistMatch = inputArtistLower.contains(resultArtistLower) ||
                               resultArtistLower.contains(inputArtistLower) ||
                               inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) } ||
                               inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
 
-            if durationDiff < 2 && artistMatch {
+            // 🔑 标题匹配：检查标题是否相关
+            let resultTitleLower = trackName.lowercased()
+            let cleanedResultTitle = resultTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
+            // 🔑 标题匹配条件：清理后的标题相互包含，或者有显著的共同词汇
+            let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
+                            cleanedResultTitle.contains(cleanedInputTitle) ||
+                            // 🔑 检查是否有共同的主要词汇（>3字符的词）
+                            cleanedInputTitle.split(separator: " ")
+                                .filter { $0.count > 3 }
+                                .contains { cleanedResultTitle.contains($0.lowercased()) }
+
+            if durationDiff < 2 && artistMatch && titleMatch {
                 debugLog("✅ iTunes CN match: '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.1f", durationDiff))s)")
                 return (trackName, artistName)
             }
         }
 
-        debugLog("❌ iTunes CN: No duration+artist match found")
+        debugLog("❌ iTunes CN: No duration+artist+title match found")
         return nil
     }
 
