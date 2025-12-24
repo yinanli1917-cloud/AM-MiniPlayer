@@ -1020,14 +1020,16 @@ struct InterludeDotsView: View {
         let overallOpacity = isInInterlude ? (1.0 - fadeOutProgress) : 0.0
         let overallBlur = fadeOutProgress * 8
 
-        // 🔑 呼吸动画：降低频率到 0.8Hz（更慢更柔和）
-        let breathingPhase = sin(currentTime * .pi * 0.8)
+        // 🔑 呼吸动画：使用缓动函数让脉搏更柔和丝滑
+        let rawPhase = sin(currentTime * .pi * 0.8)
+        // 使用 ease-in-out 曲线：让加速和减速都更柔和
+        let breathingPhase = rawPhase * abs(rawPhase)  // x * |x| 产生平方缓动效果
 
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { dotIndex in
                 let progress = dotProgresses[dotIndex]
                 let isLightingUp = progress > 0.0 && progress < 1.0
-                let breathingScale: CGFloat = isLightingUp ? (1.0 + CGFloat(breathingPhase) * 0.06) : 1.0
+                let breathingScale: CGFloat = isLightingUp ? (1.0 + CGFloat(breathingPhase) * 0.12) : 1.0
 
                 Circle()
                     .fill(Color.white)
@@ -1095,8 +1097,10 @@ struct PreludeDotsView: View {
         let overallOpacity = 1.0 - fadeOutProgress
         let overallBlur = fadeOutProgress * 8
 
-        // 🔑 呼吸动画：降低频率到 0.8Hz
-        let breathingPhase = sin(currentTime * .pi * 0.8)
+        // 🔑 呼吸动画：使用缓动函数让脉搏更柔和丝滑
+        let rawPhase = sin(currentTime * .pi * 0.8)
+        // 使用 ease-in-out 曲线：让加速和减速都更柔和
+        let breathingPhase = rawPhase * abs(rawPhase)  // x * |x| 产生平方缓动效果
 
         HStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -1104,7 +1108,7 @@ struct PreludeDotsView: View {
                     let progress = dotProgresses[index]
                     // 🔑 只有正在点亮过程中的点（0 < progress < 1）才有呼吸动画
                     let isLightingUp = progress > 0.0 && progress < 1.0
-                    let breathingScale: CGFloat = isLightingUp ? (1.0 + CGFloat(breathingPhase) * 0.06) : 1.0
+                    let breathingScale: CGFloat = isLightingUp ? (1.0 + CGFloat(breathingPhase) * 0.12) : 1.0
 
                     Circle()
                         .fill(Color.white)
@@ -1134,32 +1138,3 @@ struct LyricsView_Previews: PreviewProvider {
 }
 #endif
 
-// MARK: - Translation Modifier for LyricsView
-@available(macOS 15.0, *)
-private struct LyricsTranslationModifier: ViewModifier {
-    @ObservedObject var lyricsService = LyricsService.shared
-
-    func body(content: Content) -> some View {
-        Group {
-            if let config = lyricsService.translationSessionConfig as? TranslationSession.Configuration {
-                content
-                    .translationTask(config) { session in
-                        fputs("🎯 [TranslationModifier] translationTask triggered!\n", stderr)
-                        await lyricsService.performTranslation(with: session)
-                    }
-            } else {
-                content
-            }
-        }
-        .onAppear {
-            fputs("🔧 [TranslationModifier] onAppear, config type: \(type(of: lyricsService.translationSessionConfig))\n", stderr)
-        }
-    }
-}
-
-@available(macOS, obsoleted: 15.0)
-private struct LyricsTranslationModifierLegacy: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-    }
-}

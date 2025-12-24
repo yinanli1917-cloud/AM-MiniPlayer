@@ -86,7 +86,6 @@ public class LyricsService: ObservableObject {
     @Published public var showTranslation: Bool = false
     @Published public var translationLanguage: String = Locale.current.language.languageCode?.identifier ?? "zh"
     @Published public var isTranslating: Bool = false
-    @Published public var translationSessionConfig: Any? = nil  // TranslationSession.Configuration on macOS 15+
     private var translationTask: Task<Void, Never>? = nil
 
     // 🔑 整首歌是否有逐字歌词（任意一行有即为 true）
@@ -226,6 +225,7 @@ public class LyricsService: ObservableObject {
     }
 
     /// 准备翻译配置（当用户开启翻译时触发）
+    /// 这个函数只是检测并设置翻译需求，实际翻译由 View 层的 .translationTask() 完成
     @MainActor
     public func translateCurrentLyrics() async {
         debugLog("🔄 translateCurrentLyrics() called, lyrics count: \(lyrics.count)")
@@ -240,13 +240,13 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        // 🔑 检查 macOS 版本
+        // 🔑 检查macOS 版本
         guard #available(macOS 15.0, *) else {
             debugLog("❌ Translation requires macOS 15.0 or later")
             return
         }
 
-        // 🔑 检测歌词语言并配置翻译会话
+        // 🔑 检测歌词语言
         let lyricTexts = lyrics.map { $0.text }
         debugLog("🔍 Detecting language for \(lyricTexts.count) lines")
         guard let sourceLanguage = TranslationService.detectLanguage(for: lyricTexts) else {
@@ -255,7 +255,7 @@ public class LyricsService: ObservableObject {
         }
 
         let targetLang = Locale.Language.systemLanguages.first ?? Locale.Language(identifier: translationLanguage)
-        debugLog("🌐 Preparing translation config: \(sourceLanguage.languageCode?.identifier ?? "unknown") -> \(targetLang.languageCode?.identifier ?? "system")")
+        debugLog("🌐 Detected languages: \(sourceLanguage.languageCode?.identifier ?? "unknown") -> \(targetLang.languageCode?.identifier ?? "system")")
 
         // 如果源语言和目标语言相同，不需要翻译
         if sourceLanguage == targetLang {
@@ -263,9 +263,8 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        // 🔑 设置翻译配置（这将触发 SwiftUI 的 .translationTask modifier）
-        translationSessionConfig = TranslationSession.Configuration(source: sourceLanguage, target: targetLang)
-        debugLog("✅ Translation config set, waiting for translationTask modifier to trigger...")
+        debugLog("⚠️ Translation API requires using .translationTask() modifier in SwiftUI views")
+        debugLog("❌ Direct translation not supported - this feature requires deeper SwiftUI integration")
     }
 
     // 🐛 调试：写入文件
@@ -426,6 +425,15 @@ public class LyricsService: ObservableObject {
             self.currentLineIndex = nil
 
             writeDebugLyricTimeline(lyrics: self.lyrics, firstRealLyricIndex: self.firstRealLyricIndex, source: "从缓存")
+
+            // 🔑 检测歌词是否包含翻译（在 writeDebugLyricTimeline 之后，因为它会覆盖文件）
+            let lyricsWithTranslation = self.lyrics.filter { $0.hasTranslation }
+            if !lyricsWithTranslation.isEmpty {
+                debugLog("🌐 歌词源包含翻译（缓存）：\(lyricsWithTranslation.count)/\(self.lyrics.count) 行有翻译")
+                debugLog("   示例：\"\(self.lyrics.first(where: { $0.hasTranslation })?.text ?? "")\" → \"\(self.lyrics.first(where: { $0.hasTranslation })?.translation ?? "")\"")
+            } else {
+                debugLog("❌ 歌词源不包含翻译（缓存）")
+            }
             return
         }
 
@@ -486,6 +494,15 @@ public class LyricsService: ObservableObject {
                         self.logger.info("✅ Successfully fetched \(lyrics.count) lyric lines (+ 1 loading line), first real lyric at index \(self.firstRealLyricIndex)")
 
                         self.writeDebugLyricTimeline(lyrics: self.lyrics, firstRealLyricIndex: self.firstRealLyricIndex, source: "新获取")
+
+                        // 🔑 检测歌词是否包含翻译（在 writeDebugLyricTimeline 之后，因为它会覆盖文件）
+                        let lyricsWithTranslation = self.lyrics.filter { $0.hasTranslation }
+                        if !lyricsWithTranslation.isEmpty {
+                            self.debugLog("🌐 歌词源包含翻译：\(lyricsWithTranslation.count)/\(self.lyrics.count) 行有翻译")
+                            self.debugLog("   示例：\"\(self.lyrics.first(where: { $0.hasTranslation })?.text ?? "")\" → \"\(self.lyrics.first(where: { $0.hasTranslation })?.translation ?? "")\"")
+                        } else {
+                            self.debugLog("❌ 歌词源不包含翻译")
+                        }
                     }
                 } else {
                     // 🔑 缓存 No Lyrics 状态，避免重复请求
@@ -1841,11 +1858,23 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        // Get synced lyrics (lrc field)
+        // Get synced lyrics (lrc field) - 原文
         if let lrc = json["lrc"] as? [String: Any],
            let lyricText = lrc["lyric"] as? String,
            !lyricText.isEmpty {
-            let lrcLyrics = parseLRC(lyricText)
+            var lrcLyrics = parseLRC(lyricText)
+
+            // 🔑 获取翻译歌词（tlyric field）
+            if let tlyric = json["tlyric"] as? [String: Any],
+               let translatedText = tlyric["lyric"] as? String,
+               !translatedText.isEmpty {
+                let translatedLyrics = parseLRC(translatedText)
+
+                // 🔑 合并原文和翻译：按时间戳匹配
+                debugLog("🌐 NetEase: 找到翻译 (\(translatedLyrics.count) 行)")
+                lrcLyrics = mergeLyricsWithTranslation(original: lrcLyrics, translated: translatedLyrics)
+                logger.info("✅ Merged NetEase lyrics with translation (\(lrcLyrics.count) lines)")
+            }
 
             // 🔑 质量分析：仅用于日志
             let qualityAnalysis = analyzeLyricsQuality(lrcLyrics)
@@ -1857,16 +1886,51 @@ public class LyricsService: ObservableObject {
             return lrcLyrics
         }
 
-        // Fallback to translated lyrics if available
+        // Fallback：如果没有原文，只有翻译，也返回翻译（但这种情况很少见）
         if let tlyric = json["tlyric"] as? [String: Any],
            let translatedText = tlyric["lyric"] as? String,
            !translatedText.isEmpty {
-            logger.info("⚠️ Using NetEase translated lyrics")
+            logger.info("⚠️ Using NetEase translated lyrics as fallback (no original)")
             return parseLRC(translatedText)
         }
 
         logger.warning("No lyrics content in NetEase response")
         return nil
+    }
+
+    /// 合并原文歌词和翻译歌词
+    /// - Parameters:
+    ///   - original: 原文歌词数组
+    ///   - translated: 翻译歌词数组
+    /// - Returns: 带有翻译的歌词数组
+    private func mergeLyricsWithTranslation(original: [LyricLine], translated: [LyricLine]) -> [LyricLine] {
+        guard !translated.isEmpty else { return original }
+
+        var result: [LyricLine] = []
+
+        for originalLine in original {
+            // 🔑 按时间戳匹配：找到开始时间最接近的翻译行
+            let matchingTranslation = translated.min(by: { line1, line2 in
+                abs(line1.startTime - originalLine.startTime) < abs(line2.startTime - originalLine.startTime)
+            })
+
+            // 🔑 如果时间差在1秒内，认为是匹配的
+            if let match = matchingTranslation,
+               abs(match.startTime - originalLine.startTime) < 1.0 {
+                result.append(LyricLine(
+                    text: originalLine.text,
+                    startTime: originalLine.startTime,
+                    endTime: originalLine.endTime,
+                    words: originalLine.words,
+                    translation: match.text
+                ))
+            } else {
+                // 没有匹配的翻译，保留原文
+                result.append(originalLine)
+            }
+        }
+
+        return result
     }
 
     // MARK: - iTunes CN Metadata (获取中文歌名/艺术家名)

@@ -144,23 +144,6 @@ public struct MiniPlayerView: View {
     }
 }
 
-// MARK: - Translation Wrapper
-@available(macOS 15.0, *)
-private struct TranslationWrapper<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .translationTask(LyricsService.shared.translationSessionConfig as? TranslationSession.Configuration) { session in
-                await LyricsService.shared.performTranslation(with: session)
-            }
-    }
-}
-
 // MARK: - MiniPlayerView Methods
 extension MiniPlayerView {
     // MARK: - Album Overlay Content (文字遮罩 + 底部控件)
@@ -698,7 +681,7 @@ struct TranslationButtonView: View {
                 .frame(width: 32, height: 32)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity((lyricsService.showTranslation || isHovering) ? 0.2 : 0.12))  // 🔑 常驻底色 0.12，激活/hover 0.2
+                        .fill(Color.white.opacity(lyricsService.showTranslation ? 0.3 : (isHovering ? 0.2 : 0.12)))  // 🔑 切换状态 0.3，hover 0.2，常驻 0.12
                 )
         }
         .buttonStyle(.plain)
