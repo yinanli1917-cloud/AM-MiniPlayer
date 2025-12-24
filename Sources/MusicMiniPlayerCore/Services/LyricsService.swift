@@ -83,8 +83,26 @@ public class LyricsService: ObservableObject {
     @Published var error: String? = nil
 
     // 🔑 翻译相关
-    @Published public var showTranslation: Bool = false
-    @Published public var translationLanguage: String = Locale.current.language.languageCode?.identifier ?? "zh"
+    // 使用 UserDefaults 持久化 showTranslation 状态
+    private let showTranslationKey = "showTranslation"
+    @Published public var showTranslation: Bool = false {
+        didSet {
+            UserDefaults.standard.set(showTranslation, forKey: showTranslationKey)
+        }
+    }
+
+    // 🔑 翻译目标语言设置（支持 UserDefaults 持久化）
+    private let translationLanguageKey = "translationLanguage"
+    // 默认跟随系统语言，使用 Locale.Language.LanguageCode
+    private var _translationLanguage: String = Locale.current.language.languageCode?.identifier ?? "zh"
+    @Published public var translationLanguage: String {
+        get { _translationLanguage }
+        set {
+            _translationLanguage = newValue
+            UserDefaults.standard.set(newValue, forKey: translationLanguageKey)
+            debugLog("🌐 翻译目标语言已设置为: \(newValue)")
+        }
+    }
     @Published public var isTranslating: Bool = false
     private var translationTask: Task<Void, Never>? = nil
 
@@ -140,6 +158,19 @@ public class LyricsService: ObservableObject {
     }
 
     private init() {
+        // 🔑 从 UserDefaults 加载 showTranslation 状态
+        self.showTranslation = UserDefaults.standard.bool(forKey: showTranslationKey)
+
+        // 🔑 从 UserDefaults 加载 translationLanguage（如果存在）
+        if let savedLang = UserDefaults.standard.string(forKey: translationLanguageKey) {
+            self._translationLanguage = savedLang
+            debugLog("🌐 从 UserDefaults 加载翻译语言: \(savedLang)")
+        } else {
+            // 默认使用系统语言
+            self._translationLanguage = Locale.current.language.languageCode?.identifier ?? "zh"
+            debugLog("🌐 使用系统语言作为翻译目标: \(self._translationLanguage)")
+        }
+
         // Configure cache limits
         lyricsCache.countLimit = 50 // Store up to 50 songs' lyrics
         lyricsCache.totalCostLimit = 10 * 1024 * 1024 // 10MB limit
@@ -147,15 +178,6 @@ public class LyricsService: ObservableObject {
         // 启动时异步加载 AMLL 索引
         Task {
             await loadAMLLIndex()
-        }
-
-        // 🔑 监听 showTranslation 变化，触发翻译
-        Task { @MainActor in
-            for await _ in $showTranslation.values {
-                if showTranslation && !hasTranslation {
-                    await translateCurrentLyrics()
-                }
-            }
         }
 
         // 🔑 监听 translationLanguage 变化，重新翻译
@@ -295,8 +317,17 @@ public class LyricsService: ObservableObject {
             return ([], 0)
         }
 
+        // 🔑 元信息关键词列表（用于更精确的过滤）
+        let metadataKeywords = [
+            "作词", "作曲", "编曲", "制作人", "和声", "录音", "混音", "母带",
+            "吉他", "贝斯", "鼓", "钢琴", "键盘", "弦乐", "管乐",
+            "词:", "曲:", "编:", "制作:", "和声:",
+            "Lyrics", "Music", "Arrangement", "Producer", "Vocals",
+            "Guitar", "Bass", "Drums", "Piano", "Keyboards", "Strings", "Brass",
+            "Mix", "Mastering", "Recording", "Engineer"
+        ]
+
         // 1. 🔑 移除开头的元信息行
-        // 判断标准：在歌曲开头 + 时长极短(< 3秒) + 包含冒号（中文：或英文:）
         var filteredLyrics: [LyricLine] = []
         var firstRealLyricStartTime: TimeInterval = 0
         var foundFirstRealLyric = false
@@ -308,11 +339,18 @@ public class LyricsService: ObservableObject {
             let hasColon = trimmed.contains("：") || trimmed.contains(":")
             let hasTitleSeparator = trimmed.contains(" - ") && trimmed.count < 50
 
-            // 🔑 元信息判断：在开头 + (空行 OR (短时长 AND 有冒号) OR 有标题分隔符)
+            // 🔑 检查是否包含元信息关键词
+            let lowercased = trimmed.lowercased()
+            let hasMetadataKeyword = metadataKeywords.contains { keyword in
+                lowercased.contains(keyword.lowercased())
+            }
+
+            // 🔑 元信息判断：在开头 + (空行 OR 短时长有冒号 OR 有标题分隔符 OR 包含元信息关键词)
             let isMetadata = !foundFirstRealLyric && (
                 trimmed.isEmpty ||
                 (duration < 3.0 && hasColon) ||
-                hasTitleSeparator
+                hasTitleSeparator ||
+                hasMetadataKeyword
             )
 
             // 🔑 额外检查：如果有冒号，但时长较长（>=3秒），也可能是元信息，检查是否在开头的连续短行区域
@@ -326,6 +364,7 @@ public class LyricsService: ObservableObject {
 
             if isMetadata {
                 consecutiveMetadataEnd = line.endTime
+                debugLog("🔍 过滤元信息行: \"\(trimmed)\" (duration: \(String(format: "%.2f", duration))s)")
                 continue  // 跳过元信息行
             } else {
                 // 这是真正的歌词行
@@ -362,7 +401,8 @@ public class LyricsService: ObservableObject {
                 text: filteredLyrics[i].text,
                 startTime: currentStart,
                 endTime: fixedEnd,
-                words: filteredLyrics[i].words  // 🔑 保留逐字时间信息！
+                words: filteredLyrics[i].words,  // 🔑 保留逐字时间信息！
+                translation: filteredLyrics[i].translation  // 🔑 保留翻译！
             )
         }
 
@@ -387,7 +427,17 @@ public class LyricsService: ObservableObject {
             let marker = (index == firstRealLyricIndex) ? " ← 第一句" : ""
             debugOutput += "  [\(index)] \(String(format: "%6.2f", line.startTime))s - \(String(format: "%6.2f", line.endTime))s: \"\(text)\"\(marker)\n"
         }
-        try? debugOutput.write(toFile: "/tmp/nanopod_lyrics_debug.log", atomically: true, encoding: .utf8)
+        // 🔑 追加到日志文件而不是覆盖
+        if let data = debugOutput.data(using: .utf8) {
+            let logPath = "/tmp/nanopod_lyrics_debug.log"
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            } else {
+                try? data.write(to: URL(fileURLWithPath: logPath))
+            }
+        }
     }
 
     func fetchLyrics(for title: String, artist: String, duration: TimeInterval, forceRefresh: Bool = false) {
@@ -601,6 +651,7 @@ public class LyricsService: ObservableObject {
     /// - 行数: 每行+0.5分，最多+15分
     /// - 时间轴覆盖度: 最多+15分
     /// - 来源加成: AMLL +10, NetEase +8, QQ +6, LRCLIB +3, lyrics.ovh +0
+    /// - 翻译加成: 有翻译时 +15 分（仅在 showTranslation=true 时）
     private func calculateLyricsScore(_ lyrics: [LyricLine], source: String, duration: TimeInterval) -> Double {
         guard !lyrics.isEmpty else { return 0 }
 
@@ -627,12 +678,21 @@ public class LyricsService: ObservableObject {
             score += coverageRatio * 15  // 最多 15 分
         }
 
-        // 5. 来源加成
+        // 5. 🔑 翻译加成：当用户开启翻译时，有翻译的歌词源 +15 分
+        if showTranslation {
+            let hasTranslation = lyrics.contains { $0.hasTranslation }
+            if hasTranslation {
+                score += 15
+                debugLog("🌐 \(source): 有翻译，加 +15 分")
+            }
+        }
+
+        // 6. 来源加成
         switch source {
         case "AMLL":
             score += 10  // AMLL 通常是最高质量
         case "NetEase":
-            score += 8   // 网易云 YRC 质量很好
+            score += 8   // 网易云 LRC 质量很好
         case "QQ":
             score += 6   // QQ 音乐质量也不错
         case "LRCLIB":
@@ -1107,6 +1167,10 @@ public class LyricsService: ObservableObject {
     private func parseTTML(_ ttmlString: String) -> [LyricLine]? {
         logger.info("📝 Parsing TTML content (\(ttmlString.count) chars)")
 
+        // 🔑 调试：显示前 500 字符的原始 TTML 内容
+        debugLog("🔍 TTML 原始内容预览 (前 500 字符):")
+        debugLog(String(ttmlString.prefix(500)))
+
         // AMLL TTML format:
         // <p begin="00:01.737" end="00:06.722">
         //   <span begin="00:01.737" end="00:02.175">沈</span>
@@ -1130,6 +1194,11 @@ public class LyricsService: ObservableObject {
         // <span begin="00:21.400" end="00:22.010">低</span>
         let timedSpanPattern = "<span[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>([^<]+)</span>"
         let timedSpanRegex = try? NSRegularExpression(pattern: timedSpanPattern, options: [])
+
+        // 🔑 新增：提取翻译 span（没有 begin/end，但有 ttm:role="x-translation"）
+        // <span ttm:role="x-translation" xml:lang="zh-CN">翻译内容</span>
+        let translationSpanPattern = "<span[^>]*ttm:role=\"x-translation\"[^>]*>([^<]+)</span>"
+        let translationSpanRegex = try? NSRegularExpression(pattern: translationSpanPattern, options: [])
 
         // Pattern to match <span> tags without timing (fallback)
         let cleanSpanPattern = "<span[^>]*>([^<]+)</span>"
@@ -1155,6 +1224,20 @@ public class LyricsService: ObservableObject {
             // 🔑 关键修改：尝试提取逐字时间信息
             var words: [LyricWord] = []
             var lineText = ""
+            var translation: String? = nil  // 🔑 提取翻译
+
+            // 🔑 步骤0：先提取翻译 span（没有 begin/end 属性的）
+            if let translationSpanRegex = translationSpanRegex {
+                let transMatches = translationSpanRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+                if transMatches.count > 0,
+                   let textRange = Range(transMatches[0].range(at: 1), in: content) {
+                    let transText = String(content[textRange]).trimmingCharacters(in: .whitespaces)
+                    if !transText.isEmpty {
+                        translation = transText
+                        debugLog("🌐 TTML: 找到翻译: \"\(transText)\"")
+                    }
+                }
+            }
 
             // 方法1：提取带时间戳的 span（逐字歌词）
             if let timedSpanRegex = timedSpanRegex {
@@ -1163,10 +1246,15 @@ public class LyricsService: ObservableObject {
                 for spanMatch in spanMatches {
                     guard spanMatch.numberOfRanges >= 4 else { continue }
 
-                    // 检查是否包含 ttm:role（翻译或罗马音）
+                    // 检查是否包含 ttm:role（翻译或罗马音或背景音）
                     guard let fullSpanRange = Range(spanMatch.range, in: content) else { continue }
                     let fullSpan = String(content[fullSpanRange])
-                    if fullSpan.contains("ttm:role") { continue }
+
+                    // 过滤掉罗马音和背景音
+                    if fullSpan.contains("ttm:role=\"x-roman") ||
+                       fullSpan.contains("ttm:role=\"x-bg\"") {
+                        continue
+                    }
 
                     // 提取 span 的 begin 和 end 时间
                     guard let spanBeginRange = Range(spanMatch.range(at: 1), in: content),
@@ -1181,7 +1269,8 @@ public class LyricsService: ObservableObject {
                     if let wordStart = parseTTMLTime(spanBegin),
                        let wordEnd = parseTTMLTime(spanEnd) {
                         words.append(LyricWord(word: spanText, startTime: wordStart, endTime: wordEnd))
-                        lineText += spanText
+                        // 🔑 关键修复：TTML 中空格在 span 标签外，需要在每个单词后添加空格
+                        lineText += spanText + " "
                     }
                 }
             }
@@ -1198,7 +1287,8 @@ public class LyricsService: ObservableObject {
 
                         if spanMatch.numberOfRanges >= 2,
                            let textRange = Range(spanMatch.range(at: 1), in: content) {
-                            lineText += String(content[textRange])
+                            // 同样添加空格
+                            lineText += String(content[textRange]) + " "
                         }
                     }
                 }
@@ -1222,11 +1312,20 @@ public class LyricsService: ObservableObject {
 
             guard !lineText.isEmpty else { continue }
 
+            // 🔑 调试：显示前 3 行解析后的歌词（包括翻译）
+            if lines.count < 3 {
+                var logMsg = "📝 TTML 解析第 \(lines.count + 1) 行: \"\(lineText)\" (字数: \(words.count)"
+                if let t = translation {
+                    logMsg += " | 翻译: \"\(t)\""
+                }
+                debugLog(logMsg)
+            }
+
             // Parse time format: MM:SS.mmm (AMLL format) or HH:MM:SS.mmm
             if let startTime = parseTTMLTime(beginString),
                let endTime = parseTTMLTime(endString) {
-                // 🔑 关键：传入 words 数组！
-                lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
+                // 🔑 传入 words 数组和翻译
+                lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words, translation: translation))
             }
         }
 
@@ -1234,8 +1333,9 @@ public class LyricsService: ObservableObject {
         lines.sort { $0.startTime < $1.startTime }
 
         let syllableCount = lines.filter { $0.hasSyllableSync }.count
-        logger.info("✅ Parsed \(lines.count) lyric lines from TTML (\(syllableCount) with syllable sync)")
-        debugLog("✅ TTML parsed: \(lines.count) lines, \(syllableCount) syllable-synced")
+        let translationCount = lines.filter { $0.hasTranslation }.count
+        logger.info("✅ Parsed \(lines.count) lyric lines from TTML (\(syllableCount) with syllable sync, \(translationCount) with translation)")
+        debugLog("✅ TTML parsed: \(lines.count) lines, \(syllableCount) syllable-synced, \(translationCount) with translation")
         return lines.isEmpty ? nil : lines
     }
 
@@ -1387,6 +1487,11 @@ public class LyricsService: ObservableObject {
                 let startTime = Double(minute * 60) + Double(second) + Double(centisecond) / 100.0
 
                 lines.append(LyricLine(text: text, startTime: startTime, endTime: startTime + 5.0))
+
+                // 🔑 调试：显示前几行歌词示例
+                if lines.count <= 5 {
+                    debugLog("📝 LRC 解析第 \(lines.count) 行: \"\(text)\"")
+                }
             }
         }
 
@@ -1524,6 +1629,16 @@ public class LyricsService: ObservableObject {
         var issues: [String] = []
 
         // 🔑 过滤掉非歌词行（前奏省略号 + 元信息行）
+        // 🔑 更精确的元信息检测：基于常见元信息关键词和格式模式
+        let metadataKeywords = [
+            "作词", "作曲", "编曲", "制作人", "和声", "录音", "混音", "母带",
+            "吉他", "贝斯", "鼓", "钢琴", "键盘", "弦乐", "管乐",
+            "词:", "曲:", "编:", "制作:", "和声:",
+            "Lyrics", "Music", "Arrangement", "Producer", "Vocals",
+            "Guitar", "Bass", "Drums", "Piano", "Keyboards", "Strings", "Brass",
+            "Mix", "Mastering", "Recording", "Engineer"
+        ]
+
         let realLyrics = lyrics.filter { line in
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
 
@@ -1533,8 +1648,24 @@ public class LyricsService: ObservableObject {
                 return false
             }
 
-            // 🔑 跳过元信息行（包含中文或英文冒号且较短的行）
-            if (trimmed.contains("：") || trimmed.contains(":")) && trimmed.count < 30 {
+            // 🔑 跳过元信息行（更精确的检测逻辑）
+            // 1. 检查是否包含元信息关键词（中文或英文）
+            let lowercased = trimmed.lowercased()
+            let hasMetadataKeyword = metadataKeywords.contains { keyword in
+                lowercased.contains(keyword.lowercased())
+            }
+
+            // 2. 检查是否是元信息格式（冒号前是短关键词）
+            // 例如："词:周杰伦", "Lyrics: Taylor Swift"
+            let hasColonFormat = (trimmed.contains("：") || trimmed.contains(":"))
+            let isShortMetadataLine = hasColonFormat && trimmed.count < 40
+
+            // 3. 如果行很短且包含冒号，很可能是元信息
+            // 但如果行很长（超过40字符）且包含冒号，可能是正常歌词
+            let isVeryShortWithColon = hasColonFormat && trimmed.count < 25
+
+            if hasMetadataKeyword || isVeryShortWithColon || (isShortMetadataLine && hasMetadataKeyword) {
+                // 特殊处理：如果行以常见元信息关键词开头，跳过
                 return false
             }
 
@@ -1813,28 +1944,12 @@ public class LyricsService: ObservableObject {
     }
 
     private func fetchNetEaseLyrics(songId: Int) async throws -> [LyricLine]? {
-        // 🔑 优先尝试新版 API 获取 YRC 逐字歌词（更精确的时间轴）
-        if let yrcLyrics = try? await fetchNetEaseYRC(songId: songId) {
-            let syllableCount = yrcLyrics.filter { $0.hasSyllableSync }.count
-            debugLog("✅ NetEase YRC: \(yrcLyrics.count) lines (\(syllableCount) with syllable sync)")
-            if let firstSyllable = yrcLyrics.first(where: { $0.hasSyllableSync }) {
-                debugLog("📝 Sample line: \"\(firstSyllable.text)\" words=\(firstSyllable.words.count)")
-                if let firstWord = firstSyllable.words.first {
-                    debugLog("   First word: \"\(firstWord.word)\" \(firstWord.startTime)s-\(firstWord.endTime)s")
-                }
-            }
+        // 🔑 直接使用 LRC API（包含原文+翻译）
+        return try await fetchNetEaseLRCWithTranslation(songId: songId)
+    }
 
-            // 🔑 质量分析：仅用于日志，不再在这里过滤（由评分系统处理）
-            let qualityAnalysis = analyzeLyricsQuality(yrcLyrics)
-            if !qualityAnalysis.isValid {
-                debugLog("⚠️ NetEase YRC has quality issues: \(qualityAnalysis.issues.joined(separator: ", "))")
-                logger.warning("⚠️ NetEase YRC quality issues: \(qualityAnalysis.issues.joined(separator: ", "))")
-                // 🔑 不再直接返回 nil，让评分系统决定
-            }
-
-            logger.info("✅ Found NetEase YRC lyrics (\(yrcLyrics.count) lines, quality: \(String(format: "%.0f", qualityAnalysis.qualityScore)))")
-            return yrcLyrics
-        }
+    /// 获取 NetEase LRC 歌词（包含原文和翻译）
+    private func fetchNetEaseLRCWithTranslation(songId: Int) async throws -> [LyricLine]? {
 
         // 回退到旧版 API 获取 LRC 行级歌词
         let urlString = "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1"
@@ -1865,15 +1980,31 @@ public class LyricsService: ObservableObject {
             var lrcLyrics = parseLRC(lyricText)
 
             // 🔑 获取翻译歌词（tlyric field）
-            if let tlyric = json["tlyric"] as? [String: Any],
-               let translatedText = tlyric["lyric"] as? String,
-               !translatedText.isEmpty {
-                let translatedLyrics = parseLRC(translatedText)
+            debugLog("🔍 NetEase: 检查翻译字段...")
+            if let tlyric = json["tlyric"] as? [String: Any] {
+                debugLog("🔍 NetEase: tlyric 字段存在")
+                if let translatedText = tlyric["lyric"] as? String {
+                    debugLog("🔍 NetEase: tlyric.lyric 长度 = \(translatedText.count)")
+                    if !translatedText.isEmpty {
+                        let translatedLyrics = parseLRC(translatedText)
+                        debugLog("🔍 NetEase: 解析后翻译行数 = \(translatedLyrics.count)")
 
-                // 🔑 合并原文和翻译：按时间戳匹配
-                debugLog("🌐 NetEase: 找到翻译 (\(translatedLyrics.count) 行)")
-                lrcLyrics = mergeLyricsWithTranslation(original: lrcLyrics, translated: translatedLyrics)
-                logger.info("✅ Merged NetEase lyrics with translation (\(lrcLyrics.count) lines)")
+                        // 🔑 合并原文和翻译：按时间戳匹配
+                        if !translatedLyrics.isEmpty {
+                            debugLog("🌐 NetEase: 找到翻译 (\(translatedLyrics.count) 行)")
+                            lrcLyrics = mergeLyricsWithTranslation(original: lrcLyrics, translated: translatedLyrics)
+                            logger.info("✅ Merged NetEase lyrics with translation (\(lrcLyrics.count) lines)")
+                        } else {
+                            debugLog("⚠️ NetEase: 翻译文本解析后为空")
+                        }
+                    } else {
+                        debugLog("⚠️ NetEase: tlyric.lyric 为空字符串")
+                    }
+                } else {
+                    debugLog("⚠️ NetEase: tlyric.lyric 不是字符串")
+                }
+            } else {
+                debugLog("⚠️ NetEase: 没有 tlyric 字段")
             }
 
             // 🔑 质量分析：仅用于日志
@@ -2171,7 +2302,22 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        let lyrics = parseLRC(lyricText)
+        // 🔑 解析原文歌词
+        var lyrics = parseLRC(lyricText)
+
+        // 🔑 检查是否有翻译（trans 字段）
+        if let transText = json["trans"] as? String, !transText.isEmpty {
+            debugLog("🌐 QQ Music: 找到翻译 (\(transText.count) 字符)")
+            let translatedLyrics = parseLRC(transText)
+            if !translatedLyrics.isEmpty {
+                debugLog("🌐 QQ Music: 解析翻译 (\(translatedLyrics.count) 行)")
+                lyrics = mergeLyricsWithTranslation(original: lyrics, translated: translatedLyrics)
+                let transCount = lyrics.filter { $0.hasTranslation }.count
+                debugLog("✅ QQ Music 合并翻译: \(transCount)/\(lyrics.count) 行有翻译")
+            }
+        } else {
+            debugLog("⚠️ QQ Music: 无翻译字段")
+        }
 
         // 🔑 质量分析：仅用于日志
         let qualityAnalysis = analyzeLyricsQuality(lyrics)
@@ -2245,6 +2391,21 @@ public class LyricsService: ObservableObject {
         let wordPattern = "\\((\\d+),(\\d+),(\\d+)\\)([^(]+)"
         let wordRegex = try? NSRegularExpression(pattern: wordPattern)
 
+        // 🔑 调试：显示前5行原始 YRC 内容
+        var debugLineCount = 0
+        for line in yrcLines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmedLine.isEmpty else { continue }
+
+            // 跳过元信息行（以 { 开头的 JSON 行）
+            if trimmedLine.hasPrefix("{") { continue }
+
+            if debugLineCount < 5 {
+                debugLog("🔍 YRC 原始行 \(debugLineCount + 1): \(trimmedLine)")
+                debugLineCount += 1
+            }
+        }
+
         for line in yrcLines {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
             guard !trimmedLine.isEmpty else { continue }
@@ -2301,6 +2462,11 @@ public class LyricsService: ObservableObject {
 
             lineText = lineText.trimmingCharacters(in: .whitespaces)
             guard !lineText.isEmpty else { continue }
+
+            // 🔑 调试：显示前3行解析后的歌词
+            if lines.count < 3 {
+                debugLog("📝 YRC 解析第 \(lines.count + 1) 行: \"\(lineText)\" (字数: \(words.count))")
+            }
 
             // 转换时间（毫秒 → 秒）
             let startTime = Double(lineStartMs) / 1000.0

@@ -916,7 +916,8 @@ struct LyricLineView: View {
         }()
 
         // 🔑 稳定版本：简单的行级高亮（等待正确的逐字高亮实现）
-        VStack(alignment: .leading, spacing: 2) {
+        // 参考 AMLL/LyricFever 样式：翻译显示在原文下方
+        VStack(alignment: .leading, spacing: 4) {
             // 🔑 主歌词行
             HStack(spacing: 0) {
                 Text(cleanedText)
@@ -929,17 +930,18 @@ struct LyricLineView: View {
             }
 
             // 🔑 翻译行（如果有翻译且开启显示）
+            // 样式：翻译字体 65%（16pt/24pt）
             if showTranslation, let translation = line.translation, !translation.isEmpty {
                 HStack(spacing: 0) {
                     Text(translation)
-                        .font(.system(size: 12, weight: .medium))  // 50% 大小
-                        .foregroundColor(.white.opacity(textOpacity * 0.7))  // 稍微透明一点
+                        .font(.system(size: 16, weight: .regular))  // 65% 大小
+                        .foregroundColor(.white.opacity(textOpacity * 0.6))  // 更明显的透明度
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(4)
 
                     Spacer(minLength: 0)
                 }
-                .padding(.top, 2)
             }
         }
         // 🔑 不设固定高度，让内容自然决定高度
