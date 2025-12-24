@@ -1518,7 +1518,159 @@ debugLog("🔍 过滤元信息行: \"\(trimmed)\" (duration: \(duration)s, hasCo
 
 ---
 
-## 十四、问题排查清单
+## 十四、调试日志系统 (Debug Logging) ✅ 已实现
+
+### 14.1 全局调试配置
+
+**文件位置**: `Sources/MusicMiniPlayerCore/Utils/DebugConfig.swift`
+
+```swift
+/// 全局调试配置
+public enum DebugConfig {
+    /// 是否启用 stderr 调试日志输出
+    /// 生产环境设为 false，调试时设为 true
+    #if DEBUG
+    public static let enableStderrLog = false  // 开发时设为 true 启用日志
+    #else
+    public static let enableStderrLog = false
+    #endif
+}
+
+/// 调试日志输出（仅在 enableStderrLog 为 true 时输出）
+@inline(__always)
+public func debugPrint(_ message: String) {
+    guard DebugConfig.enableStderrLog else { return }
+    fputs(message, stderr)
+}
+```
+
+### 14.2 使用方式
+
+**启用调试日志**:
+1. 打开 `DebugConfig.swift`
+2. 将 `enableStderrLog = false` 改为 `enableStderrLog = true`
+3. 重新编译
+
+**日志输出位置**:
+- 终端运行时：直接输出到 stderr
+- 查看文件日志：`cat /tmp/nanopod_lyrics_debug.log`
+
+**代码中使用**:
+```swift
+// 使用全局 debugPrint 函数（会自动检查开关）
+debugPrint("🔍 歌词获取开始: \(title) - \(artist)\n")
+
+// 注意：消息需要手动添加换行符 \n
+```
+
+### 14.3 日志分类
+
+项目中的调试日志按功能分类：
+
+| 分类 | 前缀 | 位置 | 说明 |
+|------|------|------|------|
+| 歌词获取 | 🔍 | LyricsService | 歌词搜索流程、数据源选择 |
+| 歌词解析 | 📝 | LyricsService | TTML/YRC/LRC 解析过程 |
+| 翻译系统 | 🌐 | TranslationService | 系统翻译触发、语言检测 |
+| 音乐控制 | 🎵 | MusicController | Apple Music 状态变化 |
+| 滚动检测 | 📜 | ScrollDetector | 手势检测、速度计算 |
+| UI 布局 | 🎨 | LyricsView | 布局计算、动画状态 |
+| 窗口控制 | 🪟 | WindowResizeHandler | 窗口大小变化 |
+
+### 14.4 性能考虑
+
+**@inline(__always)**: `debugPrint` 函数使用此修饰符，确保编译器内联函数调用，减少函数调用开销。
+
+**guard 快速返回**: 当 `enableStderrLog = false` 时，函数在入口立即返回，不执行任何字符串操作。
+
+**生产环境**: 两个配置分支（DEBUG/RELEASE）都默认设为 false，确保生产包无日志输出。
+
+### 14.5 调试技巧
+
+**实时查看日志**:
+```bash
+# 在终端直接运行（捕获 stderr）
+./nanoPod.app/Contents/MacOS/nanoPod 2>&1 | tee /tmp/nanopod_debug.log
+
+# 或监听日志文件
+tail -f /tmp/nanopod_lyrics_debug.log
+```
+
+**过滤特定类型日志**:
+```bash
+# 只看歌词获取日志
+cat /tmp/nanopod_lyrics_debug.log | grep "🔍"
+
+# 只看翻译相关日志
+cat /tmp/nanopod_lyrics_debug.log | grep "🌐"
+```
+
+---
+
+## 十五、性能优化记录 ✅
+
+### 15.1 Wave 动画泄漏修复
+
+**问题**: 每次歌词行切换时，`triggerWaveAnimation()` 会为每行创建 `DispatchQueue.main.asyncAfter` 任务，这些任务无法取消，导致内存泄漏和性能下降。
+
+**解决方案**: 使用 `DispatchWorkItem` 替代，支持取消。
+
+```swift
+// 🔑 存储可取消的 Work Item
+@State private var waveAnimationWorkItems: [DispatchWorkItem] = []
+
+// 🔑 触发新动画前取消旧动画
+private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
+    // 取消之前未完成的波浪动画
+    for workItem in waveAnimationWorkItems {
+        workItem.cancel()
+    }
+    waveAnimationWorkItems.removeAll()
+
+    // 创建新的可取消任务
+    let workItem = DispatchWorkItem {
+        guard !self.isManualScrolling else { return }
+        self.lineTargetIndices[lineIndex] = newIndex
+    }
+    waveAnimationWorkItems.append(workItem)
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+}
+
+// 🔑 歌曲切换时清理
+.onChange(of: musicController.currentTrackTitle) {
+    cancelWaveAnimations()
+    // ...
+}
+```
+
+### 15.2 正则表达式缓存
+
+**问题**: 每次解析歌词时都重新编译正则表达式，造成不必要的 CPU 开销。
+
+**解决方案**: 使用 static 变量缓存编译后的正则。
+
+```swift
+// MARK: - 正则表达式缓存（避免重复编译）
+private static let ttmlPRegex = try? NSRegularExpression(
+    pattern: "<p[^>]*begin=\"([^\"]+)\"[^>]*end=\"([^\"]+)\"[^>]*>(.*?)</p>",
+    options: [.dotMatchesLineSeparators]
+)
+private static let lrcRegex = try? NSRegularExpression(
+    pattern: "\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{2,3}))?\\]([^\\[]*)",
+    options: []
+)
+// ... 共缓存 7 个正则表达式
+```
+
+### 15.3 死代码清理
+
+**已移除**:
+- `MusicController.debugMessage` - 未使用的 @Published 变量
+- 多余的 fputs 调试调用（生产环境不输出）
+
+---
+
+## 十六、问题排查清单
 
 如果逐字高亮看起来不对：
 
