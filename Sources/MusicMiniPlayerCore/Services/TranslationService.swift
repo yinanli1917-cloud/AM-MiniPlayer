@@ -19,22 +19,22 @@ class TranslationService {
     static func translationTask(_ session: TranslationSession, lyrics: [String]) async -> [String]? {
         guard !lyrics.isEmpty else { return nil }
 
-        print("🌐 [Translation] Starting translation for \(lyrics.count) lines")
+        fputs("🌐 [Translation] Starting translation for \(lyrics.count) lines\n", stderr)
 
         do {
             let requests = lyrics.map { TranslationSession.Request(sourceText: $0) }
             let responses = try await session.translations(from: requests)
             let translatedTexts = responses.map { $0.targetText }
 
-            print("✅ [Translation] Successfully translated \(translatedTexts.count) lines")
+            fputs("✅ [Translation] Successfully translated \(translatedTexts.count) lines\n", stderr)
             return translatedTexts
 
         } catch {
-            print("❌ [Translation] Failed: \(error)")
+            fputs("❌ [Translation] Failed: \(error)\n", stderr)
 
             // 如果翻译失败，尝试检测真实语言用于配置更新
             if let realLanguage = detectLanguage(for: lyrics) {
-                print("🔄 [Translation] Detected real language: \(realLanguage.languageCode?.identifier ?? "unknown")")
+                fputs("🔄 [Translation] Detected real language: \(realLanguage.languageCode?.identifier ?? "unknown")\n", stderr)
                 // 返回 nil 表示需要更新配置（调用者应检测并更新 translationSessionConfig）
             }
             return nil

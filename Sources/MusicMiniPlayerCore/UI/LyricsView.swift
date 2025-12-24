@@ -548,6 +548,12 @@ public struct LyricsView: View {
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
         }
+        // 🔑 macOS 15.0+: 歌词加载完成后更新翻译会话配置
+        .onChange(of: lyricsService.lyrics.count) { _, newCount in
+            if #available(macOS 15.0, *), newCount > 0 {
+                updateTranslationSessionConfig()
+            }
+        }
         .onChange(of: musicController.currentTime) {
             lyricsService.updateCurrentTime(musicController.currentTime)
         }
@@ -1185,9 +1191,7 @@ struct SystemTranslationModifier: ViewModifier {
         if #available(macOS 15.0, *) {
             if let config = translationSessionConfigAny as? TranslationSession.Configuration {
                 content
-                    .onChange(of: lyricsService.translationLanguage) { _, _ in
-                        // 翻译语言变化时，触发重新翻译（通过歌词服务）
-                    }
+                    .id(lyricsService.translationRequestTrigger)  // 🔑 使用 id modifier 强制重建视图，触发翻译
                     .translationTask(config) { session in
                         await lyricsService.performSystemTranslation(session: session)
                     }

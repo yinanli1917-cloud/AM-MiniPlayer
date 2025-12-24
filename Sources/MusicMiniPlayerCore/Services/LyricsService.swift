@@ -88,6 +88,11 @@ public class LyricsService: ObservableObject {
     @Published public var showTranslation: Bool = false {
         didSet {
             UserDefaults.standard.set(showTranslation, forKey: showTranslationKey)
+            // 🔑 当翻译开关打开时，触发翻译请求计数器变化，让 SwiftUI .translationTask() 重新执行
+            if showTranslation {
+                translationRequestTrigger += 1
+                debugLog("🌐 翻译开关已打开，触发翻译请求 (#\(translationRequestTrigger))")
+            }
         }
     }
 
@@ -97,8 +102,14 @@ public class LyricsService: ObservableObject {
         didSet {
             UserDefaults.standard.set(translationLanguage, forKey: translationLanguageKey)
             debugLog("🌐 翻译目标语言已设置为: \(translationLanguage)")
+            // 🔑 翻译语言变化时，触发翻译请求
+            translationRequestTrigger += 1
         }
     }
+
+    // 🔑 翻译请求触发器（用于触发 SwiftUI .translationTask() 重新执行）
+    @Published public var translationRequestTrigger: Int = 0
+
     @Published public var isTranslating: Bool = false
     private var translationTask: Task<Void, Never>? = nil
 
@@ -350,6 +361,19 @@ public class LyricsService: ObservableObject {
             return !hasLetters
         }
 
+        // 🔑 检查是否为元信息关键词行（作词/曲/编曲/etc）
+        func isMetadataKeywordLine(_ text: String) -> Bool {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            let keywords = ["词", "曲", "编曲", "作曲", "作词", "翻译", "LRC", "lrc",
+                           "Lyrics", "Music", "Arrangement", "Composer", "Lyricist"]
+            for keyword in keywords {
+                if trimmed.hasPrefix(keyword) || trimmed.contains(keyword + "：") || trimmed.contains(keyword + ":") {
+                    return true
+                }
+            }
+            return false
+        }
+
         // 1. 🔑 两阶段过滤策略：
         //    阶段1：检测连续的冒号行区域（元信息区域）
         //    阶段2：过滤元信息行
@@ -369,8 +393,9 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        // 🔑 如果前5行中有3行或更多包含冒号，说明是元信息区域
-        let isColonMetadataRegion = colonCountInFirstLines >= 3
+        // 🔑 如果前5行中有2行或更多包含冒号，说明是元信息区域
+        // 从3降低到2，以更好地处理 "标题行 + 词：xxx + 曲：xxx" 的情况
+        let isColonMetadataRegion = colonCountInFirstLines >= 2
 
         for line in rawLyrics {
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
@@ -380,16 +405,18 @@ public class LyricsService: ObservableObject {
 
             // 🔑 检查是否为纯符号/emoji行
             let isPureSymbolLine = isPureSymbols(trimmed)
+            let isMetadataKeyword = isMetadataKeywordLine(trimmed)
 
             // 🔑 连续冒号行检测：在找到第一句真正歌词之前
             if !foundFirstRealLyric && hasColon {
                 consecutiveColonLines += 1
-                // 如果连续3行以上都有冒号，或者是检测到的冒号元信息区域
-                if consecutiveColonLines >= 3 || isColonMetadataRegion {
-                    colonRegionEndTime = line.endTime + 3.0  // 区域结束后再延伸3秒
+                // 如果连续2行以上都有冒号（从3降低到2），或者是检测到的冒号元信息区域
+                if consecutiveColonLines >= 2 || isColonMetadataRegion {
+                    colonRegionEndTime = line.endTime + 5.0  // 区域结束后再延伸5秒（从3秒增加）
                 }
-            } else if !foundFirstRealLyric && !hasColon {
-                // 遇到非冒号行，重置计数（但只在未找到真正歌词前）
+            } else if !foundFirstRealLyric && !hasColon && !hasTitleSeparator {
+                // 遇到非冒号、非标题行，重置计数（但只在未找到真正歌词前）
+                // 注意：标题行不算重置条件，因为它也是元信息
                 consecutiveColonLines = 0
             }
 
@@ -398,8 +425,9 @@ public class LyricsService: ObservableObject {
                 trimmed.isEmpty ||                              // 空行
                 isPureSymbolLine ||                            // 纯符号/emoji行
                 hasTitleSeparator ||                           // 标题分隔符（如 "Artist - Title"）
+                isMetadataKeyword ||                           // 🔑 元信息关键词行
                 (hasColon && line.startTime < colonRegionEndTime) ||  // 在冒号区域内
-                (hasColon && duration < 5.0) ||                 // 短时长+冒号（<5秒）
+                (hasColon && duration < 10.0) ||                // 🔑 短时长+冒号（从5秒增加到10秒）
                 (!hasColon && duration < 2.0 && trimmed.count < 10)  // 短且无冒号的标签行
             )
 
