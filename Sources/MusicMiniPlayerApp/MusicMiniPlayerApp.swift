@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import MusicMiniPlayerCore
+import Translation
 
 /// macOS 菜单栏迷你播放器应用
 /// 支持：菜单栏迷你视图 + 浮动窗口模式切换
@@ -272,14 +273,46 @@ class AppMain: NSObject, NSApplicationDelegate {
     @objc func setTranslationLanguage(_ sender: NSMenuItem) {
         guard let langCode = sender.representedObject as? String else { return }
 
+        let targetLangCode: String
         if langCode == "system" {
             // 使用系统语言
-            let systemLang = Locale.current.language.languageCode?.identifier ?? "zh"
-            LyricsService.shared.translationLanguage = systemLang
-            fputs("🌐 翻译语言设置为: 跟随系统 (\(systemLang))\n", stderr)
+            targetLangCode = Locale.current.language.languageCode?.identifier ?? "zh"
+            fputs("🌐 翻译语言设置为: 跟随系统 (\(targetLangCode))\n", stderr)
         } else {
-            LyricsService.shared.translationLanguage = langCode
-            fputs("🌐 翻译语言设置为: \(langCode)\n", stderr)
+            targetLangCode = langCode
+            fputs("🌐 翻译语言设置为: \(targetLangCode)\n", stderr)
+        }
+
+        // 设置语言
+        LyricsService.shared.translationLanguage = targetLangCode
+
+        // 🔑 macOS 15.0+: 预先下载语言包（如果需要）
+        if #available(macOS 15.0, *) {
+            Task {
+                await prepareTranslationLanguage(targetLangCode)
+            }
+        }
+    }
+
+    /// 🔑 检查并准备翻译语言包（触发系统下载 UI）
+    @available(macOS 15.0, *)
+    private func prepareTranslationLanguage(_ langCode: String) async {
+        let targetLanguage = Locale.Language(identifier: langCode)
+
+        // 检查语言是否可用
+        let availability = LanguageAvailability()
+        let status = await availability.status(from: .init(identifier: "en"), to: targetLanguage)
+
+        switch status {
+        case .installed:
+            fputs("🌐 翻译语言包已安装: \(langCode)\n", stderr)
+        case .supported:
+            fputs("🌐 翻译语言包需要下载: \(langCode)，将在首次翻译时提示下载\n", stderr)
+            // 系统会在下次使用 .translationTask() 时自动提示下载
+        case .unsupported:
+            fputs("⚠️ 翻译语言不支持: \(langCode)\n", stderr)
+        @unknown default:
+            break
         }
     }
 

@@ -1820,8 +1820,19 @@ public class LyricsService: ObservableObject {
         debugLog("🌐 Fetching from NetEase: '\(title)' by '\(artist)'")
         logger.info("🌐 Fetching from NetEase: \(title) by \(artist)")
 
+        // 🔑 Step 0: 尝试获取本地化元数据（解决英文/罗马字标题对应日文/中文歌的问题）
+        var searchTitle = title
+        var searchArtist = artist
+
+        if let localizedMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
+            // 如果找到了本地化元数据，优先使用
+            searchTitle = localizedMetadata.chineseTitle
+            searchArtist = localizedMetadata.chineseArtist
+            debugLog("🇨🇳 NetEase using localized metadata: '\(searchTitle)' by '\(searchArtist)'")
+        }
+
         // Step 1: Search for the song
-        guard let songId = try await searchNetEaseSong(title: title, artist: artist, duration: duration) else {
+        guard let songId = try await searchNetEaseSong(title: searchTitle, artist: searchArtist, duration: duration) else {
             debugLog("❌ NetEase: No matching song found")
             logger.warning("No matching song found on NetEase")
             return nil

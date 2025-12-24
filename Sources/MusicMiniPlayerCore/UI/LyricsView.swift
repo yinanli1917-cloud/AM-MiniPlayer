@@ -554,6 +554,12 @@ public struct LyricsView: View {
                 updateTranslationSessionConfig()
             }
         }
+        // 🔑 macOS 15.0+: 翻译语言变化时更新配置
+        .onChange(of: lyricsService.translationLanguage) { _, _ in
+            if #available(macOS 15.0, *) {
+                updateTranslationSessionConfig()
+            }
+        }
         .onChange(of: musicController.currentTime) {
             lyricsService.updateCurrentTime(musicController.currentTime)
         }

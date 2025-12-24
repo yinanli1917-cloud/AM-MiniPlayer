@@ -1287,32 +1287,92 @@ lyrics = mergeLyricsWithTranslation(original: lrcLyrics, translated: tlyricLyric
 lineText += spanText + " "  // 每个单词后加空格
 ```
 
-### 12.3 Apple 系统翻译集成
+### 12.3 Apple 系统翻译集成 (macOS 15.0+ 专属)
 
 **参考项目**: [LyricFever](https://github.com/aviwad/LyricFever)
+
+**⚠️ 版本兼容性**: 系统翻译仅在 macOS 15.0+ 可用。使用 `Any` 类型避免编译时可用性检查。
 
 ```swift
 import Translation
 
-// SwiftUI .translationTask() modifier
-.translationTask(translationSessionConfig) { session in
-    await lyricsService.performSystemTranslation(session: session)
+// 🔑 使用 Any 类型存储配置，避免 macOS 版本编译问题
+@State private var translationSessionConfigAny: Any?
+
+// 🔑 创建配置时进行可用性检查
+private func updateTranslationSessionConfig() {
+    if #available(macOS 15.0, *) {
+        let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
+        translationSessionConfigAny = TranslationSession.Configuration(
+            source: detectedSourceLanguage,  // nil = 自动检测
+            target: targetLang
+        )
+    }
+}
+
+// 🔑 SystemTranslationModifier 处理版本兼容性
+struct SystemTranslationModifier: ViewModifier {
+    var translationSessionConfigAny: Any?
+    let lyricsService: LyricsService
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            if let config = translationSessionConfigAny as? TranslationSession.Configuration {
+                content
+                    .id(lyricsService.translationRequestTrigger)  // 🔑 强制重建触发翻译
+                    .translationTask(config) { session in
+                        await lyricsService.performSystemTranslation(session: session)
+                    }
+            } else {
+                content
+            }
+        } else {
+            content
+        }
+    }
 }
 ```
 
-**配置结构**:
+**翻译触发机制**:
 ```swift
-// TranslationSession.Configuration
-struct Configuration {
-    source: Locale.Language?  // nil = 自动检测
-    target: Locale.Language    // 目标语言
+// 🔑 translationRequestTrigger 计数器强制触发翻译
+@Published public var translationRequestTrigger: Int = 0
+
+// showTranslation 开关变化时触发
+@Published public var showTranslation: Bool = false {
+    didSet {
+        if showTranslation {
+            translationRequestTrigger += 1  // 触发 .translationTask() 重新执行
+        }
+    }
 }
 
-// 自动语言检测
+// translationLanguage 变化时触发
+@Published public var translationLanguage: String {
+    didSet {
+        translationRequestTrigger += 1
+    }
+}
+```
+
+**配置更新时机**:
+```swift
+// 1. 视图 onAppear 时
+.onAppear { updateTranslationSessionConfig() }
+
+// 2. 歌词加载完成后
+.onChange(of: lyricsService.lyrics.count) { _, newCount in
+    if #available(macOS 15.0, *), newCount > 0 {
+        updateTranslationSessionConfig()
+    }
+}
+```
+
+**自动语言检测**:
+```swift
+// NLLanguageRecognizer 检测歌词主要语言
 let lyricTexts = lyrics.map { $0.text }
 let sourceLanguage = TranslationService.detectLanguage(for: lyricTexts)
-
-// NLLanguageRecognizer
 // 返回出现 >=3 次的主要语言
 ```
 
@@ -1386,31 +1446,74 @@ public struct LyricLine {
 
 ## 十三、元信息过滤优化 (Metadata Filtering) ✅ 已改进
 
-### 13.1 过滤策略
+### 13.1 两阶段过滤策略
 
-**关键词检测 + 位置检测**:
+**阶段1: 冒号区域检测**
 ```swift
-// 元信息关键词列表
-let metadataKeywords = [
-    "作词", "作曲", "编曲", "制作人", "和声", "录音", "混音", "母带",
-    "吉他", "贝斯", "鼓", "钢琴", "键盘", "弦乐", "管乐",
-    "Lyrics", "Music", "Arrangement", "Producer", "Vocals",
-    // ...
-]
+// 统计前5行中有多少行包含冒号
+var colonCountInFirstLines = 0
+for i in 0..<min(5, rawLyrics.count) {
+    let trimmed = rawLyrics[i].text.trimmingCharacters(in: .whitespaces)
+    if trimmed.contains("：") || trimmed.contains(":") {
+        colonCountInFirstLines += 1
+    }
+}
 
-// 过滤条件
+// 🔑 如果前5行中有2行或更多包含冒号，说明是元信息区域
+let isColonMetadataRegion = colonCountInFirstLines >= 2
+```
+
+**阶段2: 逐行过滤**
+```swift
+// 🔑 元信息关键词检测
+func isMetadataKeywordLine(_ text: String) -> Bool {
+    let keywords = ["词", "曲", "编曲", "作曲", "作词", "翻译", "LRC", "lrc",
+                   "Lyrics", "Music", "Arrangement", "Composer", "Lyricist"]
+    for keyword in keywords {
+        if trimmed.hasPrefix(keyword) ||
+           trimmed.contains(keyword + "：") ||
+           trimmed.contains(keyword + ":") {
+            return true
+        }
+    }
+    return false
+}
+
+// 过滤条件（满足任一即过滤）
 let isMetadata = !foundFirstRealLyric && (
-    trimmed.isEmpty ||                          // 空行
-    (duration < 3.0 && hasColon) ||             // 短时长+冒号
-    hasTitleSeparator ||                        // " - " 标题分隔符
-    hasMetadataKeyword                          // 🔑 包含关键词
+    trimmed.isEmpty ||                              // 空行
+    isPureSymbols(trimmed) ||                      // 纯符号/emoji行
+    hasTitleSeparator ||                           // " - " 标题分隔符
+    isMetadataKeywordLine(trimmed) ||              // 🔑 元信息关键词
+    (hasColon && line.startTime < colonRegionEndTime) ||  // 在冒号区域内
+    (hasColon && duration < 10.0) ||               // 🔑 短时长+冒号（<10秒）
+    (!hasColon && duration < 2.0 && trimmed.count < 10)  // 短且无冒号的标签行
 )
 ```
 
-### 13.2 调试日志
+### 13.2 参数调优记录
+
+| 参数 | 旧值 | 新值 | 原因 |
+|-----|------|------|------|
+| 冒号区域阈值 | 3行 | **2行** | 处理 "标题+词+曲" 模式 |
+| 冒号区域缓冲 | 3秒 | **5秒** | 确保过滤完连续元信息 |
+| 短时长冒号阈值 | 5秒 | **10秒** | 元信息行可能较长 |
+| 标题行重置计数 | 是 | **否** | 标题行也是元信息 |
+
+### 13.3 LRC 排序修复
+
+**问题**: 某些 LRC 文件的行可能乱序，导致元信息过滤逻辑失效
 
 ```swift
-debugLog("🔍 过滤元信息行: \"\(trimmed)\" (duration: \(duration)s)")
+// 🔑 关键修复：parseLRC() 返回前按 startTime 排序
+lines.sort { $0.startTime < $1.startTime }
+debugLog("🔧 LRC 歌词已按时间排序（共 \(lines.count) 行）")
+```
+
+### 13.4 调试日志
+
+```swift
+debugLog("🔍 过滤元信息行: \"\(trimmed)\" (duration: \(duration)s, hasColon: \(hasColon))")
 ```
 
 ---
