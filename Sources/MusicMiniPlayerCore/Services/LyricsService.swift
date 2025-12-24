@@ -93,14 +93,10 @@ public class LyricsService: ObservableObject {
 
     // 🔑 翻译目标语言设置（支持 UserDefaults 持久化）
     private let translationLanguageKey = "translationLanguage"
-    // 默认跟随系统语言，使用 Locale.Language.LanguageCode
-    private var _translationLanguage: String = Locale.current.language.languageCode?.identifier ?? "zh"
     @Published public var translationLanguage: String {
-        get { _translationLanguage }
-        set {
-            _translationLanguage = newValue
-            UserDefaults.standard.set(newValue, forKey: translationLanguageKey)
-            debugLog("🌐 翻译目标语言已设置为: \(newValue)")
+        didSet {
+            UserDefaults.standard.set(translationLanguage, forKey: translationLanguageKey)
+            debugLog("🌐 翻译目标语言已设置为: \(translationLanguage)")
         }
     }
     @Published public var isTranslating: Bool = false
@@ -163,12 +159,12 @@ public class LyricsService: ObservableObject {
 
         // 🔑 从 UserDefaults 加载 translationLanguage（如果存在）
         if let savedLang = UserDefaults.standard.string(forKey: translationLanguageKey) {
-            self._translationLanguage = savedLang
+            self.translationLanguage = savedLang
             debugLog("🌐 从 UserDefaults 加载翻译语言: \(savedLang)")
         } else {
             // 默认使用系统语言
-            self._translationLanguage = Locale.current.language.languageCode?.identifier ?? "zh"
-            debugLog("🌐 使用系统语言作为翻译目标: \(self._translationLanguage)")
+            self.translationLanguage = Locale.current.language.languageCode?.identifier ?? "zh"
+            debugLog("🌐 使用系统语言作为翻译目标: \(self.translationLanguage)")
         }
 
         // Configure cache limits
@@ -273,6 +269,7 @@ public class LyricsService: ObservableObject {
 
     /// 🔑 执行系统翻译（由 SwiftUI .translationTask() 调用）
     /// - Parameter session: SwiftUI 提供的翻译会话
+    @available(macOS 15.0, *)
     @MainActor
     public func performSystemTranslation(session: TranslationSession) async {
         guard !lyrics.isEmpty else { return }
@@ -337,21 +334,43 @@ public class LyricsService: ObservableObject {
             return ([], 0)
         }
 
-        // 🔑 元信息关键词列表（用于更精确的过滤）
-        let metadataKeywords = [
-            "作词", "作曲", "编曲", "制作人", "和声", "录音", "混音", "母带",
-            "吉他", "贝斯", "鼓", "钢琴", "键盘", "弦乐", "管乐",
-            "词:", "曲:", "编:", "制作:", "和声:",
-            "Lyrics", "Music", "Arrangement", "Producer", "Vocals",
-            "Guitar", "Bass", "Drums", "Piano", "Keyboards", "Strings", "Brass",
-            "Mix", "Mastering", "Recording", "Engineer"
-        ]
+        // 🔑 检查是否为纯符号/emoji行（非文字内容）
+        func isPureSymbols(_ text: String) -> Bool {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return true }
 
-        // 1. 🔑 移除开头的元信息行
+            let hasLetters = trimmed.unicodeScalars.contains { scalar in
+                let isCJK = (0x4E00...0x9FFF).contains(scalar.value) ||
+                            (0x3400...0x4DBF).contains(scalar.value) ||
+                            (0x20000...0x2A6DF).contains(scalar.value)
+                let isLetter = CharacterSet.letters.contains(scalar)
+                let isNumber = CharacterSet.decimalDigits.contains(scalar)
+                return isCJK || isLetter || isNumber
+            }
+            return !hasLetters
+        }
+
+        // 1. 🔑 两阶段过滤策略：
+        //    阶段1：检测连续的冒号行区域（元信息区域）
+        //    阶段2：过滤元信息行
         var filteredLyrics: [LyricLine] = []
         var firstRealLyricStartTime: TimeInterval = 0
         var foundFirstRealLyric = false
-        var consecutiveMetadataEnd: TimeInterval = 0  // 连续元信息的结束时间
+        var consecutiveColonLines = 0  // 连续冒号行计数
+        var colonRegionEndTime: TimeInterval = 0  // 冒号区域结束时间
+
+        // 🔑 检测冒号区域：统计前5行中有多少行包含冒号
+        var colonCountInFirstLines = 0
+        for i in 0..<min(5, rawLyrics.count) {
+            let line = rawLyrics[i]
+            let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+            if trimmed.contains("：") || trimmed.contains(":") {
+                colonCountInFirstLines += 1
+            }
+        }
+
+        // 🔑 如果前5行中有3行或更多包含冒号，说明是元信息区域
+        let isColonMetadataRegion = colonCountInFirstLines >= 3
 
         for line in rawLyrics {
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
@@ -359,32 +378,33 @@ public class LyricsService: ObservableObject {
             let hasColon = trimmed.contains("：") || trimmed.contains(":")
             let hasTitleSeparator = trimmed.contains(" - ") && trimmed.count < 50
 
-            // 🔑 检查是否包含元信息关键词
-            let lowercased = trimmed.lowercased()
-            let hasMetadataKeyword = metadataKeywords.contains { keyword in
-                lowercased.contains(keyword.lowercased())
+            // 🔑 检查是否为纯符号/emoji行
+            let isPureSymbolLine = isPureSymbols(trimmed)
+
+            // 🔑 连续冒号行检测：在找到第一句真正歌词之前
+            if !foundFirstRealLyric && hasColon {
+                consecutiveColonLines += 1
+                // 如果连续3行以上都有冒号，或者是检测到的冒号元信息区域
+                if consecutiveColonLines >= 3 || isColonMetadataRegion {
+                    colonRegionEndTime = line.endTime + 3.0  // 区域结束后再延伸3秒
+                }
+            } else if !foundFirstRealLyric && !hasColon {
+                // 遇到非冒号行，重置计数（但只在未找到真正歌词前）
+                consecutiveColonLines = 0
             }
 
-            // 🔑 元信息判断：在开头 + (空行 OR 短时长有冒号 OR 有标题分隔符 OR 包含元信息关键词)
+            // 🔑 元信息判断条件（满足任一即过滤）：
             let isMetadata = !foundFirstRealLyric && (
-                trimmed.isEmpty ||
-                (duration < 3.0 && hasColon) ||
-                hasTitleSeparator ||
-                hasMetadataKeyword
+                trimmed.isEmpty ||                              // 空行
+                isPureSymbolLine ||                            // 纯符号/emoji行
+                hasTitleSeparator ||                           // 标题分隔符（如 "Artist - Title"）
+                (hasColon && line.startTime < colonRegionEndTime) ||  // 在冒号区域内
+                (hasColon && duration < 5.0) ||                 // 短时长+冒号（<5秒）
+                (!hasColon && duration < 2.0 && trimmed.count < 10)  // 短且无冒号的标签行
             )
 
-            // 🔑 额外检查：如果有冒号，但时长较长（>=3秒），也可能是元信息，检查是否在开头的连续短行区域
-            if !isMetadata && !foundFirstRealLyric && hasColon && consecutiveMetadataEnd > 0 && line.startTime < consecutiveMetadataEnd + 5.0 {
-                // 在连续元信息区域后的5秒内，仍然可能是元信息
-                if duration < 5.0 && trimmed.count < 30 {
-                    // 短行且有冒号，视为元信息
-                    continue
-                }
-            }
-
             if isMetadata {
-                consecutiveMetadataEnd = line.endTime
-                debugLog("🔍 过滤元信息行: \"\(trimmed)\" (duration: \(String(format: "%.2f", duration))s)")
+                debugLog("🔍 过滤元信息行: \"\(trimmed)\" (duration: \(String(format: "%.2f", duration))s, hasColon: \(hasColon))")
                 continue  // 跳过元信息行
             } else {
                 // 这是真正的歌词行
@@ -1522,6 +1542,10 @@ public class LyricsService: ObservableObject {
                 lines[i] = LyricLine(text: lines[i].text, startTime: lines[i].startTime, endTime: nextStartTime)
             }
         }
+
+        // 🔑 关键修复：按 startTime 排序歌词（某些 LRC 文件的行可能乱序）
+        lines.sort { $0.startTime < $1.startTime }
+        debugLog("🔧 LRC 歌词已按时间排序（共 \(lines.count) 行）")
 
         logger.info("Parsed \(lines.count) lyric lines from LRC")
         return lines
