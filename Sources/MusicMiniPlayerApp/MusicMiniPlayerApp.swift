@@ -163,55 +163,59 @@ class AppMain: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 🔑 翻译目标语言设置
-        let translationMenu = NSMenuItem()
-        translationMenu.title = "翻译语言"
-        let translationSubmenu = NSMenu()
+        // 🔑 翻译目标语言设置 (仅 macOS 15+)
+        if #available(macOS 15.0, *) {
+            let translationMenu = NSMenuItem()
+            translationMenu.title = "翻译语言"
+            let translationSubmenu = NSMenu()
 
-        // 获取当前设置的翻译语言
-        let currentLang = LyricsService.shared.translationLanguage
-        let systemLang = Locale.current.language.languageCode?.identifier ?? "zh"
+            // 获取当前设置的翻译语言
+            let currentLang = LyricsService.shared.translationLanguage
+            let systemLang = Locale.current.language.languageCode?.identifier ?? "zh"
 
-        // 定义支持的语言列表
-        let languages: [(name: String, code: String)] = [
-            ("跟随系统", "system"),  // 特殊值，使用系统语言
-            ("中文", "zh"),
-            ("英文", "en"),
-            ("日文", "ja"),
-            ("韩文", "ko"),
-            ("法文", "fr"),
-            ("德文", "de"),
-            ("西班牙文", "es"),
-            ("俄文", "ru"),
-            ("葡萄牙文", "pt"),
-            ("意大利文", "it")
-        ]
+            // 定义支持的语言列表
+            let languages: [(name: String, code: String)] = [
+                ("跟随系统", "system"),  // 特殊值，使用系统语言
+                ("中文", "zh"),
+                ("英文", "en"),
+                ("日文", "ja"),
+                ("韩文", "ko"),
+                ("法文", "fr"),
+                ("德文", "de"),
+                ("西班牙文", "es"),
+                ("俄文", "ru"),
+                ("葡萄牙文", "pt"),
+                ("意大利文", "it")
+            ]
 
-        for lang in languages {
-            let item = NSMenuItem(
-                title: lang.name,
-                action: #selector(setTranslationLanguage(_:)),
-                keyEquivalent: ""
-            )
-            item.representedObject = lang.code
+            for lang in languages {
+                let item = NSMenuItem(
+                    title: lang.name,
+                    action: #selector(setTranslationLanguage(_:)),
+                    keyEquivalent: ""
+                )
+                item.representedObject = lang.code
 
-            // 标记当前选中的语言
-            let isSelected: Bool
-            if lang.code == "system" {
-                isSelected = (currentLang == systemLang)
-            } else {
-                isSelected = (currentLang == lang.code)
+                // 标记当前选中的语言
+                let isSelected: Bool
+                if lang.code == "system" {
+                    isSelected = (currentLang == systemLang)
+                } else {
+                    isSelected = (currentLang == lang.code)
+                }
+
+                if isSelected {
+                    item.state = .on
+                }
+
+                translationSubmenu.addItem(item)
             }
 
-            if isSelected {
-                item.state = .on
-            }
+            translationMenu.submenu = translationSubmenu
+            menu.addItem(translationMenu)
 
-            translationSubmenu.addItem(item)
+            menu.addItem(NSMenuItem.separator())
         }
-
-        translationMenu.submenu = translationSubmenu
-        menu.addItem(translationMenu)
 
         menu.addItem(NSMenuItem.separator())
 

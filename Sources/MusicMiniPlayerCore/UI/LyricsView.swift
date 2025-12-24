@@ -44,6 +44,10 @@ public struct LyricsView: View {
     @State private var showDebugWindow: Bool = false
     @State private var debugMessages: [String] = []
 
+    // 🔑 系统翻译会话配置 (仅 macOS 15.0+)
+    // 使用 Any 类型来避免编译时的可用性检查
+    @State private var translationSessionConfigAny: Any?
+
     public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
         self._currentPage = currentPage
         self.openWindow = openWindow
@@ -61,6 +65,33 @@ public struct LyricsView: View {
     private func debugLog(_ message: String) {
         addDebugMessage(message)
         fputs("🔄 [LyricsView] \(message)\n", stderr)
+    }
+
+    // 🔑 更新翻译会话配置 (仅 macOS 15.0+)
+    private func updateTranslationSessionConfig() {
+        if #available(macOS 15.0, *) {
+            let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
+
+            // 检测歌词源语言（如果已有歌词）
+            if !lyricsService.lyrics.isEmpty {
+                let lyricTexts = lyricsService.lyrics.map { $0.text }
+                if let sourceLang = TranslationService.detectLanguage(for: lyricTexts) {
+                    translationSessionConfigAny = TranslationSession.Configuration(
+                        source: sourceLang,
+                        target: targetLang
+                    )
+                    debugLog("🌐 翻译会话配置已更新: \(sourceLang.languageCode?.identifier ?? "?") -> \(targetLang.languageCode?.identifier ?? "?")")
+                    return
+                }
+            }
+
+            // 默认配置（source 为 nil 让系统自动检测）
+            translationSessionConfigAny = TranslationSession.Configuration(
+                source: nil,
+                target: targetLang
+            )
+            debugLog("🌐 翻译会话配置已更新（自动检测源语言）: -> \(targetLang.languageCode?.identifier ?? "?")")
+        }
     }
 
     public var body: some View {
@@ -507,6 +538,10 @@ public struct LyricsView: View {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
+            // 🔑 macOS 15.0+: 初始化翻译会话配置
+            if #available(macOS 15.0, *) {
+                updateTranslationSessionConfig()
+            }
         }
           .onChange(of: musicController.currentTrackTitle) {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
@@ -540,6 +575,11 @@ public struct LyricsView: View {
                 }
             }
         }
+        // 🔑 macOS 15.0+: 系统翻译集成
+        .modifier(SystemTranslationModifier(
+            translationSessionConfigAny: translationSessionConfigAny,
+            lyricsService: lyricsService
+        ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -1134,21 +1174,31 @@ struct PreludeDotsView: View {
     }
 }
 
-// MARK: - Translation Modifier Wrapper (Disabled for now)
+// MARK: - System Translation Modifier (macOS 15.0+)
 
-// TODO: Re-enable system translation when macOS 15.0+ availability is properly handled
-// @available(macOS 15.0, *)
-// struct TranslationModifierWrapper: ViewModifier {
-//     var translationSessionConfig: TranslationSession.Configuration?
-//     let lyricsService: LyricsService
-//
-//     func body(content: Content) -> some View {
-//         content
-//             .translationTask(translationSessionConfig) { session in
-//                 await lyricsService.performSystemTranslation(session: session)
-//             }
-//     }
-// }
+/// 系统翻译修饰器 - 仅在 macOS 15.0+ 可用时使用
+struct SystemTranslationModifier: ViewModifier {
+    var translationSessionConfigAny: Any?
+    let lyricsService: LyricsService
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            if let config = translationSessionConfigAny as? TranslationSession.Configuration {
+                content
+                    .onChange(of: lyricsService.translationLanguage) { _, _ in
+                        // 翻译语言变化时，触发重新翻译（通过歌词服务）
+                    }
+                    .translationTask(config) { session in
+                        await lyricsService.performSystemTranslation(session: session)
+                    }
+            } else {
+                content
+            }
+        } else {
+            content
+        }
+    }
+}
 
 #if DEBUG
 struct LyricsView_Previews: PreviewProvider {
