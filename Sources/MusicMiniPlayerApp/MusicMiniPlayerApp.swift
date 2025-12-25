@@ -136,6 +136,10 @@ class AppMain: NSObject, NSApplicationDelegate {
     func showContextMenu() {
         let menu = NSMenu()
 
+        // ═══════════════════════════════════════════
+        // MARK: - 窗口 (Window)
+        // ═══════════════════════════════════════════
+
         // 浮窗显示/隐藏（仅在浮窗模式下显示）
         if isFloatingMode {
             let isWindowVisible = floatingWindow?.isVisible ?? false
@@ -144,6 +148,7 @@ class AppMain: NSObject, NSApplicationDelegate {
                 action: #selector(toggleFloatingWindowFromMenu),
                 keyEquivalent: ""
             )
+            showHideItem.image = NSImage(systemSymbolName: isWindowVisible ? "eye.slash" : "eye", accessibilityDescription: nil)
             menu.addItem(showHideItem)
         }
 
@@ -153,21 +158,38 @@ class AppMain: NSObject, NSApplicationDelegate {
             action: #selector(toggleMode),
             keyEquivalent: ""
         )
+        modeItem.image = NSImage(systemSymbolName: isFloatingMode ? "menubar.arrow.up.rectangle" : "macwindow", accessibilityDescription: nil)
         menu.addItem(modeItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // 播放控制
-        menu.addItem(NSMenuItem(title: "播放/暂停", action: #selector(togglePlayPause), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "上一首", action: #selector(previousTrack), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "下一首", action: #selector(nextTrack), keyEquivalent: ""))
+        // ═══════════════════════════════════════════
+        // MARK: - 播放控制 (Playback)
+        // ═══════════════════════════════════════════
+
+        let playPauseItem = NSMenuItem(title: "播放/暂停", action: #selector(togglePlayPause), keyEquivalent: " ")
+        playPauseItem.image = NSImage(systemSymbolName: "playpause.fill", accessibilityDescription: nil)
+        menu.addItem(playPauseItem)
+
+        let prevItem = NSMenuItem(title: "上一首", action: #selector(previousTrack), keyEquivalent: "")
+        prevItem.image = NSImage(systemSymbolName: "backward.fill", accessibilityDescription: nil)
+        menu.addItem(prevItem)
+
+        let nextItem = NSMenuItem(title: "下一首", action: #selector(nextTrack), keyEquivalent: "")
+        nextItem.image = NSImage(systemSymbolName: "forward.fill", accessibilityDescription: nil)
+        menu.addItem(nextItem)
 
         menu.addItem(NSMenuItem.separator())
+
+        // ═══════════════════════════════════════════
+        // MARK: - 歌词 (Lyrics)
+        // ═══════════════════════════════════════════
 
         // 🔑 翻译目标语言设置 (仅 macOS 15+)
         if #available(macOS 15.0, *) {
             let translationMenu = NSMenuItem()
             translationMenu.title = "翻译语言"
+            translationMenu.image = NSImage(systemSymbolName: "translate", accessibilityDescription: nil)
             let translationSubmenu = NSMenu()
 
             // 获取当前设置的翻译语言
@@ -175,18 +197,18 @@ class AppMain: NSObject, NSApplicationDelegate {
             let systemLang = Locale.current.language.languageCode?.identifier ?? "zh"
 
             // 定义支持的语言列表
-            let languages: [(name: String, code: String)] = [
-                ("跟随系统", "system"),  // 特殊值，使用系统语言
-                ("中文", "zh"),
-                ("英文", "en"),
-                ("日文", "ja"),
-                ("韩文", "ko"),
-                ("法文", "fr"),
-                ("德文", "de"),
-                ("西班牙文", "es"),
-                ("俄文", "ru"),
-                ("葡萄牙文", "pt"),
-                ("意大利文", "it")
+            let languages: [(name: String, code: String, icon: String)] = [
+                ("跟随系统", "system", "gearshape"),
+                ("中文", "zh", "character.zh"),
+                ("英文", "en", "character.en"),
+                ("日文", "ja", "character.ja"),
+                ("韩文", "ko", "character.ko"),
+                ("法文", "fr", "f.cursive"),
+                ("德文", "de", "d.square"),
+                ("西班牙文", "es", "s.square"),
+                ("俄文", "ru", "r.square"),
+                ("葡萄牙文", "pt", "p.square"),
+                ("意大利文", "it", "i.square")
             ]
 
             for lang in languages {
@@ -196,6 +218,7 @@ class AppMain: NSObject, NSApplicationDelegate {
                     keyEquivalent: ""
                 )
                 item.representedObject = lang.code
+                item.image = NSImage(systemSymbolName: lang.icon, accessibilityDescription: nil)
 
                 // 标记当前选中的语言
                 let isSelected: Bool
@@ -218,7 +241,9 @@ class AppMain: NSObject, NSApplicationDelegate {
             menu.addItem(NSMenuItem.separator())
         }
 
-        menu.addItem(NSMenuItem.separator())
+        // ═══════════════════════════════════════════
+        // MARK: - 设置 (Settings)
+        // ═══════════════════════════════════════════
 
         // Dock 图标设置
         let dockItem = NSMenuItem(
@@ -226,15 +251,23 @@ class AppMain: NSObject, NSApplicationDelegate {
             action: #selector(toggleDockIcon),
             keyEquivalent: ""
         )
+        dockItem.image = NSImage(systemSymbolName: showInDock ? "dock.arrow.down.rectangle" : "dock.rectangle", accessibilityDescription: nil)
         menu.addItem(dockItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        menu.addItem(NSMenuItem(title: "打开 Apple Music", action: #selector(openAppleMusic), keyEquivalent: ""))
+        // ═══════════════════════════════════════════
+        // MARK: - 其他 (Other)
+        // ═══════════════════════════════════════════
+
+        let musicItem = NSMenuItem(title: "打开 Apple Music", action: #selector(openAppleMusic), keyEquivalent: "")
+        musicItem.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: nil)
+        menu.addItem(musicItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "退出", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "退出 nanoPod", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
         menu.addItem(quitItem)
 
         statusItem.menu = menu

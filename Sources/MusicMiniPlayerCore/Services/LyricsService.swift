@@ -88,10 +88,17 @@ public class LyricsService: ObservableObject {
     @Published public var showTranslation: Bool = false {
         didSet {
             UserDefaults.standard.set(showTranslation, forKey: showTranslationKey)
-            // 🔑 当翻译开关打开时，触发翻译请求计数器变化，让 SwiftUI .translationTask() 重新执行
             if showTranslation {
+                // 🔑 翻译开关打开时，触发翻译请求
                 translationRequestTrigger += 1
                 debugLog("🌐 翻译开关已打开，触发翻译请求 (#\(translationRequestTrigger))")
+            } else {
+                // 🔑 翻译开关关闭时，重置系统翻译状态（但保留歌词源翻译标记）
+                // 这样再打开时，如果没有歌词源翻译，会重新触发系统翻译
+                if !translationsAreFromLyricsSource {
+                    lastSystemTranslationLanguage = nil
+                    debugLog("🌐 翻译开关已关闭，重置系统翻译状态")
+                }
             }
         }
     }
@@ -635,6 +642,11 @@ public class LyricsService: ObservableObject {
                 // 🔑 重置翻译来源标记
                 translationsAreFromLyricsSource = false
                 lastSystemTranslationLanguage = nil
+                // 🔑 如果翻译开关已打开，触发系统翻译
+                if showTranslation {
+                    translationRequestTrigger += 1
+                    debugLog("🌐 歌词加载完成（缓存），触发系统翻译请求 (#\(translationRequestTrigger))")
+                }
             }
             return
         }
@@ -710,6 +722,11 @@ public class LyricsService: ObservableObject {
                             // 🔑 重置翻译来源标记
                             self.translationsAreFromLyricsSource = false
                             self.lastSystemTranslationLanguage = nil
+                            // 🔑 如果翻译开关已打开，触发系统翻译
+                            if self.showTranslation {
+                                self.translationRequestTrigger += 1
+                                self.debugLog("🌐 歌词加载完成，触发系统翻译请求 (#\(self.translationRequestTrigger))")
+                            }
                         }
                     }
                 } else {
@@ -744,7 +761,7 @@ public class LyricsService: ObservableObject {
     func updateCurrentTime(_ time: TimeInterval) {
         // 🔑 歌词时间轴匹配
         // - 前奏期间：显示占位符（index 0）
-        // - 歌词滚动：提前 0.05 秒触发（进一步减少提前量，让同步更精确）
+        // - 歌词滚动：提前 0.05 秒触发
         let scrollAnimationLeadTime: TimeInterval = 0.05
 
         guard !lyrics.isEmpty else {
@@ -2078,23 +2095,33 @@ public class LyricsService: ObservableObject {
         // 🔑 按时长差排序（最接近的在前）
         candidates.sort { $0.durationDiff < $1.durationDiff }
 
-        // 🔑 匹配优先级：
-        // 1. 时长差 < 1秒 且 (标题匹配 或 艺术家匹配)
-        // 2. 时长差 < 2秒 且 艺术家匹配
-        // 3. 时长差 < 1秒（纯时长匹配）
-        // 4. 时长差 < 3秒 且 标题匹配
+        // 🔑 匹配优先级（更严格，避免通用歌名错误匹配）：
+        // 1. 时长差 < 1秒 且 标题匹配 且 艺术家匹配（最精确）
+        // 2. 时长差 < 1秒 且 艺术家匹配（艺术家匹配比标题匹配更可靠）
+        // 3. 时长差 < 2秒 且 艺术家匹配
+        // 4. 时长差 < 1秒 且 标题匹配（标题可能是通用词，需要更严格的时长）
+        // 注意：移除了纯时长匹配，因为容易匹配到错误的歌
 
         for candidate in candidates {
-            // 优先1：时长差 < 1秒 且 (标题匹配 或 艺术家匹配)
-            if candidate.durationDiff < 1 && (candidate.titleMatch || candidate.artistMatch) {
-                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title/artist)")
+            // 优先1：时长差 < 1秒 且 标题匹配 且 艺术家匹配（最精确）
+            if candidate.durationDiff < 1 && candidate.titleMatch && candidate.artistMatch {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title + artist)")
                 logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
                 return candidate.id
             }
         }
 
         for candidate in candidates {
-            // 优先2：时长差 < 2秒 且 艺术家匹配
+            // 优先2：时长差 < 1秒 且 艺术家匹配
+            if candidate.durationDiff < 1 && candidate.artistMatch {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + artist)")
+                logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
+                return candidate.id
+            }
+        }
+
+        for candidate in candidates {
+            // 优先3：时长差 < 2秒 且 艺术家匹配
             if candidate.durationDiff < 2 && candidate.artistMatch {
                 debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<2s + artist)")
                 logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
@@ -2103,18 +2130,9 @@ public class LyricsService: ObservableObject {
         }
 
         for candidate in candidates {
-            // 优先3：时长差 < 1秒（纯时长匹配）- 适用于中英文标题完全不同的情况
-            if candidate.durationDiff < 1 {
-                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s only)")
-                logger.info("✅ NetEase duration match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
-                return candidate.id
-            }
-        }
-
-        for candidate in candidates {
-            // 优先4：时长差 < 3秒 且 标题匹配
-            if candidate.durationDiff < 3 && candidate.titleMatch {
-                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<3s + title)")
+            // 优先4：时长差 < 1秒 且 标题匹配（标题可能通用，需严格时长）
+            if candidate.durationDiff < 1 && candidate.titleMatch {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title)")
                 logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
                 return candidate.id
             }
@@ -2197,7 +2215,8 @@ public class LyricsService: ObservableObject {
             }
 
             logger.info("✅ Found NetEase LRC lyrics (\(lyricText.count) chars, quality: \(String(format: "%.0f", qualityAnalysis.qualityScore)))")
-            return lrcLyrics
+            // 🔑 应用 NetEase 时间偏移
+            return applyTimeOffset(to: lrcLyrics, offset: netEaseTimeOffset)
         }
 
         // Fallback：如果没有原文，只有翻译，也返回翻译（但这种情况很少见）
@@ -2205,11 +2224,43 @@ public class LyricsService: ObservableObject {
            let translatedText = tlyric["lyric"] as? String,
            !translatedText.isEmpty {
             logger.info("⚠️ Using NetEase translated lyrics as fallback (no original)")
-            return parseLRC(translatedText)
+            // 🔑 应用 NetEase 时间偏移
+            return applyTimeOffset(to: parseLRC(translatedText), offset: netEaseTimeOffset)
         }
 
         logger.warning("No lyrics content in NetEase response")
         return nil
+    }
+
+    /// 给歌词应用时间偏移（用于补偿歌词时间轴延迟）
+    /// - Parameters:
+    ///   - lyrics: 原始歌词数组
+    ///   - offset: 时间偏移（秒），正值表示提前
+    /// - Returns: 应用偏移后的歌词数组
+    private func applyTimeOffset(to lyrics: [LyricLine], offset: Double) -> [LyricLine] {
+        guard offset != 0 else { return lyrics }
+
+        return lyrics.map { line in
+            let newStartTime = max(0, line.startTime - offset)
+            let newEndTime = max(0, line.endTime - offset)
+
+            // 如果有逐字时间轴，也需要偏移
+            let newWords = line.words.map { word in
+                LyricWord(
+                    word: word.word,
+                    startTime: max(0, word.startTime - offset),
+                    endTime: max(0, word.endTime - offset)
+                )
+            }
+
+            return LyricLine(
+                text: line.text,
+                startTime: newStartTime,
+                endTime: newEndTime,
+                words: newWords,
+                translation: line.translation
+            )
+        }
     }
 
     /// 合并原文歌词和翻译歌词
@@ -2564,6 +2615,10 @@ public class LyricsService: ObservableObject {
 
     // MARK: - YRC Parser (NetEase Syllable-Level Lyrics)
 
+    // 🔑 NetEase 歌词时间偏移（秒）- 用于补偿 NetEase 歌词时间轴普遍滞后的问题
+    // 正值表示歌词提前显示
+    private let netEaseTimeOffset: Double = 0.7
+
     /// 解析 YRC 格式歌词（支持逐字时间轴）
     /// YRC 格式：[行开始毫秒,行持续毫秒](字开始毫秒,字持续毫秒,0)字(字开始毫秒,字持续毫秒,0)字...
     /// 例如：[600,5040](600,470,0)有(1070,470,0)些(1540,510,0)话
@@ -2627,10 +2682,12 @@ public class LyricsService: ObservableObject {
                 let wordMatches = wordRegex.matches(in: content, range: contentNSRange)
 
                 for wordMatch in wordMatches {
-                    if wordMatch.numberOfRanges >= 5,
+                    // 🔑 正则 \((\d+),(\d+),\d+\)([^(]+) 有 4 个 ranges:
+                    // range(0): 整个匹配, range(1): wordStartMs, range(2): wordDurationMs, range(3): 文本
+                    if wordMatch.numberOfRanges >= 4,
                        let wordStartRange = Range(wordMatch.range(at: 1), in: content),
                        let wordDurationRange = Range(wordMatch.range(at: 2), in: content),
-                       let charRange = Range(wordMatch.range(at: 4), in: content) {
+                       let charRange = Range(wordMatch.range(at: 3), in: content) {
 
                         let wordStartMs = Int(content[wordStartRange]) ?? 0
                         let wordDurationMs = Int(content[wordDurationRange]) ?? 0
@@ -2638,9 +2695,9 @@ public class LyricsService: ObservableObject {
 
                         lineText += wordText
 
-                        // 保存字级时间信息（毫秒 → 秒）
-                        let wordStartTime = Double(wordStartMs) / 1000.0
-                        let wordEndTime = Double(wordStartMs + wordDurationMs) / 1000.0
+                        // 保存字级时间信息（毫秒 → 秒）+ NetEase 时间偏移
+                        let wordStartTime = max(0, Double(wordStartMs) / 1000.0 - netEaseTimeOffset)
+                        let wordEndTime = max(0, Double(wordStartMs + wordDurationMs) / 1000.0 - netEaseTimeOffset)
                         words.append(LyricWord(word: wordText, startTime: wordStartTime, endTime: wordEndTime))
                     }
                 }
@@ -2660,9 +2717,9 @@ public class LyricsService: ObservableObject {
                 debugLog("📝 YRC 解析第 \(lines.count + 1) 行: \"\(lineText)\" (字数: \(words.count))")
             }
 
-            // 转换时间（毫秒 → 秒）
-            let startTime = Double(lineStartMs) / 1000.0
-            let endTime = Double(lineStartMs + lineDurationMs) / 1000.0
+            // 转换时间（毫秒 → 秒）+ NetEase 时间偏移
+            let startTime = max(0, Double(lineStartMs) / 1000.0 - netEaseTimeOffset)
+            let endTime = max(0, Double(lineStartMs + lineDurationMs) / 1000.0 - netEaseTimeOffset)
 
             lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
         }

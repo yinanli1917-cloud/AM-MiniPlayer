@@ -576,6 +576,12 @@ public struct LyricsView: View {
                 updateTranslationSessionConfig()
             }
         }
+        // 🔑 macOS 15.0+: 翻译开关变化时更新配置（确保重新触发翻译）
+        .onChange(of: lyricsService.showTranslation) { _, newValue in
+            if #available(macOS 15.0, *), newValue {
+                updateTranslationSessionConfig()
+            }
+        }
         .onChange(of: musicController.currentTime) {
             lyricsService.updateCurrentTime(musicController.currentTime)
         }

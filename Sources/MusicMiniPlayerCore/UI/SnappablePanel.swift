@@ -40,7 +40,10 @@ public class SnappablePanel: NSPanel {
     // 贴边隐藏状态
     private(set) public var isEdgeHidden = false
     private(set) public var hiddenEdge: Edge = .none
-    
+
+    // 🔑 窗口刚从隐藏状态唤出，第一次点击不应穿透到内容
+    private var justRestoredFromEdge = false
+
     public enum Edge {
         case none, left, right
     }
@@ -68,7 +71,7 @@ public class SnappablePanel: NSPanel {
     }
     
     // MARK: - Event Override
-    
+
     public override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown:
@@ -80,21 +83,50 @@ public class SnappablePanel: NSPanel {
         // 🔑 鼠标移动 - 用于贴边隐藏的 hover 效果
         case .mouseMoved:
             handleMouseMoved(event)
-        // 双指拖拽支持（仅专辑页面）
+        // 双指拖拽支持
         case .scrollWheel:
-            // 🔑 非专辑页面：所有滚动事件直接传递给 ScrollView（包括惯性）
-            if let provider = currentPageProvider, provider() != .album {
-                super.sendEvent(event)
-                return
-            }
-            
-            // 专辑页面：用于窗口拖拽
-            if event.phase == .began || event.phase == .changed {
-                handleScrollDrag(event)
-            } else if event.phase == .ended {
-                handleScrollEnd(event)
+            if let provider = currentPageProvider {
+                let currentPage = provider()
+
+                if currentPage == .album {
+                    // 🔑 专辑页面：双指触控板手势用于贴边/隐藏（全方向）
+                    if event.phase == .began || event.phase == .changed {
+                        handleScrollDrag(event)
+                    } else if event.phase == .ended {
+                        handleScrollEnd(event)
+                    } else {
+                        super.sendEvent(event)
+                    }
+                } else {
+                    // 🔑 歌词/歌单页面：横向手势用于隐藏，纵向手势传递给 ScrollView
+                    if event.phase == .began {
+                        // 开始时判断是否为横向主导手势
+                        let isHorizontalDominant = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5
+                        if isHorizontalDominant {
+                            isHorizontalScrollGesture = true
+                            handleHorizontalHideGesture(event)
+                        } else {
+                            isHorizontalScrollGesture = false
+                            super.sendEvent(event)
+                        }
+                    } else if event.phase == .changed {
+                        if isHorizontalScrollGesture {
+                            handleHorizontalHideGesture(event)
+                        } else {
+                            super.sendEvent(event)
+                        }
+                    } else if event.phase == .ended {
+                        if isHorizontalScrollGesture {
+                            handleHorizontalHideGestureEnd(event)
+                            isHorizontalScrollGesture = false
+                        } else {
+                            super.sendEvent(event)
+                        }
+                    } else {
+                        super.sendEvent(event)
+                    }
+                }
             } else {
-                // 惯性阶段等其他情况
                 super.sendEvent(event)
             }
         default:
@@ -105,37 +137,46 @@ public class SnappablePanel: NSPanel {
     // MARK: - Mouse Drag
     
     private func handleMouseDown(_ event: NSEvent) {
+        // 🔑 窗口刚从隐藏状态唤出，第一次点击只唤出窗口，不传递到内容
+        if justRestoredFromEdge {
+            justRestoredFromEdge = false
+            // 不调用 super.sendEvent(event)，阻止点击穿透
+            return
+        }
+
         // 🔑 检查是否点击在交互式视图或底部控件区域
         if let hitView = contentView?.hitTest(event.locationInWindow),
            isInteractiveView(hitView) {
             super.sendEvent(event)
             return
         }
-        
+
         // 🔑 底部控件区域（进度条等）不触发窗口拖拽
         if isInBottomControlsArea(event: event) {
             super.sendEvent(event)
             return
         }
-        
+
         if isEdgeHidden {
             restoreFromEdge()
-            super.sendEvent(event)
+            // 🔑 标记刚从隐藏状态恢复，下次点击不穿透
+            justRestoredFromEdge = true
+            // 不调用 super.sendEvent(event)，阻止这次点击穿透
             return
         }
-        
+
         stopAllAnimations()
         // 🔑 拖拽开始时立即通知UI恢复非hover状态
         onDragStateChanged?(false)
-        
+
         let mousePos = NSEvent.mouseLocation
         dragStartLocation = mousePos
         dragStartOrigin = frame.origin
         isDragging = true
-        
+
         positionHistory.removeAll()
         positionHistory.append((pos: mousePos, time: CACurrentMediaTime()))
-        
+
         super.sendEvent(event)
     }
     
@@ -163,40 +204,32 @@ public class SnappablePanel: NSPanel {
             super.sendEvent(event)
             return
         }
-        
+
         isDragging = false
-        
+
         let mousePos = NSEvent.mouseLocation
         let distance = hypot(mousePos.x - dragStartLocation.x, mousePos.y - dragStartLocation.y)
-        
+
         if distance < 3 {
             super.sendEvent(event)
             return
         }
-        
-        let velocity = calculateReleaseVelocity()
-        
-        if checkAndHideToEdgeWithVelocity(velocity) {
-            super.sendEvent(event)
-            return
-        }
-        
-        if snapToCorners {
-            animationTarget = calculateTargetCorner(velocity: velocity)
-            springVelocityX = velocity.x * 0.3
-            springVelocityY = velocity.y * 0.3
-            startSpringAnimation()
-        }
-        
+
+        // 🔑 所有页面：鼠标拖拽只移动窗口，不触发贴角/贴边
+        // 贴边/隐藏由双指触控板手势处理
         super.sendEvent(event)
     }
     
     // MARK: - Scroll (双指) Drag
-    
+
     private var scrollDragOrigin: NSPoint = .zero
     private var isScrollDragging = false
     private var scrollVelocityX: CGFloat = 0
     private var scrollVelocityY: CGFloat = 0
+
+    // 🔑 横向隐藏手势状态（歌词/歌单页面）
+    private var isHorizontalScrollGesture = false
+    private var horizontalScrollAccumulated: CGFloat = 0
     
     private func handleScrollDrag(_ event: NSEvent) {
         // 检查是否是双指手势（触控板）
@@ -241,19 +274,51 @@ public class SnappablePanel: NSPanel {
     private func handleScrollEnd(_ event: NSEvent) {
         guard isScrollDragging else { return }
         isScrollDragging = false
-        
+
         let velocity = CGPoint(x: scrollVelocityX, y: scrollVelocityY)
-        
+
         if checkAndHideToEdgeWithVelocity(velocity) {
             return
         }
-        
+
         if snapToCorners {
             animationTarget = calculateTargetCorner(velocity: velocity)
             springVelocityX = velocity.x * 0.3
             springVelocityY = velocity.y * 0.3
             startSpringAnimation()
         }
+    }
+
+    // MARK: - Horizontal Hide Gesture (歌词/歌单页面横向隐藏)
+
+    private func handleHorizontalHideGesture(_ event: NSEvent) {
+        let sensitivity: CGFloat = 1.5
+        horizontalScrollAccumulated += event.scrollingDeltaX * sensitivity
+        scrollVelocityX = event.scrollingDeltaX * sensitivity * 60  // 转换为 px/s
+
+        // 🔑 实时移动窗口（仅水平方向）
+        let newX = frame.origin.x + event.scrollingDeltaX * sensitivity
+        setFrameOrigin(NSPoint(x: newX, y: frame.origin.y))
+    }
+
+    private func handleHorizontalHideGestureEnd(_ event: NSEvent) {
+        let velocity = CGPoint(x: scrollVelocityX, y: 0)
+
+        // 🔑 检查是否满足隐藏条件
+        if checkAndHideToEdgeWithVelocity(velocity) {
+            horizontalScrollAccumulated = 0
+            return
+        }
+
+        // 🔑 没有隐藏，回弹到最近的角落
+        if snapToCorners {
+            animationTarget = calculateTargetCorner(velocity: velocity)
+            springVelocityX = velocity.x * 0.3
+            springVelocityY = 0
+            startSpringAnimation()
+        }
+
+        horizontalScrollAccumulated = 0
     }
     
     // MARK: - Edge Hiding
