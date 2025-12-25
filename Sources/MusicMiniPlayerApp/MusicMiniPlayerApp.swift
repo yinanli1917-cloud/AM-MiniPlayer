@@ -483,26 +483,27 @@ class AppMain: NSObject, NSApplicationDelegate {
         showFloatingWindow()
     }
 
-    // MARK: - Menu Bar Popover (菜单栏弹出视图)
+    // MARK: - Menu Bar Popover (菜单栏弹出设置页面)
 
     func createMenuBarPopover() {
         menuBarPopover = NSPopover()
-        menuBarPopover?.contentSize = NSSize(width: 300, height: 350)  // 高度改为 350
         menuBarPopover?.behavior = .transient
         menuBarPopover?.animates = true
 
-        let popoverContent = MenuBarPlayerView(
+        let popoverContent = MenuBarSettingsView(
             onExpand: { [weak self] in
                 self?.expandToFloatingWindow()
             },
-            onHoverChanged: { [weak self] isHovering in
-                // 用户鼠标进入时取消自动隐藏，离开时重新开始计时
-                self?.userInteractingWithPopover(isHovering)
+            onQuit: {
+                NSApp.terminate(nil)
             }
         )
         .environmentObject(musicController)
 
-        menuBarPopover?.contentViewController = NSHostingController(rootView: popoverContent)
+        let hostingController = NSHostingController(rootView: popoverContent)
+        // 让 popover 自动适应内容大小
+        hostingController.view.setFrameSize(hostingController.sizeThatFits(in: CGSize(width: 260, height: 600)))
+        menuBarPopover?.contentViewController = hostingController
     }
 
     func showMenuBarPopover() {
@@ -539,26 +540,326 @@ struct MiniPlayerContentView: View {
     }
 }
 
-/// 菜单栏弹出的播放器视图
-struct MenuBarPlayerView: View {
+/// 菜单栏弹出的设置页面 - 符合 Apple HIG
+struct MenuBarSettingsView: View {
     @EnvironmentObject var musicController: MusicController
+    @StateObject private var lyricsService = LyricsService.shared
     var onExpand: (() -> Void)?
-    var onHoverChanged: ((Bool) -> Void)?
+    var onQuit: (() -> Void)?
+
+    // 获取当前系统语言
+    private var systemLanguageCode: String {
+        Locale.current.language.languageCode?.identifier ?? "zh"
+    }
 
     var body: some View {
-        ZStack {
-            // 🔑 背景取色 - 使用 LiquidBackgroundView
-            LiquidBackgroundView(artwork: musicController.currentArtwork)
-                .ignoresSafeArea()
+        VStack(spacing: 0) {
+            // ═══════════════════════════════════════════
+            // MARK: - 窗口 (Window)
+            // ═══════════════════════════════════════════
 
-            // 使用完整的 MiniPlayerView
-            MiniPlayerView(openWindow: nil, onHide: nil, onExpand: onExpand)
+            SettingsSection {
+                SettingsButton(
+                    title: "显示浮窗",
+                    icon: "macwindow",
+                    action: { onExpand?() }
+                )
+            }
+
+            Divider().padding(.horizontal, 12)
+
+            // ═══════════════════════════════════════════
+            // MARK: - 播放控制 (Playback)
+            // ═══════════════════════════════════════════
+
+            SettingsSection {
+                SettingsButton(
+                    title: "播放/暂停",
+                    icon: "playpause.fill",
+                    shortcut: "Space",
+                    action: { musicController.togglePlayPause() }
+                )
+                SettingsButton(
+                    title: "上一首",
+                    icon: "backward.fill",
+                    action: { musicController.previousTrack() }
+                )
+                SettingsButton(
+                    title: "下一首",
+                    icon: "forward.fill",
+                    action: { musicController.nextTrack() }
+                )
+            }
+
+            Divider().padding(.horizontal, 12)
+
+            // ═══════════════════════════════════════════
+            // MARK: - 歌词 (Lyrics) - 仅 macOS 15+
+            // ═══════════════════════════════════════════
+
+            if #available(macOS 15.0, *) {
+                SettingsSection {
+                    SettingsPickerButton(
+                        title: "翻译语言",
+                        icon: "translate",
+                        currentValue: translationLanguageDisplayName,
+                        options: translationLanguageOptions,
+                        onSelect: { code in
+                            let targetCode = code == "system" ? systemLanguageCode : code
+                            lyricsService.translationLanguage = targetCode
+                        }
+                    )
+                }
+
+                Divider().padding(.horizontal, 12)
+            }
+
+            // ═══════════════════════════════════════════
+            // MARK: - 设置 (Settings)
+            // ═══════════════════════════════════════════
+
+            SettingsSection {
+                SettingsToggle(
+                    title: "在 Dock 显示图标",
+                    icon: "dock.rectangle",
+                    isOn: Binding(
+                        get: { AppMain.shared?.showInDock ?? true },
+                        set: { AppMain.shared?.showInDock = $0 }
+                    )
+                )
+            }
+
+            Divider().padding(.horizontal, 12)
+
+            // ═══════════════════════════════════════════
+            // MARK: - 其他 (Other)
+            // ═══════════════════════════════════════════
+
+            SettingsSection {
+                SettingsButton(
+                    title: "打开 Apple Music",
+                    icon: "music.note",
+                    action: {
+                        let url = URL(fileURLWithPath: "/System/Applications/Music.app")
+                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+                    }
+                )
+            }
+
+            Divider().padding(.horizontal, 12)
+
+            SettingsSection {
+                SettingsButton(
+                    title: "退出 nanoPod",
+                    icon: "power",
+                    shortcut: "⌘Q",
+                    isDestructive: true,
+                    action: { onQuit?() }
+                )
+            }
+
+            Spacer(minLength: 8)
         }
-        .frame(width: 300, height: 350)  // 高度改为 350
-        .clipShape(RoundedRectangle(cornerRadius: 6))  // 圆角 6pt
-        .onHover { isHovering in
-            // 通知 AppMain 用户是否在交互
-            onHoverChanged?(isHovering)
+        .frame(width: 260)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // 翻译语言显示名称
+    private var translationLanguageDisplayName: String {
+        let currentLang = lyricsService.translationLanguage
+        if currentLang == systemLanguageCode {
+            return "跟随系统"
+        }
+        return translationLanguageOptions.first { $0.code == currentLang }?.name ?? currentLang
+    }
+
+    // 翻译语言选项
+    private var translationLanguageOptions: [(name: String, code: String, icon: String)] {
+        [
+            ("跟随系统", "system", "gearshape"),
+            ("中文", "zh", "character"),
+            ("英文", "en", "a.square"),
+            ("日文", "ja", "character"),
+            ("韩文", "ko", "character"),
+            ("法文", "fr", "f.square"),
+            ("德文", "de", "d.square"),
+            ("西班牙文", "es", "s.square"),
+            ("俄文", "ru", "r.square"),
+            ("葡萄牙文", "pt", "p.square"),
+            ("意大利文", "it", "i.square")
+        ]
+    }
+}
+
+// MARK: - Settings Components
+
+struct SettingsSection<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            content
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct SettingsButton: View {
+    let title: String
+    let icon: String
+    var shortcut: String? = nil
+    var isDestructive: Bool = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundColor(isDestructive ? .red : .primary)
+                    .frame(width: 20)
+
+                Text(title)
+                    .font(.system(size: 13))
+                    .foregroundColor(isDestructive ? .red : .primary)
+
+                Spacer()
+
+                if let shortcut = shortcut {
+                    Text(shortcut)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+}
+
+struct SettingsToggle: View {
+    let title: String
+    let icon: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(.primary)
+                .frame(width: 20)
+
+            Text(title)
+                .font(.system(size: 13))
+                .foregroundColor(.primary)
+
+            Spacer()
+
+            Toggle("", isOn: $isOn)
+                .toggleStyle(.switch)
+                .scaleEffect(0.8)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+    }
+}
+
+struct SettingsPickerButton: View {
+    let title: String
+    let icon: String
+    let currentValue: String
+    let options: [(name: String, code: String, icon: String)]
+    let onSelect: (String) -> Void
+
+    @State private var isHovering = false
+    @State private var showPicker = false
+
+    var body: some View {
+        Button(action: { showPicker.toggle() }) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundColor(.primary)
+                    .frame(width: 20)
+
+                Text(title)
+                    .font(.system(size: 13))
+                    .foregroundColor(.primary)
+
+                Spacer()
+
+                Text(currentValue)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+        .padding(.horizontal, 8)
+        .popover(isPresented: $showPicker, arrowEdge: .trailing) {
+            VStack(spacing: 2) {
+                ForEach(options, id: \.code) { option in
+                    Button(action: {
+                        onSelect(option.code)
+                        showPicker = false
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: option.icon)
+                                .font(.system(size: 12))
+                                .frame(width: 16)
+
+                            Text(option.name)
+                                .font(.system(size: 13))
+
+                            Spacer()
+
+                            if currentValue == option.name {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.accentColor)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 8)
+            .frame(width: 160)
         }
     }
 }
