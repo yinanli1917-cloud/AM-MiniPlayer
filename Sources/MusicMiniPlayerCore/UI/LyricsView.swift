@@ -11,9 +11,6 @@ public struct LyricsView: View {
     @State private var isManualScrolling: Bool = false
     @State private var autoScrollTimer: Timer? = nil
     @State private var showControls: Bool = true
-    @State private var lastDragLocation: CGFloat = 0
-    @State private var wasFastScrolling: Bool = false
-    @State private var showLoadingDots: Bool = false
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
@@ -26,12 +23,8 @@ public struct LyricsView: View {
     @State private var manualScrollOffset: CGFloat = 0
     // 🔑 行高度缓存（用于精确计算位置）
     @State private var lineHeights: [Int: CGFloat] = [:]
-    // 🔑 记录上次滚动时间（用于速度计算）
-    @State private var lastScrollTime: CFTimeInterval = 0
     // 🔑 手动滚动时锁定的行索引（防止歌词在手动滚动时跟随播放移动）
     @State private var lockedLineIndex: Int? = nil
-    // 🔑 锁定时的累积高度（用于固定滚动位置）
-    @State private var lockedAccumulatedHeight: CGFloat = 0
     // 🔑 锁定时每行的目标索引快照（手动滚动期间不变）
     @State private var lockedLineTargetIndices: [Int: Int] = [:]
 
@@ -47,10 +40,6 @@ public struct LyricsView: View {
     @State private var cachedAccumulatedHeights: [Int: CGFloat] = [:]  // [lineIndex: accumulatedHeight]
     @State private var heightCacheInvalidated: Bool = true
 
-    // 🐛 调试窗口状态
-    @State private var showDebugWindow: Bool = false
-    @State private var debugMessages: [String] = []
-
     // 🔑 系统翻译会话配置 (仅 macOS 15.0+)
     // 使用 Any 类型来避免编译时的可用性检查
     @State private var translationSessionConfigAny: Any?
@@ -60,28 +49,6 @@ public struct LyricsView: View {
         self.openWindow = openWindow
         self.onHide = onHide
         self.onExpand = onExpand
-    }
-
-    // 🐛 调试日志（生产环境禁用）
-    #if DEBUG
-    private let enableDebugLog = false  // 开发时设为 true 启用日志
-    #else
-    private let enableDebugLog = false
-    #endif
-
-    private func addDebugMessage(_ message: String) {
-        guard enableDebugLog else { return }
-        debugMessages.append(message)
-        if debugMessages.count > 100 {
-            debugMessages.removeFirst(50)
-        }
-    }
-
-    @inline(__always)
-    private func debugLog(_ message: String) {
-        guard enableDebugLog else { return }
-        addDebugMessage(message)
-        debugPrint("🔄 [LyricsView] \(message)\n")
     }
 
     // 🔑 更新翻译会话配置 (仅 macOS 15.0+)
@@ -97,7 +64,6 @@ public struct LyricsView: View {
                         source: sourceLang,
                         target: targetLang
                     )
-                    debugLog("🌐 翻译会话配置已更新: \(sourceLang.languageCode?.identifier ?? "?") -> \(targetLang.languageCode?.identifier ?? "?")")
                     return
                 }
             }
@@ -107,7 +73,6 @@ public struct LyricsView: View {
                 source: nil,
                 target: targetLang
             )
-            debugLog("🌐 翻译会话配置已更新（自动检测源语言）: -> \(targetLang.languageCode?.identifier ?? "?")")
         }
     }
 
@@ -459,46 +424,6 @@ public struct LyricsView: View {
                         .animation(.easeInOut(duration: 0.25), value: showControls)
                     )
                 }
-            }
-
-            // 🐛 调试窗口 - inside ZStack
-            if showDebugWindow {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text("Scroll Debug")
-                            .font(.system(size: 10, weight: .bold))
-                        Spacer()
-                        Button("Clear") {
-                            debugMessages.removeAll()
-                        }
-                        .font(.system(size: 9))
-                        Button("✕") {
-                            showDebugWindow = false
-                        }
-                        .font(.system(size: 9))
-                    }
-                    .padding(4)
-                    .background(Color.black.opacity(0.8))
-
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 1) {
-                            ForEach(debugMessages.suffix(20), id: \.self) { msg in
-                                Text(msg)
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundColor(.green)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(height: 150)
-                    .background(Color.black.opacity(0.9))
-                }
-                .frame(width: 280)
-                .background(Color.black.opacity(0.95))
-                .cornerRadius(8)
-                .shadow(radius: 10)
-                .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
         .overlay(alignment: .topLeading) {

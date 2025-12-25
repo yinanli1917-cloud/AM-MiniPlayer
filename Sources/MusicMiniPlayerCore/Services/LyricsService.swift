@@ -404,9 +404,13 @@ public class LyricsService: ObservableObject {
         isTranslating = false
     }
 
-    // 🐛 调试日志（临时启用用于诊断）
+    // 🐛 调试日志（生产环境禁用）
     // 设置为 true 启用调试日志写入 /tmp/nanopod_lyrics_debug.log
-    private let enableDebugLog = true  // 临时启用用于诊断翻译问题
+    #if DEBUG
+    private let enableDebugLog = false
+    #else
+    private let enableDebugLog = false
+    #endif
 
     @inline(__always)
     private func debugLog(_ message: String) {
@@ -2059,9 +2063,7 @@ public class LyricsService: ObservableObject {
         let simplifiedTitle = convertToSimplified(title)
         let simplifiedArtist = convertToSimplified(artist)
 
-        // 🔑 检测标题是否主要是非中文（英文/拉丁字符）
-        // 如果是，先尝试只用艺术家搜索（因为 NetEase 里的歌曲标题可能是中文）
-        let isNonChineseTitle = !containsChineseCharacters(title)
+        // 🔑 检测标题是否包含日文字符
         let isJapaneseTitle = containsJapaneseCharacters(title)
 
         // 🔑 搜索策略（改进版）：
@@ -2505,11 +2507,6 @@ public class LyricsService: ObservableObject {
                                   inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
                 }
 
-                // 🔑 对于搜索词是艺术家名时，如果时长非常接近，放宽艺术家匹配要求
-                // 因为搜索结果很可能就是这个艺术家的歌（Eason Chan → 陈奕迅）
-                let isArtistSearch = (searchTerm.lowercased() == inputArtistLower)
-                let veryCloseDuration = durationDiff < 0.5
-
                 // 🔑 标题匹配：检查标题是否相关
                 let resultTitleLower = trackName.lowercased()
                 let cleanedResultTitle = resultTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
@@ -2674,7 +2671,6 @@ public class LyricsService: ObservableObject {
                 guard durationDiff < 3 else { continue }
 
                 // 🔑 严格匹配逻辑：检查标题和艺术家是否都匹配
-                let searchKeywordLower = round.keyword.lowercased()
                 let artistLower = songArtist.lowercased()
                 let titleLower = simplifiedTitle.lowercased()
                 let inputArtistLower = simplifiedArtist.lowercased()
