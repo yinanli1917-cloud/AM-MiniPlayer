@@ -42,6 +42,11 @@ public struct LyricsView: View {
     // 🔑 波浪动画 Work Item（用于取消未完成的动画）
     @State private var waveAnimationWorkItems: [DispatchWorkItem] = []
 
+    // 🔑 性能优化：缓存总高度和累积高度，避免滚动时重复计算
+    @State private var cachedTotalContentHeight: CGFloat = 0
+    @State private var cachedAccumulatedHeights: [Int: CGFloat] = [:]  // [lineIndex: accumulatedHeight]
+    @State private var heightCacheInvalidated: Bool = true
+
     // 🐛 调试窗口状态
     @State private var showDebugWindow: Bool = false
     @State private var debugMessages: [String] = []
@@ -180,6 +185,9 @@ public struct LyricsView: View {
                         )
                 } else {
                     // 🔑 AMLL 风格：VStack 自适应高度 + Y 轴整体偏移
+                    // 🔑 性能优化核心思路：
+                    // - 自动滚动：每行单独计算偏移（波浪动画）
+                    // - 手动滚动：整个容器统一偏移（避免重新计算每行）
                     GeometryReader { geo in
                         let containerHeight = geo.size.height
                         let controlBarHeight: CGFloat = 120
@@ -188,27 +196,19 @@ public struct LyricsView: View {
                         // 🔑 锚点位置：当前行在容器的 24% 高度处
                         let anchorY = (containerHeight - controlBarHeight) * 0.24
 
-                        // 🔑 计算页面超出回弹边界
-                        let visibleHeight = containerHeight - controlBarHeight
-                        let totalContentHeight = calculateTotalContentHeight()
-                        let headOverscroll = visibleHeight * 0.10  // 上 10%
-                        let tailOverscroll = visibleHeight * 0.20  // 下 20%
-
-                        // 🔑 AMLL 波浪效果：不在容器级别计算偏移，而是在每行单独计算
-                        // 每行使用自己的 lineTargetIndices[index] 来决定位置
-
                         ZStack(alignment: .topLeading) {  // 🔑 使用 ZStack 实现 AMLL 风格布局
                             ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                                 if index == 0 || index >= lyricsService.firstRealLyricIndex {
-                                    // 🔑 手动滚动时：使用锁定时的目标索引快照
-                                    // 🔑 自动滚动时：每行使用自己的 lineTargetIndex
+                                    // 🔑 性能优化：手动滚动时使用锁定的基础偏移（不包含 manualScrollOffset）
+                                    // manualScrollOffset 在容器级别应用，避免触发每行重新计算
                                     let lineOffset: CGFloat = {
                                         if isManualScrolling {
-                                            // 手动滚动：使用锁定时的目标索引，不随播放变化
+                                            // 🔑 手动滚动时：使用锁定时的目标索引快照
+                                            // 注意：不包含 manualScrollOffset，它在容器级别应用
                                             let frozenTargetIndex = lockedLineTargetIndices[index] ?? lockedLineIndex ?? currentIndex
-                                            return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex) + manualScrollOffset
+                                            return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
                                         } else {
-                                            // 自动滚动：使用该行的目标索引计算偏移
+                                            // 自动滚动：使用该行的目标索引计算偏移（波浪动画）
                                             let lineTargetIndex = lineTargetIndices[index] ?? currentIndex
                                             return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
                                         }
@@ -254,7 +254,8 @@ public struct LyricsView: View {
                                                         manualScrollOffset = 0
                                                         musicController.seek(to: line.startTime)
                                                     },
-                                                    showTranslation: lyricsService.showTranslation
+                                                    showTranslation: lyricsService.showTranslation,
+                                                    isTranslating: lyricsService.isTranslating
                                                 )
                                                 .padding(.horizontal, 32)
 
@@ -276,10 +277,16 @@ public struct LyricsView: View {
                                     .background(
                                         GeometryReader { lineGeo in
                                             Color.clear.onAppear {
-                                                lineHeights[index] = lineGeo.size.height
+                                                if lineHeights[index] != lineGeo.size.height {
+                                                    lineHeights[index] = lineGeo.size.height
+                                                    heightCacheInvalidated = true  // 🔑 使缓存失效
+                                                }
                                             }
                                             .onChange(of: lineGeo.size.height) { _, newHeight in
-                                                lineHeights[index] = newHeight
+                                                if lineHeights[index] != newHeight {
+                                                    lineHeights[index] = newHeight
+                                                    heightCacheInvalidated = true  // 🔑 使缓存失效
+                                                }
                                             }
                                         }
                                     )
@@ -299,23 +306,32 @@ public struct LyricsView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        // 🔑 性能关键：手动滚动偏移在容器级别应用，而不是每行单独计算
+                        // 这样 manualScrollOffset 变化只会触发一次 transform，而不是 N 次（N = 歌词行数）
+                        .offset(y: isManualScrolling ? manualScrollOffset : 0)
                     }
                     .clipped()
                     // 🔑 滚轮事件监听（与 PlaylistView 一致）
                     .contentShape(Rectangle())
                     .scrollDetectionWithVelocity(
                         onScrollStarted: {
-                            // 🔑 锁定当前状态，防止歌词跟随播放移动
+                            // 🔑 滚动开始时立即锁定状态，之后滚动只更新 manualScrollOffset
+                            autoScrollTimer?.invalidate()
+
+                            // 先更新缓存（同步，但只在需要时）
+                            if heightCacheInvalidated {
+                                updateHeightCache()
+                            }
+
+                            // 🔑 锁定当前状态
                             let currentIdx = lyricsService.currentLineIndex ?? 0
-                            lockedAccumulatedHeight = calculateAccumulatedHeight(upTo: currentIdx)
                             lockedLineIndex = currentIdx
-                            // 🔑 保存每行的目标索引快照
                             lockedLineTargetIndices = lineTargetIndices
                             isManualScrolling = true
+
                             lastVelocity = 0
                             scrollLocked = false
                             hasTriggeredSlowScroll = false
-                            autoScrollTimer?.invalidate()
                         },
                         onScrollEnded: {
                             autoScrollTimer?.invalidate()
@@ -559,6 +575,9 @@ public struct LyricsView: View {
             cancelWaveAnimations()
             lineTargetIndices.removeAll()
             lastCurrentIndex = -1
+            // 🔑 使高度缓存失效
+            heightCacheInvalidated = true
+            lineHeights.removeAll()
 
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
@@ -568,6 +587,17 @@ public struct LyricsView: View {
         .onChange(of: lyricsService.lyrics.count) { _, newCount in
             if #available(macOS 15.0, *), newCount > 0 {
                 updateTranslationSessionConfig()
+            }
+            // 🔑 歌词变化时使缓存失效
+            heightCacheInvalidated = true
+        }
+        // 🔑 macOS 15.0+: 歌词加载完成时（isLoading: true -> false），检查是否需要触发系统翻译
+        .onChange(of: lyricsService.isLoading) { oldValue, newValue in
+            if #available(macOS 15.0, *) {
+                // 从加载中变为加载完成
+                if oldValue && !newValue && !lyricsService.lyrics.isEmpty {
+                    updateTranslationSessionConfig()
+                }
             }
         }
         // 🔑 macOS 15.0+: 翻译语言变化时更新配置
@@ -812,7 +842,13 @@ public struct LyricsView: View {
     }
 
     /// 🔑 计算从第一行到指定行的累积高度（用于 VStack offset）
+    /// 使用缓存优化，避免滚动时重复计算
     private func calculateAccumulatedHeight(upTo targetIndex: Int) -> CGFloat {
+        // 🔑 如果缓存有效，直接返回缓存值
+        if !heightCacheInvalidated, let cached = cachedAccumulatedHeights[targetIndex] {
+            return cached
+        }
+
         let spacing: CGFloat = 6  // 🔑 与 VStack spacing 保持一致
         var totalHeight: CGFloat = 0
         let defaultHeight: CGFloat = 36  // 默认行高（用于尚未测量的行）
@@ -840,32 +876,17 @@ public struct LyricsView: View {
     /// 🔑 计算某行在容器中的位置（相对于第一行）
     /// 用于 ZStack 布局中确定每行的 Y 位置
     private func calculateLinePosition(index: Int) -> CGFloat {
-        let spacing: CGFloat = 6  // 与 VStack spacing 保持一致
-        var position: CGFloat = 0
-        let defaultHeight: CGFloat = 36
-
-        // 获取实际渲染的行索引列表
-        let renderedIndices = lyricsService.lyrics.enumerated()
-            .filter { idx, _ in idx == 0 || idx >= lyricsService.firstRealLyricIndex }
-            .map { $0.offset }
-
-        // 找到目标行在渲染列表中的位置
-        guard let targetPosition = renderedIndices.firstIndex(of: index) else {
-            return 0
-        }
-
-        // 累加目标行之前所有行的高度 + 间距
-        for i in 0..<targetPosition {
-            let lineIndex = renderedIndices[i]
-            let height = lineHeights[lineIndex] ?? defaultHeight
-            position += height + spacing
-        }
-
-        return position
+        // 🔑 复用累积高度缓存
+        return calculateAccumulatedHeight(upTo: index)
     }
 
-    /// 🔑 计算内容总高度
+    /// 🔑 计算内容总高度（使用缓存）
     private func calculateTotalContentHeight() -> CGFloat {
+        // 🔑 如果缓存有效，直接返回缓存值
+        if !heightCacheInvalidated && cachedTotalContentHeight > 0 {
+            return cachedTotalContentHeight
+        }
+
         let spacing: CGFloat = 6  // 🔑 与 VStack spacing 保持一致
         var totalHeight: CGFloat = 0
         let defaultHeight: CGFloat = 36
@@ -883,6 +904,36 @@ public struct LyricsView: View {
         }
 
         return totalHeight
+    }
+
+    /// 🔑 更新高度缓存（在歌词变化或行高变化时调用）
+    private func updateHeightCache() {
+        let spacing: CGFloat = 6
+        let defaultHeight: CGFloat = 36
+
+        let renderedIndices = lyricsService.lyrics.enumerated()
+            .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
+            .map { $0.offset }
+
+        var accumulatedHeight: CGFloat = 0
+        var newAccumulatedHeights: [Int: CGFloat] = [:]
+        var totalHeight: CGFloat = 0
+
+        for (i, lineIndex) in renderedIndices.enumerated() {
+            newAccumulatedHeights[lineIndex] = accumulatedHeight
+            let height = lineHeights[lineIndex] ?? defaultHeight
+            totalHeight += height
+            if i < renderedIndices.count - 1 {
+                totalHeight += spacing
+                accumulatedHeight += height + spacing
+            } else {
+                accumulatedHeight += height
+            }
+        }
+
+        cachedAccumulatedHeights = newAccumulatedHeights
+        cachedTotalContentHeight = totalHeight
+        heightCacheInvalidated = false
     }
 
     /// 🔑 AMLL 波浪效果：触发波浪动画
@@ -965,6 +1016,7 @@ struct LyricLineView: View {
     var currentTime: TimeInterval = 0  // 保留用于将来逐字高亮
     var onTap: (() -> Void)? = nil  // 🔑 点击回调
     var showTranslation: Bool = false  // 🔑 是否显示翻译
+    var isTranslating: Bool = false  // 🔑 是否正在翻译中
 
     @State private var isHovering: Bool = false
 
@@ -1025,6 +1077,12 @@ struct LyricLineView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .lineSpacing(4)
 
+                    Spacer(minLength: 0)
+                }
+            } else if showTranslation && isTranslating && line.translation == nil {
+                // 🔑 翻译加载中动画
+                HStack(spacing: 4) {
+                    TranslationLoadingDotsView()
                     Spacer(minLength: 0)
                 }
             }
@@ -1134,6 +1192,39 @@ struct InterludeDotsView: View {
     }
 }
 
+/// 翻译加载动画 - 三个渐变闪烁的点
+struct TranslationLoadingDotsView: View {
+    @State private var animationPhase: Int = 0
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(Color.white.opacity(dotOpacity(for: index)))
+                    .frame(width: 4, height: 4)
+            }
+        }
+        .onAppear {
+            withAnimation(Animation.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
+                animationPhase = 1
+            }
+        }
+    }
+
+    private func dotOpacity(for index: Int) -> Double {
+        // 创建波浪式闪烁效果
+        let baseOpacity = 0.3
+        let highlightOpacity = 0.7
+        let phase = Double(animationPhase)
+
+        // 每个点有不同的相位偏移
+        let offset = Double(index) * 0.3
+        let value = sin((phase + offset) * .pi)
+
+        return baseOpacity + (highlightOpacity - baseOpacity) * max(0, value)
+    }
+}
+
 /// 前奏加载点视图 - 替换 "..." 省略号歌词
 struct PreludeDotsView: View {
     let startTime: TimeInterval  // 前奏/间奏开始时间
@@ -1224,10 +1315,16 @@ struct SystemTranslationModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
             if let config = translationSessionConfigAny as? TranslationSession.Configuration {
+                // 🔑 只有当翻译开关开启且需要系统翻译时，才使用 .id() 触发
+                // 这样可以在用户点击翻译按钮时重新触发 .translationTask
                 content
-                    .id(lyricsService.translationRequestTrigger)  // 🔑 使用 id modifier 强制重建视图，触发翻译
-                    .translationTask(config) { session in
-                        await lyricsService.performSystemTranslation(session: session)
+                    .background {
+                        // 🔑 使用 background 中的隐藏视图来触发翻译，避免主内容闪烁
+                        Color.clear
+                            .id(lyricsService.translationRequestTrigger)
+                            .translationTask(config) { session in
+                                await lyricsService.performSystemTranslation(session: session)
+                            }
                     }
             } else {
                 content

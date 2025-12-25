@@ -327,11 +327,22 @@ public class LyricsService: ObservableObject {
     @available(macOS 15.0, *)
     @MainActor
     public func performSystemTranslation(session: TranslationSession) async {
-        guard !lyrics.isEmpty else { return }
+        debugLog("🌐 performSystemTranslation 被调用 (lyrics=\(lyrics.count), showTranslation=\(showTranslation), isLoading=\(isLoading))")
+
+        guard !lyrics.isEmpty else {
+            debugLog("ℹ️ 歌词为空，跳过系统翻译")
+            return
+        }
 
         // 🔑 检查翻译开关是否开启
         guard showTranslation else {
             debugLog("ℹ️ 翻译开关未开启，跳过系统翻译")
+            return
+        }
+
+        // 🔑 检查是否正在加载歌词（歌曲切换中）
+        guard !isLoading else {
+            debugLog("ℹ️ 歌词正在加载中，稍后会自动触发翻译")
             return
         }
 
@@ -393,13 +404,9 @@ public class LyricsService: ObservableObject {
         isTranslating = false
     }
 
-    // 🐛 调试日志（生产环境禁用）
+    // 🐛 调试日志（临时启用用于诊断）
     // 设置为 true 启用调试日志写入 /tmp/nanopod_lyrics_debug.log
-    #if DEBUG
-    private let enableDebugLog = false  // 开发时设为 true 启用日志
-    #else
-    private let enableDebugLog = false
-    #endif
+    private let enableDebugLog = true  // 临时启用用于诊断翻译问题
 
     @inline(__always)
     private func debugLog(_ message: String) {
@@ -604,6 +611,11 @@ public class LyricsService: ObservableObject {
 
         currentSongID = songID
 
+        // 🔑 歌曲切换时立即重置翻译状态
+        // 这样可以确保切换到没有歌词源翻译的歌曲时，系统翻译能被触发
+        translationsAreFromLyricsSource = false
+        lastSystemTranslationLanguage = nil
+
         // Check cache first
         if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
             // 🔑 处理 No Lyrics 缓存
@@ -631,12 +643,32 @@ public class LyricsService: ObservableObject {
 
             // 🔑 检测歌词是否包含翻译（在 writeDebugLyricTimeline 之后，因为它会覆盖文件）
             let lyricsWithTranslation = self.lyrics.filter { $0.hasTranslation }
+            let isTargetChinese = translationLanguage.hasPrefix("zh")
+
             if !lyricsWithTranslation.isEmpty {
                 debugLog("🌐 歌词源包含翻译（缓存）：\(lyricsWithTranslation.count)/\(self.lyrics.count) 行有翻译")
                 debugLog("   示例：\"\(self.lyrics.first(where: { $0.hasTranslation })?.text ?? "")\" → \"\(self.lyrics.first(where: { $0.hasTranslation })?.translation ?? "")\"")
-                // 🔑 标记翻译来自歌词源
-                translationsAreFromLyricsSource = true
-                lastSystemTranslationLanguage = nil
+
+                // 🔑 检查目标语言：歌词源翻译是中文，只有目标语言是中文时才使用
+                if isTargetChinese {
+                    // 目标语言是中文，使用歌词源翻译
+                    translationsAreFromLyricsSource = true
+                    lastSystemTranslationLanguage = nil
+                    debugLog("🌐 目标语言是中文，使用歌词源翻译（缓存）")
+                } else {
+                    // 🔑 目标语言不是中文，清除歌词源翻译，触发系统翻译
+                    debugLog("🌐 目标语言非中文 (\(translationLanguage))，清除歌词源翻译（缓存）")
+                    for i in 0..<lyrics.count {
+                        lyrics[i].translation = nil
+                    }
+                    translationsAreFromLyricsSource = false
+                    lastSystemTranslationLanguage = nil
+                    // 🔑 触发系统翻译
+                    if showTranslation {
+                        translationRequestTrigger += 1
+                        debugLog("🌐 触发系统翻译请求 (#\(translationRequestTrigger))")
+                    }
+                }
             } else {
                 debugLog("❌ 歌词源不包含翻译（缓存）")
                 // 🔑 重置翻译来源标记
@@ -711,14 +743,34 @@ public class LyricsService: ObservableObject {
 
                         // 🔑 检测歌词是否包含翻译（在 writeDebugLyricTimeline 之后，因为它会覆盖文件）
                         let lyricsWithTranslation = self.lyrics.filter { $0.hasTranslation }
+                        let isTargetChinese = self.translationLanguage.hasPrefix("zh")
+
                         if !lyricsWithTranslation.isEmpty {
                             self.debugLog("🌐 歌词源包含翻译：\(lyricsWithTranslation.count)/\(self.lyrics.count) 行有翻译")
                             self.debugLog("   示例：\"\(self.lyrics.first(where: { $0.hasTranslation })?.text ?? "")\" → \"\(self.lyrics.first(where: { $0.hasTranslation })?.translation ?? "")\"")
-                            // 🔑 标记翻译来自歌词源
-                            self.translationsAreFromLyricsSource = true
-                            self.lastSystemTranslationLanguage = nil
+
+                            // 🔑 检查目标语言：歌词源翻译是中文，只有目标语言是中文时才使用
+                            if isTargetChinese {
+                                // 目标语言是中文，使用歌词源翻译
+                                self.translationsAreFromLyricsSource = true
+                                self.lastSystemTranslationLanguage = nil
+                                self.debugLog("🌐 目标语言是中文，使用歌词源翻译")
+                            } else {
+                                // 🔑 目标语言不是中文，清除歌词源翻译，触发系统翻译
+                                self.debugLog("🌐 目标语言非中文 (\(self.translationLanguage))，清除歌词源翻译")
+                                for i in 0..<self.lyrics.count {
+                                    self.lyrics[i].translation = nil
+                                }
+                                self.translationsAreFromLyricsSource = false
+                                self.lastSystemTranslationLanguage = nil
+                                // 🔑 触发系统翻译
+                                if self.showTranslation {
+                                    self.translationRequestTrigger += 1
+                                    self.debugLog("🌐 触发系统翻译请求 (#\(self.translationRequestTrigger))")
+                                }
+                            }
                         } else {
-                            self.debugLog("❌ 歌词源不包含翻译")
+                            self.debugLog("❌ 歌词源不包含翻译 (showTranslation=\(self.showTranslation))")
                             // 🔑 重置翻译来源标记
                             self.translationsAreFromLyricsSource = false
                             self.lastSystemTranslationLanguage = nil
@@ -726,6 +778,8 @@ public class LyricsService: ObservableObject {
                             if self.showTranslation {
                                 self.translationRequestTrigger += 1
                                 self.debugLog("🌐 歌词加载完成，触发系统翻译请求 (#\(self.translationRequestTrigger))")
+                            } else {
+                                self.debugLog("ℹ️ 翻译开关关闭，不触发系统翻译")
                             }
                         }
                     }
@@ -845,15 +899,53 @@ public class LyricsService: ObservableObject {
         let lineScore = min(Double(lyrics.count) * 0.5, 15)  // 最多 15 分
         score += lineScore
 
-        // 4. 时间轴覆盖度（歌词覆盖歌曲时长的比例）
+        // 4. 时长匹配评分（新增：确保歌曲时长匹配）
+        // 🔑 歌词总时长应该与目标时长接近
+        if duration > 0 {
+            let lyricsDuration = (lyrics.last?.endTime ?? 0) - (lyrics.first?.startTime ?? 0)
+            let durationDiff = abs(lyricsDuration - duration)
+            let durationDiffRatio = durationDiff / duration  // 差异比例
+
+            // 时长匹配评分：差异越小分数越高
+            // 差异 < 1%: 15分
+            // 差异 < 3%: 12分
+            // 差异 < 5%: 8分
+            // 差异 < 10%: 4分
+            // 差异 >= 10%: 0分
+            // 差异 >= 20%: 扣分
+
+            var durationMatchScore: Double = 0
+            if durationDiffRatio < 0.01 {
+                durationMatchScore = 15
+            } else if durationDiffRatio < 0.03 {
+                durationMatchScore = 12
+            } else if durationDiffRatio < 0.05 {
+                durationMatchScore = 8
+            } else if durationDiffRatio < 0.10 {
+                durationMatchScore = 4
+            } else if durationDiffRatio < 0.20 {
+                durationMatchScore = 0
+            } else {
+                // 时长差异太大，扣分
+                durationMatchScore = -20
+            }
+
+            score += durationMatchScore
+
+            if durationMatchScore < 10 {
+                debugLog("⏱️ \(source): 时长匹配 -\(Int(durationDiff))s (\(String(format: "%.1f", durationDiffRatio * 100))%差异), 得分 \(Int(durationMatchScore))")
+            }
+        }
+
+        // 5. 时间轴覆盖度（歌词覆盖歌曲时长的比例）
         if duration > 0 {
             let lastLyricEnd = lyrics.last?.endTime ?? 0
             let firstLyricStart = lyrics.first?.startTime ?? 0
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
-            score += coverageRatio * 15  // 最多 15 分
+            score += coverageRatio * 8  // 降低权重：15分 → 8分
         }
 
-        // 5. 🔑 翻译加成：当用户开启翻译时，有翻译的歌词源 +15 分
+        // 6. 🔑 翻译加成：当用户开启翻译时，有翻译的歌词源 +15 分
         if showTranslation {
             let hasTranslation = lyrics.contains { $0.hasTranslation }
             if hasTranslation {
@@ -1970,21 +2062,23 @@ public class LyricsService: ObservableObject {
         // 🔑 检测标题是否主要是非中文（英文/拉丁字符）
         // 如果是，先尝试只用艺术家搜索（因为 NetEase 里的歌曲标题可能是中文）
         let isNonChineseTitle = !containsChineseCharacters(title)
+        let isJapaneseTitle = containsJapaneseCharacters(title)
 
-        // 🔑 搜索策略：
-        // 1. 如果标题是英文，先尝试"艺术家名"搜索（因为 NetEase 里可能只有中文标题）
-        // 2. 然后尝试"标题 + 艺术家"搜索
+        // 🔑 搜索策略（改进版）：
+        // 1. 优先使用 "标题 + 艺术家" 搜索（最精确）
+        // 2. 如果是日文标题，可以尝试只用艺术家搜索（因为 NetEase 可能有中文对应）
+        // 3. 对于英文标题，不再只用艺术家搜索（容易匹配到错误的歌）
         var searchKeywords: [String] = []
 
-        if isNonChineseTitle {
-            // 英文标题：优先只用艺术家搜索
-            searchKeywords.append(simplifiedArtist)
-            searchKeywords.append("\(simplifiedTitle) \(simplifiedArtist)")
-        } else {
-            // 中文标题：正常搜索顺序
-            searchKeywords.append("\(simplifiedTitle) \(simplifiedArtist)")
+        // 第一优先级：标题 + 艺术家（最精确）
+        searchKeywords.append("\(simplifiedTitle) \(simplifiedArtist)")
+
+        // 第二优先级：根据标题类型决定
+        if isJapaneseTitle {
+            // 日文标题：可以尝试只用艺术家搜索（可能有中文名对应）
             searchKeywords.append(simplifiedArtist)
         }
+        // 🔑 英文标题不再只用艺术家搜索（避免匹配到错误的歌）
 
         for searchKeyword in searchKeywords {
             debugLog("🔍 NetEase: '\(searchKeyword)', duration: \(Int(duration))s")
@@ -2005,6 +2099,32 @@ public class LyricsService: ObservableObject {
             // CJK Unified Ideographs Extension A: U+3400 - U+4DBF
             if (0x4E00...0x9FFF).contains(scalar.value) ||
                (0x3400...0x4DBF).contains(scalar.value) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 检测字符串是否包含日文字符（平假名、片假名）
+    private func containsJapaneseCharacters(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            // Hiragana: U+3040 - U+309F
+            // Katakana: U+30A0 - U+30FF
+            if (0x3040...0x309F).contains(scalar.value) ||
+               (0x30A0...0x30FF).contains(scalar.value) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 检测字符串是否包含韩文字符
+    private func containsKoreanCharacters(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            // Hangul Syllables: U+AC00 - U+D7AF
+            // Hangul Jamo: U+1100 - U+11FF
+            if (0xAC00...0xD7AF).contains(scalar.value) ||
+               (0x1100...0x11FF).contains(scalar.value) {
                 return true
             }
         }
@@ -2086,8 +2206,27 @@ public class LyricsService: ObservableObject {
                             songNameLower.contains(simplifiedTitleLower) ||
                             simplifiedTitleLower.contains(songNameLower)
 
-            let artistMatch = songArtist.lowercased().contains(artist.lowercased()) ||
-                             artist.lowercased().contains(songArtist.lowercased())
+            // 🔑 改进艺术家匹配逻辑：对于短名字或 CJK 名字使用更严格的匹配
+            let artistLower = artist.lowercased()
+            let songArtistLower = songArtist.lowercased()
+            let simplifiedArtist = convertToSimplified(artist).lowercased()
+            let simplifiedSongArtist = convertToSimplified(songArtist).lowercased()
+
+            // 🔑 CJK 字符检测：如果艺术家名包含 CJK 字符，使用更严格的匹配
+            let isCJKArtist = containsChineseCharacters(artist) || containsJapaneseCharacters(artist) || containsKoreanCharacters(artist)
+
+            let artistMatch: Bool
+            if isCJKArtist {
+                // 🔑 CJK 艺术家：要求完全匹配或简繁体匹配
+                artistMatch = artistLower == songArtistLower ||
+                              simplifiedArtist == simplifiedSongArtist ||
+                              artistLower == simplifiedSongArtist ||
+                              simplifiedArtist == songArtistLower
+            } else {
+                // 🔑 非 CJK 艺术家：保持原有的包含匹配逻辑
+                artistMatch = songArtistLower.contains(artistLower) ||
+                             artistLower.contains(songArtistLower)
+            }
 
             candidates.append((songId, songName, songArtist, songDuration, durationDiff, titleMatch, artistMatch))
         }
@@ -2303,74 +2442,128 @@ public class LyricsService: ObservableObject {
     /// 通过 iTunes Search API (中国区) 获取歌曲的中文元数据
     /// 用于解决 Apple Music 英文界面显示英文名，但实际是中文歌的问题
     private func fetchChineseMetadata(title: String, artist: String, duration: TimeInterval) async -> (chineseTitle: String, chineseArtist: String)? {
-        debugLog("🇨🇳 Fetching Chinese metadata from iTunes CN: '\(artist)'")
+        debugLog("🇨🇳 Fetching Chinese metadata from iTunes CN: '\(title)' by '\(artist)'")
 
-        // 用艺术家名搜索中国区 iTunes
-        guard var components = URLComponents(string: "https://itunes.apple.com/search") else { return nil }
-        components.queryItems = [
-            URLQueryItem(name: "term", value: artist),
-            URLQueryItem(name: "country", value: "CN"),
-            URLQueryItem(name: "media", value: "music"),
-            URLQueryItem(name: "limit", value: "20")
-        ]
+        // 🔑 尝试两种搜索策略
+        // 1. 艺术家名搜索
+        // 2. 标题搜索（对于英文歌名在中国区可能有对应中文名）
+        let searchTerms = [artist, title, "\(title) \(artist)"]
 
-        guard let url = components.url else { return nil }
+        for (index, searchTerm) in searchTerms.enumerated() {
+            guard var components = URLComponents(string: "https://itunes.apple.com/search") else { continue }
+            components.queryItems = [
+                URLQueryItem(name: "term", value: searchTerm),
+                URLQueryItem(name: "country", value: "CN"),
+                URLQueryItem(name: "media", value: "music"),
+                URLQueryItem(name: "limit", value: "30")  // 🔑 增加搜索结果数量
+            ]
 
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 6.0  // 🔑 降低超时：10s → 6s
+            guard let url = components.url else { continue }
 
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            return nil
-        }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6.0
 
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let results = json["results"] as? [[String: Any]] else {
-            return nil
-        }
-
-        // 🔑 用时长 + 艺术家名 + 标题匹配找到正确的歌曲
-        let inputArtistLower = artist.lowercased()
-        let inputTitleLower = title.lowercased()
-        // 🔑 清理标题：移除括号内容如 "(2021 Remaster)"
-        let cleanedInputTitle = inputTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
-
-        for result in results {
-            guard let trackName = result["trackName"] as? String,
-                  let artistName = result["artistName"] as? String,
-                  let trackTimeMillis = result["trackTimeMillis"] as? Int else {
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
                 continue
             }
 
-            let trackDuration = Double(trackTimeMillis) / 1000.0
-            let durationDiff = abs(trackDuration - duration)
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = json["results"] as? [[String: Any]] else {
+                continue
+            }
 
-            // 🔑 必须同时满足：时长差 < 2秒 AND 艺术家名相关 AND 标题相关
-            let resultArtistLower = artistName.lowercased()
-            let artistMatch = inputArtistLower.contains(resultArtistLower) ||
-                              resultArtistLower.contains(inputArtistLower) ||
-                              inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) } ||
-                              inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
+            debugLog("🇨🇳 iTunes CN search '\(searchTerm)': \(results.count) results")
 
-            // 🔑 标题匹配：检查标题是否相关
-            let resultTitleLower = trackName.lowercased()
-            let cleanedResultTitle = resultTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
-            // 🔑 标题匹配条件：清理后的标题相互包含，或者有显著的共同词汇
-            let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
-                            cleanedResultTitle.contains(cleanedInputTitle) ||
-                            // 🔑 检查是否有共同的主要词汇（>3字符的词）
-                            cleanedInputTitle.split(separator: " ")
-                                .filter { $0.count > 3 }
-                                .contains { cleanedResultTitle.contains($0.lowercased()) }
+            // 🔑 用时长 + 艺术家名 + 标题匹配找到正确的歌曲
+            let inputArtistLower = artist.lowercased()
+            let inputTitleLower = title.lowercased()
+            // 🔑 清理标题：移除括号内容如 "(2021 Remaster)"
+            let cleanedInputTitle = inputTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
 
-            if durationDiff < 2 && artistMatch && titleMatch {
-                debugLog("✅ iTunes CN match: '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.1f", durationDiff))s)")
-                return (trackName, artistName)
+            for result in results {
+                guard let trackName = result["trackName"] as? String,
+                      let artistName = result["artistName"] as? String,
+                      let trackTimeMillis = result["trackTimeMillis"] as? Int else {
+                    continue
+                }
+
+                let trackDuration = Double(trackTimeMillis) / 1000.0
+                let durationDiff = abs(trackDuration - duration)
+
+                // 🔑 艺术家匹配逻辑（改进：支持英文名对应中文名）
+                let resultArtistLower = artistName.lowercased()
+
+                // 🔑 检查直接包含关系
+                var artistMatch = inputArtistLower.contains(resultArtistLower) ||
+                                  resultArtistLower.contains(inputArtistLower)
+
+                // 🔑 检查词汇匹配（如 "Eason Chan" 的 "eason" 或 "chan"）
+                if !artistMatch {
+                    artistMatch = inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) } ||
+                                  inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
+                }
+
+                // 🔑 对于搜索词是艺术家名时，如果时长非常接近，放宽艺术家匹配要求
+                // 因为搜索结果很可能就是这个艺术家的歌（Eason Chan → 陈奕迅）
+                let isArtistSearch = (searchTerm.lowercased() == inputArtistLower)
+                let veryCloseDuration = durationDiff < 0.5
+
+                // 🔑 标题匹配：检查标题是否相关
+                let resultTitleLower = trackName.lowercased()
+                let cleanedResultTitle = resultTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
+                // 🔑 标题匹配条件：清理后的标题相互包含，或者有显著的共同词汇
+                let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
+                                cleanedResultTitle.contains(cleanedInputTitle) ||
+                                // 🔑 检查是否有共同的主要词汇（>3字符的词）
+                                cleanedInputTitle.split(separator: " ")
+                                    .filter { $0.count > 3 }
+                                    .contains { cleanedResultTitle.contains($0.lowercased()) }
+
+                // 🔑 匹配优先级（严格版：要求标题/艺术家 + 时长都匹配）
+
+                // 检查是否是组合搜索（标题+艺术家一起搜索）
+                let isCombinedSearch = searchTerm.lowercased().contains(" ") &&
+                                      searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
+
+                // 🔑 关键修复：检查返回的结果是否真的"本地化"了（从英文/罗马字变成中文）
+                // 如果输入是英文/罗马字，但返回的结果也是英文/罗马字，那么这不是有效的本地化
+                let resultIsActuallyLocalized = !containsChineseCharacters(title) ||
+                                                     containsChineseCharacters(trackName) ||
+                                                     (containsJapaneseCharacters(title) && containsJapaneseCharacters(trackName) && trackName != inputTitleLower)
+
+                // 1. 组合搜索 + 时长精确匹配（最可靠）
+                // 例如：搜索 "Monologue From One Soul Eason Chan" 找到 "一个灵魂的独白 陈奕迅" (306.06s)
+                if isCombinedSearch && durationDiff < 0.5 && resultIsActuallyLocalized {
+                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, combined-search + close-duration)")
+                    return (trackName, artistName)
+                }
+
+                // 2. 标题 AND 艺术家都匹配 + 时长接近（双重验证）
+                // 🔑 必须是有效的本地化结果
+                if artistMatch && titleMatch && durationDiff < 2 && resultIsActuallyLocalized {
+                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.2f", durationDiff))s, title+artist+duration)")
+                    return (trackName, artistName)
+                }
+
+                // 3. 标题匹配 + 时长精确（仅标题搜索时）
+                // 🔑 必须是有效的本地化结果（标题真的变了）
+                if titleMatch && durationDiff < 0.5 && searchTerm.lowercased() == inputTitleLower && resultIsActuallyLocalized {
+                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, title-only + exact-duration)")
+                    return (trackName, artistName)
+                }
+
+                // 4. 艺术家匹配 + 时长精确（仅艺术家搜索时）
+                // 🔑 对于艺术家搜索，允许标题不变（因为可能确实没有中文歌名）
+                if artistMatch && durationDiff < 0.5 && searchTerm.lowercased() == inputArtistLower {
+                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, artist-only + exact-duration)")
+                    return (trackName, artistName)
+                }
             }
         }
 
-        debugLog("❌ iTunes CN: No duration+artist+title match found")
+        debugLog("❌ iTunes CN: No match found")
         return nil
     }
 
@@ -2480,20 +2673,33 @@ public class LyricsService: ObservableObject {
                 // 🔑 时长差超过 3 秒的跳过
                 guard durationDiff < 3 else { continue }
 
-                // 🔑 检查艺术家相关性（搜索词是否在艺术家名中，或艺术家名是否在搜索词中）
+                // 🔑 严格匹配逻辑：检查标题和艺术家是否都匹配
                 let searchKeywordLower = round.keyword.lowercased()
                 let artistLower = songArtist.lowercased()
                 let titleLower = simplifiedTitle.lowercased()
                 let inputArtistLower = simplifiedArtist.lowercased()
+                let songNameLower = songName.lowercased()
 
-                // 艺术家匹配条件：搜索词包含艺术家名，或艺术家名包含输入的艺术家名
-                let isArtistMatch = searchKeywordLower.contains(artistLower) ||
-                                   artistLower.contains(inputArtistLower) ||
-                                   inputArtistLower.contains(artistLower) ||
-                                   songName.lowercased().contains(titleLower) ||
-                                   titleLower.contains(songName.lowercased())
+                // 🔑 艺术家匹配：必须包含输入艺术家名
+                let artistMatch = artistLower.contains(inputArtistLower) ||
+                                 inputArtistLower.contains(artistLower)
 
-                candidates.append((songMid, songName, songArtist, durationDiff, isArtistMatch))
+                // 🔑 标题匹配：搜索词标题必须与歌曲标题相关
+                // 检查方式：清理后的标题相互包含，或有共同词汇
+                let cleanedSongName = songNameLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
+                let cleanedTitle = titleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
+                let titleMatch = cleanedSongName.contains(cleanedTitle) ||
+                                cleanedTitle.contains(cleanedSongName) ||
+                                // 检查是否有共同的主要词汇（>3字符）
+                                cleanedTitle.split(separator: " ")
+                                    .filter { $0.count > 3 }
+                                    .contains { cleanedSongName.contains($0.lowercased()) }
+
+                // 🔑 综合匹配：艺术家和标题都必须匹配
+                // 注意：不能仅凭时长匹配，因为同一艺术家的不同歌曲可能时长非常接近
+                let isMatch = artistMatch && titleMatch
+
+                candidates.append((songMid, songName, songArtist, durationDiff, isMatch))
             }
 
             // 🔑 按时长差排序

@@ -321,175 +321,99 @@ struct MiniPlayerContentView: View {
     }
 }
 
-/// 菜单栏弹出的设置页面 - 符合 Apple HIG
+/// 菜单栏弹出的设置页面 - 参照 CleanShot X 设计
 struct MenuBarSettingsView: View {
     @EnvironmentObject var musicController: MusicController
     @StateObject private var lyricsService = LyricsService.shared
     var onExpand: (() -> Void)?
     var onQuit: (() -> Void)?
 
-    // 获取当前系统语言
     private var systemLanguageCode: String {
-        Locale.current.language.languageCode?.identifier ?? "zh"
+        Locale.current.language.languageCode?.identifier ?? "en"
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            // ═══════════════════════════════════════════
-            // MARK: - 窗口 (Window)
-            // ═══════════════════════════════════════════
-
-            SettingsSection {
-                SettingsButton(
-                    title: "显示浮窗",
-                    icon: "macwindow",
-                    action: { onExpand?() }
-                )
-            }
+            // 窗口
+            SettingsRow(title: "显示浮窗", icon: "macwindow", action: { onExpand?() })
 
             Divider().padding(.horizontal, 12)
 
-            // ═══════════════════════════════════════════
-            // MARK: - 播放控制 (Playback)
-            // ═══════════════════════════════════════════
-
-            SettingsSection {
-                SettingsButton(
-                    title: "播放/暂停",
-                    icon: "playpause.fill",
-                    shortcut: "Space",
-                    action: { musicController.togglePlayPause() }
-                )
-                SettingsButton(
-                    title: "上一首",
-                    icon: "backward.fill",
-                    action: { musicController.previousTrack() }
-                )
-                SettingsButton(
-                    title: "下一首",
-                    icon: "forward.fill",
-                    action: { musicController.nextTrack() }
-                )
-            }
+            // 播放控制
+            SettingsRow(title: "播放/暂停", icon: "playpause.fill", shortcut: "Space", action: { musicController.togglePlayPause() })
+            SettingsRow(title: "上一首", icon: "backward.fill", action: { musicController.previousTrack() })
+            SettingsRow(title: "下一首", icon: "forward.fill", action: { musicController.nextTrack() })
 
             Divider().padding(.horizontal, 12)
 
-            // ═══════════════════════════════════════════
-            // MARK: - 歌词 (Lyrics) - 仅 macOS 15+
-            // ═══════════════════════════════════════════
-
+            // 歌词翻译 (macOS 15+)
             if #available(macOS 15.0, *) {
-                SettingsSection {
-                    SettingsPickerButton(
-                        title: "翻译语言",
-                        icon: "translate",
-                        currentValue: translationLanguageDisplayName,
-                        options: translationLanguageOptions,
-                        onSelect: { code in
-                            let targetCode = code == "system" ? systemLanguageCode : code
-                            lyricsService.translationLanguage = targetCode
-                        }
-                    )
-                }
+                SettingsPickerRow(
+                    title: "翻译语言",
+                    icon: "character.bubble",
+                    currentValue: translationLanguageDisplayName,
+                    options: translationLanguageOptions,
+                    onSelect: { code in
+                        let targetCode = code == "system" ? systemLanguageCode : code
+                        lyricsService.translationLanguage = targetCode
+                    }
+                )
 
                 Divider().padding(.horizontal, 12)
             }
 
-            // ═══════════════════════════════════════════
-            // MARK: - 设置 (Settings)
-            // ═══════════════════════════════════════════
-
-            SettingsSection {
-                SettingsToggle(
-                    title: "在 Dock 显示图标",
-                    icon: "dock.rectangle",
-                    isOn: Binding(
-                        get: { AppMain.shared?.showInDock ?? true },
-                        set: { AppMain.shared?.showInDock = $0 }
-                    )
+            // 设置
+            SettingsToggleRow(
+                title: "在 Dock 显示",
+                icon: "dock.rectangle",
+                isOn: Binding(
+                    get: { AppMain.shared?.showInDock ?? true },
+                    set: { AppMain.shared?.showInDock = $0 }
                 )
-            }
+            )
 
             Divider().padding(.horizontal, 12)
 
-            // ═══════════════════════════════════════════
-            // MARK: - 其他 (Other)
-            // ═══════════════════════════════════════════
-
-            SettingsSection {
-                SettingsButton(
-                    title: "打开 Apple Music",
-                    icon: "music.note",
-                    action: {
-                        let url = URL(fileURLWithPath: "/System/Applications/Music.app")
-                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-                    }
-                )
-            }
+            // 其他
+            SettingsRow(title: "打开 Music", icon: "music.note", action: {
+                let url = URL(fileURLWithPath: "/System/Applications/Music.app")
+                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+            })
 
             Divider().padding(.horizontal, 12)
 
-            SettingsSection {
-                SettingsButton(
-                    title: "退出 nanoPod",
-                    icon: "power",
-                    shortcut: "⌘Q",
-                    isDestructive: true,
-                    action: { onQuit?() }
-                )
-            }
-
-            Spacer(minLength: 8)
+            SettingsRow(title: "退出", icon: "power", shortcut: "⌘Q", isDestructive: true, action: { onQuit?() })
         }
-        .frame(width: 260)
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 6)
+        .frame(width: 200)
     }
 
-    // 翻译语言显示名称
     private var translationLanguageDisplayName: String {
         let currentLang = lyricsService.translationLanguage
+        // 🔑 如果当前语言等于系统语言，显示 "跟随系统"
         if currentLang == systemLanguageCode {
             return "跟随系统"
         }
         return translationLanguageOptions.first { $0.code == currentLang }?.name ?? currentLang
     }
 
-    // 翻译语言选项
-    private var translationLanguageOptions: [(name: String, code: String, icon: String)] {
+    private var translationLanguageOptions: [(name: String, code: String)] {
         [
-            ("跟随系统", "system", "gearshape"),
-            ("中文", "zh", "character"),
-            ("英文", "en", "a.square"),
-            ("日文", "ja", "character"),
-            ("韩文", "ko", "character"),
-            ("法文", "fr", "f.square"),
-            ("德文", "de", "d.square"),
-            ("西班牙文", "es", "s.square"),
-            ("俄文", "ru", "r.square"),
-            ("葡萄牙文", "pt", "p.square"),
-            ("意大利文", "it", "i.square")
+            ("跟随系统", "system"),
+            ("中文", "zh"),
+            ("English", "en"),
+            ("日本語", "ja"),
+            ("한국어", "ko"),
+            ("Français", "fr"),
+            ("Deutsch", "de"),
+            ("Español", "es")
         ]
     }
 }
 
-// MARK: - Settings Components
+// MARK: - Compact Settings Components
 
-struct SettingsSection<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(spacing: 2) {
-            content
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-struct SettingsButton: View {
+struct SettingsRow: View {
     let title: String
     let icon: String
     var shortcut: String? = nil
@@ -500,11 +424,11 @@ struct SettingsButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundColor(isDestructive ? .red : .primary)
-                    .frame(width: 20)
+                    .font(.system(size: 13))
+                    .foregroundColor(isDestructive ? .red : .secondary)
+                    .frame(width: 16, height: 16)
 
                 Text(title)
                     .font(.system(size: 13))
@@ -515,37 +439,33 @@ struct SettingsButton: View {
                 if let shortcut = shortcut {
                     Text(shortcut)
                         .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isHovering ? Color.accentColor.opacity(0.12) : Color.clear)
             )
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovering = hovering
-            }
-        }
-        .padding(.horizontal, 8)
+        .onHover { isHovering = $0 }
+        .padding(.horizontal, 6)
     }
 }
 
-struct SettingsToggle: View {
+struct SettingsToggleRow: View {
     let title: String
     let icon: String
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 14))
-                .foregroundColor(.primary)
-                .frame(width: 20)
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .frame(width: 16, height: 16)
 
             Text(title)
                 .font(.system(size: 13))
@@ -555,19 +475,19 @@ struct SettingsToggle: View {
 
             Toggle("", isOn: $isOn)
                 .toggleStyle(.switch)
-                .scaleEffect(0.8)
+                .scaleEffect(0.7)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .padding(.horizontal, 6)
     }
 }
 
-struct SettingsPickerButton: View {
+struct SettingsPickerRow: View {
     let title: String
     let icon: String
     let currentValue: String
-    let options: [(name: String, code: String, icon: String)]
+    let options: [(name: String, code: String)]
     let onSelect: (String) -> Void
 
     @State private var isHovering = false
@@ -575,11 +495,11 @@ struct SettingsPickerButton: View {
 
     var body: some View {
         Button(action: { showPicker.toggle() }) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundColor(.primary)
-                    .frame(width: 20)
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+                    .frame(width: 16, height: 16)
 
                 Text(title)
                     .font(.system(size: 13))
@@ -589,26 +509,22 @@ struct SettingsPickerButton: View {
 
                 Text(currentValue)
                     .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isHovering ? Color.accentColor.opacity(0.12) : Color.clear)
             )
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovering = hovering
-            }
-        }
-        .padding(.horizontal, 8)
+        .onHover { isHovering = $0 }
+        .padding(.horizontal, 6)
         .popover(isPresented: $showPicker, arrowEdge: .trailing) {
             VStack(spacing: 2) {
                 ForEach(options, id: \.code) { option in
@@ -616,31 +532,25 @@ struct SettingsPickerButton: View {
                         onSelect(option.code)
                         showPicker = false
                     }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: option.icon)
-                                .font(.system(size: 12))
-                                .frame(width: 16)
-
+                        HStack {
                             Text(option.name)
-                                .font(.system(size: 13))
-
+                                .font(.system(size: 12))
                             Spacer()
-
                             if currentValue == option.name {
                                 Image(systemName: "checkmark")
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.system(size: 11, weight: .semibold))
                                     .foregroundColor(.accentColor)
                             }
                         }
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 5)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.vertical, 8)
-            .frame(width: 160)
+            .padding(.vertical, 6)
+            .frame(width: 140)
         }
     }
 }

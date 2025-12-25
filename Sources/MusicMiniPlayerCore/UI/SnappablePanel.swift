@@ -41,9 +41,6 @@ public class SnappablePanel: NSPanel {
     private(set) public var isEdgeHidden = false
     private(set) public var hiddenEdge: Edge = .none
 
-    // 🔑 窗口刚从隐藏状态唤出，第一次点击不应穿透到内容
-    private var justRestoredFromEdge = false
-
     public enum Edge {
         case none, left, right
     }
@@ -104,16 +101,28 @@ public class SnappablePanel: NSPanel {
                         let isHorizontalDominant = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5
                         if isHorizontalDominant {
                             isHorizontalScrollGesture = true
+                            horizontalScrollAccumulated = 0
                             handleHorizontalHideGesture(event)
                         } else {
                             isHorizontalScrollGesture = false
+                            horizontalScrollAccumulated = 0
                             super.sendEvent(event)
                         }
                     } else if event.phase == .changed {
                         if isHorizontalScrollGesture {
                             handleHorizontalHideGesture(event)
                         } else {
-                            super.sendEvent(event)
+                            // 🔑 累积横向滚动量，如果超过阈值则切换为横向手势
+                            // 这样即使开始时偏向纵向，后续明显横向滑动也能触发隐藏
+                            horizontalScrollAccumulated += event.scrollingDeltaX
+                            let shouldSwitchToHorizontal = abs(horizontalScrollAccumulated) > 30 &&
+                                abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 2
+                            if shouldSwitchToHorizontal {
+                                isHorizontalScrollGesture = true
+                                handleHorizontalHideGesture(event)
+                            } else {
+                                super.sendEvent(event)
+                            }
                         }
                     } else if event.phase == .ended {
                         if isHorizontalScrollGesture {
@@ -122,6 +131,7 @@ public class SnappablePanel: NSPanel {
                         } else {
                             super.sendEvent(event)
                         }
+                        horizontalScrollAccumulated = 0
                     } else {
                         super.sendEvent(event)
                     }
@@ -137,10 +147,10 @@ public class SnappablePanel: NSPanel {
     // MARK: - Mouse Drag
     
     private func handleMouseDown(_ event: NSEvent) {
-        // 🔑 窗口刚从隐藏状态唤出，第一次点击只唤出窗口，不传递到内容
-        if justRestoredFromEdge {
-            justRestoredFromEdge = false
-            // 不调用 super.sendEvent(event)，阻止点击穿透
+        // 🔑 如果窗口处于贴边隐藏状态，点击恢复窗口，不穿透到内容
+        if isEdgeHidden {
+            restoreFromEdge()
+            // 不调用 super.sendEvent(event)，阻止这次点击穿透
             return
         }
 
@@ -154,14 +164,6 @@ public class SnappablePanel: NSPanel {
         // 🔑 底部控件区域（进度条等）不触发窗口拖拽
         if isInBottomControlsArea(event: event) {
             super.sendEvent(event)
-            return
-        }
-
-        if isEdgeHidden {
-            restoreFromEdge()
-            // 🔑 标记刚从隐藏状态恢复，下次点击不穿透
-            justRestoredFromEdge = true
-            // 不调用 super.sendEvent(event)，阻止这次点击穿透
             return
         }
 
