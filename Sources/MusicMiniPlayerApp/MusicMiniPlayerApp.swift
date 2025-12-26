@@ -340,9 +340,9 @@ struct MenuBarSettingsView: View {
             Divider().padding(.horizontal, 12)
 
             // 播放控制
-            SettingsRow(title: "播放/暂停", icon: "playpause.fill", shortcut: "Space", action: { musicController.togglePlayPause() })
-            SettingsRow(title: "上一首", icon: "backward.fill", action: { musicController.previousTrack() })
-            SettingsRow(title: "下一首", icon: "forward.fill", action: { musicController.nextTrack() })
+            SettingsRow(title: "播放/暂停", icon: "playpause", shortcut: "Space", action: { musicController.togglePlayPause() })
+            SettingsRow(title: "上一首", icon: "backward", action: { musicController.previousTrack() })
+            SettingsRow(title: "下一首", icon: "forward", action: { musicController.nextTrack() })
 
             Divider().padding(.horizontal, 12)
 

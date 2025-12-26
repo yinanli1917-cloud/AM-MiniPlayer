@@ -96,42 +96,56 @@ public class SnappablePanel: NSPanel {
                     }
                 } else {
                     // 🔑 歌词/歌单页面：横向手势用于隐藏，纵向手势传递给 ScrollView
+                    // 关键优化：一旦判定为横向隐藏手势，就不再传递给 ScrollView
                     if event.phase == .began {
-                        // 开始时判断是否为横向主导手势
-                        let isHorizontalDominant = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5
-                        if isHorizontalDominant {
-                            isHorizontalScrollGesture = true
-                            horizontalScrollAccumulated = 0
-                            handleHorizontalHideGesture(event)
-                        } else {
-                            isHorizontalScrollGesture = false
-                            horizontalScrollAccumulated = 0
-                            super.sendEvent(event)
-                        }
+                        // 重置状态
+                        isHorizontalScrollGesture = false
+                        horizontalScrollAccumulated = 0
+                        verticalScrollAccumulated = 0
+                        gestureDecided = false
+                        // began 阶段不做判定，等待更多数据
+                        super.sendEvent(event)
                     } else if event.phase == .changed {
+                        // 累积滚动量
+                        horizontalScrollAccumulated += event.scrollingDeltaX
+                        verticalScrollAccumulated += event.scrollingDeltaY
+
                         if isHorizontalScrollGesture {
+                            // 已判定为横向手势，继续处理隐藏
                             handleHorizontalHideGesture(event)
-                        } else {
-                            // 🔑 累积横向滚动量，如果超过阈值则切换为横向手势
-                            // 这样即使开始时偏向纵向，后续明显横向滑动也能触发隐藏
-                            horizontalScrollAccumulated += event.scrollingDeltaX
-                            let shouldSwitchToHorizontal = abs(horizontalScrollAccumulated) > 30 &&
-                                abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 2
-                            if shouldSwitchToHorizontal {
+                        } else if !gestureDecided {
+                            // 还未决定手势类型，检查累积量
+                            let absH = abs(horizontalScrollAccumulated)
+                            let absV = abs(verticalScrollAccumulated)
+
+                            // 🔑 判定条件：累积横向 > 50 且横向是纵向的 1.5 倍以上
+                            if absH > 50 && absH > absV * 1.5 {
                                 isHorizontalScrollGesture = true
+                                gestureDecided = true
                                 handleHorizontalHideGesture(event)
+                            } else if absV > 30 {
+                                // 纵向累积超过 30，锁定为纵向手势
+                                gestureDecided = true
+                                super.sendEvent(event)
                             } else {
+                                // 还在观察期，传递事件
                                 super.sendEvent(event)
                             }
+                        } else {
+                            // 已锁定为纵向手势
+                            super.sendEvent(event)
                         }
                     } else if event.phase == .ended {
                         if isHorizontalScrollGesture {
                             handleHorizontalHideGestureEnd(event)
-                            isHorizontalScrollGesture = false
                         } else {
                             super.sendEvent(event)
                         }
+                        // 重置状态
+                        isHorizontalScrollGesture = false
                         horizontalScrollAccumulated = 0
+                        verticalScrollAccumulated = 0
+                        gestureDecided = false
                     } else {
                         super.sendEvent(event)
                     }
@@ -232,6 +246,8 @@ public class SnappablePanel: NSPanel {
     // 🔑 横向隐藏手势状态（歌词/歌单页面）
     private var isHorizontalScrollGesture = false
     private var horizontalScrollAccumulated: CGFloat = 0
+    private var verticalScrollAccumulated: CGFloat = 0
+    private var gestureDecided = false  // 是否已决定手势类型
     
     private func handleScrollDrag(_ event: NSEvent) {
         // 检查是否是双指手势（触控板）

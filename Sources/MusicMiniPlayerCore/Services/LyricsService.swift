@@ -620,6 +620,11 @@ public class LyricsService: ObservableObject {
         translationsAreFromLyricsSource = false
         lastSystemTranslationLanguage = nil
 
+        // 🔑 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
+        for i in 0..<lyrics.count {
+            lyrics[i].translation = nil
+        }
+
         // Check cache first
         if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
             // 🔑 处理 No Lyrics 缓存
