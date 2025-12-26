@@ -328,28 +328,50 @@ struct MenuBarSettingsView: View {
     var onExpand: (() -> Void)?
     var onQuit: (() -> Void)?
 
+    // 🔑 检测系统语言是否为中文
+    private var isSystemChinese: Bool {
+        let langCode = Locale.current.language.languageCode?.identifier ?? "en"
+        return langCode.hasPrefix("zh")
+    }
+
     private var systemLanguageCode: String {
         Locale.current.language.languageCode?.identifier ?? "en"
+    }
+
+    // 🔑 本地化字符串
+    private func localized(_ key: String) -> String {
+        let strings: [String: (en: String, zh: String)] = [
+            "showWindow": ("Show Window", "显示浮窗"),
+            "playPause": ("Play/Pause", "播放/暂停"),
+            "previous": ("Previous", "上一首"),
+            "next": ("Next", "下一首"),
+            "translationLang": ("Translation", "翻译语言"),
+            "showInDock": ("Show in Dock", "在 Dock 显示"),
+            "openMusic": ("Open Music", "打开 Music"),
+            "quit": ("Quit", "退出"),
+            "followSystem": ("System", "跟随系统")
+        ]
+        return isSystemChinese ? (strings[key]?.zh ?? key) : (strings[key]?.en ?? key)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             // 窗口
-            SettingsRow(title: "显示浮窗", icon: "macwindow", action: { onExpand?() })
+            SettingsRow(title: localized("showWindow"), icon: "macwindow", action: { onExpand?() })
 
             Divider().padding(.horizontal, 12)
 
-            // 播放控制
-            SettingsRow(title: "播放/暂停", icon: "playpause", shortcut: "Space", action: { musicController.togglePlayPause() })
-            SettingsRow(title: "上一首", icon: "backward", action: { musicController.previousTrack() })
-            SettingsRow(title: "下一首", icon: "forward", action: { musicController.nextTrack() })
+            // 播放控制 - 使用 .circle 版本让图标大小更一致
+            SettingsRow(title: localized("playPause"), icon: "playpause.circle", shortcut: "Space", action: { musicController.togglePlayPause() })
+            SettingsRow(title: localized("previous"), icon: "backward.circle", action: { musicController.previousTrack() })
+            SettingsRow(title: localized("next"), icon: "forward.circle", action: { musicController.nextTrack() })
 
             Divider().padding(.horizontal, 12)
 
             // 歌词翻译 (macOS 15+)
             if #available(macOS 15.0, *) {
                 SettingsPickerRow(
-                    title: "翻译语言",
+                    title: localized("translationLang"),
                     icon: "character.bubble",
                     currentValue: translationLanguageDisplayName,
                     options: translationLanguageOptions,
@@ -364,7 +386,7 @@ struct MenuBarSettingsView: View {
 
             // 设置
             SettingsToggleRow(
-                title: "在 Dock 显示",
+                title: localized("showInDock"),
                 icon: "dock.rectangle",
                 isOn: Binding(
                     get: { AppMain.shared?.showInDock ?? true },
@@ -375,14 +397,14 @@ struct MenuBarSettingsView: View {
             Divider().padding(.horizontal, 12)
 
             // 其他
-            SettingsRow(title: "打开 Music", icon: "music.note", action: {
+            SettingsRow(title: localized("openMusic"), icon: "music.note", action: {
                 let url = URL(fileURLWithPath: "/System/Applications/Music.app")
                 NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
             })
 
             Divider().padding(.horizontal, 12)
 
-            SettingsRow(title: "退出", icon: "power", shortcut: "⌘Q", isDestructive: true, action: { onQuit?() })
+            SettingsRow(title: localized("quit"), icon: "power", shortcut: "⌘Q", isDestructive: true, action: { onQuit?() })
         }
         .padding(.vertical, 6)
         .frame(width: 200)
@@ -392,14 +414,14 @@ struct MenuBarSettingsView: View {
         let currentLang = lyricsService.translationLanguage
         // 🔑 如果当前语言等于系统语言，显示 "跟随系统"
         if currentLang == systemLanguageCode {
-            return "跟随系统"
+            return localized("followSystem")
         }
         return translationLanguageOptions.first { $0.code == currentLang }?.name ?? currentLang
     }
 
     private var translationLanguageOptions: [(name: String, code: String)] {
         [
-            ("跟随系统", "system"),
+            (localized("followSystem"), "system"),
             ("中文", "zh"),
             ("English", "en"),
             ("日本語", "ja"),
