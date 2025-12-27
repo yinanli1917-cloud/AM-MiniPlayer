@@ -180,6 +180,16 @@ class AppMain: NSObject, NSApplicationDelegate {
             return self?.musicController.currentPage ?? .album
         }
 
+        // 🔑 设置手动滚动状态provider（用于两次滑动逻辑）
+        snappableWindow.isManualScrollingProvider = {
+            return LyricsService.shared.isManualScrolling
+        }
+
+        // 🔑 触发进入手动滚动状态
+        snappableWindow.onTriggerManualScroll = {
+            LyricsService.shared.isManualScrolling = true
+        }
+
         windowDelegate = FloatingWindowDelegate()
         snappableWindow.delegate = windowDelegate
 

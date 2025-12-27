@@ -43,6 +43,8 @@ public struct LyricsView: View {
     // 🔑 系统翻译会话配置 (仅 macOS 15.0+)
     // 使用 Any 类型来避免编译时的可用性检查
     @State private var translationSessionConfigAny: Any?
+    // 🔑 翻译触发器本地状态（用于强制视图重建）
+    @State private var localTranslationTrigger: Int = 0
 
     public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
         self._currentPage = currentPage
@@ -55,6 +57,7 @@ public struct LyricsView: View {
     private func updateTranslationSessionConfig() {
         if #available(macOS 15.0, *) {
             let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
+            lyricsService.debugLogPublic("🔧 updateTranslationSessionConfig: target=\(lyricsService.translationLanguage), lyrics=\(lyricsService.lyrics.count)")
 
             // 检测歌词源语言（如果已有歌词）
             if !lyricsService.lyrics.isEmpty {
@@ -64,6 +67,7 @@ public struct LyricsView: View {
                         source: sourceLang,
                         target: targetLang
                     )
+                    lyricsService.debugLogPublic("🔧 Config updated: source=\(sourceLang.languageCode?.identifier ?? "?")")
                     return
                 }
             }
@@ -73,6 +77,7 @@ public struct LyricsView: View {
                 source: nil,
                 target: targetLang
             )
+            lyricsService.debugLogPublic("🔧 Config updated: source=nil (auto)")
         }
     }
 
@@ -215,6 +220,7 @@ public struct LyricsView: View {
                                                         autoScrollTimer?.invalidate()
                                                         autoScrollTimer = nil
                                                         isManualScrolling = false
+                                                        lyricsService.isManualScrolling = false  // 同步到 LyricsService
                                                         lockedLineIndex = nil
                                                         manualScrollOffset = 0
                                                         musicController.seek(to: line.startTime)
@@ -293,6 +299,7 @@ public struct LyricsView: View {
                             lockedLineIndex = currentIdx
                             lockedLineTargetIndices = lineTargetIndices
                             isManualScrolling = true
+                            lyricsService.isManualScrolling = true  // 同步到 LyricsService
 
                             lastVelocity = 0
                             scrollLocked = false
@@ -304,6 +311,7 @@ public struct LyricsView: View {
                                 // 🔑 2秒后恢复到当前播放位置
                                 // 先解锁，再用动画恢复
                                 isManualScrolling = false
+                                lyricsService.isManualScrolling = false  // 同步到 LyricsService
                                 lockedLineIndex = nil
 
                                 withAnimation(.interpolatingSpring(
@@ -533,12 +541,64 @@ public struct LyricsView: View {
         }
         // 🔑 macOS 15.0+: 翻译开关变化时更新配置（确保重新触发翻译）
         .onChange(of: lyricsService.showTranslation) { _, newValue in
+            // 🔑 翻译开关变化会影响行高，需要使缓存失效
+            heightCacheInvalidated = true
             if #available(macOS 15.0, *), newValue {
                 updateTranslationSessionConfig()
             }
         }
+        // 🔑 macOS 15.0+: 翻译请求触发器变化时，确保配置已更新
+        .onChange(of: lyricsService.translationRequestTrigger) { _, newValue in
+            if #available(macOS 15.0, *) {
+                // 确保 config 已更新，这样 .translationTask 才能正确触发
+                updateTranslationSessionConfig()
+                // 🔑 更新本地触发器，强制视图重建
+                localTranslationTrigger = newValue
+            }
+        }
+        // 🔑 翻译状态变化会影响行高（显示/隐藏加载动画和翻译内容）
+        .onChange(of: lyricsService.isTranslating) { _, _ in
+            heightCacheInvalidated = true
+        }
         .onChange(of: musicController.currentTime) {
             lyricsService.updateCurrentTime(musicController.currentTime)
+        }
+        // 🔑 监听 LyricsService 的手动滚动状态（由 SnappablePanel 触发）
+        .onChange(of: lyricsService.isManualScrolling) { _, newValue in
+            if newValue && !isManualScrolling {
+                // SnappablePanel 触发了手动滚动模式
+                if heightCacheInvalidated {
+                    updateHeightCache()
+                }
+                let currentIdx = lyricsService.currentLineIndex ?? 0
+                lockedLineIndex = currentIdx
+                lockedLineTargetIndices = lineTargetIndices
+                isManualScrolling = true
+
+                lastVelocity = 0
+                scrollLocked = false
+                hasTriggeredSlowScroll = false
+
+                // 启动 2 秒后自动恢复的计时器
+                autoScrollTimer?.invalidate()
+                autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
+                    isManualScrolling = false
+                    lyricsService.isManualScrolling = false
+                    lockedLineIndex = nil
+
+                    withAnimation(.interpolatingSpring(
+                        mass: 1,
+                        stiffness: 100,
+                        damping: 16.5,
+                        initialVelocity: 0
+                    )) {
+                        manualScrollOffset = 0
+                    }
+                    scrollLocked = false
+                    hasTriggeredSlowScroll = false
+                }
+                RunLoop.main.add(autoScrollTimer!, forMode: .common)
+            }
         }
         // 🔑 AMLL 波浪效果：监听当前行变化，触发波浪动画
         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
@@ -563,7 +623,8 @@ public struct LyricsView: View {
         // 🔑 macOS 15.0+: 系统翻译集成
         .modifier(SystemTranslationModifier(
             translationSessionConfigAny: translationSessionConfigAny,
-            lyricsService: lyricsService
+            lyricsService: lyricsService,
+            translationTrigger: localTranslationTrigger
         ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1236,18 +1297,18 @@ struct PreludeDotsView: View {
 struct SystemTranslationModifier: ViewModifier {
     var translationSessionConfigAny: Any?
     let lyricsService: LyricsService
+    let translationTrigger: Int  // 🔑 使用 @State 传入的触发器
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
             if let config = translationSessionConfigAny as? TranslationSession.Configuration {
-                // 🔑 只有当翻译开关开启且需要系统翻译时，才使用 .id() 触发
-                // 这样可以在用户点击翻译按钮时重新触发 .translationTask
                 content
                     .background {
-                        // 🔑 使用 background 中的隐藏视图来触发翻译，避免主内容闪烁
+                        // 🔑 使用 translationTrigger 作为 ID，强制视图重建
                         Color.clear
-                            .id(lyricsService.translationRequestTrigger)
+                            .id("translation-\(translationTrigger)")
                             .translationTask(config) { session in
+                                lyricsService.debugLogPublic("🌐 .translationTask 执行 (trigger=\(translationTrigger))")
                                 await lyricsService.performSystemTranslation(session: session)
                             }
                     }

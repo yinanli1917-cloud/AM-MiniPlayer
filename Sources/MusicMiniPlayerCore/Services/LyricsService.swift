@@ -117,8 +117,14 @@ public class LyricsService: ObservableObject {
     // 🔑 翻译请求触发器（用于触发 SwiftUI .translationTask() 重新执行）
     @Published public var translationRequestTrigger: Int = 0
 
+    // 🔑 当前歌曲的翻译状态追踪（用于避免重复翻译）
+    private var currentSongTranslationID: String?
+
     @Published public var isTranslating: Bool = false
     private var translationTask: Task<Void, Never>? = nil
+
+    // 🔑 手动滚动模式状态（供 SnappablePanel 查询）
+    @Published public var isManualScrolling: Bool = false
 
     // 🔑 标记当前翻译是否来自歌词源（而非系统翻译）
     // 用于区分：歌词源自带翻译（不需要重新翻译）vs 系统翻译结果（语言变化时需要重新翻译）
@@ -327,7 +333,11 @@ public class LyricsService: ObservableObject {
     @available(macOS 15.0, *)
     @MainActor
     public func performSystemTranslation(session: TranslationSession) async {
-        debugLog("🌐 performSystemTranslation 被调用 (lyrics=\(lyrics.count), showTranslation=\(showTranslation), isLoading=\(isLoading))")
+        debugLog("🌐 performSystemTranslation 被调用")
+        debugLog("   - lyrics=\(lyrics.count), showTranslation=\(showTranslation), isLoading=\(isLoading)")
+        debugLog("   - translationsAreFromLyricsSource=\(translationsAreFromLyricsSource)")
+        debugLog("   - hasTranslation=\(hasTranslation)")
+        debugLog("   - currentSongTranslationID=\(currentSongTranslationID ?? "nil")")
 
         guard !lyrics.isEmpty else {
             debugLog("ℹ️ 歌词为空，跳过系统翻译")
@@ -349,34 +359,37 @@ public class LyricsService: ObservableObject {
         // 🔑 检查用户目标语言是否为中文
         let isTargetChinese = translationLanguage.hasPrefix("zh")
 
-        // 🔑 检查是否已经有翻译了
-        if hasTranslation {
-            // 🔑 如果翻译来自歌词源（NetEase/QQ/AMLL 的中文翻译）
-            if translationsAreFromLyricsSource {
-                // 🔑 只有用户选择中文时，才优先使用歌词源翻译
-                // 否则清除歌词源翻译，使用系统翻译到用户选择的语言
-                if isTargetChinese {
-                    debugLog("ℹ️ 歌词源已有中文翻译，用户目标也是中文，跳过系统翻译")
-                    return
-                } else {
-                    debugLog("🔄 用户目标语言非中文 (\(translationLanguage))，清除歌词源翻译，使用系统翻译")
-                    for i in 0..<lyrics.count {
-                        lyrics[i].translation = nil
-                    }
-                    translationsAreFromLyricsSource = false
-                }
-            } else {
-                // 🔑 如果翻译来自系统翻译，检查语言是否变化
-                if let lastLang = lastSystemTranslationLanguage, lastLang == translationLanguage {
-                    debugLog("ℹ️ 已有系统翻译且语言未变化 (\(translationLanguage))，跳过重新翻译")
-                    return
-                }
+        // 🔑 只有目标语言是中文时，歌词源自带的翻译才优先
+        // 如果目标语言不是中文，即使有歌词源翻译也要用系统翻译覆盖
+        if translationsAreFromLyricsSource && isTargetChinese {
+            debugLog("ℹ️ 歌词源已有中文翻译，用户目标也是中文，跳过系统翻译")
+            return
+        }
 
-                // 🔑 语言已变化，清除旧的系统翻译
-                debugLog("🔄 翻译语言已变化: \(lastSystemTranslationLanguage ?? "nil") → \(translationLanguage)，清除旧翻译")
-                for i in 0..<lyrics.count {
-                    lyrics[i].translation = nil
-                }
+        // 🔑 如果目标语言不是中文，但有歌词源翻译，需要清除并用系统翻译
+        if translationsAreFromLyricsSource && !isTargetChinese {
+            debugLog("🔄 歌词源有翻译但目标语言不是中文，需要系统翻译覆盖")
+            // 清除歌词源翻译
+            for i in 0..<lyrics.count {
+                lyrics[i].translation = nil
+            }
+            translationsAreFromLyricsSource = false
+        }
+
+        // 🔑 生成当前歌曲+语言的唯一标识符
+        let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
+
+        // 🔑 检查是否已经对当前歌曲+语言组合进行过系统翻译
+        if currentSongTranslationID == translationID && hasTranslation && !translationsAreFromLyricsSource {
+            debugLog("ℹ️ 当前歌曲已有系统翻译 (\(translationLanguage))，跳过重复翻译")
+            return
+        }
+
+        // 🔑 清除旧翻译数据（如果有）
+        if hasTranslation {
+            debugLog("🔄 清除旧翻译数据，准备重新翻译到 \(translationLanguage)")
+            for i in 0..<lyrics.count {
+                lyrics[i].translation = nil
             }
         }
 
@@ -396,7 +409,8 @@ public class LyricsService: ObservableObject {
             lyrics[i].translation = translatedTexts[i]
         }
 
-        // 🔑 记录这次系统翻译的目标语言
+        // 🔑 记录这次系统翻译的歌曲+语言组合
+        currentSongTranslationID = translationID
         lastSystemTranslationLanguage = translationLanguage
         translationsAreFromLyricsSource = false  // 标记为系统翻译
 
@@ -407,10 +421,15 @@ public class LyricsService: ObservableObject {
     // 🐛 调试日志（生产环境禁用）
     // 设置为 true 启用调试日志写入 /tmp/nanopod_lyrics_debug.log
     #if DEBUG
-    private let enableDebugLog = false
+    private let enableDebugLog = true
     #else
-    private let enableDebugLog = false
+    private let enableDebugLog = true
     #endif
+
+    // 🔑 公共调试日志（供 LyricsView 调用）
+    public func debugLogPublic(_ message: String) {
+        debugLog(message)
+    }
 
     @inline(__always)
     private func debugLog(_ message: String) {
@@ -619,6 +638,7 @@ public class LyricsService: ObservableObject {
         // 这样可以确保切换到没有歌词源翻译的歌曲时，系统翻译能被触发
         translationsAreFromLyricsSource = false
         lastSystemTranslationLanguage = nil
+        currentSongTranslationID = nil  // 🔑 重置翻译ID
 
         // 🔑 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
         for i in 0..<lyrics.count {
@@ -856,17 +876,6 @@ public class LyricsService: ObservableObject {
 
         // 更新当前行索引
         if let newIndex = bestMatch, currentLineIndex != newIndex {
-            // 🐛 调试：输出歌词切换信息到文件
-            let lyricStartTime = lyrics[newIndex].startTime
-            let lyricText = String(lyrics[newIndex].text.prefix(20))
-            let oldIndex = currentLineIndex ?? -1
-            let debugLine = "🎤 切换: \(oldIndex) → \(newIndex) | 时间: \(String(format: "%.2f", time))s | 歌词: \"\(lyricText)\" (开始: \(String(format: "%.2f", lyricStartTime))s)\n"
-            if let data = debugLine.data(using: .utf8),
-               let handle = FileHandle(forWritingAtPath: "/tmp/nanopod_lyrics_debug.log") {
-                handle.seekToEndOfFile()
-                handle.write(data)
-                handle.closeFile()
-            }
             currentLineIndex = newIndex
         } else if bestMatch == nil {
             currentLineIndex = nil
@@ -1926,13 +1935,26 @@ public class LyricsService: ObservableObject {
 
             // 🔑 跳过纯音乐提示（这类提示应视为无歌词）
             let instrumentalPatterns = [
+                // 中文
                 "此歌曲为没有填词的纯音乐",
                 "纯音乐，请欣赏",
                 "纯音乐，请您欣赏",
                 "此歌曲为纯音乐",
+                "纯音乐",
+                "无歌词",
+                "本歌曲没有歌词",
+                "暂无歌词",
+                "歌词正在制作中",
+                // 英文
                 "Instrumental",
                 "This song is instrumental",
-                "No lyrics available"
+                "No lyrics available",
+                "No lyrics",
+                "This is an instrumental",
+                // 日文
+                "歌詞なし",
+                "インストゥルメンタル",
+                "インスト"
             ]
             if instrumentalPatterns.contains(where: { trimmed.contains($0) }) {
                 return false
@@ -2605,20 +2627,20 @@ public class LyricsService: ObservableObject {
         let simplifiedArtist = convertToSimplified(artist)
 
         // 🔑 多轮搜索策略：
-        // Round 1: title + artist（需要验证艺术家相关性）
-        // Round 2: artist only（搜索结果应该都是该艺术家的歌，用时长匹配）
-        // Round 3: title only（需要验证艺术家或歌名相关性）
+        // Round 1: title + artist（需要验证标题匹配）
+        // Round 2: artist only（需要验证标题匹配，仅扩大搜索范围）
+        // Round 3: title only（需要验证标题匹配）
 
         struct SearchRound {
             let keyword: String
-            let requireArtistMatch: Bool  // 是否需要验证艺术家匹配
+            let requireTitleMatch: Bool  // 是否需要验证标题匹配
             let description: String
         }
 
         let searchRounds = [
-            SearchRound(keyword: "\(simplifiedTitle) \(simplifiedArtist)", requireArtistMatch: true, description: "title+artist"),
-            SearchRound(keyword: simplifiedArtist, requireArtistMatch: false, description: "artist only"),
-            SearchRound(keyword: simplifiedTitle, requireArtistMatch: true, description: "title only")
+            SearchRound(keyword: "\(simplifiedTitle) \(simplifiedArtist)", requireTitleMatch: true, description: "title+artist"),
+            SearchRound(keyword: simplifiedArtist, requireTitleMatch: true, description: "artist only"),  // 🔑 改为 true，必须验证标题
+            SearchRound(keyword: simplifiedTitle, requireTitleMatch: true, description: "title only")
         ]
 
         for (roundIndex, round) in searchRounds.enumerated() {
@@ -2656,7 +2678,7 @@ public class LyricsService: ObservableObject {
             debugLog("📦 QQ Music round \(roundIndex + 1) returned \(songs.count) results")
 
             // 🔑 收集候选项
-            var candidates: [(mid: String, name: String, artist: String, durationDiff: Double, isArtistMatch: Bool)] = []
+            var candidates: [(mid: String, name: String, artist: String, durationDiff: Double, titleMatch: Bool)] = []
 
             for song in songs {
                 guard let songMid = song["songmid"] as? String,
@@ -2696,11 +2718,9 @@ public class LyricsService: ObservableObject {
                                     .filter { $0.count > 3 }
                                     .contains { cleanedSongName.contains($0.lowercased()) }
 
-                // 🔑 综合匹配：艺术家和标题都必须匹配
+                // 🔑 存储标题匹配状态（用于 requireTitleMatch 检查）
                 // 注意：不能仅凭时长匹配，因为同一艺术家的不同歌曲可能时长非常接近
-                let isMatch = artistMatch && titleMatch
-
-                candidates.append((songMid, songName, songArtist, durationDiff, isMatch))
+                candidates.append((songMid, songName, songArtist, durationDiff, titleMatch))
             }
 
             // 🔑 按时长差排序
@@ -2708,10 +2728,9 @@ public class LyricsService: ObservableObject {
 
             // 🔑 选择最佳匹配
             for candidate in candidates {
-                // Round 2 (artist only): 不需要额外验证，搜索结果应该都是相关艺术家的歌
-                // Round 1, 3: 需要验证艺术家或歌名匹配
-                if round.requireArtistMatch && !candidate.isArtistMatch {
-                    debugLog("⚠️ QQ skip: '\(candidate.name)' by '\(candidate.artist)' - no artist/title match")
+                // 🔑 所有轮次都必须验证标题匹配，避免误匹配同一艺术家的不同歌曲
+                if round.requireTitleMatch && !candidate.titleMatch {
+                    debugLog("⚠️ QQ skip: '\(candidate.name)' by '\(candidate.artist)' - title mismatch (looking for '\(simplifiedTitle)')")
                     continue
                 }
 

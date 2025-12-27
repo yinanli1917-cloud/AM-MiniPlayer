@@ -59,6 +59,10 @@ public class MusicController: ObservableObject {
     private var internalCurrentTime: Double = 0  // 🔑 内部精确时间，不触发重绘
     // 🔑 改为 public 以便 UI 层可以用 persistentID 精确匹配当前播放的歌曲
     @Published public var currentPersistentID: String?
+
+    // 🔑 暴露 LyricsService 单例供 UI 层访问
+    public var lyricsService: LyricsService { LyricsService.shared }
+
     private var artworkCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 100  // 最多缓存 100 张封面
@@ -295,6 +299,8 @@ public class MusicController: ObservableObject {
             self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                 self?.updatePlayerState()
             }
+            // 🔑 添加到 .common mode，确保拖动/动画时也能更新
+            RunLoop.main.add(self.pollingTimer!, forMode: .common)
             // Fire immediately
             self.pollingTimer?.fire()
 
@@ -305,6 +311,8 @@ public class MusicController: ObservableObject {
             self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.checkQueueHashAndRefresh()
             }
+            // 🔑 添加到 .common mode
+            RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
             // 🔑 立即触发一次，获取初始队列
             self.queueCheckTimer?.fire()
 
@@ -325,6 +333,8 @@ public class MusicController: ObservableObject {
                 self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
                     self?.interpolateTime()
                 }
+                // 🔑 添加到 .common mode，确保拖动/动画时也能更新
+                RunLoop.main.add(self.interpolationTimer!, forMode: .common)
                 self.interpolationTimerActive = true
                 self.logger.debug("⏱️ interpolationTimer started")
             } else if !self.isPlaying && self.interpolationTimerActive {

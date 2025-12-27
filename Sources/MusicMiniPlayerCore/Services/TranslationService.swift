@@ -19,25 +19,43 @@ class TranslationService {
     static func translationTask(_ session: TranslationSession, lyrics: [String]) async -> [String]? {
         guard !lyrics.isEmpty else { return nil }
 
-        debugPrint("🌐 [Translation] Starting translation for \(lyrics.count) lines\n")
+        logToFile("🌐 [Translation] Starting translation for \(lyrics.count) lines")
 
         do {
             let requests = lyrics.map { TranslationSession.Request(sourceText: $0) }
             let responses = try await session.translations(from: requests)
             let translatedTexts = responses.map { $0.targetText }
 
-            debugPrint("✅ [Translation] Successfully translated \(translatedTexts.count) lines\n")
+            logToFile("✅ [Translation] Successfully translated \(translatedTexts.count) lines")
             return translatedTexts
 
         } catch {
-            debugPrint("❌ [Translation] Failed: \(error)\n")
+            logToFile("❌ [Translation] Failed: \(error.localizedDescription)")
 
             // 如果翻译失败，尝试检测真实语言用于配置更新
             if let realLanguage = detectLanguage(for: lyrics) {
-                debugPrint("🔄 [Translation] Detected real language: \(realLanguage.languageCode?.identifier ?? "unknown")\n")
+                logToFile("🔄 [Translation] Detected real language: \(realLanguage.languageCode?.identifier ?? "unknown")")
                 // 返回 nil 表示需要更新配置（调用者应检测并更新 translationSessionConfig）
             }
             return nil
+        }
+    }
+
+    /// 写入调试日志文件
+    private static func logToFile(_ message: String) {
+        let logPath = "/tmp/nanopod_lyrics_debug.log"
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let line = "[\(timestamp)] \(message)\n"
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
         }
     }
 

@@ -123,11 +123,10 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             coordinator.accumulatedDeltaY += deltaY
 
             // 检测滚动开始
+            // 🔑 性能优化：NSEvent 监听器已在主线程，直接调用回调避免延迟
             if !coordinator.isScrolling {
                 coordinator.isScrolling = true
-                DispatchQueue.main.async { [weak self] in
-                    self?.onScrollStarted?()
-                }
+                onScrollStarted?()
             }
 
             // 🔑 节流回调
@@ -136,17 +135,11 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             if shouldCallback {
                 coordinator.lastCallbackTime = currentTime
 
-                if let callback = onScrollWithVelocity {
-                    DispatchQueue.main.async {
-                        callback(deltaY, velocity)
-                    }
-                }
+                // 🔑 性能优化：直接调用，不使用 DispatchQueue.main.async
+                onScrollWithVelocity?(deltaY, velocity)
 
                 if let offsetCallback = onScrollOffsetChanged {
-                    let offset = coordinator.accumulatedDeltaY
-                    DispatchQueue.main.async {
-                        offsetCallback(offset)
-                    }
+                    offsetCallback(coordinator.accumulatedDeltaY)
                 }
             }
 
@@ -163,9 +156,8 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             if coordinator.isScrolling {
                 coordinator.isScrolling = false
                 coordinator.lastScrollTime = 0
-                DispatchQueue.main.async { [weak self] in
-                    self?.onScrollEnded?()
-                }
+                // 🔑 Timer 回调已在主线程，直接调用
+                onScrollEnded?()
             }
             coordinator.scrollTimer?.invalidate()
             coordinator.scrollTimer = nil
@@ -276,7 +268,6 @@ struct ScrollWheelEventView: NSViewRepresentable {
         func setupEventMonitor() {
             guard coordinator?.eventMonitor == nil else { return }
 
-            debugPrint("📜 [ScrollWheelNSView] Setting up global event monitor for lyrics\n")
             // 🔑 使用全局事件监听器捕获滚动事件
             coordinator?.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 self?.handleScrollEvent(event)
@@ -299,7 +290,6 @@ struct ScrollWheelEventView: NSViewRepresentable {
 
             // 忽略极小的滚动量
             if abs(deltaY) > 0.5 {
-                debugPrint("📜 [ScrollWheelNSView] handleScrollEvent deltaY: \(deltaY)\n")
                 onScroll?(deltaY)
             }
         }

@@ -17,6 +17,10 @@ public class SnappablePanel: NSPanel {
     public var onEdgeHiddenChanged: ((Bool) -> Void)?
     /// 获取当前页面状态（用于判断是否允许双指拖拽）
     public var currentPageProvider: (() -> PlayerPage)?
+    /// 🔑 获取当前是否处于手动滚动状态（歌词页面）
+    public var isManualScrollingProvider: (() -> Bool)?
+    /// 🔑 触发进入手动滚动状态（歌词页面）
+    public var onTriggerManualScroll: (() -> Void)?
     
     // MARK: - Drag State
     
@@ -96,56 +100,63 @@ public class SnappablePanel: NSPanel {
                     }
                 } else {
                     // 🔑 歌词/歌单页面：横向手势用于隐藏，纵向手势传递给 ScrollView
-                    // 关键优化：一旦判定为横向隐藏手势，就不再传递给 ScrollView
+                    // 🔑 两次滑动逻辑：自然滚动时第一次横滑进入手动滚动，第二次才隐藏
                     if event.phase == .began {
-                        // 重置状态
-                        isHorizontalScrollGesture = false
-                        horizontalScrollAccumulated = 0
-                        verticalScrollAccumulated = 0
-                        gestureDecided = false
-                        // began 阶段不做判定，等待更多数据
-                        super.sendEvent(event)
-                    } else if event.phase == .changed {
-                        // 累积滚动量
-                        horizontalScrollAccumulated += event.scrollingDeltaX
-                        verticalScrollAccumulated += event.scrollingDeltaY
-
-                        if isHorizontalScrollGesture {
-                            // 已判定为横向手势，继续处理隐藏
-                            handleHorizontalHideGesture(event)
-                        } else if !gestureDecided {
-                            // 还未决定手势类型，检查累积量
-                            let absH = abs(horizontalScrollAccumulated)
-                            let absV = abs(verticalScrollAccumulated)
-
-                            // 🔑 判定条件：累积横向 > 50 且横向是纵向的 1.5 倍以上
-                            if absH > 50 && absH > absV * 1.5 {
+                        // 重置标志
+                        justTriggeredManualScroll = false
+                        // 开始时判断是否为横向主导手势
+                        let isHorizontalDominant = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5
+                        if isHorizontalDominant {
+                            // 🔑 检查是否已经在手动滚动状态
+                            let isManualScrolling = isManualScrollingProvider?() ?? false
+                            if isManualScrolling {
+                                // 已在手动滚动状态，这次横滑可以隐藏
                                 isHorizontalScrollGesture = true
-                                gestureDecided = true
+                                horizontalScrollAccumulated = 0
                                 handleHorizontalHideGesture(event)
-                            } else if absV > 30 {
-                                // 纵向累积超过 30，锁定为纵向手势
-                                gestureDecided = true
-                                super.sendEvent(event)
                             } else {
-                                // 还在观察期，传递事件
+                                // 不在手动滚动状态，第一次横滑只触发进入手动滚动
+                                onTriggerManualScroll?()
+                                justTriggeredManualScroll = true  // 🔑 标记本次手势已触发手动滚动
+                                isHorizontalScrollGesture = false
+                                horizontalScrollAccumulated = 0
                                 super.sendEvent(event)
                             }
                         } else {
-                            // 已锁定为纵向手势
+                            isHorizontalScrollGesture = false
+                            horizontalScrollAccumulated = 0
+                            super.sendEvent(event)
+                        }
+                    } else if event.phase == .changed {
+                        if isHorizontalScrollGesture {
+                            handleHorizontalHideGesture(event)
+                        } else if !justTriggeredManualScroll {
+                            // 🔑 只有在本次手势周期内没有触发过手动滚动时，才检查是否切换
+                            // 累积横向滚动量，如果超过阈值且已在手动滚动状态则切换为横向手势
+                            horizontalScrollAccumulated += event.scrollingDeltaX
+                            let isManualScrolling = isManualScrollingProvider?() ?? false
+                            let shouldSwitchToHorizontal = isManualScrolling &&
+                                abs(horizontalScrollAccumulated) > 30 &&
+                                abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 2
+                            if shouldSwitchToHorizontal {
+                                isHorizontalScrollGesture = true
+                                handleHorizontalHideGesture(event)
+                            } else {
+                                super.sendEvent(event)
+                            }
+                        } else {
+                            // 本次手势已触发手动滚动，继续传递事件
                             super.sendEvent(event)
                         }
                     } else if event.phase == .ended {
                         if isHorizontalScrollGesture {
                             handleHorizontalHideGestureEnd(event)
+                            isHorizontalScrollGesture = false
                         } else {
                             super.sendEvent(event)
                         }
-                        // 重置状态
-                        isHorizontalScrollGesture = false
                         horizontalScrollAccumulated = 0
-                        verticalScrollAccumulated = 0
-                        gestureDecided = false
+                        justTriggeredManualScroll = false  // 🔑 手势结束，重置标志
                     } else {
                         super.sendEvent(event)
                     }
@@ -246,8 +257,7 @@ public class SnappablePanel: NSPanel {
     // 🔑 横向隐藏手势状态（歌词/歌单页面）
     private var isHorizontalScrollGesture = false
     private var horizontalScrollAccumulated: CGFloat = 0
-    private var verticalScrollAccumulated: CGFloat = 0
-    private var gestureDecided = false  // 是否已决定手势类型
+    private var justTriggeredManualScroll = false  // 🔑 防止同一手势周期内触发隐藏
     
     private func handleScrollDrag(_ event: NSEvent) {
         // 检查是否是双指手势（触控板）
