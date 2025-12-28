@@ -662,16 +662,32 @@ struct ExpandButtonView: View {
 struct TranslationButtonView: View {
     @ObservedObject var lyricsService: LyricsService
     @State private var isHovering = false
+    // 🔑 记录是否已经尝试过强制重试（防止无限重试）
+    @State private var hasTriedForceRetry = false
 
     var body: some View {
         Button(action: {
             withAnimation(.easeInOut(duration: 0.2)) {
-                lyricsService.showTranslation.toggle()
-                // 手动触发翻译（以防监听器没工作）
-                if lyricsService.showTranslation {
-                    Task {
-                        await lyricsService.translateCurrentLyrics()
-                    }
+                // 🔑 智能翻译逻辑：
+                // 1. 如果翻译开关关闭 → 打开翻译
+                // 2. 如果翻译开关已开启但没有翻译结果，且未尝试过强制重试 → 强制重试翻译
+                // 3. 其他情况 → 关闭翻译
+
+                if !lyricsService.showTranslation {
+                    // 情况1：打开翻译
+                    lyricsService.showTranslation = true
+                    hasTriedForceRetry = false  // 重置重试标记
+                    lyricsService.debugLogPublic("🔘 翻译按钮：打开翻译")
+                } else if !lyricsService.hasTranslation && !lyricsService.isTranslating && !hasTriedForceRetry {
+                    // 情况2：翻译开关已开启但没有翻译结果，强制重试一次
+                    lyricsService.debugLogPublic("🔘 翻译按钮：强制重试翻译（当前无翻译结果）")
+                    hasTriedForceRetry = true  // 标记已尝试过
+                    lyricsService.forceRetryTranslation()
+                } else {
+                    // 情况3：关闭翻译
+                    lyricsService.showTranslation = false
+                    hasTriedForceRetry = false  // 重置重试标记
+                    lyricsService.debugLogPublic("🔘 翻译按钮：关闭翻译")
                 }
             }
         }) {
@@ -689,6 +705,10 @@ struct TranslationButtonView: View {
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
+        }
+        // 🔑 歌曲切换时重置重试标记
+        .onChange(of: lyricsService.lyrics.count) { _, _ in
+            hasTriedForceRetry = false
         }
         .help("Toggle Translation")
     }
