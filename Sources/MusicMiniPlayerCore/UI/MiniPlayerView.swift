@@ -301,8 +301,8 @@ extension MiniPlayerView {
                     // 🔑 与 PlaylistView 中的 artSize 完全一致
                     let size = min(geo.size.width * 0.18, 60.0)
 
-                    // 计算在 Now Playing 卡片内的位置：
-                    // - Section header 高度: 36
+                    // 🔑 计算在 Now Playing 卡片内的位置：
+                    // - "Now Playing" header 高度: 36 (非 sticky，但仍占空间)
                     // - 卡片上 padding(.top, 8): 8
                     // - 卡片内 padding(12): 12
                     let headerHeight: CGFloat = 36

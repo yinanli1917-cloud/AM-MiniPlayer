@@ -483,6 +483,35 @@ public class LyricsService: ObservableObject {
             return ([], 0)
         }
 
+        // 🔑 检查是否为纯音乐/无歌词提示（整个歌词就是这类提示）
+        let instrumentalPatterns = [
+            "此歌曲为没有填词的纯音乐",
+            "纯音乐，请欣赏",
+            "纯音乐，请您欣赏",
+            "此歌曲为纯音乐",
+            "纯音乐",
+            "无歌词",
+            "本歌曲没有歌词",
+            "暂无歌词",
+            "歌词正在制作中",
+            "Instrumental",
+            "This song is instrumental",
+            "No lyrics available",
+            "No lyrics",
+            "歌詞なし"
+        ]
+
+        // 如果歌词只有1-2行且包含纯音乐提示，返回空
+        if rawLyrics.count <= 2 {
+            for line in rawLyrics {
+                let text = line.text.trimmingCharacters(in: .whitespaces)
+                if instrumentalPatterns.contains(where: { text.contains($0) }) {
+                    debugLog("🎵 检测到纯音乐提示: \"\(text)\"，返回空歌词")
+                    return ([], 0)
+                }
+            }
+        }
+
         // 🔑 检查是否为纯符号/emoji行（非文字内容）
         func isPureSymbols(_ text: String) -> Bool {
             let trimmed = text.trimmingCharacters(in: .whitespaces)
@@ -2384,12 +2413,11 @@ public class LyricsService: ObservableObject {
         // 🔑 按时长差排序（最接近的在前）
         candidates.sort { $0.durationDiff < $1.durationDiff }
 
-        // 🔑 匹配优先级（更严格，避免通用歌名错误匹配）：
+        // 🔑 匹配优先级（必须同时匹配标题，避免同艺术家不同歌曲错配）：
         // 1. 时长差 < 1秒 且 标题匹配 且 艺术家匹配（最精确）
-        // 2. 时长差 < 1秒 且 艺术家匹配（艺术家匹配比标题匹配更可靠）
-        // 3. 时长差 < 2秒 且 艺术家匹配
-        // 4. 时长差 < 1秒 且 标题匹配（标题可能是通用词，需要更严格的时长）
-        // 注意：移除了纯时长匹配，因为容易匹配到错误的歌
+        // 2. 时长差 < 2秒 且 标题匹配 且 艺术家匹配（稍宽松时长）
+        // 3. 时长差 < 1秒 且 标题匹配（无艺术家匹配，用于跨语言情况）
+        // 注意：必须有标题匹配，避免同艺术家不同歌曲错配
 
         for candidate in candidates {
             // 优先1：时长差 < 1秒 且 标题匹配 且 艺术家匹配（最精确）
@@ -2401,18 +2429,18 @@ public class LyricsService: ObservableObject {
         }
 
         for candidate in candidates {
-            // 优先2：时长差 < 1秒 且 艺术家匹配
-            if candidate.durationDiff < 1 && candidate.artistMatch {
-                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + artist)")
+            // 优先2：时长差 < 2秒 且 标题匹配 且 艺术家匹配
+            if candidate.durationDiff < 2 && candidate.titleMatch && candidate.artistMatch {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<2s + title + artist)")
                 logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
                 return candidate.id
             }
         }
 
         for candidate in candidates {
-            // 优先3：时长差 < 2秒 且 艺术家匹配
-            if candidate.durationDiff < 2 && candidate.artistMatch {
-                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<2s + artist)")
+            // 优先3：时长差 < 1秒 且 标题匹配（无艺术家匹配，用于跨语言艺术家名）
+            if candidate.durationDiff < 1 && candidate.titleMatch {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title)")
                 logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
                 return candidate.id
             }

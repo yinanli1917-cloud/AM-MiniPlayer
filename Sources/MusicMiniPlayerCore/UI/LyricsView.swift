@@ -399,14 +399,13 @@ public struct LyricsView: View {
                             ZStack(alignment: .bottom) {
                                 // 渐变模糊背景
                                 VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                                    .frame(height: 120)
+                                    .frame(height: 100)
                                     .mask(
                                         LinearGradient(
                                             gradient: Gradient(stops: [
                                                 .init(color: .clear, location: 0),
-                                                .init(color: .black.opacity(0.3), location: 0.15),
-                                                .init(color: .black.opacity(0.6), location: 0.3),
-                                                .init(color: .black, location: 0.5),
+                                                .init(color: .black.opacity(0.5), location: 0.15),
+                                                .init(color: .black, location: 0.35),
                                                 .init(color: .black, location: 1.0)
                                             ]),
                                             startPoint: .top,
@@ -651,14 +650,13 @@ public struct LyricsView: View {
             ZStack(alignment: .bottom) {
                 // 渐变模糊背景（不拦截点击，让上层内容可点击）
                 VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                    .frame(height: 120)
+                    .frame(height: 100)
                     .mask(
                         LinearGradient(
                             gradient: Gradient(stops: [
                                 .init(color: .clear, location: 0),
-                                .init(color: .black.opacity(0.3), location: 0.15),
-                                .init(color: .black.opacity(0.6), location: 0.3),
-                                .init(color: .black, location: 0.5),
+                                .init(color: .black.opacity(0.5), location: 0.15),
+                                .init(color: .black, location: 0.35),
                                 .init(color: .black, location: 1.0)
                             ]),
                             startPoint: .top,
