@@ -446,7 +446,7 @@ public class LyricsService: ObservableObject {
     #if DEBUG
     private let enableDebugLog = true
     #else
-    private let enableDebugLog = true
+    private let enableDebugLog = false  // 🔑 Release 构建禁用，避免 160+ 次文件 I/O 影响性能
     #endif
 
     // 🔑 公共调试日志（供 LyricsView 调用）
