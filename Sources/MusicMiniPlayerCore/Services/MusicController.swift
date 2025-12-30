@@ -457,8 +457,10 @@ public class MusicController: ObservableObject {
             // 这避免了轮询更新时时间跳回的问题
             // 除非差距太大（>2秒），说明用户 seek 了
             if clampedTime >= currentTime || (currentTime - clampedTime) > 2.0 {
-                // 🔑 只有当显示时间变化足够大时才更新（避免频繁重绘）
-                if abs(clampedTime - currentTime) >= 0.05 {
+                // 🔑 性能优化：增加更新阈值从 0.05s 到 0.1s
+                // 减少 @Published 触发频率，从 20次/秒 降到 10次/秒
+                // 进度条仍然视觉流畅，但 CPU 开销减半
+                if abs(clampedTime - currentTime) >= 0.1 {
                     currentTime = clampedTime
                 }
             }

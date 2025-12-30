@@ -1872,8 +1872,16 @@ public class LyricsService: ObservableObject {
             }
 
             // 🔑 提取时间戳后面的歌词文本
-            let text = String(line[lastMatchEnd...]).trimmingCharacters(in: .whitespaces)
+            var text = String(line[lastMatchEnd...]).trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { continue }
+
+            // 🔑 解码 HTML 实体（修复 &apos; 等显示问题）
+            text = text.replacingOccurrences(of: "&lt;", with: "<")
+            text = text.replacingOccurrences(of: "&gt;", with: ">")
+            text = text.replacingOccurrences(of: "&amp;", with: "&")
+            text = text.replacingOccurrences(of: "&quot;", with: "\"")
+            text = text.replacingOccurrences(of: "&apos;", with: "'")
+            text = text.replacingOccurrences(of: "&#39;", with: "'")  // 数字实体形式
 
             // 🔑 为每个时间戳创建一个歌词行（处理多时间戳情况）
             for startTime in timestamps {
@@ -3087,6 +3095,14 @@ public class LyricsService: ObservableObject {
 
             lineText = lineText.trimmingCharacters(in: .whitespaces)
             guard !lineText.isEmpty else { continue }
+
+            // 🔑 解码 HTML 实体（修复 &apos; 等显示问题）
+            lineText = lineText.replacingOccurrences(of: "&lt;", with: "<")
+            lineText = lineText.replacingOccurrences(of: "&gt;", with: ">")
+            lineText = lineText.replacingOccurrences(of: "&amp;", with: "&")
+            lineText = lineText.replacingOccurrences(of: "&quot;", with: "\"")
+            lineText = lineText.replacingOccurrences(of: "&apos;", with: "'")
+            lineText = lineText.replacingOccurrences(of: "&#39;", with: "'")
 
             // 🔑 调试：显示前3行解析后的歌词
             if lines.count < 3 {
