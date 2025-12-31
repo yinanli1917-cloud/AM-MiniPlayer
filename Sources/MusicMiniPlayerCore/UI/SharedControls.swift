@@ -97,12 +97,14 @@ struct SharedBottomControls: View {
                         Text(formatTime(musicController.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
+                            .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 1)
 
                         Spacer()
 
                         // Audio quality badge
                         if let quality = musicController.audioQuality {
                             qualityBadge(quality)
+                                .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 1)
                         }
 
                         Spacer()
@@ -110,6 +112,7 @@ struct SharedBottomControls: View {
                         Text("-" + formatTime(musicController.duration - musicController.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
+                            .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 1)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
                 }
@@ -235,6 +238,7 @@ struct SharedBottomControls: View {
                         }
                     )
             }
+            .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 2)
             .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
@@ -309,6 +313,7 @@ struct HoverableControlButton: View {
                 )
         }
         .buttonStyle(.plain)
+        .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
@@ -335,6 +340,7 @@ struct NavigationIconButton: View {
                 )
         }
         .buttonStyle(.plain)
+        .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering

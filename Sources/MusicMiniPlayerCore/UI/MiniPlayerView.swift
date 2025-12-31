@@ -86,6 +86,7 @@ public struct MiniPlayerView: View {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
                 MusicButtonView()
+                    .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
                     .padding(12)
                     .transition(.opacity)
             }
@@ -97,11 +98,13 @@ public struct MiniPlayerView: View {
                 if onExpand != nil {
                     // 菜单栏模式：显示展开按钮
                     ExpandButtonView(onExpand: onExpand!)
+                        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
                         .padding(12)
                         .transition(.opacity)
                 } else if onHide != nil {
                     // 浮窗模式：显示收起按钮
                     HideButtonView(onHide: onHide!)
+                        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
                         .padding(12)
                         .transition(.opacity)
                 } else {
@@ -111,6 +114,7 @@ public struct MiniPlayerView: View {
                             window.orderOut(nil)
                         }
                     })
+                    .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
                     .padding(12)
                     .transition(.opacity)
                 }
@@ -400,49 +404,66 @@ extension MiniPlayerView {
 
             if musicController.currentPage != .lyrics {
                 // 🔑 全屏模式：整图模糊背景 + 清晰封面覆盖
-                if fullscreenAlbumCover && musicController.currentPage == .album {
+                if fullscreenAlbumCover {
                     let coverSize = geo.size.width
-                    let extensionHeight = max(0, geo.size.height - coverSize)
                     // 羽化区域高度
                     let blendHeight: CGFloat = 100
 
-                    // ===== Layer 1: 整图模糊背景（铺满整个窗口）=====
-                    Image(nsImage: artwork)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                        .blur(radius: 50, opaque: true)
-                        .saturation(1.2)  // 稍微增加饱和度
-                        .brightness(-0.1)  // 稍微降低亮度，提高文字可读性
+                    // 🔑 根据当前页面决定封面尺寸和位置
+                    let isAlbumPage = musicController.currentPage == .album
+                    let displaySize = isAlbumPage ? coverSize : artSize
+                    let displayCornerRadius: CGFloat = isAlbumPage ? 0 : cornerRadius
+                    let displayX = isAlbumPage ? geo.size.width / 2 : xPosition
+                    let displayY = isAlbumPage ? coverSize / 2 : yPosition
 
-                    // ===== Layer 2: 正方形封面（Hero）=====
+                    // ===== Layer 1: 整图模糊背景（仅在 album 页面显示）=====
+                    if isAlbumPage {
+                        Image(nsImage: artwork)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                            .blur(radius: 50, opaque: true)
+                            .saturation(1.2)
+                            .brightness(-0.1)
+                    }
+
+                    // ===== Layer 2: 正方形封面（Hero）- 参与 matchedGeometryEffect =====
                     Image(nsImage: artwork)
                         .resizable()
                         .scaledToFill()
-                        .frame(width: coverSize, height: coverSize)
+                        .frame(width: displaySize, height: displaySize)
                         .clipped()
-                        // 🔑 底部羽化遮罩：融入模糊背景
+                        // 🔑 底部羽化遮罩（仅在 album 页面应用）
                         .mask(
                             VStack(spacing: 0) {
-                                Rectangle().fill(Color.black)  // 上部实心
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: .black, location: 0),
-                                        .init(color: .clear, location: 1.0)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                                .frame(height: blendHeight)  // 羽化区域
+                                Rectangle().fill(Color.black)
+                                if isAlbumPage {
+                                    LinearGradient(
+                                        stops: [
+                                            .init(color: .black, location: 0),
+                                            .init(color: .clear, location: 1.0)
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                    .frame(height: blendHeight)
+                                }
                             }
                         )
+                        .cornerRadius(displayCornerRadius)
+                        .shadow(
+                            color: .black.opacity(isAlbumPage ? 0 : 0.5),
+                            radius: isAlbumPage ? 0 : shadowRadius,
+                            x: 0,
+                            y: isAlbumPage ? 0 : 2
+                        )
                         .matchedGeometryEffect(
-                            id: "album-placeholder",
+                            id: isAlbumPage ? "album-placeholder" : "playlist-placeholder",
                             in: animation,
                             isSource: false
                         )
-                        .position(x: geo.size.width / 2, y: coverSize / 2)
+                        .position(x: displayX, y: displayY)
                         .allowsHitTesting(false)
                 } else {
                     // 🎯 普通模式：封面图片 + 底部渐进模糊
@@ -699,6 +720,7 @@ struct MusicButtonView: View {
                 }
             )
             .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -732,6 +754,7 @@ struct HideButtonView: View {
                     }
                 )
                 .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -766,6 +789,7 @@ struct ExpandButtonView: View {
                     }
                 )
                 .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
