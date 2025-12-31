@@ -304,6 +304,91 @@ ZStack {
 
 ---
 
+## 全屏封面模式调试 (2025-01-01)
+
+### 当前问题描述
+
+需要实现类似 Apple Music 的全屏封面页效果（参考图2）：
+1. **封面**: 正方形封面占满窗口宽度
+2. **底部延伸**: 封面底部颜色向下"融化"延伸到屏幕底部
+3. **过渡动画**: 从歌单页到封面页的 matchedGeometryEffect 飞跃动画
+
+### 当前实现的问题
+
+1. **割裂感**: 封面和底部延伸层之间有明显接缝
+2. **没有 matchedGeometry 过渡动画**: 切换时缺乏流畅的飞跃动画
+3. **两层不匹配**: 封面的裁剪方式和延伸层的裁剪方式不一致
+
+### 当前代码分析
+
+**封面层** (`floatingArtwork` 函数):
+```swift
+// 第2层：正方形封面 + 底部渐进模糊
+Image(nsImage: artwork)
+    .resizable()
+    .scaledToFill()  // ← 使用 scaledToFill
+    .frame(width: coverSize, height: coverSize)
+    .clipped()
+    .mask(底部羽化遮罩)
+    .matchedGeometryEffect(...)
+```
+
+**延伸层** (`blurredBottomStrip` 函数):
+```swift
+// 使用 CIImage 模拟 scaledToFill + clipped
+let scale = max(targetSize / originalWidth, targetSize / originalHeight)
+// 然后缩放、居中裁剪、模糊、取底部像素条
+```
+
+**问题**: 理论上两者使用相同的裁剪逻辑，但实际效果有接缝，可能原因：
+1. SwiftUI 的 `scaledToFill` 和 CIImage 的手动计算可能有微小差异
+2. 模糊顺序问题：先裁剪后模糊 vs 先模糊后裁剪
+3. 羽化区域参数不够精确
+
+### Gemini 的"锚点克隆法"分析
+
+核心思路：
+1. **同源裁剪**: 延伸层的源头必须和封面层使用完全相同的 `frame(width: W, height: W)` + `scaledToFill`
+2. **先模糊后拉伸**: 切片 → 强力高斯模糊 → 纵向拉伸（避免条纹）
+3. **背景层不参与 matchedGeometry**: 用 `transition(.opacity)` 淡入
+
+**优点**:
+- 使用 SwiftUI 原生的 `scaledToFill`，保证与封面裁剪一致
+- 先模糊后拉伸，避免拉伸条纹
+
+**潜在问题**:
+- `.blur(radius: 20)` 后接 `.scaleEffect(x: 1, y: 30)` 可能导致模糊边缘被拉伸变形
+- `frame(height: 50, alignment: .bottom)` 取底部 50px 可能不够精确
+- 背景层和封面层使用不同的动画时序，可能不协调
+
+### 我的改进方案
+
+**核心修改**: 延伸层直接使用 SwiftUI Image + 相同的裁剪逻辑，而非单独的 NSImage 处理
+
+```swift
+// 延伸层：克隆封面的底部
+Image(nsImage: artwork)
+    .resizable()
+    .scaledToFill()
+    .frame(width: coverSize, height: coverSize)  // ← 与封面完全一致
+    .clipped()
+    // 只取底部 2-4 像素行
+    .mask(
+        VStack { Spacer(); Rectangle().frame(height: 4) }
+    )
+    .blur(radius: 30)  // 先模糊
+    .scaleEffect(x: 1.0, y: extensionHeight / 4, anchor: .top)  // 后拉伸
+    .offset(y: coverSize - 2)  // 紧贴封面底部
+```
+
+**关键点**:
+1. 延伸层和封面层使用**完全相同**的 `Image + scaledToFill + frame + clipped`
+2. 用 mask 只取底部 4px
+3. 先 blur 后 scaleEffect，避免条纹
+4. matchedGeometry 只给封面层
+
+---
+
 ## 教训总结
 
 1. **zIndex 是容器级别的**

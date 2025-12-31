@@ -20,6 +20,9 @@ public struct MiniPlayerView: View {
     // 🔑 封面页hover后文字和遮罩延迟显示
     @State private var showOverlayContent: Bool = false
 
+    // 🔑 全屏封面模式（从 UserDefaults 读取）
+    @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
+
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
@@ -140,7 +143,15 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 删除onChange中的hover强制设置，让onHover自然控制状态
+        // 🔑 监听全屏封面设置变化
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
+            if newValue != fullscreenAlbumCover {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                    fullscreenAlbumCover = newValue
+                }
+            }
+        }
     }
 }
 
@@ -150,79 +161,124 @@ extension MiniPlayerView {
     @ViewBuilder
     func albumOverlayContent(geometry: GeometryProxy) -> some View {
         GeometryReader { geo in
-            let artSize = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
+            // 🔑 全屏模式：封面尺寸始终为窗口宽度；普通模式：根据hover状态变化
+            let artSize = fullscreenAlbumCover ? geo.size.width : (isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68)
             // 控件区域高度（与SharedBottomControls一致）
             let controlsHeight: CGFloat = 80
             // 可用高度（给封面居中用）
             let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
-            // 封面中心Y
-            let artCenterY = availableHeight / 2
+            // 封面中心Y（全屏模式：顶部对齐；普通模式：居中）
+            let artCenterY = fullscreenAlbumCover ? artSize / 2 : availableHeight / 2
             // 遮罩高度
             let maskHeight: CGFloat = 60
             // 遮罩Y位置（封面底部）
             let maskY = artCenterY + (artSize / 2) - (maskHeight / 2)
+            // 🔑 底部延伸区域高度
+            let remainingHeight = geo.size.height - geo.size.width
 
             ZStack {
-                // 🎨 非hover状态：文字在封面底部（已删除黑色渐变遮罩，依靠底部模糊效果）
+                // 🎨 非hover状态：文字位置根据模式不同
+                // 全屏模式：歌曲信息在底部延伸区域内
+                // 普通模式：歌曲信息在封面底部
                 if !isHovering {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ScrollingText(
-                            text: musicController.currentTrackTitle,
-                            font: .system(size: 16, weight: .bold),
-                            textColor: .white,
-                            maxWidth: artSize - 24,
-                            height: 20,  // 🔑 明确高度，防止被裁剪
-                            alignment: .leading
-                        )
-                        .matchedGeometryEffect(id: "track-title", in: animation)
-                        .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
+                    if fullscreenAlbumCover {
+                        // 🔑 全屏模式：歌曲信息在底部延伸区域，上移留出底部 10px spacing
+                        // 文字高度约 20 + 16 + 2(spacing) = 38pt
+                        // 位置：底部延伸区域顶部偏下，留出底部 10px
+                        let textBlockHeight: CGFloat = 38
+                        let textCenterY = geo.size.width + (remainingHeight - 10 - textBlockHeight / 2)
 
-                        ScrollingText(
-                            text: musicController.currentArtist,
-                            font: .system(size: 13, weight: .medium),
-                            textColor: .white.opacity(0.9),
-                            maxWidth: artSize - 24,
-                            height: 16,  // 🔑 明确高度，防止被裁剪
-                            alignment: .leading
-                        )
-                        .matchedGeometryEffect(id: "track-artist", in: animation)
-                        .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ScrollingText(
+                                text: musicController.currentTrackTitle,
+                                font: .system(size: 16, weight: .bold),
+                                textColor: .white,
+                                maxWidth: geo.size.width - 32,
+                                height: 20,
+                                alignment: .leading
+                            )
+                            .matchedGeometryEffect(id: "track-title", in: animation)
+                            .shadow(color: .black.opacity(0.7), radius: 10, x: 0, y: 2)
+
+                            ScrollingText(
+                                text: musicController.currentArtist,
+                                font: .system(size: 13, weight: .medium),
+                                textColor: .white.opacity(0.9),
+                                maxWidth: geo.size.width - 32,
+                                height: 16,
+                                alignment: .leading
+                            )
+                            .matchedGeometryEffect(id: "track-artist", in: animation)
+                            .shadow(color: .black.opacity(0.7), radius: 10, x: 0, y: 2)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .position(x: geo.size.width / 2, y: textCenterY)
+                        .opacity(showOverlayContent ? 0 : 1)
+                        .allowsHitTesting(false)
+                    } else {
+                        // 普通模式：歌曲信息在封面底部
+                        VStack(alignment: .leading, spacing: 2) {
+                            ScrollingText(
+                                text: musicController.currentTrackTitle,
+                                font: .system(size: 16, weight: .bold),
+                                textColor: .white,
+                                maxWidth: artSize - 24,
+                                height: 20,  // 🔑 明确高度，防止被裁剪
+                                alignment: .leading
+                            )
+                            .matchedGeometryEffect(id: "track-title", in: animation)
+                            .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
+
+                            ScrollingText(
+                                text: musicController.currentArtist,
+                                font: .system(size: 13, weight: .medium),
+                                textColor: .white.opacity(0.9),
+                                maxWidth: artSize - 24,
+                                height: 16,  // 🔑 明确高度，防止被裁剪
+                                alignment: .leading
+                            )
+                            .matchedGeometryEffect(id: "track-artist", in: animation)
+                            .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
+                        }
+                        .padding(.leading, 12)
+                        .padding(.bottom, 12)  // 🔑 增加底部padding，防止文字被裁剪
+                        .frame(width: artSize, height: maskHeight, alignment: .bottomLeading)
+                        .position(x: geo.size.width / 2, y: maskY)
+                        .opacity(showOverlayContent ? 0 : 1)
+                        .allowsHitTesting(false)
                     }
-                    .padding(.leading, 12)
-                    .padding(.bottom, 12)  // 🔑 增加底部padding，防止文字被裁剪
-                    .frame(width: artSize, height: maskHeight, alignment: .bottomLeading)
-                    .position(x: geo.size.width / 2, y: maskY)
-                    .opacity(showOverlayContent ? 0 : 1)
-                    .allowsHitTesting(false)
                 }
 
-                // 🎨 hover状态：歌曲信息行 + SharedBottomControls
+                // 🎨 hover状态：歌曲信息行 + SharedBottomControls（全屏和普通模式相同）
                 if isHovering && showControls {
                     VStack(spacing: 0) {
                         Spacer()
 
                         // 🔑 歌曲信息行：标题/艺术家 (左) + Shuffle/Repeat (右)
-                        HStack(alignment: .center) {  // 🔑 居中对齐
-                            VStack(alignment: .leading, spacing: -2) {  // 🔑 spacing=-2 负间距更紧凑
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: -2) {
                                 ScrollingText(
                                     text: musicController.currentTrackTitle,
                                     font: .system(size: 12, weight: .bold),
                                     textColor: .white,
                                     maxWidth: geo.size.width * 0.50,
-                                    height: 15,  // 🔑 紧凑高度
+                                    height: 15,
                                     alignment: .leading
                                 )
                                 .matchedGeometryEffect(id: "track-title", in: animation)
+                                .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
 
                                 ScrollingText(
                                     text: musicController.currentArtist,
                                     font: .system(size: 10, weight: .medium),
                                     textColor: .white.opacity(0.7),
                                     maxWidth: geo.size.width * 0.50,
-                                    height: 13,  // 🔑 紧凑高度
+                                    height: 13,
                                     alignment: .leading
                                 )
                                 .matchedGeometryEffect(id: "track-artist", in: animation)
+                                .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
                             }
 
                             Spacer()
@@ -235,23 +291,25 @@ extension MiniPlayerView {
                                     Image(systemName: "shuffle")
                                         .font(.system(size: 11, weight: .semibold))
                                         .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.5))
-                                        .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
+                                        .frame(width: 24, height: 24)
                                         .background(Circle().fill(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1)))
                                 }
                                 .buttonStyle(.plain)
+                                .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
 
                                 Button(action: { musicController.cycleRepeatMode() }) {
                                     Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                                         .font(.system(size: 11, weight: .semibold))
                                         .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.5))
-                                        .frame(width: 24, height: 24)  // 🔑 24x24 匹配文字高度
+                                        .frame(width: 24, height: 24)
                                         .background(Circle().fill(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1)))
                                 }
                                 .buttonStyle(.plain)
+                                .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
                             }
                         }
-                        .padding(.horizontal, 32)  // 🔑 12 + 20 = 32，与进度条对齐
-                        .padding(.bottom, 4)  // 🔑 距离进度条更近
+                        .padding(.horizontal, 32)
+                        .padding(.bottom, 4)
 
                         // 🔑 使用 SharedBottomControls
                         SharedBottomControls(
@@ -261,10 +319,10 @@ extension MiniPlayerView {
                             isProgressBarHovering: $isProgressBarHovering,
                             dragPosition: $dragPosition
                         )
+                        .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 2)
                     }
                     .contentShape(Rectangle())
                     .allowsHitTesting(true)
-                    // 🔑 hover状态的控件使用showOverlayContent控制延迟显示
                     .opacity(showOverlayContent ? 1 : 0)
                     .transition(.opacity)
                 }
@@ -283,20 +341,34 @@ extension MiniPlayerView {
             // 控件区域高度（与albumOverlayContent一致）
             let controlsHeight: CGFloat = 80
             let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
+            // 🔑 底部延伸区域高度（全屏模式用）
+            let remainingHeight = geo.size.height - geo.size.width
 
             // 根据当前页面计算尺寸和位置
             let (artSize, cornerRadius, shadowRadius, xPosition, yPosition): (CGFloat, CGFloat, CGFloat, CGFloat, CGFloat) = {
                 if musicController.currentPage == .album {
-                    // Album页面：居中大图（在可用区域内居中）
-                    // 🔑 与albumOverlayContent保持一致的尺寸
-                    let size = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
-                    return (
-                        size,
-                        12.0,
-                        25.0,
-                        geo.size.width / 2,
-                        availableHeight / 2
-                    )
+                    if fullscreenAlbumCover {
+                        // 🔑 全屏封面模式：封面占满窗口宽度，hover时尺寸不变
+                        let size = geo.size.width
+                        return (
+                            size,
+                            0.0,    // 无圆角
+                            0.0,    // 无阴影
+                            geo.size.width / 2,
+                            size / 2  // 顶部对齐
+                        )
+                    } else {
+                        // 普通模式：居中大图（在可用区域内居中）
+                        // 🔑 与albumOverlayContent保持一致的尺寸
+                        let size = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
+                        return (
+                            size,
+                            12.0,
+                            25.0,
+                            geo.size.width / 2,
+                            availableHeight / 2
+                        )
+                    }
                 } else if musicController.currentPage == .playlist {
                     // 🔑 与 PlaylistView 中的 artSize 完全一致
                     let size = min(geo.size.width * 0.18, 60.0)
@@ -327,100 +399,145 @@ extension MiniPlayerView {
             }()
 
             if musicController.currentPage != .lyrics {
-                // 🎯 封面图片 + 底部渐进模糊
-                ZStack {
-                    // 原图始终存在
+                // 🔑 全屏模式：整图模糊背景 + 清晰封面覆盖
+                if fullscreenAlbumCover && musicController.currentPage == .album {
+                    let coverSize = geo.size.width
+                    let extensionHeight = max(0, geo.size.height - coverSize)
+                    // 羽化区域高度
+                    let blendHeight: CGFloat = 100
+
+                    // ===== Layer 1: 整图模糊背景（铺满整个窗口）=====
                     Image(nsImage: artwork)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: artSize, height: artSize)
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
                         .clipped()
+                        .blur(radius: 50, opaque: true)
+                        .saturation(1.2)  // 稍微增加饱和度
+                        .brightness(-0.1)  // 稍微降低亮度，提高文字可读性
 
-                    // 🔑 底部渐进模糊 - 用 opacity 控制显示/隐藏，实现平滑过渡
-                    // 只在 album 页面非 hover 时显示
-                    // 范围略高于文字区域，模糊从 8px 开始递减
-                    Group {
-                        // 第1层：模糊 8px，覆盖底部 ~15%
-                        Image(nsImage: artwork)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: artSize + 24, height: artSize + 24)
-                            .blur(radius: 8)
-                            .frame(width: artSize, height: artSize)
-                            .clipped()
-                            .mask(
+                    // ===== Layer 2: 正方形封面（Hero）=====
+                    Image(nsImage: artwork)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: coverSize, height: coverSize)
+                        .clipped()
+                        // 🔑 底部羽化遮罩：融入模糊背景
+                        .mask(
+                            VStack(spacing: 0) {
+                                Rectangle().fill(Color.black)  // 上部实心
                                 LinearGradient(
                                     stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.82),
-                                        .init(color: .black, location: 0.92),
-                                        .init(color: .black, location: 1.0)
+                                        .init(color: .black, location: 0),
+                                        .init(color: .clear, location: 1.0)
                                     ],
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
-                            )
-
-                        // 第2层：模糊 5px，覆盖底部 ~20%
+                                .frame(height: blendHeight)  // 羽化区域
+                            }
+                        )
+                        .matchedGeometryEffect(
+                            id: "album-placeholder",
+                            in: animation,
+                            isSource: false
+                        )
+                        .position(x: geo.size.width / 2, y: coverSize / 2)
+                        .allowsHitTesting(false)
+                } else {
+                    // 🎯 普通模式：封面图片 + 底部渐进模糊
+                    ZStack {
+                        // 原图始终存在
                         Image(nsImage: artwork)
                             .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: artSize + 16, height: artSize + 16)
-                            .blur(radius: 5)
+                            .scaledToFill()
                             .frame(width: artSize, height: artSize)
                             .clipped()
-                            .mask(
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.77),
-                                        .init(color: .black, location: 0.87),
-                                        .init(color: .black, location: 1.0)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
 
-                        // 第3层：模糊 2px，覆盖底部 ~25%
-                        Image(nsImage: artwork)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: artSize + 8, height: artSize + 8)
-                            .blur(radius: 2)
-                            .frame(width: artSize, height: artSize)
-                            .clipped()
-                            .mask(
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .clear, location: 0.72),
-                                        .init(color: .black, location: 0.82),
-                                        .init(color: .black, location: 1.0)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
+                        // 🔑 底部渐进模糊（15-25%）
+                        Group {
+                            // 第1层：模糊 8px，覆盖底部 ~15%
+                            Image(nsImage: artwork)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: artSize + 24, height: artSize + 24)
+                                .blur(radius: 8)
+                                .frame(width: artSize, height: artSize)
+                                .clipped()
+                                .mask(
+                                    LinearGradient(
+                                        stops: [
+                                            .init(color: .clear, location: 0),
+                                            .init(color: .clear, location: 0.82),
+                                            .init(color: .black, location: 0.92),
+                                            .init(color: .black, location: 1.0)
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
                                 )
-                            )
+
+                            // 第2层：模糊 5px，覆盖底部 ~20%
+                            Image(nsImage: artwork)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: artSize + 16, height: artSize + 16)
+                                .blur(radius: 5)
+                                .frame(width: artSize, height: artSize)
+                                .clipped()
+                                .mask(
+                                    LinearGradient(
+                                        stops: [
+                                            .init(color: .clear, location: 0),
+                                            .init(color: .clear, location: 0.77),
+                                            .init(color: .black, location: 0.87),
+                                            .init(color: .black, location: 1.0)
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+
+                            // 第3层：模糊 2px，覆盖底部 ~25%
+                            Image(nsImage: artwork)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: artSize + 8, height: artSize + 8)
+                                .blur(radius: 2)
+                                .frame(width: artSize, height: artSize)
+                                .clipped()
+                                .mask(
+                                    LinearGradient(
+                                        stops: [
+                                            .init(color: .clear, location: 0),
+                                            .init(color: .clear, location: 0.72),
+                                            .init(color: .black, location: 0.82),
+                                            .init(color: .black, location: 1.0)
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                        }
+                        .opacity(musicController.currentPage == .album && !isHovering ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.25), value: isHovering)
+                        .allowsHitTesting(false)
                     }
-                    .opacity(musicController.currentPage == .album && !isHovering ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.25), value: isHovering)
+                    .cornerRadius(cornerRadius)
+                    .shadow(
+                        color: .black.opacity(0.5),
+                        radius: shadowRadius,
+                        x: 0,
+                        y: musicController.currentPage == .album ? 12 : 2
+                    )
+                    .matchedGeometryEffect(
+                        id: musicController.currentPage == .album ? "album-placeholder" : "playlist-placeholder",
+                        in: animation,
+                        isSource: false
+                    )
+                    .position(x: xPosition, y: yPosition)
                     .allowsHitTesting(false)
                 }
-                .cornerRadius(cornerRadius)
-                .shadow(
-                    color: .black.opacity(0.5),
-                    radius: shadowRadius,
-                    x: 0,
-                    y: musicController.currentPage == .album ? 12 : 2
-                )
-                .matchedGeometryEffect(
-                    id: musicController.currentPage == .album ? "album-placeholder" : "playlist-placeholder",
-                    in: animation,
-                    isSource: false
-                )
-                .position(x: xPosition, y: yPosition)
-                .allowsHitTesting(false)
             }
         }
     }
@@ -434,13 +551,15 @@ extension MiniPlayerView {
                 let controlsHeight: CGFloat = 80
                 // 封面可用高度
                 let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
-                // 🔑 与albumOverlayContent和floatingArtwork保持一致的尺寸
-                let artSize = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
+                // 🔑 全屏模式：封面尺寸始终为窗口宽度；普通模式：根据hover状态变化
+                let artSize = fullscreenAlbumCover ? geo.size.width : (isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68)
+                // 🔑 全屏模式：顶部对齐；普通模式：垂直居中
+                let artCenterY = fullscreenAlbumCover ? artSize / 2 : availableHeight / 2
 
                 // Album Artwork Placeholder (用于matchedGeometryEffect)
                 Color.clear
                     .frame(width: artSize, height: artSize)
-                    .cornerRadius(12)
+                    .cornerRadius(fullscreenAlbumCover ? 0 : 12)
                     .matchedGeometryEffect(id: "album-placeholder", in: animation, isSource: true)
                     .onTapGesture {
                         // 🔑 快速但不弹性的动画
@@ -456,7 +575,7 @@ extension MiniPlayerView {
                     }
                     .position(
                         x: geo.size.width / 2,
-                        y: availableHeight / 2
+                        y: artCenterY
                     )
             }
         } else {

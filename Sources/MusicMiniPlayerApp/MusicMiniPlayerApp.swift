@@ -357,6 +357,7 @@ struct MenuBarSettingsView: View {
             "next": ("Next", "下一首"),
             "translationLang": ("Translation", "翻译语言"),
             "showInDock": ("Show in Dock", "在 Dock 显示"),
+            "fullscreenCover": ("Fullscreen Cover", "全屏封面"),
             "openMusic": ("Open Music", "打开 Music"),
             "quit": ("Quit", "退出"),
             "followSystem": ("System", "跟随系统")
@@ -395,6 +396,15 @@ struct MenuBarSettingsView: View {
             }
 
             // 设置
+            SettingsToggleRow(
+                title: localized("fullscreenCover"),
+                icon: "rectangle.fill",
+                isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: "fullscreenAlbumCover") },
+                    set: { UserDefaults.standard.set($0, forKey: "fullscreenAlbumCover") }
+                )
+            )
+
             SettingsToggleRow(
                 title: localized("showInDock"),
                 icon: "dock.rectangle",
