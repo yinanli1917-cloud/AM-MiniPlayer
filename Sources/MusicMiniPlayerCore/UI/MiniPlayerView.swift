@@ -23,6 +23,9 @@ public struct MiniPlayerView: View {
     // 🔑 全屏封面模式（从 UserDefaults 读取）
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
 
+    // 🔑 封面亮度（用于动态调整按钮样式）
+    @State private var artworkBrightness: CGFloat = 0.5
+
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
@@ -71,7 +74,8 @@ public struct MiniPlayerView: View {
                 }
 
                 // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上
-                if musicController.currentPage == .album, musicController.currentArtwork != nil {
+                // 🔑 移除 currentArtwork != nil 条件，确保歌曲信息始终显示
+                if musicController.currentPage == .album {
                     albumOverlayContent(geometry: geometry)
                         .zIndex(101)  // 在浮动artwork之上
                 }
@@ -85,8 +89,7 @@ public struct MiniPlayerView: View {
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
-                MusicButtonView()
-                    .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
+                MusicButtonView(artworkBrightness: artworkBrightness)
                     .padding(12)
                     .transition(.opacity)
             }
@@ -97,14 +100,12 @@ public struct MiniPlayerView: View {
                 // 根据模式显示不同按钮
                 if onExpand != nil {
                     // 菜单栏模式：显示展开按钮
-                    ExpandButtonView(onExpand: onExpand!)
-                        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
+                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: artworkBrightness)
                         .padding(12)
                         .transition(.opacity)
                 } else if onHide != nil {
                     // 浮窗模式：显示收起按钮
-                    HideButtonView(onHide: onHide!)
-                        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
+                    HideButtonView(onHide: onHide!, artworkBrightness: artworkBrightness)
                         .padding(12)
                         .transition(.opacity)
                 } else {
@@ -113,8 +114,7 @@ public struct MiniPlayerView: View {
                         if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
                             window.orderOut(nil)
                         }
-                    })
-                    .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
+                    }, artworkBrightness: artworkBrightness)
                     .padding(12)
                     .transition(.opacity)
                 }
@@ -154,6 +154,18 @@ public struct MiniPlayerView: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                     fullscreenAlbumCover = newValue
                 }
+            }
+        }
+        // 🔑 监听封面变化，计算亮度
+        .onChange(of: musicController.currentArtwork) { _, newArtwork in
+            if let artwork = newArtwork {
+                artworkBrightness = artwork.perceivedBrightness()
+            }
+        }
+        .onAppear {
+            // 初始化亮度
+            if let artwork = musicController.currentArtwork {
+                artworkBrightness = artwork.perceivedBrightness()
             }
         }
     }
@@ -288,34 +300,45 @@ extension MiniPlayerView {
                             Spacer()
 
                             HStack(spacing: 4) {
+                                // 🔑 统一白色风格 + 主题色高亮 + 根据亮度调整阴影
                                 let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                                let themeBackground = themeColor.opacity(0.20)
+                                let isLightBg = artworkBrightness > 0.6
+                                // 🔑 保持白色填充，浅色背景时高透明度+重阴影
+                                let normalFillOpacity = isLightBg ? 0.5 : 0.20
+                                let shadowOp = isLightBg ? 0.6 : 0.3
+                                let shadowRad: CGFloat = isLightBg ? 15 : 8
 
                                 Button(action: { musicController.toggleShuffle() }) {
                                     Image(systemName: "shuffle")
                                         .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.5))
+                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
                                         .frame(width: 24, height: 24)
-                                        .background(Circle().fill(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1)))
+                                        .background(
+                                            Circle()
+                                                .fill(musicController.shuffleEnabled ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
+                                                .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
+                                        )
                                 }
                                 .buttonStyle(.plain)
-                                .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
 
                                 Button(action: { musicController.cycleRepeatMode() }) {
                                     Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                                         .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.5))
+                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
                                         .frame(width: 24, height: 24)
-                                        .background(Circle().fill(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1)))
+                                        .background(
+                                            Circle()
+                                                .fill(musicController.repeatMode > 0 ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
+                                                .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
+                                        )
                                 }
                                 .buttonStyle(.plain)
-                                .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 2)
                             }
                         }
                         .padding(.horizontal, 32)
                         .padding(.bottom, 4)
 
-                        // 🔑 使用 SharedBottomControls
+                        // 🔑 使用 SharedBottomControls（阴影已内置为条件性）
                         SharedBottomControls(
                             currentPage: $musicController.currentPage,
                             isHovering: $isHovering,
@@ -323,7 +346,6 @@ extension MiniPlayerView {
                             isProgressBarHovering: $isProgressBarHovering,
                             dragPosition: $dragPosition
                         )
-                        .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 2)
                     }
                     .contentShape(Rectangle())
                     .allowsHitTesting(true)
@@ -416,17 +438,19 @@ extension MiniPlayerView {
                     let displayX = isAlbumPage ? geo.size.width / 2 : xPosition
                     let displayY = isAlbumPage ? coverSize / 2 : yPosition
 
-                    // ===== Layer 1: 整图模糊背景（仅在 album 页面显示）=====
-                    if isAlbumPage {
-                        Image(nsImage: artwork)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .clipped()
-                            .blur(radius: 50, opaque: true)
-                            .saturation(1.2)
-                            .brightness(-0.1)
-                    }
+                    // 🔑 羽化遮罩高度用动画值过渡，避免接缝
+                    let animatedBlendHeight: CGFloat = isAlbumPage ? blendHeight : 0
+
+                    // ===== Layer 1: 整图模糊背景 - 用 opacity 淡入淡出 =====
+                    Image(nsImage: artwork)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .blur(radius: 50, opaque: true)
+                        .saturation(1.2)
+                        .brightness(-0.1)
+                        .opacity(isAlbumPage ? 1 : 0)  // 🔑 opacity 动画过渡
 
                     // ===== Layer 2: 正方形封面（Hero）- 参与 matchedGeometryEffect =====
                     Image(nsImage: artwork)
@@ -434,21 +458,19 @@ extension MiniPlayerView {
                         .scaledToFill()
                         .frame(width: displaySize, height: displaySize)
                         .clipped()
-                        // 🔑 底部羽化遮罩（仅在 album 页面应用）
+                        // 🔑 底部羽化遮罩 - 高度用动画值过渡
                         .mask(
                             VStack(spacing: 0) {
                                 Rectangle().fill(Color.black)
-                                if isAlbumPage {
-                                    LinearGradient(
-                                        stops: [
-                                            .init(color: .black, location: 0),
-                                            .init(color: .clear, location: 1.0)
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                    .frame(height: blendHeight)
-                                }
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .black, location: 0),
+                                        .init(color: .clear, location: 1.0)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: animatedBlendHeight)  // 🔑 动画过渡高度
                             }
                         )
                         .cornerRadius(displayCornerRadius)
@@ -696,6 +718,13 @@ extension NSBezierPath {
 
 struct MusicButtonView: View {
     @State private var isHovering = false
+    var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
+
+    // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
+    private var isLightBackground: Bool { artworkBrightness > 0.6 }
+    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.35 : 0.20) }
+    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.3 }
+    private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
 
     var body: some View {
         Button(action: {
@@ -708,19 +737,14 @@ struct MusicButtonView: View {
                 Text("Music")
                     .font(.system(size: 11, weight: .medium))
             }
-            .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+            .foregroundColor(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
-                ZStack {
-                    Color.white.opacity(isHovering ? 0.15 : 0.08)
-                    if isHovering {
-                        Color.white.opacity(0.05)
-                    }
-                }
+                Capsule()
+                    .fill(Color.white.opacity(fillOpacity))
+                    .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
             )
-            .clipShape(Capsule())
-            .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -735,6 +759,13 @@ struct MusicButtonView: View {
 struct HideButtonView: View {
     @State private var isHovering = false
     var onHide: () -> Void
+    var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
+
+    // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
+    private var isLightBackground: Bool { artworkBrightness > 0.6 }
+    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.35 : 0.20) }
+    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.3 }
+    private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
 
     var body: some View {
         Button(action: {
@@ -742,19 +773,14 @@ struct HideButtonView: View {
         }) {
             Image(systemName: "chevron.up")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+                .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
-                    ZStack {
-                        Color.white.opacity(isHovering ? 0.15 : 0.08)
-                        if isHovering {
-                            Color.white.opacity(0.05)
-                        }
-                    }
+                    Capsule()
+                        .fill(Color.white.opacity(fillOpacity))
+                        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
                 )
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -770,6 +796,13 @@ struct HideButtonView: View {
 struct ExpandButtonView: View {
     @State private var isHovering = false
     var onExpand: () -> Void
+    var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
+
+    // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
+    private var isLightBackground: Bool { artworkBrightness > 0.6 }
+    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.35 : 0.20) }
+    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.3 }
+    private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
 
     var body: some View {
         Button(action: {
@@ -777,19 +810,14 @@ struct ExpandButtonView: View {
         }) {
             Image(systemName: "pip.exit")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+                .foregroundColor(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
-                    ZStack {
-                        Color.white.opacity(isHovering ? 0.15 : 0.08)
-                        if isHovering {
-                            Color.white.opacity(0.05)
-                        }
-                    }
+                    Capsule()
+                        .fill(Color.white.opacity(fillOpacity))
+                        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
                 )
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .onHover { hovering in

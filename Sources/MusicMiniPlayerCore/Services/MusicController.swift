@@ -50,6 +50,10 @@ public class MusicController: ObservableObject {
     // 用于判断 No Lyrics 时是否自动跳回专辑页面
     @Published public var userManuallyOpenedLyrics: Bool = false
 
+    // 🔑 封面亮度检测 - 用于 UI 元素自适应颜色
+    // true = 浅色背景（需要深色 UI），false = 深色背景（使用浅色 UI）
+    @Published public var isLightBackground: Bool = false
+
     // Private properties
     private var musicApp: SBApplication?
     private var pollingTimer: Timer?
@@ -765,11 +769,23 @@ public class MusicController: ObservableObject {
 
     // MARK: - Artwork Management (ScriptingBridge > MusicKit > Placeholder)
 
+    /// 🔑 设置封面并自动计算亮度
+    private func setArtwork(_ image: NSImage?) {
+        self.currentArtwork = image
+        // 计算亮度，阈值 0.6 以上视为浅色背景
+        if let img = image {
+            let brightness = img.perceivedBrightness()
+            self.isLightBackground = brightness > 0.6
+        } else {
+            self.isLightBackground = false
+        }
+    }
+
     private func fetchArtwork(for title: String, artist: String, album: String, persistentID: String) {
         // Check cache first
         if let cached = artworkCache.object(forKey: persistentID as NSString) {
             logger.info("✅ Using cached artwork for \(title)")
-            self.currentArtwork = cached
+            self.setArtwork(cached)
             return
         }
 
@@ -783,7 +799,7 @@ public class MusicController: ObservableObject {
             // 1. Try ScriptingBridge (App Store 合规，参考 Tuneful)
             if let image = self.getArtworkImageFromApp(app) {
                 DispatchQueue.main.async {
-                    self.currentArtwork = image
+                    self.setArtwork(image)
                     if !persistentID.isEmpty {
                         self.artworkCache.setObject(image, forKey: persistentID as NSString)
                     }
@@ -794,7 +810,7 @@ public class MusicController: ObservableObject {
 
             // 2. Fallback to placeholder
             DispatchQueue.main.async {
-                self.currentArtwork = self.createPlaceholder()
+                self.setArtwork(self.createPlaceholder())
                 self.logger.warning("⚠️ Failed to fetch artwork - using placeholder")
             }
         }

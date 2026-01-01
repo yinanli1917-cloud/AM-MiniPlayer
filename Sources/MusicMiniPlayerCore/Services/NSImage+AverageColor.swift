@@ -281,6 +281,41 @@ extension NSImage {
         return NSImage(cgImage: stripCGImage, size: NSSize(width: targetSize, height: stripHeight))
     }
 
+    /// 计算图片的感知亮度（0-1，0=黑，1=白）
+    /// 用于判断是否需要使用深色 UI 元素
+    func perceivedBrightness() -> CGFloat {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0.5 }
+
+        let inputImage = CIImage(cgImage: cgImage)
+        let extentVector = CIVector(x: inputImage.extent.origin.x,
+                                    y: inputImage.extent.origin.y,
+                                    z: inputImage.extent.size.width,
+                                    w: inputImage.extent.size.height)
+
+        guard let filter = CIFilter(name: "CIAreaAverage",
+                                    parameters: [kCIInputImageKey: inputImage,
+                                                 kCIInputExtentKey: extentVector]) else { return 0.5 }
+        guard let outputImage = filter.outputImage else { return 0.5 }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        let context = Self.sharedCIContext
+
+        context.render(outputImage,
+                       toBitmap: &bitmap,
+                       rowBytes: 4,
+                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8,
+                       colorSpace: nil)
+
+        let r = CGFloat(bitmap[0]) / 255.0
+        let g = CGFloat(bitmap[1]) / 255.0
+        let b = CGFloat(bitmap[2]) / 255.0
+
+        // 使用感知亮度公式（人眼对绿色更敏感）
+        let perceivedBrightness = 0.299 * r + 0.587 * g + 0.114 * b
+        return perceivedBrightness
+    }
+
     func averageColor() -> NSColor? {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
 

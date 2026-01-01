@@ -97,14 +97,12 @@ struct SharedBottomControls: View {
                         Text(formatTime(musicController.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
-                            .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 1)
 
                         Spacer()
 
                         // Audio quality badge
                         if let quality = musicController.audioQuality {
                             qualityBadge(quality)
-                                .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 1)
                         }
 
                         Spacer()
@@ -112,7 +110,6 @@ struct SharedBottomControls: View {
                         Text("-" + formatTime(musicController.duration - musicController.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
-                            .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 1)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
                 }
@@ -238,7 +235,6 @@ struct SharedBottomControls: View {
                         }
                     )
             }
-            .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 2)
             .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
@@ -269,7 +265,7 @@ struct SharedBottomControls: View {
     }
 
     private func qualityBadge(_ quality: String) -> some View {
-        HStack(spacing: 2) {
+        return HStack(spacing: 2) {
             if quality == "Hi-Res Lossless" {
                 Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 8))
             } else if quality == "Dolby Atmos" {
@@ -305,15 +301,14 @@ struct HoverableControlButton: View {
         Button(action: action) {
             Image(systemName: iconName)
                 .font(.system(size: size))
-                .foregroundColor(isHovering ? .white : .white.opacity(0.8))
+                .foregroundColor(.white)
                 .frame(width: 32, height: 32)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity(isHovering ? 0.15 : 0))
+                        .fill(Color.white.opacity(isHovering ? 0.25 : 0))
                 )
         }
         .buttonStyle(.plain)
-        .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
@@ -332,15 +327,14 @@ struct NavigationIconButton: View {
         Button(action: action) {
             Image(systemName: iconName)
                 .font(.system(size: 15))
-                .foregroundColor(isActive ? .white : (isHovering ? .white.opacity(0.9) : .white.opacity(0.7)))
+                .foregroundColor(isActive ? .white : (isHovering ? .white : .white.opacity(0.7)))
                 .frame(width: 26, height: 26)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity((isActive || isHovering) ? 0.15 : 0))
+                        .fill(Color.white.opacity((isActive || isHovering) ? 0.25 : 0))
                 )
         }
         .buttonStyle(.plain)
-        .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
