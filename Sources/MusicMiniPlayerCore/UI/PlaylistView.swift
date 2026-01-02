@@ -222,7 +222,7 @@ public struct PlaylistView: View {
                     Spacer()
 
                     ZStack(alignment: .bottom) {
-                        // 渐变模糊背景
+                        // 🔑 统一使用 VisualEffectView（不允许用透明黑色渐变，会穿透）
                         VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
                             .frame(height: 100)
                             .mask(
@@ -251,9 +251,9 @@ public struct PlaylistView: View {
                     .contentShape(Rectangle())
                     .allowsHitTesting(true)
                 }
-                .opacity(showControls ? 1 : 0)  // 🔑 使用 opacity 而非 if，确保动画生效
-                .offset(y: showControls ? 0 : 20)  // 🔑 使用 offset 实现滑动效果
-                .animation(.easeInOut(duration: 0.3), value: showControls)  // 🔑 动画绑定到控件本身
+                .opacity(showControls ? 1 : 0)
+                .offset(y: showControls ? 0 : 20)
+                .animation(.easeInOut(duration: 0.3), value: showControls)
             }
             .onAppear {
                 musicController.fetchUpNextQueue()

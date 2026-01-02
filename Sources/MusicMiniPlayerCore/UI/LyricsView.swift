@@ -665,7 +665,7 @@ public struct LyricsView: View {
 
             // 渐变模糊 + 控件区域
             ZStack(alignment: .bottom) {
-                // 渐变模糊背景
+                // 🔑 统一使用 VisualEffectView（不允许用透明黑色渐变，会穿透）
                 VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
                     .frame(height: 100)
                     .mask(

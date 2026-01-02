@@ -721,9 +721,9 @@ struct MusicButtonView: View {
     var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
 
     // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
-    private var isLightBackground: Bool { artworkBrightness > 0.6 }
-    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.35 : 0.20) }
-    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.3 }
+    private var isLightBackground: Bool { artworkBrightness > 0.8 }
+    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.55 : 0.48) }
+    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.48 }
     private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
 
     var body: some View {
@@ -762,9 +762,9 @@ struct HideButtonView: View {
     var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
 
     // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
-    private var isLightBackground: Bool { artworkBrightness > 0.6 }
-    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.35 : 0.20) }
-    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.3 }
+    private var isLightBackground: Bool { artworkBrightness > 0.8 }
+    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.55 : 0.48) }
+    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.48 }
     private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
 
     var body: some View {
@@ -799,9 +799,9 @@ struct ExpandButtonView: View {
     var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
 
     // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
-    private var isLightBackground: Bool { artworkBrightness > 0.6 }
-    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.35 : 0.20) }
-    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.3 }
+    private var isLightBackground: Bool { artworkBrightness > 0.8 }
+    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.55 : 0.48) }
+    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.48 }
     private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
 
     var body: some View {
