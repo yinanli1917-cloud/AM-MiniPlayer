@@ -46,6 +46,9 @@ public struct LyricsView: View {
     // 🔑 翻译触发器本地状态（用于强制视图重建）
     @State private var localTranslationTrigger: Int = 0
 
+    // 🔑 全屏封面模式（从 UserDefaults 读取）
+    @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
+
     public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
         self._currentPage = currentPage
         self.openWindow = openWindow
@@ -83,9 +86,14 @@ public struct LyricsView: View {
 
     public var body: some View {
         ZStack {
-            // Background (Liquid Glass) - same as MiniPlayerView
-            LiquidBackgroundView(artwork: musicController.currentArtwork)
-            .ignoresSafeArea()
+            // Background - 全屏模式用流体渐变，普通模式用 Liquid Glass
+            if fullscreenAlbumCover {
+                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                    .ignoresSafeArea()
+            } else {
+                LiquidBackgroundView(artwork: musicController.currentArtwork)
+                    .ignoresSafeArea()
+            }
 
             // Main lyrics container
             VStack(spacing: 0) {
@@ -619,6 +627,15 @@ public struct LyricsView: View {
                 }
             }
         }
+        // 🔑 监听全屏封面设置变化
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
+            if newValue != fullscreenAlbumCover {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    fullscreenAlbumCover = newValue
+                }
+            }
+        }
         // 🔑 macOS 15.0+: 系统翻译集成
         .modifier(SystemTranslationModifier(
             translationSessionConfigAny: translationSessionConfigAny,
@@ -648,7 +665,7 @@ public struct LyricsView: View {
 
             // 渐变模糊 + 控件区域
             ZStack(alignment: .bottom) {
-                // 渐变模糊背景（不拦截点击，让上层内容可点击）
+                // 渐变模糊背景
                 VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
                     .frame(height: 100)
                     .mask(
@@ -663,7 +680,7 @@ public struct LyricsView: View {
                             endPoint: .bottom
                         )
                     )
-                    .allowsHitTesting(false)  // 🔑 模糊背景不拦截点击
+                    .allowsHitTesting(false)
 
                 SharedBottomControls(
                     currentPage: $currentPage,
@@ -674,9 +691,7 @@ public struct LyricsView: View {
                 )
                 .padding(.bottom, 0)
             }
-            // 🔑 只有控件区域拦截点击，渐变模糊区域穿透
         }
-        // 🔑 移除clipShape transition，使用纯opacity + 轻微offset动画
         .transition(.opacity.combined(with: .offset(y: 20)))
     }
     

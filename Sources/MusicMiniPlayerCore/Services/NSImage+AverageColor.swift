@@ -354,4 +354,167 @@ extension NSImage {
 
         return NSColor(hue: hue, saturation: enhancedSaturation, brightness: enhancedBrightness, alpha: alphaValue)
     }
+
+    // MARK: - 流体渐变背景用：提取多个主色调
+
+    /// 提取图片的多个主色调（用于流体渐变背景）
+    /// - Parameter count: 需要提取的颜色数量
+    /// - Returns: 颜色数组，按饱和度和频率排序
+    func extractPaletteColors(count: Int = 4) -> [NSColor] {
+        // 🔑 较小采样尺寸保证性能
+        let size = CGSize(width: 40, height: 40)
+        // 🔑 使用 RGB 初始化避免 catalog color 问题
+        let fallbackColors: [NSColor] = [
+            NSColor(red: 0.6, green: 0.2, blue: 0.8, alpha: 0.8),
+            NSColor(red: 0.2, green: 0.4, blue: 0.9, alpha: 0.8),
+            NSColor(red: 0.9, green: 0.3, blue: 0.5, alpha: 0.8),
+            NSColor(red: 0.95, green: 0.5, blue: 0.2, alpha: 0.8)
+        ]
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return fallbackColors
+        }
+
+        let context = Self.sharedCIContext
+        let inputImage = CIImage(cgImage: cgImage)
+        let filter = CIFilter(name: "CILanczosScaleTransform")
+        filter?.setValue(inputImage, forKey: kCIInputImageKey)
+        filter?.setValue(size.width / CGFloat(cgImage.width), forKey: kCIInputScaleKey)
+        filter?.setValue(1.0, forKey: kCIInputAspectRatioKey)
+
+        guard let outputImage = filter?.outputImage,
+              let resizedCGImage = context.createCGImage(outputImage, from: outputImage.extent) else {
+            return fallbackColors
+        }
+
+        let width = resizedCGImage.width
+        let height = resizedCGImage.height
+        let dataSize = width * height * 4
+        var pixelData = [UInt8](repeating: 0, count: dataSize)
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: &pixelData,
+                                  width: width,
+                                  height: height,
+                                  bitsPerComponent: 8,
+                                  bytesPerRow: 4 * width,
+                                  space: colorSpace,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return fallbackColors
+        }
+
+        ctx.draw(resizedCGImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        // 收集颜色到桶中（12 个桶每通道 = 1728 个可能的桶）
+        var colorBuckets: [String: (r: CGFloat, g: CGFloat, b: CGFloat, count: Int, saturation: CGFloat, brightness: CGFloat)] = [:]
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = (y * width + x) * 4
+                let r = CGFloat(pixelData[offset]) / 255.0
+                let g = CGFloat(pixelData[offset + 1]) / 255.0
+                let b = CGFloat(pixelData[offset + 2]) / 255.0
+
+                // 转换到 HSB
+                let maxComp = max(r, max(g, b))
+                let minComp = min(r, min(g, b))
+                let diff = maxComp - minComp
+                let saturation = maxComp == 0 ? 0 : diff / maxComp
+                let brightness = maxComp
+
+                // 🔑 放宽条件：接受低饱和度颜色（如肤色、灰色调）
+                if saturation > 0.05 && brightness > 0.08 && brightness < 0.98 {
+                    // 12 个桶每通道
+                    let rBucket = Int(r * 11)
+                    let gBucket = Int(g * 11)
+                    let bBucket = Int(b * 11)
+                    let key = "\(rBucket)-\(gBucket)-\(bBucket)"
+
+                    if var existing = colorBuckets[key] {
+                        existing.count += 1
+                        colorBuckets[key] = existing
+                    } else {
+                        colorBuckets[key] = (r, g, b, 1, saturation, brightness)
+                    }
+                }
+            }
+        }
+
+        // 按分数排序，取前 N 个不同色相的颜色
+        let sortedColors = colorBuckets.values
+            .map { info -> (r: CGFloat, g: CGFloat, b: CGFloat, score: CGFloat, hue: CGFloat) in
+                let frequencyWeight = CGFloat(info.count) / CGFloat(width * height) * 100.0
+                let score = info.saturation * 4.0 + frequencyWeight * 2.0 + info.brightness * 0.5
+
+                // 计算色相
+                let maxC = max(info.r, max(info.g, info.b))
+                let minC = min(info.r, min(info.g, info.b))
+                var hue: CGFloat = 0
+                if maxC != minC {
+                    let d = maxC - minC
+                    if maxC == info.r {
+                        hue = ((info.g - info.b) / d).truncatingRemainder(dividingBy: 6)
+                    } else if maxC == info.g {
+                        hue = (info.b - info.r) / d + 2
+                    } else {
+                        hue = (info.r - info.g) / d + 4
+                    }
+                    hue /= 6
+                    if hue < 0 { hue += 1 }
+                }
+                return (info.r, info.g, info.b, score, hue)
+            }
+            .sorted { $0.score > $1.score }
+
+        // 选择色相差异足够大的颜色
+        var selectedColors: [NSColor] = []
+        var selectedHues: [CGFloat] = []
+        let minHueDifference: CGFloat = 0.04  // 🔑 降低最小色相差异，允许更相近的颜色
+
+        for colorInfo in sortedColors {
+            // 检查与已选颜色的色相差异
+            var tooSimilar = false
+            for existingHue in selectedHues {
+                let hueDiff = min(abs(colorInfo.hue - existingHue), 1 - abs(colorInfo.hue - existingHue))
+                if hueDiff < minHueDifference {
+                    tooSimilar = true
+                    break
+                }
+            }
+
+            if !tooSimilar {
+                // 增强饱和度
+                let nsColor = NSColor(red: colorInfo.r, green: colorInfo.g, blue: colorInfo.b, alpha: 1.0)
+                var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                nsColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+
+                let enhancedColor = NSColor(
+                    hue: h,
+                    saturation: min(s * 1.8, 0.9),
+                    brightness: min(b * 1.1, 0.85),
+                    alpha: 0.8
+                )
+                selectedColors.append(enhancedColor)
+                selectedHues.append(colorInfo.hue)
+
+                if selectedColors.count >= count {
+                    break
+                }
+            }
+        }
+
+        // 如果颜色不够，用默认颜色填充（使用 RGB 初始化避免 catalog color 问题）
+        let defaultColors: [NSColor] = [
+            NSColor(red: 0.6, green: 0.2, blue: 0.8, alpha: 0.8),  // 紫色
+            NSColor(red: 0.2, green: 0.4, blue: 0.9, alpha: 0.8),  // 蓝色
+            NSColor(red: 0.9, green: 0.3, blue: 0.5, alpha: 0.8),  // 粉色
+            NSColor(red: 0.95, green: 0.5, blue: 0.2, alpha: 0.8), // 橙色
+            NSColor(red: 0.2, green: 0.7, blue: 0.7, alpha: 0.8),  // 青色
+            NSColor(red: 0.3, green: 0.3, blue: 0.7, alpha: 0.8)   // 靛蓝
+        ]
+        while selectedColors.count < count {
+            selectedColors.append(defaultColors[selectedColors.count % defaultColors.count])
+        }
+
+        return selectedColors
+    }
 }

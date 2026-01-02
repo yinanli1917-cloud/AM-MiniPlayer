@@ -20,6 +20,9 @@ public struct PlaylistView: View {
 
     @Binding var scrollOffset: CGFloat
 
+    // 🔑 全屏封面模式（从 UserDefaults 读取）
+    @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
+
     // 🔑 统一的 artSize 常量（与 MiniPlayerView 同步）
     private let artSizeRatio: CGFloat = 0.18
     private let artSizeMax: CGFloat = 60.0
@@ -41,9 +44,14 @@ public struct PlaylistView: View {
             let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
 
             ZStack {
-                // Background (Liquid Glass) - same as LyricsView and MiniPlayerView
-                LiquidBackgroundView(artwork: musicController.currentArtwork)
-                    .ignoresSafeArea()
+                // Background - 全屏模式用流体渐变，普通模式用 Liquid Glass
+                if fullscreenAlbumCover {
+                    AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                        .ignoresSafeArea()
+                } else {
+                    LiquidBackgroundView(artwork: musicController.currentArtwork)
+                        .ignoresSafeArea()
+                }
 
                 // 主内容 ScrollView
                 ScrollViewReader { scrollProxy in
@@ -229,6 +237,7 @@ public struct PlaylistView: View {
                                     endPoint: .bottom
                                 )
                             )
+                            .allowsHitTesting(false)
 
                         SharedBottomControls(
                             currentPage: $currentPage,
@@ -248,6 +257,15 @@ public struct PlaylistView: View {
             }
             .onAppear {
                 musicController.fetchUpNextQueue()
+            }
+            // 🔑 监听全屏封面设置变化
+            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+                let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
+                if newValue != fullscreenAlbumCover {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        fullscreenAlbumCover = newValue
+                    }
+                }
             }
         }
     }
