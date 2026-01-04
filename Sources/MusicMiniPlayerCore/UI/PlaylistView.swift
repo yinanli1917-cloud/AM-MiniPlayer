@@ -18,6 +18,10 @@ public struct PlaylistView: View {
     @State private var scrollLocked: Bool = false
     @State private var hasTriggeredSlowScroll: Bool = false
 
+    // 🔑 控件模糊渐入效果（初始值为 0，在页面切换时触发动画）
+    @State private var controlsBlurAmount: CGFloat = 0
+    @State private var controlsOffsetY: CGFloat = 0
+
     @Binding var scrollOffset: CGFloat
 
     // 🔑 全屏封面模式（从 UserDefaults 读取）
@@ -145,6 +149,13 @@ public struct PlaylistView: View {
                         // 🔑 切换到歌单页时立即滚动到 Now Playing
                         if newPage == .playlist {
                             scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
+                            // 🔑 触发 blur + move-in 动画
+                            controlsBlurAmount = 10
+                            controlsOffsetY = 30
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                                controlsBlurAmount = 0
+                                controlsOffsetY = 0
+                            }
                         }
                     }
                     .onChange(of: musicController.currentTrackTitle) { _, _ in
@@ -168,8 +179,19 @@ public struct PlaylistView: View {
                         autoScrollTimer?.invalidate()
                         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
                             if !isHovering {
-                                withAnimation(.easeInOut(duration: 0.3)) {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                     showControls = false
+                                    controlsBlurAmount = 10
+                                    controlsOffsetY = 30
+                                }
+                            } else {
+                                // 🔑 鼠标在窗口内，显示控件（带 blur+offset 动画）
+                                controlsBlurAmount = 10
+                                controlsOffsetY = 30
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                                    showControls = true
+                                    controlsBlurAmount = 0
+                                    controlsOffsetY = 0
                                 }
                             }
                             withAnimation(.easeInOut(duration: 0.3)) {
@@ -185,26 +207,37 @@ public struct PlaylistView: View {
                         let threshold: CGFloat = 800
 
                         if deltaY < 0 {
+                            // 往上滚：隐藏控件
                             if showControls {
-                                withAnimation(.easeInOut(duration: 0.2)) {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                     showControls = false
+                                    controlsBlurAmount = 10
+                                    controlsOffsetY = 30
                                 }
                             }
                             scrollLocked = true
                         } else if absVelocity >= threshold {
+                            // 快速滚动：隐藏控件
                             if !scrollLocked {
                                 scrollLocked = true
                             }
                             if showControls {
-                                withAnimation(.easeInOut(duration: 0.2)) {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                     showControls = false
+                                    controlsBlurAmount = 10
+                                    controlsOffsetY = 30
                                 }
                             }
                         } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
+                            // 慢速往下滚：显示控件
                             hasTriggeredSlowScroll = true
                             if !showControls {
-                                withAnimation(.easeInOut(duration: 0.2)) {
+                                controlsBlurAmount = 10
+                                controlsOffsetY = 30
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                     showControls = true
+                                    controlsBlurAmount = 0
+                                    controlsOffsetY = 0
                                 }
                             }
                         }
@@ -248,12 +281,16 @@ public struct PlaylistView: View {
                         )
                         .padding(.bottom, 0)
                     }
+                    // 🔑 blur + move-in 动画
+                    .blur(radius: controlsBlurAmount)
+                    .offset(y: controlsOffsetY)
                     .contentShape(Rectangle())
                     .allowsHitTesting(true)
                 }
                 .opacity(showControls ? 1 : 0)
-                .offset(y: showControls ? 0 : 20)
-                .animation(.easeInOut(duration: 0.3), value: showControls)
+                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showControls)
+                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsBlurAmount)
+                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsOffsetY)
             }
             .onAppear {
                 musicController.fetchUpNextQueue()

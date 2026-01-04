@@ -316,6 +316,45 @@ extension NSImage {
         return perceivedBrightness
     }
 
+    /// 计算图片左上角区域的感知亮度（用于判断按钮背景色）
+    /// 取左上角 25% 区域的平均亮度
+    func topLeftBrightness() -> CGFloat {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0.5 }
+
+        let inputImage = CIImage(cgImage: cgImage)
+        let width = inputImage.extent.size.width
+        let height = inputImage.extent.size.height
+
+        // 🔑 左上角 25% 区域（CIImage 坐标系 Y 轴向上，所以 "top" 是 maxY 附近）
+        let regionWidth = width * 0.35
+        let regionHeight = height * 0.25
+        let extentVector = CIVector(x: 0,
+                                    y: height - regionHeight,  // 顶部
+                                    z: regionWidth,
+                                    w: regionHeight)
+
+        guard let filter = CIFilter(name: "CIAreaAverage",
+                                    parameters: [kCIInputImageKey: inputImage,
+                                                 kCIInputExtentKey: extentVector]) else { return 0.5 }
+        guard let outputImage = filter.outputImage else { return 0.5 }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        let context = Self.sharedCIContext
+
+        context.render(outputImage,
+                       toBitmap: &bitmap,
+                       rowBytes: 4,
+                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8,
+                       colorSpace: nil)
+
+        let r = CGFloat(bitmap[0]) / 255.0
+        let g = CGFloat(bitmap[1]) / 255.0
+        let b = CGFloat(bitmap[2]) / 255.0
+
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    }
+
     func averageColor() -> NSColor? {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
 

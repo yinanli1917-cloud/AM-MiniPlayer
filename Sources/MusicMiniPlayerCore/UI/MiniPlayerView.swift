@@ -20,6 +20,11 @@ public struct MiniPlayerView: View {
     // 🔑 封面页hover后文字和遮罩延迟显示
     @State private var showOverlayContent: Bool = false
 
+    // 🔑 封面页控件模糊渐入效果（除歌曲信息外）
+    @State private var controlsBlurAmount: CGFloat = 10
+    // 🔑 封面页控件从下往上移入（10% 距离）
+    @State private var controlsOffsetY: CGFloat = 30  // 约 300px * 10% = 30
+
     // 🔑 全屏封面模式（从 UserDefaults 读取）
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
 
@@ -54,31 +59,36 @@ public struct MiniPlayerView: View {
                     .opacity(musicController.currentPage == .lyrics ? 1 : 0)
                     .zIndex(musicController.currentPage == .lyrics ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .lyrics)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // Playlist View - 始终存在以支持matchedGeometryEffect
                 PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, scrollOffset: $playlistScrollOffset)
                     .opacity(musicController.currentPage == .playlist ? 1 : 0)
                     .zIndex(musicController.currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
                     .allowsHitTesting(musicController.currentPage == .playlist)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // Album View - 始终存在以支持matchedGeometryEffect
                 albumPageContent(geometry: geometry)
                     .opacity(musicController.currentPage == .album ? 1 : 0)
                     .zIndex(musicController.currentPage == .album ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
                     .allowsHitTesting(musicController.currentPage == .album)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // 🎯 浮动的Artwork - 单个Image实例，通过matchedGeometry移动
                 if let artwork = musicController.currentArtwork {
                     floatingArtwork(artwork: artwork, geometry: geometry)
                         .zIndex(musicController.currentPage == .album ? 50 : 1)  // 🔑 歌单页 1（同层），专辑页 50（遮住文字）
+                        .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
                 }
 
                 // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上
-                // 🔑 移除 currentArtwork != nil 条件，确保歌曲信息始终显示
-                if musicController.currentPage == .album {
-                    albumOverlayContent(geometry: geometry)
-                        .zIndex(101)  // 在浮动artwork之上
-                }
+                // 🔑 始终存在，使用 opacity 控制显示，确保丝滑过渡
+                albumOverlayContent(geometry: geometry)
+                    .zIndex(101)  // 在浮动artwork之上
+                    .opacity(musicController.currentPage == .album ? 1 : 0)
+                    .allowsHitTesting(musicController.currentPage == .album)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
 
             }
@@ -89,7 +99,7 @@ public struct MiniPlayerView: View {
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
-                MusicButtonView(artworkBrightness: artworkBrightness)
+                MusicButtonView(artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
                     .padding(12)
                     .transition(.opacity)
             }
@@ -100,12 +110,12 @@ public struct MiniPlayerView: View {
                 // 根据模式显示不同按钮
                 if onExpand != nil {
                     // 菜单栏模式：显示展开按钮
-                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: artworkBrightness)
+                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
                         .padding(12)
                         .transition(.opacity)
                 } else if onHide != nil {
                     // 浮窗模式：显示收起按钮
-                    HideButtonView(onHide: onHide!, artworkBrightness: artworkBrightness)
+                    HideButtonView(onHide: onHide!, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
                         .padding(12)
                         .transition(.opacity)
                 } else {
@@ -114,7 +124,7 @@ public struct MiniPlayerView: View {
                         if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
                             window.orderOut(nil)
                         }
-                    }, artworkBrightness: artworkBrightness)
+                    }, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
                     .padding(12)
                     .transition(.opacity)
                 }
@@ -122,27 +132,27 @@ public struct MiniPlayerView: View {
         }
         .onHover { hovering in
             // 🔑 简单逻辑：鼠标在窗口内=hover（显示控件+缩小封面），鼠标离开=非hover（放大封面）
+            // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
+            let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
             withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                 isHovering = hovering
             }
             if hovering {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
-                        showControls = true
-                    }
-                }
-                // 🔑 文字和渐变遮罩延迟0.1秒后渐现（等待matchedGeometry动画完成）
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showOverlayContent = true
-                    }
+                // 🔑 进入时重置模糊和位移状态
+                controlsBlurAmount = 10
+                controlsOffsetY = 30
+                withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
+                    showControls = true
+                    showOverlayContent = true
+                    controlsBlurAmount = 0
+                    controlsOffsetY = 0
                 }
             } else {
-                // 🔑 离开时立即隐藏文字遮罩
-                withAnimation(.easeOut(duration: 0.1)) {
+                // 🔑 离开时动画
+                withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
                     showOverlayContent = false
-                }
-                withAnimation(.easeOut(duration: 0.18)) {
+                    controlsBlurAmount = 10
+                    controlsOffsetY = 30
                     showControls = false
                 }
             }
@@ -156,14 +166,14 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 监听封面变化，计算亮度
+        // 🔑 监听封面变化，计算整图平均亮度（因为背景是全图模糊后的混合色）
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
             }
         }
         .onAppear {
-            // 初始化亮度
+            // 初始化亮度（整图平均）
             if let artwork = musicController.currentArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
             }
@@ -181,181 +191,128 @@ extension MiniPlayerView {
             let artSize = fullscreenAlbumCover ? geo.size.width : (isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68)
             // 控件区域高度（与SharedBottomControls一致）
             let controlsHeight: CGFloat = 80
-            // 可用高度（给封面居中用）
-            let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
-            // 封面中心Y（全屏模式：顶部对齐；普通模式：居中）
-            let artCenterY = fullscreenAlbumCover ? artSize / 2 : availableHeight / 2
-            // 遮罩高度
-            let maskHeight: CGFloat = 60
-            // 遮罩Y位置（封面底部）
-            let maskY = artCenterY + (artSize / 2) - (maskHeight / 2)
-            // 🔑 底部延伸区域高度
-            let remainingHeight = geo.size.height - geo.size.width
+            // 🔑 非全屏模式：非hover时封面在整个窗口居中，hover时在可用区域居中
+            let availableHeight = isHovering ? (geo.size.height - controlsHeight) : geo.size.height
+            let artCenterY = availableHeight / 2
+            let artBottomY = artCenterY + artSize / 2
+            // 🔑 非全屏模式：封面左边缘 X 位置
+            let artLeftX = (geo.size.width - artSize) / 2
 
             ZStack {
-                // 🎨 非hover状态：文字位置根据模式不同
-                // 全屏模式：歌曲信息在底部延伸区域内
-                // 普通模式：歌曲信息在封面底部
-                if !isHovering {
-                    if fullscreenAlbumCover {
-                        // 🔑 全屏模式：歌曲信息在底部延伸区域，上移留出底部 10px spacing
-                        // 文字高度约 20 + 16 + 2(spacing) = 38pt
-                        // 位置：底部延伸区域顶部偏下，留出底部 10px
-                        let textBlockHeight: CGFloat = 38
-                        let textCenterY = geo.size.width + (remainingHeight - 10 - textBlockHeight / 2)
+                // ═══════════════════════════════════════════
+                // 🎨 歌曲信息：使用 matchedGeometryEffect 实现丝滑过渡
+                // ═══════════════════════════════════════════
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            ScrollingText(
-                                text: musicController.currentTrackTitle,
-                                font: .system(size: 16, weight: .bold),
-                                textColor: .white,
-                                maxWidth: geo.size.width - 32,
-                                height: 20,
-                                alignment: .leading
-                            )
-                            .matchedGeometryEffect(id: "track-title", in: animation)
-                            .shadow(color: .black.opacity(0.7), radius: 10, x: 0, y: 2)
+                // 🔑 标题 - matchedGeometryEffect
+                Text(musicController.currentTrackTitle)
+                    .font(.system(size: isHovering ? 12 : 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .matchedGeometryEffect(id: "trackTitle", in: animation)
+                    .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
+                    .position(
+                        x: isHovering
+                            ? 32 + (geo.size.width - 112) / 2  // hover: 左边距32，右边距80
+                            : (fullscreenAlbumCover
+                                ? 12 + (geo.size.width - 24) / 2  // 全屏: 左边距12
+                                : artLeftX + 12 + (artSize - 24) / 2),  // 普通: 封面内左边距12
+                        y: isHovering
+                            ? geo.size.height - controlsHeight - 4 - 16  // hover: 控件上方
+                            : (fullscreenAlbumCover
+                                ? geo.size.width + (geo.size.height - geo.size.width) / 2 - 12  // 全屏: 封面下方居中偏上
+                                : artBottomY - 38)   // 普通: 封面底部内，标题位置（距底边38）
+                    )
+                    .allowsHitTesting(false)
 
-                            ScrollingText(
-                                text: musicController.currentArtist,
-                                font: .system(size: 13, weight: .medium),
-                                textColor: .white.opacity(0.9),
-                                maxWidth: geo.size.width - 32,
-                                height: 16,
-                                alignment: .leading
-                            )
-                            .matchedGeometryEffect(id: "track-artist", in: animation)
-                            .shadow(color: .black.opacity(0.7), radius: 10, x: 0, y: 2)
-                        }
-                        .padding(.horizontal, 16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .position(x: geo.size.width / 2, y: textCenterY)
-                        .opacity(showOverlayContent ? 0 : 1)
-                        .allowsHitTesting(false)
-                    } else {
-                        // 普通模式：歌曲信息在封面底部
-                        VStack(alignment: .leading, spacing: 2) {
-                            ScrollingText(
-                                text: musicController.currentTrackTitle,
-                                font: .system(size: 16, weight: .bold),
-                                textColor: .white,
-                                maxWidth: artSize - 24,
-                                height: 20,  // 🔑 明确高度，防止被裁剪
-                                alignment: .leading
-                            )
-                            .matchedGeometryEffect(id: "track-title", in: animation)
-                            .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
+                // 🔑 艺术家 - matchedGeometryEffect
+                Text(musicController.currentArtist)
+                    .font(.system(size: isHovering ? 10 : 13, weight: .medium))
+                    .foregroundColor(.white.opacity(isHovering ? 0.7 : 0.9))
+                    .lineLimit(1)
+                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .matchedGeometryEffect(id: "artistName", in: animation)
+                    .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
+                    .position(
+                        x: isHovering
+                            ? 32 + (geo.size.width - 112) / 2  // hover: 左边距32，右边距80
+                            : (fullscreenAlbumCover
+                                ? 12 + (geo.size.width - 24) / 2  // 全屏: 左边距12
+                                : artLeftX + 12 + (artSize - 24) / 2),  // 普通: 封面内左边距12
+                        y: isHovering
+                            ? geo.size.height - controlsHeight - 4 - 4   // hover: 标题下方
+                            : (fullscreenAlbumCover
+                                ? geo.size.width + (geo.size.height - geo.size.width) / 2 + 6   // 全屏: 标题下方
+                                : artBottomY - 18)   // 普通: 封面底部内，艺术家位置（距底边18）
+                    )
+                    .allowsHitTesting(false)
 
-                            ScrollingText(
-                                text: musicController.currentArtist,
-                                font: .system(size: 13, weight: .medium),
-                                textColor: .white.opacity(0.9),
-                                maxWidth: artSize - 24,
-                                height: 16,  // 🔑 明确高度，防止被裁剪
-                                alignment: .leading
-                            )
-                            .matchedGeometryEffect(id: "track-artist", in: animation)
-                            .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 1)
-                        }
-                        .padding(.leading, 12)
-                        .padding(.bottom, 12)  // 🔑 增加底部padding，防止文字被裁剪
-                        .frame(width: artSize, height: maskHeight, alignment: .bottomLeading)
-                        .position(x: geo.size.width / 2, y: maskY)
-                        .opacity(showOverlayContent ? 0 : 1)
-                        .allowsHitTesting(false)
-                    }
-                }
+                // ═══════════════════════════════════════════
+                // 🎨 hover 状态：Shuffle/Repeat + 控件（blur+move-in 动画）
+                // ═══════════════════════════════════════════
+                VStack(spacing: 0) {
+                    Spacer()
 
-                // 🎨 hover状态：歌曲信息行 + SharedBottomControls（全屏和普通模式相同）
-                if isHovering && showControls {
-                    VStack(spacing: 0) {
+                    // 🔑 Shuffle/Repeat 按钮行
+                    HStack {
                         Spacer()
 
-                        // 🔑 歌曲信息行：标题/艺术家 (左) + Shuffle/Repeat (右)
-                        HStack(alignment: .center) {
-                            VStack(alignment: .leading, spacing: -2) {
-                                ScrollingText(
-                                    text: musicController.currentTrackTitle,
-                                    font: .system(size: 12, weight: .bold),
-                                    textColor: .white,
-                                    maxWidth: geo.size.width * 0.50,
-                                    height: 15,
-                                    alignment: .leading
-                                )
-                                .matchedGeometryEffect(id: "track-title", in: animation)
-                                .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
+                        HStack(spacing: 4) {
+                            let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+                            let isLightBg = artworkBrightness > 0.6
+                            let normalFillOpacity = isLightBg ? 0.5 : 0.20
+                            let shadowOp = isLightBg ? 0.6 : 0.3
+                            let shadowRad: CGFloat = isLightBg ? 15 : 8
 
-                                ScrollingText(
-                                    text: musicController.currentArtist,
-                                    font: .system(size: 10, weight: .medium),
-                                    textColor: .white.opacity(0.7),
-                                    maxWidth: geo.size.width * 0.50,
-                                    height: 13,
-                                    alignment: .leading
-                                )
-                                .matchedGeometryEffect(id: "track-artist", in: animation)
-                                .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
+                            Button(action: { musicController.toggleShuffle() }) {
+                                Image(systemName: "shuffle")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
+                                    .frame(width: 24, height: 24)
+                                    .background(
+                                        Circle()
+                                            .fill(musicController.shuffleEnabled ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
+                                            .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
+                                    )
                             }
+                            .buttonStyle(.plain)
 
-                            Spacer()
-
-                            HStack(spacing: 4) {
-                                // 🔑 统一白色风格 + 主题色高亮 + 根据亮度调整阴影
-                                let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                                let isLightBg = artworkBrightness > 0.6
-                                // 🔑 保持白色填充，浅色背景时高透明度+重阴影
-                                let normalFillOpacity = isLightBg ? 0.5 : 0.20
-                                let shadowOp = isLightBg ? 0.6 : 0.3
-                                let shadowRad: CGFloat = isLightBg ? 15 : 8
-
-                                Button(action: { musicController.toggleShuffle() }) {
-                                    Image(systemName: "shuffle")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
-                                        .frame(width: 24, height: 24)
-                                        .background(
-                                            Circle()
-                                                .fill(musicController.shuffleEnabled ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
-                                                .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
-                                        )
-                                }
-                                .buttonStyle(.plain)
-
-                                Button(action: { musicController.cycleRepeatMode() }) {
-                                    Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
-                                        .frame(width: 24, height: 24)
-                                        .background(
-                                            Circle()
-                                                .fill(musicController.repeatMode > 0 ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
-                                                .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
-                                        )
-                                }
-                                .buttonStyle(.plain)
+                            Button(action: { musicController.cycleRepeatMode() }) {
+                                Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
+                                    .frame(width: 24, height: 24)
+                                    .background(
+                                        Circle()
+                                            .fill(musicController.repeatMode > 0 ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
+                                            .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
+                                    )
                             }
+                            .buttonStyle(.plain)
                         }
-                        .padding(.horizontal, 32)
-                        .padding(.bottom, 4)
-
-                        // 🔑 使用 SharedBottomControls（阴影已内置为条件性）
-                        SharedBottomControls(
-                            currentPage: $musicController.currentPage,
-                            isHovering: $isHovering,
-                            showControls: $showControls,
-                            isProgressBarHovering: $isProgressBarHovering,
-                            dragPosition: $dragPosition
-                        )
                     }
-                    .contentShape(Rectangle())
-                    .allowsHitTesting(true)
-                    .opacity(showOverlayContent ? 1 : 0)
-                    .transition(.opacity)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 4)
+                    .blur(radius: controlsBlurAmount)
+                    .offset(y: controlsOffsetY)
+
+                    // 🔑 SharedBottomControls
+                    SharedBottomControls(
+                        currentPage: $musicController.currentPage,
+                        isHovering: $isHovering,
+                        showControls: $showControls,
+                        isProgressBarHovering: $isProgressBarHovering,
+                        dragPosition: $dragPosition
+                    )
+                    .blur(radius: controlsBlurAmount)
+                    .offset(y: controlsOffsetY)
                 }
+                .opacity(showOverlayContent ? 1 : 0)
+                .allowsHitTesting(showOverlayContent)
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.82), value: isHovering)
-            .animation(.spring(response: 0.3, dampingFraction: 0.82), value: showControls)
-            .animation(.easeInOut(duration: 0.2), value: showOverlayContent)
+            // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
+            .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
+            .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: showOverlayContent)
         }
     }
 
@@ -718,13 +675,20 @@ extension NSBezierPath {
 
 struct MusicButtonView: View {
     @State private var isHovering = false
-    var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
+    var artworkBrightness: CGFloat = 0.5
+    var isAlbumPage: Bool = false
 
-    // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
-    private var isLightBackground: Bool { artworkBrightness > 0.8 }
-    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.55 : 0.48) }
-    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.48 }
-    private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
+    // 🔑 只有封面页区分亮度；歌词页始终是暗色样式（无阴影+低透明度）
+    private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
+    private var fillOpacity: Double {
+        if isLightBackground {
+            return isHovering ? 0.55 : 0.45
+        } else {
+            return isHovering ? 0.20 : 0.10
+        }
+    }
+    private var shadowOpacity: Double { isLightBackground ? 0.5 : 0.0 }
+    private var shadowRadius: CGFloat { isLightBackground ? 10 : 0 }
 
     var body: some View {
         Button(action: {
@@ -737,14 +701,12 @@ struct MusicButtonView: View {
                 Text("Music")
                     .font(.system(size: 11, weight: .medium))
             }
-            .foregroundColor(.white)
+            .foregroundColor(isHovering ? .white : .white.opacity(0.7))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(Color.white.opacity(fillOpacity))
-                    .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
-            )
+            .background(Color.white.opacity(fillOpacity))
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -759,13 +721,19 @@ struct MusicButtonView: View {
 struct HideButtonView: View {
     @State private var isHovering = false
     var onHide: () -> Void
-    var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
+    var artworkBrightness: CGFloat = 0.5
+    var isAlbumPage: Bool = false
 
-    // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
-    private var isLightBackground: Bool { artworkBrightness > 0.8 }
-    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.55 : 0.48) }
-    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.48 }
-    private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
+    private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
+    private var fillOpacity: Double {
+        if isLightBackground {
+            return isHovering ? 0.55 : 0.45
+        } else {
+            return isHovering ? 0.20 : 0.10
+        }
+    }
+    private var shadowOpacity: Double { isLightBackground ? 0.5 : 0.0 }
+    private var shadowRadius: CGFloat { isLightBackground ? 10 : 0 }
 
     var body: some View {
         Button(action: {
@@ -773,14 +741,12 @@ struct HideButtonView: View {
         }) {
             Image(systemName: "chevron.up")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Color.white.opacity(fillOpacity))
-                        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
-                )
+                .background(Color.white.opacity(fillOpacity))
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -796,13 +762,19 @@ struct HideButtonView: View {
 struct ExpandButtonView: View {
     @State private var isHovering = false
     var onExpand: () -> Void
-    var artworkBrightness: CGFloat = 0.5  // 🔑 封面亮度
+    var artworkBrightness: CGFloat = 0.5
+    var isAlbumPage: Bool = false
 
-    // 🔑 根据亮度计算样式 - 保持白色填充，浅色背景时高透明度+重阴影
-    private var isLightBackground: Bool { artworkBrightness > 0.8 }
-    private var fillOpacity: Double { isLightBackground ? (isHovering ? 0.58 : 0.5) : (isHovering ? 0.55 : 0.48) }
-    private var shadowOpacity: Double { isLightBackground ? 0.6 : 0.48 }
-    private var shadowRadius: CGFloat { isLightBackground ? 15 : 8 }
+    private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
+    private var fillOpacity: Double {
+        if isLightBackground {
+            return isHovering ? 0.55 : 0.45
+        } else {
+            return isHovering ? 0.20 : 0.10
+        }
+    }
+    private var shadowOpacity: Double { isLightBackground ? 0.5 : 0.0 }
+    private var shadowRadius: CGFloat { isLightBackground ? 10 : 0 }
 
     var body: some View {
         Button(action: {
@@ -810,14 +782,12 @@ struct ExpandButtonView: View {
         }) {
             Image(systemName: "pip.exit")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Color.white.opacity(fillOpacity))
-                        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
-                )
+                .background(Color.white.opacity(fillOpacity))
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
         }
         .buttonStyle(.plain)
         .onHover { hovering in

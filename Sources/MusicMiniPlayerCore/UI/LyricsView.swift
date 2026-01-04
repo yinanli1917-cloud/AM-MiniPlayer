@@ -11,6 +11,9 @@ public struct LyricsView: View {
     @State private var isManualScrolling: Bool = false
     @State private var autoScrollTimer: Timer? = nil
     @State private var showControls: Bool = true
+    // 🔑 控件模糊渐入效果（初始值为 0，在 onAppear/页面切换时触发动画）
+    @State private var controlsBlurAmount: CGFloat = 0
+    @State private var controlsOffsetY: CGFloat = 0
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
@@ -333,10 +336,14 @@ public struct LyricsView: View {
                                 scrollLocked = false
                                 hasTriggeredSlowScroll = false
 
-                                // 🔑 恢复后如果鼠标在窗口内则显示控件
+                                // 🔑 恢复后如果鼠标在窗口内则显示控件（带 blur+offset 动画）
                                 if isHovering {
-                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                    controlsBlurAmount = 10
+                                    controlsOffsetY = 30
+                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                         showControls = true
+                                        controlsBlurAmount = 0
+                                        controlsOffsetY = 0
                                     }
                                 }
                             }
@@ -371,8 +378,10 @@ public struct LyricsView: View {
                             if deltaY < 0 {
                                 // 往上滚：隐藏控件
                                 if showControls {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                         showControls = false
+                                        controlsBlurAmount = 10
+                                        controlsOffsetY = 30
                                     }
                                 }
                                 scrollLocked = true
@@ -382,16 +391,22 @@ public struct LyricsView: View {
                                     scrollLocked = true
                                 }
                                 if showControls {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                         showControls = false
+                                        controlsBlurAmount = 10
+                                        controlsOffsetY = 30
                                     }
                                 }
                             } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
                                 // 慢速往下滚：显示控件
                                 hasTriggeredSlowScroll = true
                                 if !showControls {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                    controlsBlurAmount = 10
+                                    controlsOffsetY = 30
+                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                                         showControls = true
+                                        controlsBlurAmount = 0
+                                        controlsOffsetY = 0
                                     }
                                 }
                             }
@@ -431,12 +446,15 @@ public struct LyricsView: View {
                                     translationButton: !lyricsService.lyrics.isEmpty ? AnyView(TranslationButtonView(lyricsService: lyricsService)) : nil
                                 )
                             }
-                            // 🔑 滑入滑出动画（从下往上）
-                            .offset(y: showControls ? 0 : 30)
+                            // 🔑 blur + move-in 动画
+                            .blur(radius: controlsBlurAmount)
+                            .offset(y: controlsOffsetY)
                         }
                         .allowsHitTesting(showControls)
                         .opacity(showControls ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.25), value: showControls)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showControls)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsBlurAmount)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsOffsetY)
                     )
                 }
             }
@@ -479,14 +497,21 @@ public struct LyricsView: View {
             isHovering = hovering
             // 🔑 鼠标离开窗口时总是隐藏控件（无论是否在滚动）
             if !hovering {
-                withAnimation(.easeInOut(duration: 0.3)) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                     showControls = false
+                    controlsBlurAmount = 10
+                    controlsOffsetY = 30
                 }
             }
             // 🔑 只在非滚动状态时，鼠标进入显示控件
             else if !isManualScrolling {
-                withAnimation(.easeInOut(duration: 0.3)) {
+                // 🔑 进入时重置模糊和位移状态
+                controlsBlurAmount = 10
+                controlsOffsetY = 30
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                     showControls = true
+                    controlsBlurAmount = 0
+                    controlsOffsetY = 0
                 }
             }
             // 滚动时鼠标进入不自动显示控件（由scroll逻辑控制）
@@ -496,8 +521,13 @@ public struct LyricsView: View {
             if newPage == .lyrics {
                 // 🔑 假设是从 hover 状态切换过来的，设置 isHovering = true
                 isHovering = true
-                withAnimation(.easeInOut(duration: 0.2)) {
+                // 🔑 触发 blur + move-in 动画
+                controlsBlurAmount = 10
+                controlsOffsetY = 30
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                     showControls = true
+                    controlsBlurAmount = 0
+                    controlsOffsetY = 0
                 }
             }
         }
