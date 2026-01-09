@@ -220,7 +220,7 @@ extension MiniPlayerView {
                         y: isHovering
                             ? geo.size.height - controlsHeight - 4 - 16  // hover: 控件上方
                             : (fullscreenAlbumCover
-                                ? geo.size.width + (geo.size.height - geo.size.width) / 2 - 12  // 全屏: 封面下方居中偏上
+                                ? geo.size.height - 12 - 18 - 8  // 全屏非hover: 底边距12 + 艺术家行高18 + 间距8
                                 : artBottomY - 38)   // 普通: 封面底部内，标题位置（距底边38）
                     )
                     .allowsHitTesting(false)
@@ -242,7 +242,7 @@ extension MiniPlayerView {
                         y: isHovering
                             ? geo.size.height - controlsHeight - 4 - 4   // hover: 标题下方
                             : (fullscreenAlbumCover
-                                ? geo.size.width + (geo.size.height - geo.size.width) / 2 + 6   // 全屏: 标题下方
+                                ? geo.size.height - 12 - 8  // 全屏非hover: 底边距12 + 半行高8（艺术家在最下方）
                                 : artBottomY - 18)   // 普通: 封面底部内，艺术家位置（距底边18）
                     )
                     .allowsHitTesting(false)
@@ -701,7 +701,7 @@ struct MusicButtonView: View {
                 Text("Music")
                     .font(.system(size: 11, weight: .medium))
             }
-            .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+            .foregroundColor(.white)  // 🔑 icon/text 始终 100% opacity
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Color.white.opacity(fillOpacity))
@@ -741,7 +741,7 @@ struct HideButtonView: View {
         }) {
             Image(systemName: "chevron.up")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Color.white.opacity(fillOpacity))
@@ -782,7 +782,7 @@ struct ExpandButtonView: View {
         }) {
             Image(systemName: "pip.exit")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(isHovering ? .white : .white.opacity(0.7))
+                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Color.white.opacity(fillOpacity))
@@ -834,7 +834,7 @@ struct TranslationButtonView: View {
         }) {
             Image(systemName: "translate")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(lyricsService.showTranslation ? .white : (isHovering ? .white.opacity(0.95) : .white.opacity(0.8)))
+                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
                 .frame(width: 32, height: 32)
                 .background(
                     Circle()

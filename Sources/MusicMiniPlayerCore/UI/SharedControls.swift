@@ -327,7 +327,7 @@ struct NavigationIconButton: View {
         Button(action: action) {
             Image(systemName: iconName)
                 .font(.system(size: 15))
-                .foregroundColor(isActive ? .white : (isHovering ? .white : .white.opacity(0.7)))
+                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
                 .frame(width: 26, height: 26)
                 .background(
                     Circle()

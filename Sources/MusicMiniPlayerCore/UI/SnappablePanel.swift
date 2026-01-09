@@ -662,6 +662,18 @@ public class SnappablePanel: NSPanel {
     
     public override var canBecomeKey: Bool { true }
     public override var canBecomeMain: Bool { false }
+
+    // 🔑 点击时激活应用，以便 menu bar 显示 app 菜单
+    public override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        // 让窗口成为 key window
+        makeKey()
+        // 激活应用程序
+        if !UserDefaults.standard.bool(forKey: "showInDock") {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: false)
+    }
 }
 
 public enum ScreenCorner {

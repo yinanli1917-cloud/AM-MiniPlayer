@@ -5,7 +5,7 @@
     <key>CFBundleExecutable</key>
     <string>nanoPod</string>
     <key>CFBundleIdentifier</key>
-    <string>com.yinanli.MusicMiniPlayer</string>
+    <string>com.yinanli.nanoPod</string>
     <key>CFBundleName</key>
     <string>nanoPod</string>
     <key>CFBundleDisplayName</key>

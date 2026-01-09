@@ -2445,23 +2445,8 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        for candidate in candidates {
-            // 优先3：时长差 < 1秒 且 标题匹配（无艺术家匹配，用于跨语言艺术家名）
-            if candidate.durationDiff < 1 && candidate.titleMatch {
-                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title)")
-                logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
-                return candidate.id
-            }
-        }
-
-        for candidate in candidates {
-            // 优先4：时长差 < 1秒 且 标题匹配（标题可能通用，需严格时长）
-            if candidate.durationDiff < 1 && candidate.titleMatch {
-                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<1s + title)")
-                logger.info("✅ NetEase match: \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.1f", candidate.durationDiff))s")
-                return candidate.id
-            }
-        }
+        // 🔑 优先级3已完全移除：对于通用歌名（如 "Singer"），只有标题+时长匹配会导致错误匹配
+        // 必须同时匹配艺术家，没有例外
 
         // ❌ 没有找到匹配
         debugLog("❌ NetEase: No match found in \(songs.count) results (candidates after duration filter: \(candidates.count))")
@@ -3177,9 +3162,12 @@ public class LyricsService: ObservableObject {
             return nil
         }
 
-        // 查找最佳匹配
+        // 🔑 查找最佳匹配 - 严格要求：标题+艺术家+时长 都必须匹配
         let titleLower = title.lowercased()
         let artistLower = artist.lowercased()
+
+        // 🔑 评分系统：找到最高分的匹配结果
+        var bestMatch: (trackId: Int, score: Int)? = nil
 
         for result in results {
             guard let trackId = result["trackId"] as? Int,
@@ -3187,18 +3175,61 @@ public class LyricsService: ObservableObject {
                   let artistName = result["artistName"] as? String else { continue }
 
             let trackDuration = (result["trackTimeMillis"] as? Double ?? 0) / 1000.0
+            let trackNameLower = trackName.lowercased()
+            let artistNameLower = artistName.lowercased()
 
-            // 标题和艺术家匹配
-            let titleMatch = trackName.lowercased().contains(titleLower) ||
-                            titleLower.contains(trackName.lowercased())
-            let artistMatch = artistName.lowercased().contains(artistLower) ||
-                             artistLower.contains(artistName.lowercased())
-            let durationMatch = abs(trackDuration - duration) < 3.0
+            var score = 0
 
-            // 完全匹配或标题+时长匹配
-            if (titleMatch && artistMatch) || (titleMatch && durationMatch) {
-                return trackId
+            // 🔑 标题匹配（必须）
+            let titleExactMatch = trackNameLower == titleLower
+            let titlePartialMatch = trackNameLower.contains(titleLower) || titleLower.contains(trackNameLower)
+            if titleExactMatch {
+                score += 100
+            } else if titlePartialMatch {
+                score += 50
+            } else {
+                continue  // 标题不匹配，跳过
             }
+
+            // 🔑 艺术家匹配（必须）
+            let artistExactMatch = artistNameLower == artistLower
+            let artistPartialMatch = artistNameLower.contains(artistLower) || artistLower.contains(artistNameLower)
+            if artistExactMatch {
+                score += 80
+            } else if artistPartialMatch {
+                score += 40
+            } else {
+                // 🔑 艺术家不匹配时，大幅降低分数但不完全排除（某些情况下艺术家名可能有差异）
+                score -= 50
+                debugLog("⚠️ iTunes artist mismatch: '\(artistName)' vs '\(artist)'")
+            }
+
+            // 🔑 时长匹配（重要）
+            let durationDiff = abs(trackDuration - duration)
+            if durationDiff < 1.0 {
+                score += 50  // 几乎完全匹配
+            } else if durationDiff < 3.0 {
+                score += 30  // 允许小误差
+            } else if durationDiff < 5.0 {
+                score += 10  // 较大误差
+            } else {
+                // 🔑 时长差异太大，说明很可能是不同版本或不同歌曲
+                score -= 30
+                debugLog("⚠️ iTunes duration mismatch: \(trackDuration)s vs \(duration)s (diff: \(durationDiff)s)")
+            }
+
+            // 🔑 只有分数超过阈值才考虑（防止错误匹配）
+            if score >= 100 {  // 至少需要：标题部分匹配(50) + 艺术家部分匹配(40) + 时长接近(10) = 100
+                if bestMatch == nil || score > bestMatch!.score {
+                    bestMatch = (trackId, score)
+                    debugLog("✅ iTunes candidate: '\(trackName)' by '\(artistName)' duration=\(trackDuration)s score=\(score)")
+                }
+            }
+        }
+
+        if let match = bestMatch {
+            debugLog("✅ iTunes best match: trackId=\(match.trackId) score=\(match.score)")
+            return match.trackId
         }
 
         return nil

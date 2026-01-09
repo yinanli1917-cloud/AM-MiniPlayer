@@ -12,6 +12,7 @@ mkdir -p nanoPod.app/Contents/Resources
 cp .build/release/MusicMiniPlayer nanoPod.app/Contents/MacOS/nanoPod
 
 # Create Info.plist with ALL required permissions and icon configuration
+# 🔑 使用新的 Bundle Identifier (com.yinanli.nanoPod) 避免和旧版本冲突
 cat > nanoPod.app/Contents/Info.plist << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -20,7 +21,7 @@ cat > nanoPod.app/Contents/Info.plist << 'PLIST'
     <key>CFBundleExecutable</key>
     <string>nanoPod</string>
     <key>CFBundleIdentifier</key>
-    <string>com.yinanli.MusicMiniPlayer</string>
+    <string>com.yinanli.nanoPod</string>
     <key>CFBundleName</key>
     <string>nanoPod</string>
     <key>CFBundleDisplayName</key>

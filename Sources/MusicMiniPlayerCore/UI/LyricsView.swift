@@ -578,8 +578,11 @@ public struct LyricsView: View {
         }
         // 🔑 macOS 15.0+: 翻译开关变化时更新配置（确保重新触发翻译）
         .onChange(of: lyricsService.showTranslation) { _, newValue in
-            // 🔑 翻译开关变化会影响行高，需要使缓存失效
-            heightCacheInvalidated = true
+            // 🔑 翻译开关变化会影响行高，但不立即使缓存失效
+            // 让 SwiftUI 的自然布局动画先执行，然后延迟更新缓存
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                heightCacheInvalidated = true
+            }
             if #available(macOS 15.0, *), newValue {
                 updateTranslationSessionConfig()
             }
@@ -595,7 +598,10 @@ public struct LyricsView: View {
         }
         // 🔑 翻译状态变化会影响行高（显示/隐藏加载动画和翻译内容）
         .onChange(of: lyricsService.isTranslating) { _, _ in
-            heightCacheInvalidated = true
+            // 🔑 延迟更新缓存，让自然动画先执行
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                heightCacheInvalidated = true
+            }
         }
         .onChange(of: musicController.currentTime) {
             lyricsService.updateCurrentTime(musicController.currentTime)
@@ -1048,6 +1054,8 @@ struct LyricLineView: View {
     var isTranslating: Bool = false  // 🔑 是否正在翻译中
 
     @State private var isHovering: Bool = false
+    // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
+    @State private var internalShowTranslation: Bool = false
 
     private var distance: Int { index - currentIndex }
     private var isCurrent: Bool { distance == 0 }
@@ -1059,6 +1067,12 @@ struct LyricLineView: View {
         let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
         return line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    // 🔑 翻译文本（如果有）
+    private var translationText: String? {
+        guard let translation = line.translation, !translation.isEmpty else { return nil }
+        return translation
     }
 
     var body: some View {
@@ -1095,26 +1109,42 @@ struct LyricLineView: View {
                 Spacer(minLength: 0)
             }
 
-            // 🔑 翻译行（如果有翻译且开启显示）
-            // 样式：翻译字体 65%（16pt/24pt），字重与主歌词一致
-            if showTranslation, let translation = line.translation, !translation.isEmpty {
+            // 🔑 翻译行 - 使用 internalShowTranslation 控制，实现开启时的平滑动画
+            if internalShowTranslation, let translation = translationText {
                 HStack(spacing: 0) {
                     Text(translation)
-                        .font(.system(size: 16, weight: .semibold))  // 与主歌词一致的字重
-                        .foregroundColor(.white.opacity(textOpacity * 0.6))  // 更明显的透明度
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white.opacity(textOpacity * 0.6))
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .lineSpacing(4)
 
                     Spacer(minLength: 0)
                 }
-            } else if showTranslation && isTranslating && line.translation == nil {
+            } else if showTranslation && isTranslating {
                 // 🔑 翻译加载中动画
                 HStack(spacing: 4) {
                     TranslationLoadingDotsView()
                     Spacer(minLength: 0)
                 }
             }
+        }
+        // 🔑 监听 showTranslation 变化，触发内部状态更新
+        .onChange(of: showTranslation) { _, newValue in
+            // 🔑 开启时延迟一帧，让布局系统先完成初始计算，然后动画到新高度
+            if newValue {
+                // 开启：延迟一帧添加翻译视图，这样 lineOffset 的变化会被动画捕获
+                DispatchQueue.main.async {
+                    internalShowTranslation = true
+                }
+            } else {
+                // 关闭：立即移除
+                internalShowTranslation = false
+            }
+        }
+        .onAppear {
+            // 🔑 初始化时同步状态
+            internalShowTranslation = showTranslation
         }
         // 🔑 不设固定高度，让内容自然决定高度
         .padding(.vertical, 8)  // 🔑 每句歌词的内部 padding（hover 背景用）
@@ -1133,6 +1163,7 @@ struct LyricLineView: View {
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: textOpacity)
+        // 🔑 翻译动画已移至容器级别，此处不再单独设置（性能优化）
         // 🔑 点击整个区域触发跳转
         .contentShape(Rectangle())
         .onTapGesture {
@@ -1376,4 +1407,9 @@ struct LyricsView_Previews: PreviewProvider {
     }
 }
 #endif
+
+
+
+
+
 

@@ -73,13 +73,10 @@ public struct PlaylistView: View {
                                         .padding(.vertical, 20)
                                 } else {
                                     // 🔑 反转顺序：最近的在底部（靠近 Now Playing）
-                                    // 使用 persistentID 作为稳定 ID，避免闪烁
-                                    ForEach(musicController.recentTracks.reversed(), id: \.persistentID) { track in
+                                    ForEach(0..<musicController.recentTracks.count, id: \.self) { index in
                                         PlaylistItemRowCompact(
-                                            title: track.title,
-                                            artist: track.artist,
-                                            album: track.album,
-                                            persistentID: track.persistentID,
+                                            index: index,
+                                            isUpNext: false,
                                             artSize: min(geometry.size.width * 0.12, 40.0),
                                             currentPage: $currentPage,
                                             fadeHeaderHeight: headerHeight
@@ -87,7 +84,8 @@ public struct PlaylistView: View {
                                     }
                                 }
                             }
-                            .id("historySection")
+                            // 🔑 基于内容的 ID，强制在数据变化时重建整个 Section
+                            .id("history-\(musicController.recentTracks.map { "\($0.title)-\($0.artist)" }.joined(separator: "|"))")
 
                             // ═══════════════════════════════════════════
                             // MARK: - Now Playing Section（默认位置，无 sticky header）
@@ -117,13 +115,10 @@ public struct PlaylistView: View {
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 20)
                                 } else {
-                                    // 使用 persistentID 作为稳定 ID，避免闪烁
-                                    ForEach(musicController.upNextTracks, id: \.persistentID) { track in
+                                    ForEach(0..<musicController.upNextTracks.count, id: \.self) { index in
                                         PlaylistItemRowCompact(
-                                            title: track.title,
-                                            artist: track.artist,
-                                            album: track.album,
-                                            persistentID: track.persistentID,
+                                            index: index,
+                                            isUpNext: true,
                                             artSize: min(geometry.size.width * 0.12, 40.0),
                                             currentPage: $currentPage,
                                             fadeHeaderHeight: headerHeight
@@ -131,7 +126,8 @@ public struct PlaylistView: View {
                                     }
                                 }
                             }
-                            .id("upNextSection")
+                            // 🔑 基于内容的 ID，强制在数据变化时重建整个 Section
+                            .id("upnext-\(musicController.upNextTracks.map { "\($0.title)-\($0.artist)" }.joined(separator: "|"))")
 
                             // 底部留白
                             Spacer().frame(height: 120)  // 🔑 增加留白，给控件腾出空间
@@ -295,6 +291,30 @@ public struct PlaylistView: View {
             .onAppear {
                 musicController.fetchUpNextQueue()
             }
+            // 🔑 hover 控件显示/隐藏动画（与歌词页面同步）
+            .onHover { hovering in
+                isHovering = hovering
+                // 🔑 鼠标离开窗口时总是隐藏控件（无论是否在滚动）
+                if !hovering {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        showControls = false
+                        controlsBlurAmount = 10
+                        controlsOffsetY = 30
+                    }
+                }
+                // 🔑 只在非滚动状态时，鼠标进入显示控件
+                else if !isManualScrolling {
+                    // 🔑 进入时重置模糊和位移状态
+                    controlsBlurAmount = 10
+                    controlsOffsetY = 30
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        showControls = true
+                        controlsBlurAmount = 0
+                        controlsOffsetY = 0
+                    }
+                }
+                // 滚动时鼠标进入不自动显示控件（由scroll逻辑控制）
+            }
             // 🔑 监听全屏封面设置变化
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
@@ -387,7 +407,7 @@ public struct PlaylistView: View {
                             Text("Shuffle")
                                 .font(.system(size: 10, weight: .medium))
                         }
-                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white.opacity(0.6))
+                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)  // 🔑 icon 始终 100% opacity
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
@@ -403,7 +423,7 @@ public struct PlaylistView: View {
                             Text("Repeat")
                                 .font(.system(size: 10, weight: .medium))
                         }
-                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white.opacity(0.6))
+                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)  // 🔑 icon 始终 100% opacity
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
@@ -429,24 +449,75 @@ public struct PlaylistView: View {
 }
 
 // MARK: - Compact Playlist Item Row（带 Gemini 模糊效果）
+// 🔑 macOS 26 修复：接收 index + isUpNext 参数，从 musicController 动态读取数据
+// 这样即使 SwiftUI 复用 view，数据也会是最新的
 
 struct PlaylistItemRowCompact: View {
-    let title: String
-    let artist: String
-    let album: String
-    let persistentID: String
+    let index: Int                    // 🔑 在数组中的索引
+    let isUpNext: Bool                // 🔑 true = upNextTracks, false = recentTracks
     let artSize: CGFloat
     @Binding var currentPage: PlayerPage
-    var fadeHeaderHeight: CGFloat = 0  // 🔑 Gemini 方案：header 高度
+    var fadeHeaderHeight: CGFloat = 0
     @State private var isHovering = false
     @State private var artwork: NSImage? = nil
     @State private var currentArtworkID: String = ""
     @EnvironmentObject var musicController: MusicController
 
-    // 🔑 使用 persistentID 精确匹配，而不是 title+artist
-    // 这样可以避免同名歌曲被错误标记为正在播放
+    // 🔑 从 musicController 动态读取当前 track 数据
+    private var track: (title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)? {
+        if isUpNext {
+            guard index < musicController.upNextTracks.count else { return nil }
+            return musicController.upNextTracks[index]
+        } else {
+            // recentTracks 是反转显示的
+            let reversed = Array(musicController.recentTracks.reversed())
+            guard index < reversed.count else { return nil }
+            return reversed[index]
+        }
+    }
+
+    private var title: String { track?.title ?? "" }
+    private var artist: String { track?.artist ?? "" }
+    private var album: String { track?.album ?? "" }
+    private var persistentID: String { track?.persistentID ?? "" }
+
     var isCurrentTrack: Bool {
         persistentID == musicController.currentPersistentID
+    }
+
+    private var contentID: String {
+        "\(title)-\(artist)"
+    }
+
+    // 🔑 加载封面
+    private func loadArtwork() {
+        guard track != nil else { return }
+        let requestID = contentID
+        let pid = persistentID
+        guard currentArtworkID != requestID else { return }
+
+        artwork = nil
+        currentArtworkID = requestID
+
+        Task {
+            // 🔑 优先从 Music.app 本地获取（有缓存，最快）
+            if let localImg = await musicController.fetchArtworkByPersistentID(persistentID: pid) {
+                await MainActor.run {
+                    if currentArtworkID == requestID {
+                        artwork = localImg
+                    }
+                }
+                return
+            }
+
+            // 🔑 回退到 iTunes API（网络请求，较慢）
+            let img = await musicController.fetchMusicKitArtwork(title: title, artist: artist, album: album)
+            await MainActor.run {
+                if currentArtworkID == requestID {
+                    artwork = img
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -460,7 +531,7 @@ struct PlaylistItemRowCompact: View {
             }
         }) {
             HStack(spacing: 8) {
-                if let artwork = artwork, currentArtworkID == persistentID {
+                if let artwork = artwork {
                     Image(nsImage: artwork)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -516,26 +587,10 @@ struct PlaylistItemRowCompact: View {
                 isHovering = hovering
             }
         }
-        .task(id: persistentID) {
-            if currentArtworkID != persistentID {
-                artwork = nil
-                currentArtworkID = persistentID
-            }
-
-            if let fetchedArtwork = await musicController.fetchArtworkByPersistentID(persistentID: persistentID) {
-                await MainActor.run {
-                    if currentArtworkID == persistentID {
-                        artwork = fetchedArtwork
-                    }
-                }
-            } else {
-                let fetchedArtwork = await musicController.fetchMusicKitArtwork(title: title, artist: artist, album: album)
-                await MainActor.run {
-                    if currentArtworkID == persistentID {
-                        artwork = fetchedArtwork
-                    }
-                }
-            }
+        // 🔑 macOS 26 修复：使用 contentID 作为 task id
+        // 当 musicController 的数组更新时，contentID 会变化，触发重新加载
+        .task(id: contentID) {
+            loadArtwork()
         }
     }
 }
