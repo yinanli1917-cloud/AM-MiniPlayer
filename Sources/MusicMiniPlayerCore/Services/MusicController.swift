@@ -80,7 +80,9 @@ public class MusicController: ObservableObject {
     // - 封面获取队列（后台）：歌单封面预加载等非紧急操作
     // - 控制操作（用户交互）：直接在调用线程执行，保证即时响应
     private let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
-    private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
+    // 🔑 改为并发队列 + 信号量限制，避免歌单封面请求串行阻塞
+    private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility, attributes: .concurrent)
+    private let artworkFetchSemaphore = DispatchSemaphore(value: 3)  // 最多 3 个并发请求
 
     // 🔑 文件日志（调试用）
     private func logToFile(_ message: String) {
@@ -879,60 +881,76 @@ public class MusicController: ObservableObject {
             return
         }
 
-        logToFile("🎨 Cache MISS, trying ScriptingBridge...")
+        logToFile("🎨 Cache MISS, starting parallel fetch...")
 
-        // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
+        // 🔑 并行获取策略：同时启动 ScriptingBridge 和 MusicKit/iTunes API
+        // 谁先返回有效结果就用谁，减少延迟
+        let artworkSet = OSAllocatedUnfairLock(initialState: false)
+
+        // Track 1: ScriptingBridge (本地嵌入封面，最快)
         scriptingBridgeQueue.async { [weak self] in
-            guard let self = self else {
-                self?.logToFile("🎨 ERROR: self is nil")
-                return
-            }
-            guard let app = self.musicApp else {
-                self.logToFile("🎨 ERROR: musicApp is nil")
-                return
-            }
-            guard app.isRunning else {
-                self.logToFile("🎨 ERROR: musicApp not running")
-                return
-            }
-            self.logToFile("🎨 ScriptingBridge ready, calling getArtworkImageFromApp...")
+            guard let self = self,
+                  let app = self.musicApp,
+                  app.isRunning else { return }
 
-            // 1. Try ScriptingBridge (App Store 合规，参考 Tuneful)
+            self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
             if let image = self.getArtworkImageFromApp(app) {
-                self.logToFile("🎨 ScriptingBridge SUCCESS! Got image \(image.size)")
-                DispatchQueue.main.async {
-                    self.setArtwork(image)
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(image, forKey: persistentID as NSString)
+                // 🔑 只有第一个成功的源会设置封面
+                let alreadySet = artworkSet.withLock { state -> Bool in
+                    if state { return true }
+                    state = true
+                    return false
+                }
+                if !alreadySet {
+                    self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
+                    DispatchQueue.main.async {
+                        self.setArtwork(image)
+                        if !persistentID.isEmpty {
+                            self.artworkCache.setObject(image, forKey: persistentID as NSString)
+                        }
                     }
                 }
-                return
+            } else {
+                self.logToFile("🎨 [SB] No embedded artwork")
             }
+        }
 
-            self.logToFile("🎨 ScriptingBridge FAILED, trying MusicKit/iTunes API...")
+        // Track 2: MusicKit/iTunes API (网络获取，适用于流媒体歌曲)
+        Task { [weak self] in
+            guard let self = self else { return }
+            self.logToFile("🎨 [API] Starting MusicKit/iTunes fetch...")
 
-            // 2. ScriptingBridge 失败，先用占位图，然后异步尝试 MusicKit
-            DispatchQueue.main.async {
-                self.setArtwork(self.createPlaceholder())
-
-                // 🔑 异步尝试 MusicKit（适用于电台、云端歌曲等）
-                Task {
-                    self.logToFile("🎨 Calling fetchMusicKitArtwork...")
-                    if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                        self.logToFile("🎨 MusicKit/iTunes SUCCESS! Got image \(mkArtwork.size)")
-                        await MainActor.run {
-                            // 确保还是同一首歌
-                            if self.currentPersistentID == persistentID || persistentID.isEmpty {
-                                self.setArtwork(mkArtwork)
-                                if !persistentID.isEmpty {
-                                    self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
-                                }
+            if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+                // 🔑 只有第一个成功的源会设置封面
+                let alreadySet = artworkSet.withLock { state -> Bool in
+                    if state { return true }
+                    state = true
+                    return false
+                }
+                if !alreadySet {
+                    self.logToFile("🎨 [API] SUCCESS! Got image \(mkArtwork.size)")
+                    await MainActor.run {
+                        // 确保还是同一首歌
+                        if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                            self.setArtwork(mkArtwork)
+                            if !persistentID.isEmpty {
+                                self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
                             }
                         }
-                    } else {
-                        self.logToFile("🎨 MusicKit/iTunes FAILED - no artwork found")
                     }
                 }
+            } else {
+                self.logToFile("🎨 [API] No artwork found")
+            }
+        }
+
+        // 🔑 设置超时后的占位图（如果两个源都没返回）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self else { return }
+            let hasArtwork = artworkSet.withLock { $0 }
+            if !hasArtwork && (self.currentPersistentID == persistentID || persistentID.isEmpty) {
+                self.logToFile("🎨 [Timeout] Setting placeholder after 300ms")
+                self.setArtwork(self.createPlaceholder())
             }
         }
     }
@@ -1062,15 +1080,17 @@ public class MusicController: ObservableObject {
             return cached
         }
 
-        // 🔑 使用专用的封面获取队列，不阻塞核心操作
-        // 注意：这里使用 artworkFetchQueue 而不是 scriptingBridgeQueue
+        // 🔑 使用并发队列 + 信号量限制，避免过多请求阻塞
         let image: NSImage? = await withCheckedContinuation { continuation in
             artworkFetchQueue.async { [weak self] in
                 guard let self = self else {
                     continuation.resume(returning: nil)
                     return
                 }
+                // 🔑 信号量限制并发数
+                self.artworkFetchSemaphore.wait()
                 let result = self.getArtworkImageByPersistentID(app, persistentID: persistentID)
+                self.artworkFetchSemaphore.signal()
                 continuation.resume(returning: result)
             }
         }

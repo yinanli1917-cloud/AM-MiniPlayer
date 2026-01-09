@@ -778,18 +778,17 @@ struct MusicButtonView: View {
             let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
             NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
         }) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up.left")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("Music")
-                    .font(.system(size: 11, weight: .medium))
+            glassButtonLabel {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.left")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Music")
+                        .font(.system(size: 11, weight: .medium))
+                }
             }
-            .foregroundColor(.white)  // 🔑 icon/text 始终 100% opacity
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color.white.opacity(fillOpacity))
-            .clipShape(Capsule())
-            .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -798,6 +797,40 @@ struct MusicButtonView: View {
             }
         }
         .help("打开 Apple Music")
+    }
+}
+
+// 🔑 macOS 26+ Liquid Glass 按钮背景适配
+struct GlassButtonBackground: ViewModifier {
+    var fillOpacity: Double
+    var shadowOpacity: Double
+    var shadowRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            // 🔑 Liquid Glass: 使用 .clear 样式 - 透明度高，适合在封面图片上方
+            // .clear 特点：最小模糊，高透明度，视觉冲击力强
+            content
+                .glassEffect(.clear, in: .capsule)
+                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+        } else {
+            content
+                .background(Color.white.opacity(fillOpacity))
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+        }
+    }
+}
+
+// 🔑 macOS 26+ Liquid Glass 按钮标签：自动适配前景色
+@ViewBuilder
+func glassButtonLabel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    if #available(macOS 26.0, *) {
+        content()
+            .foregroundStyle(.primary)  // 系统自动适配亮/暗背景
+    } else {
+        content()
+            .foregroundStyle(Color.white)
     }
 }
 
@@ -822,14 +855,13 @@ struct HideButtonView: View {
         Button(action: {
             onHide()
         }) {
-            Image(systemName: "chevron.up")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(fillOpacity))
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+            glassButtonLabel {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -863,14 +895,13 @@ struct ExpandButtonView: View {
         Button(action: {
             onExpand()
         }) {
-            Image(systemName: "pip.exit")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(fillOpacity))
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+            glassButtonLabel {
+                Image(systemName: "pip.exit")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius))
         }
         .buttonStyle(.plain)
         .onHover { hovering in

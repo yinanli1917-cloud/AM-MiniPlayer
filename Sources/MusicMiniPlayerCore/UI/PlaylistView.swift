@@ -86,8 +86,8 @@ public struct PlaylistView: View {
                                     }
                                 }
                             }
-                            // 🔑 基于内容的 ID，强制在数据变化时重建整个 Section
-                            .id("history-\(musicController.recentTracks.map { "\($0.title)-\($0.artist)" }.joined(separator: "|"))")
+                            // 🔑 使用简单的 count 作为 ID，避免复杂字符串拼接
+                            .id("history-\(musicController.recentTracks.count)")
 
                             // ═══════════════════════════════════════════
                             // MARK: - Now Playing Section（默认位置，无 sticky header）
@@ -128,8 +128,8 @@ public struct PlaylistView: View {
                                     }
                                 }
                             }
-                            // 🔑 基于内容的 ID，强制在数据变化时重建整个 Section
-                            .id("upnext-\(musicController.upNextTracks.map { "\($0.title)-\($0.artist)" }.joined(separator: "|"))")
+                            // 🔑 使用简单的 count 作为 ID，避免复杂字符串拼接
+                            .id("upnext-\(musicController.upNextTracks.count)")
 
                             // 底部留白
                             Spacer().frame(height: 120)  // 🔑 增加留白，给控件腾出空间
@@ -644,7 +644,7 @@ struct ScrollFadeEffect: ViewModifier {
 struct PlaylistView_Previews: PreviewProvider {
     @Namespace static var namespace
     static var previews: some View {
-        PlaylistView(currentPage: .constant(.playlist), animationNamespace: namespace, selectedTab: .constant(1), showControls: .constant(true), isHovering: .constant(false), scrollOffset: .constant(0))
+        PlaylistView(currentPage: .constant(.playlist), animationNamespace: namespace, selectedTab: .constant(1), showControls: .constant(true), isHovering: .constant(false), showOverlayContent: .constant(false), scrollOffset: .constant(0))
             .environmentObject(MusicController(preview: true))
             .frame(width: 300, height: 300)
     }
