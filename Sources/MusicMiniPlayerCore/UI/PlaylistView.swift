@@ -7,6 +7,7 @@ public struct PlaylistView: View {
     @Binding var selectedTab: Int
     @Binding var showControls: Bool
     @Binding var isHovering: Bool
+    @Binding var showOverlayContent: Bool  // 🔑 新增：用于页面切换时同步状态
     @State private var isProgressBarHovering: Bool = false
     @State private var dragPosition: CGFloat? = nil
     @State private var isManualScrolling: Bool = false
@@ -34,12 +35,13 @@ public struct PlaylistView: View {
     // 🔑 布局常量
     private let headerHeight: CGFloat = 36
 
-    public init(currentPage: Binding<PlayerPage>, animationNamespace: Namespace.ID, selectedTab: Binding<Int>, showControls: Binding<Bool>, isHovering: Binding<Bool>, scrollOffset: Binding<CGFloat>) {
+    public init(currentPage: Binding<PlayerPage>, animationNamespace: Namespace.ID, selectedTab: Binding<Int>, showControls: Binding<Bool>, isHovering: Binding<Bool>, showOverlayContent: Binding<Bool>, scrollOffset: Binding<CGFloat>) {
         self._currentPage = currentPage
         self.animationNamespace = animationNamespace
         self._selectedTab = selectedTab
         self._showControls = showControls
         self._isHovering = isHovering
+        self._showOverlayContent = showOverlayContent
         self._scrollOffset = scrollOffset
     }
 
@@ -293,6 +295,8 @@ public struct PlaylistView: View {
             }
             // 🔑 hover 控件显示/隐藏动画（与歌词页面同步）
             .onHover { hovering in
+                // 🔑 只在歌单页面时处理 hover，避免页面切换时覆盖状态
+                guard currentPage == .playlist else { return }
                 isHovering = hovering
                 // 🔑 鼠标离开窗口时总是隐藏控件（无论是否在滚动）
                 if !hovering {
@@ -348,12 +352,14 @@ public struct PlaylistView: View {
             VStack(spacing: 0) {
                 // Now Playing 卡片
                 Button(action: {
-                    withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
+                    // 🔑 同时设置所有状态，确保切换到专辑页时状态一致
+                    let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+                    withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
                         isCoverAnimating = true
                         currentPage = .album
-                        // 🔑 确保回到专辑页时控件可见
                         isHovering = true
                         showControls = true
+                        showOverlayContent = true
                     }
                 }) {
                     HStack(alignment: .center, spacing: 12) {

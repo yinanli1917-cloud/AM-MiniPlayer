@@ -31,6 +31,9 @@ public struct MiniPlayerView: View {
     // 🔑 封面亮度（用于动态调整按钮样式）
     @State private var artworkBrightness: CGFloat = 0.5
 
+    // 🔑 页面切换后短暂锁定 hover 状态，防止 onHover(false) 覆盖
+    @State private var hoverLocked: Bool = false
+
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
@@ -62,7 +65,7 @@ public struct MiniPlayerView: View {
                     .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // Playlist View - 始终存在以支持matchedGeometryEffect
-                PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, scrollOffset: $playlistScrollOffset)
+                PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent, scrollOffset: $playlistScrollOffset)
                     .opacity(musicController.currentPage == .playlist ? 1 : 0)
                     .zIndex(musicController.currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
                     .allowsHitTesting(musicController.currentPage == .playlist)
@@ -80,6 +83,7 @@ public struct MiniPlayerView: View {
                     floatingArtwork(artwork: artwork, geometry: geometry)
                         .zIndex(musicController.currentPage == .album ? 50 : 1)  // 🔑 歌单页 1（同层），专辑页 50（遮住文字）
                         .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                        .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
                 }
 
                 // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上
@@ -89,6 +93,7 @@ public struct MiniPlayerView: View {
                     .opacity(musicController.currentPage == .album ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .album)
                     .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
 
 
             }
@@ -131,7 +136,18 @@ public struct MiniPlayerView: View {
             }
         }
         .onHover { hovering in
-            // 🔑 简单逻辑：鼠标在窗口内=hover（显示控件+缩小封面），鼠标离开=非hover（放大封面）
+            // 🔑 调试日志
+            let logMsg = "🖱️ onHover: hovering=\(hovering), locked=\(hoverLocked), page=\(musicController.currentPage)\n"
+            let logPath = "/tmp/nanopod_hover.log"
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                if let data = logMsg.data(using: .utf8) { handle.write(data) }
+                handle.closeFile()
+            }
+
+            // 🔑 如果 hover 状态被锁定（页面切换后短暂期间），忽略 onHover(false)
+            if hoverLocked && !hovering { return }
+
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
             let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
             withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
@@ -180,19 +196,38 @@ public struct MiniPlayerView: View {
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
         .onChange(of: musicController.currentPage) { oldPage, newPage in
+            // 🔑 日志：确认 onChange 被触发
+            let logMsg = "🔄 onChange: \(oldPage)->\(newPage), hover=\(isHovering), ctrl=\(showControls), overlay=\(showOverlayContent)\n"
+            let logPath = "/tmp/nanopod_page.log"
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                if let data = logMsg.data(using: .utf8) { handle.write(data) }
+                handle.closeFile()
+            } else {
+                try? logMsg.write(toFile: logPath, atomically: true, encoding: .utf8)
+            }
+
             // 从歌单/歌词页切换到专辑页时，强制同步 hover 状态
             if newPage == .album && oldPage != .album {
                 let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
-                // 🔑 先设置初始状态（模糊+位移）
+
+                // 🔑 锁定 hover 状态，防止 onHover(false) 覆盖
+                hoverLocked = true
+
+                // 🔑 用 withAnimation 包裹所有状态变化，确保动画系统正确处理
                 controlsBlurAmount = 10
                 controlsOffsetY = 30
-                // 🔑 然后动画到最终状态
                 withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
                     isHovering = true
                     showControls = true
                     showOverlayContent = true
                     controlsBlurAmount = 0
                     controlsOffsetY = 0
+                }
+
+                // 🔑 延迟解除锁定（动画完成后）
+                DispatchQueue.main.asyncAfter(deadline: .now() + animationDuration + 0.1) {
+                    hoverLocked = false
                 }
             }
         }
@@ -205,6 +240,19 @@ extension MiniPlayerView {
     @ViewBuilder
     func albumOverlayContent(geometry: GeometryProxy) -> some View {
         GeometryReader { geo in
+            // 🔑 调试日志：写入文件确认渲染时的 isHovering 值
+            let _ = {
+                let logMsg = "📝 albumOverlayContent render: isHovering=\(isHovering), page=\(musicController.currentPage)\n"
+                let logPath = "/tmp/nanopod_hover.log"
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    if let data = logMsg.data(using: .utf8) { handle.write(data) }
+                    handle.closeFile()
+                } else {
+                    try? logMsg.write(toFile: logPath, atomically: true, encoding: .utf8)
+                }
+            }()
+
             // 🔑 全屏模式：封面尺寸始终为窗口宽度；普通模式：根据hover状态变化
             let artSize = fullscreenAlbumCover ? geo.size.width : (isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68)
             // 控件区域高度（与SharedBottomControls一致）
@@ -215,6 +263,21 @@ extension MiniPlayerView {
             let artBottomY = artCenterY + artSize / 2
             // 🔑 非全屏模式：封面左边缘 X 位置
             let artLeftX = (geo.size.width - artSize) / 2
+
+            // 🔑 计算文字 Y 坐标
+            let titleY = isHovering
+                ? geo.size.height - controlsHeight - 4 - 16
+                : (fullscreenAlbumCover ? geo.size.height - 12 - 18 - 8 : artBottomY - 38)
+
+            // 🔑 调试：输出计算值
+            let _ = {
+                let logMsg = "📐 titleY=\(Int(titleY)), isHovering=\(isHovering), fullscreen=\(fullscreenAlbumCover), artSize=\(Int(artSize))\n"
+                if let handle = FileHandle(forWritingAtPath: "/tmp/nanopod_hover.log") {
+                    handle.seekToEndOfFile()
+                    if let data = logMsg.data(using: .utf8) { handle.write(data) }
+                    handle.closeFile()
+                }
+            }()
 
             ZStack {
                 // ═══════════════════════════════════════════
@@ -241,6 +304,7 @@ extension MiniPlayerView {
                                 ? geo.size.height - 12 - 18 - 8  // 全屏非hover: 底边距12 + 艺术家行高18 + 间距8
                                 : artBottomY - 38)   // 普通: 封面底部内，标题位置（距底边38）
                     )
+                    .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
                     .allowsHitTesting(false)
 
                 // 🔑 艺术家 - matchedGeometryEffect
@@ -263,6 +327,7 @@ extension MiniPlayerView {
                                 ? geo.size.height - 12 - 8  // 全屏非hover: 底边距12 + 半行高8（艺术家在最下方）
                                 : artBottomY - 18)   // 普通: 封面底部内，艺术家位置（距底边18）
                     )
+                    .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
                     .allowsHitTesting(false)
 
                 // ═══════════════════════════════════════════

@@ -82,6 +82,24 @@ public class MusicController: ObservableObject {
     private let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
     private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
 
+    // 🔑 文件日志（调试用）
+    private func logToFile(_ message: String) {
+        let logPath = "/tmp/nanopod_artwork.log"
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let logMsg = "[\(timestamp)] \(message)\n"
+        if FileManager.default.fileExists(atPath: logPath) {
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                if let data = logMsg.data(using: .utf8) {
+                    handle.write(data)
+                }
+                handle.closeFile()
+            }
+        } else {
+            try? logMsg.write(toFile: logPath, atomically: true, encoding: .utf8)
+        }
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Artwork Extraction Helper
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -852,18 +870,36 @@ public class MusicController: ObservableObject {
     }
 
     private func fetchArtwork(for title: String, artist: String, album: String, persistentID: String) {
+        logToFile("🎨 fetchArtwork: \(title) - \(artist)")
+
         // Check cache first
         if let cached = artworkCache.object(forKey: persistentID as NSString) {
+            logToFile("🎨 Cache HIT")
             self.setArtwork(cached)
             return
         }
 
+        logToFile("🎨 Cache MISS, trying ScriptingBridge...")
+
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         scriptingBridgeQueue.async { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            guard let self = self else {
+                self?.logToFile("🎨 ERROR: self is nil")
+                return
+            }
+            guard let app = self.musicApp else {
+                self.logToFile("🎨 ERROR: musicApp is nil")
+                return
+            }
+            guard app.isRunning else {
+                self.logToFile("🎨 ERROR: musicApp not running")
+                return
+            }
+            self.logToFile("🎨 ScriptingBridge ready, calling getArtworkImageFromApp...")
 
             // 1. Try ScriptingBridge (App Store 合规，参考 Tuneful)
             if let image = self.getArtworkImageFromApp(app) {
+                self.logToFile("🎨 ScriptingBridge SUCCESS! Got image \(image.size)")
                 DispatchQueue.main.async {
                     self.setArtwork(image)
                     if !persistentID.isEmpty {
@@ -873,13 +909,17 @@ public class MusicController: ObservableObject {
                 return
             }
 
+            self.logToFile("🎨 ScriptingBridge FAILED, trying MusicKit/iTunes API...")
+
             // 2. ScriptingBridge 失败，先用占位图，然后异步尝试 MusicKit
             DispatchQueue.main.async {
                 self.setArtwork(self.createPlaceholder())
 
                 // 🔑 异步尝试 MusicKit（适用于电台、云端歌曲等）
                 Task {
+                    self.logToFile("🎨 Calling fetchMusicKitArtwork...")
                     if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+                        self.logToFile("🎨 MusicKit/iTunes SUCCESS! Got image \(mkArtwork.size)")
                         await MainActor.run {
                             // 确保还是同一首歌
                             if self.currentPersistentID == persistentID || persistentID.isEmpty {
@@ -889,6 +929,8 @@ public class MusicController: ObservableObject {
                                 }
                             }
                         }
+                    } else {
+                        self.logToFile("🎨 MusicKit/iTunes FAILED - no artwork found")
                     }
                 }
             }
@@ -897,28 +939,38 @@ public class MusicController: ObservableObject {
 
     /// 从 SBApplication 获取封面图片（使用共享的 musicApp 实例）
     private func getArtworkImageFromApp(_ app: SBApplication) -> NSImage? {
-        guard let track = app.value(forKey: "currentTrack") as? NSObject,
-              let artworks = track.value(forKey: "artworks") as? SBElementArray,
-              artworks.count > 0,
+        guard let track = app.value(forKey: "currentTrack") as? NSObject else {
+            logToFile("⚠️ getArtworkImageFromApp: no currentTrack")
+            return nil
+        }
+
+        guard let artworks = track.value(forKey: "artworks") as? SBElementArray else {
+            logToFile("⚠️ getArtworkImageFromApp: no artworks property")
+            return nil
+        }
+
+        logToFile("🔍 getArtworkImageFromApp: artworks.count = \(artworks.count)")
+
+        guard artworks.count > 0,
               let artwork = artworks.object(at: 0) as? NSObject else {
-            debugPrint("⚠️ [MusicController] No artwork found for current track\n")
+            logToFile("⚠️ getArtworkImageFromApp: artworks is empty")
             return nil
         }
 
         // Tuneful 方式：artwork.data 直接返回 NSImage
         if let image = artwork.value(forKey: "data") as? NSImage {
-            debugPrint("✅ [MusicController] Got artwork as NSImage\n")
+            logToFile("✅ getArtworkImageFromApp: got NSImage via data")
             return image
         }
 
         // 回退：尝试 rawData 作为 Data
         if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
            let image = NSImage(data: rawData) {
-            debugPrint("✅ [MusicController] Got artwork via rawData (\(rawData.count) bytes)\n")
+            logToFile("✅ getArtworkImageFromApp: got NSImage via rawData (\(rawData.count) bytes)")
             return image
         }
 
-        debugPrint("⚠️ [MusicController] Could not extract artwork image\n")
+        logToFile("⚠️ getArtworkImageFromApp: could not extract image from artwork object")
         return nil
     }
 
