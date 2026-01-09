@@ -82,6 +82,30 @@ public class MusicController: ObservableObject {
     private let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
     private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Artwork Extraction Helper
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// 从 ScriptingBridge track 对象提取封面图片
+    /// 🔑 复用于队列遍历和单独封面获取，避免重复代码
+    private func extractArtwork(from track: NSObject) -> NSImage? {
+        guard let artworks = track.value(forKey: "artworks") as? SBElementArray,
+              artworks.count > 0,
+              let artwork = artworks.object(at: 0) as? NSObject else {
+            return nil
+        }
+        // 尝试 data 属性（Tuneful 方式）
+        if let image = artwork.value(forKey: "data") as? NSImage {
+            return image
+        }
+        // 尝试 rawData 属性
+        if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
+           let image = NSImage(data: rawData) {
+            return image
+        }
+        return nil
+    }
+
     // Queue sync state
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
@@ -968,6 +992,13 @@ public class MusicController: ObservableObject {
         return nil
     }
 
+    // 🔑 同步获取缓存中的封面（供 UI 层直接使用）
+    // 如果缓存命中立即返回，避免 async 开销
+    public func getCachedArtwork(persistentID: String) -> NSImage? {
+        guard !persistentID.isEmpty else { return nil }
+        return artworkCache.object(forKey: persistentID as NSString)
+    }
+
     // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
         guard !isPreview, !persistentID.isEmpty, let app = musicApp, app.isRunning else {
@@ -1003,26 +1034,6 @@ public class MusicController: ObservableObject {
     /// 从 SBApplication 获取指定 persistentID 的封面
     private func getArtworkImageByPersistentID(_ app: SBApplication, persistentID: String) -> NSImage? {
         let startTime = CFAbsoluteTimeGetCurrent()
-
-        // 辅助函数：从 track 对象提取封面
-        func extractArtwork(from track: NSObject) -> NSImage? {
-            guard let artworks = track.value(forKey: "artworks") as? SBElementArray,
-                  artworks.count > 0,
-                  let artwork = artworks.object(at: 0) as? NSObject else {
-                return nil
-            }
-
-            // 尝试 data 属性（Tuneful 方式）
-            if let image = artwork.value(forKey: "data") as? NSImage {
-                return image
-            }
-            // 尝试 rawData 属性
-            if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
-               let image = NSImage(data: rawData) {
-                return image
-            }
-            return nil
-        }
 
         // 1. 先在 currentPlaylist 中查找（限制搜索范围为前 100 首，因为 Up Next 只显示 10 首）
         if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
@@ -1431,6 +1442,14 @@ public class MusicController: ObservableObject {
                 // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
                 if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
                     result.append((name, artist, album, trackID, duration))
+
+                    // 🔑 在遍历时同时预加载封面到缓存，避免后续重复遍历
+                    if artworkCache.object(forKey: trackID as NSString) == nil,
+                       let image = extractArtwork(from: track) {
+                        artworkCache.setObject(image, forKey: trackID as NSString)
+                        debugPrint("✅ [getUpNextTracksFromApp] Preloaded artwork for: \(name.prefix(20))...\n")
+                    }
+
                     if result.count >= limit { break }
                 } else if !name.isEmpty {
                     debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
@@ -1441,7 +1460,7 @@ public class MusicController: ObservableObject {
             }
         }
 
-        debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), returning \(result.count) tracks\n")
+        debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), preloaded \(result.count) artworks\n")
         return result
     }
 
@@ -1490,6 +1509,12 @@ public class MusicController: ObservableObject {
             // 某些较新添加的歌曲可能元数据未完全加载
             if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
                 recentList.append((name, artist, album, trackID, duration))
+
+                // 🔑 在遍历时同时预加载封面到缓存
+                if artworkCache.object(forKey: trackID as NSString) == nil,
+                   let image = extractArtwork(from: track) {
+                    artworkCache.setObject(image, forKey: trackID as NSString)
+                }
             } else if !name.isEmpty {
                 // 🐛 调试：记录异常的歌曲名称
                 debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")

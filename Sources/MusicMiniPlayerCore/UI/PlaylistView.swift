@@ -496,11 +496,19 @@ struct PlaylistItemRowCompact: View {
         let pid = persistentID
         guard currentArtworkID != requestID else { return }
 
-        artwork = nil
         currentArtworkID = requestID
 
+        // 🔑 Step 1: 同步检查缓存（预加载时已填充）
+        if let cached = musicController.getCachedArtwork(persistentID: pid) {
+            artwork = cached
+            return
+        }
+
+        // 缓存未命中，走异步流程
+        artwork = nil
+
         Task {
-            // 🔑 优先从 Music.app 本地获取（有缓存，最快）
+            // 🔑 优先从 Music.app 本地获取
             if let localImg = await musicController.fetchArtworkByPersistentID(persistentID: pid) {
                 await MainActor.run {
                     if currentArtworkID == requestID {

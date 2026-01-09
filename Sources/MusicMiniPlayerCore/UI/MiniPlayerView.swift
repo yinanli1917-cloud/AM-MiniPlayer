@@ -178,6 +178,24 @@ public struct MiniPlayerView: View {
                 artworkBrightness = artwork.perceivedBrightness()
             }
         }
+        // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
+        .onChange(of: musicController.currentPage) { oldPage, newPage in
+            // 从歌单/歌词页切换到专辑页时，强制同步 hover 状态
+            if newPage == .album && oldPage != .album {
+                let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+                // 🔑 先设置初始状态（模糊+位移）
+                controlsBlurAmount = 10
+                controlsOffsetY = 30
+                // 🔑 然后动画到最终状态
+                withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
+                    isHovering = true
+                    showControls = true
+                    showOverlayContent = true
+                    controlsBlurAmount = 0
+                    controlsOffsetY = 0
+                }
+            }
+        }
     }
 }
 
