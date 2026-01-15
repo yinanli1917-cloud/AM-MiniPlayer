@@ -1,56 +1,107 @@
+/**
+ * [INPUT]: MusicController (播放状态 + 歌单数据 + 封面缓存)
+ * [OUTPUT]: PlaylistView (歌单页面视图)
+ * [POS]: UI/ 的歌单页面，与 MiniPlayerView 通过 Binding 交互
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+
 import SwiftUI
 import AppKit
-import os.log
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - PlaylistView
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 macOS 26 修复：不用 Section + LazyVStack + pinnedViews（会触发递归 bug）
+// 🔑 Sticky Header：全局 overlay + PreferenceKey 追踪 section 位置
+// 🔑 Gemini 方案：header 纯文字透明，歌单行滚动到 header 区域时自己模糊
+// 🔑 Snap scroll：.scrollTargetLayout() + .scrollTargetBehavior(.viewAligned)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - PreferenceKey for Section Tracking
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct SectionOffsetKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
 
 public struct PlaylistView: View {
     @EnvironmentObject var musicController: MusicController
+
+    // ═══════════════════════════════════════════
+    // MARK: - Bindings（与 MiniPlayerView 同步）
+    // ═══════════════════════════════════════════
+    @Binding var currentPage: PlayerPage
     @Binding var selectedTab: Int
     @Binding var showControls: Bool
     @Binding var isHovering: Bool
-    @Binding var showOverlayContent: Bool  // 🔑 新增：用于页面切换时同步状态
+    @Binding var showOverlayContent: Bool
+
+    var animationNamespace: Namespace.ID
+
+    // ═══════════════════════════════════════════
+    // MARK: - Local State
+    // ═══════════════════════════════════════════
     @State private var isProgressBarHovering: Bool = false
     @State private var dragPosition: CGFloat? = nil
     @State private var isManualScrolling: Bool = false
     @State private var autoScrollTimer: Timer? = nil
-    @Binding var currentPage: PlayerPage
-    var animationNamespace: Namespace.ID
     @State private var isCoverAnimating: Bool = false
+
+    // 滚动控制状态
     @State private var lastVelocity: CGFloat = 0
     @State private var scrollLocked: Bool = false
     @State private var hasTriggeredSlowScroll: Bool = false
 
-    // 🔑 控件模糊渐入效果（初始值为 0，在页面切换时触发动画）
-    @State private var controlsBlurAmount: CGFloat = 0
-    @State private var controlsOffsetY: CGFloat = 0
+    // 控件显示状态
+    @State private var controlsVisible: Bool = false
 
-    @Binding var scrollOffset: CGFloat
-
-    // 🔑 全屏封面模式（从 UserDefaults 读取）
+    // 全屏封面模式
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
 
-    // 🔑 统一的 artSize 常量（与 MiniPlayerView 同步）
+    // Sticky header 状态
+    @State private var sectionOffsets: [String: CGFloat] = [:]
+
+    // ═══════════════════════════════════════════
+    // MARK: - Constants
+    // ═══════════════════════════════════════════
     private let artSizeRatio: CGFloat = 0.18
     private let artSizeMax: CGFloat = 60.0
+    private let headerHeight: CGFloat = 32
 
-    // 🔑 布局常量
-    private let headerHeight: CGFloat = 36
-
-    public init(currentPage: Binding<PlayerPage>, animationNamespace: Namespace.ID, selectedTab: Binding<Int>, showControls: Binding<Bool>, isHovering: Binding<Bool>, showOverlayContent: Binding<Bool>, scrollOffset: Binding<CGFloat>) {
+    // ═══════════════════════════════════════════
+    // MARK: - Init
+    // ═══════════════════════════════════════════
+    public init(
+        currentPage: Binding<PlayerPage>,
+        animationNamespace: Namespace.ID,
+        selectedTab: Binding<Int>,
+        showControls: Binding<Bool>,
+        isHovering: Binding<Bool>,
+        showOverlayContent: Binding<Bool>
+    ) {
         self._currentPage = currentPage
         self.animationNamespace = animationNamespace
         self._selectedTab = selectedTab
         self._showControls = showControls
         self._isHovering = isHovering
         self._showOverlayContent = showOverlayContent
-        self._scrollOffset = scrollOffset
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // MARK: - Body
+    // ═══════════════════════════════════════════════════════════════════════════════
     public var body: some View {
         GeometryReader { geometry in
             let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
+            let rowArtSize = min(geometry.size.width * 0.12, 40.0)
 
-            ZStack {
-                // Background - 全屏模式用流体渐变，普通模式用 Liquid Glass
+            ZStack(alignment: .top) {
+                // ═══════════════════════════════════════════
+                // MARK: - Background
+                // ═══════════════════════════════════════════
                 if fullscreenAlbumCover {
                     AdaptiveFluidBackground(artwork: musicController.currentArtwork)
                         .ignoresSafeArea()
@@ -59,105 +110,94 @@ public struct PlaylistView: View {
                         .ignoresSafeArea()
                 }
 
-                // 主内容 ScrollView
+                // ═══════════════════════════════════════════
+                // MARK: - Main ScrollView with Sections
+                // ═══════════════════════════════════════════
                 ScrollViewReader { scrollProxy in
                     ScrollView(showsIndicators: false) {
-                        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        VStack(alignment: .leading, spacing: 0) {
+
                             // ═══════════════════════════════════════════
-                            // MARK: - History Section（上滑才能看到）
+                            // MARK: - History Section（有 sticky header）
                             // ═══════════════════════════════════════════
-                            Section(header: stickyHeader("History")) {
+                            PlaylistSection(
+                                sectionID: "history",
+                                title: "History",
+                                headerHeight: headerHeight
+                            ) {
                                 if musicController.recentTracks.isEmpty {
-                                    Text("No recent tracks")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.white.opacity(0.5))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 20)
+                                    emptyStateText("No recent tracks")
                                 } else {
-                                    // 🔑 反转顺序：最近的在底部（靠近 Now Playing）
-                                    ForEach(0..<musicController.recentTracks.count, id: \.self) { index in
+                                    ForEach(musicController.recentTracks.reversed(), id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
-                                            index: index,
-                                            isUpNext: false,
-                                            artSize: min(geometry.size.width * 0.12, 40.0),
+                                            track: track,
+                                            artSize: rowArtSize,
                                             currentPage: $currentPage,
+                                            isScrolling: isManualScrolling,
                                             fadeHeaderHeight: headerHeight
                                         )
                                     }
                                 }
                             }
-                            // 🔑 使用简单的 count 作为 ID，避免复杂字符串拼接
-                            .id("history-\(musicController.recentTracks.count)")
+                            .id("historySection")
 
                             // ═══════════════════════════════════════════
-                            // MARK: - Now Playing Section（默认位置，无 sticky header）
+                            // MARK: - Now Playing Section（普通标题，不 sticky）
                             // ═══════════════════════════════════════════
-                            VStack(spacing: 0) {
-                                // Simple header (non-sticky)
-                                Text("Now Playing")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .frame(height: 36)
-
+                            PlainHeaderSection(
+                                title: "Now Playing",
+                                headerHeight: headerHeight
+                            ) {
                                 nowPlayingCard(geometry: geometry, artSize: artSize)
                             }
                             .id("nowPlayingSection")
 
                             // ═══════════════════════════════════════════
-                            // MARK: - Up Next Section
+                            // MARK: - Up Next Section（有 sticky header）
                             // ═══════════════════════════════════════════
-                            Section(header: stickyHeader("Up Next")) {
+                            PlaylistSection(
+                                sectionID: "upNext",
+                                title: "Up Next",
+                                headerHeight: headerHeight
+                            ) {
                                 if musicController.upNextTracks.isEmpty {
-                                    Text("Queue is empty")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.white.opacity(0.5))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 20)
+                                    emptyStateText("Queue is empty")
                                 } else {
-                                    ForEach(0..<musicController.upNextTracks.count, id: \.self) { index in
+                                    ForEach(musicController.upNextTracks, id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
-                                            index: index,
-                                            isUpNext: true,
-                                            artSize: min(geometry.size.width * 0.12, 40.0),
+                                            track: track,
+                                            artSize: rowArtSize,
                                             currentPage: $currentPage,
+                                            isScrolling: isManualScrolling,
                                             fadeHeaderHeight: headerHeight
                                         )
                                     }
                                 }
                             }
-                            // 🔑 使用简单的 count 作为 ID，避免复杂字符串拼接
-                            .id("upnext-\(musicController.upNextTracks.count)")
+                            .id("upNextSection")
 
                             // 底部留白
-                            Spacer().frame(height: 120)  // 🔑 增加留白，给控件腾出空间
+                            Spacer().frame(height: 120)
                         }
-                        .scrollTargetLayout()  // 🔑 恢复 snap 支持
+                        .scrollTargetLayout()
                     }
-                    .coordinateSpace(name: "playlistScroll")  // 🔑 Gemini 方案需要
-                    .scrollTargetBehavior(.viewAligned)  // 🔑 恢复 snap 行为
-                    .defaultScrollAnchor(.top)  // 🔑 默认锚点
+                    .coordinateSpace(name: "playlistScroll")
+                    .scrollTargetBehavior(.viewAligned)
+                    .onPreferenceChange(SectionOffsetKey.self) { offsets in
+                        sectionOffsets = offsets
+                    }
                     .onAppear {
-                        // 🔑 立即滚动到 Now Playing（无延迟，避免跳闪）
-                        scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
+                        }
                     }
                     .onChange(of: currentPage) { _, newPage in
-                        // 🔑 切换到歌单页时立即滚动到 Now Playing
                         if newPage == .playlist {
                             scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
-                            // 🔑 触发 blur + move-in 动画
-                            controlsBlurAmount = 10
-                            controlsOffsetY = 30
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                controlsBlurAmount = 0
-                                controlsOffsetY = 0
-                            }
+                            showControlsWithAnimation()
                         }
                     }
                     .onChange(of: musicController.currentTrackTitle) { _, _ in
-                        // 歌曲切换时也滚动到 Now Playing
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             withAnimation(.easeOut(duration: 0.3)) {
                                 scrollProxy.scrollTo("nowPlayingSection", anchor: .top)
@@ -166,94 +206,40 @@ public struct PlaylistView: View {
                     }
                 }
                 .scrollDetectionWithVelocity(
-                    onScrollStarted: {
-                        isManualScrolling = true
-                        lastVelocity = 0
-                        scrollLocked = false
-                        hasTriggeredSlowScroll = false
-                        autoScrollTimer?.invalidate()
-                    },
-                    onScrollEnded: {
-                        autoScrollTimer?.invalidate()
-                        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
-                            if !isHovering {
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                    showControls = false
-                                    controlsBlurAmount = 10
-                                    controlsOffsetY = 30
-                                }
-                            } else {
-                                // 🔑 鼠标在窗口内，显示控件（带 blur+offset 动画）
-                                controlsBlurAmount = 10
-                                controlsOffsetY = 30
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                    showControls = true
-                                    controlsBlurAmount = 0
-                                    controlsOffsetY = 0
-                                }
-                            }
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                isManualScrolling = false
-                                lastVelocity = 0
-                                scrollLocked = false
-                                hasTriggeredSlowScroll = false
-                            }
-                        }
-                    },
-                    onScrollWithVelocity: { deltaY, velocity in
-                        let absVelocity = abs(velocity)
-                        let threshold: CGFloat = 800
-
-                        if deltaY < 0 {
-                            // 往上滚：隐藏控件
-                            if showControls {
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                    showControls = false
-                                    controlsBlurAmount = 10
-                                    controlsOffsetY = 30
-                                }
-                            }
-                            scrollLocked = true
-                        } else if absVelocity >= threshold {
-                            // 快速滚动：隐藏控件
-                            if !scrollLocked {
-                                scrollLocked = true
-                            }
-                            if showControls {
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                    showControls = false
-                                    controlsBlurAmount = 10
-                                    controlsOffsetY = 30
-                                }
-                            }
-                        } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
-                            // 慢速往下滚：显示控件
-                            hasTriggeredSlowScroll = true
-                            if !showControls {
-                                controlsBlurAmount = 10
-                                controlsOffsetY = 30
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                    showControls = true
-                                    controlsBlurAmount = 0
-                                    controlsOffsetY = 0
-                                }
-                            }
-                        }
-
-                        lastVelocity = absVelocity
-                    },
-                    onScrollOffsetChanged: { offset in
-                        scrollOffset = offset
-                    },
+                    onScrollStarted: { handleScrollStarted() },
+                    onScrollEnded: { handleScrollEnded() },
+                    onScrollWithVelocity: { deltaY, velocity in handleScrollWithVelocity(deltaY: deltaY, velocity: velocity) },
+                    onScrollOffsetChanged: { _ in },
                     isEnabled: currentPage == .playlist
                 )
 
-                // 底部控件 overlay
+                // ═══════════════════════════════════════════
+                // MARK: - Global Sticky Header Overlay
+                // ═══════════════════════════════════════════
+                // 🔑 根据 section offset 决定显示哪个 sticky header
+                // 🔑 只有当 section 滚动到顶部且还有内容在下方时才显示
+                VStack {
+                    if let stickyTitle = computeStickyHeader() {
+                        Text(stickyTitle)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .frame(height: headerHeight)
+                            .allowsHitTesting(false)
+                    }
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+
+                // ═══════════════════════════════════════════
+                // MARK: - Bottom Controls Overlay
+                // ═══════════════════════════════════════════
                 VStack {
                     Spacer()
 
                     ZStack(alignment: .bottom) {
-                        // 🔑 统一使用 VisualEffectView（不允许用透明黑色渐变，会穿透）
                         VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
                             .frame(height: 100)
                             .mask(
@@ -279,47 +265,19 @@ public struct PlaylistView: View {
                         )
                         .padding(.bottom, 0)
                     }
-                    // 🔑 blur + move-in 动画
-                    .blur(radius: controlsBlurAmount)
-                    .offset(y: controlsOffsetY)
                     .contentShape(Rectangle())
                     .allowsHitTesting(true)
                 }
-                .opacity(showControls ? 1 : 0)
-                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showControls)
-                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsBlurAmount)
-                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsOffsetY)
+                .opacity(controlsVisible ? 1 : 0)
+                .offset(y: controlsVisible ? 0 : 20)
+                .animation(.easeInOut(duration: 0.3), value: controlsVisible)
             }
             .onAppear {
                 musicController.fetchUpNextQueue()
             }
-            // 🔑 hover 控件显示/隐藏动画（与歌词页面同步）
             .onHover { hovering in
-                // 🔑 只在歌单页面时处理 hover，避免页面切换时覆盖状态
-                guard currentPage == .playlist else { return }
-                isHovering = hovering
-                // 🔑 鼠标离开窗口时总是隐藏控件（无论是否在滚动）
-                if !hovering {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                        showControls = false
-                        controlsBlurAmount = 10
-                        controlsOffsetY = 30
-                    }
-                }
-                // 🔑 只在非滚动状态时，鼠标进入显示控件
-                else if !isManualScrolling {
-                    // 🔑 进入时重置模糊和位移状态
-                    controlsBlurAmount = 10
-                    controlsOffsetY = 30
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                        showControls = true
-                        controlsBlurAmount = 0
-                        controlsOffsetY = 0
-                    }
-                }
-                // 滚动时鼠标进入不自动显示控件（由scroll逻辑控制）
+                handleHover(hovering: hovering)
             }
-            // 🔑 监听全屏封面设置变化
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
                 if newValue != fullscreenAlbumCover {
@@ -331,28 +289,27 @@ public struct PlaylistView: View {
         }
     }
 
-    // MARK: - Sticky Header（Gemini 方案：纯文字透明背景，歌单行自己模糊）
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // MARK: - Subviews
+    // ═══════════════════════════════════════════════════════════════════════════════
+
     @ViewBuilder
-    private func stickyHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 13, weight: .bold))
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    private func emptyStateText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundColor(.white.opacity(0.5))
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(height: headerHeight)
-        // 🔑 Header 完全透明，背景完美透传
-        // 歌单行滚动到这下面时会自己模糊，不需要 header 加材质
+            .padding(.vertical, 20)
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════════
     // MARK: - Now Playing Card
+    // ═══════════════════════════════════════════════════════════════════════════════
     @ViewBuilder
     private func nowPlayingCard(geometry: GeometryProxy, artSize: CGFloat) -> some View {
         if musicController.currentTrackTitle != "Not Playing" {
             VStack(spacing: 0) {
-                // Now Playing 卡片
                 Button(action: {
-                    // 🔑 同时设置所有状态，确保切换到专辑页时状态一致
                     let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
                     withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
                         isCoverAnimating = true
@@ -363,7 +320,6 @@ public struct PlaylistView: View {
                     }
                 }) {
                     HStack(alignment: .center, spacing: 12) {
-                        // Album art placeholder（用于 matchedGeometryEffect）
                         if musicController.currentArtwork != nil {
                             Color.clear
                                 .frame(width: artSize, height: artSize)
@@ -375,7 +331,6 @@ public struct PlaylistView: View {
                                 .frame(width: artSize, height: artSize)
                         }
 
-                        // Track info
                         VStack(alignment: .leading, spacing: 2) {
                             Text(musicController.currentTrackTitle)
                                 .font(.system(size: 13, weight: .semibold))
@@ -413,7 +368,7 @@ public struct PlaylistView: View {
                             Text("Shuffle")
                                 .font(.system(size: 10, weight: .medium))
                         }
-                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)  // 🔑 icon 始终 100% opacity
+                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
@@ -429,7 +384,7 @@ public struct PlaylistView: View {
                             Text("Repeat")
                                 .font(.system(size: 10, weight: .medium))
                         }
-                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)  // 🔑 icon 始终 100% opacity
+                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
@@ -442,96 +397,191 @@ public struct PlaylistView: View {
                 }
                 .padding(.top, 10)
                 .padding(.horizontal, 12)
-                .padding(.bottom, 16)  // 增加与 Up Next 的间距
+                .padding(.bottom, 16)
             }
         }
     }
 
-    private func formatTime(_ time: Double) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // MARK: - Event Handlers
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    private func handleScrollStarted() {
+        isManualScrolling = true
+        lastVelocity = 0
+        scrollLocked = false
+        hasTriggeredSlowScroll = false
+        autoScrollTimer?.invalidate()
+    }
+
+    private func handleScrollEnded() {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+            if !isHovering {
+                hideControls()
+            } else if !controlsVisible {
+                showControlsWithAnimation()
+            }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isManualScrolling = false
+                lastVelocity = 0
+                scrollLocked = false
+                hasTriggeredSlowScroll = false
+            }
+        }
+    }
+
+    private func handleScrollWithVelocity(deltaY: CGFloat, velocity: CGFloat) {
+        let absVelocity = abs(velocity)
+        let threshold: CGFloat = 800
+
+        if deltaY < 0 {
+            if controlsVisible { hideControls() }
+            scrollLocked = true
+        } else if absVelocity >= threshold {
+            if !scrollLocked { scrollLocked = true }
+            if controlsVisible { hideControls() }
+        } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
+            hasTriggeredSlowScroll = true
+            if !controlsVisible { showControlsWithAnimation() }
+        }
+
+        lastVelocity = absVelocity
+    }
+
+    private func handleHover(hovering: Bool) {
+        guard currentPage == .playlist else { return }
+        isHovering = hovering
+
+        if !hovering {
+            hideControls()
+        } else if !isManualScrolling && !controlsVisible {
+            showControlsWithAnimation()
+        }
+    }
+
+    private func showControlsWithAnimation() {
+        showControls = true
+        controlsVisible = true
+    }
+
+    private func hideControls() {
+        showControls = false
+        controlsVisible = false
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // MARK: - Sticky Header Logic
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // 🔑 计算当前应该显示的 sticky header
+    // 🔑 条件：section 已滚动到顶部（minY <= 0）且还有内容在视口内（底部未完全离开）
+
+    private func computeStickyHeader() -> String? {
+        let historyMinY = sectionOffsets["history_minY"] ?? 1000
+        let historyMaxY = sectionOffsets["history_maxY"] ?? 1000
+        let upNextMinY = sectionOffsets["upNext_minY"] ?? 1000
+        let upNextMaxY = sectionOffsets["upNext_maxY"] ?? 1000
+
+        // History: 当 section 顶部滚过视口顶部，且底部还在视口内
+        if historyMinY <= 0 && historyMaxY > headerHeight {
+            return "History"
+        }
+
+        // Up Next: 当 section 顶部滚过视口顶部，且底部还在视口内
+        if upNextMinY <= 0 && upNextMaxY > headerHeight {
+            return "Up Next"
+        }
+
+        return nil
     }
 }
 
-// MARK: - Compact Playlist Item Row（带 Gemini 模糊效果）
-// 🔑 macOS 26 修复：接收 index + isUpNext 参数，从 musicController 动态读取数据
-// 这样即使 SwiftUI 复用 view，数据也会是最新的
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - PlaylistSection
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 避免 Section + pinnedViews 的递归 bug (POSTM-001)
+// 🔑 用 PreferenceKey 报告 section 位置给父视图
+// 🔑 内部 header 在 section 未滚动时显示，滚动后由全局 overlay 接管
+
+struct PlaylistSection<Content: View>: View {
+    let sectionID: String
+    let title: String
+    let headerHeight: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header（在 section 内部，滚出视口后由全局 overlay 接管）
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .frame(height: headerHeight)
+
+            // 内容
+            content
+        }
+        .background(
+            GeometryReader { geo in
+                let frame = geo.frame(in: .named("playlistScroll"))
+                Color.clear
+                    .preference(
+                        key: SectionOffsetKey.self,
+                        value: [
+                            "\(sectionID)_minY": frame.minY,
+                            "\(sectionID)_maxY": frame.maxY
+                        ]
+                    )
+            }
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - PlainHeaderSection
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 普通标题（不 sticky），用于 Now Playing
+
+struct PlainHeaderSection<Content: View>: View {
+    let title: String
+    let headerHeight: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .frame(height: headerHeight)
+
+            content
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - PlaylistItemRowCompact
+// ═══════════════════════════════════════════════════════════════════════════════
 
 struct PlaylistItemRowCompact: View {
-    let index: Int                    // 🔑 在数组中的索引
-    let isUpNext: Bool                // 🔑 true = upNextTracks, false = recentTracks
+    let track: (title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)
     let artSize: CGFloat
     @Binding var currentPage: PlayerPage
+    var isScrolling: Bool = false
     var fadeHeaderHeight: CGFloat = 0
+
     @State private var isHovering = false
     @State private var artwork: NSImage? = nil
     @State private var currentArtworkID: String = ""
     @EnvironmentObject var musicController: MusicController
 
-    // 🔑 从 musicController 动态读取当前 track 数据
-    private var track: (title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)? {
-        if isUpNext {
-            guard index < musicController.upNextTracks.count else { return nil }
-            return musicController.upNextTracks[index]
-        } else {
-            // recentTracks 是反转显示的
-            let reversed = Array(musicController.recentTracks.reversed())
-            guard index < reversed.count else { return nil }
-            return reversed[index]
-        }
-    }
-
-    private var title: String { track?.title ?? "" }
-    private var artist: String { track?.artist ?? "" }
-    private var album: String { track?.album ?? "" }
-    private var persistentID: String { track?.persistentID ?? "" }
-
-    var isCurrentTrack: Bool {
-        persistentID == musicController.currentPersistentID
-    }
-
-    private var contentID: String {
-        "\(title)-\(artist)"
-    }
-
-    // 🔑 加载封面
-    private func loadArtwork() {
-        guard track != nil else { return }
-        let requestID = contentID
-        let pid = persistentID
-        guard currentArtworkID != requestID else { return }
-
-        currentArtworkID = requestID
-
-        // 🔑 Step 1: 同步检查缓存（预加载时已填充）
-        if let cached = musicController.getCachedArtwork(persistentID: pid) {
-            artwork = cached
-            return
-        }
-
-        // 缓存未命中，走异步流程
-        artwork = nil
-
-        Task {
-            // 🔑 优先从 Music.app 本地获取
-            if let localImg = await musicController.fetchArtworkByPersistentID(persistentID: pid) {
-                await MainActor.run {
-                    if currentArtworkID == requestID {
-                        artwork = localImg
-                    }
-                }
-                return
-            }
-
-            // 🔑 回退到 iTunes API（网络请求，较慢）
-            let img = await musicController.fetchMusicKitArtwork(title: title, artist: artist, album: album)
-            await MainActor.run {
-                if currentArtworkID == requestID {
-                    artwork = img
-                }
-            }
-        }
+    private var isCurrentTrack: Bool {
+        track.persistentID == musicController.currentPersistentID
     }
 
     var body: some View {
@@ -541,11 +591,11 @@ struct PlaylistItemRowCompact: View {
                     currentPage = .album
                 }
             } else {
-                musicController.playTrack(persistentID: persistentID)
+                musicController.playTrack(persistentID: track.persistentID)
             }
         }) {
             HStack(spacing: 8) {
-                if let artwork = artwork {
+                if let artwork = artwork, currentArtworkID == track.persistentID {
                     Image(nsImage: artwork)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -563,12 +613,12 @@ struct PlaylistItemRowCompact: View {
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
+                    Text(track.title)
                         .font(.system(size: 11, weight: isCurrentTrack ? .bold : .medium))
                         .foregroundColor(isCurrentTrack ? Color(red: 0.99, green: 0.24, blue: 0.27) : .white)
                         .lineLimit(1)
 
-                    Text(artist)
+                    Text(track.artist)
                         .font(.system(size: 9, weight: .regular))
                         .foregroundColor(.white.opacity(0.7))
                         .lineLimit(1)
@@ -594,40 +644,65 @@ struct PlaylistItemRowCompact: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // 🔑 Gemini 方案：滚动到 header 区域时自己模糊
-        .modifier(ScrollFadeEffect(headerHeight: fadeHeaderHeight))
+        .modifier(ScrollFadeEffect(headerHeight: fadeHeaderHeight, isScrolling: isScrolling))
         .onHover { hovering in
+            guard !isScrolling else { return }
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
         }
-        // 🔑 macOS 26 修复：使用 contentID 作为 task id
-        // 当 musicController 的数组更新时，contentID 会变化，触发重新加载
-        .task(id: contentID) {
-            loadArtwork()
+        .task(id: track.persistentID) {
+            await loadArtwork()
+        }
+    }
+
+    private func loadArtwork() async {
+        let pid = track.persistentID
+        guard currentArtworkID != pid else { return }
+
+        currentArtworkID = pid
+        artwork = nil
+
+        if let cached = musicController.getCachedArtwork(persistentID: pid) {
+            artwork = cached
+            return
+        }
+
+        if let localImg = await musicController.fetchArtworkByPersistentID(persistentID: pid) {
+            await MainActor.run {
+                if currentArtworkID == pid { artwork = localImg }
+            }
+            return
+        }
+
+        let img = await musicController.fetchMusicKitArtwork(
+            title: track.title,
+            artist: track.artist,
+            album: track.album
+        )
+        await MainActor.run {
+            if currentArtworkID == pid { artwork = img }
         }
     }
 }
 
-// MARK: - Gemini 方案：Per-View Progressive Blur
-// 🔑 歌单行滚动到 header 区域时自己模糊+淡出，header 完全透明无色差
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - ScrollFadeEffect
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 Gemini 方案：歌单行滚动到 header 区域时自己模糊+淡出
 
 struct ScrollFadeEffect: ViewModifier {
     let headerHeight: CGFloat
+    var isScrolling: Bool = false
 
     func body(content: Content) -> some View {
         if headerHeight > 0 {
             content
                 .visualEffect { effectContent, geometryProxy in
-                    // 获取当前行在 ScrollView 坐标系中的位置
                     let frame = geometryProxy.frame(in: .named("playlistScroll"))
                     let minY = frame.minY
-
-                    // 🔑 只模糊行的上 1/3（约 15pt）
-                    // minY >= 15: progress = 0（完全清晰）
-                    // minY <= 0: progress = 1（完全模糊）
-                    let fadeZone: CGFloat = 15  // 1/3 行高
-                    let progress = max(0, min(1, 1 - (minY / fadeZone)))
+                    // 🔑 当行滚动到 header 区域内时开始模糊
+                    let progress = max(0, min(1, 1 - (minY / headerHeight)))
 
                     return effectContent
                         .blur(radius: progress * 8)
@@ -639,14 +714,24 @@ struct ScrollFadeEffect: ViewModifier {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - Preview
+// ═══════════════════════════════════════════════════════════════════════════════
 
 #if DEBUG
 struct PlaylistView_Previews: PreviewProvider {
     @Namespace static var namespace
     static var previews: some View {
-        PlaylistView(currentPage: .constant(.playlist), animationNamespace: namespace, selectedTab: .constant(1), showControls: .constant(true), isHovering: .constant(false), showOverlayContent: .constant(false), scrollOffset: .constant(0))
-            .environmentObject(MusicController(preview: true))
-            .frame(width: 300, height: 300)
+        PlaylistView(
+            currentPage: .constant(.playlist),
+            animationNamespace: namespace,
+            selectedTab: .constant(1),
+            showControls: .constant(true),
+            isHovering: .constant(false),
+            showOverlayContent: .constant(true)
+        )
+        .environmentObject(MusicController(preview: true))
+        .frame(width: 300, height: 300)
     }
 }
 #endif
