@@ -14,7 +14,7 @@ import AppKit
 // 🔑 macOS 26 修复：不用 Section + LazyVStack + pinnedViews（会触发递归 bug）
 // 🔑 Sticky Header：全局 overlay + PreferenceKey 追踪 section 位置
 // 🔑 Gemini 方案：header 纯文字透明，歌单行滚动到 header 区域时自己模糊
-// 🔑 Snap scroll：.scrollTargetLayout() + .scrollTargetBehavior(.viewAligned)
+// 🔑 自由滚动：不用 snap scroll，让用户自由浏览（snap 会让每行都卡住）
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - PreferenceKey for Section Tracking
@@ -179,10 +179,8 @@ public struct PlaylistView: View {
                             // 底部留白
                             Spacer().frame(height: 120)
                         }
-                        .scrollTargetLayout()
                     }
                     .coordinateSpace(name: "playlistScroll")
-                    .scrollTargetBehavior(.viewAligned)
                     .onPreferenceChange(SectionOffsetKey.self) { offsets in
                         sectionOffsets = offsets
                     }
