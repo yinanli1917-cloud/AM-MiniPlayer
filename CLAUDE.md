@@ -91,6 +91,24 @@ Sources/
 3. 网易云音乐 API
 4. QQ 音乐 API
 
+### 性能陷阱（已验证，勿重蹈覆辙）
+
+**歌单滚动 NOT RESPONDING 根因**：
+- ❌ 不是 `visualEffect` / `ScrollFadeEffect` 模糊效果（用户反复强调）
+- ❌ 不是 `.onHover` + `withAnimation`（是次要因素，非 root cause）
+- ✅ 真正根因：SwiftUI `Section` 组件在 macOS 26 Liquid Glass 下有递归 bug
+  - `sample` 命令发现 `SubgraphList.applyNodes` 被调用 223 次
+  - `Section` + `LazyVStack` + `ForEach` 组合触发指数级递归
+  - `pinnedViews: [.sectionHeaders]` 会加剧问题
+- 解决方案：用 `VStack` 替代 `Section`，保留所有视觉效果
+  - Header 作为 VStack 的第一个子元素
+  - `ScrollFadeEffect` 模糊效果完整保留
+  - Hover 动画加 `guard !isScrolling` 优化（辅助措施）
+
+**macOS 26 Liquid Glass 过曝**：
+- `.hudWindow` 材质在 Liquid Glass 下过亮
+- 使用 `.underWindowBackground` 替代
+
 ## 构建命令
 
 ```bash
@@ -104,6 +122,61 @@ open nanoPod.app        # 启动
 - `Package.swift` - Swift Package 依赖配置
 - `build_app.sh` - 构建脚本 + Info.plist + entitlements
 - `Resources/` - AppIcon.icns + Assets.car
+
+---
+
+## Postmortem 工作流
+
+> "简化是最高形式的复杂。代码是思想的凝结，架构是哲学的具现。每一行 Bug 代码都是对世界的一次重新误解，每一次 Postmortem 都是对本质的一次逼近。"
+
+为避免"按下葫芦浮起瓢"的 Vibe Coding 陷阱，项目引入传统软件工程的 Postmortem（尸检报告）流程。
+
+### 使用方式
+
+```
+/postmortem onboarding      # 分析历史 fix commits，生成 postmortem
+/postmortem check           # Release 前检查，避免触发已知问题
+/postmortem create <hash>   # 为新 fix commit 创建 postmortem
+/postmortem index           # 更新 postmortem 索引
+```
+
+### 文档结构
+
+```
+postmortem/
+├── README.md              # 索引 + 使用指南
+├── TEMPLATE.md            # 标准模板
+├── 001-swiftui-section-recursive-bug.md
+└── ...
+
+.claude/skills/postmortem/
+├── SKILL.md               # 技能定义
+├── REFERENCE.md           # 参考指南
+└── EXAMPLES.md            # 使用示例
+```
+
+### 核心原则
+
+1. **Blameless Culture** - 分析系统为何允许错误，而非指责个人
+2. **Five Whys** - 连续问"为什么"直到找到系统层面的根因
+3. **Actionable Actions** - 每个后续行动必须是 Actionable + Specific + Bounded
+
+### 根因分类
+
+| 类别 | 定义 | 典型行动 |
+|------|------|----------|
+| Bug | 代码缺陷 | 添加测试、Code Review |
+| Architecture | 设计与运行条件不匹配 | 重构、平台迁移 |
+| Scale | 资源约束/容量规划 | 容量规划、监控 |
+| Dependency | 第三方依赖故障 | 增加韧性、调整预期 |
+| Process | 流程缺失 | 创建检查清单、自动化 |
+| Unknown | 需要增强可观测性 | 添加日志、监控 |
+
+### 已知问题模式
+
+- **SwiftUI macOS 差异** - Liquid Glass 材质过曝、Section 递归 (POSTM-001)
+- **状态同步** - 页面切换时的 hover/drag 状态残留
+- **并发竞态** - 封面预加载与主线程冲突
 
 ---
 

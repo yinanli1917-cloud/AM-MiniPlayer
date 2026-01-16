@@ -617,7 +617,30 @@ public class MusicController: ObservableObject {
                         if let image = artworkImage {
                             self.setArtwork(image)
                         } else {
+                            // 🔑 ScriptingBridge 失败，先设占位图，然后异步回退到网络 API
                             self.setArtwork(self.createPlaceholder())
+
+                            // 🔑 电台/流媒体歌曲常见：本地无嵌入封面，需要从网络获取
+                            Task { [weak self] in
+                                guard let self = self else { return }
+                                if let mkArtwork = await self.fetchMusicKitArtwork(title: name, artist: artist, album: album) {
+                                    await MainActor.run {
+                                        // 确保还是同一首歌
+                                        if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                                            self.setArtwork(mkArtwork)
+                                            if !persistentID.isEmpty {
+                                                self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
+                                            }
+                                            debugPrint("✅ [playerInfoChanged] API fallback success for \(name)\n")
+                                        }
+                                    }
+                                } else {
+                                    // 🔑 电台首歌特殊处理：延迟 1s 重试 ScriptingBridge
+                                    // Music.app 可能需要时间加载封面数据
+                                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                    await self.retryArtworkFetch(persistentID: persistentID, title: name, artist: artist, album: album)
+                                }
+                            }
                         }
                         // 🔑 歌曲切换时也刷新 Up Next 队列
                         self.fetchUpNextQueue()
@@ -945,11 +968,12 @@ public class MusicController: ObservableObject {
         }
 
         // 🔑 设置超时后的占位图（如果两个源都没返回）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        // 增加到 3s，多级搜索策略需要更多时间
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             guard let self = self else { return }
             let hasArtwork = artworkSet.withLock { $0 }
             if !hasArtwork && (self.currentPersistentID == persistentID || persistentID.isEmpty) {
-                self.logToFile("🎨 [Timeout] Setting placeholder after 300ms")
+                self.logToFile("🎨 [Timeout] Setting placeholder after 3s")
                 self.setArtwork(self.createPlaceholder())
             }
         }
@@ -1034,31 +1058,58 @@ public class MusicController: ObservableObject {
     }
 
     /// iTunes Search API 方式获取封面（公开 API，无需授权）
+    /// 使用多级搜索策略提高命中率
     private func fetchArtworkViaITunesAPI(title: String, artist: String) async -> NSImage? {
-        let searchTerm = "\(title) \(artist)".trimmingCharacters(in: .whitespaces)
-        guard !searchTerm.isEmpty,
-              let encodedTerm = searchTerm.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://itunes.apple.com/search?term=\(encodedTerm)&media=music&entity=song&limit=1") else {
-            return nil
-        }
+        // 🔑 多级搜索策略
+        let searchStrategies = [
+            "\(title) \(artist)",           // 1. title + artist（最精确）
+            "\(artist) \(title)",           // 2. artist + title（顺序调换）
+            title,                          // 3. 只用 title
+            artist                          // 4. 只用 artist
+        ]
 
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let results = json["results"] as? [[String: Any]],
-               let firstResult = results.first,
-               let artworkUrlString = firstResult["artworkUrl100"] as? String {
-                // 替换为高分辨率 (300x300)
-                let highResUrl = artworkUrlString.replacingOccurrences(of: "100x100", with: "300x300")
-                if let artworkUrl = URL(string: highResUrl),
-                   let (imageData, _) = try? await URLSession.shared.data(from: artworkUrl) {
-                    return NSImage(data: imageData)
-                }
+        for searchTerm in searchStrategies {
+            let trimmed = searchTerm.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty,
+                  let encodedTerm = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let url = URL(string: "https://itunes.apple.com/search?term=\(encodedTerm)&media=music&entity=song&limit=5") else {
+                continue
             }
-        } catch {
-            // 静默失败
+
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let results = json["results"] as? [[String: Any]],
+                   !results.isEmpty {
+                    // 🔑 优先选择匹配 artist 的结果
+                    let artistLower = artist.lowercased()
+                    let titleLower = title.lowercased()
+
+                    let bestMatch = results.first { result in
+                        let resultArtist = (result["artistName"] as? String)?.lowercased() ?? ""
+                        let resultTrack = (result["trackName"] as? String)?.lowercased() ?? ""
+                        return resultArtist.contains(artistLower) || artistLower.contains(resultArtist) ||
+                               resultTrack.contains(titleLower) || titleLower.contains(resultTrack)
+                    } ?? results.first
+
+                    if let match = bestMatch,
+                       let artworkUrlString = match["artworkUrl100"] as? String {
+                        // 替换为高分辨率 (300x300)
+                        let highResUrl = artworkUrlString.replacingOccurrences(of: "100x100", with: "300x300")
+                        if let artworkUrl = URL(string: highResUrl),
+                           let (imageData, _) = try? await URLSession.shared.data(from: artworkUrl) {
+                            logToFile("🎨 [iTunes API] Found artwork via strategy: \(searchTerm)")
+                            return NSImage(data: imageData)
+                        }
+                    }
+                }
+            } catch {
+                // 继续尝试下一个策略
+            }
         }
+
+        logToFile("🎨 [iTunes API] All strategies failed for: \(title) - \(artist)")
         return nil
     }
 
@@ -1067,6 +1118,55 @@ public class MusicController: ObservableObject {
     public func getCachedArtwork(persistentID: String) -> NSImage? {
         guard !persistentID.isEmpty else { return nil }
         return artworkCache.object(forKey: persistentID as NSString)
+    }
+
+    /// 延迟重试封面获取（电台首歌特殊处理）
+    /// Music.app 刚开始播放电台时，封面数据可能尚未加载完成
+    private func retryArtworkFetch(persistentID: String, title: String, artist: String, album: String) async {
+        // 确保还是同一首歌
+        guard currentPersistentID == persistentID || persistentID.isEmpty else { return }
+
+        debugPrint("🔄 [retryArtworkFetch] Retrying for \(title)...\n")
+
+        // 1. 先尝试 ScriptingBridge（Music.app 可能已加载好封面）
+        let sbImage: NSImage? = await withCheckedContinuation { continuation in
+            scriptingBridgeQueue.async { [weak self] in
+                guard let self = self, let app = self.musicApp, app.isRunning else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let image = self.getArtworkImageFromApp(app)
+                continuation.resume(returning: image)
+            }
+        }
+
+        if let image = sbImage {
+            await MainActor.run {
+                if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                    self.setArtwork(image)
+                    if !persistentID.isEmpty {
+                        self.artworkCache.setObject(image, forKey: persistentID as NSString)
+                    }
+                    debugPrint("✅ [retryArtworkFetch] ScriptingBridge retry success\n")
+                }
+            }
+            return
+        }
+
+        // 2. ScriptingBridge 仍然失败，再试一次网络 API
+        if let mkArtwork = await fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+            await MainActor.run {
+                if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                    self.setArtwork(mkArtwork)
+                    if !persistentID.isEmpty {
+                        self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
+                    }
+                    debugPrint("✅ [retryArtworkFetch] API retry success\n")
+                }
+            }
+        } else {
+            debugPrint("⚠️ [retryArtworkFetch] All retries failed for \(title)\n")
+        }
     }
 
     // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
@@ -1514,14 +1614,8 @@ public class MusicController: ObservableObject {
                 // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
                 if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
                     result.append((name, artist, album, trackID, duration))
-
-                    // 🔑 在遍历时同时预加载封面到缓存，避免后续重复遍历
-                    if artworkCache.object(forKey: trackID as NSString) == nil,
-                       let image = extractArtwork(from: track) {
-                        artworkCache.setObject(image, forKey: trackID as NSString)
-                        debugPrint("✅ [getUpNextTracksFromApp] Preloaded artwork for: \(name.prefix(20))...\n")
-                    }
-
+                    // 🔑 移除封面预加载 - extractArtwork 是 ScriptingBridge 操作，会阻塞
+                    // 封面由 PlaylistItemRowCompact 按需异步加载
                     if result.count >= limit { break }
                 } else if !name.isEmpty {
                     debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
@@ -1532,7 +1626,7 @@ public class MusicController: ObservableObject {
             }
         }
 
-        debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), preloaded \(result.count) artworks\n")
+        debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), fetched \(result.count) tracks\n")
         return result
     }
 
@@ -1581,12 +1675,8 @@ public class MusicController: ObservableObject {
             // 某些较新添加的歌曲可能元数据未完全加载
             if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
                 recentList.append((name, artist, album, trackID, duration))
-
-                // 🔑 在遍历时同时预加载封面到缓存
-                if artworkCache.object(forKey: trackID as NSString) == nil,
-                   let image = extractArtwork(from: track) {
-                    artworkCache.setObject(image, forKey: trackID as NSString)
-                }
+                // 🔑 移除封面预加载 - extractArtwork 是 ScriptingBridge 操作，会阻塞
+                // 封面由 PlaylistItemRowCompact 按需异步加载
             } else if !name.isEmpty {
                 // 🐛 调试：记录异常的歌曲名称
                 debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")

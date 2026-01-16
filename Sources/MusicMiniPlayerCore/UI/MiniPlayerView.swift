@@ -15,7 +15,6 @@ public struct MiniPlayerView: View {
     @Namespace private var animation
 
     // 🔑 Clip 逻辑 - 从 PlaylistView 传递的滚动偏移量
-    @State private var playlistScrollOffset: CGFloat = 0
 
     // 🔑 封面页hover后文字和遮罩延迟显示
     @State private var showOverlayContent: Bool = false
@@ -65,7 +64,7 @@ public struct MiniPlayerView: View {
                     .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // Playlist View - 始终存在以支持matchedGeometryEffect
-                PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent, scrollOffset: $playlistScrollOffset)
+                PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent)
                     .opacity(musicController.currentPage == .playlist ? 1 : 0)
                     .zIndex(musicController.currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
                     .allowsHitTesting(musicController.currentPage == .playlist)
@@ -778,17 +777,15 @@ struct MusicButtonView: View {
             let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
             NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
         }) {
-            glassButtonLabel {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.up.left")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("Music")
-                        .font(.system(size: 11, weight: .medium))
-                }
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.up.left")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Music")
+                    .font(.system(size: 11, weight: .medium))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius))
+            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius, isLightBackground: isLightBackground))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -805,32 +802,22 @@ struct GlassButtonBackground: ViewModifier {
     var fillOpacity: Double
     var shadowOpacity: Double
     var shadowRadius: CGFloat
+    var isLightBackground: Bool = false  // 🔑 背景亮度信息，用于文字颜色适配
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            // 🔑 Liquid Glass: 使用 .clear 样式 - 透明度高，适合在封面图片上方
-            // .clear 特点：最小模糊，高透明度，视觉冲击力强
+            // 🔑 Liquid Glass: 使用 .clear 材质，亮色背景用黑字
             content
+                .foregroundStyle(isLightBackground ? Color.black : Color.white)
                 .glassEffect(.clear, in: .capsule)
                 .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
         } else {
             content
+                .foregroundStyle(isLightBackground ? Color.black : Color.white)
                 .background(Color.white.opacity(fillOpacity))
                 .clipShape(Capsule())
                 .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
         }
-    }
-}
-
-// 🔑 macOS 26+ Liquid Glass 按钮标签：自动适配前景色
-@ViewBuilder
-func glassButtonLabel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-    if #available(macOS 26.0, *) {
-        content()
-            .foregroundStyle(.primary)  // 系统自动适配亮/暗背景
-    } else {
-        content()
-            .foregroundStyle(Color.white)
     }
 }
 
@@ -855,13 +842,11 @@ struct HideButtonView: View {
         Button(action: {
             onHide()
         }) {
-            glassButtonLabel {
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 13, weight: .medium))
-            }
+            Image(systemName: "chevron.up")
+                .font(.system(size: 13, weight: .medium))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius))
+            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius, isLightBackground: isLightBackground))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -895,13 +880,11 @@ struct ExpandButtonView: View {
         Button(action: {
             onExpand()
         }) {
-            glassButtonLabel {
-                Image(systemName: "pip.exit")
-                    .font(.system(size: 12, weight: .medium))
-            }
+            Image(systemName: "pip.exit")
+                .font(.system(size: 12, weight: .medium))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius))
+            .modifier(GlassButtonBackground(fillOpacity: fillOpacity, shadowOpacity: shadowOpacity, shadowRadius: shadowRadius, isLightBackground: isLightBackground))
         }
         .buttonStyle(.plain)
         .onHover { hovering in

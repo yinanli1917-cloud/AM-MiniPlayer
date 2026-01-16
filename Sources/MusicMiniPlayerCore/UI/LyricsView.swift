@@ -421,7 +421,8 @@ public struct LyricsView: View {
                             Spacer()
                             ZStack(alignment: .bottom) {
                                 // 渐变模糊背景
-                                VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                                // 🔑 macOS 26 修复：使用 .underWindowBackground 避免过曝
+                                VisualEffectView(material: .underWindowBackground, blendingMode: .withinWindow)
                                     .frame(height: 100)
                                     .mask(
                                         LinearGradient(
@@ -701,8 +702,8 @@ public struct LyricsView: View {
 
             // 渐变模糊 + 控件区域
             ZStack(alignment: .bottom) {
-                // 🔑 统一使用 VisualEffectView（不允许用透明黑色渐变，会穿透）
-                VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+                // 🔑 macOS 26 修复：使用 .underWindowBackground 避免过曝
+                VisualEffectView(material: .underWindowBackground, blendingMode: .withinWindow)
                     .frame(height: 100)
                     .mask(
                         LinearGradient(
