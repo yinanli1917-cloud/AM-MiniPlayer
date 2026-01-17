@@ -441,13 +441,10 @@ public class LyricsService: ObservableObject {
         isTranslating = false
     }
 
-    // 🐛 调试日志（生产环境禁用）
+    // 🐛 调试日志
     // 设置为 true 启用调试日志写入 /tmp/nanopod_lyrics_debug.log
-    #if DEBUG
-    private let enableDebugLog = true
-    #else
-    private let enableDebugLog = false  // 🔑 Release 构建禁用，避免 160+ 次文件 I/O 影响性能
-    #endif
+    // TODO: 调试完成后改回 false
+    private let enableDebugLog = true  // 🔑 临时启用以调试 Release 版本问题
 
     // 🔑 公共调试日志（供 LyricsView 调用）
     public func debugLogPublic(_ message: String) {
@@ -1064,8 +1061,12 @@ public class LyricsService: ObservableObject {
             score += 8   // 网易云 LRC 质量很好
         case "QQ":
             score += 6   // QQ 音乐质量也不错
+        case "SimpMusic":
+            score += 5   // SimpMusic 全球化覆盖好
         case "LRCLIB":
             score += 3   // LRCLIB 质量一般
+        case "LRCLIB-Search":
+            score += 2   // LRCLIB 模糊搜索，质量稍低
         case "lyrics.ovh":
             score += 0   // 纯文本，无时间轴
         default:
@@ -1087,13 +1088,38 @@ public class LyricsService: ObservableObject {
         isChinese: Bool
     ) async -> [LyricLine]? {
 
-        // 🔑 使用 TaskGroup 并行请求所有源
+        // ============================================================
+        // 🔑 Step 0: 统一获取 iTunes CN 元信息（解决英文标题对应中文歌的问题）
+        // 所有歌词源都用这个统一的元信息进行匹配
+        // ============================================================
+        var searchTitle = title
+        var searchArtist = artist
+
+        // 🔑 先尝试 iTunes CN 获取中文元信息
+        if let cnMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
+            searchTitle = cnMetadata.chineseTitle
+            searchArtist = cnMetadata.chineseArtist
+            debugLog("🇨🇳 统一使用 iTunes CN 元信息: '\(searchTitle)' by '\(searchArtist)'")
+        }
+        // 🔑 再尝试多区域元信息（JP/KR/TH 等）
+        else if let localizedMetadata = await fetchLocalizedMetadata(title: title, artist: artist, duration: duration) {
+            searchTitle = localizedMetadata.localizedTitle
+            searchArtist = localizedMetadata.localizedArtist
+            debugLog("🌍 统一使用 \(localizedMetadata.region) 元信息: '\(searchTitle)' by '\(searchArtist)'")
+        }
+        else {
+            debugLog("🔍 使用原始元信息: '\(searchTitle)' by '\(searchArtist)'")
+        }
+
+        // ============================================================
+        // 🔑 Step 1: 使用统一的元信息并行请求所有歌词源
+        // ============================================================
         var results: [LyricsResult] = []
 
         await withTaskGroup(of: LyricsResult?.self) { group in
             // 1. AMLL-TTML-DB（始终尝试，质量最高）
             group.addTask {
-                if let lyrics = try? await self.fetchFromAMLLTTMLDB(title: title, artist: artist, duration: duration),
+                if let lyrics = try? await self.fetchFromAMLLTTMLDB(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
                     let score = self.calculateLyricsScore(lyrics, source: "AMLL", duration: duration)
                     self.debugLog("📊 AMLL: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
@@ -1103,8 +1129,9 @@ public class LyricsService: ObservableObject {
             }
 
             // 2. NetEase（YRC 逐字歌词质量很好）
+            // 🔑 直接使用统一元信息，不再内部重复查询
             group.addTask {
-                if let lyrics = try? await self.fetchFromNetEase(title: title, artist: artist, duration: duration),
+                if let lyrics = try? await self.fetchFromNetEaseWithMetadata(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
                     let score = self.calculateLyricsScore(lyrics, source: "NetEase", duration: duration)
                     self.debugLog("📊 NetEase: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
@@ -1114,8 +1141,9 @@ public class LyricsService: ObservableObject {
             }
 
             // 3. QQ Music
+            // 🔑 直接使用统一元信息，不再内部重复查询
             group.addTask {
-                if let lyrics = try? await self.fetchFromQQMusic(title: title, artist: artist, duration: duration),
+                if let lyrics = try? await self.fetchFromQQMusicWithMetadata(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
                     let score = self.calculateLyricsScore(lyrics, source: "QQ", duration: duration)
                     self.debugLog("📊 QQ Music: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
@@ -1124,9 +1152,9 @@ public class LyricsService: ObservableObject {
                 return nil
             }
 
-            // 4. LRCLIB
+            // 4. LRCLIB（精确匹配）
             group.addTask {
-                if let lyrics = try? await self.fetchFromLRCLIB(title: title, artist: artist, duration: duration),
+                if let lyrics = try? await self.fetchFromLRCLIB(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
                     let score = self.calculateLyricsScore(lyrics, source: "LRCLIB", duration: duration)
                     self.debugLog("📊 LRCLIB: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
@@ -1135,9 +1163,31 @@ public class LyricsService: ObservableObject {
                 return nil
             }
 
-            // 5. lyrics.ovh（最后的备选）
+            // 5. SimpMusic（全球化歌词源，基于 YouTube Music）
             group.addTask {
-                if let lyrics = try? await self.fetchFromLyricsOVH(title: title, artist: artist, duration: duration),
+                if let lyrics = try? await self.fetchFromSimpMusic(title: searchTitle, artist: searchArtist, duration: duration),
+                   !lyrics.isEmpty {
+                    let score = self.calculateLyricsScore(lyrics, source: "SimpMusic", duration: duration)
+                    self.debugLog("📊 SimpMusic: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
+                    return LyricsResult(lyrics: lyrics, source: "SimpMusic", score: score)
+                }
+                return nil
+            }
+
+            // 6. LRCLIB Search（模糊搜索，作为 LRCLIB 精确匹配的补充）
+            group.addTask {
+                if let lyrics = try? await self.fetchFromLRCLIBSearch(title: searchTitle, artist: searchArtist, duration: duration),
+                   !lyrics.isEmpty {
+                    let score = self.calculateLyricsScore(lyrics, source: "LRCLIB-Search", duration: duration)
+                    self.debugLog("📊 LRCLIB-Search: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
+                    return LyricsResult(lyrics: lyrics, source: "LRCLIB-Search", score: score)
+                }
+                return nil
+            }
+
+            // 7. lyrics.ovh（最后的备选）
+            group.addTask {
+                if let lyrics = try? await self.fetchFromLyricsOVH(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
                     let score = self.calculateLyricsScore(lyrics, source: "lyrics.ovh", duration: duration)
                     self.debugLog("📊 lyrics.ovh: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
@@ -1744,9 +1794,37 @@ public class LyricsService: ObservableObject {
 
     private func fetchFromLRCLIB(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
         debugLog("🌐 Fetching from LRCLIB: '\(title)' by '\(artist)'")
-        logger.info("🌐 Fetching from LRCLIB: \(title) by \(artist)")
 
-        // Build URL with parameters
+        // 🔑 LRCLIB get 端点需要精确匹配，但 iTunes CN 返回的元信息可能包含后缀
+        // 策略：先尝试规范化的标题/艺术家，失败后再尝试原始值
+        let searchStrategies: [(title: String, artist: String)] = [
+            // 1. 规范化：去掉后缀 + 只用第一个艺术家
+            (normalizeTrackName(title), normalizeArtistName(artist)),
+            // 2. 原始值
+            (title, artist)
+        ]
+
+        for (idx, strategy) in searchStrategies.enumerated() {
+            if let lyrics = try await fetchFromLRCLIBInternal(
+                title: strategy.title,
+                artist: strategy.artist,
+                duration: duration,
+                attempt: idx + 1
+            ) {
+                return lyrics
+            }
+        }
+
+        return nil
+    }
+
+    /// LRCLIB get 端点内部请求
+    private func fetchFromLRCLIBInternal(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        attempt: Int
+    ) async throws -> [LyricLine]? {
         var components = URLComponents(string: "https://lrclib.net/api/get")!
         components.queryItems = [
             URLQueryItem(name: "artist_name", value: artist),
@@ -1756,60 +1834,322 @@ public class LyricsService: ObservableObject {
 
         guard let url = components.url else {
             debugLog("❌ LRCLIB: Invalid URL")
-            logger.error("Invalid LRCLIB URL")
             return nil
         }
 
-        logger.info("📡 Request URL: \(url.absoluteString)")
+        debugLog("🔍 LRCLIB attempt \(attempt): '\(title)' by '\(artist)'")
 
         var request = URLRequest(url: url)
-        request.setValue("MusicMiniPlayer/1.0 (https://github.com/yourusername/MusicMiniPlayer)", forHTTPHeaderField: "User-Agent")
+        request.setValue("MusicMiniPlayer/1.0", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 6.0  // 🔑 降低超时：15s → 6s
+        request.timeoutInterval = 6.0
 
-        let session = URLSession.shared
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            logger.error("Invalid response type")
             return nil
         }
 
-        logger.info("📦 Response status: \(httpResponse.statusCode)")
-
-        // Check for 404 - no lyrics found
+        // 404 = 没找到，返回 nil 让下一个策略尝试
         if httpResponse.statusCode == 404 {
-            debugLog("❌ LRCLIB: 404 Not found")
-            logger.warning("No lyrics found in LRCLIB database")
+            debugLog("❌ LRCLIB attempt \(attempt): 404 Not found")
             return nil
         }
 
-        // Check for other errors
         guard (200...299).contains(httpResponse.statusCode) else {
-            logger.error("HTTP error: \(httpResponse.statusCode)")
+            debugLog("❌ LRCLIB attempt \(attempt): HTTP \(httpResponse.statusCode)")
             return nil
         }
 
-        // Parse JSON response
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            logger.error("Failed to parse JSON response")
             return nil
         }
 
-        logger.info("✅ Received response with keys: \(json.keys.joined(separator: ", "))")
-
-        // LRCLIB returns synced lyrics in "syncedLyrics" field as LRC format string
+        // LRCLIB 返回同步歌词在 syncedLyrics 字段
         if let syncedLyrics = json["syncedLyrics"] as? String, !syncedLyrics.isEmpty {
-            debugLog("✅ LRCLIB: Found synced lyrics (\(syncedLyrics.count) chars)")
-            logger.info("✅ Found synced lyrics (\(syncedLyrics.count) chars)")
+            debugLog("✅ LRCLIB: Found synced lyrics (\(syncedLyrics.count) chars) at attempt \(attempt)")
             return parseLRC(syncedLyrics)
         }
 
-        // 🔑 如果没有同步歌词，返回 nil 让其他源继续尝试
-        // 不使用 plainLyrics 创建假的时间轴，因为那样会导致前奏没有等待
-        debugLog("⚠️ LRCLIB: Plain lyrics only (no sync), skipping")
-        logger.warning("⚠️ LRCLIB has plain lyrics only (no sync), skipping")
+        // 没有同步歌词，跳过（不使用 plainLyrics 创建假时间轴）
+        debugLog("⚠️ LRCLIB attempt \(attempt): Plain lyrics only (no sync), skipping")
         return nil
+    }
+
+    // MARK: - LRCLIB Search API (Fuzzy Search Fallback)
+
+    /// LRCLIB 模糊搜索端点 - 当精确匹配失败时使用
+    /// /api/search 支持更宽松的匹配，但需要手动评分选择最佳结果
+    private func fetchFromLRCLIBSearch(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🔍 LRCLIB Search: '\(title)' by '\(artist)'")
+        logger.info("🔍 LRCLIB Search: \(title) by \(artist)")
+
+        // 构建搜索 URL（使用 q 参数进行全文搜索）
+        let searchQuery = "\(title) \(artist)"
+        var components = URLComponents(string: "https://lrclib.net/api/search")!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: searchQuery)
+        ]
+
+        guard let url = components.url else {
+            debugLog("❌ LRCLIB Search: Invalid URL")
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("MusicMiniPlayer/1.0 (https://github.com/user/MusicMiniPlayer)", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 6.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            debugLog("❌ LRCLIB Search: HTTP error")
+            return nil
+        }
+
+        // 解析 JSON 数组
+        guard let results = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              !results.isEmpty else {
+            debugLog("❌ LRCLIB Search: No results")
+            return nil
+        }
+
+        debugLog("📊 LRCLIB Search: Found \(results.count) results")
+
+        // 🔑 对搜索结果进行评分，选择最佳匹配
+        var bestMatch: (lyrics: String, score: Double)? = nil
+        let inputTitleNormalized = normalizeTrackName(title)
+        let inputArtistNormalized = normalizeArtistName(artist)
+
+        for result in results {
+            guard let syncedLyrics = result["syncedLyrics"] as? String,
+                  !syncedLyrics.isEmpty else { continue }
+
+            let resultTitle = result["trackName"] as? String ?? ""
+            let resultArtist = result["artistName"] as? String ?? ""
+            let resultDuration = result["duration"] as? Double ?? 0
+
+            // 🔑 计算匹配评分
+            var score = 0.0
+
+            // 时长匹配（权重 40%）
+            let durationDiff = abs(duration - resultDuration)
+            if durationDiff < 1 { score += 40 }
+            else if durationDiff < 2 { score += 30 }
+            else if durationDiff < 3 { score += 20 }
+            else if durationDiff < 5 { score += 10 }
+            else { continue }  // 时长差太大，跳过
+
+            // 标题匹配（权重 35%）
+            let resultTitleNormalized = normalizeTrackName(resultTitle)
+            let titleSimilarity = stringSimilarity(inputTitleNormalized, resultTitleNormalized)
+            score += titleSimilarity * 35
+
+            // 艺术家匹配（权重 25%）
+            let resultArtistNormalized = normalizeArtistName(resultArtist)
+            if inputArtistNormalized.lowercased().contains(resultArtistNormalized.lowercased()) ||
+               resultArtistNormalized.lowercased().contains(inputArtistNormalized.lowercased()) {
+                score += 25
+            }
+
+            debugLog("  📊 '\(resultTitle)' by '\(resultArtist)': score=\(String(format: "%.1f", score)), duration diff=\(String(format: "%.1f", durationDiff))s")
+
+            if bestMatch == nil || score > bestMatch!.score {
+                bestMatch = (syncedLyrics, score)
+            }
+        }
+
+        // 🔑 质量阈值：至少 50 分才接受
+        guard let match = bestMatch, match.score >= 50 else {
+            debugLog("❌ LRCLIB Search: No good match (best score: \(bestMatch?.score ?? 0))")
+            return nil
+        }
+
+        debugLog("✅ LRCLIB Search: Selected match with score \(String(format: "%.1f", match.score))")
+        return parseLRC(match.lyrics)
+    }
+
+    // MARK: - SimpMusic Lyrics API (Global YouTube Music Lyrics)
+
+    /// SimpMusic Lyrics - 开源全球化歌词服务
+    /// 基于 YouTube Music，社区贡献，支持多语言
+    /// API: https://lyrics.simpmusic.org/v1/search
+    private func fetchFromSimpMusic(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🌍 SimpMusic: '\(title)' by '\(artist)'")
+        logger.info("🌍 Fetching from SimpMusic: \(title) by \(artist)")
+
+        // 🔑 使用全文搜索端点
+        let searchQuery = "\(title) \(artist)"
+        var components = URLComponents(string: "https://lyrics.simpmusic.org/v1/search")!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: searchQuery),
+            URLQueryItem(name: "limit", value: "10")
+        ]
+
+        guard let url = components.url else {
+            debugLog("❌ SimpMusic: Invalid URL")
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("MusicMiniPlayer/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 6.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            debugLog("❌ SimpMusic: Invalid response")
+            return nil
+        }
+
+        // 🔑 处理各种 HTTP 状态码
+        if httpResponse.statusCode == 404 {
+            debugLog("❌ SimpMusic: 404 Not found")
+            return nil
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            debugLog("❌ SimpMusic: HTTP \(httpResponse.statusCode)")
+            return nil
+        }
+
+        // 🔑 检查 Content-Type 是否为 JSON（避免 Vercel 安全检查页面等 HTML 响应）
+        let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type") ?? ""
+        guard contentType.contains("application/json") else {
+            debugLog("❌ SimpMusic: Not JSON response (Content-Type: \(contentType))")
+            return nil
+        }
+
+        // 🔑 解析 ApiResult 响应格式
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            debugLog("❌ SimpMusic: Failed to parse JSON")
+            return nil
+        }
+
+        // SimpMusic 使用 ApiResult<T> 包装，检查 success 字段
+        guard let success = json["success"] as? Bool, success,
+              let dataArray = json["data"] as? [[String: Any]],
+              !dataArray.isEmpty else {
+            debugLog("❌ SimpMusic: No results or request failed")
+            return nil
+        }
+
+        debugLog("📊 SimpMusic: Found \(dataArray.count) results")
+
+        // 🔑 对搜索结果进行评分
+        var bestMatch: (lyrics: String, score: Double)? = nil
+        let inputTitleNormalized = normalizeTrackName(title)
+        let inputArtistNormalized = normalizeArtistName(artist)
+
+        for result in dataArray {
+            // SimpMusic 返回的字段：syncedLyrics, plainLyrics, trackName, artistName, duration
+            guard let syncedLyrics = result["syncedLyrics"] as? String,
+                  !syncedLyrics.isEmpty else { continue }
+
+            let resultTitle = result["trackName"] as? String ?? ""
+            let resultArtist = result["artistName"] as? String ?? ""
+            let resultDuration = result["duration"] as? Double ?? 0
+
+            // 🔑 计算匹配评分
+            var score = 0.0
+
+            // 时长匹配（权重 40%）
+            let durationDiff = abs(duration - resultDuration)
+            if durationDiff < 1 { score += 40 }
+            else if durationDiff < 2 { score += 30 }
+            else if durationDiff < 3 { score += 20 }
+            else if durationDiff < 5 { score += 10 }
+            else { continue }  // 时长差太大，跳过
+
+            // 标题匹配（权重 35%）
+            let resultTitleNormalized = normalizeTrackName(resultTitle)
+            let titleSimilarity = stringSimilarity(inputTitleNormalized, resultTitleNormalized)
+            score += titleSimilarity * 35
+
+            // 艺术家匹配（权重 25%）
+            let resultArtistNormalized = normalizeArtistName(resultArtist)
+            if inputArtistNormalized.lowercased().contains(resultArtistNormalized.lowercased()) ||
+               resultArtistNormalized.lowercased().contains(inputArtistNormalized.lowercased()) {
+                score += 25
+            }
+
+            debugLog("  📊 '\(resultTitle)' by '\(resultArtist)': score=\(String(format: "%.1f", score)), duration diff=\(String(format: "%.1f", durationDiff))s")
+
+            if bestMatch == nil || score > bestMatch!.score {
+                bestMatch = (syncedLyrics, score)
+            }
+        }
+
+        // 🔑 质量阈值：至少 50 分才接受
+        guard let match = bestMatch, match.score >= 50 else {
+            debugLog("❌ SimpMusic: No good match (best score: \(bestMatch?.score ?? 0))")
+            return nil
+        }
+
+        debugLog("✅ SimpMusic: Selected match with score \(String(format: "%.1f", match.score))")
+        return parseLRC(match.lyrics)
+    }
+
+    // MARK: - String Normalization Helpers
+
+    /// 规范化歌曲标题：移除常见后缀如 (feat. xxx), (Remaster), [Live] 等
+    private func normalizeTrackName(_ name: String) -> String {
+        var normalized = name.lowercased()
+
+        // 🔑 移除常见后缀模式
+        let suffixPatterns = [
+            "\\s*\\(feat\\..*\\)",           // (feat. xxx)
+            "\\s*\\[feat\\..*\\]",           // [feat. xxx]
+            "\\s*-\\s*remaster.*",           // - Remaster
+            "\\s*\\(\\d{4}\\s*remaster\\)",  // (2020 Remaster)
+            "\\s*\\(remaster.*\\)",          // (Remastered xxx) - 新增
+            "\\s*\\(official.*\\)",          // (Official Video)
+            "\\s*\\(live.*\\)",              // (Live)
+            "\\s*\\(acoustic.*\\)",          // (Acoustic)
+            "\\s*\\[.*\\]",                  // [anything]
+            "\\s*\\(.*version.*\\)",         // (xxx Version)
+            "\\s*\\(.*remix.*\\)",           // (xxx Remix)
+        ]
+
+        for pattern in suffixPatterns {
+            normalized = normalized.replacingOccurrences(
+                of: pattern, with: "", options: .regularExpression
+            )
+        }
+
+        return normalized.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// 规范化艺术家名：提取主要艺术家名
+    private func normalizeArtistName(_ name: String) -> String {
+        var normalized = name.lowercased()
+
+        // 🔑 移除常见分隔符后的内容，保留第一个艺术家
+        let separators = [" & ", ", ", " feat. ", " ft. ", " x ", " vs ", " vs. ", " featuring "]
+        for sep in separators {
+            if let range = normalized.range(of: sep) {
+                normalized = String(normalized[..<range.lowerBound])
+            }
+        }
+
+        return normalized.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// 计算两个字符串的相似度 (0.0 - 1.0)
+    /// 使用 Jaccard 相似度：共同字符数 / 总字符数
+    private func stringSimilarity(_ s1: String, _ s2: String) -> Double {
+        guard !s1.isEmpty && !s2.isEmpty else { return 0 }
+
+        let set1 = Set(s1.lowercased())
+        let set2 = Set(s2.lowercased())
+        let intersection = set1.intersection(set2)
+        let union = set1.union(set2)
+
+        guard !union.isEmpty else { return 0 }
+        return Double(intersection.count) / Double(union.count)
     }
 
     // MARK: - LRC Parser
@@ -1914,65 +2254,80 @@ public class LyricsService: ObservableObject {
 
     private func fetchFromLyricsOVH(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
         debugLog("🌐 Fetching from lyrics.ovh: '\(title)' by '\(artist)'")
-        logger.info("🌐 Fetching from lyrics.ovh: \(title) by \(artist)")
 
+        // 🔑 lyrics.ovh 需要精确匹配，但 iTunes CN 返回的元信息可能包含 (Remastered 2024) 等后缀
+        // 策略：先尝试规范化的标题/艺术家，失败后再尝试原始值
+        let searchStrategies: [(title: String, artist: String)] = [
+            // 1. 规范化：去掉后缀 + 只用第一个艺术家
+            (normalizeTrackName(title), normalizeArtistName(artist)),
+            // 2. 原始值
+            (title, artist)
+        ]
+
+        for (idx, strategy) in searchStrategies.enumerated() {
+            if let lyrics = try await fetchFromLyricsOVHInternal(
+                title: strategy.title,
+                artist: strategy.artist,
+                duration: duration,
+                attempt: idx + 1
+            ) {
+                return lyrics
+            }
+        }
+
+        return nil
+    }
+
+    /// lyrics.ovh 内部请求
+    private func fetchFromLyricsOVHInternal(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        attempt: Int
+    ) async throws -> [LyricLine]? {
         // URL encode artist and title
         guard let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             debugLog("❌ lyrics.ovh: Failed to encode artist/title")
-            logger.error("Failed to encode artist/title for lyrics.ovh")
             return nil
         }
 
         let urlString = "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)"
         guard let url = URL(string: urlString) else {
             debugLog("❌ lyrics.ovh: Invalid URL")
-            logger.error("Invalid lyrics.ovh URL")
             return nil
         }
 
-        logger.info("📡 Request URL: \(url.absoluteString)")
+        debugLog("🔍 lyrics.ovh attempt \(attempt): '\(title)' by '\(artist)'")
 
         var request = URLRequest(url: url)
         request.setValue("MusicMiniPlayer/1.0", forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 6.0  // 🔑 降低超时：15s → 6s
+        request.timeoutInterval = 6.0
 
-        let session = URLSession.shared
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            logger.error("Invalid response type from lyrics.ovh")
             return nil
         }
 
-        logger.info("📦 Response status: \(httpResponse.statusCode)")
-
-        // Check for 404 - no lyrics found
+        // 404 = 没找到，返回 nil 让下一个策略尝试
         if httpResponse.statusCode == 404 {
-            debugLog("❌ lyrics.ovh: 404 Not found")
-            logger.warning("No lyrics found in lyrics.ovh")
+            debugLog("❌ lyrics.ovh attempt \(attempt): 404 Not found")
             return nil
         }
 
-        // Check for other errors
         guard (200...299).contains(httpResponse.statusCode) else {
-            debugLog("❌ lyrics.ovh: HTTP error \(httpResponse.statusCode)")
-            logger.error("HTTP error from lyrics.ovh: \(httpResponse.statusCode)")
+            debugLog("❌ lyrics.ovh attempt \(attempt): HTTP \(httpResponse.statusCode)")
             return nil
         }
 
-        // Parse JSON response
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let lyricsText = json["lyrics"] as? String, !lyricsText.isEmpty else {
-            debugLog("❌ lyrics.ovh: No lyrics content")
-            logger.warning("No lyrics content in lyrics.ovh response")
+            debugLog("❌ lyrics.ovh attempt \(attempt): No lyrics content")
             return nil
         }
 
-        debugLog("✅ lyrics.ovh: Found lyrics (\(lyricsText.count) chars)")
-        logger.info("✅ Found lyrics from lyrics.ovh (\(lyricsText.count) chars)")
-
-        // lyrics.ovh returns plain text, create unsynced lyrics
+        debugLog("✅ lyrics.ovh: Found lyrics (\(lyricsText.count) chars) at attempt \(attempt)")
         return createUnsyncedLyrics(lyricsText, duration: duration)
     }
 
@@ -2182,11 +2537,17 @@ public class LyricsService: ObservableObject {
         var searchTitle = title
         var searchArtist = artist
 
-        if let localizedMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
-            // 如果找到了本地化元数据，优先使用
-            searchTitle = localizedMetadata.chineseTitle
-            searchArtist = localizedMetadata.chineseArtist
-            debugLog("🇨🇳 NetEase using localized metadata: '\(searchTitle)' by '\(searchArtist)'")
+        // 🔑 优先尝试多区域元信息（JP/KR/TH 等）
+        if let localizedMetadata = await fetchLocalizedMetadata(title: title, artist: artist, duration: duration) {
+            searchTitle = localizedMetadata.localizedTitle
+            searchArtist = localizedMetadata.localizedArtist
+            debugLog("🌍 NetEase using \(localizedMetadata.region) metadata: '\(searchTitle)' by '\(searchArtist)'")
+        }
+        // 🔑 回退到中文区域
+        else if let chineseMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
+            searchTitle = chineseMetadata.chineseTitle
+            searchArtist = chineseMetadata.chineseArtist
+            debugLog("🇨🇳 NetEase using CN metadata: '\(searchTitle)' by '\(searchArtist)'")
         }
 
         // Step 1: Search for the song
@@ -2200,6 +2561,22 @@ public class LyricsService: ObservableObject {
         logger.info("🎵 Found NetEase song ID: \(songId)")
 
         // Step 2: Get lyrics for the song
+        return try await fetchNetEaseLyrics(songId: songId)
+    }
+
+    /// NetEase 搜索 - 直接使用传入的元信息（已经过 iTunes CN 标准化）
+    /// 🔑 不再内部重复查询 iTunes，由 parallelFetchAndSelectBest 统一处理
+    private func fetchFromNetEaseWithMetadata(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🌐 NetEase (统一元信息): '\(title)' by '\(artist)'")
+        logger.info("🌐 NetEase (统一元信息): \(title) by \(artist)")
+
+        // 直接搜索，不再查询 iTunes
+        guard let songId = try await searchNetEaseSong(title: title, artist: artist, duration: duration) else {
+            debugLog("❌ NetEase: No matching song found")
+            return nil
+        }
+
+        debugLog("✅ NetEase found song ID: \(songId)")
         return try await fetchNetEaseLyrics(songId: songId)
     }
 
@@ -2727,11 +3104,230 @@ public class LyricsService: ObservableObject {
                     debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, artist-only + exact-duration)")
                     return (trackName, artistName)
                 }
+
+                // 5. 🔑 标题搜索 + 时长超精确匹配（<0.1秒）+ 返回的是中文标题
+                // 解决"Between Love and You" vs "在爱和你之间"：英文艺术家名无法匹配中文艺术家名
+                // 但如果时长完全匹配且返回了中文标题，这几乎肯定是同一首歌
+                if searchTerm.lowercased() == inputTitleLower &&
+                   durationDiff < 0.1 &&
+                   containsChineseCharacters(trackName) &&
+                   !containsChineseCharacters(title) {
+                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, title-search + super-exact-duration + CN-localized)")
+                    return (trackName, artistName)
+                }
             }
         }
 
         debugLog("❌ iTunes CN: No match found")
         return nil
+    }
+
+    // MARK: - Multi-Region iTunes Metadata (JP/KR/TH/etc.)
+
+    /// 多区域 iTunes 元信息获取 - 解决小语种歌曲匹配问题
+    /// 当系统语言为英文时，iTunes 返回英文元信息，导致日/韩/泰等歌曲在中国歌词库无法匹配
+    /// 此函数根据艺术家名推断可能的语言区域，并查询对应区域的 iTunes API
+    private func fetchLocalizedMetadata(title: String, artist: String, duration: TimeInterval) async -> (localizedTitle: String, localizedArtist: String, region: String)? {
+        debugLog("🌍 Fetching localized metadata: '\(title)' by '\(artist)'")
+
+        // 🔑 根据艺术家名和标题推断可能的语言区域
+        let regions = inferRegions(title: title, artist: artist)
+
+        guard !regions.isEmpty else {
+            debugLog("🌍 No regions inferred for '\(artist)'")
+            return nil
+        }
+
+        debugLog("🌍 Inferred regions: \(regions.joined(separator: ", "))")
+
+        // 🔑 并行查询多个区域
+        return await withTaskGroup(of: (String, String, String, Double)?.self) { group in
+            for region in regions {
+                group.addTask {
+                    await self.fetchMetadataFromRegion(title: title, artist: artist, duration: duration, region: region)
+                }
+            }
+
+            // 收集结果，选择时长最接近的
+            var bestMatch: (String, String, String, Double)? = nil
+            for await result in group {
+                if let r = result {
+                    if bestMatch == nil || r.3 < bestMatch!.3 {
+                        bestMatch = r
+                    }
+                }
+            }
+
+            if let match = bestMatch {
+                return (match.0, match.1, match.2)
+            }
+            return nil
+        }
+    }
+
+    /// 根据艺术家名和标题推断可能的语言区域
+    private func inferRegions(title: String, artist: String) -> [String] {
+        var regions: [String] = []
+        let combined = "\(title) \(artist)"
+
+        // 🔑 检测日文（平假名/片假名）
+        if containsJapaneseCharacters(combined) {
+            regions.append("JP")
+        }
+
+        // 🔑 检测韩文（谚文）
+        if containsKoreanCharacters(combined) {
+            regions.append("KR")
+        }
+
+        // 🔑 检测泰文
+        if containsThaiCharacters(combined) {
+            regions.append("TH")
+        }
+
+        // 🔑 检测越南文（带声调的拉丁字母）
+        if containsVietnameseCharacters(combined) {
+            regions.append("VN")
+        }
+
+        // 🔑 如果是纯 ASCII 但不是常见英文艺术家，尝试日韩区域
+        // 很多日韩艺术家用罗马字名
+        if regions.isEmpty && isPureASCII(artist) && !isLikelyEnglishArtist(artist) {
+            // 尝试日本和韩国区域（这些地区有很多罗马字艺术家名）
+            regions.append(contentsOf: ["JP", "KR"])
+        }
+
+        return regions
+    }
+
+    /// 从指定区域获取元信息
+    private func fetchMetadataFromRegion(title: String, artist: String, duration: TimeInterval, region: String) async -> (String, String, String, Double)? {
+        let searchTerms = ["\(title) \(artist)", artist, title]
+
+        for searchTerm in searchTerms {
+            guard var components = URLComponents(string: "https://itunes.apple.com/search") else { continue }
+            components.queryItems = [
+                URLQueryItem(name: "term", value: searchTerm),
+                URLQueryItem(name: "country", value: region),
+                URLQueryItem(name: "media", value: "music"),
+                URLQueryItem(name: "limit", value: "25")
+            ]
+
+            guard let url = components.url else { continue }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5.0
+
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                continue
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = json["results"] as? [[String: Any]] else {
+                continue
+            }
+
+            // 🔑 匹配逻辑：时长 + 艺术家名
+            let inputArtistLower = artist.lowercased()
+            let inputTitleLower = title.lowercased()
+
+            for result in results {
+                guard let trackName = result["trackName"] as? String,
+                      let artistName = result["artistName"] as? String,
+                      let trackTimeMillis = result["trackTimeMillis"] as? Int else {
+                    continue
+                }
+
+                let trackDuration = Double(trackTimeMillis) / 1000.0
+                let durationDiff = abs(trackDuration - duration)
+
+                // 🔑 时长必须接近（<2秒）
+                guard durationDiff < 2 else { continue }
+
+                let resultArtistLower = artistName.lowercased()
+                let resultTitleLower = trackName.lowercased()
+
+                // 🔑 艺术家匹配：部分包含即可
+                let artistMatch = inputArtistLower.contains(resultArtistLower) ||
+                                  resultArtistLower.contains(inputArtistLower) ||
+                                  inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) }
+
+                // 🔑 标题匹配：部分包含即可
+                let titleMatch = inputTitleLower.contains(resultTitleLower) ||
+                                 resultTitleLower.contains(inputTitleLower)
+
+                // 🔑 必须同时匹配艺术家和时长
+                if artistMatch || (titleMatch && durationDiff < 0.5) {
+                    // 🔑 检查是否真的"本地化"了（返回了不同的标题/艺术家）
+                    let isLocalized = trackName.lowercased() != inputTitleLower ||
+                                      artistName.lowercased() != inputArtistLower
+
+                    if isLocalized {
+                        debugLog("✅ iTunes \(region): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.2f", durationDiff))s)")
+                        return (trackName, artistName, region, durationDiff)
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    // MARK: - Language Detection Helpers (Multi-Region)
+
+    /// 检测是否包含泰文字符
+    private func containsThaiCharacters(_ text: String) -> Bool {
+        // 泰文范围：U+0E00-U+0E7F
+        for scalar in text.unicodeScalars {
+            if (0x0E00...0x0E7F).contains(scalar.value) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 检测是否包含越南文特有字符
+    private func containsVietnameseCharacters(_ text: String) -> Bool {
+        // 越南文使用带声调的拉丁字母
+        let vietnameseChars = CharacterSet(charactersIn: "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
+        return text.lowercased().unicodeScalars.contains { vietnameseChars.contains($0) }
+    }
+
+    /// 检测是否为纯 ASCII 字符
+    private func isPureASCII(_ text: String) -> Bool {
+        return text.unicodeScalars.allSatisfy { $0.isASCII }
+    }
+
+    /// 检测是否可能是英文艺术家（启发式规则）
+    private func isLikelyEnglishArtist(_ artist: String) -> Bool {
+        // 🔑 常见英文艺术家的特征
+        let lowercased = artist.lowercased()
+
+        // 包含常见英文词
+        let englishIndicators = ["the ", " and ", " of ", "dj ", "mc ", "feat.", "ft."]
+        for indicator in englishIndicators {
+            if lowercased.contains(indicator) {
+                return true
+            }
+        }
+
+        // 名字格式：First Last（两个单词，首字母大写）
+        let words = artist.split(separator: " ")
+        if words.count == 2 {
+            let hasCapitalizedWords = words.allSatisfy { word in
+                guard let first = word.first else { return false }
+                return first.isUppercase && word.dropFirst().allSatisfy { $0.isLowercase || $0 == "'" || $0 == "-" }
+            }
+            // 这可能是英文名，但也可能是日韩罗马字名，不能确定
+            // 返回 false 让系统尝试其他区域
+            if hasCapitalizedWords {
+                return false
+            }
+        }
+
+        return false
     }
 
     // MARK: - QQ Music Lyrics
@@ -2740,14 +3336,21 @@ public class LyricsService: ObservableObject {
         debugLog("🌐 Fetching from QQ Music: '\(title)' by '\(artist)'")
         logger.info("🌐 Fetching from QQ Music: \(title) by \(artist)")
 
-        // 🔑 Step 0: 尝试获取中文元数据（解决 MoreFeel → 莫非定律乐团 的问题）
+        // 🔑 Step 0: 尝试获取本地化元数据（解决英文/罗马字标题对应日文/中文歌的问题）
         var searchTitle = title
         var searchArtist = artist
 
-        if let chineseMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
+        // 🔑 优先尝试多区域元信息（JP/KR/TH 等）
+        if let localizedMetadata = await fetchLocalizedMetadata(title: title, artist: artist, duration: duration) {
+            searchTitle = localizedMetadata.localizedTitle
+            searchArtist = localizedMetadata.localizedArtist
+            debugLog("🌍 QQ Music using \(localizedMetadata.region) metadata: '\(searchTitle)' by '\(searchArtist)'")
+        }
+        // 🔑 回退到中文区域
+        else if let chineseMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
             searchTitle = chineseMetadata.chineseTitle
             searchArtist = chineseMetadata.chineseArtist
-            debugLog("🇨🇳 Using Chinese metadata: '\(searchTitle)' by '\(searchArtist)'")
+            debugLog("🇨🇳 QQ Music using CN metadata: '\(searchTitle)' by '\(searchArtist)'")
         }
 
         // Step 1: Search for the song
@@ -2761,6 +3364,22 @@ public class LyricsService: ObservableObject {
         logger.info("🎵 Found QQ Music song mid: \(songMid)")
 
         // Step 2: Get lyrics for the song
+        return try await fetchQQMusicLyrics(songMid: songMid)
+    }
+
+    /// QQ Music 搜索 - 直接使用传入的元信息（已经过 iTunes CN 标准化）
+    /// 🔑 不再内部重复查询 iTunes，由 parallelFetchAndSelectBest 统一处理
+    private func fetchFromQQMusicWithMetadata(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        debugLog("🌐 QQ Music (统一元信息): '\(title)' by '\(artist)'")
+        logger.info("🌐 QQ Music (统一元信息): \(title) by \(artist)")
+
+        // 直接搜索，不再查询 iTunes
+        guard let songMid = try await searchQQMusicSong(title: title, artist: artist, duration: duration) else {
+            debugLog("❌ QQ Music: No matching song found")
+            return nil
+        }
+
+        debugLog("✅ QQ Music found song mid: \(songMid)")
         return try await fetchQQMusicLyrics(songMid: songMid)
     }
 

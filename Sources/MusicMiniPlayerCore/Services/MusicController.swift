@@ -82,7 +82,9 @@ public class MusicController: ObservableObject {
     private let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
     // 🔑 改为并发队列 + 信号量限制，避免歌单封面请求串行阻塞
     private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility, attributes: .concurrent)
-    private let artworkFetchSemaphore = DispatchSemaphore(value: 3)  // 最多 3 个并发请求
+    // 🔑 ScriptingBridge 非线程安全，必须串行化调用（value: 1）
+    // 崩溃根因：多线程同时调用 Apple Events 导致 EXC_BAD_ACCESS
+    private let artworkFetchSemaphore = DispatchSemaphore(value: 1)
 
     // 🔑 文件日志（调试用）
     private func logToFile(_ message: String) {
