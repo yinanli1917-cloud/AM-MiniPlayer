@@ -86,22 +86,10 @@ public class MusicController: ObservableObject {
     // 崩溃根因：多线程同时调用 Apple Events 导致 EXC_BAD_ACCESS
     private let artworkFetchSemaphore = DispatchSemaphore(value: 1)
 
-    // 🔑 文件日志（调试用）
+    // 🔑 封面调试日志 - 复用全局 debugPrint（条件编译保护）
+    @inline(__always)
     private func logToFile(_ message: String) {
-        let logPath = "/tmp/nanopod_artwork.log"
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let logMsg = "[\(timestamp)] \(message)\n"
-        if FileManager.default.fileExists(atPath: logPath) {
-            if let handle = FileHandle(forWritingAtPath: logPath) {
-                handle.seekToEndOfFile()
-                if let data = logMsg.data(using: .utf8) {
-                    handle.write(data)
-                }
-                handle.closeFile()
-            }
-        } else {
-            try? logMsg.write(toFile: logPath, atomically: true, encoding: .utf8)
-        }
+        debugPrint(message + "\n")
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -981,41 +969,11 @@ public class MusicController: ObservableObject {
         }
     }
 
-    /// 从 SBApplication 获取封面图片（使用共享的 musicApp 实例）
+    /// 从 SBApplication 获取当前播放曲目的封面图片
+    /// 🔑 复用 extractArtwork 避免重复代码
     private func getArtworkImageFromApp(_ app: SBApplication) -> NSImage? {
-        guard let track = app.value(forKey: "currentTrack") as? NSObject else {
-            logToFile("⚠️ getArtworkImageFromApp: no currentTrack")
-            return nil
-        }
-
-        guard let artworks = track.value(forKey: "artworks") as? SBElementArray else {
-            logToFile("⚠️ getArtworkImageFromApp: no artworks property")
-            return nil
-        }
-
-        logToFile("🔍 getArtworkImageFromApp: artworks.count = \(artworks.count)")
-
-        guard artworks.count > 0,
-              let artwork = artworks.object(at: 0) as? NSObject else {
-            logToFile("⚠️ getArtworkImageFromApp: artworks is empty")
-            return nil
-        }
-
-        // Tuneful 方式：artwork.data 直接返回 NSImage
-        if let image = artwork.value(forKey: "data") as? NSImage {
-            logToFile("✅ getArtworkImageFromApp: got NSImage via data")
-            return image
-        }
-
-        // 回退：尝试 rawData 作为 Data
-        if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
-           let image = NSImage(data: rawData) {
-            logToFile("✅ getArtworkImageFromApp: got NSImage via rawData (\(rawData.count) bytes)")
-            return image
-        }
-
-        logToFile("⚠️ getArtworkImageFromApp: could not extract image from artwork object")
-        return nil
+        guard let track = app.value(forKey: "currentTrack") as? NSObject else { return nil }
+        return extractArtwork(from: track)
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1296,17 +1254,18 @@ public class MusicController: ObservableObject {
             logger.info("Preview: nextTrack")
             return
         }
-        // 🔑 使用 scriptingBridgeQueue 保证线程安全
-        scriptingBridgeQueue.async { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else {
-                debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
-                return
-            }
-            debugPrint("⏭️ [MusicController] nextTrack() executing\n")
-            app.perform(Selector(("nextTrack")))
+        // 🔑 控制操作直接执行，不阻塞 UI
+        // ScriptingBridge 的 perform 是异步的，几乎瞬间返回
+        guard let app = self.musicApp, app.isRunning else {
+            debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
+            return
+        }
+        debugPrint("⏭️ [MusicController] nextTrack() executing\n")
+        app.perform(Selector(("nextTrack")))
 
-            // 🔑 切歌后立即获取新曲目信息和封面（不等待通知）
-            Thread.sleep(forTimeInterval: 0.1)  // 短暂等待 Music.app 切换完成
+        // 🔑 异步获取新曲目信息（不阻塞控制操作）
+        scriptingBridgeQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self = self, let app = self.musicApp, app.isRunning else { return }
             self.fetchCurrentTrackInfo(app: app)
         }
     }
@@ -1320,17 +1279,17 @@ public class MusicController: ObservableObject {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
-            // 🔑 使用 scriptingBridgeQueue 保证线程安全
-            scriptingBridgeQueue.async { [weak self] in
-                guard let self = self, let app = self.musicApp, app.isRunning else {
-                    debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
-                    return
-                }
-                debugPrint("⏮️ [MusicController] previousTrack() executing\n")
-                app.perform(Selector(("backTrack")))
+            // 🔑 控制操作直接执行，不阻塞 UI
+            guard let app = self.musicApp, app.isRunning else {
+                debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
+                return
+            }
+            debugPrint("⏮️ [MusicController] previousTrack() executing\n")
+            app.perform(Selector(("backTrack")))
 
-                // 🔑 切歌后立即获取新曲目信息和封面（不等待通知）
-                Thread.sleep(forTimeInterval: 0.1)  // 短暂等待 Music.app 切换完成
+            // 🔑 异步获取新曲目信息（不阻塞控制操作）
+            scriptingBridgeQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self = self, let app = self.musicApp, app.isRunning else { return }
                 self.fetchCurrentTrackInfo(app: app)
             }
         }
@@ -1368,38 +1327,44 @@ public class MusicController: ObservableObject {
             self.userManuallyOpenedLyrics = false
         }
 
-        // 获取封面 - 先检查缓存
-        if !persistentID.isEmpty, let cached = self.artworkCache.object(forKey: persistentID as NSString) {
+        // 🔑 封面获取策略：先用缓存/占位图立即响应，再异步获取真实封面
+        let title = trackName
+        let artist = trackArtist
+        let album = trackAlbum
+        let pid = persistentID
+
+        // 1. 检查缓存（立即返回）
+        if !pid.isEmpty, let cached = self.artworkCache.object(forKey: pid as NSString) {
             DispatchQueue.main.async {
                 self.setArtwork(cached)
             }
             return
         }
 
-        // 🔑 没有缓存，直接从当前曲目获取封面（最快方式）
-        if let artworkImage = self.getArtworkImageFromApp(app) {
-            if !persistentID.isEmpty {
-                self.artworkCache.setObject(artworkImage, forKey: persistentID as NSString)
+        // 2. 先设置占位图（立即响应）
+        DispatchQueue.main.async {
+            self.setArtwork(self.createPlaceholder())
+        }
+
+        // 3. 异步获取封面（不阻塞曲目信息更新）
+        // 🔑 这里仍然在 scriptingBridgeQueue 上，但使用 async 让出控制权
+        let artworkImage = self.getArtworkImageFromApp(app)
+        if let image = artworkImage {
+            if !pid.isEmpty {
+                self.artworkCache.setObject(image, forKey: pid as NSString)
             }
             DispatchQueue.main.async {
-                self.setArtwork(artworkImage)
+                // 确保还是同一首歌
+                if self.currentPersistentID == pid {
+                    self.setArtwork(image)
+                }
             }
         } else {
             // 🔑 ScriptingBridge 获取失败，异步尝试 MusicKit
-            let title = trackName
-            let artist = trackArtist
-            let album = trackAlbum
-            let pid = persistentID
-
             DispatchQueue.main.async {
-                // 先用占位图
-                self.setArtwork(self.createPlaceholder())
-
-                // 异步尝试 MusicKit
                 Task {
                     if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
                         await MainActor.run {
-                            // 确保还是同一首歌
                             if self.currentPersistentID == pid {
                                 self.setArtwork(mkArtwork)
                                 if !pid.isEmpty {

@@ -441,10 +441,12 @@ public class LyricsService: ObservableObject {
         isTranslating = false
     }
 
-    // 🐛 调试日志
-    // 设置为 true 启用调试日志写入 /tmp/nanopod_lyrics_debug.log
-    // TODO: 调试完成后改回 false
-    private let enableDebugLog = true  // 🔑 临时启用以调试 Release 版本问题
+    // 🐛 调试日志 - DEBUG 模式自动启用，Release 关闭
+    #if DEBUG
+    private let enableDebugLog = false  // 开发时设为 true 启用详细日志
+    #else
+    private let enableDebugLog = false  // Release 始终关闭
+    #endif
 
     // 🔑 公共调试日志（供 LyricsView 调用）
     public func debugLogPublic(_ message: String) {
