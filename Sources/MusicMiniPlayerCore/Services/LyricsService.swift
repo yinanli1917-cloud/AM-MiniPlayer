@@ -441,11 +441,11 @@ public class LyricsService: ObservableObject {
         isTranslating = false
     }
 
-    // 🐛 调试日志 - DEBUG 模式自动启用，Release 关闭
+    // 🐛 调试日志 - DEBUG 模式可手动启用，Release 始终关闭
     #if DEBUG
     private let enableDebugLog = false  // 开发时设为 true 启用详细日志
     #else
-    private let enableDebugLog = false  // Release 始终关闭
+    private let enableDebugLog = false
     #endif
 
     // 🔑 公共调试日志（供 LyricsView 调用）
@@ -783,7 +783,7 @@ public class LyricsService: ObservableObject {
 
         currentFetchTask = Task {
             // 🔑 检测是否为中文歌曲（标题或艺术家包含中文字符）
-            let isChinese = containsChineseCharacters(title) || containsChineseCharacters(artist)
+            let isChinese = LanguageUtils.containsChinese(title) || LanguageUtils.containsChinese(artist)
 
             do {
                 try Task.checkCancellation()
@@ -1269,7 +1269,7 @@ public class LyricsService: ObservableObject {
                 var fetchedLyrics: [LyricLine]? = nil
 
                 // 🔑 检测是否为中文歌曲
-                let isChinese = containsChineseCharacters(track.title) || containsChineseCharacters(track.artist)
+                let isChinese = LanguageUtils.containsChinese(track.title) || LanguageUtils.containsChinese(track.artist)
 
                 // Priority 1: AMLL-TTML-DB (best quality)
                 if let lyrics = try? await fetchFromAMLLTTMLDB(title: track.title, artist: track.artist, duration: track.duration), !lyrics.isEmpty {
@@ -1801,7 +1801,7 @@ public class LyricsService: ObservableObject {
         // 策略：先尝试规范化的标题/艺术家，失败后再尝试原始值
         let searchStrategies: [(title: String, artist: String)] = [
             // 1. 规范化：去掉后缀 + 只用第一个艺术家
-            (normalizeTrackName(title), normalizeArtistName(artist)),
+            (LanguageUtils.normalizeTrackName(title), LanguageUtils.normalizeArtistName(artist)),
             // 2. 原始值
             (title, artist)
         ]
@@ -1922,8 +1922,8 @@ public class LyricsService: ObservableObject {
 
         // 🔑 对搜索结果进行评分，选择最佳匹配
         var bestMatch: (lyrics: String, score: Double)? = nil
-        let inputTitleNormalized = normalizeTrackName(title)
-        let inputArtistNormalized = normalizeArtistName(artist)
+        let inputTitleNormalized = LanguageUtils.normalizeTrackName(title)
+        let inputArtistNormalized = LanguageUtils.normalizeArtistName(artist)
 
         for result in results {
             guard let syncedLyrics = result["syncedLyrics"] as? String,
@@ -1945,12 +1945,12 @@ public class LyricsService: ObservableObject {
             else { continue }  // 时长差太大，跳过
 
             // 标题匹配（权重 35%）
-            let resultTitleNormalized = normalizeTrackName(resultTitle)
-            let titleSimilarity = stringSimilarity(inputTitleNormalized, resultTitleNormalized)
+            let resultTitleNormalized = LanguageUtils.normalizeTrackName(resultTitle)
+            let titleSimilarity = LanguageUtils.stringSimilarity(inputTitleNormalized, resultTitleNormalized)
             score += titleSimilarity * 35
 
             // 艺术家匹配（权重 25%）
-            let resultArtistNormalized = normalizeArtistName(resultArtist)
+            let resultArtistNormalized = LanguageUtils.normalizeArtistName(resultArtist)
             if inputArtistNormalized.lowercased().contains(resultArtistNormalized.lowercased()) ||
                resultArtistNormalized.lowercased().contains(inputArtistNormalized.lowercased()) {
                 score += 25
@@ -2043,8 +2043,8 @@ public class LyricsService: ObservableObject {
 
         // 🔑 对搜索结果进行评分
         var bestMatch: (lyrics: String, score: Double)? = nil
-        let inputTitleNormalized = normalizeTrackName(title)
-        let inputArtistNormalized = normalizeArtistName(artist)
+        let inputTitleNormalized = LanguageUtils.normalizeTrackName(title)
+        let inputArtistNormalized = LanguageUtils.normalizeArtistName(artist)
 
         for result in dataArray {
             // SimpMusic 返回的字段：syncedLyrics, plainLyrics, trackName, artistName, duration
@@ -2067,12 +2067,12 @@ public class LyricsService: ObservableObject {
             else { continue }  // 时长差太大，跳过
 
             // 标题匹配（权重 35%）
-            let resultTitleNormalized = normalizeTrackName(resultTitle)
-            let titleSimilarity = stringSimilarity(inputTitleNormalized, resultTitleNormalized)
+            let resultTitleNormalized = LanguageUtils.normalizeTrackName(resultTitle)
+            let titleSimilarity = LanguageUtils.stringSimilarity(inputTitleNormalized, resultTitleNormalized)
             score += titleSimilarity * 35
 
             // 艺术家匹配（权重 25%）
-            let resultArtistNormalized = normalizeArtistName(resultArtist)
+            let resultArtistNormalized = LanguageUtils.normalizeArtistName(resultArtist)
             if inputArtistNormalized.lowercased().contains(resultArtistNormalized.lowercased()) ||
                resultArtistNormalized.lowercased().contains(inputArtistNormalized.lowercased()) {
                 score += 25
@@ -2093,65 +2093,6 @@ public class LyricsService: ObservableObject {
 
         debugLog("✅ SimpMusic: Selected match with score \(String(format: "%.1f", match.score))")
         return parseLRC(match.lyrics)
-    }
-
-    // MARK: - String Normalization Helpers
-
-    /// 规范化歌曲标题：移除常见后缀如 (feat. xxx), (Remaster), [Live] 等
-    private func normalizeTrackName(_ name: String) -> String {
-        var normalized = name.lowercased()
-
-        // 🔑 移除常见后缀模式
-        let suffixPatterns = [
-            "\\s*\\(feat\\..*\\)",           // (feat. xxx)
-            "\\s*\\[feat\\..*\\]",           // [feat. xxx]
-            "\\s*-\\s*remaster.*",           // - Remaster
-            "\\s*\\(\\d{4}\\s*remaster\\)",  // (2020 Remaster)
-            "\\s*\\(remaster.*\\)",          // (Remastered xxx) - 新增
-            "\\s*\\(official.*\\)",          // (Official Video)
-            "\\s*\\(live.*\\)",              // (Live)
-            "\\s*\\(acoustic.*\\)",          // (Acoustic)
-            "\\s*\\[.*\\]",                  // [anything]
-            "\\s*\\(.*version.*\\)",         // (xxx Version)
-            "\\s*\\(.*remix.*\\)",           // (xxx Remix)
-        ]
-
-        for pattern in suffixPatterns {
-            normalized = normalized.replacingOccurrences(
-                of: pattern, with: "", options: .regularExpression
-            )
-        }
-
-        return normalized.trimmingCharacters(in: .whitespaces)
-    }
-
-    /// 规范化艺术家名：提取主要艺术家名
-    private func normalizeArtistName(_ name: String) -> String {
-        var normalized = name.lowercased()
-
-        // 🔑 移除常见分隔符后的内容，保留第一个艺术家
-        let separators = [" & ", ", ", " feat. ", " ft. ", " x ", " vs ", " vs. ", " featuring "]
-        for sep in separators {
-            if let range = normalized.range(of: sep) {
-                normalized = String(normalized[..<range.lowerBound])
-            }
-        }
-
-        return normalized.trimmingCharacters(in: .whitespaces)
-    }
-
-    /// 计算两个字符串的相似度 (0.0 - 1.0)
-    /// 使用 Jaccard 相似度：共同字符数 / 总字符数
-    private func stringSimilarity(_ s1: String, _ s2: String) -> Double {
-        guard !s1.isEmpty && !s2.isEmpty else { return 0 }
-
-        let set1 = Set(s1.lowercased())
-        let set2 = Set(s2.lowercased())
-        let intersection = set1.intersection(set2)
-        let union = set1.union(set2)
-
-        guard !union.isEmpty else { return 0 }
-        return Double(intersection.count) / Double(union.count)
     }
 
     // MARK: - LRC Parser
@@ -2261,7 +2202,7 @@ public class LyricsService: ObservableObject {
         // 策略：先尝试规范化的标题/艺术家，失败后再尝试原始值
         let searchStrategies: [(title: String, artist: String)] = [
             // 1. 规范化：去掉后缀 + 只用第一个艺术家
-            (normalizeTrackName(title), normalizeArtistName(artist)),
+            (LanguageUtils.normalizeTrackName(title), LanguageUtils.normalizeArtistName(artist)),
             // 2. 原始值
             (title, artist)
         ]
@@ -2584,11 +2525,11 @@ public class LyricsService: ObservableObject {
 
     private func searchNetEaseSong(title: String, artist: String, duration: TimeInterval) async throws -> Int? {
         // 🔑 繁体转简体（NetEase 使用简体中文）
-        let simplifiedTitle = convertToSimplified(title)
-        let simplifiedArtist = convertToSimplified(artist)
+        let simplifiedTitle = LanguageUtils.toSimplifiedChinese(title)
+        let simplifiedArtist = LanguageUtils.toSimplifiedChinese(artist)
 
         // 🔑 检测标题是否包含日文字符
-        let isJapaneseTitle = containsJapaneseCharacters(title)
+        let isJapaneseTitle = LanguageUtils.containsJapanese(title)
 
         // 🔑 搜索策略（改进版）：
         // 1. 优先使用 "标题 + 艺术家" 搜索（最精确）
@@ -2616,45 +2557,6 @@ public class LyricsService: ObservableObject {
         }
 
         return nil
-    }
-
-    /// 检测字符串是否包含中文字符
-    private func containsChineseCharacters(_ text: String) -> Bool {
-        for scalar in text.unicodeScalars {
-            // CJK Unified Ideographs: U+4E00 - U+9FFF
-            // CJK Unified Ideographs Extension A: U+3400 - U+4DBF
-            if (0x4E00...0x9FFF).contains(scalar.value) ||
-               (0x3400...0x4DBF).contains(scalar.value) {
-                return true
-            }
-        }
-        return false
-    }
-
-    /// 检测字符串是否包含日文字符（平假名、片假名）
-    private func containsJapaneseCharacters(_ text: String) -> Bool {
-        for scalar in text.unicodeScalars {
-            // Hiragana: U+3040 - U+309F
-            // Katakana: U+30A0 - U+30FF
-            if (0x3040...0x309F).contains(scalar.value) ||
-               (0x30A0...0x30FF).contains(scalar.value) {
-                return true
-            }
-        }
-        return false
-    }
-
-    /// 检测字符串是否包含韩文字符
-    private func containsKoreanCharacters(_ text: String) -> Bool {
-        for scalar in text.unicodeScalars {
-            // Hangul Syllables: U+AC00 - U+D7AF
-            // Hangul Jamo: U+1100 - U+11FF
-            if (0xAC00...0xD7AF).contains(scalar.value) ||
-               (0x1100...0x11FF).contains(scalar.value) {
-                return true
-            }
-        }
-        return false
     }
 
     /// 执行 NetEase 搜索请求
@@ -2724,7 +2626,7 @@ public class LyricsService: ObservableObject {
 
             // 匹配标题和艺术家
             let titleLower = title.lowercased()
-            let simplifiedTitleLower = convertToSimplified(title).lowercased()
+            let simplifiedTitleLower = LanguageUtils.toSimplifiedChinese(title).lowercased()
             let songNameLower = songName.lowercased()
 
             // 🔑 改进标题匹配：提取核心词汇进行匹配
@@ -2758,12 +2660,12 @@ public class LyricsService: ObservableObject {
             // 🔑 改进艺术家匹配逻辑
             let artistLower = artist.lowercased()
             let songArtistLower = songArtist.lowercased()
-            let simplifiedArtist = convertToSimplified(artist).lowercased()
-            let simplifiedSongArtist = convertToSimplified(songArtist).lowercased()
+            let simplifiedArtist = LanguageUtils.toSimplifiedChinese(artist).lowercased()
+            let simplifiedSongArtist = LanguageUtils.toSimplifiedChinese(songArtist).lowercased()
 
             // 🔑 CJK 字符检测
-            let inputHasCJK = containsChineseCharacters(artist) || containsJapaneseCharacters(artist) || containsKoreanCharacters(artist)
-            let resultHasCJK = containsChineseCharacters(songArtist) || containsJapaneseCharacters(songArtist) || containsKoreanCharacters(songArtist)
+            let inputHasCJK = LanguageUtils.containsChinese(artist) || LanguageUtils.containsJapanese(artist) || LanguageUtils.containsKorean(artist)
+            let resultHasCJK = LanguageUtils.containsChinese(songArtist) || LanguageUtils.containsJapanese(songArtist) || LanguageUtils.containsKorean(songArtist)
 
             let artistMatch: Bool
             if inputHasCJK && resultHasCJK {
@@ -3074,9 +2976,9 @@ public class LyricsService: ObservableObject {
 
                 // 🔑 关键修复：检查返回的结果是否真的"本地化"了（从英文/罗马字变成中文）
                 // 如果输入是英文/罗马字，但返回的结果也是英文/罗马字，那么这不是有效的本地化
-                let resultIsActuallyLocalized = !containsChineseCharacters(title) ||
-                                                     containsChineseCharacters(trackName) ||
-                                                     (containsJapaneseCharacters(title) && containsJapaneseCharacters(trackName) && trackName != inputTitleLower)
+                let resultIsActuallyLocalized = !LanguageUtils.containsChinese(title) ||
+                                                     LanguageUtils.containsChinese(trackName) ||
+                                                     (LanguageUtils.containsJapanese(title) && LanguageUtils.containsJapanese(trackName) && trackName != inputTitleLower)
 
                 // 1. 组合搜索 + 时长精确匹配（最可靠）
                 // 例如：搜索 "Monologue From One Soul Eason Chan" 找到 "一个灵魂的独白 陈奕迅" (306.06s)
@@ -3112,8 +3014,8 @@ public class LyricsService: ObservableObject {
                 // 但如果时长完全匹配且返回了中文标题，这几乎肯定是同一首歌
                 if searchTerm.lowercased() == inputTitleLower &&
                    durationDiff < 0.1 &&
-                   containsChineseCharacters(trackName) &&
-                   !containsChineseCharacters(title) {
+                   LanguageUtils.containsChinese(trackName) &&
+                   !LanguageUtils.containsChinese(title) {
                     debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, title-search + super-exact-duration + CN-localized)")
                     return (trackName, artistName)
                 }
@@ -3173,28 +3075,28 @@ public class LyricsService: ObservableObject {
         let combined = "\(title) \(artist)"
 
         // 🔑 检测日文（平假名/片假名）
-        if containsJapaneseCharacters(combined) {
+        if LanguageUtils.containsJapanese(combined) {
             regions.append("JP")
         }
 
         // 🔑 检测韩文（谚文）
-        if containsKoreanCharacters(combined) {
+        if LanguageUtils.containsKorean(combined) {
             regions.append("KR")
         }
 
         // 🔑 检测泰文
-        if containsThaiCharacters(combined) {
+        if LanguageUtils.containsThai(combined) {
             regions.append("TH")
         }
 
         // 🔑 检测越南文（带声调的拉丁字母）
-        if containsVietnameseCharacters(combined) {
+        if LanguageUtils.containsVietnamese(combined) {
             regions.append("VN")
         }
 
         // 🔑 如果是纯 ASCII 但不是常见英文艺术家，尝试日韩区域
         // 很多日韩艺术家用罗马字名
-        if regions.isEmpty && isPureASCII(artist) && !isLikelyEnglishArtist(artist) {
+        if regions.isEmpty && LanguageUtils.isPureASCII(artist) && !LanguageUtils.isLikelyEnglishArtist(artist) {
             // 尝试日本和韩国区域（这些地区有很多罗马字艺术家名）
             regions.append(contentsOf: ["JP", "KR"])
         }
@@ -3277,61 +3179,6 @@ public class LyricsService: ObservableObject {
         return nil
     }
 
-    // MARK: - Language Detection Helpers (Multi-Region)
-
-    /// 检测是否包含泰文字符
-    private func containsThaiCharacters(_ text: String) -> Bool {
-        // 泰文范围：U+0E00-U+0E7F
-        for scalar in text.unicodeScalars {
-            if (0x0E00...0x0E7F).contains(scalar.value) {
-                return true
-            }
-        }
-        return false
-    }
-
-    /// 检测是否包含越南文特有字符
-    private func containsVietnameseCharacters(_ text: String) -> Bool {
-        // 越南文使用带声调的拉丁字母
-        let vietnameseChars = CharacterSet(charactersIn: "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
-        return text.lowercased().unicodeScalars.contains { vietnameseChars.contains($0) }
-    }
-
-    /// 检测是否为纯 ASCII 字符
-    private func isPureASCII(_ text: String) -> Bool {
-        return text.unicodeScalars.allSatisfy { $0.isASCII }
-    }
-
-    /// 检测是否可能是英文艺术家（启发式规则）
-    private func isLikelyEnglishArtist(_ artist: String) -> Bool {
-        // 🔑 常见英文艺术家的特征
-        let lowercased = artist.lowercased()
-
-        // 包含常见英文词
-        let englishIndicators = ["the ", " and ", " of ", "dj ", "mc ", "feat.", "ft."]
-        for indicator in englishIndicators {
-            if lowercased.contains(indicator) {
-                return true
-            }
-        }
-
-        // 名字格式：First Last（两个单词，首字母大写）
-        let words = artist.split(separator: " ")
-        if words.count == 2 {
-            let hasCapitalizedWords = words.allSatisfy { word in
-                guard let first = word.first else { return false }
-                return first.isUppercase && word.dropFirst().allSatisfy { $0.isLowercase || $0 == "'" || $0 == "-" }
-            }
-            // 这可能是英文名，但也可能是日韩罗马字名，不能确定
-            // 返回 false 让系统尝试其他区域
-            if hasCapitalizedWords {
-                return false
-            }
-        }
-
-        return false
-    }
-
     // MARK: - QQ Music Lyrics
 
     private func fetchFromQQMusic(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
@@ -3387,8 +3234,8 @@ public class LyricsService: ObservableObject {
 
     private func searchQQMusicSong(title: String, artist: String, duration: TimeInterval) async throws -> String? {
         // 🔑 繁体转简体
-        let simplifiedTitle = convertToSimplified(title)
-        let simplifiedArtist = convertToSimplified(artist)
+        let simplifiedTitle = LanguageUtils.toSimplifiedChinese(title)
+        let simplifiedArtist = LanguageUtils.toSimplifiedChinese(artist)
 
         // 🔑 多轮搜索策略：
         // Round 1: title + artist（需要验证标题匹配）
@@ -3740,16 +3587,6 @@ public class LyricsService: ObservableObject {
         }
 
         return lines.isEmpty ? nil : lines
-    }
-
-    // MARK: - Helper Functions
-
-    /// 繁体中文转简体中文
-    private func convertToSimplified(_ text: String) -> String {
-        // 使用 CFStringTransform 进行繁简转换
-        let mutableString = NSMutableString(string: text)
-        CFStringTransform(mutableString, nil, "Traditional-Simplified" as CFString, false)
-        return mutableString as String
     }
 
     // MARK: - Apple Music Catalog ID Lookup
