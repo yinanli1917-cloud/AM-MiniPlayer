@@ -3,75 +3,6 @@ import Combine
 import os
 import Translation
 
-// MARK: - Models
-
-/// 单个字/词的时间信息（用于逐字歌词）
-public struct LyricWord: Identifiable, Equatable {
-    public let id = UUID()
-    public let word: String
-    public let startTime: TimeInterval  // 秒
-    public let endTime: TimeInterval    // 秒
-
-    public init(word: String, startTime: TimeInterval, endTime: TimeInterval) {
-        self.word = word
-        self.startTime = startTime
-        self.endTime = endTime
-    }
-
-    /// 计算当前时间对应的进度 (0.0 - 1.0)
-    public func progress(at time: TimeInterval) -> Double {
-        guard endTime > startTime else { return time >= startTime ? 1.0 : 0.0 }
-        if time <= startTime { return 0.0 }
-        if time >= endTime { return 1.0 }
-        return (time - startTime) / (endTime - startTime)
-    }
-}
-
-public struct LyricLine: Identifiable, Equatable {
-    public let id = UUID()
-    public let text: String
-    public let startTime: TimeInterval
-    public let endTime: TimeInterval
-    /// 逐字时间信息（如果有的话）
-    public let words: [LyricWord]
-    /// 翻译文本（如果有的话）- var 以支持系统翻译更新
-    public var translation: String?
-    /// 是否有逐字时间轴
-    public var hasSyllableSync: Bool { !words.isEmpty }
-    /// 是否有翻译
-    public var hasTranslation: Bool { translation != nil && !translation!.isEmpty }
-
-    public init(text: String, startTime: TimeInterval, endTime: TimeInterval, words: [LyricWord] = [], translation: String? = nil) {
-        self.text = text
-        self.startTime = startTime
-        self.endTime = endTime
-        self.words = words
-        self.translation = translation
-    }
-}
-
-// MARK: - Cache Item
-
-class CachedLyricsItem: NSObject {
-    let lyrics: [LyricLine]
-    let timestamp: Date
-    let isNoLyrics: Bool  // 🔑 标记是否为"无歌词"缓存
-
-    init(lyrics: [LyricLine], isNoLyrics: Bool = false) {
-        self.lyrics = lyrics
-        self.isNoLyrics = isNoLyrics
-        self.timestamp = Date()
-        super.init()
-    }
-
-    var isExpired: Bool {
-        // 🔑 No Lyrics 缓存 6 小时过期（比有歌词的短，以便后续可能有歌词时能刷新）
-        // 有歌词的缓存 24 小时过期
-        let expirationTime: TimeInterval = isNoLyrics ? 21600 : 86400
-        return Date().timeIntervalSince(timestamp) > expirationTime
-    }
-}
-
 // MARK: - Service
 
 public class LyricsService: ObservableObject {
@@ -960,7 +891,10 @@ public class LyricsService: ObservableObject {
     /// - 时间轴覆盖度: 最多+15分
     /// - 来源加成: AMLL +10, NetEase +8, QQ +6, LRCLIB +3, lyrics.ovh +0
     /// - 翻译加成: 有翻译时 +15 分（仅在 showTranslation=true 时）
-    private func calculateLyricsScore(_ lyrics: [LyricLine], source: String, duration: TimeInterval) -> Double {
+    /// 计算歌词质量评分
+    /// - Parameters:
+    ///   - translationEnabled: 🔑 必须在主线程捕获后传入，避免并发访问 @Published 属性
+    private func calculateLyricsScore(_ lyrics: [LyricLine], source: String, duration: TimeInterval, translationEnabled: Bool) -> Double {
         guard !lyrics.isEmpty else { return 0 }
 
         var score: Double = 0
@@ -1025,7 +959,7 @@ public class LyricsService: ObservableObject {
         }
 
         // 6. 🔑 翻译加成：当用户开启翻译时，有翻译的歌词源 +15 分
-        if showTranslation {
+        if translationEnabled {
             let hasTranslation = lyrics.contains { $0.hasTranslation }
             if hasTranslation {
                 score += 15
@@ -1118,12 +1052,16 @@ public class LyricsService: ObservableObject {
         // ============================================================
         var results: [LyricsResult] = []
 
+        // 🔑 在进入并发任务前捕获 showTranslation 状态
+        // 避免在后台线程访问 @Published 属性
+        let translationEnabled = await MainActor.run { self.showTranslation }
+
         await withTaskGroup(of: LyricsResult?.self) { group in
             // 1. AMLL-TTML-DB（始终尝试，质量最高）
             group.addTask {
                 if let lyrics = try? await self.fetchFromAMLLTTMLDB(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
-                    let score = self.calculateLyricsScore(lyrics, source: "AMLL", duration: duration)
+                    let score = self.calculateLyricsScore(lyrics, source: "AMLL", duration: duration, translationEnabled: translationEnabled)
                     self.debugLog("📊 AMLL: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
                     return LyricsResult(lyrics: lyrics, source: "AMLL", score: score)
                 }
@@ -1135,7 +1073,7 @@ public class LyricsService: ObservableObject {
             group.addTask {
                 if let lyrics = try? await self.fetchFromNetEaseWithMetadata(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
-                    let score = self.calculateLyricsScore(lyrics, source: "NetEase", duration: duration)
+                    let score = self.calculateLyricsScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled)
                     self.debugLog("📊 NetEase: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
                     return LyricsResult(lyrics: lyrics, source: "NetEase", score: score)
                 }
@@ -1147,7 +1085,7 @@ public class LyricsService: ObservableObject {
             group.addTask {
                 if let lyrics = try? await self.fetchFromQQMusicWithMetadata(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
-                    let score = self.calculateLyricsScore(lyrics, source: "QQ", duration: duration)
+                    let score = self.calculateLyricsScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled)
                     self.debugLog("📊 QQ Music: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
                     return LyricsResult(lyrics: lyrics, source: "QQ", score: score)
                 }
@@ -1158,7 +1096,7 @@ public class LyricsService: ObservableObject {
             group.addTask {
                 if let lyrics = try? await self.fetchFromLRCLIB(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
-                    let score = self.calculateLyricsScore(lyrics, source: "LRCLIB", duration: duration)
+                    let score = self.calculateLyricsScore(lyrics, source: "LRCLIB", duration: duration, translationEnabled: translationEnabled)
                     self.debugLog("📊 LRCLIB: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
                     return LyricsResult(lyrics: lyrics, source: "LRCLIB", score: score)
                 }
@@ -1169,7 +1107,7 @@ public class LyricsService: ObservableObject {
             group.addTask {
                 if let lyrics = try? await self.fetchFromSimpMusic(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
-                    let score = self.calculateLyricsScore(lyrics, source: "SimpMusic", duration: duration)
+                    let score = self.calculateLyricsScore(lyrics, source: "SimpMusic", duration: duration, translationEnabled: translationEnabled)
                     self.debugLog("📊 SimpMusic: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
                     return LyricsResult(lyrics: lyrics, source: "SimpMusic", score: score)
                 }
@@ -1180,7 +1118,7 @@ public class LyricsService: ObservableObject {
             group.addTask {
                 if let lyrics = try? await self.fetchFromLRCLIBSearch(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
-                    let score = self.calculateLyricsScore(lyrics, source: "LRCLIB-Search", duration: duration)
+                    let score = self.calculateLyricsScore(lyrics, source: "LRCLIB-Search", duration: duration, translationEnabled: translationEnabled)
                     self.debugLog("📊 LRCLIB-Search: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
                     return LyricsResult(lyrics: lyrics, source: "LRCLIB-Search", score: score)
                 }
@@ -1191,7 +1129,7 @@ public class LyricsService: ObservableObject {
             group.addTask {
                 if let lyrics = try? await self.fetchFromLyricsOVH(title: searchTitle, artist: searchArtist, duration: duration),
                    !lyrics.isEmpty {
-                    let score = self.calculateLyricsScore(lyrics, source: "lyrics.ovh", duration: duration)
+                    let score = self.calculateLyricsScore(lyrics, source: "lyrics.ovh", duration: duration, translationEnabled: translationEnabled)
                     self.debugLog("📊 lyrics.ovh: \(lyrics.count) 行, 评分 \(String(format: "%.1f", score))")
                     return LyricsResult(lyrics: lyrics, source: "lyrics.ovh", score: score)
                 }
@@ -2705,7 +2643,7 @@ public class LyricsService: ObservableObject {
         // 🔑 匹配优先级（必须同时匹配标题，避免同艺术家不同歌曲错配）：
         // 1. 时长差 < 1秒 且 标题匹配 且 艺术家匹配（最精确）
         // 2. 时长差 < 2秒 且 标题匹配 且 艺术家匹配（稍宽松时长）
-        // 3. 时长差 < 1秒 且 标题匹配（无艺术家匹配，用于跨语言情况）
+        // 3. 时长差 < 0.5秒 且 标题匹配（罗马字 vs CJK 情况，允许艺术家不匹配）
         // 注意：必须有标题匹配，避免同艺术家不同歌曲错配
 
         for candidate in candidates {
@@ -2726,8 +2664,18 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        // 🔑 优先级3已完全移除：对于通用歌名（如 "Singer"），只有标题+时长匹配会导致错误匹配
-        // 必须同时匹配艺术家，没有例外
+        // 🔑 优先级3：罗马字 vs CJK 艺术家名问题
+        // 当系统语言是英文时，iTunes 返回 "Tomoko Aran"，但 NetEase 返回 "亜蘭知子"
+        // 在这种情况下，如果标题匹配且时长非常精确（<0.5秒），允许艺术家不匹配
+        // 但标题必须足够长且唯一（避免通用歌名如 "Singer" 错配）
+        for candidate in candidates {
+            let isTitleSpecificEnough = title.count >= 8 || !LanguageUtils.isPureASCII(title)
+            if candidate.durationDiff < 0.5 && candidate.titleMatch && isTitleSpecificEnough {
+                debugLog("✅ NetEase match: '\(candidate.name)' by '\(candidate.artist)' (duration<0.5s + title, cross-language artist)")
+                logger.info("✅ NetEase match (cross-lang): \(candidate.name) by \(candidate.artist), diff=\(String(format: "%.2f", candidate.durationDiff))s")
+                return candidate.id
+            }
+        }
 
         // ❌ 没有找到匹配
         debugLog("❌ NetEase: No match found in \(songs.count) results (candidates after duration filter: \(candidates.count))")
@@ -2974,11 +2922,15 @@ public class LyricsService: ObservableObject {
                 let isCombinedSearch = searchTerm.lowercased().contains(" ") &&
                                       searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
 
-                // 🔑 关键修复：检查返回的结果是否真的"本地化"了（从英文/罗马字变成中文）
-                // 如果输入是英文/罗马字，但返回的结果也是英文/罗马字，那么这不是有效的本地化
-                let resultIsActuallyLocalized = !LanguageUtils.containsChinese(title) ||
-                                                     LanguageUtils.containsChinese(trackName) ||
-                                                     (LanguageUtils.containsJapanese(title) && LanguageUtils.containsJapanese(trackName) && trackName != inputTitleLower)
+                // 🔑 关键修复：检查返回的结果是否真的"本地化"了
+                // fetchChineseMetadata 的目的是获取中文元信息，用于在中文歌词库（NetEase/QQ）中搜索
+                // 所以结果必须包含中文，否则对中文歌词库搜索没有帮助
+                let resultHasChinese = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsChinese(artistName)
+
+                // 如果输入已经包含中文，允许返回相同内容（说明本来就是中文歌）
+                // 如果输入是英文/罗马字，结果必须包含中文才有意义
+                let inputHasChinese = LanguageUtils.containsChinese(title) || LanguageUtils.containsChinese(artist)
+                let resultIsActuallyLocalized = inputHasChinese || resultHasChinese
 
                 // 1. 组合搜索 + 时长精确匹配（最可靠）
                 // 例如：搜索 "Monologue From One Soul Eason Chan" 找到 "一个灵魂的独白 陈奕迅" (306.06s)
@@ -3003,9 +2955,11 @@ public class LyricsService: ObservableObject {
                 }
 
                 // 4. 艺术家匹配 + 时长精确（仅艺术家搜索时）
-                // 🔑 对于艺术家搜索，允许标题不变（因为可能确实没有中文歌名）
-                if artistMatch && durationDiff < 0.5 && searchTerm.lowercased() == inputArtistLower {
-                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, artist-only + exact-duration)")
+                // 🔑 必须检查结果是否真的本地化了（标题或艺术家包含中文）
+                // 否则会把日文罗马字歌曲错误地当成"中文元信息"
+                let hasChineseContent = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsChinese(artistName)
+                if artistMatch && durationDiff < 0.5 && searchTerm.lowercased() == inputArtistLower && hasChineseContent {
+                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, artist-only + exact-duration + CN-content)")
                     return (trackName, artistName)
                 }
 
@@ -3133,9 +3087,12 @@ public class LyricsService: ObservableObject {
                 continue
             }
 
-            // 🔑 匹配逻辑：时长 + 艺术家名
+            // 🔑 匹配逻辑：时长 + 艺术家名/标题
             let inputArtistLower = artist.lowercased()
             let inputTitleLower = title.lowercased()
+
+            // 🔑 收集候选结果，按时长差排序
+            var candidates: [(trackName: String, artistName: String, durationDiff: Double)] = []
 
             for result in results {
                 guard let trackName = result["trackName"] as? String,
@@ -3162,17 +3119,38 @@ public class LyricsService: ObservableObject {
                 let titleMatch = inputTitleLower.contains(resultTitleLower) ||
                                  resultTitleLower.contains(inputTitleLower)
 
-                // 🔑 必须同时匹配艺术家和时长
-                if artistMatch || (titleMatch && durationDiff < 0.5) {
-                    // 🔑 检查是否真的"本地化"了（返回了不同的标题/艺术家）
-                    let isLocalized = trackName.lowercased() != inputTitleLower ||
-                                      artistName.lowercased() != inputArtistLower
+                // 🔑 检查是否真的"本地化"了（返回了不同的标题/艺术家）
+                let isLocalized = trackName.lowercased() != inputTitleLower ||
+                                  artistName.lowercased() != inputArtistLower
 
-                    if isLocalized {
-                        debugLog("✅ iTunes \(region): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.2f", durationDiff))s)")
-                        return (trackName, artistName, region, durationDiff)
-                    }
+                guard isLocalized else { continue }
+
+                // 🔑 匹配策略：
+                // 1. 艺术家匹配 + 时长接近
+                // 2. 标题匹配 + 时长精确 (<0.5s)
+                // 3. 🔑 新增：时长超精确 (<0.3s) + 结果包含 CJK 字符（罗马字→原文情况）
+                //    对于 "Momoko Kikuchi" → "菊池桃子"，无法通过字符串匹配
+                //    但如果时长完全匹配且返回了 CJK 结果，几乎肯定是同一首歌
+
+                let resultHasCJK = LanguageUtils.containsChinese(trackName) ||
+                                   LanguageUtils.containsJapanese(trackName) ||
+                                   LanguageUtils.containsKorean(trackName) ||
+                                   LanguageUtils.containsChinese(artistName) ||
+                                   LanguageUtils.containsJapanese(artistName) ||
+                                   LanguageUtils.containsKorean(artistName)
+
+                let inputIsPureASCII = LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
+
+                if artistMatch || (titleMatch && durationDiff < 0.5) ||
+                   (durationDiff < 0.3 && resultHasCJK && inputIsPureASCII) {
+                    candidates.append((trackName, artistName, durationDiff))
                 }
+            }
+
+            // 🔑 返回时长最接近的候选
+            if let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) {
+                debugLog("✅ iTunes \(region): '\(best.trackName)' by '\(best.artistName)' (diff: \(String(format: "%.2f", best.durationDiff))s)")
+                return (best.trackName, best.artistName, region, best.durationDiff)
             }
         }
 
