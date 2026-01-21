@@ -63,6 +63,98 @@ public enum LanguageUtils {
         return text.lowercased().unicodeScalars.contains { vietnameseChars.contains($0) }
     }
 
+    // MARK: - South Asian Scripts (印度次大陆)
+
+    /// 检测是否包含天城文（Devanagari）- 印地语/梵文/尼泊尔语
+    public static func containsDevanagari(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Devanagari: U+0900 - U+097F
+            (0x0900...0x097F).contains(scalar.value)
+        }
+    }
+
+    /// 检测是否包含泰米尔文
+    public static func containsTamil(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Tamil: U+0B80 - U+0BFF
+            (0x0B80...0x0BFF).contains(scalar.value)
+        }
+    }
+
+    /// 检测是否包含泰卢固文
+    public static func containsTelugu(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Telugu: U+0C00 - U+0C7F
+            (0x0C00...0x0C7F).contains(scalar.value)
+        }
+    }
+
+    // MARK: - Middle Eastern Scripts (中东)
+
+    /// 检测是否包含阿拉伯文
+    public static func containsArabic(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Arabic: U+0600 - U+06FF
+            // Arabic Supplement: U+0750 - U+077F
+            (0x0600...0x06FF).contains(scalar.value) ||
+            (0x0750...0x077F).contains(scalar.value)
+        }
+    }
+
+    /// 检测是否包含希伯来文
+    public static func containsHebrew(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Hebrew: U+0590 - U+05FF
+            (0x0590...0x05FF).contains(scalar.value)
+        }
+    }
+
+    // MARK: - European Scripts (欧洲)
+
+    /// 检测是否包含西里尔字母（俄语/乌克兰语等）
+    public static func containsCyrillic(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Cyrillic: U+0400 - U+04FF
+            // Cyrillic Supplement: U+0500 - U+052F
+            (0x0400...0x04FF).contains(scalar.value) ||
+            (0x0500...0x052F).contains(scalar.value)
+        }
+    }
+
+    /// 检测是否包含希腊文
+    public static func containsGreek(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Greek: U+0370 - U+03FF
+            (0x0370...0x03FF).contains(scalar.value)
+        }
+    }
+
+    // MARK: - Southeast Asian Scripts (东南亚)
+
+    /// 检测是否包含缅甸文
+    public static func containsBurmese(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Myanmar: U+1000 - U+109F
+            (0x1000...0x109F).contains(scalar.value)
+        }
+    }
+
+    /// 检测是否包含高棉文（柬埔寨）
+    public static func containsKhmer(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Khmer: U+1780 - U+17FF
+            (0x1780...0x17FF).contains(scalar.value)
+        }
+    }
+
+    /// 检测是否包含老挝文
+    public static func containsLao(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            // Lao: U+0E80 - U+0EFF
+            (0x0E80...0x0EFF).contains(scalar.value)
+        }
+    }
+
     // MARK: - ASCII Detection
 
     /// 检测是否为纯 ASCII 字符
@@ -78,15 +170,38 @@ public enum LanguageUtils {
     // MARK: - Region Inference
 
     /// 根据文本内容推断可能的 iTunes 区域代码
-    /// 返回值: ["JP", "KR", "TH", "VN"] 等
+    /// 支持全球主要音乐市场：东亚、东南亚、南亚、中东、东欧
     public static func inferRegions(title: String, artist: String) -> [String] {
         let combined = title + " " + artist
         var regions: [String] = []
 
+        // 东亚 (East Asia)
         if containsJapanese(combined) { regions.append("JP") }
         if containsKorean(combined) { regions.append("KR") }
+
+        // 东南亚 (Southeast Asia)
         if containsThai(combined) { regions.append("TH") }
         if containsVietnamese(combined) { regions.append("VN") }
+        if containsBurmese(combined) { regions.append("MM") }
+        if containsKhmer(combined) { regions.append("KH") }
+        if containsLao(combined) { regions.append("LA") }
+
+        // 南亚 (South Asia) - 印度市场
+        if containsDevanagari(combined) || containsTamil(combined) || containsTelugu(combined) {
+            regions.append("IN")
+        }
+
+        // 中东 (Middle East)
+        if containsArabic(combined) {
+            regions.append(contentsOf: ["SA", "AE", "EG"])  // 沙特/阿联酋/埃及
+        }
+        if containsHebrew(combined) { regions.append("IL") }
+
+        // 东欧 (Eastern Europe)
+        if containsCyrillic(combined) {
+            regions.append(contentsOf: ["RU", "UA"])  // 俄罗斯/乌克兰
+        }
+        if containsGreek(combined) { regions.append("GR") }
 
         // 🔑 纯 ASCII 但不是常见英文艺术家，尝试日韩区域（罗马字名）
         if regions.isEmpty && isPureASCII(artist) && !isLikelyEnglishArtist(artist) {
@@ -98,17 +213,31 @@ public enum LanguageUtils {
 
     /// 启发式判断是否为英文艺术家（避免误匹配日韩罗马字艺术家）
     public static func isLikelyEnglishArtist(_ artist: String) -> Bool {
-        let englishArtists = [
-            // 常见英文名词缀
-            "the ", " band", " brothers", " sisters", " boys", " girls",
-            // 常见英文艺术家
+        let lowercased = artist.lowercased()
+
+        // 通用英文词缀
+        let englishPrefixes = ["the ", "dj ", "mc "]
+        let englishSuffixes = [" band", " brothers", " sisters", " boys", " girls",
+                              " orchestra", " choir", " ensemble", " trio", " quartet"]
+
+        for prefix in englishPrefixes {
+            if lowercased.hasPrefix(prefix) { return true }
+        }
+        for suffix in englishSuffixes {
+            if lowercased.hasSuffix(suffix) { return true }
+        }
+
+        // 常见英文艺术家
+        let knownEnglishArtists = [
             "taylor swift", "ed sheeran", "adele", "beyonce", "drake",
             "coldplay", "maroon 5", "imagine dragons", "one republic",
             "bruno mars", "lady gaga", "justin bieber", "ariana grande",
-            "the weeknd", "billie eilish", "dua lipa", "harry styles"
+            "the weeknd", "billie eilish", "dua lipa", "harry styles",
+            "post malone", "travis scott", "bad bunny", "olivia rodrigo",
+            "doja cat", "lil nas x", "twenty one pilots", "panic at the disco"
         ]
-        let lowercased = artist.lowercased()
-        return englishArtists.contains { lowercased.contains($0) }
+
+        return knownEnglishArtists.contains { lowercased.contains($0) }
     }
 }
 
@@ -124,21 +253,52 @@ public extension LanguageUtils {
 
         // 移除括号内容：(feat. xxx), (Remaster), [Live], etc.
         let patterns = [
+            // feat/ft/with 系列
             #"\s*\(feat\.?[^)]*\)"#,
             #"\s*\[feat\.?[^\]]*\]"#,
             #"\s*\(ft\.?[^)]*\)"#,
             #"\s*\(with[^)]*\)"#,
+
+            // 版本标注 - 括号形式
             #"\s*\(remaster[^)]*\)"#,
             #"\s*\(live[^)]*\)"#,
             #"\s*\(acoustic[^)]*\)"#,
             #"\s*\(remix[^)]*\)"#,
             #"\s*\(radio[^)]*\)"#,
             #"\s*\(deluxe[^)]*\)"#,
+            #"\s*\(cover[^)]*\)"#,
+            #"\s*\(extended[^)]*\)"#,
+            #"\s*\(original[^)]*\)"#,
+            #"\s*\(full\s*version[^)]*\)"#,
+            #"\s*\(official[^)]*\)"#,
+            #"\s*\(bonus[^)]*\)"#,
+            #"\s*\(edit[^)]*\)"#,
+            #"\s*\(clean[^)]*\)"#,
+            #"\s*\(explicit[^)]*\)"#,
+            #"\s*\(instrumental[^)]*\)"#,
+            #"\s*\(karaoke[^)]*\)"#,
+
+            // OST/影视相关
+            #"\s*\(from\s+[^)]*\)"#,
+            #"\s*\(ost[^)]*\)"#,
+            #"\s*\(theme[^)]*\)"#,
+            #"\s*\(soundtrack[^)]*\)"#,
+
+            // 方括号形式
             #"\s*\[remaster[^\]]*\]"#,
             #"\s*\[live[^\]]*\]"#,
+            #"\s*\[remix[^\]]*\]"#,
+            #"\s*\[cover[^\]]*\]"#,
+            #"\s*\[acoustic[^\]]*\]"#,
+            #"\s*\[instrumental[^\]]*\]"#,
+
+            // 横线后缀形式
             #"\s*-\s*remaster.*$"#,
             #"\s*-\s*live.*$"#,
-            #"\s*-\s*single\s*version.*$"#
+            #"\s*-\s*single\s*version.*$"#,
+            #"\s*-\s*(intro|outro|interlude)$"#,
+            #"\s*-\s*bonus\s*track.*$"#,
+            #"\s*mv\s*version.*$"#
         ]
 
         for pattern in patterns {
@@ -180,14 +340,38 @@ public extension LanguageUtils {
     }
 
     /// 计算两个字符串的相似度 (0.0 - 1.0)
-    /// 基于 Jaccard 相似度（字符集交集/并集）
+    /// 基于 Levenshtein 编辑距离（比 Jaccard 更精确）
     static func stringSimilarity(_ s1: String, _ s2: String) -> Double {
-        let set1 = Set(s1.lowercased())
-        let set2 = Set(s2.lowercased())
-        let intersection = set1.intersection(set2)
-        let union = set1.union(set2)
-        guard !union.isEmpty else { return 0 }
-        return Double(intersection.count) / Double(union.count)
+        let str1 = Array(s1.lowercased())
+        let str2 = Array(s2.lowercased())
+
+        // 空字符串边界处理
+        guard !str1.isEmpty else { return str2.isEmpty ? 1.0 : 0.0 }
+        guard !str2.isEmpty else { return 0.0 }
+
+        let distance = levenshteinDistance(str1, str2)
+        let maxLen = max(str1.count, str2.count)
+        return 1.0 - Double(distance) / Double(maxLen)
+    }
+
+    /// Levenshtein 编辑距离（动态规划）
+    private static func levenshteinDistance(_ s1: [Character], _ s2: [Character]) -> Int {
+        // 空间优化：只保留前一行
+        var prev = Array(0...s2.count)
+        var curr = [Int](repeating: 0, count: s2.count + 1)
+
+        for i in 1...s1.count {
+            curr[0] = i
+            for j in 1...s2.count {
+                if s1[i - 1] == s2[j - 1] {
+                    curr[j] = prev[j - 1]
+                } else {
+                    curr[j] = min(prev[j], curr[j - 1], prev[j - 1]) + 1
+                }
+            }
+            swap(&prev, &curr)
+        }
+        return prev[s2.count]
     }
 }
 
@@ -209,5 +393,43 @@ public extension LanguageUtils {
         let mutableString = NSMutableString(string: text)
         CFStringTransform(mutableString, nil, "Simplified-Traditional" as CFString, false)
         return mutableString as String
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Unicode Normalization
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+public extension LanguageUtils {
+
+    /// Unicode 规范化 + CJK 标点统一
+    /// 解决不同编码形式（NFC/NFD）和全/半角标点导致的匹配失败
+    static func normalizeUnicode(_ text: String) -> String {
+        // NFC 规范化：将分解形式组合为预组合形式
+        var result = text.precomposedStringWithCanonicalMapping
+
+        // CJK 全角标点 → 半角
+        let punctuationMap: [Character: Character] = [
+            "「": "[", "」": "]", "『": "[", "』": "]",
+            "（": "(", "）": ")",
+            "【": "[", "】": "]",
+            "〈": "<", "〉": ">",
+            "《": "<", "》": ">",
+            "、": ",", "。": ".",
+            "：": ":", "；": ";",
+            "！": "!", "？": "?",
+            "～": "~", "—": "-",
+            "\u{2018}": "'", "\u{2019}": "'",  // 中文单引号 '' → '
+            "\u{201C}": "\"", "\u{201D}": "\"",  // 中文双引号 "" → "
+            "　": " "  // 全角空格
+        ]
+
+        result = String(result.map { punctuationMap[$0] ?? $0 })
+        return result
+    }
+
+    /// 搜索前的完整规范化（Unicode + 标题清理 + 小写）
+    static func normalizeForSearch(_ text: String) -> String {
+        normalizeTrackName(normalizeUnicode(text))
     }
 }

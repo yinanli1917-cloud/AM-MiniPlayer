@@ -12,7 +12,7 @@ public enum DebugConfig {
     /// 是否启用 stderr 调试日志输出
     /// 生产环境设为 false，调试时设为 true
     #if DEBUG
-    public static let enableStderrLog = false  // 开发时设为 true 启用日志
+    public static let enableStderrLog = true  // 开发时设为 true 启用日志
     #else
     public static let enableStderrLog = false
     #endif

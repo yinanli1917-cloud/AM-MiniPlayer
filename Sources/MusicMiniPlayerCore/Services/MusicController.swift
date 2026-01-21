@@ -894,13 +894,9 @@ public class MusicController: ObservableObject {
             return
         }
 
-        logToFile("🎨 Cache MISS, starting parallel fetch...")
+        logToFile("🎨 Cache MISS, starting sequential fetch (SB first, API fallback)...")
 
-        // 🔑 并行获取策略：同时启动 ScriptingBridge 和 MusicKit/iTunes API
-        // 谁先返回有效结果就用谁，减少延迟
-        let artworkSet = OSAllocatedUnfairLock(initialState: false)
-
-        // Track 1: ScriptingBridge (本地嵌入封面，最快)
+        // 🔑 串行优先级策略：优先 ScriptingBridge（与系统一致），失败才用 API
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self,
                   let app = self.musicApp,
@@ -908,14 +904,58 @@ public class MusicController: ObservableObject {
 
             self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
             if let image = self.getArtworkImageFromApp(app) {
-                // 🔑 只有第一个成功的源会设置封面
+                self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
+                DispatchQueue.main.async {
+                    self.setArtwork(image)
+                    if !persistentID.isEmpty {
+                        self.artworkCache.setObject(image, forKey: persistentID as NSString)
+                    }
+                }
+            } else {
+                // 🔑 ScriptingBridge 失败，回退到 API
+                self.logToFile("🎨 [SB] No embedded artwork, falling back to API...")
+                Task {
+                    if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+                        self.logToFile("🎨 [API] SUCCESS! Got image \(mkArtwork.size)")
+                        await MainActor.run {
+                            // 确保还是同一首歌
+                            if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                                self.setArtwork(mkArtwork)
+                                if !persistentID.isEmpty {
+                                    self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
+                                }
+                            }
+                        }
+                    } else {
+                        self.logToFile("🎨 [API] No artwork found, setting placeholder")
+                        await MainActor.run {
+                            if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                                self.currentArtwork = nil
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 🔑 保留原有的超时逻辑作为独立函数（已移除，串行策略不需要竞争超时）
+    private func fetchArtworkLegacyParallel(for title: String, artist: String, album: String, persistentID: String) {
+        // 🔑 并行获取策略（已弃用，保留代码以备回滚）
+        let artworkSet = OSAllocatedUnfairLock(initialState: false)
+
+        scriptingBridgeQueue.async { [weak self] in
+            guard let self = self,
+                  let app = self.musicApp,
+                  app.isRunning else { return }
+
+            if let image = self.getArtworkImageFromApp(app) {
                 let alreadySet = artworkSet.withLock { state -> Bool in
                     if state { return true }
                     state = true
                     return false
                 }
                 if !alreadySet {
-                    self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
                     DispatchQueue.main.async {
                         self.setArtwork(image)
                         if !persistentID.isEmpty {
@@ -923,27 +963,20 @@ public class MusicController: ObservableObject {
                         }
                     }
                 }
-            } else {
-                self.logToFile("🎨 [SB] No embedded artwork")
             }
         }
 
-        // Track 2: MusicKit/iTunes API (网络获取，适用于流媒体歌曲)
         Task { [weak self] in
             guard let self = self else { return }
-            self.logToFile("🎨 [API] Starting MusicKit/iTunes fetch...")
 
             if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                // 🔑 只有第一个成功的源会设置封面
                 let alreadySet = artworkSet.withLock { state -> Bool in
                     if state { return true }
                     state = true
                     return false
                 }
                 if !alreadySet {
-                    self.logToFile("🎨 [API] SUCCESS! Got image \(mkArtwork.size)")
                     await MainActor.run {
-                        // 确保还是同一首歌
                         if self.currentPersistentID == persistentID || persistentID.isEmpty {
                             self.setArtwork(mkArtwork)
                             if !persistentID.isEmpty {
@@ -952,13 +985,9 @@ public class MusicController: ObservableObject {
                         }
                     }
                 }
-            } else {
-                self.logToFile("🎨 [API] No artwork found")
             }
         }
 
-        // 🔑 设置超时后的占位图（如果两个源都没返回）
-        // 增加到 3s，多级搜索策略需要更多时间
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             guard let self = self else { return }
             let hasArtwork = artworkSet.withLock { $0 }

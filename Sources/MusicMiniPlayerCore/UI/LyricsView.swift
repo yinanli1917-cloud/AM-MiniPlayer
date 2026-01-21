@@ -533,6 +533,7 @@ public struct LyricsView: View {
             }
         }
         .onAppear {
+            debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
@@ -542,6 +543,7 @@ public struct LyricsView: View {
             }
         }
           .onChange(of: musicController.currentTrackTitle) {
+            debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             // 🔑 歌曲切换时取消未完成的波浪动画
             cancelWaveAnimations()
             lineTargetIndices.removeAll()

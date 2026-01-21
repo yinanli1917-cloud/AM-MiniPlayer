@@ -2844,9 +2844,13 @@ public class LyricsService: ObservableObject {
     private func fetchChineseMetadata(title: String, artist: String, duration: TimeInterval) async -> (chineseTitle: String, chineseArtist: String)? {
         debugLog("🇨🇳 Fetching Chinese metadata from iTunes CN: '\(title)' by '\(artist)'")
 
-        // 🔑 尝试两种搜索策略
+        // 🔑 收集所有候选匹配，最后选择时长差最小的
+        var candidates: [(title: String, artist: String, durationDiff: Double, strategy: String)] = []
+
+        // 🔑 尝试三种搜索策略
         // 1. 艺术家名搜索
         // 2. 标题搜索（对于英文歌名在中国区可能有对应中文名）
+        // 3. 标题+艺术家组合搜索
         let searchTerms = [artist, title, "\(title) \(artist)"]
 
         for (index, searchTerm) in searchTerms.enumerated() {
@@ -2855,7 +2859,7 @@ public class LyricsService: ObservableObject {
                 URLQueryItem(name: "term", value: searchTerm),
                 URLQueryItem(name: "country", value: "CN"),
                 URLQueryItem(name: "media", value: "music"),
-                URLQueryItem(name: "limit", value: "30")  // 🔑 增加搜索结果数量
+                URLQueryItem(name: "limit", value: "30")
             ]
 
             guard let url = components.url else { continue }
@@ -2931,49 +2935,41 @@ public class LyricsService: ObservableObject {
                 // 如果输入是英文/罗马字，结果必须包含中文才有意义
                 let inputHasChinese = LanguageUtils.containsChinese(title) || LanguageUtils.containsChinese(artist)
                 let resultIsActuallyLocalized = inputHasChinese || resultHasChinese
-
-                // 1. 组合搜索 + 时长精确匹配（最可靠）
-                // 例如：搜索 "Monologue From One Soul Eason Chan" 找到 "一个灵魂的独白 陈奕迅" (306.06s)
-                if isCombinedSearch && durationDiff < 0.5 && resultIsActuallyLocalized {
-                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, combined-search + close-duration)")
-                    return (trackName, artistName)
-                }
-
-                // 2. 标题 AND 艺术家都匹配 + 时长接近（双重验证）
-                // 🔑 必须是有效的本地化结果
-                if artistMatch && titleMatch && durationDiff < 2 && resultIsActuallyLocalized {
-                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.2f", durationDiff))s, title+artist+duration)")
-                    return (trackName, artistName)
-                }
-
-                // 3. 标题匹配 + 艺术家匹配 + 时长精确（仅标题搜索时）
-                // 🔑 必须同时满足艺术家匹配条件，避免匹配到同名但不同艺术家的歌曲
-                // 🔑 必须是有效的本地化结果（标题真的变了）
-                if titleMatch && artistMatch && durationDiff < 0.5 && searchTerm.lowercased() == inputTitleLower && resultIsActuallyLocalized {
-                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, title+artist-only + exact-duration)")
-                    return (trackName, artistName)
-                }
-
-                // 4. 艺术家匹配 + 时长精确（仅艺术家搜索时）
-                // 🔑 必须检查结果是否真的本地化了（标题或艺术家包含中文）
-                // 否则会把日文罗马字歌曲错误地当成"中文元信息"
                 let hasChineseContent = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsChinese(artistName)
-                if artistMatch && durationDiff < 0.5 && searchTerm.lowercased() == inputArtistLower && hasChineseContent {
-                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, artist-only + exact-duration + CN-content)")
-                    return (trackName, artistName)
+
+                // 🔑 策略：收集所有合理的候选匹配（时长差 < 3 秒），最后选择时长差最小的
+                // 这样既能容忍 Apple Music 和 iTunes 之间的轻微时长差异，
+                // 又能在多个候选中选择最精确的匹配
+
+                // 1. 组合搜索匹配（标题+艺术家一起搜索）
+                if isCombinedSearch && durationDiff < 3.0 && resultIsActuallyLocalized {
+                    candidates.append((trackName, artistName, durationDiff, "combined"))
                 }
 
-                // 5. 🔑 标题搜索 + 时长超精确匹配（<0.1秒）+ 返回的是中文标题
-                // 解决"Between Love and You" vs "在爱和你之间"：英文艺术家名无法匹配中文艺术家名
-                // 但如果时长完全匹配且返回了中文标题，这几乎肯定是同一首歌
-                if searchTerm.lowercased() == inputTitleLower &&
-                   durationDiff < 0.1 &&
-                   LanguageUtils.containsChinese(trackName) &&
-                   !LanguageUtils.containsChinese(title) {
-                    debugLog("✅ iTunes CN match (strategy \(index + 1)): '\(trackName)' by '\(artistName)' (diff: \(String(format: "%.3f", durationDiff))s, title-search + super-exact-duration + CN-localized)")
-                    return (trackName, artistName)
+                // 2. 标题 AND 艺术家都匹配
+                else if artistMatch && titleMatch && durationDiff < 3.0 && resultIsActuallyLocalized {
+                    candidates.append((trackName, artistName, durationDiff, "title+artist"))
+                }
+
+                // 3. 艺术家匹配（仅艺术家搜索时）
+                else if artistMatch && durationDiff < 3.0 && searchTerm.lowercased() == inputArtistLower && hasChineseContent {
+                    candidates.append((trackName, artistName, durationDiff, "artist-only"))
+                }
+
+                // 4. 标题搜索 + 返回中文标题
+                else if searchTerm.lowercased() == inputTitleLower &&
+                        durationDiff < 3.0 &&
+                        LanguageUtils.containsChinese(trackName) &&
+                        !LanguageUtils.containsChinese(title) {
+                    candidates.append((trackName, artistName, durationDiff, "title-search+CN"))
                 }
             }
+        }
+
+        // 🔑 从所有候选中选择时长差最小的
+        if let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) {
+            debugLog("✅ iTunes CN match: '\(best.title)' by '\(best.artist)' (diff: \(String(format: "%.3f", best.durationDiff))s, \(best.strategy))")
+            return (best.title, best.artist)
         }
 
         debugLog("❌ iTunes CN: No match found")
@@ -3197,17 +3193,22 @@ public class LyricsService: ObservableObject {
     /// QQ Music 搜索 - 直接使用传入的元信息（已经过 iTunes CN 标准化）
     /// 🔑 不再内部重复查询 iTunes，由 parallelFetchAndSelectBest 统一处理
     private func fetchFromQQMusicWithMetadata(title: String, artist: String, duration: TimeInterval) async throws -> [LyricLine]? {
+        fputs("🎵 [QQ-Fetch] Starting: '\(title)' by '\(artist)', duration: \(Int(duration))s\n", stderr)
         debugLog("🌐 QQ Music (统一元信息): '\(title)' by '\(artist)'")
         logger.info("🌐 QQ Music (统一元信息): \(title) by \(artist)")
 
         // 直接搜索，不再查询 iTunes
         guard let songMid = try await searchQQMusicSong(title: title, artist: artist, duration: duration) else {
+            fputs("🎵 [QQ-Fetch] Search returned NO match\n", stderr)
             debugLog("❌ QQ Music: No matching song found")
             return nil
         }
 
+        fputs("🎵 [QQ-Fetch] Got songMid: \(songMid), fetching lyrics...\n", stderr)
         debugLog("✅ QQ Music found song mid: \(songMid)")
-        return try await fetchQQMusicLyrics(songMid: songMid)
+        let lyrics = try await fetchQQMusicLyrics(songMid: songMid)
+        fputs("🎵 [QQ-Fetch] Lyrics result: \(lyrics?.count ?? 0) lines\n", stderr)
+        return lyrics
     }
 
     private func searchQQMusicSong(title: String, artist: String, duration: TimeInterval) async throws -> String? {
@@ -3233,6 +3234,7 @@ public class LyricsService: ObservableObject {
         ]
 
         for (roundIndex, round) in searchRounds.enumerated() {
+            fputs("🎵 [QQ-Search] Round \(roundIndex + 1) (\(round.description)): '\(round.keyword)'\n", stderr)
             debugLog("🔍 QQ Music round \(roundIndex + 1) (\(round.description)): '\(round.keyword)'")
 
             var components = URLComponents(string: "https://c.y.qq.com/soso/fcgi-bin/client_search_cp")!
@@ -3264,6 +3266,7 @@ public class LyricsService: ObservableObject {
                 continue
             }
 
+            fputs("🎵 [QQ-Search] Round \(roundIndex + 1) returned \(songs.count) results\n", stderr)
             debugLog("📦 QQ Music round \(roundIndex + 1) returned \(songs.count) results")
 
             // 🔑 收集候选项
@@ -3309,6 +3312,7 @@ public class LyricsService: ObservableObject {
 
                 // 🔑 存储标题匹配状态（用于 requireTitleMatch 检查）
                 // 注意：不能仅凭时长匹配，因为同一艺术家的不同歌曲可能时长非常接近
+                fputs("🎵 [QQ-Candidate] '\(songName)' by '\(songArtist)' diff=\(String(format: "%.1f", durationDiff))s titleMatch=\(titleMatch)\n", stderr)
                 candidates.append((songMid, songName, songArtist, durationDiff, titleMatch))
             }
 
@@ -3324,6 +3328,7 @@ public class LyricsService: ObservableObject {
                 }
 
                 if candidate.durationDiff < 2 {
+                    fputs("🎵 [QQ-Match] FOUND: '\(candidate.name)' mid=\(candidate.mid)\n", stderr)
                     debugLog("✅ QQ Music match (round \(roundIndex + 1)): '\(candidate.name)' by '\(candidate.artist)' (duration diff: \(String(format: "%.1f", candidate.durationDiff))s)")
                     return candidate.mid
                 }
