@@ -98,13 +98,21 @@ public class LyricsService: ObservableObject {
         let lyrics: [LyricLine]
         let firstRealLyricIndex: Int
         let hasSourceTranslation: Bool
+        let isNoLyrics: Bool
         let timestamp: Date
 
-        init(lyrics: [LyricLine], firstRealLyricIndex: Int, hasSourceTranslation: Bool) {
+        init(lyrics: [LyricLine], firstRealLyricIndex: Int = 1, hasSourceTranslation: Bool = false, isNoLyrics: Bool = false) {
             self.lyrics = lyrics
             self.firstRealLyricIndex = firstRealLyricIndex
             self.hasSourceTranslation = hasSourceTranslation
+            self.isNoLyrics = isNoLyrics
             self.timestamp = Date()
+        }
+
+        var isExpired: Bool {
+            // No Lyrics 缓存 6 小时过期，有歌词的缓存 24 小时过期
+            let expirationTime: TimeInterval = isNoLyrics ? 21600 : 86400
+            return Date().timeIntervalSince(timestamp) > expirationTime
         }
     }
 
@@ -125,6 +133,15 @@ public class LyricsService: ObservableObject {
         // 缓存配置
         lyricsCache.countLimit = 50
         lyricsCache.totalCostLimit = 10 * 1024 * 1024
+
+        // 🔑 监听翻译语言变化，重新翻译
+        Task { @MainActor in
+            for await _ in $translationLanguage.values {
+                if showTranslation {
+                    await translateCurrentLyrics()
+                }
+            }
+        }
     }
 
     // ========================================================================
@@ -141,8 +158,23 @@ public class LyricsService: ObservableObject {
         currentSongTranslationID = nil
         translationsAreFromLyricsSource = false
 
-        // 检查缓存
-        if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString) {
+        // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
+        for i in 0..<lyrics.count {
+            lyrics[i].translation = nil
+        }
+
+        // 检查缓存（带过期检查）
+        if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+            // 处理 No Lyrics 缓存
+            if cached.isNoLyrics {
+                currentSongID = songID
+                lyrics = []
+                isLoading = false
+                error = "No lyrics available"
+                currentLineIndex = nil
+                return
+            }
+
             applyLyrics(cached.lyrics,
                         firstRealLyricIndex: cached.firstRealLyricIndex,
                         hasSourceTranslation: cached.hasSourceTranslation,
@@ -179,6 +211,10 @@ public class LyricsService: ObservableObject {
 
         // 选择最佳结果
         guard let bestLyrics = fetcher.selectBest(from: results), !bestLyrics.isEmpty else {
+            // 缓存 No Lyrics 状态（6小时过期）
+            let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
+            lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
+
             await MainActor.run {
                 self.isLoading = false
                 self.error = "No lyrics found"
