@@ -19,7 +19,7 @@ public enum DebugLogger {
     private static let logPath = "/tmp/nanopod_debug.log"
 
     #if DEBUG
-    private static var enabled = false  // 开发时手动改为 true 启用
+    private static var enabled = true  // 开发时手动改为 true 启用
     #else
     private static let enabled = false  // Release 始终关闭
     #endif

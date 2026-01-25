@@ -1374,23 +1374,21 @@ struct PreludeDotsView: View {
 struct SystemTranslationModifier: ViewModifier {
     var translationSessionConfigAny: Any?
     let lyricsService: LyricsService
-    let translationTrigger: Int  // 🔑 使用 @State 传入的触发器
+    let translationTrigger: Int
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
             if let config = translationSessionConfigAny as? TranslationSession.Configuration {
                 content
-                    .background {
-                        // 🔑 使用 translationTrigger 作为 ID，强制视图重建并重新触发 .translationTask
-                        Text("")
-                            .hidden()
-                            .translationTask(config) { session in
-                                lyricsService.debugLogPublic("🌐 .translationTask 执行 (trigger=\(translationTrigger))")
-                                await lyricsService.performSystemTranslation(session: session)
-                            }
-                    }
-                    // 🔑 关键修复：.id() 放在整个视图上，而非背景内的子视图
-                    .id("translation-trigger-\(translationTrigger)")
+                    .translationTask(config, action: { session in
+                        // 🔑 所有防重复逻辑都在 performSystemTranslation 内部处理
+                        // 只检查基本条件
+                        guard lyricsService.showTranslation,
+                              !lyricsService.lyrics.isEmpty else { return }
+
+                        lyricsService.debugLogPublic("🌐 .translationTask 执行 (trigger=\(translationTrigger))")
+                        await lyricsService.performSystemTranslation(session: session)
+                    })
             } else {
                 content
             }

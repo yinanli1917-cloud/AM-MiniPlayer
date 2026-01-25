@@ -38,6 +38,16 @@ public final class MetadataResolver {
 
         // 尝试多区域（JP/KR/TH/VN）
         if let localizedMetadata = await fetchLocalizedMetadata(title: title, artist: artist, duration: duration) {
+            // 🔑 防止纯英文歌曲被错误替换成日文片假名
+            // 如果原始标题是纯 ASCII，而解析结果包含 CJK，则拒绝替换
+            let inputIsPureASCII = LanguageUtils.isPureASCII(title)
+            let resultHasCJK = LanguageUtils.containsJapanese(localizedMetadata.title) ||
+                               LanguageUtils.containsKorean(localizedMetadata.title) ||
+                               LanguageUtils.containsChinese(localizedMetadata.title)
+            if inputIsPureASCII && resultHasCJK {
+                // 纯英文歌曲不应该被替换成 CJK 标题
+                return (title, artist)
+            }
             return (localizedMetadata.title, localizedMetadata.artist)
         }
 
@@ -61,7 +71,15 @@ public final class MetadataResolver {
 
             let inputArtistLower = artist.lowercased()
             let inputTitleLower = title.lowercased()
-            let cleanedInputTitle = inputTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
+
+            // 🔑 更智能的标题清理：移除常见后缀但保留核心内容
+            let cleanedInputTitle = inputTitleLower
+                .replacingOccurrences(of: #"\s*\(feat\.?[^)]*\)"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\s*\(ft\.?[^)]*\)"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\s*\(remaster[^)]*\)"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\s*\(live[^)]*\)"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\s*\[.*?\]"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
 
             for result in results {
                 guard let trackName = result["trackName"] as? String,
@@ -82,7 +100,14 @@ public final class MetadataResolver {
                 }
 
                 let resultTitleLower = trackName.lowercased()
-                let cleanedResultTitle = resultTitleLower.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: "", options: .regularExpression)
+                let cleanedResultTitle = resultTitleLower
+                    .replacingOccurrences(of: #"\s*\(feat\.?[^)]*\)"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"\s*\(ft\.?[^)]*\)"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"\s*\(remaster[^)]*\)"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"\s*\(live[^)]*\)"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"\s*\[.*?\]"#, with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+
                 let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
                                 cleanedResultTitle.contains(cleanedInputTitle) ||
                                 cleanedInputTitle.split(separator: " ").filter { $0.count > 3 }.contains { cleanedResultTitle.contains($0.lowercased()) }
@@ -93,12 +118,14 @@ public final class MetadataResolver {
 
                 let isCombinedSearch = searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
 
+                // 🔑 所有策略都必须验证标题匹配，避免同艺术家不同歌曲错配
+                // 例如：搜索 "Try to Say by Hitomi Tohyama" 不能匹配到 "Let's Talk in Bed by 当山ひとみ"
+                guard titleMatch else { continue }
+
                 if isCombinedSearch && resultIsActuallyLocalized {
                     candidates.append((trackName, artistName, durationDiff, "combined"))
-                } else if artistMatch && titleMatch && resultIsActuallyLocalized {
+                } else if artistMatch && resultIsActuallyLocalized {
                     candidates.append((trackName, artistName, durationDiff, "title+artist"))
-                } else if artistMatch && searchTerm.lowercased() == inputArtistLower && resultHasChinese {
-                    candidates.append((trackName, artistName, durationDiff, "artist-only"))
                 } else if searchTerm.lowercased() == inputTitleLower && LanguageUtils.containsChinese(trackName) && !LanguageUtils.containsChinese(title) {
                     candidates.append((trackName, artistName, durationDiff, "title-search+CN"))
                 }
@@ -201,10 +228,16 @@ public final class MetadataResolver {
                 let resultHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) ||
                                    LanguageUtils.containsKorean(trackName) || LanguageUtils.containsChinese(artistName) ||
                                    LanguageUtils.containsJapanese(artistName) || LanguageUtils.containsKorean(artistName)
-                let inputIsPureASCII = LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
 
-                if artistMatch || (titleMatch && durationDiff < 0.5) ||
-                   (durationDiff < 0.3 && resultHasCJK && inputIsPureASCII) {
+                // 🔑 修复：必须同时匹配艺术家和标题，避免同艺术家不同歌曲错配
+                // 例如：搜索 "Try to Say by Hitomi Tohyama" 不能匹配到 "Let's Talk in Bed by 当山ひとみ"
+                guard titleMatch else { continue }
+
+                if artistMatch {
+                    // 艺术家匹配 + 标题匹配 → 高置信度
+                    candidates.append((trackName, artistName, durationDiff))
+                } else if durationDiff < 0.3 && resultHasCJK {
+                    // 标题匹配 + 时长极精确 + 结果是本地化的 → 中等置信度
                     candidates.append((trackName, artistName, durationDiff))
                 }
             }

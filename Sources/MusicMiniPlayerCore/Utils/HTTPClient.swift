@@ -67,14 +67,25 @@ public enum HTTPClient {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = timeout
-        request.setValue(defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.cachePolicy = .reloadIgnoringLocalCacheData  // 🔑 禁用缓存
 
-        // 应用自定义 headers
+        // 应用自定义 headers（覆盖默认 User-Agent）
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // 如果没有自定义 User-Agent，使用默认值
+        if headers["User-Agent"] == nil {
+            request.setValue(defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        }
+
+        // 🔑 使用 ephemeral URLSession 避免缓存和 Cookie 干扰
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.urlCache = nil
+        let session = URLSession(configuration: config)
+
+        let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw HTTPError.invalidResponse

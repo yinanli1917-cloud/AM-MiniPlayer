@@ -133,21 +133,13 @@ public class LyricsService: ObservableObject {
         // 缓存配置
         lyricsCache.countLimit = 50
         lyricsCache.totalCostLimit = 10 * 1024 * 1024
-
-        // 🔑 监听翻译语言变化，重新翻译
-        Task { @MainActor in
-            for await _ in $translationLanguage.values {
-                if showTranslation {
-                    await translateCurrentLyrics()
-                }
-            }
-        }
     }
 
     // ========================================================================
     // MARK: - Public API: Fetch Lyrics
     // ========================================================================
 
+    @MainActor
     func fetchLyrics(for title: String, artist: String, duration: TimeInterval, forceRefresh: Bool = false) {
         let songID = "\(title)-\(artist)"
 
@@ -186,21 +178,23 @@ public class LyricsService: ObservableObject {
         currentFetchTask?.cancel()
         currentSongID = songID
 
-        // 开始加载
-        Task { @MainActor in
-            isLoading = true
-            lyrics = []
-            currentLineIndex = nil
-            error = nil
-        }
+        // 🔑 同步设置加载状态（避免竞态条件）
+        isLoading = true
+        lyrics = []  // 立即清空旧歌词
+        currentLineIndex = nil
+        error = nil
 
         // 异步获取歌词
-        currentFetchTask = Task {
-            await performFetch(title: title, artist: artist, duration: duration, songID: songID)
+        currentFetchTask = Task { [weak self] in
+            guard let self = self else { return }
+            await self.performFetch(title: title, artist: artist, duration: duration, songID: songID)
         }
     }
 
     private func performFetch(title: String, artist: String, duration: TimeInterval, songID: String) async {
+        // 检查任务是否被取消
+        guard !Task.isCancelled else { return }
+
         // 并行获取所有歌词源
         let results = await fetcher.fetchAllSources(
             title: title,
@@ -209,6 +203,13 @@ public class LyricsService: ObservableObject {
             translationEnabled: showTranslation
         )
 
+        // 🔑 关键：验证 songID 仍然匹配（防止旧任务覆盖新结果）
+        let currentID = await MainActor.run { currentSongID }
+        guard currentID == songID else {
+            logger.warning("⚠️ Song changed during fetch, discarding: \(songID)")
+            return
+        }
+
         // 选择最佳结果
         guard let bestLyrics = fetcher.selectBest(from: results), !bestLyrics.isEmpty else {
             // 缓存 No Lyrics 状态（6小时过期）
@@ -216,6 +217,8 @@ public class LyricsService: ObservableObject {
             lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
 
             await MainActor.run {
+                // 再次验证（MainActor.run 可能有延迟）
+                guard self.currentSongID == songID else { return }
                 self.isLoading = false
                 self.error = "No lyrics found"
             }
@@ -238,6 +241,11 @@ public class LyricsService: ObservableObject {
 
         // 应用歌词
         await MainActor.run {
+            // 🔑 再次验证 songID（MainActor.run 可能有延迟）
+            guard self.currentSongID == songID else {
+                self.logger.warning("⚠️ Song changed before apply, discarding: \(songID)")
+                return
+            }
             applyLyrics(processed.lyrics,
                         firstRealLyricIndex: processed.firstRealLyricIndex,
                         hasSourceTranslation: hasSourceTranslation,
@@ -245,6 +253,7 @@ public class LyricsService: ObservableObject {
         }
     }
 
+    @MainActor
     private func applyLyrics(_ newLyrics: [LyricLine],
                              firstRealLyricIndex: Int,
                              hasSourceTranslation: Bool,
@@ -255,9 +264,12 @@ public class LyricsService: ObservableObject {
         self.isLoading = false
         self.currentLineIndex = nil
 
-        // 如果翻译开关开启，触发翻译请求
+        // 🔑 延迟触发翻译，避免与 lyrics 更新同时发生导致 SwiftUI AttributeGraph 递归
         if showTranslation {
-            translationRequestTrigger += 1
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms delay
+                translationRequestTrigger += 1
+            }
         }
     }
 
@@ -331,12 +343,27 @@ public class LyricsService: ObservableObject {
     @available(macOS 15.0, *)
     @MainActor
     public func performSystemTranslation(session: TranslationSession) async {
+        // 🔑 防止重复执行：正在翻译时不再触发
+        guard !isTranslating else {
+            debugLogPublic("⏭️ 跳过翻译: 正在进行中")
+            return
+        }
         guard !lyrics.isEmpty, showTranslation, !isLoading else { return }
 
         let isTargetChinese = translationLanguage.hasPrefix("zh")
 
         // 歌词源已有中文翻译且目标也是中文，跳过
-        if translationsAreFromLyricsSource && isTargetChinese { return }
+        if translationsAreFromLyricsSource && isTargetChinese {
+            debugLogPublic("⏭️ 跳过翻译: 已有歌词源翻译")
+            return
+        }
+
+        // 检查是否已翻译过（相同歌曲+相同语言）
+        let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
+        if currentSongTranslationID == translationID && hasTranslation {
+            debugLogPublic("⏭️ 跳过翻译: 已翻译过 (\(translationID))")
+            return
+        }
 
         // 目标语言不是中文，需要系统翻译覆盖
         if translationsAreFromLyricsSource && !isTargetChinese {
@@ -344,12 +371,6 @@ public class LyricsService: ObservableObject {
                 lyrics[i].translation = nil
             }
             translationsAreFromLyricsSource = false
-        }
-
-        // 检查是否已翻译过
-        let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
-        if currentSongTranslationID == translationID && hasTranslation && !translationsAreFromLyricsSource {
-            return
         }
 
         // 清除旧翻译
@@ -360,10 +381,12 @@ public class LyricsService: ObservableObject {
         }
 
         isTranslating = true
+        debugLogPublic("🔄 开始翻译: \(lyrics.count) 行")
 
         let lyricTexts = lyrics.map { $0.text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: lyricTexts) else {
             isTranslating = false
+            debugLogPublic("❌ 翻译失败")
             return
         }
 
@@ -376,6 +399,7 @@ public class LyricsService: ObservableObject {
         lastSystemTranslationLanguage = translationLanguage
         translationsAreFromLyricsSource = false
         isTranslating = false
+        debugLogPublic("✅ 翻译完成: \(translatedTexts.count) 行")
     }
 
     /// performTranslation (兼容旧 API)
