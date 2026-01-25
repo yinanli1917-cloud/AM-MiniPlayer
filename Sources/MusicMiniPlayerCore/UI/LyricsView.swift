@@ -63,7 +63,6 @@ public struct LyricsView: View {
     private func updateTranslationSessionConfig() {
         if #available(macOS 15.0, *) {
             let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
-            lyricsService.debugLogPublic("🔧 updateTranslationSessionConfig: target=\(lyricsService.translationLanguage), lyrics=\(lyricsService.lyrics.count)")
 
             // 检测歌词源语言（如果已有歌词）
             if !lyricsService.lyrics.isEmpty {
@@ -73,7 +72,6 @@ public struct LyricsView: View {
                         source: sourceLang,
                         target: targetLang
                     )
-                    lyricsService.debugLogPublic("🔧 Config updated: source=\(sourceLang.languageCode?.identifier ?? "?")")
                     return
                 }
             }
@@ -83,7 +81,6 @@ public struct LyricsView: View {
                 source: nil,
                 target: targetLang
             )
-            lyricsService.debugLogPublic("🔧 Config updated: source=nil (auto)")
         }
     }
 
@@ -92,6 +89,7 @@ public struct LyricsView: View {
             // Background - 全屏模式用流体渐变，普通模式用 Liquid Glass
             if fullscreenAlbumCover {
                 AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                    .id(musicController.currentTrackTitle)  // 🔑 强制在歌曲切换时重建
                     .ignoresSafeArea()
             } else {
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
@@ -169,6 +167,8 @@ public struct LyricsView: View {
                     // 🔑 性能优化核心思路：
                     // - 自动滚动：每行单独计算偏移（波浪动画）
                     // - 手动滚动：整个容器统一偏移（避免重新计算每行）
+                    // 🔑 使用歌曲 ID 强制重建整个歌词视图，避免切歌时视图残留
+                    let lyricsViewID = "\(musicController.currentTrackTitle)-\(musicController.currentArtist)"
                     GeometryReader { geo in
                         let containerHeight = geo.size.height
                         let controlBarHeight: CGFloat = 120
@@ -293,6 +293,8 @@ public struct LyricsView: View {
                         .offset(y: isManualScrolling ? manualScrollOffset : 0)
                     }
                     .clipped()
+                    // 🔑 强制在歌曲切换时重建整个 GeometryReader，避免 ZStack 视图残留
+                    .id(lyricsViewID)
                     // 🔑 滚轮事件监听（与 PlaylistView 一致）
                     .contentShape(Rectangle())
                     .scrollDetectionWithVelocity(
@@ -1379,16 +1381,17 @@ struct SystemTranslationModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
             if let config = translationSessionConfigAny as? TranslationSession.Configuration {
+                // 🔑 使用 translationTrigger 作为视图 ID
+                // .translationTask 只在 config 变化时触发，但切歌时 config 可能相同（相同语言对）
+                // 通过 .id() 强制重建视图，从而重新触发 .translationTask
                 content
                     .translationTask(config, action: { session in
                         // 🔑 所有防重复逻辑都在 performSystemTranslation 内部处理
-                        // 只检查基本条件
                         guard lyricsService.showTranslation,
                               !lyricsService.lyrics.isEmpty else { return }
-
-                        lyricsService.debugLogPublic("🌐 .translationTask 执行 (trigger=\(translationTrigger))")
                         await lyricsService.performSystemTranslation(session: session)
                     })
+                    .id(translationTrigger)  // 🔑 强制在 trigger 变化时重建视图
             } else {
                 content
             }

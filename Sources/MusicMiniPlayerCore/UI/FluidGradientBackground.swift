@@ -5,8 +5,8 @@ import AppKit
 // 基于 Apple Music 逆向工程：直接用封面图片 + twist扭曲 + 模糊
 // 参考: https://www.aadishv.dev/music
 
-/// 流体渐变背景视图 - 使用封面图片本身而非提取颜色
-/// 使用 TimelineView 实现真正的持续流体动画
+/// 流体渐变背景视图 - 使用封面图片 + 模糊效果
+/// 🔑 优化：静态多层 + 更大偏移/旋转差异 = 流体扭曲感（无动画，CPU 友好）
 public struct FluidGradientBackground: View {
     let artwork: NSImage?
 
@@ -15,99 +15,68 @@ public struct FluidGradientBackground: View {
     }
 
     public var body: some View {
-        // 🔑 使用 TimelineView 实现真正的持续动画
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
+        GeometryReader { geometry in
+            let size = geometry.size
+            let diagonal = sqrt(size.width * size.width + size.height * size.height)
 
-            GeometryReader { geometry in
-                let size = geometry.size
-                let diagonal = sqrt(size.width * size.width + size.height * size.height)
+            ZStack {
+                if let artwork = artwork {
+                    // 🎨 5 层封面副本，模拟动画的"某一帧"静止状态
+                    // 通过更大的偏移和旋转差异，创造流体扭曲感
 
-                ZStack {
-                    if let artwork = artwork {
-                        // 🎨 5 层封面副本，持续不规则运动
+                    // Layer 0: 超大底层，轻微偏移，确保填满角落
+                    fluidLayer(artwork: artwork, containerSize: size,
+                               size: diagonal * 1.5,
+                               offsetX: size.width * 0.05, offsetY: -size.height * 0.03,
+                               rotation: 0.12)
 
-                        // Layer 0: 超大底层，确保填满所有角落，缓慢旋转
-                        artworkLayer(
-                            artwork: artwork,
-                            size: diagonal * 1.4,
-                            containerSize: size,
-                            rotation: time * 0.02,
-                            offsetX: sin(time * 0.03) * size.width * 0.05,
-                            offsetY: cos(time * 0.025) * size.height * 0.05
-                        )
+                    // Layer 1: 偏左上，较大旋转
+                    fluidLayer(artwork: artwork, containerSize: size,
+                               size: diagonal * 0.95,
+                               offsetX: -size.width * 0.22, offsetY: -size.height * 0.15,
+                               rotation: 0.45)
 
-                        // Layer 1: 偏左上，独立运动轨迹
-                        artworkLayer(
-                            artwork: artwork,
-                            size: diagonal * 0.85,
-                            containerSize: size,
-                            rotation: -time * 0.035 + 0.5,
-                            offsetX: sin(time * 0.05 + 1.0) * size.width * 0.2 - size.width * 0.1,
-                            offsetY: cos(time * 0.04 + 0.5) * size.height * 0.15 - size.height * 0.1
-                        )
+                    // Layer 2: 偏右下，反向旋转
+                    fluidLayer(artwork: artwork, containerSize: size,
+                               size: diagonal * 0.8,
+                               offsetX: size.width * 0.25, offsetY: size.height * 0.2,
+                               rotation: -0.35)
 
-                        // Layer 2: 偏右下，反向运动
-                        artworkLayer(
-                            artwork: artwork,
-                            size: diagonal * 0.7,
-                            containerSize: size,
-                            rotation: time * 0.045 - 0.8,
-                            offsetX: cos(time * 0.055 + 2.0) * size.width * 0.2 + size.width * 0.1,
-                            offsetY: sin(time * 0.045 + 1.5) * size.height * 0.2 + size.height * 0.1
-                        )
+                    // Layer 3: 偏左下，更大旋转
+                    fluidLayer(artwork: artwork, containerSize: size,
+                               size: diagonal * 0.65,
+                               offsetX: -size.width * 0.18, offsetY: size.height * 0.22,
+                               rotation: 0.7)
 
-                        // Layer 3: 偏左下，8 字形轨迹
-                        artworkLayer(
-                            artwork: artwork,
-                            size: diagonal * 0.55,
-                            containerSize: size,
-                            rotation: -time * 0.06 + 1.5,
-                            offsetX: sin(time * 0.07) * size.width * 0.25 - size.width * 0.05,
-                            offsetY: sin(time * 0.07 * 2) * size.height * 0.15 + size.height * 0.15
-                        )
-
-                        // Layer 4: 偏右上，椭圆轨迹
-                        artworkLayer(
-                            artwork: artwork,
-                            size: diagonal * 0.4,
-                            containerSize: size,
-                            rotation: time * 0.08 - 2.0,
-                            offsetX: cos(time * 0.08 + 3.0) * size.width * 0.3 + size.width * 0.1,
-                            offsetY: sin(time * 0.06 + 2.0) * size.height * 0.2 - size.height * 0.1
-                        )
-                    }
+                    // Layer 4: 偏右上，极端旋转
+                    fluidLayer(artwork: artwork, containerSize: size,
+                               size: diagonal * 0.5,
+                               offsetX: size.width * 0.2, offsetY: -size.height * 0.18,
+                               rotation: -0.55)
                 }
-                // 🔑 模糊
-                .blur(radius: 55)
-                // 🔑 饱和度 - 稍微增强
-                .saturation(1.2)
-                // 🔑 轻微降低亮度
-                .brightness(-0.08)
             }
+            .blur(radius: 55)
+            .saturation(1.2)
+            .brightness(-0.08)
         }
     }
 
-    /// 单个封面图层
     @ViewBuilder
-    private func artworkLayer(
+    private func fluidLayer(
         artwork: NSImage,
-        size: CGFloat,
         containerSize: CGSize,
-        rotation: CGFloat,
+        size: CGFloat,
         offsetX: CGFloat,
-        offsetY: CGFloat
+        offsetY: CGFloat,
+        rotation: CGFloat
     ) -> some View {
-        let centerX = containerSize.width / 2
-        let centerY = containerSize.height / 2
-
         Image(nsImage: artwork)
             .resizable()
             .scaledToFill()
             .frame(width: size, height: size)
             .clipped()
             .rotationEffect(.radians(rotation))
-            .position(x: centerX + offsetX, y: centerY + offsetY)
+            .position(x: containerSize.width / 2 + offsetX, y: containerSize.height / 2 + offsetY)
     }
 }
 

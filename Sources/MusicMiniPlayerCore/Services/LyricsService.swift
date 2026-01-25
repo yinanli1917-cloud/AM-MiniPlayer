@@ -157,19 +157,24 @@ public class LyricsService: ObservableObject {
 
         // 检查缓存（带过期检查）
         if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+            // 🔑 先清空旧歌词，避免切歌时新旧歌词重叠
+            lyrics = []
+            currentLineIndex = nil
+
             // 处理 No Lyrics 缓存
             if cached.isNoLyrics {
                 currentSongID = songID
-                lyrics = []
                 isLoading = false
                 error = "No lyrics available"
-                currentLineIndex = nil
                 return
             }
 
+            // 🔑 缓存命中时，检查缓存歌词是否实际包含翻译
+            let cachedHasActualTranslation = cached.lyrics.contains { $0.hasTranslation }
+
             applyLyrics(cached.lyrics,
                         firstRealLyricIndex: cached.firstRealLyricIndex,
-                        hasSourceTranslation: cached.hasSourceTranslation,
+                        hasSourceTranslation: cachedHasActualTranslation,  // 🔑 使用实际翻译状态
                         songID: songID)
             return
         }
@@ -263,12 +268,13 @@ public class LyricsService: ObservableObject {
         self.translationsAreFromLyricsSource = hasSourceTranslation
         self.isLoading = false
         self.currentLineIndex = nil
+        self.currentSongID = songID  // 🔑 确保 songID 被更新
 
         // 🔑 延迟触发翻译，避免与 lyrics 更新同时发生导致 SwiftUI AttributeGraph 递归
         if showTranslation {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms delay
-                translationRequestTrigger += 1
+                self.translationRequestTrigger += 1
             }
         }
     }
@@ -344,26 +350,17 @@ public class LyricsService: ObservableObject {
     @MainActor
     public func performSystemTranslation(session: TranslationSession) async {
         // 🔑 防止重复执行：正在翻译时不再触发
-        guard !isTranslating else {
-            debugLogPublic("⏭️ 跳过翻译: 正在进行中")
-            return
-        }
+        guard !isTranslating else { return }
         guard !lyrics.isEmpty, showTranslation, !isLoading else { return }
 
         let isTargetChinese = translationLanguage.hasPrefix("zh")
 
         // 歌词源已有中文翻译且目标也是中文，跳过
-        if translationsAreFromLyricsSource && isTargetChinese {
-            debugLogPublic("⏭️ 跳过翻译: 已有歌词源翻译")
-            return
-        }
+        if translationsAreFromLyricsSource && isTargetChinese { return }
 
         // 检查是否已翻译过（相同歌曲+相同语言）
         let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
-        if currentSongTranslationID == translationID && hasTranslation {
-            debugLogPublic("⏭️ 跳过翻译: 已翻译过 (\(translationID))")
-            return
-        }
+        if currentSongTranslationID == translationID && hasTranslation { return }
 
         // 目标语言不是中文，需要系统翻译覆盖
         if translationsAreFromLyricsSource && !isTargetChinese {
