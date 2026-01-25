@@ -118,16 +118,28 @@ public final class MetadataResolver {
 
                 let isCombinedSearch = searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
 
-                // 🔑 所有策略都必须验证标题匹配，避免同艺术家不同歌曲错配
-                // 例如：搜索 "Try to Say by Hitomi Tohyama" 不能匹配到 "Let's Talk in Bed by 当山ひとみ"
-                guard titleMatch else { continue }
+                // 🔑 匹配策略（按优先级）：
+                // P1: 标题匹配 + 艺术家匹配 → 高置信度
+                // P2: 标题匹配 + 本地化结果 → 中置信度
+                // P3: 时长极精确(<0.5s) + 中文结果 + 输入是纯英文 → 允许中英文翻译
+                //     例如：Julia Peng "None of Your Business" (212s) → 彭佳慧 "关你屁事啊" (212s)
+                let isVeryPreciseDuration = durationDiff < 0.5
+                let inputIsPureEnglish = !inputHasChinese && LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
+                let allowTranslatedMatch = isVeryPreciseDuration && resultHasChinese && inputIsPureEnglish
 
-                if isCombinedSearch && resultIsActuallyLocalized {
-                    candidates.append((trackName, artistName, durationDiff, "combined"))
-                } else if artistMatch && resultIsActuallyLocalized {
-                    candidates.append((trackName, artistName, durationDiff, "title+artist"))
-                } else if searchTerm.lowercased() == inputTitleLower && LanguageUtils.containsChinese(trackName) && !LanguageUtils.containsChinese(title) {
-                    candidates.append((trackName, artistName, durationDiff, "title-search+CN"))
+                if titleMatch {
+                    // 标题匹配 - 正常流程
+                    if isCombinedSearch && resultIsActuallyLocalized {
+                        candidates.append((trackName, artistName, durationDiff, "combined"))
+                    } else if artistMatch && resultIsActuallyLocalized {
+                        candidates.append((trackName, artistName, durationDiff, "title+artist"))
+                    } else if searchTerm.lowercased() == inputTitleLower && LanguageUtils.containsChinese(trackName) && !LanguageUtils.containsChinese(title) {
+                        candidates.append((trackName, artistName, durationDiff, "title-search+CN"))
+                    }
+                } else if allowTranslatedMatch {
+                    // 🔑 特殊情况：中英文完全翻译（标题和艺术家都是翻译关系）
+                    // 时长极精确是最可靠的匹配指标
+                    candidates.append((trackName, artistName, durationDiff, "duration-precise+CN"))
                 }
             }
         }
