@@ -39,15 +39,21 @@ public final class MetadataResolver {
         // 尝试多区域（JP/KR/TH/VN）
         if let localizedMetadata = await fetchLocalizedMetadata(title: title, artist: artist, duration: duration) {
             // 🔑 防止纯英文歌曲被错误替换成日文片假名
-            // 如果原始标题是纯 ASCII，而解析结果包含 CJK，则拒绝替换
+            // 但允许罗马字艺术家（如 Momoko Kikuchi）替换成 CJK
             let inputIsPureASCII = LanguageUtils.isPureASCII(title)
             let resultHasCJK = LanguageUtils.containsJapanese(localizedMetadata.title) ||
                                LanguageUtils.containsKorean(localizedMetadata.title) ||
                                LanguageUtils.containsChinese(localizedMetadata.title)
-            if inputIsPureASCII && resultHasCJK {
-                // 纯英文歌曲不应该被替换成 CJK 标题
+            let isLikelyEnglish = LanguageUtils.isLikelyEnglishArtist(artist)
+
+            // 🔑 只有"可能是英语艺术家"的纯 ASCII 输入才拒绝 CJK 替换
+            // Momoko Kikuchi 不是常见英语名，所以允许替换成菊池桃子
+            if inputIsPureASCII && resultHasCJK && isLikelyEnglish {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝 CJK 替换: '\(artist)' 是常见英语艺术家")
                 return (title, artist)
             }
+
+            DebugLogger.log("MetadataResolver", "✅ 多区域解析成功: '\(localizedMetadata.title)' by '\(localizedMetadata.artist)' (region: \(localizedMetadata.region), Δ\(String(format: "%.2f", localizedMetadata.durationDiff))s)")
             return (localizedMetadata.title, localizedMetadata.artist)
         }
 
@@ -160,7 +166,11 @@ public final class MetadataResolver {
         duration: TimeInterval
     ) async -> (title: String, artist: String, region: String, durationDiff: Double)? {
         let regions = inferRegions(title: title, artist: artist)
-        guard !regions.isEmpty else { return nil }
+        DebugLogger.log("MetadataResolver", "🌏 inferRegions: '\(title)' by '\(artist)' → \(regions)")
+        guard !regions.isEmpty else {
+            DebugLogger.log("MetadataResolver", "⚠️ 无推断区域，跳过多区域解析")
+            return nil
+        }
 
         return await withTaskGroup(of: (String, String, String, Double)?.self) { group in
             for region in regions {
@@ -171,11 +181,17 @@ public final class MetadataResolver {
 
             var bestMatch: (String, String, String, Double)? = nil
             for await result in group {
-                if let r = result, bestMatch == nil || r.3 < bestMatch!.3 {
-                    bestMatch = r
+                if let r = result {
+                    DebugLogger.log("MetadataResolver", "🔍 区域结果: '\(r.0)' by '\(r.1)' (region: \(r.2), Δ\(String(format: "%.2f", r.3))s)")
+                    if bestMatch == nil || r.3 < bestMatch!.3 {
+                        bestMatch = r
+                    }
                 }
             }
 
+            if bestMatch == nil {
+                DebugLogger.log("MetadataResolver", "⚠️ 所有区域均无匹配结果")
+            }
             return bestMatch
         }
     }
@@ -207,7 +223,11 @@ public final class MetadataResolver {
         let searchTerms = ["\(title) \(artist)", artist, title]
 
         for searchTerm in searchTerms {
-            guard let results = await searchITunes(term: searchTerm, region: region) else { continue }
+            guard let results = await searchITunes(term: searchTerm, region: region) else {
+                DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(searchTerm)' 无结果")
+                continue
+            }
+            DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(searchTerm)' 返回 \(results.count) 条")
 
             var candidates: [(trackName: String, artistName: String, durationDiff: Double)] = []
             let inputArtistLower = artist.lowercased()
@@ -241,15 +261,25 @@ public final class MetadataResolver {
                                    LanguageUtils.containsKorean(trackName) || LanguageUtils.containsChinese(artistName) ||
                                    LanguageUtils.containsJapanese(artistName) || LanguageUtils.containsKorean(artistName)
 
-                // 🔑 修复：必须同时匹配艺术家和标题，避免同艺术家不同歌曲错配
-                // 例如：搜索 "Try to Say by Hitomi Tohyama" 不能匹配到 "Let's Talk in Bed by 当山ひとみ"
-                guard titleMatch else { continue }
+                // 🔑 罗马字→CJK 匹配：输入是纯 ASCII，结果是 CJK
+                // 例如：Koibitotachi no Chiheisen / Momoko Kikuchi → 恋人たちの地平線 / 菊池桃子
+                // 关键洞察：罗马字和 CJK 没有字符串包含关系，所以用 resultHasCJK 判断
+                let inputIsPureASCII = LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
+                let isRomanizedToCJK = inputIsPureASCII && resultHasCJK  // 🔑 不再限制时长，由底线阈值(<2s)控制
 
-                if artistMatch {
-                    // 艺术家匹配 + 标题匹配 → 高置信度
-                    candidates.append((trackName, artistName, durationDiff))
-                } else if durationDiff < 0.3 && resultHasCJK {
-                    // 标题匹配 + 时长极精确 + 结果是本地化的 → 中等置信度
+                // 🔑 匹配策略（收集所有候选，最后按 durationDiff 排序选最佳）：
+                // P1: 标题匹配 + 艺术家匹配 → 高置信度
+                // P2: 标题匹配 + CJK 结果 → 中置信度
+                // P3: 罗马字→CJK（无标题/艺术家匹配但结果是 CJK）→ 依赖时长排序
+                if titleMatch {
+                    if artistMatch || resultHasCJK {
+                        DebugLogger.log("MetadataResolver", "[\(region)] 候选(titleMatch): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
+                        candidates.append((trackName, artistName, durationDiff))
+                    }
+                } else if isRomanizedToCJK {
+                    // 🔑 罗马字→CJK：无字符串匹配，但时长在底线阈值内且结果是 CJK
+                    // Momoko Kikuchi (229s) → 菊池桃子 (229.533s) ✓
+                    DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                     candidates.append((trackName, artistName, durationDiff))
                 }
             }

@@ -144,7 +144,12 @@ public class LyricsService: ObservableObject {
         let songID = "\(title)-\(artist)"
 
         // 避免重复获取
-        guard songID != currentSongID || forceRefresh else { return }
+        guard songID != currentSongID || forceRefresh else {
+            DebugLogger.log("LyricsService", "⏭️ 跳过重复获取: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
+            return
+        }
+
+        DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' (forceRefresh=\(forceRefresh))")
 
         // 重置翻译状态
         currentSongTranslationID = nil
@@ -157,6 +162,8 @@ public class LyricsService: ObservableObject {
 
         // 检查缓存（带过期检查）
         if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+            DebugLogger.log("LyricsService", "📦 缓存命中: '\(songID)' (isNoLyrics=\(cached.isNoLyrics), lines=\(cached.lyrics.count))")
+
             // 🔑 先清空旧歌词，避免切歌时新旧歌词重叠
             lyrics = []
             currentLineIndex = nil
@@ -166,6 +173,7 @@ public class LyricsService: ObservableObject {
                 currentSongID = songID
                 isLoading = false
                 error = "No lyrics available"
+                DebugLogger.log("LyricsService", "❌ 使用 No Lyrics 缓存")
                 return
             }
 
@@ -188,6 +196,8 @@ public class LyricsService: ObservableObject {
         lyrics = []  // 立即清空旧歌词
         currentLineIndex = nil
         error = nil
+
+        DebugLogger.log("LyricsService", "🔄 开始异步获取...")
 
         // 异步获取歌词
         currentFetchTask = Task { [weak self] in

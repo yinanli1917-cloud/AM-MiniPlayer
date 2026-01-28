@@ -80,11 +80,10 @@ public class MusicController: ObservableObject {
     // - 封面获取队列（后台）：歌单封面预加载等非紧急操作
     // - 控制操作（用户交互）：直接在调用线程执行，保证即时响应
     private let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
-    // 🔑 改为并发队列 + 信号量限制，避免歌单封面请求串行阻塞
-    private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility, attributes: .concurrent)
-    // 🔑 ScriptingBridge 非线程安全，必须串行化调用（value: 1）
-    // 崩溃根因：多线程同时调用 Apple Events 导致 EXC_BAD_ACCESS
-    private let artworkFetchSemaphore = DispatchSemaphore(value: 1)
+    // 🔑 封面获取必须串行化 - ScriptingBridge 非线程安全
+    // 崩溃根因 (2026-01-25)：并发队列 + 信号量仍有竞态，导致 EXC_BAD_ACCESS
+    // 解决方案：直接用串行队列，放弃并发优化
+    private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
 
     // 🔑 封面调试日志 - 复用全局 debugPrint（条件编译保护）
     @inline(__always)
@@ -1169,17 +1168,14 @@ public class MusicController: ObservableObject {
             return cached
         }
 
-        // 🔑 使用并发队列 + 信号量限制，避免过多请求阻塞
+        // 🔑 串行队列保证 ScriptingBridge 线程安全
         let image: NSImage? = await withCheckedContinuation { continuation in
             artworkFetchQueue.async { [weak self] in
                 guard let self = self else {
                     continuation.resume(returning: nil)
                     return
                 }
-                // 🔑 信号量限制并发数
-                self.artworkFetchSemaphore.wait()
                 let result = self.getArtworkImageByPersistentID(app, persistentID: persistentID)
-                self.artworkFetchSemaphore.signal()
                 continuation.resume(returning: result)
             }
         }

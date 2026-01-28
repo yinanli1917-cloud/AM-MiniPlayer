@@ -696,7 +696,7 @@ public final class LyricsFetcher {
         simplifiedArtist: String,
         duration: TimeInterval
     ) async -> String? {
-        var candidates: [(mid: String, name: String, artist: String, durationDiff: Double, titleMatch: Bool)] = []
+        var candidates: [(mid: String, name: String, artist: String, durationDiff: Double, titleMatch: Bool, artistMatch: Bool)] = []
 
         for song in songs {
             guard let songMid = song["songmid"] as? String,
@@ -726,19 +726,47 @@ public final class LyricsFetcher {
                                 .filter { $0.count > 3 }
                                 .contains { cleanedSongName.contains($0.lowercased()) }
 
-            candidates.append((songMid, songName, songArtist, durationDiff, titleMatch))
+            // 🔑 艺术家匹配
+            let songArtistLower = songArtist.lowercased()
+            let simplifiedArtistLower = simplifiedArtist.lowercased()
+            let simplifiedSongArtist = LanguageUtils.toSimplifiedChinese(songArtist).lowercased()
+            let artistMatch = songArtistLower.contains(simplifiedArtistLower) ||
+                             simplifiedArtistLower.contains(songArtistLower) ||
+                             simplifiedSongArtist.contains(simplifiedArtistLower) ||
+                             simplifiedArtistLower.contains(simplifiedSongArtist)
+
+            candidates.append((songMid, songName, songArtist, durationDiff, titleMatch, artistMatch))
         }
 
-        // 按时长差排序
-        candidates.sort { $0.durationDiff < $1.durationDiff }
+        // 🔑 打印候选列表
+        DebugLogger.log("QQMusic", "🎯 候选: \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
 
-        // 选择最佳匹配（必须验证标题）
+        // 🔑 新优先级策略：艺术家匹配 > 时长精确
+        // P1: 标题 + 艺术家 + 时长精确 (<1s)
         for candidate in candidates {
-            if candidate.titleMatch && candidate.durationDiff < 2 {
+            if candidate.titleMatch && candidate.artistMatch && candidate.durationDiff < 1 {
+                DebugLogger.log("QQMusic", "✅ 匹配P1: '\(candidate.name)' by '\(candidate.artist)'")
                 return candidate.mid
             }
         }
 
+        // P2: 标题 + 艺术家 + 时长宽松 (<2s)
+        for candidate in candidates {
+            if candidate.titleMatch && candidate.artistMatch && candidate.durationDiff < 2 {
+                DebugLogger.log("QQMusic", "✅ 匹配P2: '\(candidate.name)' by '\(candidate.artist)'")
+                return candidate.mid
+            }
+        }
+
+        // P3: 标题 + 时长极精确 (<0.5s) - 可能是罗马字艺术家
+        for candidate in candidates {
+            if candidate.titleMatch && candidate.durationDiff < 0.5 {
+                DebugLogger.log("QQMusic", "✅ 匹配P3: '\(candidate.name)' by '\(candidate.artist)'")
+                return candidate.mid
+            }
+        }
+
+        DebugLogger.log("QQMusic", "❌ 无匹配")
         return nil
     }
 
