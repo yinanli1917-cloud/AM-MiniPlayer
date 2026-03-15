@@ -21,3 +21,6 @@ config.json
 *.env
 .env*
 secrets/
+
+# Claude Code settings (contains personal paths & server IPs)
+.claude/settings.local.json
