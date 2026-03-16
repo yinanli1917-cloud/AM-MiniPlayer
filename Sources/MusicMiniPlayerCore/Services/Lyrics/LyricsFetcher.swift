@@ -51,7 +51,10 @@ public final class LyricsFetcher {
 
     // MARK: - 并行获取
 
-    /// 并行获取所有歌词源
+    // 早期返回阈值：已有足够高质量结果时取消剩余任务
+    private let earlyReturnThreshold: Double = 80.0
+
+    /// 并行获取所有歌词源（含早期返回优化）
     public func fetchAllSources(
         title: String,
         artist: String,
@@ -73,11 +76,11 @@ public final class LyricsFetcher {
 
         let st = searchTitle, sa = searchArtist, d = duration, te = translationEnabled
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            // 🔑 6 个并行源（SimpMusic 已移除：Vercel CAPTCHA 拦截，0% 命中率）
             group.addTask { await self.fetchFromAMLL(title: st, artist: sa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromNetEase(title: st, artist: sa, originalTitle: title, originalArtist: artist, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: title, originalArtist: artist, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLRCLIB(title: st, artist: sa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromSimpMusic(title: st, artist: sa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLRCLIBSearch(title: st, artist: sa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLyricsOVH(title: st, artist: sa, duration: d, translationEnabled: te) }
 
@@ -85,6 +88,13 @@ public final class LyricsFetcher {
                 if let r = result {
                     results.append(r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count)")
+
+                    // 🔑 早期返回：已有高质量结果时不等慢源
+                    if r.score >= self.earlyReturnThreshold {
+                        DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold))")
+                        group.cancelAll()
+                        break
+                    }
                 }
             }
         }
@@ -120,18 +130,18 @@ public final class LyricsFetcher {
     }
 
     /// 统一优先级选择（消除 NetEase/QQ 的重复匹配逻辑）
-    /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s → P3: 仅标题+时长<1s → P4: 仅艺术家+时长<1s
+    /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s → P3: 仅标题+时长<1s
+    /// ⚠️ 不做「仅艺术家」匹配 — 同歌手不同歌时长可能相近，会导致错配
     private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String) -> ID? {
         let sorted = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sorted.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }
         DebugLogger.log(source, "🎯 候选: \(desc.joined(separator: ", "))")
 
-        // 按优先级递减尝试
+        // 按优先级递减尝试（标题必须匹配，防止同歌手错配）
         let priorities: [(String, (SearchCandidate<ID>) -> Bool)] = [
             ("P1", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 3 }),
             ("P2", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 20 }),
             ("P3", { $0.titleMatch && $0.durationDiff < 1 }),
-            ("P4", { $0.artistMatch && $0.durationDiff < 1 }),
         ]
 
         for (label, predicate) in priorities {
@@ -775,7 +785,8 @@ public final class LyricsFetcher {
               let url = URL(string: "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)") else { return nil }
 
         do {
-            let json = try await HTTPClient.getJSON(url: url, timeout: 6.0)
+            // 🔑 lyrics.ovh 是纯文本备选源（最低优先级），缩短超时避免拖慢整体
+            let json = try await HTTPClient.getJSON(url: url, timeout: 3.0)
             guard let lyricsText = json["lyrics"] as? String, !lyricsText.isEmpty else { return nil }
 
             let lyrics = parser.createUnsyncedLyrics(lyricsText, duration: duration)

@@ -70,6 +70,7 @@ public final class MetadataResolver {
         duration: TimeInterval
     ) async -> (title: String, artist: String, durationDiff: Double)? {
         var candidates: [(title: String, artist: String, durationDiff: Double, strategy: String)] = []
+        var translatedCandidates: [(title: String, artist: String, durationDiff: Double, strategy: String)] = []
         let searchTerms = [artist, title, "\(title) \(artist)"]
 
         for searchTerm in searchTerms {
@@ -144,10 +145,17 @@ public final class MetadataResolver {
                     }
                 } else if allowTranslatedMatch {
                     // 🔑 特殊情况：中英文完全翻译（标题和艺术家都是翻译关系）
-                    // 时长极精确是最可靠的匹配指标
-                    candidates.append((trackName, artistName, durationDiff, "duration-precise+CN"))
+                    // 收集到单独列表，只在唯一匹配时使用（避免同歌手多首歌误匹配）
+                    translatedCandidates.append((trackName, artistName, durationDiff, "duration-precise+CN"))
                 }
             }
+        }
+
+        // 翻译候选只在唯一匹配时使用（多首同歌手 = 不可靠）
+        if candidates.isEmpty && translatedCandidates.count == 1 {
+            let tc = translatedCandidates[0]
+            DebugLogger.log("MetadataResolver", "🔄 唯一翻译匹配: '\(tc.title)' by '\(tc.artist)' Δ\(String(format: "%.1f", tc.durationDiff))s")
+            candidates.append(tc)
         }
 
         if let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) {

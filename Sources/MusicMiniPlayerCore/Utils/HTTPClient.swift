@@ -19,6 +19,15 @@ public enum HTTPClient {
     private static let defaultUserAgent = "nanoPod/1.0"
     public static let defaultTimeout: TimeInterval = 6.0
 
+    // 🔑 共享 ephemeral session：复用 TLS 连接和 DNS 缓存，避免每次请求重建
+    private static let sharedSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.urlCache = nil
+        config.timeoutIntervalForResource = 30
+        return URLSession(configuration: config)
+    }()
+
     // ── 错误类型 ──
 
     public enum HTTPError: Error, LocalizedError {
@@ -79,13 +88,7 @@ public enum HTTPClient {
             request.setValue(defaultUserAgent, forHTTPHeaderField: "User-Agent")
         }
 
-        // 🔑 使用 ephemeral URLSession 避免缓存和 Cookie 干扰
-        let config = URLSessionConfiguration.ephemeral
-        config.httpCookieStorage = nil
-        config.urlCache = nil
-        let session = URLSession(configuration: config)
-
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await sharedSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw HTTPError.invalidResponse
@@ -154,12 +157,7 @@ public enum HTTPClient {
 
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        let config = URLSessionConfiguration.ephemeral
-        config.httpCookieStorage = nil
-        config.urlCache = nil
-        let session = URLSession(configuration: config)
-
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await sharedSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
