@@ -368,6 +368,9 @@ public class LyricsService: ObservableObject {
         // 歌词源已有中文翻译且目标也是中文，跳过
         if translationsAreFromLyricsSource && isTargetChinese { return }
 
+        // 🔑 歌词内容已经是目标语言 → 跳过（避免中文歌词翻译成中文）
+        if isTargetChinese && lyricsArePredominantlyChinese() { return }
+
         // 检查是否已翻译过（相同歌曲+相同语言）
         let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
         if currentSongTranslationID == translationID && hasTranslation { return }
@@ -414,6 +417,21 @@ public class LyricsService: ObservableObject {
     @MainActor
     public func performTranslation(with session: TranslationSession) async {
         await performSystemTranslation(session: session)
+    }
+
+    // ========================================================================
+    // MARK: - 语言检测
+    // ========================================================================
+
+    /// 歌词内容是否以中文为主（超过 40% 的有效行含中文字符）
+    private func lyricsArePredominantlyChinese() -> Bool {
+        let validLines = lyrics.filter {
+            let t = $0.text.trimmingCharacters(in: .whitespaces)
+            return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
+        }
+        guard !validLines.isEmpty else { return false }
+        let chineseCount = validLines.filter { LanguageUtils.containsChinese($0.text) }.count
+        return Double(chineseCount) / Double(validLines.count) > 0.4
     }
 
     // ========================================================================

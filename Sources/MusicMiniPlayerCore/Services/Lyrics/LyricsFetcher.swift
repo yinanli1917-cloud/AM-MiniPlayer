@@ -103,14 +103,27 @@ public final class LyricsFetcher {
     }
 
     /// 选择最佳结果（优先质量通过的，回退到最高分）
+    /// ⚠️ lyrics.ovh 低分且无其他可信源时拒绝（宁可没歌词也不要错配）
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
+        // 是否有非 lyrics.ovh 的可信源（分数 >= 50）
+        let hasReliableAlternative = results.contains { $0.source != "lyrics.ovh" && $0.score >= 50 }
+
+        // 过滤掉不可靠的结果：
+        // - 任何源分数 <= 0 → 直接丢弃（纯音乐提示、垃圾结果）
+        // - lyrics.ovh 低分且无其他可信源 → 丢弃（宁缺勿错）
+        let reliable = results.filter { r in
+            if r.score <= 0 { return false }
+            if r.source == "lyrics.ovh" && r.score < 55 && !hasReliableAlternative { return false }
+            return true
+        }
+
         // 优先选择质量通过的最高分
-        if let best = results.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
+        if let best = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
             DebugLogger.log("🏆 最终选择: \(best.source)")
             return best.lyrics
         }
         // 回退到最高分
-        if let best = results.first {
+        if let best = reliable.first {
             DebugLogger.log("⚠️ 降级使用: \(best.source)")
             return best.lyrics
         }
@@ -727,48 +740,6 @@ public final class LyricsFetcher {
             let lyrics = parser.parseLRC(match.lyrics)
             let score = scorer.calculateScore(lyrics, source: "LRCLIB-Search", duration: duration, translationEnabled: translationEnabled)
             return LyricsFetchResult(lyrics: lyrics, source: "LRCLIB-Search", score: score)
-        } catch {
-            return nil
-        }
-    }
-
-    // MARK: - SimpMusic
-
-    private func fetchFromSimpMusic(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
-        let searchQuery = "\(title) \(artist)"
-        guard let url = HTTPClient.buildURL(base: "https://lyrics.simpmusic.org/v1/search", queryItems: [
-            "q": searchQuery, "limit": "10"
-        ]) else { return nil }
-
-        do {
-            let json = try await HTTPClient.getJSON(url: url, timeout: 6.0)
-            guard let success = json["success"] as? Bool, success,
-                  let dataArray = json["data"] as? [[String: Any]], !dataArray.isEmpty else { return nil }
-
-            var bestMatch: (lyrics: String, score: Double)?
-
-            for result in dataArray {
-                guard let syncedLyrics = result["syncedLyrics"] as? String, !syncedLyrics.isEmpty else { continue }
-
-                let resultTitle = result["trackName"] as? String ?? ""
-                let resultArtist = result["artistName"] as? String ?? ""
-                let resultDuration = result["duration"] as? Double ?? 0
-
-                let matchResult = MatchingUtils.calculateMatch(
-                    targetTitle: title, targetArtist: artist, targetDuration: duration,
-                    actualTitle: resultTitle, actualArtist: resultArtist, actualDuration: resultDuration
-                )
-
-                if matchResult.isAcceptable && (bestMatch == nil || matchResult.score > bestMatch!.score) {
-                    bestMatch = (syncedLyrics, matchResult.score)
-                }
-            }
-
-            guard let match = bestMatch else { return nil }
-
-            let lyrics = parser.parseLRC(match.lyrics)
-            let score = scorer.calculateScore(lyrics, source: "SimpMusic", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "SimpMusic", score: score)
         } catch {
             return nil
         }

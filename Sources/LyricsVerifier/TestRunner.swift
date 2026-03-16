@@ -25,6 +25,7 @@ struct VerifyResult: Codable {
     let firstRealLine: String?
     let elapsedMs: Int
     let failures: [String]
+    let warnings: [String]   // 内容验证警告（疑似错配、语言不一致等）
     let allSources: [SourceResult]
 }
 
@@ -96,6 +97,14 @@ func testSong(
         )
     }
 
+    // ── 内容验证（自动检测疑似错配）──
+    let warnings = validateContent(
+        title: title, artist: artist,
+        source: selectedResult?.source,
+        score: selectedResult?.score,
+        lyrics: lyrics
+    )
+
     return VerifyResult(
         id: id, title: title, artist: artist,
         duration: Int(duration), passed: failures.isEmpty,
@@ -107,6 +116,7 @@ func testSong(
         firstRealLine: firstReal?.text,
         elapsedMs: elapsed,
         failures: failures,
+        warnings: warnings,
         allSources: allSources
     )
 }
@@ -146,6 +156,78 @@ private func checkExpectation(
 }
 
 // =========================================================================
+// MARK: - 内容验证（自动检测疑似问题）
+// =========================================================================
+
+/// 三层内容验证：
+/// 1. 错配检测：首行是否包含明显错误的歌名/艺术家
+/// 2. 语言一致性：歌词语言是否与歌曲语言合理
+/// 3. 低质量源标记：lyrics.ovh 单一来源 + 低分 = 高风险
+private func validateContent(
+    title: String, artist: String,
+    source: String?, score: Double?,
+    lyrics: [LyricLine]
+) -> [String] {
+    guard !lyrics.isEmpty, let source = source else { return [] }
+    var warnings: [String] = []
+
+    let validLines = lyrics.filter {
+        let t = $0.text.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
+    }
+    guard !validLines.isEmpty else { return [] }
+
+    // ── 1. 首行错配检测 ──
+    // 很多源的首行格式是 "歌名 - 艺术家"，如果歌名不匹配就是错配
+    if let firstLine = validLines.first?.text {
+        let dashParts = firstLine.split(separator: "-", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        if dashParts.count == 2 {
+            let lyricsTitle = dashParts[0].lowercased()
+            let inputTitle = title.lowercased()
+                .replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+
+            // 跨语言翻译标题：一个纯 ASCII 一个含 CJK，且来自可信源高分命中 → 跳过
+            let inputIsASCII = inputTitle.allSatisfy { $0.isASCII }
+            let lyricsTitleHasCJK = lyricsTitle.unicodeScalars.contains {
+                (0x4E00...0x9FFF).contains($0.value) || (0x3040...0x30FF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value)
+            }
+            let isCrossLanguage = inputIsASCII && lyricsTitleHasCJK
+            let isReliableSource = ["NetEase", "QQ", "AMLL"].contains(source) && (score ?? 0) >= 50
+
+            // 首行标题和输入标题完全不搭（跨语言翻译+可信源除外）
+            if !lyricsTitle.contains(inputTitle) && !inputTitle.contains(lyricsTitle) && lyricsTitle.count > 3 {
+                if !(isCrossLanguage && isReliableSource) {
+                    warnings.append("⚠️ 首行标题不匹配: 歌词=\"\(dashParts[0])\" vs 输入=\"\(title)\"")
+                }
+            }
+        }
+    }
+
+    // ── 2. 语言一致性检测 ──
+    // 歌词全是拼音（纯 ASCII 但不像英文）= 可能是 lyrics.ovh 的垃圾
+    let asciiOnlyLines = validLines.filter { $0.text.allSatisfy { $0.isASCII } }
+    let hasCJKTitle = title.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
+            || title.unicodeScalars.contains { $0.value >= 0x3040 && $0.value <= 0x30FF }
+    if hasCJKTitle && asciiOnlyLines.count == validLines.count && source == "lyrics.ovh" {
+        warnings.append("⚠️ CJK标题但歌词全是ASCII（可能是拼音垃圾）")
+    }
+
+    // 古典/器乐曲不应该有歌词
+    let instrumentalKeywords = ["waltz", "sonata", "concerto", "symphony", "étude", "nocturne", "prelude", "fugue"]
+    if instrumentalKeywords.contains(where: { title.lowercased().contains($0) }) {
+        warnings.append("⚠️ 器乐曲标题但有歌词（可能是错配）")
+    }
+
+    // ── 3. 低质量源标记 ──
+    if source == "lyrics.ovh" && (score ?? 0) < 55 {
+        warnings.append("⚠️ 仅 lyrics.ovh 低分命中（高错配风险）")
+    }
+
+    return warnings
+}
+
+// =========================================================================
 // MARK: - 人类可读输出（stderr）
 // =========================================================================
 
@@ -170,6 +252,7 @@ func printResultLine(_ r: VerifyResult) {
     log(line)
 
     for f in r.failures { log("      ! \(f)") }
+    for w in r.warnings { log("      \(w)") }
 
     // 打印有结果的源
     let found = r.allSources.filter { $0.found }.sorted { $0.score > $1.score }
@@ -181,13 +264,16 @@ func printResultLine(_ r: VerifyResult) {
 
 func printBatchSummary(_ results: [VerifyResult]) {
     let passed = results.filter { $0.passed }.count
+    let warned = results.filter { !$0.warnings.isEmpty }.count
+    let noLyrics = results.filter { $0.lyricsLineCount == 0 }.count
     let totalMs = results.reduce(0) { $0 + $1.elapsedMs }
     let avg = results.isEmpty ? 0 : totalMs / results.count
 
     log("""
 
     ========================================
-      \(passed)/\(results.count) passed   total \(totalMs)ms   avg \(avg)ms
+      \(passed)/\(results.count) passed   \(warned) warnings   \(noLyrics) no-lyrics
+      total \(totalMs)ms   avg \(avg)ms
     ========================================
     """)
 }

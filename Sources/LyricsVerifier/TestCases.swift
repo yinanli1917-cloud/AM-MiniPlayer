@@ -69,23 +69,21 @@ private func decodeTestCases(from url: URL) -> [TestCase] {
 // =========================================================================
 
 /// 通过 osascript 从 Apple Music 资料库获取最近添加的歌曲
-/// 播放列表名 "Music"（英文系统），过滤 >60s 的有效歌曲
+/// 按 date added 过滤最近 90 天内添加的歌曲（真正的 "最近添加"）
 func fetchLibraryTracks(count: Int) -> [LibraryTrack] {
     let script = """
     tell application "Music"
-      set musicTracks to (every track of playlist "Music")
-      set trackCount to count of musicTracks
+      set cutoffDate to (current date) - 90 * 24 * 60 * 60
+      set recentTracks to every track of playlist "Library" whose date added > cutoffDate and media kind is song
       set output to ""
       set collected to 0
-      set startIdx to trackCount
-      repeat with i from startIdx to 1 by -1
+      repeat with t in recentTracks
         if collected >= \(count) then exit repeat
-        set t to item i of musicTracks
         try
           set trackName to name of t
           set trackArtist to artist of t
           set trackDuration to duration of t
-          if trackDuration > 60 then
+          if trackDuration > 30 and trackArtist is not "" then
             set output to output & trackName & tab & trackArtist & tab & (round trackDuration) & linefeed
             set collected to collected + 1
           end if
