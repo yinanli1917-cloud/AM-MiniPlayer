@@ -198,12 +198,7 @@ public final class LyricsScorer {
     /// 过滤真正的歌词行（排除元信息和省略号）
     private func filterRealLyrics(_ lyrics: [LyricLine]) -> [LyricLine] {
         let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・", ""]
-        let instrumentalPatterns = [
-            "此歌曲为没有填词的纯音乐", "纯音乐，请欣赏", "纯音乐，请您欣赏",
-            "此歌曲为纯音乐", "纯音乐", "无歌词", "本歌曲没有歌词", "暂无歌词",
-            "歌词正在制作中", "Instrumental", "This song is instrumental",
-            "No lyrics available", "No lyrics", "歌詞なし", "インストゥルメンタル", "インスト"
-        ]
+        let instrumentalPatterns = kInstrumentalPatterns
         let metadataKeywords = [
             "作词", "作曲", "编曲", "制作人", "和声", "录音", "混音", "母带",
             "吉他", "贝斯", "鼓", "钢琴", "键盘", "弦乐", "管乐",

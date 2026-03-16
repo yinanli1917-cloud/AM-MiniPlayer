@@ -132,6 +132,47 @@ public enum HTTPClient {
         return json
     }
 
+    /// POST JSON 请求返回 JSON 字典
+    public static func postJSON(
+        url: URL,
+        body: [String: Any],
+        headers: [String: String] = [:],
+        timeout: TimeInterval = defaultTimeout
+    ) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        if headers["User-Agent"] == nil {
+            request.setValue(defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        }
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.urlCache = nil
+        let session = URLSession(configuration: config)
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw HTTPError.invalidResponse
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw HTTPError.decodingFailed
+        }
+
+        return json
+    }
+
     // ── 便捷方法 ──
 
     /// 构建带查询参数的 URL

@@ -129,7 +129,7 @@ public final class MetadataResolver {
                 // P2: 标题匹配 + 本地化结果 → 中置信度
                 // P3: 时长极精确(<0.5s) + 中文结果 + 输入是纯英文 → 允许中英文翻译
                 //     例如：Julia Peng "None of Your Business" (212s) → 彭佳慧 "关你屁事啊" (212s)
-                let isVeryPreciseDuration = durationDiff < 0.5
+                let isVeryPreciseDuration = durationDiff < 1.0
                 let inputIsPureEnglish = !inputHasChinese && LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
                 let allowTranslatedMatch = isVeryPreciseDuration && resultHasChinese && inputIsPureEnglish
 
@@ -196,21 +196,9 @@ public final class MetadataResolver {
         }
     }
 
-    /// 推断可能的区域
+    /// 推断可能的区域（委托给 LanguageUtils 统一实现）
     public func inferRegions(title: String, artist: String) -> [String] {
-        var regions: [String] = []
-        let combined = "\(title) \(artist)"
-
-        if LanguageUtils.containsJapanese(combined) { regions.append("JP") }
-        if LanguageUtils.containsKorean(combined) { regions.append("KR") }
-        if LanguageUtils.containsThai(combined) { regions.append("TH") }
-        if LanguageUtils.containsVietnamese(combined) { regions.append("VN") }
-
-        if regions.isEmpty && LanguageUtils.isPureASCII(artist) && !LanguageUtils.isLikelyEnglishArtist(artist) {
-            regions.append(contentsOf: ["JP", "KR"])
-        }
-
-        return regions
+        LanguageUtils.inferRegions(title: title, artist: artist)
     }
 
     /// 从指定区域获取元信息
@@ -261,24 +249,20 @@ public final class MetadataResolver {
                                    LanguageUtils.containsKorean(trackName) || LanguageUtils.containsChinese(artistName) ||
                                    LanguageUtils.containsJapanese(artistName) || LanguageUtils.containsKorean(artistName)
 
-                // 🔑 罗马字→CJK 匹配：输入是纯 ASCII，结果是 CJK
-                // 例如：Koibitotachi no Chiheisen / Momoko Kikuchi → 恋人たちの地平線 / 菊池桃子
-                // 关键洞察：罗马字和 CJK 没有字符串包含关系，所以用 resultHasCJK 判断
+                // 罗马字→CJK 匹配：纯 ASCII 输入 + CJK 结果
+                // 组合搜索（title+artist）时直接允许，artist-only 搜索需要标题足够长（排除常见英文词）
                 let inputIsPureASCII = LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
-                let isRomanizedToCJK = inputIsPureASCII && resultHasCJK  // 🔑 不再限制时长，由底线阈值(<2s)控制
+                let searchTermLower = searchTerm.lowercased()
+                let searchIncludesTitle = searchTermLower.contains(inputTitleLower)
+                let titleIsSpecific = inputTitleLower.count >= 12 && !LanguageUtils.isLikelyEnglishArtist(title)
+                let isRomanizedToCJK = inputIsPureASCII && resultHasCJK && durationDiff < 1 &&
+                                       (searchIncludesTitle || titleIsSpecific)
 
-                // 🔑 匹配策略（收集所有候选，最后按 durationDiff 排序选最佳）：
-                // P1: 标题匹配 + 艺术家匹配 → 高置信度
-                // P2: 标题匹配 + CJK 结果 → 中置信度
-                // P3: 罗马字→CJK（无标题/艺术家匹配但结果是 CJK）→ 依赖时长排序
-                if titleMatch {
-                    if artistMatch || resultHasCJK {
-                        DebugLogger.log("MetadataResolver", "[\(region)] 候选(titleMatch): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
-                        candidates.append((trackName, artistName, durationDiff))
-                    }
+                // 匹配策略（收集所有候选，最后按 durationDiff 排序选最佳）
+                if titleMatch && (artistMatch || resultHasCJK) {
+                    DebugLogger.log("MetadataResolver", "[\(region)] 候选(titleMatch): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
+                    candidates.append((trackName, artistName, durationDiff))
                 } else if isRomanizedToCJK {
-                    // 🔑 罗马字→CJK：无字符串匹配，但时长在底线阈值内且结果是 CJK
-                    // Momoko Kikuchi (229s) → 菊池桃子 (229.533s) ✓
                     DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                     candidates.append((trackName, artistName, durationDiff))
                 }

@@ -1,0 +1,134 @@
+[
+  {
+    "id": "T01",
+    "title": "None of Your Business (feat. Kumachan)",
+    "artist": "Julia Peng",
+    "duration": 212,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "T02",
+    "title": "Between Love and You",
+    "artist": "Naiwen Yang",
+    "duration": 240,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "C01",
+    "title": "女爵",
+    "artist": "杨乃文",
+    "duration": 252,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "C02",
+    "title": "叶子 (电视剧《蔷薇之恋》原声带版)",
+    "artist": "阿桑",
+    "duration": 295,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "C03",
+    "title": "晴天",
+    "artist": "周杰伦",
+    "duration": 269,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "C04",
+    "title": "起风了",
+    "artist": "买辣椒也用券",
+    "duration": 325,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "R03",
+    "title": "Koibitotachi no Chiheisen",
+    "artist": "Momoko Kikuchi",
+    "duration": 260,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "AMLL", "LRCLIB"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "J01",
+    "title": "残酷な天使のテーゼ",
+    "artist": "高橋洋子",
+    "duration": 263,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["AMLL", "NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "K01",
+    "title": "Love Lee",
+    "artist": "AKMU",
+    "duration": 197,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "E01",
+    "title": "Bohemian Rhapsody",
+    "artist": "Queen",
+    "duration": 355,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "E02",
+    "title": "Hotel California",
+    "artist": "Eagles",
+    "duration": 391,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "E03",
+    "title": "Shape of You",
+    "artist": "Ed Sheeran",
+    "duration": 234,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
+      "firstLineContains": null
+    }
+  }
+]

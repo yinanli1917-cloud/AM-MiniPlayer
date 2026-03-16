@@ -317,19 +317,11 @@ public final class LyricsParser {
     public func processLyrics(_ rawLyrics: [LyricLine]) -> (lyrics: [LyricLine], firstRealLyricIndex: Int) {
         guard !rawLyrics.isEmpty else { return ([], 0) }
 
-        // 纯音乐提示
-        let instrumentalPatterns = [
-            "此歌曲为没有填词的纯音乐", "纯音乐，请欣赏", "纯音乐，请您欣赏",
-            "此歌曲为纯音乐", "纯音乐", "无歌词", "本歌曲没有歌词", "暂无歌词",
-            "歌词正在制作中", "Instrumental", "This song is instrumental",
-            "No lyrics available", "No lyrics", "歌詞なし"
-        ]
-
         // 如果歌词只有1-2行且包含纯音乐提示，返回空
         if rawLyrics.count <= 2 {
             for line in rawLyrics {
                 let text = line.text.trimmingCharacters(in: .whitespaces)
-                if instrumentalPatterns.contains(where: { text.contains($0) }) {
+                if kInstrumentalPatterns.contains(where: { text.contains($0) }) {
                     return ([], 0)
                 }
             }
@@ -423,26 +415,28 @@ public final class LyricsParser {
 
     // MARK: - 翻译合并
 
-    /// 合并原文歌词和翻译歌词
+    /// 合并原文歌词和翻译歌词（O(n) 时间戳索引匹配）
     public func mergeLyricsWithTranslation(original: [LyricLine], translated: [LyricLine]) -> [LyricLine] {
         guard !translated.isEmpty else { return original }
 
-        return original.map { originalLine in
-            let matchingTranslation = translated.min { line1, line2 in
-                abs(line1.startTime - originalLine.startTime) < abs(line2.startTime - originalLine.startTime)
-            }
+        // 按 startTime 建立索引，O(n) 查找
+        let translationMap = Dictionary(
+            translated.map { (Int($0.startTime * 10), $0.text) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
-            if let match = matchingTranslation,
-               abs(match.startTime - originalLine.startTime) < 1.0 {
-                return LyricLine(
-                    text: originalLine.text,
-                    startTime: originalLine.startTime,
-                    endTime: originalLine.endTime,
-                    words: originalLine.words,
-                    translation: match.text
-                )
-            }
-            return originalLine
+        return original.map { line in
+            let key = Int(line.startTime * 10)
+            // 精确匹配（±0.1s 内）或扩展搜索（±1.0s）
+            let matchText = translationMap[key]
+                ?? translationMap[key - 1] ?? translationMap[key + 1]
+                ?? translationMap[key - 5] ?? translationMap[key + 5]
+
+            guard let text = matchText else { return line }
+            return LyricLine(
+                text: line.text, startTime: line.startTime, endTime: line.endTime,
+                words: line.words, translation: text
+            )
         }
     }
 

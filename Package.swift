@@ -28,6 +28,11 @@ let package = Package(
             ]
         ),
         .executableTarget(
+            name: "LyricsVerifier",
+            dependencies: ["MusicMiniPlayerCore"],
+            path: "Sources/LyricsVerifier"
+        ),
+        .executableTarget(
             name: "MusicMiniPlayer",
             dependencies: ["MusicMiniPlayerCore"],
             path: "Sources/MusicMiniPlayerApp",

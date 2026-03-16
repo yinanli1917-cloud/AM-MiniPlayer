@@ -247,95 +247,59 @@ public enum LanguageUtils {
 
 public extension LanguageUtils {
 
+    // 缓存的正则表达式（只编译一次）
+    private static let trackNameRegexes: [NSRegularExpression] = {
+        // 合并为 3 个正则：括号形式 + 方括号形式 + 横线后缀
+        let patterns = [
+            // 圆括号内容（feat/ft/with/版本标注/OST 等）
+            #"\s*\((feat|ft)\.?[^)]*\)"#,
+            #"\s*\((with|remaster|live|acoustic|remix|radio|deluxe|cover|extended|original|official|bonus|edit|clean|explicit|instrumental|karaoke|from\s+|ost|theme|soundtrack|full\s*version)[^)]*\)"#,
+            // 中文全角括号
+            #"\s*（[^）]*）"#,
+            #"\s*《[^》]*》"#,
+            #"\s*「[^」]*」"#,
+            // 方括号
+            #"\s*\[(feat|remaster|live|remix|cover|acoustic|instrumental)[^\]]*\]"#,
+            // 横线后缀
+            #"\s*-\s*(remaster|live|single\s*version|intro|outro|interlude|bonus\s*track).*$"#,
+            #"\s*mv\s*version.*$"#,
+            // 中文电视剧标注
+            #"\s*电视剧.*$"#
+        ]
+        return patterns.compactMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+    }()
+
+    private static let artistNameRegexes: [NSRegularExpression] = {
+        let patterns = [
+            #"\s*(feat|ft)\.?\s+.*$"#,
+            #"\s*[&,]\s+.*$"#
+        ]
+        return patterns.compactMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+    }()
+
     /// 规范化歌曲标题（移除版本标注、feat 等）
     static func normalizeTrackName(_ name: String) -> String {
         var normalized = name.lowercased()
-
-        // 移除括号内容：(feat. xxx), (Remaster), [Live], etc.
-        let patterns = [
-            // feat/ft/with 系列
-            #"\s*\(feat\.?[^)]*\)"#,
-            #"\s*\[feat\.?[^\]]*\]"#,
-            #"\s*\(ft\.?[^)]*\)"#,
-            #"\s*\(with[^)]*\)"#,
-
-            // 版本标注 - 括号形式
-            #"\s*\(remaster[^)]*\)"#,
-            #"\s*\(live[^)]*\)"#,
-            #"\s*\(acoustic[^)]*\)"#,
-            #"\s*\(remix[^)]*\)"#,
-            #"\s*\(radio[^)]*\)"#,
-            #"\s*\(deluxe[^)]*\)"#,
-            #"\s*\(cover[^)]*\)"#,
-            #"\s*\(extended[^)]*\)"#,
-            #"\s*\(original[^)]*\)"#,
-            #"\s*\(full\s*version[^)]*\)"#,
-            #"\s*\(official[^)]*\)"#,
-            #"\s*\(bonus[^)]*\)"#,
-            #"\s*\(edit[^)]*\)"#,
-            #"\s*\(clean[^)]*\)"#,
-            #"\s*\(explicit[^)]*\)"#,
-            #"\s*\(instrumental[^)]*\)"#,
-            #"\s*\(karaoke[^)]*\)"#,
-
-            // OST/影视相关
-            #"\s*\(from\s+[^)]*\)"#,
-            #"\s*\(ost[^)]*\)"#,
-            #"\s*\(theme[^)]*\)"#,
-            #"\s*\(soundtrack[^)]*\)"#,
-
-            // 方括号形式
-            #"\s*\[remaster[^\]]*\]"#,
-            #"\s*\[live[^\]]*\]"#,
-            #"\s*\[remix[^\]]*\]"#,
-            #"\s*\[cover[^\]]*\]"#,
-            #"\s*\[acoustic[^\]]*\]"#,
-            #"\s*\[instrumental[^\]]*\]"#,
-
-            // 横线后缀形式
-            #"\s*-\s*remaster.*$"#,
-            #"\s*-\s*live.*$"#,
-            #"\s*-\s*single\s*version.*$"#,
-            #"\s*-\s*(intro|outro|interlude)$"#,
-            #"\s*-\s*bonus\s*track.*$"#,
-            #"\s*mv\s*version.*$"#
-        ]
-
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                normalized = regex.stringByReplacingMatches(
-                    in: normalized,
-                    range: NSRange(normalized.startIndex..., in: normalized),
-                    withTemplate: ""
-                )
-            }
+        for regex in trackNameRegexes {
+            normalized = regex.stringByReplacingMatches(
+                in: normalized,
+                range: NSRange(normalized.startIndex..., in: normalized),
+                withTemplate: ""
+            )
         }
-
         return normalized.trimmingCharacters(in: .whitespaces)
     }
 
     /// 规范化艺术家名（移除 feat 等）
     static func normalizeArtistName(_ name: String) -> String {
         var normalized = name.lowercased()
-
-        // 移除 feat/ft/with 后的内容
-        let patterns = [
-            #"\s*feat\.?\s+.*$"#,
-            #"\s*ft\.?\s+.*$"#,
-            #"\s*&\s+.*$"#,
-            #"\s*,\s+.*$"#
-        ]
-
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                normalized = regex.stringByReplacingMatches(
-                    in: normalized,
-                    range: NSRange(normalized.startIndex..., in: normalized),
-                    withTemplate: ""
-                )
-            }
+        for regex in artistNameRegexes {
+            normalized = regex.stringByReplacingMatches(
+                in: normalized,
+                range: NSRange(normalized.startIndex..., in: normalized),
+                withTemplate: ""
+            )
         }
-
         return normalized.trimmingCharacters(in: .whitespaces)
     }
 

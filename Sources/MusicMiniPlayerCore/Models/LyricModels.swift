@@ -3,7 +3,7 @@
 //  MusicMiniPlayer
 //
 //  [INPUT]: 无外部依赖
-//  [OUTPUT]: LyricWord, LyricLine, CachedLyricsItem
+//  [OUTPUT]: LyricWord, LyricLine, CachedLyricsItem, kInstrumentalPatterns
 //  [POS]: Models 模块的歌词数据结构，供 LyricsService 和 UI 层使用
 //
 
@@ -63,6 +63,22 @@ public struct LyricLine: Identifiable, Equatable {
         self.translation = translation
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Cache Item (歌词缓存)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - 共享常量
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// 纯音乐/无歌词提示（LyricsParser + LyricsScorer 共用）
+public let kInstrumentalPatterns: [String] = [
+    "此歌曲为没有填词的纯音乐", "纯音乐，请欣赏", "纯音乐，请您欣赏",
+    "此歌曲为纯音乐", "纯音乐", "无歌词", "本歌曲没有歌词", "暂无歌词",
+    "歌词正在制作中", "Instrumental", "This song is instrumental",
+    "No lyrics available", "No lyrics", "歌詞なし", "インストゥルメンタル", "インスト"
+]
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Cache Item (歌词缓存)

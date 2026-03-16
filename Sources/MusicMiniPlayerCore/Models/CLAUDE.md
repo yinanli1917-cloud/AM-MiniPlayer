@@ -6,7 +6,7 @@
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| LyricModels.swift | 90 | 歌词数据结构：LyricWord, LyricLine, CachedLyricsItem |
+| LyricModels.swift | 106 | 歌词数据结构：LyricWord, LyricLine, CachedLyricsItem, kInstrumentalPatterns |
 
 ## 设计原则
 

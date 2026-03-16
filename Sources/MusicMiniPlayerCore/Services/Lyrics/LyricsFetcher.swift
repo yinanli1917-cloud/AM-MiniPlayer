@@ -22,15 +22,12 @@ public final class LyricsFetcher {
     private let metadataResolver = MetadataResolver.shared
     private let logger = Logger(subsystem: "com.nanoPod", category: "LyricsFetcher")
 
-    /// NetEase 时间偏移（补偿时间轴滞后）
     private let netEaseTimeOffset: Double = 0.7
-
-    /// AMLL 索引缓存
     private var amllIndex: [AMLLIndexEntry] = []
     private var amllIndexLastUpdate: Date?
-    private var amllIndexLoadFailed: Date?  // 🔑 记录加载失败时间
+    private var amllIndexLoadFailed: Date?
     private let amllIndexCacheDuration: TimeInterval = 3600
-    private let amllIndexFailureCooldown: TimeInterval = 300  // 🔑 失败后 5 分钟内不重试 * 6  // 6 hours
+    private let amllIndexFailureCooldown: TimeInterval = 300
 
     /// AMLL 镜像源
     private let amllMirrorBaseURLs: [(name: String, baseURL: String)] = [
@@ -44,8 +41,6 @@ public final class LyricsFetcher {
     private init() {
         Task { await loadAMLLIndex() }
     }
-
-    // MARK: - 搜索结果
 
     /// 歌词搜索结果
     public struct LyricsFetchResult {
@@ -76,41 +71,15 @@ public final class LyricsFetcher {
 
         var results: [LyricsFetchResult] = []
 
+        let st = searchTitle, sa = searchArtist, d = duration, te = translationEnabled
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
-            // 1. AMLL
-            group.addTask {
-                await self.fetchFromAMLL(title: searchTitle, artist: searchArtist, duration: duration, translationEnabled: translationEnabled)
-            }
-
-            // 2. NetEase
-            group.addTask {
-                await self.fetchFromNetEase(title: searchTitle, artist: searchArtist, duration: duration, translationEnabled: translationEnabled)
-            }
-
-            // 3. QQ Music
-            group.addTask {
-                await self.fetchFromQQMusic(title: searchTitle, artist: searchArtist, duration: duration, translationEnabled: translationEnabled)
-            }
-
-            // 4. LRCLIB
-            group.addTask {
-                await self.fetchFromLRCLIB(title: searchTitle, artist: searchArtist, duration: duration, translationEnabled: translationEnabled)
-            }
-
-            // 5. SimpMusic
-            group.addTask {
-                await self.fetchFromSimpMusic(title: searchTitle, artist: searchArtist, duration: duration, translationEnabled: translationEnabled)
-            }
-
-            // 6. LRCLIB Search
-            group.addTask {
-                await self.fetchFromLRCLIBSearch(title: searchTitle, artist: searchArtist, duration: duration, translationEnabled: translationEnabled)
-            }
-
-            // 7. lyrics.ovh
-            group.addTask {
-                await self.fetchFromLyricsOVH(title: searchTitle, artist: searchArtist, duration: duration, translationEnabled: translationEnabled)
-            }
+            group.addTask { await self.fetchFromAMLL(title: st, artist: sa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromNetEase(title: st, artist: sa, originalTitle: title, originalArtist: artist, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: title, originalArtist: artist, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromLRCLIB(title: st, artist: sa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromSimpMusic(title: st, artist: sa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromLRCLIBSearch(title: st, artist: sa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromLyricsOVH(title: st, artist: sa, duration: d, translationEnabled: te) }
 
             for await result in group {
                 if let r = result {
@@ -120,34 +89,88 @@ public final class LyricsFetcher {
             }
         }
 
-        let sorted = results.sorted { $0.score > $1.score }
-        DebugLogger.log("📊 结果汇总: \(sorted.count) 个源, 最高分=\(sorted.first.map { String(format: "%.1f", $0.score) } ?? "N/A")")
-        return sorted
+        return results.sorted { $0.score > $1.score }
     }
 
-    /// 选择最佳结果
+    /// 选择最佳结果（优先质量通过的，回退到最高分）
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
-        DebugLogger.log("🎯 selectBest: 从 \(results.count) 个结果中选择")
-
-        for result in results {
-            let qualityAnalysis = scorer.analyzeQuality(result.lyrics)
-            DebugLogger.log("🔍 检查 \(result.source): valid=\(qualityAnalysis.isValid), lines=\(result.lyrics.count)")
-            if qualityAnalysis.isValid {
-                logger.info("🏆 Selected: \(result.source) (score: \(String(format: "%.1f", result.score)))")
-                DebugLogger.log("🏆 最终选择: \(result.source)")
-                return result.lyrics
-            }
+        // 优先选择质量通过的最高分
+        if let best = results.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
+            DebugLogger.log("🏆 最终选择: \(best.source)")
+            return best.lyrics
         }
-
-        // 回退到最高分（即使有质量问题）
+        // 回退到最高分
         if let best = results.first {
-            logger.warning("⚠️ Using best available: \(best.source)")
             DebugLogger.log("⚠️ 降级使用: \(best.source)")
             return best.lyrics
         }
-
-        DebugLogger.log("❌ selectBest: 无可用结果")
         return nil
+    }
+
+    // MARK: - 统一匹配工具
+
+    /// 搜索候选结构体（NetEase/QQ 共用）
+    private struct SearchCandidate<ID> {
+        let id: ID
+        let name: String
+        let artist: String
+        let durationDiff: Double
+        let titleMatch: Bool
+        let artistMatch: Bool
+    }
+
+    /// 统一优先级选择（消除 NetEase/QQ 的重复匹配逻辑）
+    /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s → P3: 仅标题+时长<1s → P4: 仅艺术家+时长<1s
+    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String) -> ID? {
+        let sorted = candidates.sorted { $0.durationDiff < $1.durationDiff }
+        let desc = sorted.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }
+        DebugLogger.log(source, "🎯 候选: \(desc.joined(separator: ", "))")
+
+        // 按优先级递减尝试
+        let priorities: [(String, (SearchCandidate<ID>) -> Bool)] = [
+            ("P1", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 3 }),
+            ("P2", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 20 }),
+            ("P3", { $0.titleMatch && $0.durationDiff < 1 }),
+            ("P4", { $0.artistMatch && $0.durationDiff < 1 }),
+        ]
+
+        for (label, predicate) in priorities {
+            if let match = sorted.first(where: predicate) {
+                DebugLogger.log(source, "✅ \(label): '\(match.name)' by '\(match.artist)' Δ\(String(format: "%.1f", match.durationDiff))s")
+                return match.id
+            }
+        }
+
+        if !sorted.isEmpty { DebugLogger.log(source, "❌ 无匹配") }
+        return nil
+    }
+
+    /// 统一标题匹配（消除 NetEase/QQ 各自的内联清理逻辑）
+    private func isTitleMatch(input: String, result: String, simplifiedInput: String) -> Bool {
+        let cleanedInput = LanguageUtils.normalizeTrackName(input).lowercased()
+        let cleanedResult = LanguageUtils.normalizeTrackName(result).lowercased()
+        let simplifiedResult = LanguageUtils.toSimplifiedChinese(cleanedResult)
+        let simplifiedCleanedInput = LanguageUtils.toSimplifiedChinese(cleanedInput)
+
+        return cleanedInput == cleanedResult ||
+               simplifiedCleanedInput == simplifiedResult ||
+               cleanedInput.contains(cleanedResult) || cleanedResult.contains(cleanedInput) ||
+               simplifiedCleanedInput.contains(simplifiedResult) || simplifiedResult.contains(simplifiedCleanedInput)
+    }
+
+    /// 统一艺术家匹配（简繁体 + CJK 跨语言）
+    private func isArtistMatch(input: String, result: String, simplifiedInput: String) -> Bool {
+        let inputLower = input.lowercased()
+        let resultLower = result.lowercased()
+        let simplifiedInputLower = simplifiedInput.lowercased()
+        let simplifiedResult = LanguageUtils.toSimplifiedChinese(result).lowercased()
+
+        // 直接匹配或包含匹配
+        if inputLower == resultLower || simplifiedInputLower == simplifiedResult { return true }
+        if inputLower.contains(resultLower) || resultLower.contains(inputLower) { return true }
+        if simplifiedInputLower.contains(simplifiedResult) || simplifiedResult.contains(simplifiedInputLower) { return true }
+
+        return false
     }
 
     // MARK: - AMLL-TTML-DB
@@ -155,7 +178,7 @@ public final class LyricsFetcher {
     private func fetchFromAMLL(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         // 尝试通过 Apple Music Track ID 直接获取
         if let trackId = await getAppleMusicTrackId(title: title, artist: artist, duration: duration),
-           let lyrics = await fetchAMLLByTrackId(trackId: trackId) {
+           let lyrics = await fetchAMLLTTML(platform: "am-lyrics", filename: "\(trackId).ttml") {
             let score = scorer.calculateScore(lyrics, source: "AMLL", duration: duration, translationEnabled: translationEnabled)
             return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score)
         }
@@ -196,7 +219,7 @@ public final class LyricsFetcher {
 
         guard let match = bestMatch else { return nil }
 
-        if let lyrics = await fetchAMLLTTML(entry: match.entry) {
+        if let lyrics = await fetchAMLLTTML(platform: match.entry.platform, filename: "\(match.entry.id).ttml") {
             let score = scorer.calculateScore(lyrics, source: "AMLL", duration: duration, translationEnabled: translationEnabled)
             return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score)
         }
@@ -204,36 +227,12 @@ public final class LyricsFetcher {
         return nil
     }
 
-    private func fetchAMLLTTML(entry: AMLLIndexEntry) async -> [LyricLine]? {
-        let ttmlFilename = "\(entry.id).ttml"
-        let platform = entry.platform
-
+    /// 从 AMLL 镜像获取 TTML（共用镜像循环逻辑）
+    private func fetchAMLLTTML(platform: String, filename: String) async -> [LyricLine]? {
         for i in 0..<amllMirrorBaseURLs.count {
             let mirrorIndex = (currentMirrorIndex + i) % amllMirrorBaseURLs.count
             let mirror = amllMirrorBaseURLs[mirrorIndex]
-
-            guard let url = URL(string: "\(mirror.baseURL)\(platform)/\(ttmlFilename)") else { continue }
-
-            do {
-                let content = try await HTTPClient.getString(url: url, timeout: 6.0)
-                self.currentMirrorIndex = mirrorIndex
-                return parser.parseTTML(content)
-            } catch {
-                continue
-            }
-        }
-
-        return nil
-    }
-
-    private func fetchAMLLByTrackId(trackId: Int) async -> [LyricLine]? {
-        let ttmlFilename = "\(trackId).ttml"
-
-        for i in 0..<amllMirrorBaseURLs.count {
-            let mirrorIndex = (currentMirrorIndex + i) % amllMirrorBaseURLs.count
-            let mirror = amllMirrorBaseURLs[mirrorIndex]
-
-            guard let url = URL(string: "\(mirror.baseURL)am-lyrics/\(ttmlFilename)") else { continue }
+            guard let url = URL(string: "\(mirror.baseURL)\(platform)/\(filename)") else { continue }
 
             do {
                 let content = try await HTTPClient.getString(url: url, timeout: 6.0)
@@ -245,7 +244,6 @@ public final class LyricsFetcher {
                 continue
             }
         }
-
         return nil
     }
 
@@ -368,9 +366,9 @@ public final class LyricsFetcher {
 
     // MARK: - NetEase
 
-    private func fetchFromNetEase(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+    private func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("NetEase", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
-        guard let songId = await searchNetEaseSong(title: title, artist: artist, duration: duration) else {
+        guard let songId = await searchNetEaseSong(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration) else {
             DebugLogger.log("NetEase", "❌ 未找到歌曲")
             return nil
         }
@@ -384,36 +382,31 @@ public final class LyricsFetcher {
         return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score)
     }
 
-    private func searchNetEaseSong(title: String, artist: String, duration: TimeInterval) async -> Int? {
-        // 🔑 清理标题：移除括号内容（如 "叶子 (电视剧《蔷薇之恋》原声带版)" → "叶子"）
-        // NetEase 搜索 API 对长标题处理不好，需要用核心标题搜索
-        let cleanedTitle = title
-            .replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s*\[[^\]]*\]"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s*（[^）]*）"#, with: "", options: .regularExpression)  // 中文括号
-            .trimmingCharacters(in: .whitespaces)
-
+    private func searchNetEaseSong(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval) async -> Int? {
+        // 清理标题：移除括号内容（NetEase 搜索 API 对长标题处理不好）
+        let cleanedTitle = LanguageUtils.normalizeTrackName(title)
         let simplifiedTitle = LanguageUtils.toSimplifiedChinese(cleanedTitle)
         let simplifiedArtist = LanguageUtils.toSimplifiedChinese(artist)
-        let isJapaneseTitle = LanguageUtils.containsJapanese(title)
 
-        // 多关键词策略
-        var searchKeywords: [String] = []
-        searchKeywords.append("\(simplifiedTitle) \(simplifiedArtist)")
-        if isJapaneseTitle {
-            searchKeywords.append(simplifiedArtist)  // 日文歌可能有中文名
+        // 同时准备原始标题的清理版本（用于匹配）
+        let cleanedOriginalTitle = LanguageUtils.normalizeTrackName(originalTitle)
+        let simplifiedOriginalTitle = LanguageUtils.toSimplifiedChinese(cleanedOriginalTitle)
+        let simplifiedOriginalArtist = LanguageUtils.toSimplifiedChinese(originalArtist)
+
+        // 多关键词策略（按优先级排列）
+        var searchKeywords: [(String, String)] = []
+        searchKeywords.append(("\(simplifiedTitle) \(simplifiedArtist)", "title+artist"))
+        if simplifiedOriginalTitle != simplifiedTitle || simplifiedOriginalArtist != simplifiedArtist {
+            searchKeywords.append(("\(simplifiedOriginalTitle) \(simplifiedOriginalArtist)", "original"))
         }
-        DebugLogger.log("NetEase", "🔑 关键词: \(searchKeywords), 日文=\(isJapaneseTitle), 原标题='\(title)'")
+        searchKeywords.append((simplifiedArtist, "artist only"))
+        DebugLogger.log("NetEase", "🔑 关键词: \(searchKeywords.map(\.0))")
 
-        for (index, keyword) in searchKeywords.enumerated() {
-            DebugLogger.log("NetEase", "🔎 尝试第\(index+1)轮搜索: '\(keyword)'")
+        for (keyword, desc) in searchKeywords {
+            DebugLogger.log("NetEase", "🔎 尝试 \(desc): '\(keyword)'")
             guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
                 "s": keyword, "type": "1", "limit": "20"
-            ]) else {
-                DebugLogger.log("NetEase", "❌ URL构建失败")
-                continue
-            }
-            DebugLogger.log("NetEase", "🌐 URL: \(url.absoluteString)")
+            ]) else { continue }
 
             do {
                 let headers = [
@@ -421,27 +414,23 @@ public final class LyricsFetcher {
                     "Referer": "https://music.163.com"
                 ]
                 let (data, response) = try await HTTPClient.getData(url: url, headers: headers, timeout: 6.0)
-
-                // 记录响应状态
                 DebugLogger.log("NetEase", "📡 响应: status=\(response.statusCode), size=\(data.count) bytes")
 
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let result = json["result"] as? [String: Any],
-                      let songs = result["songs"] as? [[String: Any]] else {
-                    DebugLogger.log("NetEase", "❌ API返回格式错误 (json=\(String(data: data, encoding: .utf8)?.prefix(200) ?? "decode failed"))")
-                    continue
-                }
+                      let songs = result["songs"] as? [[String: Any]] else { continue }
 
                 DebugLogger.log("NetEase", "📦 收到 \(songs.count) 个候选")
 
-                if let songId = await performNetEaseMatching(
+                // 同时用 resolved 和 original 匹配（resolved 可能是翻译/本地化标题）
+                let candidates = buildNetEaseCandidates(
                     songs: songs,
-                    title: title,
-                    artist: artist,
-                    simplifiedTitle: simplifiedTitle,
-                    simplifiedArtist: simplifiedArtist,
+                    titles: [(title, simplifiedTitle), (originalTitle, simplifiedOriginalTitle)],
+                    artists: [(artist, simplifiedArtist), (originalArtist, simplifiedOriginalArtist)],
                     duration: duration
-                ) {
+                )
+
+                if let songId = selectBestCandidate(candidates, source: "NetEase") {
                     return songId
                 }
             } catch {
@@ -453,24 +442,15 @@ public final class LyricsFetcher {
         return nil
     }
 
-    private func performNetEaseMatching(
+    /// 构建 NetEase 候选列表（提取 JSON 为统一 SearchCandidate）
+    /// titles/artists 包含所有可能匹配的标题/艺术家对（resolved + original）
+    private func buildNetEaseCandidates(
         songs: [[String: Any]],
-        title: String,
-        artist: String,
-        simplifiedTitle: String,
-        simplifiedArtist: String,
+        titles: [(String, String)],
+        artists: [(String, String)],
         duration: TimeInterval
-    ) async -> Int? {
-        // 🔍 打印 API 返回的原始数据前3条
-        let rawSongs = songs.prefix(3).compactMap { song -> String? in
-            guard let name = song["name"] as? String else { return nil }
-            let artist = (song["artists"] as? [[String: Any]])?.first?["name"] as? String ?? "?"
-            let dur = (song["duration"] as? Double ?? 0) / 1000
-            return "'\(name)' by '\(artist)' (\(Int(dur))s)"
-        }
-        DebugLogger.log("NetEase", "📋 API返回前3: \(rawSongs.joined(separator: ", "))")
-
-        var candidates: [(id: Int, name: String, artist: String, durationDiff: Double, titleMatch: Bool, artistMatch: Bool)] = []
+    ) -> [SearchCandidate<Int>] {
+        var candidates: [SearchCandidate<Int>] = []
 
         for song in songs {
             guard let songId = song["id"] as? Int,
@@ -485,100 +465,19 @@ public final class LyricsFetcher {
 
             let songDuration = (song["duration"] as? Double ?? 0) / 1000.0
             let durationDiff = abs(songDuration - duration)
-            guard durationDiff < 5 else {
-                DebugLogger.log("NetEase", "⏭️ 跳过: '\(songName)' by '\(songArtist)' (时长差\(String(format: "%.1f", durationDiff))s)")
-                continue
-            }
+            guard durationDiff < 20 else { continue }
 
-            // 标题清理（移除括号、后缀、标点）
-            let cleanTitle = { (s: String) -> String in
-                var cleaned = s.lowercased()
-                cleaned = cleaned.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
-                cleaned = cleaned.replacingOccurrences(of: #"\s*\[[^\]]*\]"#, with: "", options: .regularExpression)
-                cleaned = cleaned.replacingOccurrences(of: #"\s*-\s*remaster.*$"#, with: "", options: .regularExpression)
-                cleaned = cleaned.replacingOccurrences(of: #"\s*-\s*remix.*$"#, with: "", options: .regularExpression)
-                // 🔑 移除标点符号（逗号、引号等），避免 "Baby Don't" vs "Baby, Don't" 不匹配
-                cleaned = cleaned.replacingOccurrences(of: #"[,;:'\"!?]"#, with: "", options: .regularExpression)
-                return cleaned.trimmingCharacters(in: .whitespaces)
-            }
+            // 任一标题/艺术家对匹配即可
+            let titleMatch = titles.contains { isTitleMatch(input: $0.0, result: songName, simplifiedInput: $0.1) }
+            let artistMatch = artists.contains { isArtistMatch(input: $0.0, result: songArtist, simplifiedInput: $0.1) }
 
-            let cleanedInputTitle = cleanTitle(title)
-            let cleanedSongName = cleanTitle(songName)
-            let titleLower = title.lowercased()
-            let songNameLower = songName.lowercased()
-            let simplifiedTitleLower = simplifiedTitle.lowercased()
-
-            let titleMatch = songNameLower.contains(titleLower) || titleLower.contains(songNameLower) ||
-                            songNameLower.contains(simplifiedTitleLower) || simplifiedTitleLower.contains(songNameLower) ||
-                            cleanedInputTitle == cleanedSongName ||
-                            cleanedInputTitle.contains(cleanedSongName) || cleanedSongName.contains(cleanedInputTitle)
-
-            // 艺术家匹配
-            let artistLower = artist.lowercased()
-            let songArtistLower = songArtist.lowercased()
-            let simplifiedArtistLower = simplifiedArtist.lowercased()
-            let simplifiedSongArtist = LanguageUtils.toSimplifiedChinese(songArtist).lowercased()
-
-            let inputHasCJK = LanguageUtils.containsChinese(artist) || LanguageUtils.containsJapanese(artist) || LanguageUtils.containsKorean(artist)
-            let resultHasCJK = LanguageUtils.containsChinese(songArtist) || LanguageUtils.containsJapanese(songArtist) || LanguageUtils.containsKorean(songArtist)
-
-            let artistMatch: Bool
-            if inputHasCJK && resultHasCJK {
-                artistMatch = artistLower == songArtistLower ||
-                             simplifiedArtistLower == simplifiedSongArtist ||
-                             artistLower == simplifiedSongArtist ||
-                             simplifiedArtistLower == songArtistLower ||
-                             songArtistLower.contains(simplifiedArtistLower) ||
-                             simplifiedArtistLower.contains(songArtistLower)
-            } else if inputHasCJK || resultHasCJK {
-                let hasNameOverlap = songArtistLower.contains(simplifiedArtistLower) ||
-                                    simplifiedArtistLower.contains(songArtistLower) ||
-                                    songArtistLower.contains(artistLower) ||
-                                    artistLower.contains(songArtistLower)
-                let bothHaveSomeCJK = inputHasCJK && resultHasCJK
-                artistMatch = hasNameOverlap || (bothHaveSomeCJK && durationDiff < 2)
-            } else {
-                artistMatch = songArtistLower.contains(artistLower) || artistLower.contains(songArtistLower)
-            }
-
-            candidates.append((songId, songName, songArtist, durationDiff, titleMatch, artistMatch))
+            candidates.append(SearchCandidate(
+                id: songId, name: songName, artist: songArtist,
+                durationDiff: durationDiff, titleMatch: titleMatch, artistMatch: artistMatch
+            ))
         }
 
-        DebugLogger.log("NetEase", "🎯 候选数量: \(candidates.count)")
-
-        // 按时长差排序
-        candidates.sort { $0.durationDiff < $1.durationDiff }
-
-        // 优先级1：<1s + 标题 + 艺术家
-        for candidate in candidates {
-            if candidate.durationDiff < 1 && candidate.titleMatch && candidate.artistMatch {
-                DebugLogger.log("NetEase", "✅ 匹配P1: '\(candidate.name)' by '\(candidate.artist)' (Δ\(String(format: "%.2f", candidate.durationDiff))s)")
-                return candidate.id
-            }
-        }
-
-        // 优先级2：<2s + 标题 + 艺术家
-        for candidate in candidates {
-            if candidate.durationDiff < 2 && candidate.titleMatch && candidate.artistMatch {
-                DebugLogger.log("NetEase", "✅ 匹配P2: '\(candidate.name)' by '\(candidate.artist)' (Δ\(String(format: "%.2f", candidate.durationDiff))s)")
-                return candidate.id
-            }
-        }
-
-        // 优先级3：<0.5s + 标题（罗马字 vs CJK艺术家名）
-        for candidate in candidates {
-            let isTitleSpecificEnough = title.count >= 8 || !LanguageUtils.isPureASCII(title)
-            if candidate.durationDiff < 0.5 && candidate.titleMatch && isTitleSpecificEnough {
-                DebugLogger.log("NetEase", "✅ 匹配P3: '\(candidate.name)' by '\(candidate.artist)' (Δ\(String(format: "%.2f", candidate.durationDiff))s)")
-                return candidate.id
-            }
-        }
-
-        if !candidates.isEmpty {
-            DebugLogger.log("NetEase", "❌ 无匹配 (前3候选: \(candidates.prefix(3).map { "'\($0.name)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", ")))")
-        }
-
-        return nil
+        return candidates
     }
 
     private func fetchNetEaseLyrics(songId: Int) async -> [LyricLine]? {
@@ -612,9 +511,9 @@ public final class LyricsFetcher {
 
     // MARK: - QQ Music
 
-    private func fetchFromQQMusic(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+    private func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
-        guard let songMid = await searchQQMusicSong(title: title, artist: artist, duration: duration) else {
+        guard let songMid = await searchQQMusicSong(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration) else {
             DebugLogger.log("QQMusic", "❌ 未找到歌曲")
             return nil
         }
@@ -628,56 +527,63 @@ public final class LyricsFetcher {
         return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score)
     }
 
-    private func searchQQMusicSong(title: String, artist: String, duration: TimeInterval) async -> String? {
-        // 🔑 清理标题：移除括号内容
-        let cleanedTitle = title
-            .replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s*\[[^\]]*\]"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s*（[^）]*）"#, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-
+    private func searchQQMusicSong(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval) async -> String? {
+        let cleanedTitle = LanguageUtils.normalizeTrackName(title)
         let simplifiedTitle = LanguageUtils.toSimplifiedChinese(cleanedTitle)
         let simplifiedArtist = LanguageUtils.toSimplifiedChinese(artist)
 
-        // 多轮搜索策略
-        let searchRounds = [
-            ("\(simplifiedTitle) \(simplifiedArtist)", "title+artist"),
-            (simplifiedArtist, "artist only"),
-            (simplifiedTitle, "title only")
-        ]
+        let cleanedOriginalTitle = LanguageUtils.normalizeTrackName(originalTitle)
+        let simplifiedOriginalTitle = LanguageUtils.toSimplifiedChinese(cleanedOriginalTitle)
+        let simplifiedOriginalArtist = LanguageUtils.toSimplifiedChinese(originalArtist)
 
-        for (keyword, description) in searchRounds {
-            DebugLogger.log("QQMusic", "🔎 尝试 \(description): '\(keyword)'")
-            guard let url = HTTPClient.buildURL(base: "https://c.y.qq.com/soso/fcgi-bin/client_search_cp", queryItems: [
-                "p": "1", "n": "20", "w": keyword, "format": "json"
-            ]) else {
-                DebugLogger.log("QQMusic", "❌ URL构建失败")
-                continue
-            }
+        // 多轮搜索策略
+        var searchRounds: [(String, String)] = [
+            ("\(simplifiedTitle) \(simplifiedArtist)", "title+artist"),
+        ]
+        if simplifiedOriginalTitle != simplifiedTitle || simplifiedOriginalArtist != simplifiedArtist {
+            searchRounds.append(("\(simplifiedOriginalTitle) \(simplifiedOriginalArtist)", "original"))
+        }
+        searchRounds.append((simplifiedArtist, "artist only"))
+        searchRounds.append((simplifiedTitle, "title only"))
+
+        guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
+
+        for (keyword, desc) in searchRounds {
+            DebugLogger.log("QQMusic", "🔎 尝试 \(desc): '\(keyword)'")
+
+            let body: [String: Any] = [
+                "comm": ["ct": 19, "cv": 1845],
+                "req": [
+                    "method": "DoSearchForQQMusicDesktop",
+                    "module": "music.search.SearchCgiService",
+                    "param": [
+                        "num_per_page": 20,
+                        "page_num": 1,
+                        "query": keyword,
+                        "search_type": 0
+                    ] as [String: Any]
+                ] as [String: Any]
+            ]
 
             do {
-                let (data, _) = try await HTTPClient.getData(url: url, headers: [
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-                    "Referer": "https://y.qq.com/portal/player.html"
-                ], timeout: 6.0)
+                let json = try await HTTPClient.postJSON(url: apiURL, body: body, timeout: 6.0)
 
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let dataDict = json["data"] as? [String: Any],
-                      let songDict = dataDict["song"] as? [String: Any],
-                      let songs = songDict["list"] as? [[String: Any]] else {
-                    DebugLogger.log("QQMusic", "❌ API返回格式错误")
-                    continue
-                }
+                guard let reqDict = json["req"] as? [String: Any],
+                      let dataDict = reqDict["data"] as? [String: Any],
+                      let bodyDict = dataDict["body"] as? [String: Any],
+                      let songDict = bodyDict["song"] as? [String: Any],
+                      let songs = songDict["list"] as? [[String: Any]] else { continue }
 
                 DebugLogger.log("QQMusic", "📦 收到 \(songs.count) 个候选")
 
-                if let songMid = await performQQMusicMatching(
+                let candidates = buildQQMusicCandidates(
                     songs: songs,
-                    title: title,
-                    simplifiedTitle: simplifiedTitle,
-                    simplifiedArtist: simplifiedArtist,
+                    titles: [(title, simplifiedTitle), (originalTitle, simplifiedOriginalTitle)],
+                    artists: [(artist, simplifiedArtist), (originalArtist, simplifiedOriginalArtist)],
                     duration: duration
-                ) {
+                )
+
+                if let songMid = selectBestCandidate(candidates, source: "QQMusic") {
                     return songMid
                 }
             } catch {
@@ -689,18 +595,18 @@ public final class LyricsFetcher {
         return nil
     }
 
-    private func performQQMusicMatching(
+    /// 构建 QQ Music 候选列表
+    private func buildQQMusicCandidates(
         songs: [[String: Any]],
-        title: String,
-        simplifiedTitle: String,
-        simplifiedArtist: String,
+        titles: [(String, String)],
+        artists: [(String, String)],
         duration: TimeInterval
-    ) async -> String? {
-        var candidates: [(mid: String, name: String, artist: String, durationDiff: Double, titleMatch: Bool, artistMatch: Bool)] = []
+    ) -> [SearchCandidate<String>] {
+        var candidates: [SearchCandidate<String>] = []
 
         for song in songs {
-            guard let songMid = song["songmid"] as? String,
-                  let songName = song["songname"] as? String else { continue }
+            guard let songMid = song["mid"] as? String,
+                  let songName = song["name"] as? String else { continue }
 
             var songArtist = ""
             if let singers = song["singer"] as? [[String: Any]],
@@ -711,63 +617,18 @@ public final class LyricsFetcher {
 
             let songDuration = Double(song["interval"] as? Int ?? 0)
             let durationDiff = abs(songDuration - duration)
-            guard durationDiff < 3 else { continue }
+            guard durationDiff < 20 else { continue }
 
-            let songNameLower = songName.lowercased()
-            let titleLower = simplifiedTitle.lowercased()
+            let titleMatch = titles.contains { isTitleMatch(input: $0.0, result: songName, simplifiedInput: $0.1) }
+            let artistMatch = artists.contains { isArtistMatch(input: $0.0, result: songArtist, simplifiedInput: $0.1) }
 
-            // 清理括号内容
-            let cleanedSongName = songNameLower.replacingOccurrences(of: #"\s*\([^)]*\)\s*"#, with: "", options: .regularExpression)
-            let cleanedTitle = titleLower.replacingOccurrences(of: #"\s*\([^)]*\)\s*"#, with: "", options: .regularExpression)
-
-            // 标题匹配：包含匹配 + 关键词匹配
-            let titleMatch = cleanedSongName.contains(cleanedTitle) || cleanedTitle.contains(cleanedSongName) ||
-                            cleanedTitle.split(separator: " ")
-                                .filter { $0.count > 3 }
-                                .contains { cleanedSongName.contains($0.lowercased()) }
-
-            // 🔑 艺术家匹配
-            let songArtistLower = songArtist.lowercased()
-            let simplifiedArtistLower = simplifiedArtist.lowercased()
-            let simplifiedSongArtist = LanguageUtils.toSimplifiedChinese(songArtist).lowercased()
-            let artistMatch = songArtistLower.contains(simplifiedArtistLower) ||
-                             simplifiedArtistLower.contains(songArtistLower) ||
-                             simplifiedSongArtist.contains(simplifiedArtistLower) ||
-                             simplifiedArtistLower.contains(simplifiedSongArtist)
-
-            candidates.append((songMid, songName, songArtist, durationDiff, titleMatch, artistMatch))
+            candidates.append(SearchCandidate(
+                id: songMid, name: songName, artist: songArtist,
+                durationDiff: durationDiff, titleMatch: titleMatch, artistMatch: artistMatch
+            ))
         }
 
-        // 🔑 打印候选列表
-        DebugLogger.log("QQMusic", "🎯 候选: \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
-
-        // 🔑 新优先级策略：艺术家匹配 > 时长精确
-        // P1: 标题 + 艺术家 + 时长精确 (<1s)
-        for candidate in candidates {
-            if candidate.titleMatch && candidate.artistMatch && candidate.durationDiff < 1 {
-                DebugLogger.log("QQMusic", "✅ 匹配P1: '\(candidate.name)' by '\(candidate.artist)'")
-                return candidate.mid
-            }
-        }
-
-        // P2: 标题 + 艺术家 + 时长宽松 (<2s)
-        for candidate in candidates {
-            if candidate.titleMatch && candidate.artistMatch && candidate.durationDiff < 2 {
-                DebugLogger.log("QQMusic", "✅ 匹配P2: '\(candidate.name)' by '\(candidate.artist)'")
-                return candidate.mid
-            }
-        }
-
-        // P3: 标题 + 时长极精确 (<0.5s) - 可能是罗马字艺术家
-        for candidate in candidates {
-            if candidate.titleMatch && candidate.durationDiff < 0.5 {
-                DebugLogger.log("QQMusic", "✅ 匹配P3: '\(candidate.name)' by '\(candidate.artist)'")
-                return candidate.mid
-            }
-        }
-
-        DebugLogger.log("QQMusic", "❌ 无匹配")
-        return nil
+        return candidates
     }
 
     private func fetchQQMusicLyrics(songMid: String) async -> [LyricLine]? {
@@ -832,8 +693,6 @@ public final class LyricsFetcher {
             let (data, _) = try await HTTPClient.getData(url: url, headers: ["Accept": "application/json"], timeout: 6.0)
             guard let results = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !results.isEmpty else { return nil }
 
-            let inputTitleNormalized = LanguageUtils.normalizeTrackName(title)
-            let inputArtistNormalized = LanguageUtils.normalizeArtistName(artist)
             var bestMatch: (lyrics: String, score: Double)?
 
             for result in results {
