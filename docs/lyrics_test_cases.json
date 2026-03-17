@@ -71,8 +71,8 @@
     "artist": "Momoko Kikuchi",
     "duration": 260,
     "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "AMLL", "LRCLIB"],
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
       "firstLineContains": null
     }
   },

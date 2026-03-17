@@ -203,6 +203,12 @@ public enum LanguageUtils {
         }
         if containsGreek(combined) { regions.append("GR") }
 
+        // 🔑 CJK 汉字但无假名/韩文 → 可能是日文汉字名（如 須藤 薫）
+        // 日本人名经常只用汉字（kanji），containsJapanese 只检测假名会遗漏
+        if !regions.contains("JP") && containsChinese(combined) && !containsKorean(combined) {
+            regions.append("JP")
+        }
+
         // 🔑 纯 ASCII 但不是常见英文艺术家，尝试日韩区域（罗马字名）
         if regions.isEmpty && isPureASCII(artist) && !isLikelyEnglishArtist(artist) {
             regions.append(contentsOf: ["JP", "KR"])
@@ -253,7 +259,8 @@ public extension LanguageUtils {
         let patterns = [
             // 圆括号内容（feat/ft/with/版本标注/OST 等）
             #"\s*\((feat|ft)\.?[^)]*\)"#,
-            #"\s*\((with|remaster|live|acoustic|remix|radio|deluxe|cover|extended|original|official|bonus|edit|clean|explicit|instrumental|karaoke|from\s+|ost|theme|soundtrack|full\s*version)[^)]*\)"#,
+            // 🔑 支持 "(2021 Remaster)" 等年份在前的变体
+            #"\s*\((\d+\s+)?(with|remaster|live|acoustic|remix|radio|deluxe|cover|extended|original|official|bonus|edit|clean|explicit|instrumental|karaoke|from\s+|ost|theme|soundtrack|full\s*version)[^)]*\)"#,
             // 中文全角括号
             #"\s*（[^）]*）"#,
             #"\s*《[^》]*》"#,
@@ -287,6 +294,8 @@ public extension LanguageUtils {
                 withTemplate: ""
             )
         }
+        // 🔑 规范化斜杠周围的空格: " / " → "/"
+        normalized = normalized.replacingOccurrences(of: " / ", with: "/")
         return normalized.trimmingCharacters(in: .whitespaces)
     }
 

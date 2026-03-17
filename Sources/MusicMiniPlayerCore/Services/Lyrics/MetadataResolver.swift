@@ -134,7 +134,10 @@ public final class MetadataResolver {
                 //     例如：Julia Peng "None of Your Business" (212s) → 彭佳慧 "关你屁事啊" (212s)
                 let isVeryPreciseDuration = durationDiff < 1.0
                 let inputIsPureEnglish = !inputHasChinese && LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
-                let allowTranslatedMatch = isVeryPreciseDuration && resultHasChinese && inputIsPureEnglish
+                // 🔑 翻译匹配要求结果标题包含 CJK（不仅仅是艺术家）
+                // 避免 "Shang-Hide Night" → "Girl's In Love With Me" by "芳野藤丸" 这种英文→英文错配
+                let resultTitleHasChinese = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) || LanguageUtils.containsKorean(trackName)
+                let allowTranslatedMatch = isVeryPreciseDuration && resultTitleHasChinese && inputIsPureEnglish
 
                 if titleMatch {
                     // 标题匹配 - 正常流程
@@ -151,12 +154,23 @@ public final class MetadataResolver {
                 }
             }
 
-            // 本轮翻译候选：只在本轮唯一匹配时接受
-            // artist-only 搜索返回同歌手多首歌 → 拒绝；combined 搜索通常只返回 1 首 → 接受
-            if candidates.isEmpty && roundTranslatedCandidates.count == 1 {
-                let tc = roundTranslatedCandidates[0]
-                DebugLogger.log("MetadataResolver", "🔄 翻译匹配(\(searchTerm)): '\(tc.title)' by '\(tc.artist)' Δ\(String(format: "%.1f", tc.durationDiff))s")
-                candidates.append(tc)
+            // 本轮翻译候选：选时长最精确的，但要求足够安全
+            // ⚠️ artist-only 搜索不允许翻译匹配（同歌手不同歌时长可能极度接近）
+            let isArtistOnlySearch = searchTerm.lowercased() == inputArtistLower
+            if candidates.isEmpty && !roundTranslatedCandidates.isEmpty && !isArtistOnlySearch {
+                let sorted = roundTranslatedCandidates.sorted { $0.durationDiff < $1.durationDiff }
+                let best = sorted[0]
+                guard best.durationDiff < 0.5 else { continue }
+
+                // 安全条件：唯一候选 或 最佳标题占多数（如 2/3 的"广岛之恋"）
+                let bestTitle = best.title.lowercased()
+                let sameTitleCount = sorted.filter { $0.title.lowercased() == bestTitle }.count
+                let isSafe = sorted.count == 1 || sameTitleCount > sorted.count / 2
+
+                if isSafe {
+                    DebugLogger.log("MetadataResolver", "🔄 翻译匹配(\(searchTerm)): '\(best.title)' by '\(best.artist)' Δ\(String(format: "%.1f", best.durationDiff))s [\(sameTitleCount)/\(sorted.count)同名]")
+                    candidates.append(best)
+                }
             }
         }
 
@@ -227,7 +241,11 @@ public final class MetadataResolver {
             }
             DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(searchTerm)' 返回 \(results.count) 条")
 
-            var candidates: [(trackName: String, artistName: String, durationDiff: Double)] = []
+            // 🔑 三层收集：titleMatch > artist+CJK > romanized→CJK
+            typealias Candidate = (trackName: String, artistName: String, durationDiff: Double)
+            var titleCandidates: [Candidate] = []
+            var artistCJKCandidates: [Candidate] = []
+            var romanizedCandidates: [Candidate] = []
             let inputArtistLower = artist.lowercased()
             let inputTitleLower = title.lowercased()
 
@@ -259,26 +277,45 @@ public final class MetadataResolver {
                                    LanguageUtils.containsKorean(trackName) || LanguageUtils.containsChinese(artistName) ||
                                    LanguageUtils.containsJapanese(artistName) || LanguageUtils.containsKorean(artistName)
 
-                // 罗马字→CJK 匹配：纯 ASCII 输入 + CJK 结果
-                // 组合搜索（title+artist）时直接允许，artist-only 搜索需要标题足够长（排除常见英文词）
-                let inputIsPureASCII = LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
-                let searchTermLower = searchTerm.lowercased()
-                let searchIncludesTitle = searchTermLower.contains(inputTitleLower)
-                let titleIsSpecific = inputTitleLower.count >= 12 && !LanguageUtils.isLikelyEnglishArtist(title)
-                let isRomanizedToCJK = inputIsPureASCII && resultHasCJK && durationDiff < 1 &&
-                                       (searchIncludesTitle || titleIsSpecific)
+                // 🔑 艺术家精确匹配（去空格后比较）
+                let artistNoSpace = inputArtistLower.replacingOccurrences(of: " ", with: "")
+                let resultArtistNoSpace = resultArtistLower.replacingOccurrences(of: " ", with: "")
+                let isArtistPreciseMatch = artistNoSpace == resultArtistNoSpace ||
+                                           artistNoSpace.contains(resultArtistNoSpace) ||
+                                           resultArtistNoSpace.contains(artistNoSpace)
 
-                // 匹配策略（收集所有候选，最后按 durationDiff 排序选最佳）
+                // 匹配策略（三层收集）
                 if titleMatch && (artistMatch || resultHasCJK) {
                     DebugLogger.log("MetadataResolver", "[\(region)] 候选(titleMatch): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
-                    candidates.append((trackName, artistName, durationDiff))
-                } else if isRomanizedToCJK {
-                    DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
-                    candidates.append((trackName, artistName, durationDiff))
+                    titleCandidates.append((trackName, artistName, durationDiff))
+                } else if isArtistPreciseMatch && resultHasCJK && durationDiff < 0.5 {
+                    DebugLogger.log("MetadataResolver", "[\(region)] 候选(artist+CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
+                    artistCJKCandidates.append((trackName, artistName, durationDiff))
+                } else if LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist) && resultHasCJK && durationDiff < 1 {
+                    let searchTermLower = searchTerm.lowercased()
+                    let searchIncludesTitle = searchTermLower.contains(inputTitleLower)
+                    let titleIsSpecific = inputTitleLower.count >= 12 && !LanguageUtils.isLikelyEnglishArtist(title)
+                    if searchIncludesTitle || titleIsSpecific {
+                        DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
+                        romanizedCandidates.append((trackName, artistName, durationDiff))
+                    }
                 }
             }
 
-            if let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) {
+            // titleMatch 最可靠 → 直接取最佳
+            if let best = titleCandidates.min(by: { $0.durationDiff < $1.durationDiff }) {
+                return (best.trackName, best.artistName, region, best.durationDiff)
+            }
+            // artist+CJK 需唯一候选（同歌手不同歌时长可能极度接近）
+            if artistCJKCandidates.count == 1 {
+                let best = artistCJKCandidates[0]
+                DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
+                return (best.trackName, best.artistName, region, best.durationDiff)
+            }
+            // romanized→CJK 也需唯一候选
+            if romanizedCandidates.count == 1 {
+                let best = romanizedCandidates[0]
+                DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
                 return (best.trackName, best.artistName, region, best.durationDiff)
             }
         }

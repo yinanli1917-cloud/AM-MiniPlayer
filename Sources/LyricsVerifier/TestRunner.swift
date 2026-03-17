@@ -195,8 +195,12 @@ private func validateContent(
             let isCrossLanguage = inputIsASCII && lyricsTitleHasCJK
             let isReliableSource = ["NetEase", "QQ", "AMLL"].contains(source) && (score ?? 0) >= 50
 
+            // 🔑 规范化斜杠空格后再比较：" / " → "/"
+            let normalizedLyricsTitle = lyricsTitle.replacingOccurrences(of: " / ", with: "/")
+            let normalizedInputTitle = inputTitle.replacingOccurrences(of: " / ", with: "/")
+
             // 首行标题和输入标题完全不搭（跨语言翻译+可信源除外）
-            if !lyricsTitle.contains(inputTitle) && !inputTitle.contains(lyricsTitle) && lyricsTitle.count > 3 {
+            if !normalizedLyricsTitle.contains(normalizedInputTitle) && !normalizedInputTitle.contains(normalizedLyricsTitle) && lyricsTitle.count > 3 {
                 if !(isCrossLanguage && isReliableSource) {
                     warnings.append("⚠️ 首行标题不匹配: 歌词=\"\(dashParts[0])\" vs 输入=\"\(title)\"")
                 }

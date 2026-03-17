@@ -144,17 +144,20 @@ public final class LyricsFetcher {
 
     /// 统一优先级选择（消除 NetEase/QQ 的重复匹配逻辑）
     /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s → P3: 仅标题+时长<1s
-    /// ⚠️ 不做「仅艺术家」匹配 — 同歌手不同歌时长可能相近，会导致错配
+    /// P4: 仅艺术家+时长极精确(<0.5s) — 用于罗马字/翻译标题 vs CJK 标题的场景
     private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String) -> ID? {
         let sorted = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sorted.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }
         DebugLogger.log(source, "🎯 候选: \(desc.joined(separator: ", "))")
 
-        // 按优先级递减尝试（标题必须匹配，防止同歌手错配）
+        // 按优先级递减尝试
         let priorities: [(String, (SearchCandidate<ID>) -> Bool)] = [
             ("P1", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 3 }),
             ("P2", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 20 }),
             ("P3", { $0.titleMatch && $0.durationDiff < 1 }),
+            // 🔑 P4: 仅艺术家匹配 + 时长极精确 — 安全地覆盖罗马字/翻译标题场景
+            // 例如: "Try to Say" → "言い出しかねて -TRY TO SAY-" (Δ0.4s, 同歌手)
+            ("P4", { $0.artistMatch && $0.durationDiff < 0.5 }),
         ]
 
         for (label, predicate) in priorities {
@@ -181,7 +184,7 @@ public final class LyricsFetcher {
                simplifiedCleanedInput.contains(simplifiedResult) || simplifiedResult.contains(simplifiedCleanedInput)
     }
 
-    /// 统一艺术家匹配（简繁体 + CJK 跨语言）
+    /// 统一艺术家匹配（简繁体 + CJK 跨语言 + normalized 去后缀）
     private func isArtistMatch(input: String, result: String, simplifiedInput: String) -> Bool {
         let inputLower = input.lowercased()
         let resultLower = result.lowercased()
@@ -192,6 +195,20 @@ public final class LyricsFetcher {
         if inputLower == resultLower || simplifiedInputLower == simplifiedResult { return true }
         if inputLower.contains(resultLower) || resultLower.contains(inputLower) { return true }
         if simplifiedInputLower.contains(simplifiedResult) || simplifiedResult.contains(simplifiedInputLower) { return true }
+
+        // 🔑 normalized 后再匹配：移除 "&/," 后缀，覆盖 "YELLOW & 9m88" vs "YELLOW黄宣"
+        let normalizedInput = LanguageUtils.normalizeArtistName(input).lowercased()
+        let normalizedResult = LanguageUtils.normalizeArtistName(result).lowercased()
+        if !normalizedInput.isEmpty && !normalizedResult.isEmpty {
+            if normalizedInput == normalizedResult { return true }
+            if normalizedInput.contains(normalizedResult) || normalizedResult.contains(normalizedInput) { return true }
+        }
+
+        // 🔑 去空格匹配：覆盖 "須藤 薫" vs "須藤薫" 等 CJK 名字空格差异
+        let inputNoSpace = inputLower.replacingOccurrences(of: " ", with: "")
+        let resultNoSpace = resultLower.replacingOccurrences(of: " ", with: "")
+        if inputNoSpace == resultNoSpace { return true }
+        if inputNoSpace.contains(resultNoSpace) || resultNoSpace.contains(inputNoSpace) { return true }
 
         return false
     }
