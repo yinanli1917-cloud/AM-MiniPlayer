@@ -72,11 +72,16 @@ public final class MetadataResolver {
         var candidates: [(title: String, artist: String, durationDiff: Double, strategy: String)] = []
         // 🔑 搜索顺序：combined 最精确放最后，先用 artist/title 搜再用 combined 补充
         let searchTerms = [artist, title, "\(title) \(artist)"]
+        DebugLogger.log("MetadataResolver", "🇨🇳 CN 搜索开始: '\(title)' by '\(artist)' (\(Int(duration))s)")
 
         for searchTerm in searchTerms {
             // 翻译候选按搜索轮次独立追踪（避免 artist-only 搜索的多结果污染）
             var roundTranslatedCandidates: [(title: String, artist: String, durationDiff: Double, strategy: String)] = []
-            guard let results = await searchITunes(term: searchTerm, region: "CN") else { continue }
+            guard let results = await searchITunes(term: searchTerm, region: "CN") else {
+                DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(searchTerm)' 无结果")
+                continue
+            }
+            DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(searchTerm)' 返回 \(results.count) 条")
 
             let inputArtistLower = artist.lowercased()
             let inputTitleLower = title.lowercased()
@@ -150,22 +155,28 @@ public final class MetadataResolver {
                     }
                 } else if allowTranslatedMatch {
                     // 🔑 特殊情况：中英文完全翻译（标题和艺术家都是翻译关系）
+                    DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 翻译候选('\(searchTerm)'): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.1f", durationDiff))s")
                     roundTranslatedCandidates.append((trackName, artistName, durationDiff, "duration-precise+CN"))
                 }
             }
 
             // 本轮翻译候选：选时长最精确的，但要求足够安全
-            // ⚠️ artist-only 搜索不允许翻译匹配（同歌手不同歌时长可能极度接近）
             let isArtistOnlySearch = searchTerm.lowercased() == inputArtistLower
-            if candidates.isEmpty && !roundTranslatedCandidates.isEmpty && !isArtistOnlySearch {
+            if candidates.isEmpty && !roundTranslatedCandidates.isEmpty {
                 let sorted = roundTranslatedCandidates.sorted { $0.durationDiff < $1.durationDiff }
                 let best = sorted[0]
-                guard best.durationDiff < 0.5 else { continue }
+
+                // 🔑 artist-only 搜索更严格（同歌手不同歌时长可能极度接近）
+                let maxDuration = isArtistOnlySearch ? 0.35 : 0.5
+                guard best.durationDiff < maxDuration else { continue }
 
                 // 安全条件：唯一候选 或 最佳标题占多数（如 2/3 的"广岛之恋"）
+                // artist-only 搜索必须唯一候选
                 let bestTitle = best.title.lowercased()
                 let sameTitleCount = sorted.filter { $0.title.lowercased() == bestTitle }.count
-                let isSafe = sorted.count == 1 || sameTitleCount > sorted.count / 2
+                let isSafe = isArtistOnlySearch
+                    ? sorted.count == 1
+                    : sorted.count == 1 || sameTitleCount >= sorted.count / 2
 
                 if isSafe {
                     DebugLogger.log("MetadataResolver", "🔄 翻译匹配(\(searchTerm)): '\(best.title)' by '\(best.artist)' Δ\(String(format: "%.1f", best.durationDiff))s [\(sameTitleCount)/\(sorted.count)同名]")
@@ -207,7 +218,12 @@ public final class MetadataResolver {
             for await result in group {
                 if let r = result {
                     DebugLogger.log("MetadataResolver", "🔍 区域结果: '\(r.0)' by '\(r.1)' (region: \(r.2), Δ\(String(format: "%.2f", r.3))s)")
-                    if bestMatch == nil || r.3 < bestMatch!.3 {
+                    // 🔑 优先选含 CJK 的结果（多区域解析的目的是获取本地化标题）
+                    let rHasCJK = LanguageUtils.containsCJK(r.0) || LanguageUtils.containsCJK(r.1)
+                    let bestHasCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) || LanguageUtils.containsCJK($0.1) } ?? false
+                    if bestMatch == nil ||
+                       (rHasCJK && !bestHasCJK) ||
+                       (rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
                         bestMatch = r
                     }
                 }
@@ -312,11 +328,17 @@ public final class MetadataResolver {
                 DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
                 return (best.trackName, best.artistName, region, best.durationDiff)
             }
-            // romanized→CJK 也需唯一候选
-            if romanizedCandidates.count == 1 {
-                let best = romanizedCandidates[0]
-                DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
-                return (best.trackName, best.artistName, region, best.durationDiff)
+            // romanized→CJK：唯一候选 或 所有候选标题相同（同一首歌不同版本）
+            if !romanizedCandidates.isEmpty {
+                let sorted = romanizedCandidates.sorted { $0.durationDiff < $1.durationDiff }
+                let best = sorted[0]
+                // 清理标题后比较（忽略 "2024 Remaster" 等后缀）
+                let uniqueTitles = Set(sorted.map { LanguageUtils.normalizeTrackName($0.trackName) })
+                let isSafe = sorted.count == 1 || uniqueTitles.count == 1
+                if isSafe {
+                    DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s [\(sorted.count)个, \(uniqueTitles.count)种]")
+                    return (best.trackName, best.artistName, region, best.durationDiff)
+                }
             }
         }
 

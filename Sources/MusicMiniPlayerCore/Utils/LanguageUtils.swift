@@ -233,6 +233,19 @@ public enum LanguageUtils {
             if lowercased.hasSuffix(suffix) { return true }
         }
 
+        // 🔑 单个英文单词的乐队名（Jungle, Queen, Bush, Train 等）
+        // 日韩罗马字艺术家名通常是多词（Momoko Kikuchi, Yumi Matsutoya）
+        // 排除已知日韩罗马字单词名（如 Babymetal, Zutomayo）
+        let knownNonEnglishSingleWord = [
+            "babymetal", "zutomayo", "radwimps", "yoasobi", "tuyu",
+            "yorushika", "amazarashi", "aimer", "reol", "daoko"
+        ]
+        let words = lowercased.split(separator: " ")
+        if words.count == 1 && !knownNonEnglishSingleWord.contains(lowercased) {
+            // 单词名且纯 ASCII → 大概率是英文乐队
+            if isPureASCII(artist) { return true }
+        }
+
         // 常见英文艺术家
         let knownEnglishArtists = [
             "taylor swift", "ed sheeran", "adele", "beyonce", "drake",
