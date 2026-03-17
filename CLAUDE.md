@@ -108,7 +108,7 @@ swift run LyricsVerifier library --recent 20         # AM 资料库测试
 /postmortem onboarding    # 分析历史 commits
 ```
 
-已有 postmortem：001（Section递归）、002（页面切换状态）、003（封面并发）、004（歌词间距）
+已有 postmortem：001（Section递归）、002（页面切换状态）、003（封面并发）、004（歌词间距）、005（MetadataResolver 批量回归）
 
 ## Compact Instructions
 

@@ -45,6 +45,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 | POSTM-002 | 页面切换时 hover 状态未同步导致文字位置错误 | 2026-01-09 | Architecture | P1 | ✅ 已完成 |
 | POSTM-003 | 封面加载并发阻塞导致 UI 卡顿 | 2025-12-17 | Architecture | P0 | ✅ 已完成 |
 | POSTM-004 | 歌词视图手动滚动和间距问题 | 2025-12-20 | Architecture | P1 | ✅ 已完成 |
+| POSTM-005 | MetadataResolver 多轮优化引发 9 首歌批量回归 | 2026-03-16 | Process | P1 | ✅ 已完成 |
 
 ---
 
@@ -66,7 +67,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - 待填充
 
 #### 📋 Process (流程问题)
-- 待填充
+- [POSTM-005](./005-metadata-resolver-regressions.md) - MetadataResolver 多轮优化引发批量回归
 
 ---
 
@@ -82,6 +83,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - 过早优化（Premature Optimization）- POSTM-003: 并发加载未考虑系统限制
 - 过早简化（Premature Simplification）- POSTM-004: 固定行高无法支持动态内容
 - 缺少生命周期管理 - POSTM-002: SwiftUI 没有提供视图生命周期钩子
+- 无覆盖率简化（Simplification Without Coverage）- POSTM-005: 移除匹配优先级前没有大规模回归测试
 
 ---
 

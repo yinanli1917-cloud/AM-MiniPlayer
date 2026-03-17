@@ -88,12 +88,15 @@
 | T01 | Julia Peng 翻译标题不匹配 | 2026-01-25 | e98c34c |
 | T02 | 杨乃文《在爱和你之间》无歌词 | 2026-01-25 | 待提交 |
 | R03 | Momoko Kikuchi《Koibitotachi no Chiheisen》无歌词 | 2026-01-25 | 待提交 |
+| REG-001~009 | MetadataResolver 多轮优化引发 9 首歌批量回归 | 2026-03-16 | cf0850e→f2566f8 |
 
-**T02 根因**: NetEase 原版歌曲无歌词，QQ Music 匹配到翻唱版 (阿eee) 而非原版 (杨乃文)
-**T02 修复**: QQ Music 增加艺术家匹配优先级，P1/P2 要求艺术家匹配，P3 仅在时长极精确时允许不匹配艺术家
+**REG 批量回归根因** (详见 postmortem/005):
+- P4（仅艺术家匹配）被完全移除 → 6 首歌丢失
+- `isLikelyEnglishArtist("Jungle")` 返回 false → JP 区域错误解析 → 错配
+- CN 翻译匹配在 artist-only 搜索被完全禁止 → Karen Mok 回归
+- JP romanized→CJK 唯一候选限制过严 → Momoko Kikuchi 回归
 
-**R03 根因**: `resolveSearchMetadata` 中有防护逻辑拒绝所有"纯 ASCII → CJK"的替换，但这个逻辑过于宽泛，错误地拒绝了罗马字艺术家（如 Momoko Kikuchi）的合法替换
-**R03 修复**: 增加 `isLikelyEnglishArtist` 判断，只有"可能是英语艺术家"的纯 ASCII 输入才拒绝 CJK 替换。罗马字日文艺术家名不是常见英语名，允许替换成日文原名
+**修复策略**: P4 安全加回（带时长限制）; 单词 ASCII 乐队名启发式; 翻译匹配放宽; 同标题候选视为安全
 
 ---
 
@@ -121,6 +124,7 @@
 |-----|------|-------|
 | 2026-01-25 | 初始创建文档 | Claude |
 | 2026-01-25 | 修复 R03 罗马字→日文解析问题 | Claude |
+| 2026-03-16 | 批量回归修复: 9 首歌 (P4/JP/CN/英文乐队名) | Claude |
 
 ---
 
