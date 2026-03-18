@@ -718,6 +718,9 @@ public class MusicController: ObservableObject {
                     self.currentPersistentID = persistentID
                     self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
 
+                    // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
+                    self.lyricsService.fetchLyrics(for: trackName, artist: trackArtist, duration: trackDuration)
+
                     // 🔑 歌曲切换时重置"用户手动打开歌词"标记
                     debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(self.userManuallyOpenedLyrics))\n")
                     self.userManuallyOpenedLyrics = false

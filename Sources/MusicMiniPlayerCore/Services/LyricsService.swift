@@ -151,9 +151,14 @@ public class LyricsService: ObservableObject {
 
         DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' (forceRefresh=\(forceRefresh))")
 
-        // 重置翻译状态
+        // 🔑 立即清除 error + loading（防止切歌时 retry UI 残留）
+        error = nil
+        isLoading = true
+
+        // 重置翻译状态（含 isTranslating，防止 Task 取消后卡死）
         currentSongTranslationID = nil
         translationsAreFromLyricsSource = false
+        isTranslating = false
 
         // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
         for i in 0..<lyrics.count {
@@ -391,11 +396,11 @@ public class LyricsService: ObservableObject {
         }
 
         isTranslating = true
+        defer { isTranslating = false }
         debugLogPublic("🔄 开始翻译: \(lyrics.count) 行")
 
         let lyricTexts = lyrics.map { $0.text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: lyricTexts) else {
-            isTranslating = false
             debugLogPublic("❌ 翻译失败")
             return
         }
@@ -408,7 +413,6 @@ public class LyricsService: ObservableObject {
         currentSongTranslationID = translationID
         lastSystemTranslationLanguage = translationLanguage
         translationsAreFromLyricsSource = false
-        isTranslating = false
         debugLogPublic("✅ 翻译完成: \(translatedTexts.count) 行")
     }
 
