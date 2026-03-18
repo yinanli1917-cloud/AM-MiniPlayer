@@ -28,9 +28,6 @@ public struct LyricsView: View {
     @State private var lineHeights: [Int: CGFloat] = [:]
     // 🔑 手动滚动时锁定的行索引（防止歌词在手动滚动时跟随播放移动）
     @State private var lockedLineIndex: Int? = nil
-    // 🔑 锁定时每行的目标索引快照（手动滚动期间不变）
-    @State private var lockedLineTargetIndices: [Int: Int] = [:]
-
     // 🔑 AMLL 波浪效果：每行的目标 currentIndex（用于错开动画触发时间）
     @State private var lineTargetIndices: [Int: Int] = [:]
     // 🔑 上一次的 currentIndex（用于检测变化并触发波浪）
@@ -42,6 +39,8 @@ public struct LyricsView: View {
     @State private var cachedTotalContentHeight: CGFloat = 0
     @State private var cachedAccumulatedHeights: [Int: CGFloat] = [:]  // [lineIndex: accumulatedHeight]
     @State private var heightCacheInvalidated: Bool = true
+    // 🔑 缓存歌词容器高度，供 @escaping 闭包使用（GeometryProxy 不可逃逸）
+    @State private var lyricsContainerHeight: CGFloat = 300
 
     // 🔑 系统翻译会话配置 (仅 macOS 15.0+)
     // 使用 Any 类型来避免编译时的可用性检查
@@ -173,10 +172,13 @@ public struct LyricsView: View {
                         let containerHeight = geo.size.height
                         let controlBarHeight: CGFloat = 120
                         let currentIndex = lyricsService.currentLineIndex ?? 0
+                        // 🔑 同步容器高度到 @State（供 @escaping 滚动闭包使用）
+                        let _ = updateLyricsContainerHeight(containerHeight)
 
                         // 🔑 锚点位置：当前行在容器的 24% 高度处
                         let anchorY = (containerHeight - controlBarHeight) * 0.24
 
+                        let _ = updateLyricsContainerHeight(containerHeight)
                         ZStack(alignment: .topLeading) {  // 🔑 使用 ZStack 实现 AMLL 风格布局
                             ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                                 if index == 0 || index >= lyricsService.firstRealLyricIndex {
@@ -184,9 +186,10 @@ public struct LyricsView: View {
                                     // manualScrollOffset 在容器级别应用，避免触发每行重新计算
                                     let lineOffset: CGFloat = {
                                         if isManualScrolling {
-                                            // 🔑 手动滚动时：使用锁定时的目标索引快照
-                                            // 注意：不包含 manualScrollOffset，它在容器级别应用
-                                            let frozenTargetIndex = lockedLineTargetIndices[index] ?? lockedLineIndex ?? currentIndex
+                                            // 🔑 手动滚动时：所有行统一用 lockedLineIndex
+                                            // 不能用 lockedLineTargetIndices（波浪动画逐行快照），
+                                            // 否则不同行锚定到不同 targetIndex → 基础偏移不一致 → 行重叠
+                                            let frozenTargetIndex = lockedLineIndex ?? currentIndex
                                             return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
                                         } else {
                                             // 自动滚动：使用该行的目标索引计算偏移（波浪动画）
@@ -292,7 +295,7 @@ public struct LyricsView: View {
                         // 这样 manualScrollOffset 变化只会触发一次 transform，而不是 N 次（N = 歌词行数）
                         .offset(y: isManualScrolling ? manualScrollOffset : 0)
                     }
-                    .clipped()
+                    .modifier(BottomFadeMask(isActive: showControls))
                     // 🔑 强制在歌曲切换时重建整个 GeometryReader，避免 ZStack 视图残留
                     .id(lyricsViewID)
                     // 🔑 滚轮事件监听（与 PlaylistView 一致）
@@ -310,7 +313,7 @@ public struct LyricsView: View {
                             // 🔑 锁定当前状态
                             let currentIdx = lyricsService.currentLineIndex ?? 0
                             lockedLineIndex = currentIdx
-                            lockedLineTargetIndices = lineTargetIndices
+
                             isManualScrolling = true
                             lyricsService.isManualScrolling = true  // 同步到 LyricsService
 
@@ -351,27 +354,10 @@ public struct LyricsView: View {
                             }
                         },
                         onScrollWithVelocity: { deltaY, velocity in
-                            // 🔑 计算滚动边界：基于内容高度和当前行位置
-                            let totalContentHeight = calculateTotalContentHeight()
-                            let localCurrentIndex = lyricsService.currentLineIndex ?? 0
-                            let currentLineOffset = calculateAccumulatedHeight(upTo: localCurrentIndex)
-
-                            // 🔑 简化边界计算：允许向上滚动到第一行，向下滚动到最后一行
-                            // 上边界 = 当前行之前的所有内容高度（可以滚动回到开头）
-                            let maxScrollUp = currentLineOffset
-                            // 下边界 = 当前行之后的所有内容高度（可以滚动到结尾）
-                            let maxScrollDown = max(0, totalContentHeight - currentLineOffset - 200)
-
-                            var newOffset = manualScrollOffset + deltaY
-                            // 🔑 超出边界时应用阻尼（橡皮筋效果）
-                            if newOffset > maxScrollUp {
-                                let overscroll = newOffset - maxScrollUp
-                                newOffset = maxScrollUp + overscroll * 0.3
-                            } else if newOffset < -maxScrollDown {
-                                let overscroll = -maxScrollDown - newOffset
-                                newOffset = -maxScrollDown - overscroll * 0.3
-                            }
-                            manualScrollOffset = newOffset
+                            // 🔑 不限制滚动边界：2 秒后自动弹回当前播放行
+                            // 之前的边界计算依赖 lyricsContainerHeight / lineHeights 等缓存值，
+                            // 在歌词推进、行高未测量等场景下容易算错导致"滚不到底"
+                            manualScrollOffset += deltaY
 
                             let absVelocity = abs(velocity)
                             let threshold: CGFloat = 800
@@ -422,23 +408,8 @@ public struct LyricsView: View {
                         VStack {
                             Spacer()
                             ZStack(alignment: .bottom) {
-                                // 渐变模糊背景
-                                // 🔑 macOS 26 修复：使用 .underWindowBackground 避免过曝
-                                VisualEffectView(material: .underWindowBackground, blendingMode: .withinWindow)
-                                    .frame(height: 100)
-                                    .mask(
-                                        LinearGradient(
-                                            gradient: Gradient(stops: [
-                                                .init(color: .clear, location: 0),
-                                                .init(color: .black.opacity(0.5), location: 0.15),
-                                                .init(color: .black, location: 0.35),
-                                                .init(color: .black, location: 1.0)
-                                            ]),
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                    )
-                                    .allowsHitTesting(false)
+                                // 🔑 已改用 BottomFadeMask，不需要模糊背景
+                                Color.clear.frame(height: 1).allowsHitTesting(false)
 
                                 SharedBottomControls(
                                     currentPage: $currentPage,
@@ -706,22 +677,8 @@ public struct LyricsView: View {
 
             // 渐变模糊 + 控件区域
             ZStack(alignment: .bottom) {
-                // 🔑 macOS 26 修复：使用 .underWindowBackground 避免过曝
-                VisualEffectView(material: .underWindowBackground, blendingMode: .withinWindow)
-                    .frame(height: 100)
-                    .mask(
-                        LinearGradient(
-                            gradient: Gradient(stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .black.opacity(0.5), location: 0.15),
-                                .init(color: .black, location: 0.35),
-                                .init(color: .black, location: 1.0)
-                            ]),
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .allowsHitTesting(false)
+                // 🔑 已改用 BottomFadeMask，不需要模糊背景
+                Color.clear.frame(height: 1).allowsHitTesting(false)
 
                 SharedBottomControls(
                     currentPage: $currentPage,
@@ -918,6 +875,13 @@ public struct LyricsView: View {
     private func calculateLinePosition(index: Int) -> CGFloat {
         // 🔑 复用累积高度缓存
         return calculateAccumulatedHeight(upTo: index)
+    }
+
+    /// 🔑 同步容器高度到 @State（供 @escaping 闭包使用，GeometryProxy 不可逃逸）
+    private func updateLyricsContainerHeight(_ height: CGFloat) {
+        if lyricsContainerHeight != height {
+            DispatchQueue.main.async { lyricsContainerHeight = height }
+        }
     }
 
     /// 🔑 计算内容总高度（使用缓存）

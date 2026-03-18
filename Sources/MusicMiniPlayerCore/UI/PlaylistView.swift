@@ -180,6 +180,9 @@ public struct PlaylistView: View {
                             Spacer().frame(height: 120)
                         }
                     }
+                    // 🔑 topFadeHeight 只在有 sticky header 时启用
+                    // 否则 Now Playing 在默认位置（顶部）时文字也被淡出
+                    .modifier(BottomFadeMask(isActive: controlsVisible, topFadeHeight: computeStickyHeader() != nil ? 50 : 0))
                     .coordinateSpace(name: "playlistScroll")
                     .onPreferenceChange(SectionOffsetKey.self) { offsets in
                         sectionOffsets = offsets
@@ -222,7 +225,7 @@ public struct PlaylistView: View {
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 16)
                             .padding(.vertical, 6)
                             .frame(height: headerHeight)
                             .allowsHitTesting(false)
@@ -238,21 +241,8 @@ public struct PlaylistView: View {
                     Spacer()
 
                     ZStack(alignment: .bottom) {
-                        VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
-                            .frame(height: 100)
-                            .mask(
-                                LinearGradient(
-                                    gradient: Gradient(stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .black.opacity(0.5), location: 0.15),
-                                        .init(color: .black, location: 0.35),
-                                        .init(color: .black, location: 1.0)
-                                    ]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .allowsHitTesting(false)
+                        // 🔑 已改用 BottomFadeMask，不需要模糊背景
+                        Color.clear.frame(height: 1).allowsHitTesting(false)
 
                         SharedBottomControls(
                             currentPage: $currentPage,
@@ -514,7 +504,7 @@ struct PlaylistSection<Content: View>: View {
                 .font(.system(size: 13, weight: .bold))
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 16)
                 .padding(.vertical, 6)
                 .frame(height: headerHeight)
 
@@ -553,7 +543,7 @@ struct PlainHeaderSection<Content: View>: View {
                 .font(.system(size: 13, weight: .bold))
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 16)
                 .padding(.vertical, 6)
                 .frame(height: headerHeight)
 
@@ -642,7 +632,8 @@ struct PlaylistItemRowCompact: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .modifier(ScrollFadeEffect(headerHeight: fadeHeaderHeight, isScrolling: isScrolling))
+        // 🔑 已改用 ScrollView mask 渐变，不再需要 per-view ScrollFadeEffect
+        // .modifier(ScrollFadeEffect(headerHeight: fadeHeaderHeight, isScrolling: isScrolling))
         .onHover { hovering in
             guard !isScrolling else { return }
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -681,6 +672,50 @@ struct PlaylistItemRowCompact: View {
         await MainActor.run {
             if currentArtworkID == pid { artwork = img }
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - BottomFadeMask
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 底部渐隐遮罩：替代 VisualEffectView 模糊背景，更轻量且无色差
+
+struct BottomFadeMask: ViewModifier {
+    var isActive: Bool
+    var topFadeHeight: CGFloat = 0  // > 0 时启用顶部渐变（歌单 header 区域）
+
+    func body(content: Content) -> some View {
+        content
+            .mask(
+                VStack(spacing: 0) {
+                    // 顶部渐变：歌单行在 header 下方淡入
+                    if topFadeHeight > 0 {
+                        LinearGradient(
+                            colors: [.clear, .black],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: topFadeHeight)
+                    }
+                    // 中间完全可见
+                    Color.black
+                    // 底部渐变：控件区域之前淡出
+                    ZStack {
+                        LinearGradient(
+                            gradient: Gradient(stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black.opacity(0.4), location: 0.35),
+                                .init(color: .clear, location: 0.75)
+                            ]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        Color.black.opacity(isActive ? 0 : 1)
+                    }
+                    .frame(height: 160)
+                }
+            )
+            .animation(.easeInOut(duration: 0.3), value: isActive)
     }
 }
 
