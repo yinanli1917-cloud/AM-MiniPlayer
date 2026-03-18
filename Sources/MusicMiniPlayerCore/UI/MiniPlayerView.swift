@@ -809,7 +809,7 @@ struct GlassButtonBackground: ViewModifier {
             // 🔑 Liquid Glass: 使用 .clear 材质，亮色背景用黑字
             content
                 .foregroundStyle(isLightBackground ? Color.black : Color.white)
-                .glassEffect(.clear, in: .capsule)
+                .glassEffect(.clear.tint(Color.black.opacity(0.1)), in: .capsule)
                 .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
         } else {
             content

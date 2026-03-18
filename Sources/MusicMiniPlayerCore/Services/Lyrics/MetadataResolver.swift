@@ -31,23 +31,27 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String) {
-        // 优先尝试 iTunes CN
+        let inputAllASCII = LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
+
+        // 🔑 罗马字输入：CN + 多区域并行，优先 CJK 标题
+        // 避免 CN 短路：日文罗马字 CN 只拿到简中音译（竹内玛莉亚 ≠ 竹内まりや），
+        // 歌词库匹配不上日文原名。并行让 JP/KR 也有机会。
+        if inputAllASCII {
+            return await resolveRomanizedInput(title: title, artist: artist, duration: duration)
+        }
+
+        // 已有 CJK 输入：保持 CN 优先串行（中文歌词库更丰富）
         if let cnMetadata = await fetchChineseMetadata(title: title, artist: artist, duration: duration) {
             return (cnMetadata.title, cnMetadata.artist)
         }
 
-        // 尝试多区域（JP/KR/TH/VN）
         if let localizedMetadata = await fetchLocalizedMetadata(title: title, artist: artist, duration: duration) {
-            // 🔑 防止纯英文歌曲被错误替换成日文片假名
-            // 但允许罗马字艺术家（如 Momoko Kikuchi）替换成 CJK
             let inputIsPureASCII = LanguageUtils.isPureASCII(title)
             let resultHasCJK = LanguageUtils.containsJapanese(localizedMetadata.title) ||
                                LanguageUtils.containsKorean(localizedMetadata.title) ||
                                LanguageUtils.containsChinese(localizedMetadata.title)
             let isLikelyEnglish = LanguageUtils.isLikelyEnglishArtist(artist)
 
-            // 🔑 只有"可能是英语艺术家"的纯 ASCII 输入才拒绝 CJK 替换
-            // Momoko Kikuchi 不是常见英语名，所以允许替换成菊池桃子
             if inputIsPureASCII && resultHasCJK && isLikelyEnglish {
                 DebugLogger.log("MetadataResolver", "⚠️ 拒绝 CJK 替换: '\(artist)' 是常见英语艺术家")
                 return (title, artist)
@@ -57,7 +61,62 @@ public final class MetadataResolver {
             return (localizedMetadata.title, localizedMetadata.artist)
         }
 
-        // 回退到原始值
+        return (title, artist)
+    }
+
+    // MARK: - 罗马字并行解析
+
+    /// 罗马字输入：CN + 多区域并行，取 CJK 标题覆盖最好的结果
+    /// 场景：日/韩罗马字标题 → CN 给简中音译，JP/KR 给原生 CJK
+    private func resolveRomanizedInput(
+        title: String,
+        artist: String,
+        duration: TimeInterval
+    ) async -> (title: String, artist: String) {
+        async let cnTask = fetchChineseMetadata(title: title, artist: artist, duration: duration)
+        async let localizedTask = fetchLocalizedMetadata(title: title, artist: artist, duration: duration)
+
+        let cnResult = await cnTask
+        let localizedResult = await localizedTask
+
+        // 多区域结果过滤（已知英文艺术家拒绝 CJK 替换，避免翻唱版覆盖原版）
+        var localized: (title: String, artist: String)?
+        if let loc = localizedResult {
+            let resultHasCJK = LanguageUtils.containsJapanese(loc.title) ||
+                               LanguageUtils.containsKorean(loc.title) ||
+                               LanguageUtils.containsChinese(loc.title)
+            if resultHasCJK && LanguageUtils.isLikelyEnglishArtist(artist) {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝 CJK 替换: '\(artist)' 是已知英语艺术家")
+            } else {
+                DebugLogger.log("MetadataResolver", "🌏 多区域解析: '\(loc.title)' by '\(loc.artist)' (region: \(loc.region))")
+                localized = (loc.title, loc.artist)
+            }
+        }
+
+        // 🔑 优先级：CN CJK 标题 > 多区域 CJK 标题 > 仅艺术家
+        // CN 优先原因：主力歌词源（NetEase/QQ）用中文数据库
+        // 多区域仅在 CN 标题仍是 ASCII 时接力（日文罗马字歌的典型场景）
+        let cnHasCJKTitle = cnResult.map { !LanguageUtils.isPureASCII($0.title) } ?? false
+        let locHasCJKTitle = localized.map { !LanguageUtils.isPureASCII($0.title) } ?? false
+
+        if cnHasCJKTitle {
+            DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先 CN: '\(cnResult!.title)' by '\(cnResult!.artist)'")
+            return (cnResult!.title, cnResult!.artist)
+        }
+        if locHasCJKTitle {
+            DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先多区域: '\(localized!.title)' by '\(localized!.artist)'")
+            return localized!
+        }
+
+        // 都没有 CJK 标题 → 有本地化艺术家也好过没有
+        if let cn = cnResult {
+            DebugLogger.log("MetadataResolver", "⚠️ 罗马字仅艺术家解析(CN): '\(cn.title)' by '\(cn.artist)'")
+            return (cn.title, cn.artist)
+        }
+        if let loc = localized {
+            return loc
+        }
+
         return (title, artist)
     }
 

@@ -209,7 +209,7 @@ public enum LanguageUtils {
             regions.append("JP")
         }
 
-        // 🔑 纯 ASCII 但不是常见英文艺术家，尝试日韩区域（罗马字名）
+        // 🔑 纯 ASCII 非已知英文艺术家 → 尝试日韩区域（罗马字名）
         if regions.isEmpty && isPureASCII(artist) && !isLikelyEnglishArtist(artist) {
             regions.append(contentsOf: ["JP", "KR"])
         }
@@ -217,11 +217,13 @@ public enum LanguageUtils {
         return regions
     }
 
-    /// 启发式判断是否为英文艺术家（避免误匹配日韩罗马字艺术家）
+    /// 启发式判断是否为已知英文艺术家
+    /// 🔑 只用高置信度信号（已知列表 + 英文词缀），不猜单词名
+    /// 单词名无法区分英文乐队（Jungle）和日文艺术家（EPO），安全性靠匹配验证保障
     public static func isLikelyEnglishArtist(_ artist: String) -> Bool {
         let lowercased = artist.lowercased()
 
-        // 通用英文词缀
+        // 英文词缀（高置信度：The Beatles, DJ Tiesto, MC Hammer）
         let englishPrefixes = ["the ", "dj ", "mc "]
         let englishSuffixes = [" band", " brothers", " sisters", " boys", " girls",
                               " orchestra", " choir", " ensemble", " trio", " quartet"]
@@ -233,20 +235,7 @@ public enum LanguageUtils {
             if lowercased.hasSuffix(suffix) { return true }
         }
 
-        // 🔑 单个英文单词的乐队名（Jungle, Queen, Bush, Train 等）
-        // 日韩罗马字艺术家名通常是多词（Momoko Kikuchi, Yumi Matsutoya）
-        // 排除已知日韩罗马字单词名（如 Babymetal, Zutomayo）
-        let knownNonEnglishSingleWord = [
-            "babymetal", "zutomayo", "radwimps", "yoasobi", "tuyu",
-            "yorushika", "amazarashi", "aimer", "reol", "daoko"
-        ]
-        let words = lowercased.split(separator: " ")
-        if words.count == 1 && !knownNonEnglishSingleWord.contains(lowercased) {
-            // 单词名且纯 ASCII → 大概率是英文乐队
-            if isPureASCII(artist) { return true }
-        }
-
-        // 常见英文艺术家
+        // 已知英文艺术家（高置信度）
         let knownEnglishArtists = [
             "taylor swift", "ed sheeran", "adele", "beyonce", "drake",
             "coldplay", "maroon 5", "imagine dragons", "one republic",

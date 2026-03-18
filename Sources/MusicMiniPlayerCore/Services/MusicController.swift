@@ -677,17 +677,18 @@ public class MusicController: ObservableObject {
 
         DispatchQueue.main.async {
             // Update playing state (only if not recently toggled by user)
+            // 🔑 值守卫：只在值变化时赋值，避免无谓的 SwiftUI 重绘
             if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
-                self.isPlaying = isPlaying
-                self.shuffleEnabled = shuffle
-                self.repeatMode = repeatMode
+                if self.isPlaying != isPlaying { self.isPlaying = isPlaying }
+                if self.shuffleEnabled != shuffle { self.shuffleEnabled = shuffle }
+                if self.repeatMode != repeatMode { self.repeatMode = repeatMode }
             }
 
             if !trackName.isEmpty && trackName != "NOT_PLAYING" {
-                self.currentTrackTitle = trackName
-                self.currentArtist = trackArtist
-                self.currentAlbum = trackAlbum
-                self.duration = trackDuration
+                if self.currentTrackTitle != trackName { self.currentTrackTitle = trackName }
+                if self.currentArtist != trackArtist { self.currentArtist = trackArtist }
+                if self.currentAlbum != trackAlbum { self.currentAlbum = trackAlbum }
+                if self.duration != trackDuration { self.duration = trackDuration }
 
                 // 🔑 时间同步策略：
                 // - internalCurrentTime 总是更新为轮询返回的真实位置
@@ -708,7 +709,7 @@ public class MusicController: ObservableObject {
                     self.seekPending = false
                 }
 
-                self.audioQuality = quality
+                if self.audioQuality != quality { self.audioQuality = quality }
 
                 // Fetch artwork if track changed
                 if trackChanged {

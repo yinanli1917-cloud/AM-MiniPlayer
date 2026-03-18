@@ -58,7 +58,7 @@ struct ProgressiveBlurView: View {
     var body: some View {
         // 使用 VisualEffectView + mask 作为 fallback
         // Metal shader 版本需要应用到内容上，这里是 overlay 用法
-        VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
+        VisualEffectView(material: .underWindowBackground, blendingMode: .withinWindow)
             .mask(gradientMask)
     }
 

@@ -284,7 +284,7 @@ struct ScrollWheelEventView: NSViewRepresentable {
 
         private func handleScrollEvent(_ event: NSEvent) {
             // 🔑 只检查事件窗口是否存在，不严格匹配（因为 self.window 可能还没设置）
-            guard event.window != nil else { return }
+            guard let window = self.window, event.window == window else { return }
 
             let deltaY = event.scrollingDeltaY
 
