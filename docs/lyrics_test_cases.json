@@ -130,5 +130,38 @@
       "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
       "firstLineContains": null
     }
+  },
+  {
+    "id": "R04",
+    "title": "Moon Style Love",
+    "artist": "JADOES",
+    "duration": 288,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "R05",
+    "title": "Escape",
+    "artist": "EPO",
+    "duration": 260,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "lyrics.ovh"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "R06",
+    "title": "Stardust Night",
+    "artist": "JADOES",
+    "duration": 330,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
+      "firstLineContains": null
+    }
   }
 ]
