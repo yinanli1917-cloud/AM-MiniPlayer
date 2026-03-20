@@ -71,6 +71,7 @@ postmortem/001~004                 - 已知 bug 根因 + 解决方案
 
 匹配权重：时长(40%) + 标题(35%) + 艺术家(25%)，阈值 >= 50
 多区域元信息：自动检测日/韩/泰/越字符，查询对应 iTunes 区域 API
+纯 ASCII 输入：并行查 CN + 推断区域（JP/KR），CN CJK 标题优先
 
 ### 性能陷阱（已验证，永远不要重蹈）
 
@@ -78,6 +79,10 @@ postmortem/001~004                 - 已知 bug 根因 + 解决方案
   ✅ 用 `VStack` 替代，Header 作为第一个子元素
 - ❌ `.hudWindow` 材质 → Liquid Glass 下过曝
   ✅ 用 `.underWindowBackground` 替代
+- ❌ `romanized→CJK` 用 `resultHasCJK`（含 artist）→ ASCII→ASCII 标题替换被放行
+  ✅ 用 `resultTitleHasCJK`（只检查标题）→ 杜绝 "Moon Style Love"→"milk tea" 错配
+- ❌ `isLikelyEnglishArtist` 用"单词=英文"启发式 → 误杀 EPO/JADOES
+  ✅ 只用高置信度信号（已知列表 + 英文词缀），安全性靠 `resultTitleHasCJK` 保障
 - 完整记录见 `postmortem/` 和 `.claude/rules/banned-patterns.md`
 
 ### 匹配算法（统一 SearchCandidate）
@@ -108,7 +113,7 @@ swift run LyricsVerifier library --recent 20         # AM 资料库测试
 /postmortem onboarding    # 分析历史 commits
 ```
 
-已有 postmortem：001（Section递归）、002（页面切换状态）、003（封面并发）、004（歌词间距）、005（MetadataResolver 批量回归）
+已有 postmortem：001（Section递归）、002（页面切换状态）、003（封面并发）、004（歌词间距）、005（MetadataResolver 批量回归）、006（romanized→CJK 误配）
 
 ## Compact Instructions
 

@@ -108,12 +108,13 @@ public final class MetadataResolver {
             return localized!
         }
 
-        // 都没有 CJK 标题 → 有本地化艺术家也好过没有
-        if let cn = cnResult {
+        // 都没有 CJK 标题 → 仅当标题未被篡改时接受本地化艺术家
+        // 🔑 ASCII→不同ASCII 的标题替换是错误匹配（如 "Moon Style Love" → "milk tea"）
+        if let cn = cnResult, cn.title.lowercased() == title.lowercased() || !LanguageUtils.isPureASCII(cn.title) {
             DebugLogger.log("MetadataResolver", "⚠️ 罗马字仅艺术家解析(CN): '\(cn.title)' by '\(cn.artist)'")
             return (cn.title, cn.artist)
         }
-        if let loc = localized {
+        if let loc = localized, loc.title.lowercased() == title.lowercased() || !LanguageUtils.isPureASCII(loc.title) {
             return loc
         }
 
@@ -366,11 +367,14 @@ public final class MetadataResolver {
                 } else if isArtistPreciseMatch && resultHasCJK && durationDiff < 0.5 {
                     DebugLogger.log("MetadataResolver", "[\(region)] 候选(artist+CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                     artistCJKCandidates.append((trackName, artistName, durationDiff))
-                } else if LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist) && resultHasCJK && durationDiff < 1 {
-                    let searchTermLower = searchTerm.lowercased()
-                    let searchIncludesTitle = searchTermLower.contains(inputTitleLower)
-                    let titleIsSpecific = inputTitleLower.count >= 12 && !LanguageUtils.isLikelyEnglishArtist(title)
-                    if searchIncludesTitle || titleIsSpecific {
+                } else if LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist) && durationDiff < 1 {
+                    // 🔑 romanized→CJK：结果标题必须是 CJK（不能 ASCII→ASCII 替换）
+                    // 例：'Yume No Tsuzuki' → '夢の続き' ✓ (CJK 标题)
+                    //     'Moon Style Love' → 'milk tea' ✗ (仍是 ASCII，被拒)
+                    let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) ||
+                                           LanguageUtils.containsJapanese(trackName) ||
+                                           LanguageUtils.containsKorean(trackName)
+                    if resultTitleHasCJK {
                         DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                         romanizedCandidates.append((trackName, artistName, durationDiff))
                     }
