@@ -23,7 +23,8 @@ public struct LyricsView: View {
     @State private var hasTriggeredSlowScroll: Bool = false
 
     // 🔑 手动滚动 Y 轴偏移量
-    @State private var manualScrollOffset: CGFloat = 0
+    @State private var manualScrollOffset: CGFloat = 0  // 显示用（含橡皮筋）
+    @State private var rawScrollOffset: CGFloat = 0     // 原始累积（不含橡皮筋）
     // 🔑 行高度缓存（用于精确计算位置）
     @State private var lineHeights: [Int: CGFloat] = [:]
     // 🔑 手动滚动时锁定的行索引（防止歌词在手动滚动时跟随播放移动）
@@ -117,7 +118,6 @@ public struct LyricsView: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(.white.opacity(0.5))
 
-                        // Retry button
                         Button(action: {
                             lyricsService.fetchLyrics(
                                 for: musicController.currentTrackTitle,
@@ -236,6 +236,7 @@ public struct LyricsView: View {
                                                         isManualScrolling = false
                                                         lyricsService.isManualScrolling = false  // 同步到 LyricsService
                                                         lockedLineIndex = nil
+                                                        rawScrollOffset = 0
                                                         manualScrollOffset = 0
                                                         musicController.seek(to: line.startTime)
                                                     },
@@ -278,6 +279,8 @@ public struct LyricsView: View {
                                     // 🔑 AMLL 核心：每行有自己的 Y 偏移（基于该行的目标索引）
                                     .offset(y: lineOffset + calculateLinePosition(index: index))
                                     // 🔑 每行单独的 spring 动画（手动滚动时禁用）
+                                    // 🔑 监听完整偏移值（lineOffset + linePosition），
+                                    // 这样翻译导致的行高变化也会触发平滑动画
                                     .animation(
                                         isManualScrolling ? nil : .interpolatingSpring(
                                             mass: 1,
@@ -285,7 +288,10 @@ public struct LyricsView: View {
                                             damping: 16.5,
                                             initialVelocity: 0
                                         ),
-                                        value: isManualScrolling ? 0 : lineOffset  // 手动滚动时使用固定值，不触发动画
+                                        value: {
+                                            let fullOffset = lineOffset + calculateLinePosition(index: index)
+                                            return isManualScrolling ? 0 : fullOffset
+                                        }()
                                     )
                                 }
                             }
@@ -293,7 +299,9 @@ public struct LyricsView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         // 🔑 性能关键：手动滚动偏移在容器级别应用，而不是每行单独计算
                         // 这样 manualScrollOffset 变化只会触发一次 transform，而不是 N 次（N = 歌词行数）
-                        .offset(y: isManualScrolling ? manualScrollOffset : 0)
+                        // 🔑 不用三元！isManualScrolling=false 时三元直接跳 0，
+                        // manualScrollOffset 的动画没人读 → 容器跳变 → 歌词卡顿
+                        .offset(y: manualScrollOffset)
                     }
                     .modifier(BottomFadeMask(isActive: showControls))
                     // 🔑 强制在歌曲切换时重建整个 GeometryReader，避免 ZStack 视图残留
@@ -313,7 +321,7 @@ public struct LyricsView: View {
                             // 🔑 锁定当前状态
                             let currentIdx = lyricsService.currentLineIndex ?? 0
                             lockedLineIndex = currentIdx
-
+                            rawScrollOffset = manualScrollOffset
                             isManualScrolling = true
                             lyricsService.isManualScrolling = true  // 同步到 LyricsService
 
@@ -322,20 +330,28 @@ public struct LyricsView: View {
                             hasTriggeredSlowScroll = false
                         },
                         onScrollEnded: {
+                            // 🔑 松手后立即弹回边界
+                            let (maxUp, maxDown) = scrollBounds()
+                            if rawScrollOffset > maxUp || rawScrollOffset < -maxDown {
+                                rawScrollOffset = min(maxUp, max(-maxDown, rawScrollOffset))
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                    manualScrollOffset = rawScrollOffset
+                                }
+                            }
+
+                            // 🔑 2 秒后 spring 回当前播放行
                             autoScrollTimer?.invalidate()
                             autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-                                // 🔑 2秒后恢复到当前播放位置
-                                // 先解锁，再用动画恢复
-                                isManualScrolling = false
-                                lyricsService.isManualScrolling = false  // 同步到 LyricsService
                                 lockedLineIndex = nil
-
+                                rawScrollOffset = 0
                                 withAnimation(.interpolatingSpring(
                                     mass: 1,
                                     stiffness: 100,
                                     damping: 16.5,
                                     initialVelocity: 0
                                 )) {
+                                    isManualScrolling = false
+                                    lyricsService.isManualScrolling = false
                                     manualScrollOffset = 0
                                 }
                                 scrollLocked = false
@@ -354,10 +370,24 @@ public struct LyricsView: View {
                             }
                         },
                         onScrollWithVelocity: { deltaY, velocity in
-                            // 🔑 不限制滚动边界：2 秒后自动弹回当前播放行
-                            // 之前的边界计算依赖 lyricsContainerHeight / lineHeights 等缓存值，
-                            // 在歌词推进、行高未测量等场景下容易算错导致"滚不到底"
-                            manualScrollOffset += deltaY
+                            // 🔑 Apple 风格橡皮筋：raw 累积 + overscroll 衰减
+                            rawScrollOffset += deltaY
+                            let (maxUp, maxDown) = scrollBounds()
+                            let dim = max(lyricsContainerHeight * 0.4, 120)
+
+                            // 🔑 overscroll 区域：每帧衰减 rawScrollOffset 向边界靠拢
+                            // 模拟原生橡皮筋的"回拉力"，而非仅在松手后弹回
+                            if rawScrollOffset > maxUp {
+                                let overshoot = rawScrollOffset - maxUp
+                                rawScrollOffset = maxUp + overshoot * 0.92
+                                manualScrollOffset = maxUp + rubberBand(rawScrollOffset - maxUp, dim)
+                            } else if rawScrollOffset < -maxDown {
+                                let overshoot = rawScrollOffset + maxDown  // 负值
+                                rawScrollOffset = -maxDown + overshoot * 0.92
+                                manualScrollOffset = -maxDown + rubberBand(rawScrollOffset + maxDown, dim)
+                            } else {
+                                manualScrollOffset = rawScrollOffset
+                            }
 
                             let absVelocity = abs(velocity)
                             let threshold: CGFloat = 800
@@ -591,7 +621,6 @@ public struct LyricsView: View {
                 }
                 let currentIdx = lyricsService.currentLineIndex ?? 0
                 lockedLineIndex = currentIdx
-                lockedLineTargetIndices = lineTargetIndices
                 isManualScrolling = true
 
                 lastVelocity = 0
@@ -613,6 +642,7 @@ public struct LyricsView: View {
                     )) {
                         manualScrollOffset = 0
                     }
+                    rawScrollOffset = 0
                     scrollLocked = false
                     hasTriggeredSlowScroll = false
                 }
@@ -836,6 +866,32 @@ public struct LyricsView: View {
             return (startTime: currentLine.endTime, endTime: nextLine.startTime)
         }
         return nil
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // MARK: - 滚动边界 + Apple 橡皮筋
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Apple UIScrollView 橡皮筋公式：f(x) = d * (1 - 1/(x*c/d + 1))
+    private func rubberBand(_ offset: CGFloat, _ dimension: CGFloat) -> CGFloat {
+        let c: CGFloat = 0.55
+        let absX = abs(offset)
+        let result = (1.0 - (1.0 / ((absX * c / dimension) + 1.0))) * dimension
+        return offset < 0 ? -result : result
+    }
+
+    /// 滚动边界：第一行到顶部 / 最后一行到底部
+    private func scrollBounds() -> (maxUp: CGFloat, maxDown: CGFloat) {
+        let totalH = calculateTotalContentHeight()
+        let idx = lockedLineIndex ?? (lyricsService.currentLineIndex ?? 0)
+        let curOffset = calculateAccumulatedHeight(upTo: idx)
+        let containerH = lyricsContainerHeight
+        let anchorY = (containerH - 120) * 0.24
+        let visibleBottom = (containerH - 120) - anchorY  // 锚点以下的可见区域
+
+        let maxUp = max(0, curOffset - anchorY)
+        let maxDown = max(0, totalH - curOffset - visibleBottom)
+        return (maxUp, maxDown)
     }
 
     /// 🔑 计算从第一行到指定行的累积高度（用于 VStack offset）

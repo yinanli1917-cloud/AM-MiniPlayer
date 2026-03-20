@@ -633,6 +633,11 @@ public class MusicController: ObservableObject {
                         }
                         // 🔑 歌曲切换时也刷新 Up Next 队列
                         self.fetchUpNextQueue()
+
+                        // 🔑 直接用通知的 name/artist 触发歌词获取
+                        // 不依赖 processPlayerState（persistentID 为空时不触发）
+                        // 也不依赖 SwiftUI onChange（可能被 updatePlayerState 竞态覆盖）
+                        self.lyricsService.fetchLyrics(for: name, artist: artist, duration: self.duration)
                     }
                 }
             }

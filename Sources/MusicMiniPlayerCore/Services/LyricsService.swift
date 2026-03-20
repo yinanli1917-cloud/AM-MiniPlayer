@@ -427,13 +427,19 @@ public class LyricsService: ObservableObject {
     // MARK: - 语言检测
     // ========================================================================
 
-    /// 歌词内容是否以中文为主（超过 40% 的有效行含中文字符）
+    /// 歌词内容是否以中文为主（超过 40% 的有效行含中文字符，且非日文）
+    /// 🔑 CJK 汉字范围包含日文 kanji，必须排除含假名的行
     private func lyricsArePredominantlyChinese() -> Bool {
         let validLines = lyrics.filter {
             let t = $0.text.trimmingCharacters(in: .whitespaces)
             return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
         }
         guard !validLines.isEmpty else { return false }
+
+        // 任何一行含假名 → 日文歌词，不是中文
+        let hasJapanese = validLines.contains { LanguageUtils.containsJapanese($0.text) }
+        if hasJapanese { return false }
+
         let chineseCount = validLines.filter { LanguageUtils.containsChinese($0.text) }.count
         return Double(chineseCount) / Double(validLines.count) > 0.4
     }

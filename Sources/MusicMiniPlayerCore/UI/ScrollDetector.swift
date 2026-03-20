@@ -102,11 +102,22 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             // 检查事件是否发生在当前窗口内
             guard let window = self.window, event.window == window else { return }
 
+            // 🔑 动量阶段感知：macOS 触控板在手指抬起后继续发送 momentum events
+            let isMomentum = event.momentumPhase != []
+
+            // 🔑 动量结束 → 立即触发 scrollEnd（不等定时器）
+            if event.momentumPhase == .ended {
+                coordinator.scrollTimer?.invalidate()
+                handleScrollEnd()
+                return
+            }
+
             let currentTime = CACurrentMediaTime()
             let deltaY = event.scrollingDeltaY
 
-            // 忽略极小的滚动量
-            if abs(deltaY) < 0.5 {
+            // 🔑 动量事件用更低阈值（减速后期 delta 很小但仍需传递给橡皮筋）
+            let threshold: CGFloat = isMomentum ? 0.1 : 0.5
+            if abs(deltaY) < threshold {
                 return
             }
 
@@ -143,9 +154,10 @@ struct ScrollEventRepresentable: NSViewRepresentable {
                 }
             }
 
-            // 重置结束定时器
+            // 🔑 动量期间用更长超时（momentum events 间隔可能 > 200ms）
+            let delay: TimeInterval = isMomentum ? 0.4 : scrollEndDelay
             coordinator.scrollTimer?.invalidate()
-            coordinator.scrollTimer = Timer.scheduledTimer(withTimeInterval: scrollEndDelay, repeats: false) { [weak self] _ in
+            coordinator.scrollTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
                 self?.handleScrollEnd()
             }
         }
