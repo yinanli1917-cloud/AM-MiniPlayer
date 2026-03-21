@@ -10,6 +10,11 @@ import os
 // Note: We don't actually use protocols with ScriptingBridge in Swift
 // Instead, we use dynamic member lookup through SBApplication directly
 
+// MARK: - 共享常量
+
+/// 未播放时的哨兵值 — 各模块用此判断"无有效曲目"
+public let kNotPlayingSentinel = "Not Playing"
+
 // MARK: - PlayerPage Enum (共享页面状态)
 public enum PlayerPage {
     case album
@@ -30,7 +35,7 @@ public class MusicController: ObservableObject {
 
     // Published properties
     @Published public var isPlaying: Bool = false
-    @Published public var currentTrackTitle: String = "Not Playing"
+    @Published public var currentTrackTitle: String = kNotPlayingSentinel
     @Published public var currentArtist: String = ""
     @Published public var currentAlbum: String = ""
     @Published public var currentArtwork: NSImage? = nil
@@ -84,6 +89,8 @@ public class MusicController: ObservableObject {
     // 崩溃根因 (2026-01-25)：并发队列 + 信号量仍有竞态，导致 EXC_BAD_ACCESS
     // 解决方案：直接用串行队列，放弃并发优化
     private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
+    /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
+    private var artworkFetchingForKey: String?
 
     // 🔑 封面调试日志 - 复用全局 debugPrint（条件编译保护）
     @inline(__always)
@@ -615,7 +622,7 @@ public class MusicController: ObservableObject {
                                 if let mkArtwork = await self.fetchMusicKitArtwork(title: name, artist: artist, album: album) {
                                     await MainActor.run {
                                         // 确保还是同一首歌
-                                        if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                                        if self.isStillCurrentTrack(persistentID: persistentID, title: name) {
                                             self.setArtwork(mkArtwork)
                                             if !persistentID.isEmpty {
                                                 self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
@@ -676,9 +683,13 @@ public class MusicController: ObservableObject {
             quality = "Lossless"
         }
 
-        // 检测歌曲是否变化
+        // 检测歌曲是否变化（支持电台等无 persistentID 场景）
         let isFirstTrack = self.currentPersistentID == nil && !persistentID.isEmpty
-        let trackChanged = (persistentID != self.currentPersistentID && !persistentID.isEmpty) || isFirstTrack
+        let trackChangedByID = !persistentID.isEmpty && persistentID != self.currentPersistentID
+        let trackChangedByTitle = persistentID.isEmpty && trackName != self.currentTrackTitle
+        let trackChanged = trackChangedByID || trackChangedByTitle || isFirstTrack
+        DebugLogger.log("PlayerState", "📊 track='\(trackName)' pid='\(persistentID)' dur=\(trackDuration) changed=\(trackChanged) (byID=\(trackChangedByID) byTitle=\(trackChangedByTitle) first=\(isFirstTrack)) curPID='\(self.currentPersistentID ?? "nil")'")
+
 
         DispatchQueue.main.async {
             // Update playing state (only if not recently toggled by user)
@@ -733,10 +744,10 @@ public class MusicController: ObservableObject {
                 }
             } else {
                 // No track playing
-                if self.currentTrackTitle != "Not Playing" {
+                if self.currentTrackTitle != kNotPlayingSentinel {
                     self.logger.info("⏹️ No track playing")
                 }
-                self.currentTrackTitle = "Not Playing"
+                self.currentTrackTitle = kNotPlayingSentinel
                 self.currentArtist = ""
                 self.currentAlbum = ""
                 self.duration = 0
@@ -883,6 +894,7 @@ public class MusicController: ObservableObject {
     /// 🔑 设置封面并自动计算亮度
     private func setArtwork(_ image: NSImage?) {
         self.currentArtwork = image
+        artworkFetchingForKey = nil  // 🔑 清除去重标志，允许后续获取
         // 计算亮度，阈值 0.6 以上视为浅色背景
         if let img = image {
             let brightness = img.perceivedBrightness()
@@ -892,15 +904,32 @@ public class MusicController: ObservableObject {
         }
     }
 
+    /// 判断封面回调是否仍对应当前播放曲目
+    /// persistentID 非空时用 ID 比对；电台等无 ID 场景用 title 比对
+    private func isStillCurrentTrack(persistentID: String, title: String) -> Bool {
+        if !persistentID.isEmpty {
+            return currentPersistentID == persistentID
+        }
+        return currentTrackTitle == title
+    }
+
     private func fetchArtwork(for title: String, artist: String, album: String, persistentID: String) {
         logToFile("🎨 fetchArtwork: \(title) - \(artist)")
 
-        // Check cache first
-        if let cached = artworkCache.object(forKey: persistentID as NSString) {
+        // Check cache first（空 persistentID 跳过缓存）
+        if !persistentID.isEmpty, let cached = artworkCache.object(forKey: persistentID as NSString) {
             logToFile("🎨 Cache HIT")
             self.setArtwork(cached)
             return
         }
+
+        // 🔑 去重：防止通知路径和轮询路径同时触发
+        let fetchKey = persistentID.isEmpty ? "title:\(title)" : "id:\(persistentID)"
+        guard artworkFetchingForKey != fetchKey else {
+            logToFile("🎨 Already fetching for \(fetchKey), skipping")
+            return
+        }
+        artworkFetchingForKey = fetchKey
 
         logToFile("🎨 Cache MISS, starting sequential fetch (SB first, API fallback)...")
 
@@ -908,7 +937,10 @@ public class MusicController: ObservableObject {
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self,
                   let app = self.musicApp,
-                  app.isRunning else { return }
+                  app.isRunning else {
+                DispatchQueue.main.async { [weak self] in self?.artworkFetchingForKey = nil }
+                return
+            }
 
             self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
             if let image = self.getArtworkImageFromApp(app) {
@@ -926,8 +958,7 @@ public class MusicController: ObservableObject {
                     if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
                         self.logToFile("🎨 [API] SUCCESS! Got image \(mkArtwork.size)")
                         await MainActor.run {
-                            // 确保还是同一首歌
-                            if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                            if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
                                 self.setArtwork(mkArtwork)
                                 if !persistentID.isEmpty {
                                     self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
@@ -935,76 +966,21 @@ public class MusicController: ObservableObject {
                             }
                         }
                     } else {
-                        self.logToFile("🎨 [API] No artwork found, setting placeholder")
+                        self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
                         await MainActor.run {
-                            if self.currentPersistentID == persistentID || persistentID.isEmpty {
-                                self.currentArtwork = nil
+                            if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
+                                self.setArtwork(self.createPlaceholder())
                             }
                         }
+                        // 延迟 1s 重试（电台/流媒体歌曲可能需要时间加载封面）
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album)
                     }
                 }
             }
         }
     }
 
-    // 🔑 保留原有的超时逻辑作为独立函数（已移除，串行策略不需要竞争超时）
-    private func fetchArtworkLegacyParallel(for title: String, artist: String, album: String, persistentID: String) {
-        // 🔑 并行获取策略（已弃用，保留代码以备回滚）
-        let artworkSet = OSAllocatedUnfairLock(initialState: false)
-
-        scriptingBridgeQueue.async { [weak self] in
-            guard let self = self,
-                  let app = self.musicApp,
-                  app.isRunning else { return }
-
-            if let image = self.getArtworkImageFromApp(app) {
-                let alreadySet = artworkSet.withLock { state -> Bool in
-                    if state { return true }
-                    state = true
-                    return false
-                }
-                if !alreadySet {
-                    DispatchQueue.main.async {
-                        self.setArtwork(image)
-                        if !persistentID.isEmpty {
-                            self.artworkCache.setObject(image, forKey: persistentID as NSString)
-                        }
-                    }
-                }
-            }
-        }
-
-        Task { [weak self] in
-            guard let self = self else { return }
-
-            if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                let alreadySet = artworkSet.withLock { state -> Bool in
-                    if state { return true }
-                    state = true
-                    return false
-                }
-                if !alreadySet {
-                    await MainActor.run {
-                        if self.currentPersistentID == persistentID || persistentID.isEmpty {
-                            self.setArtwork(mkArtwork)
-                            if !persistentID.isEmpty {
-                                self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            guard let self = self else { return }
-            let hasArtwork = artworkSet.withLock { $0 }
-            if !hasArtwork && (self.currentPersistentID == persistentID || persistentID.isEmpty) {
-                self.logToFile("🎨 [Timeout] Setting placeholder after 3s")
-                self.setArtwork(self.createPlaceholder())
-            }
-        }
-    }
 
     /// 从 SBApplication 获取当前播放曲目的封面图片
     /// 🔑 复用 extractArtwork 避免重复代码
@@ -1120,8 +1096,7 @@ public class MusicController: ObservableObject {
     /// 延迟重试封面获取（电台首歌特殊处理）
     /// Music.app 刚开始播放电台时，封面数据可能尚未加载完成
     private func retryArtworkFetch(persistentID: String, title: String, artist: String, album: String) async {
-        // 确保还是同一首歌
-        guard currentPersistentID == persistentID || persistentID.isEmpty else { return }
+        guard await MainActor.run(body: { isStillCurrentTrack(persistentID: persistentID, title: title) }) else { return }
 
         debugPrint("🔄 [retryArtworkFetch] Retrying for \(title)...\n")
 
@@ -1139,7 +1114,7 @@ public class MusicController: ObservableObject {
 
         if let image = sbImage {
             await MainActor.run {
-                if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
                     self.setArtwork(image)
                     if !persistentID.isEmpty {
                         self.artworkCache.setObject(image, forKey: persistentID as NSString)
@@ -1153,7 +1128,7 @@ public class MusicController: ObservableObject {
         // 2. ScriptingBridge 仍然失败，再试一次网络 API
         if let mkArtwork = await fetchMusicKitArtwork(title: title, artist: artist, album: album) {
             await MainActor.run {
-                if self.currentPersistentID == persistentID || persistentID.isEmpty {
+                if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
                     self.setArtwork(mkArtwork)
                     if !persistentID.isEmpty {
                         self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)

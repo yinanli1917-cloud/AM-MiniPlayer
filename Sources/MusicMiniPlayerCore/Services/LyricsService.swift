@@ -72,6 +72,7 @@ public class LyricsService: ObservableObject {
     private let translationLanguageKey = "translationLanguage"
 
     private var currentSongID: String?
+    private var currentSongDuration: TimeInterval = 0
     private var currentSongTranslationID: String?
     private var translationsAreFromLyricsSource: Bool = false
     private var lastSystemTranslationLanguage: String?
@@ -141,15 +142,30 @@ public class LyricsService: ObservableObject {
 
     @MainActor
     func fetchLyrics(for title: String, artist: String, duration: TimeInterval, forceRefresh: Bool = false) {
+        // 🔑 忽略无效曲目（未连接/未播放时的默认值）
+        guard !title.isEmpty, title != kNotPlayingSentinel else {
+            DebugLogger.log("LyricsService", "⏭️ 忽略无效曲目: '\(title)'")
+            return
+        }
+
         let songID = "\(title)-\(artist)"
 
+        // 🔑 允许用有效 duration 重试（解决 playerInfoChanged duration=0 竞态）
+        // 场景：通知先到（duration=0）→ 匹配失败 → 轮询后到（duration 正确）→ 重新获取
+        let canRetryWithBetterDuration = songID == currentSongID && !forceRefresh
+            && duration > 0 && currentSongDuration == 0
+
         // 避免重复获取
-        guard songID != currentSongID || forceRefresh else {
+        guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration else {
             DebugLogger.log("LyricsService", "⏭️ 跳过重复获取: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
             return
         }
 
-        DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' (forceRefresh=\(forceRefresh))")
+        if canRetryWithBetterDuration {
+            DebugLogger.log("LyricsService", "🔄 duration 改善重试: 0 → \(duration)")
+        }
+
+        DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' dur=\(duration) (forceRefresh=\(forceRefresh), curSongID='\(currentSongID ?? "nil")', curDur=\(currentSongDuration))")
 
         // 🔑 立即清除 error + loading（防止切歌时 retry UI 残留）
         error = nil
@@ -166,7 +182,7 @@ public class LyricsService: ObservableObject {
         }
 
         // 检查缓存（带过期检查）
-        if !forceRefresh, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+        if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
             DebugLogger.log("LyricsService", "📦 缓存命中: '\(songID)' (isNoLyrics=\(cached.isNoLyrics), lines=\(cached.lyrics.count))")
 
             // 🔑 先清空旧歌词，避免切歌时新旧歌词重叠
@@ -176,6 +192,7 @@ public class LyricsService: ObservableObject {
             // 处理 No Lyrics 缓存
             if cached.isNoLyrics {
                 currentSongID = songID
+                currentSongDuration = duration
                 isLoading = false
                 error = "No lyrics available"
                 DebugLogger.log("LyricsService", "❌ 使用 No Lyrics 缓存")
@@ -195,6 +212,7 @@ public class LyricsService: ObservableObject {
         // 取消旧任务
         currentFetchTask?.cancel()
         currentSongID = songID
+        currentSongDuration = duration
 
         // 🔑 同步设置加载状态（避免竞态条件）
         isLoading = true
@@ -232,6 +250,7 @@ public class LyricsService: ObservableObject {
 
         // 选择最佳结果
         guard let bestLyrics = fetcher.selectBest(from: results), !bestLyrics.isEmpty else {
+            DebugLogger.log("LyricsService", "❌ SEARCH NO RESULTS: '\(songID)' dur=\(duration) sources=\(results.count)")
             // 缓存 No Lyrics 状态（6小时过期）
             let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
             lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)

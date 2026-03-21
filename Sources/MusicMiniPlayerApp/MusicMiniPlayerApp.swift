@@ -38,11 +38,11 @@ class AppMain: NSObject, NSApplicationDelegate {
         AppMain.shared = delegate
         app.delegate = delegate
 
-        // 默认显示 Dock 图标
-        if !UserDefaults.standard.bool(forKey: "showInDockInitialized") {
-            UserDefaults.standard.set(true, forKey: "showInDock")
-            UserDefaults.standard.set(true, forKey: "showInDockInitialized")
-        }
+        // 首次启动默认值（用户未手动设置前生效）
+        UserDefaults.standard.register(defaults: [
+            "showInDock": true,
+            "fullscreenAlbumCover": true
+        ])
 
         app.run()
     }

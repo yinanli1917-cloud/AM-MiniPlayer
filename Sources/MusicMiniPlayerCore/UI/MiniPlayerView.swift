@@ -668,7 +668,7 @@ extension MiniPlayerView {
                     .frame(width: geometry.size.width * 0.70, height: geometry.size.width * 0.70)
                     .overlay(Text("No Art").foregroundColor(.white))
 
-                Text("Not Playing")
+                Text(kNotPlayingSentinel)
                     .font(.headline)
                     .foregroundColor(.white)
                     .padding(.top, 10)

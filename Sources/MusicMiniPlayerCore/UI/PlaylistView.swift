@@ -295,7 +295,7 @@ public struct PlaylistView: View {
     // ═══════════════════════════════════════════════════════════════════════════════
     @ViewBuilder
     private func nowPlayingCard(geometry: GeometryProxy, artSize: CGFloat) -> some View {
-        if musicController.currentTrackTitle != "Not Playing" {
+        if musicController.currentTrackTitle != kNotPlayingSentinel {
             VStack(spacing: 0) {
                 Button(action: {
                     let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
