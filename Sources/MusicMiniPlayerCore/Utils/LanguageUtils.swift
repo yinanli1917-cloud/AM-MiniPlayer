@@ -15,47 +15,65 @@ import CoreFoundation
 /// 语言检测工具 - 基于 Unicode 范围判断字符所属语言
 public enum LanguageUtils {
 
+    // ── Unicode 范围表（数据驱动） ──
+
+    private static let scriptRanges: [String: [ClosedRange<UInt32>]] = [
+        // 东亚
+        "Chinese":    [0x4E00...0x9FFF, 0x3400...0x4DBF, 0x20000...0x2A6DF, 0xF900...0xFAFF],
+        "Japanese":   [0x3040...0x309F, 0x30A0...0x30FF, 0x31F0...0x31FF, 0xFF65...0xFF9F],
+        "Korean":     [0xAC00...0xD7AF, 0x1100...0x11FF],
+        // 东南亚
+        "Thai":       [0x0E00...0x0E7F],
+        "Burmese":    [0x1000...0x109F],
+        "Khmer":      [0x1780...0x17FF],
+        "Lao":        [0x0E80...0x0EFF],
+        // 南亚
+        "Devanagari": [0x0900...0x097F],
+        "Tamil":      [0x0B80...0x0BFF],
+        "Telugu":     [0x0C00...0x0C7F],
+        // 中东
+        "Arabic":     [0x0600...0x06FF, 0x0750...0x077F],
+        "Hebrew":     [0x0590...0x05FF],
+        // 欧洲
+        "Cyrillic":   [0x0400...0x04FF, 0x0500...0x052F],
+        "Greek":      [0x0370...0x03FF],
+    ]
+
+    /// 通用 Unicode 范围检测
+    private static func containsScript(_ text: String, ranges: [ClosedRange<UInt32>]) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            ranges.contains { $0.contains(scalar.value) }
+        }
+    }
+
     // MARK: - CJK Detection
 
-    /// 检测是否包含中文字符（CJK Unified Ideographs）
-    public static func containsChinese(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // CJK Unified Ideographs: U+4E00 - U+9FFF
-            // CJK Extension A: U+3400 - U+4DBF
-            (0x4E00...0x9FFF).contains(scalar.value) ||
-            (0x3400...0x4DBF).contains(scalar.value)
-        }
+    public static func containsChinese(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Chinese"]!) }
+    public static func containsJapanese(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Japanese"]!) }
+    public static func containsKorean(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Korean"]!) }
+
+    /// 检测是否包含任何 CJK 字符（中日韩）
+    public static func containsCJK(_ text: String) -> Bool {
+        containsChinese(text) || containsJapanese(text) || containsKorean(text)
     }
 
-    /// 检测是否包含日文假名（平假名、片假名）
-    public static func containsJapanese(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Hiragana: U+3040 - U+309F
-            // Katakana: U+30A0 - U+30FF
-            (0x3040...0x309F).contains(scalar.value) ||
-            (0x30A0...0x30FF).contains(scalar.value)
-        }
+    /// 单字符 CJK 判定（供跨文件去重调用）
+    public static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
+        let v = scalar.value
+        return (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) ||
+               (0x20000...0x2A6DF).contains(v) ||
+               (0x3040...0x309F).contains(v) || (0x30A0...0x30FF).contains(v) ||
+               (0xAC00...0xD7AF).contains(v)
     }
 
-    /// 检测是否包含韩文字符（谚文）
-    public static func containsKorean(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Hangul Syllables: U+AC00 - U+D7AF
-            // Hangul Jamo: U+1100 - U+11FF
-            (0xAC00...0xD7AF).contains(scalar.value) ||
-            (0x1100...0x11FF).contains(scalar.value)
-        }
-    }
+    // MARK: - Southeast Asian Scripts (东南亚)
 
-    /// 检测是否包含泰文字符
-    public static func containsThai(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Thai: U+0E00 - U+0E7F
-            (0x0E00...0x0E7F).contains(scalar.value)
-        }
-    }
+    public static func containsThai(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Thai"]!) }
+    public static func containsBurmese(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Burmese"]!) }
+    public static func containsKhmer(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Khmer"]!) }
+    public static func containsLao(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Lao"]!) }
 
-    /// 检测是否包含越南文特有字符（带声调的拉丁字母）
+    /// 越南文用 CharacterSet（带声调拉丁字母，无法用 Unicode 连续范围表达）
     public static func containsVietnamese(_ text: String) -> Bool {
         let vietnameseChars = CharacterSet(charactersIn:
             "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ"
@@ -65,106 +83,25 @@ public enum LanguageUtils {
 
     // MARK: - South Asian Scripts (印度次大陆)
 
-    /// 检测是否包含天城文（Devanagari）- 印地语/梵文/尼泊尔语
-    public static func containsDevanagari(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Devanagari: U+0900 - U+097F
-            (0x0900...0x097F).contains(scalar.value)
-        }
-    }
-
-    /// 检测是否包含泰米尔文
-    public static func containsTamil(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Tamil: U+0B80 - U+0BFF
-            (0x0B80...0x0BFF).contains(scalar.value)
-        }
-    }
-
-    /// 检测是否包含泰卢固文
-    public static func containsTelugu(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Telugu: U+0C00 - U+0C7F
-            (0x0C00...0x0C7F).contains(scalar.value)
-        }
-    }
+    public static func containsDevanagari(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Devanagari"]!) }
+    public static func containsTamil(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Tamil"]!) }
+    public static func containsTelugu(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Telugu"]!) }
 
     // MARK: - Middle Eastern Scripts (中东)
 
-    /// 检测是否包含阿拉伯文
-    public static func containsArabic(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Arabic: U+0600 - U+06FF
-            // Arabic Supplement: U+0750 - U+077F
-            (0x0600...0x06FF).contains(scalar.value) ||
-            (0x0750...0x077F).contains(scalar.value)
-        }
-    }
-
-    /// 检测是否包含希伯来文
-    public static func containsHebrew(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Hebrew: U+0590 - U+05FF
-            (0x0590...0x05FF).contains(scalar.value)
-        }
-    }
+    public static func containsArabic(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Arabic"]!) }
+    public static func containsHebrew(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Hebrew"]!) }
 
     // MARK: - European Scripts (欧洲)
 
-    /// 检测是否包含西里尔字母（俄语/乌克兰语等）
-    public static func containsCyrillic(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Cyrillic: U+0400 - U+04FF
-            // Cyrillic Supplement: U+0500 - U+052F
-            (0x0400...0x04FF).contains(scalar.value) ||
-            (0x0500...0x052F).contains(scalar.value)
-        }
-    }
-
-    /// 检测是否包含希腊文
-    public static func containsGreek(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Greek: U+0370 - U+03FF
-            (0x0370...0x03FF).contains(scalar.value)
-        }
-    }
-
-    // MARK: - Southeast Asian Scripts (东南亚)
-
-    /// 检测是否包含缅甸文
-    public static func containsBurmese(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Myanmar: U+1000 - U+109F
-            (0x1000...0x109F).contains(scalar.value)
-        }
-    }
-
-    /// 检测是否包含高棉文（柬埔寨）
-    public static func containsKhmer(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Khmer: U+1780 - U+17FF
-            (0x1780...0x17FF).contains(scalar.value)
-        }
-    }
-
-    /// 检测是否包含老挝文
-    public static func containsLao(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            // Lao: U+0E80 - U+0EFF
-            (0x0E80...0x0EFF).contains(scalar.value)
-        }
-    }
+    public static func containsCyrillic(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Cyrillic"]!) }
+    public static func containsGreek(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Greek"]!) }
 
     // MARK: - ASCII Detection
 
     /// 检测是否为纯 ASCII 字符
     public static func isPureASCII(_ text: String) -> Bool {
         text.unicodeScalars.allSatisfy { $0.isASCII }
-    }
-
-    /// 检测是否包含任何 CJK 字符（中日韩）
-    public static func containsCJK(_ text: String) -> Bool {
-        containsChinese(text) || containsJapanese(text) || containsKorean(text)
     }
 
     // MARK: - Region Inference

@@ -632,8 +632,6 @@ struct PlaylistItemRowCompact: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // 🔑 已改用 ScrollView mask 渐变，不再需要 per-view ScrollFadeEffect
-        // .modifier(ScrollFadeEffect(headerHeight: fadeHeaderHeight, isScrolling: isScrolling))
         .onHover { hovering in
             guard !isScrolling else { return }
             withAnimation(.easeInOut(duration: 0.2)) {

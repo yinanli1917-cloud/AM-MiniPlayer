@@ -80,6 +80,11 @@ public class LyricsService: ObservableObject {
     private var currentFetchTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
 
+    /// 清除所有歌词行的翻译数据
+    private func clearAllTranslations() {
+        for i in lyrics.indices { lyrics[i].translation = nil }
+    }
+
     // ========================================================================
     // MARK: - Sub-modules
     // ========================================================================
@@ -177,9 +182,7 @@ public class LyricsService: ObservableObject {
         isTranslating = false
 
         // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
-        for i in 0..<lyrics.count {
-            lyrics[i].translation = nil
-        }
+        clearAllTranslations()
 
         // 检查缓存（带过期检查）
         if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
@@ -364,9 +367,7 @@ public class LyricsService: ObservableObject {
         lastSystemTranslationLanguage = nil
         translationsAreFromLyricsSource = false
 
-        for i in 0..<lyrics.count {
-            lyrics[i].translation = nil
-        }
+        clearAllTranslations()
 
         translationRequestTrigger += 1
     }
@@ -401,17 +402,13 @@ public class LyricsService: ObservableObject {
 
         // 目标语言不是中文，需要系统翻译覆盖
         if translationsAreFromLyricsSource && !isTargetChinese {
-            for i in 0..<lyrics.count {
-                lyrics[i].translation = nil
-            }
+            clearAllTranslations()
             translationsAreFromLyricsSource = false
         }
 
         // 清除旧翻译
         if hasTranslation {
-            for i in 0..<lyrics.count {
-                lyrics[i].translation = nil
-            }
+            clearAllTranslations()
         }
 
         isTranslating = true

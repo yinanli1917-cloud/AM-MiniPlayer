@@ -52,7 +52,6 @@ import AppKit
     @objc optional var shuffleEnabled: Bool { get set }
     @objc optional var songRepeat: Int { get set }
 
-    // Playback control methods
     @objc optional func playpause()
     @objc optional func play()
     @objc optional func pause()
@@ -62,10 +61,25 @@ import AppKit
     @objc optional func backTrack()
 }
 
-// Make SBApplication conform to our protocol
 extension SBApplication: SBApplicationProtocol {}
 
-// MARK: - MusicBridge - Full ScriptingBridge wrapper
+// ============================================================================
+// MARK: - AppleEventCode (消除内联魔数)
+// ============================================================================
+
+private enum AppleEventCode {
+    static let playing: Int   = 0x6B505370
+    static let stopped: Int   = 0x6B505353
+    static let paused: Int    = 0x6B507073
+    static let repeatOff: Int = 0x6B52704F
+    static let repeatOne: Int = 0x6B527031
+    static let repeatAll: Int = 0x6B52416C
+}
+
+// ============================================================================
+// MARK: - MusicBridge
+// ============================================================================
+
 public class MusicBridge {
     public static let shared = MusicBridge()
 
@@ -85,82 +99,15 @@ public class MusicBridge {
         debugPrint("✅ [MusicBridge] SBApplication created successfully\n")
     }
 
-    // MARK: - Connection Check
+    // ========================================================================
+    // MARK: - Connection
+    // ========================================================================
+
     public var isConnected: Bool {
         guard let app = musicApp else { return false }
         return app.isRunning
     }
 
-    // MARK: - Playback Control (使用动态方法调用)
-    public func playPause() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else {
-            debugPrint("⚠️ [MusicBridge] playPause: app not available\n")
-            return
-        }
-        debugPrint("▶️ [MusicBridge] playPause() called\n")
-        app.perform(Selector(("playpause")))
-    }
-
-    public func play() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-        debugPrint("▶️ [MusicBridge] play() called\n")
-        app.perform(Selector(("play")))
-    }
-
-    public func pause() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-        debugPrint("⏸️ [MusicBridge] pause() called\n")
-        app.perform(Selector(("pause")))
-    }
-
-    public func stop() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-        debugPrint("⏹️ [MusicBridge] stop() called\n")
-        app.perform(Selector(("stop")))
-    }
-
-    public func nextTrack() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else {
-            debugPrint("⚠️ [MusicBridge] nextTrack: app not available\n")
-            return
-        }
-        debugPrint("⏭️ [MusicBridge] nextTrack() called\n")
-        app.perform(Selector(("nextTrack")))
-    }
-
-    public func previousTrack() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else {
-            debugPrint("⚠️ [MusicBridge] previousTrack: app not available\n")
-            return
-        }
-        debugPrint("⏮️ [MusicBridge] previousTrack() called\n")
-        app.perform(Selector(("previousTrack")))
-    }
-
-    public func backTrack() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-        debugPrint("⏮️ [MusicBridge] backTrack() called\n")
-        app.perform(Selector(("backTrack")))
-    }
-
-    public func seek(to position: Double) {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else {
-            debugPrint("⚠️ [MusicBridge] seek: app not available\n")
-            return
-        }
-        debugPrint("⏩ [MusicBridge] seek(to: \(position)) called\n")
-        app.setValue(position, forKey: "playerPosition")
-    }
-
-    // MARK: - Connection Helper
     private func ensureConnection() {
         if musicApp == nil {
             debugPrint("🔄 [MusicBridge] Reconnecting...\n")
@@ -168,42 +115,82 @@ public class MusicBridge {
         }
     }
 
-    // MARK: - Refresh Connection
     public func refreshConnection() {
         debugPrint("🔄 [MusicBridge] refreshConnection() called\n")
         setupMusicApp()
     }
 
-    // MARK: - Player State (ScriptingBridge)
-    // playerState values: 0x6B505353 = stopped, 0x6B505370 = playing, 0x6B507073 = paused
+    /// 统一的 guard+log 包装：确保连接、检查 isRunning、打印标签
+    private func withApp(_ label: String, _ action: (SBApplication) -> Void) {
+        ensureConnection()
+        guard let app = musicApp, app.isRunning else { return }
+        debugPrint("▶️ [MusicBridge] \(label)\n")
+        action(app)
+    }
 
-    /// 获取播放器状态
+    // ========================================================================
+    // MARK: - Playback Control
+    // ========================================================================
+
+    public func playPause() {
+        withApp("playPause()") { $0.perform(Selector(("playpause"))) }
+    }
+
+    public func play() {
+        withApp("play()") { $0.perform(Selector(("play"))) }
+    }
+
+    public func pause() {
+        withApp("pause()") { $0.perform(Selector(("pause"))) }
+    }
+
+    public func stop() {
+        withApp("stop()") { $0.perform(Selector(("stop"))) }
+    }
+
+    public func nextTrack() {
+        withApp("nextTrack()") { $0.perform(Selector(("nextTrack"))) }
+    }
+
+    public func previousTrack() {
+        withApp("previousTrack()") { $0.perform(Selector(("previousTrack"))) }
+    }
+
+    public func backTrack() {
+        withApp("backTrack()") { $0.perform(Selector(("backTrack"))) }
+    }
+
+    public func seek(to position: Double) {
+        withApp("seek(to: \(position))") { $0.setValue(position, forKey: "playerPosition") }
+    }
+
+    // ========================================================================
+    // MARK: - Player State
+    // ========================================================================
+
     public func getPlayerState() -> (isPlaying: Bool, position: Double, shuffle: Bool, repeatMode: Int)? {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return nil }
 
         let playerState = app.value(forKey: "playerState") as? Int ?? 0
-        let isPlaying = playerState == 0x6B505370  // kMusicPlayerStatePlaying
+        let isPlaying = playerState == AppleEventCode.playing
         let position = app.value(forKey: "playerPosition") as? Double ?? 0
         let shuffle = app.value(forKey: "shuffleEnabled") as? Bool ?? false
         let songRepeat = app.value(forKey: "songRepeat") as? Int ?? 0
 
-        // songRepeat values: 0x6B52704F = off, 0x6B527031 = one, 0x6B52416C = all
         let repeatMode: Int
         switch songRepeat {
-        case 0x6B527031: repeatMode = 1  // one
-        case 0x6B52416C: repeatMode = 2  // all
-        default: repeatMode = 0          // off
+        case AppleEventCode.repeatOne: repeatMode = 1
+        case AppleEventCode.repeatAll: repeatMode = 2
+        default: repeatMode = 0
         }
 
         return (isPlaying, position, shuffle, repeatMode)
     }
 
-    /// 获取当前曲目信息
     public func getCurrentTrack() -> (name: String, artist: String, album: String, duration: Double, persistentID: String, bitRate: Int, sampleRate: Int)? {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return nil }
-
         guard let track = app.value(forKey: "currentTrack") as? NSObject else { return nil }
 
         let name = track.value(forKey: "name") as? String ?? ""
@@ -217,8 +204,10 @@ public class MusicBridge {
         return (name, artist, album, duration, persistentID, bitRate, sampleRate)
     }
 
-    /// 获取 Artwork 图片（直接通过 ScriptingBridge，无需临时文件）
-    /// 参考 Tuneful 实现：artwork.data 返回 NSImage
+    // ========================================================================
+    // MARK: - Artwork
+    // ========================================================================
+
     public func getArtworkImage() -> NSImage? {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return nil }
@@ -231,13 +220,11 @@ public class MusicBridge {
             return nil
         }
 
-        // Tuneful 方式：artwork.data 直接返回 NSImage
         if let image = artwork.value(forKey: "data") as? NSImage {
             debugPrint("✅ [MusicBridge] Got artwork as NSImage\n")
             return image
         }
 
-        // 回退：尝试 rawData 作为 Data
         if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
            let image = NSImage(data: rawData) {
             debugPrint("✅ [MusicBridge] Got artwork via rawData (\(rawData.count) bytes)\n")
@@ -248,7 +235,6 @@ public class MusicBridge {
         return nil
     }
 
-    /// 获取 Artwork 数据（保留旧接口兼容）
     public func getArtworkData() -> Data? {
         if let image = getArtworkImage() {
             return image.tiffRepresentation
@@ -256,18 +242,15 @@ public class MusicBridge {
         return nil
     }
 
-    /// 获取指定 persistentID 曲目的 Artwork
     public func getArtworkData(for persistentID: String) -> Data? {
         ensureConnection()
         guard let app = musicApp, app.isRunning, !persistentID.isEmpty else { return nil }
 
-        // 通过当前 playlist 查找曲目
         guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
               let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
             return nil
         }
 
-        // 遍历查找匹配的 track
         for i in 0..<tracks.count {
             if let track = tracks.object(at: i) as? NSObject,
                let trackID = track.value(forKey: "persistentID") as? String,
@@ -287,7 +270,10 @@ public class MusicBridge {
         return nil
     }
 
-    /// 获取播放队列中的下一首歌曲
+    // ========================================================================
+    // MARK: - Queue
+    // ========================================================================
+
     public func getUpNextTracks(limit: Int = 10) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return [] }
@@ -324,7 +310,6 @@ public class MusicBridge {
         return result
     }
 
-    /// 获取播放历史（当前曲目之前的歌曲）
     public func getRecentTracks(limit: Int = 10) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
         ensureConnection()
         guard let app = musicApp, app.isRunning else { return [] }
@@ -342,9 +327,7 @@ public class MusicBridge {
             guard let track = tracks.object(at: i) as? NSObject,
                   let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-            if trackID == currentID {
-                break  // 到达当前歌曲，停止
-            }
+            if trackID == currentID { break }
 
             let name = track.value(forKey: "name") as? String ?? ""
             let artist = track.value(forKey: "artist") as? String ?? ""
@@ -356,36 +339,65 @@ public class MusicBridge {
             }
         }
 
-        // 返回最后 limit 个，倒序（最近播放的在前）
         return Array(recentList.suffix(limit).reversed())
     }
 
-    /// 设置 Shuffle 状态
-    public func setShuffle(_ enabled: Bool) {
+    public func getQueueHash() -> String? {
         ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-        debugPrint("🔀 [MusicBridge] setShuffle(\(enabled))\n")
-        app.setValue(enabled, forKey: "shuffleEnabled")
-    }
+        guard let app = musicApp, app.isRunning else { return nil }
 
-    /// 设置 Repeat 模式 (0 = off, 1 = one, 2 = all)
-    public func setRepeat(_ mode: Int) {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-
-        // songRepeat values: 0x6B52704F = off, 0x6B527031 = one, 0x6B52416C = all
-        let repeatValue: Int
-        switch mode {
-        case 1: repeatValue = 0x6B527031  // one
-        case 2: repeatValue = 0x6B52416C  // all
-        default: repeatValue = 0x6B52704F // off
+        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+              let playlistName = playlist.value(forKey: "name") as? String,
+              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+            return nil
         }
 
-        debugPrint("🔁 [MusicBridge] setRepeat(\(mode)) -> 0x\(String(repeatValue, radix: 16))\n")
-        app.setValue(repeatValue, forKey: "songRepeat")
+        return "\(playlistName):\(tracks.count):\(currentID)"
     }
 
-    /// 播放指定曲目
+    // ========================================================================
+    // MARK: - Shuffle / Repeat
+    // ========================================================================
+
+    public func setShuffle(_ enabled: Bool) {
+        withApp("setShuffle(\(enabled))") { $0.setValue(enabled, forKey: "shuffleEnabled") }
+    }
+
+    public func setRepeat(_ mode: Int) {
+        let repeatValue: Int
+        switch mode {
+        case 1: repeatValue = AppleEventCode.repeatOne
+        case 2: repeatValue = AppleEventCode.repeatAll
+        default: repeatValue = AppleEventCode.repeatOff
+        }
+        withApp("setRepeat(\(mode)) -> 0x\(String(repeatValue, radix: 16))") {
+            $0.setValue(repeatValue, forKey: "songRepeat")
+        }
+    }
+
+    // ========================================================================
+    // MARK: - Volume
+    // ========================================================================
+
+    public func setVolume(_ level: Int) {
+        let clamped = max(0, min(100, level))
+        withApp("setVolume(\(clamped))") { $0.setValue(clamped, forKey: "soundVolume") }
+    }
+
+    public func toggleMute() {
+        ensureConnection()
+        guard let app = musicApp, app.isRunning else { return }
+        let currentMute = app.value(forKey: "mute") as? Bool ?? false
+        debugPrint("🔇 [MusicBridge] toggleMute() -> \(!currentMute)\n")
+        app.setValue(!currentMute, forKey: "mute")
+    }
+
+    // ========================================================================
+    // MARK: - Library & Favorites
+    // ========================================================================
+
     public func playTrack(persistentID: String) {
         ensureConnection()
         guard let app = musicApp, app.isRunning, !persistentID.isEmpty else { return }
@@ -406,45 +418,6 @@ public class MusicBridge {
         }
     }
 
-    /// 获取当前播放列表的 hash（用于检测变化）
-    public func getQueueHash() -> String? {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return nil }
-
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let playlistName = playlist.value(forKey: "name") as? String,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            return nil
-        }
-
-        return "\(playlistName):\(tracks.count):\(currentID)"
-    }
-
-    // MARK: - Volume Control
-
-    /// 设置音量 (0-100)
-    public func setVolume(_ level: Int) {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-        let clamped = max(0, min(100, level))
-        debugPrint("🔊 [MusicBridge] setVolume(\(clamped))\n")
-        app.setValue(clamped, forKey: "soundVolume")
-    }
-
-    /// 切换静音
-    public func toggleMute() {
-        ensureConnection()
-        guard let app = musicApp, app.isRunning else { return }
-        let currentMute = app.value(forKey: "mute") as? Bool ?? false
-        debugPrint("🔇 [MusicBridge] toggleMute() -> \(!currentMute)\n")
-        app.setValue(!currentMute, forKey: "mute")
-    }
-
-    // MARK: - Library & Favorites
-
-    /// 切换当前曲目的喜爱状态
     public func toggleLoved() {
         ensureConnection()
         guard let app = musicApp, app.isRunning,
@@ -454,14 +427,11 @@ public class MusicBridge {
         track.setValue(!currentLoved, forKey: "loved")
     }
 
-    /// 将当前曲目添加到资料库（通过动态方法调用）
     public func addCurrentTrackToLibrary() {
         ensureConnection()
         guard let app = musicApp, app.isRunning,
               let track = app.value(forKey: "currentTrack") as? NSObject else { return }
         debugPrint("📚 [MusicBridge] addCurrentTrackToLibrary()\n")
-        // 使用 duplicate 方法 - ScriptingBridge 可能不支持复杂操作
-        // 这个功能可能需要保留 osascript 作为回退
         track.perform(Selector(("duplicateTo:")), with: app.value(forKey: "sources"))
     }
 }

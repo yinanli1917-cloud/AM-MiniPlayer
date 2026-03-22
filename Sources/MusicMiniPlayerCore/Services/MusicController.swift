@@ -1,14 +1,15 @@
+/**
+ * [INPUT]: 依赖 ScriptingBridge, MusicKit, LyricsService
+ * [OUTPUT]: 导出 MusicController（播放状态 + 队列同步）
+ * [POS]: MusicMiniPlayerCore 的核心状态管理器
+ */
+
 import Foundation
 @preconcurrency import ScriptingBridge
 import Combine
 import SwiftUI
 import MusicKit
 import os
-
-// MARK: - ScriptingBridge Protocols (For Reading State Only)
-
-// Note: We don't actually use protocols with ScriptingBridge in Swift
-// Instead, we use dynamic member lookup through SBApplication directly
 
 // MARK: - 共享常量
 
@@ -27,11 +28,8 @@ public enum PlayerPage {
 public class MusicController: ObservableObject {
     // Singleton - NO initialization in static context to avoid Preview crashes
     public static let shared = MusicController()
-    
-    private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "MusicController")
 
-
-
+    let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "MusicController")
 
     // Published properties
     @Published public var isPlaying: Bool = false
@@ -48,92 +46,52 @@ public class MusicController: ObservableObject {
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
 
-    // 🔑 共享页面状态 - 浮窗和菜单栏弹窗同步
+    // 共享页面状态 - 浮窗和菜单栏弹窗同步
     @Published public var currentPage: PlayerPage = .album
-
-    // 🔑 追踪用户是否手动打开了歌词页面
-    // 用于判断 No Lyrics 时是否自动跳回专辑页面
+    // 追踪用户是否手动打开了歌词页面（No Lyrics 时自动跳回用）
     @Published public var userManuallyOpenedLyrics: Bool = false
-
-    // 🔑 封面亮度检测 - 用于 UI 元素自适应颜色
-    // true = 浅色背景（需要深色 UI），false = 深色背景（使用浅色 UI）
+    // 封面亮度检测 - true = 浅色背景（需要深色 UI）
     @Published public var isLightBackground: Bool = false
 
-    // Private properties
-    private var musicApp: SBApplication?
+    // 核心状态
+    var musicApp: SBApplication?
     private var pollingTimer: Timer?
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var lastPollTime: Date = .distantPast
-    private var internalCurrentTime: Double = 0  // 🔑 内部精确时间，不触发重绘
-    // 🔑 改为 public 以便 UI 层可以用 persistentID 精确匹配当前播放的歌曲
+    var internalCurrentTime: Double = 0  // 内部精确时间，不触发重绘
     @Published public var currentPersistentID: String?
-
-    // 🔑 暴露 LyricsService 单例供 UI 层访问
     public var lyricsService: LyricsService { LyricsService.shared }
 
-    private var artworkCache: NSCache<NSString, NSImage> = {
+    var artworkCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 100  // 最多缓存 100 张封面
-        cache.totalCostLimit = 100 * 1024 * 1024  // 100MB 内存限制
+        cache.countLimit = 100
+        cache.totalCostLimit = 100 * 1024 * 1024  // 100MB
         return cache
     }()
-    private var isPreview: Bool = false
+    var isPreview: Bool = false
 
-    // 🔑 ScriptingBridge 队列策略：
-    // - 核心操作队列（高优先级）：用于切歌、播放状态更新等核心操作
-    // - 封面获取队列（后台）：歌单封面预加载等非紧急操作
-    // - 控制操作（用户交互）：直接在调用线程执行，保证即时响应
-    private let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
-    // 🔑 封面获取必须串行化 - ScriptingBridge 非线程安全
-    // 崩溃根因 (2026-01-25)：并发队列 + 信号量仍有竞态，导致 EXC_BAD_ACCESS
-    // 解决方案：直接用串行队列，放弃并发优化
-    private let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
+    // ScriptingBridge 队列：核心操作(高优先级) / 封面获取(后台串行)
+    let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
+    let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
     /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
-    private var artworkFetchingForKey: String?
+    var artworkFetchingForKey: String?
 
-    // 🔑 封面调试日志 - 复用全局 debugPrint（条件编译保护）
+    /// 封面获取代数：每次切歌递增，旧代任务在 SB 队列排到时直接跳过
+    /// 解决电台快速切歌时 scriptingBridgeQueue 堆积导致封面不更新的问题
+    var artworkFetchGeneration: Int = 0
+
     @inline(__always)
-    private func logToFile(_ message: String) {
-        debugPrint(message + "\n")
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - Artwork Extraction Helper
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    /// 从 ScriptingBridge track 对象提取封面图片
-    /// 🔑 复用于队列遍历和单独封面获取，避免重复代码
-    private func extractArtwork(from track: NSObject) -> NSImage? {
-        guard let artworks = track.value(forKey: "artworks") as? SBElementArray,
-              artworks.count > 0,
-              let artwork = artworks.object(at: 0) as? NSObject else {
-            return nil
-        }
-        // 尝试 data 属性（Tuneful 方式）
-        if let image = artwork.value(forKey: "data") as? NSImage {
-            return image
-        }
-        // 尝试 rawData 属性
-        if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
-           let image = NSImage(data: rawData) {
-            return image
-        }
-        return nil
+    func logToFile(_ message: String) {
+        DebugLogger.log("Artwork", message)
     }
 
     // Queue sync state
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
-
-    // 🔑 Timer 动态控制状态
     private var interpolationTimerActive = false
-
-    // 🔑 Seek 标记：执行 seek 后立即同步时间
-    private var seekPending = false
-
-    // State synchronization lock
-    private var lastUserActionTime: Date = .distantPast
+    var seekPending = false
+    var lastUserActionTime: Date = .distantPast
     private let userActionLockDuration: TimeInterval = 1.5
 
     public init(preview: Bool = false) {
@@ -148,7 +106,7 @@ public class MusicController: ObservableObject {
             self.currentArtist = "Preview Artist"
             self.currentAlbum = "Preview Album"
             self.currentArtwork = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Preview")
-            
+
             // Populate dummy data for preview
             self.recentTracks = [
                 (title: "Recent Song 1", artist: "Artist A", album: "Album A", persistentID: "1", duration: 190.0),
@@ -177,7 +135,7 @@ public class MusicController: ObservableObject {
             self?.connect()
         }
     }
-    
+
     public func connect() {
         debugPrint("🔌 [MusicController] connect() called\n")
         guard !isPreview else {
@@ -256,7 +214,7 @@ public class MusicController: ObservableObject {
         @unknown default: return "未知"
         }
     }
-    
+
     deinit {
         pollingTimer?.invalidate()
         interpolationTimer?.invalidate()
@@ -280,41 +238,19 @@ public class MusicController: ObservableObject {
 
     @MainActor
     private func requestMusicKitAuthorization() async {
-        debugPrint("🔐 [MusicKit] requestMusicKitAuthorization() called\n")
-
-        // 1. 检查当前状态
         let currentStatus = MusicAuthorization.currentStatus
-        debugPrint("🔐 [MusicKit] Current status: \(currentStatus)\n")
+        debugPrint("🔐 [MusicKit] status: \(currentStatus)\n")
 
         if currentStatus == .authorized {
             musicKitAuthorized = true
-            debugPrint("✅ [MusicKit] Already authorized!\n")
             return
         }
-
-        // 2. 请求授权
         if currentStatus == .notDetermined {
-            debugPrint("🔐 [MusicKit] Requesting authorization...\n")
             let newStatus = await MusicAuthorization.request()
-            debugPrint("🔐 [MusicKit] Authorization result: \(newStatus)\n")
-
             musicKitAuthorized = newStatus == .authorized
-
-            switch newStatus {
-            case .authorized:
-                debugPrint("✅ [MusicKit] Authorized!\n")
-            case .denied:
-                debugPrint("⚠️ [MusicKit] User denied access\n")
-            case .restricted:
-                debugPrint("❌ [MusicKit] Access restricted\n")
-            case .notDetermined:
-                debugPrint("⚠️ [MusicKit] Status still not determined\n")
-            @unknown default:
-                debugPrint("❌ [MusicKit] Unknown status\n")
-            }
-        } else if currentStatus == .denied {
+            debugPrint("🔐 [MusicKit] result: \(newStatus)\n")
+        } else {
             musicKitAuthorized = false
-            debugPrint("⚠️ [MusicKit] Previously denied\n")
         }
     }
 
@@ -356,86 +292,55 @@ public class MusicController: ObservableObject {
     }
 
     private func startPolling() {
-        debugPrint("⏰ [startPolling] Setting up timers on thread: \(Thread.isMainThread ? "Main" : "Background")\n")
-
-        // Ensure timers are created on main thread
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            debugPrint("⏰ [startPolling] Creating polling timer (0.5s interval)\n")
-            // 🔑 Poll AppleScript every 0.5 second for better lyrics sync
-            // 原来 1.0s 会导致歌词延迟，因为真实时间每秒才同步一次
+            // 0.5s 轮询（歌词同步需要），.common mode 保证拖动时也更新
             self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                 self?.updatePlayerState()
             }
-            // 🔑 添加到 .common mode，确保拖动/动画时也能更新
             RunLoop.main.add(self.pollingTimer!, forMode: .common)
-            // Fire immediately
             self.pollingTimer?.fire()
 
-            // Local interpolation timer - 动态启动（仅在播放时运行）
-            // 不在此处初始化，由 updateTimerState() 动态控制
+            // interpolationTimer 由 updateTimerState() 动态控制（仅播放时运行）
 
-            // Queue hash check timer - lightweight check every 2 seconds
+            // 2s 队列 hash 检测
             self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.checkQueueHashAndRefresh()
             }
-            // 🔑 添加到 .common mode
             RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
-            // 🔑 立即触发一次，获取初始队列
             self.queueCheckTimer?.fire()
 
-            // Setup MusicKit queue observer
             self.setupMusicKitQueueObserver()
-
-            debugPrint("⏰ [startPolling] All timers created\n")
         }
     }
 
-    /// 🔑 根据播放状态动态启停高频 Timer（减少 CPU 占用）
+    /// 根据播放状态动态启停 60fps 插值 Timer（减少 CPU 占用）
     private func updateTimerState() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-
             if self.isPlaying && !self.interpolationTimerActive {
-                // 开始播放 -> 启动高频 Timer
                 self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
                     self?.interpolateTime()
                 }
-                // 🔑 添加到 .common mode，确保拖动/动画时也能更新
                 RunLoop.main.add(self.interpolationTimer!, forMode: .common)
                 self.interpolationTimerActive = true
-                self.logger.debug("⏱️ interpolationTimer started")
             } else if !self.isPlaying && self.interpolationTimerActive {
-                // 停止播放 -> 停止高频 Timer
                 self.interpolationTimer?.invalidate()
                 self.interpolationTimer = nil
                 self.interpolationTimerActive = false
-                self.logger.debug("⏱️ interpolationTimer stopped")
             }
         }
     }
 
     // MARK: - Queue Sync (双层检测)
 
-    /// 轻量级队列hash检测 - 通过 ScriptingBridge 检测变化
     private func checkQueueHashAndRefresh() {
         guard !isPreview else { return }
 
-        debugPrint("🔍 [checkQueueHash] Timer fired, musicApp=\(musicApp != nil)\n")
-
-        // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         scriptingBridgeQueue.async { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else {
-                debugPrint("⚠️ [checkQueueHash] musicApp not available\n")
-                return
-            }
-
-            // 🔑 使用自己的 musicApp 实例获取 queue hash
-            guard let hash = self.getQueueHashFromApp(app) else {
-                debugPrint("⚠️ [checkQueueHash] Failed to get queue hash\n")
-                return
-            }
+            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            guard let hash = self.getQueueHashFromApp(app) else { return }
 
             DispatchQueue.main.async {
                 if hash != self.lastQueueHash {
@@ -469,70 +374,33 @@ public class MusicController: ObservableObject {
         return "\(playlistName):\(tracks.count):\(currentID)"
     }
 
-    /// MusicKit队列观察器 - 使用DistributedNotificationCenter监听Apple Music变化
     private func setupMusicKitQueueObserver() {
         guard !isPreview else { return }
-
-        // 监听 Apple Music 播放信息变化（包括队列变化）
-        // 这些是macOS上可用的通知
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(queueMayHaveChanged),
-            name: NSNotification.Name("com.apple.Music.playerInfo"),
-            object: nil
-        )
-
-        // 监听播放列表变化
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(queueMayHaveChanged),
-            name: NSNotification.Name("com.apple.Music.playlistChanged"),
-            object: nil
-        )
-
-        logger.info("📻 Setup DistributedNotificationCenter observers for queue changes")
+        let dnc = DistributedNotificationCenter.default()
+        for name in ["com.apple.Music.playerInfo", "com.apple.Music.playlistChanged"] {
+            dnc.addObserver(self, selector: #selector(queueMayHaveChanged), name: .init(name), object: nil)
+        }
     }
 
     @objc private func queueMayHaveChanged(_ notification: Notification) {
-        // 防抖动：如果距离上次检查不到1秒，跳过
-        let now = Date()
-        if now.timeIntervalSince(lastPollTime) < 1.0 {
-            return
-        }
-
-        logger.info("📻 Received notification: \(notification.name.rawValue)")
-
-        // 延迟执行以避免在快速切换时重复刷新
+        guard Date().timeIntervalSince(lastPollTime) >= 1.0 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.checkQueueHashAndRefresh()
         }
     }
-    
+
     private func interpolateTime() {
         guard isPlaying, !isPreview else { return }
-
-        // 🔑 使用实际经过的时间计算当前播放位置
         let elapsed = Date().timeIntervalSince(lastPollTime)
+        guard elapsed >= 0 && elapsed < 3.0 else { return }
 
-        // Only interpolate if we're within a reasonable window of the last poll (e.g. 3 seconds)
-        if elapsed < 3.0 && elapsed >= 0 {
-            // 🔑 基于上次轮询的真实时间 + 经过时间
-            // internalCurrentTime 存储的是上次轮询时 Music.app 返回的真实位置
-            let interpolatedTime = internalCurrentTime + elapsed
+        let interpolatedTime = internalCurrentTime + elapsed
+        let clampedTime = duration > 0 ? min(interpolatedTime, duration) : interpolatedTime
 
-            // Clamp to duration
-            let clampedTime = duration > 0 ? min(interpolatedTime, duration) : interpolatedTime
-
-            // 🔑 关键修复：只允许时间单调递增（不能后退）
-            // 这避免了轮询更新时时间跳回的问题
-            // 除非差距太大（>2秒），说明用户 seek 了
-            if clampedTime >= currentTime || (currentTime - clampedTime) > 2.0 {
-                // 🔑 性能优化：增加更新阈值从 0.05s 到 0.1s
-                // 减少 @Published 触发频率，从 20次/秒 降到 10次/秒
-                // 进度条仍然视觉流畅，但 CPU 开销减半
-                if abs(clampedTime - currentTime) >= 0.1 {
-                    currentTime = clampedTime
-                }
+        // 单调递增（除非差距 >2s 说明 seek 了），阈值 0.1s 减少重绘
+        if clampedTime >= currentTime || (currentTime - clampedTime) > 2.0 {
+            if abs(clampedTime - currentTime) >= 0.1 {
+                currentTime = clampedTime
             }
         }
     }
@@ -582,9 +450,18 @@ public class MusicController: ObservableObject {
                 self.logger.info("🎵 Track changed (notification): \(name) - \(artist)")
                 debugPrint("🎵 [playerInfoChanged] Track changed: \(name) - \(artist)\n")
 
+                // 🔑 递增封面代数，让旧的 SB 队列任务自动跳过
+                self.artworkFetchGeneration += 1
+                let generation = self.artworkFetchGeneration
+
                 // 🔑 优化：一次性获取 persistentID + artwork，避免两次排队
-                scriptingBridgeQueue.async { [weak self] in
+                self.scriptingBridgeQueue.async { [weak self] in
                     guard let self = self, let app = self.musicApp, app.isRunning else { return }
+                    // 🔑 代数检查：如果已经切到下一首，直接跳过
+                    guard self.artworkFetchGeneration == generation else {
+                        debugPrint("⏭️ [playerInfoChanged] SB task stale (gen \(generation) vs \(self.artworkFetchGeneration)), skipping\n")
+                        return
+                    }
 
                     var persistentID = ""
                     var artworkImage: NSImage? = nil
@@ -634,7 +511,7 @@ public class MusicController: ObservableObject {
                                     // 🔑 电台首歌特殊处理：延迟 1s 重试 ScriptingBridge
                                     // Music.app 可能需要时间加载封面数据
                                     try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                    await self.retryArtworkFetch(persistentID: persistentID, title: name, artist: artist, album: album)
+                                    await self.retryArtworkFetch(persistentID: persistentID, title: name, artist: artist, album: album, generation: generation)
                                 }
                             }
                         }
@@ -887,853 +764,5 @@ public class MusicController: ObservableObject {
                 sampleRate: sampleRate
             )
         }
-    }
-
-    // MARK: - Artwork Management (ScriptingBridge > MusicKit > Placeholder)
-
-    /// 🔑 设置封面并自动计算亮度
-    private func setArtwork(_ image: NSImage?) {
-        self.currentArtwork = image
-        artworkFetchingForKey = nil  // 🔑 清除去重标志，允许后续获取
-        // 计算亮度，阈值 0.6 以上视为浅色背景
-        if let img = image {
-            let brightness = img.perceivedBrightness()
-            self.isLightBackground = brightness > 0.6
-        } else {
-            self.isLightBackground = false
-        }
-    }
-
-    /// 判断封面回调是否仍对应当前播放曲目
-    /// persistentID 非空时用 ID 比对；电台等无 ID 场景用 title 比对
-    private func isStillCurrentTrack(persistentID: String, title: String) -> Bool {
-        if !persistentID.isEmpty {
-            return currentPersistentID == persistentID
-        }
-        return currentTrackTitle == title
-    }
-
-    private func fetchArtwork(for title: String, artist: String, album: String, persistentID: String) {
-        logToFile("🎨 fetchArtwork: \(title) - \(artist)")
-
-        // Check cache first（空 persistentID 跳过缓存）
-        if !persistentID.isEmpty, let cached = artworkCache.object(forKey: persistentID as NSString) {
-            logToFile("🎨 Cache HIT")
-            self.setArtwork(cached)
-            return
-        }
-
-        // 🔑 去重：防止通知路径和轮询路径同时触发
-        let fetchKey = persistentID.isEmpty ? "title:\(title)" : "id:\(persistentID)"
-        guard artworkFetchingForKey != fetchKey else {
-            logToFile("🎨 Already fetching for \(fetchKey), skipping")
-            return
-        }
-        artworkFetchingForKey = fetchKey
-
-        logToFile("🎨 Cache MISS, starting sequential fetch (SB first, API fallback)...")
-
-        // 🔑 串行优先级策略：优先 ScriptingBridge（与系统一致），失败才用 API
-        scriptingBridgeQueue.async { [weak self] in
-            guard let self = self,
-                  let app = self.musicApp,
-                  app.isRunning else {
-                DispatchQueue.main.async { [weak self] in self?.artworkFetchingForKey = nil }
-                return
-            }
-
-            self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
-            if let image = self.getArtworkImageFromApp(app) {
-                self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
-                DispatchQueue.main.async {
-                    self.setArtwork(image)
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(image, forKey: persistentID as NSString)
-                    }
-                }
-            } else {
-                // 🔑 ScriptingBridge 失败，回退到 API
-                self.logToFile("🎨 [SB] No embedded artwork, falling back to API...")
-                Task {
-                    if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                        self.logToFile("🎨 [API] SUCCESS! Got image \(mkArtwork.size)")
-                        await MainActor.run {
-                            if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                                self.setArtwork(mkArtwork)
-                                if !persistentID.isEmpty {
-                                    self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
-                                }
-                            }
-                        }
-                    } else {
-                        self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
-                        await MainActor.run {
-                            if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                                self.setArtwork(self.createPlaceholder())
-                            }
-                        }
-                        // 延迟 1s 重试（电台/流媒体歌曲可能需要时间加载封面）
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album)
-                    }
-                }
-            }
-        }
-    }
-
-
-    /// 从 SBApplication 获取当前播放曲目的封面图片
-    /// 🔑 复用 extractArtwork 避免重复代码
-    private func getArtworkImageFromApp(_ app: SBApplication) -> NSImage? {
-        guard let track = app.value(forKey: "currentTrack") as? NSObject else { return nil }
-        return extractArtwork(from: track)
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - Artwork Fetching (双轨方案: MusicKit + iTunes Search API)
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    /// 获取封面图片 - 双轨方案
-    /// 1. 优先尝试 MusicKit（App Store 版本，需要开发者签名）
-    /// 2. 回退到 iTunes Search API（开发版本，公开 API 无需签名）
-    public func fetchMusicKitArtwork(title: String, artist: String, album: String) async -> NSImage? {
-        guard !isPreview else { return nil }
-
-        // Track 1: MusicKit (App Store 正式版)
-        if MusicAuthorization.currentStatus == .authorized {
-            if let image = await fetchArtworkViaMusicKit(title: title, artist: artist) {
-                return image
-            }
-        }
-
-        // Track 2: iTunes Search API (开发版回退)
-        return await fetchArtworkViaITunesAPI(title: title, artist: artist)
-    }
-
-    /// MusicKit 方式获取封面（需要开发者签名 + entitlement）
-    private func fetchArtworkViaMusicKit(title: String, artist: String) async -> NSImage? {
-        do {
-            let searchTerm = "\(title) \(artist)"
-            var request = MusicCatalogSearchRequest(term: searchTerm, types: [Song.self])
-            request.limit = 1
-            let response = try await request.response()
-
-            if let song = response.songs.first,
-               let artwork = song.artwork,
-               let url = artwork.url(width: 300, height: 300) {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                return NSImage(data: data)
-            }
-        } catch {
-            // MusicKit 失败（未签名/无 entitlement），静默回退
-        }
-        return nil
-    }
-
-    /// iTunes Search API 方式获取封面（公开 API，无需授权）
-    /// 使用多级搜索策略提高命中率
-    private func fetchArtworkViaITunesAPI(title: String, artist: String) async -> NSImage? {
-        // 🔑 多级搜索策略
-        let searchStrategies = [
-            "\(title) \(artist)",           // 1. title + artist（最精确）
-            "\(artist) \(title)",           // 2. artist + title（顺序调换）
-            title,                          // 3. 只用 title
-            artist                          // 4. 只用 artist
-        ]
-
-        for searchTerm in searchStrategies {
-            let trimmed = searchTerm.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty,
-                  let encodedTerm = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                  let url = URL(string: "https://itunes.apple.com/search?term=\(encodedTerm)&media=music&entity=song&limit=5") else {
-                continue
-            }
-
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let results = json["results"] as? [[String: Any]],
-                   !results.isEmpty {
-                    // 🔑 优先选择匹配 artist 的结果
-                    let artistLower = artist.lowercased()
-                    let titleLower = title.lowercased()
-
-                    let bestMatch = results.first { result in
-                        let resultArtist = (result["artistName"] as? String)?.lowercased() ?? ""
-                        let resultTrack = (result["trackName"] as? String)?.lowercased() ?? ""
-                        return resultArtist.contains(artistLower) || artistLower.contains(resultArtist) ||
-                               resultTrack.contains(titleLower) || titleLower.contains(resultTrack)
-                    } ?? results.first
-
-                    if let match = bestMatch,
-                       let artworkUrlString = match["artworkUrl100"] as? String {
-                        // 替换为高分辨率 (300x300)
-                        let highResUrl = artworkUrlString.replacingOccurrences(of: "100x100", with: "300x300")
-                        if let artworkUrl = URL(string: highResUrl),
-                           let (imageData, _) = try? await URLSession.shared.data(from: artworkUrl) {
-                            logToFile("🎨 [iTunes API] Found artwork via strategy: \(searchTerm)")
-                            return NSImage(data: imageData)
-                        }
-                    }
-                }
-            } catch {
-                // 继续尝试下一个策略
-            }
-        }
-
-        logToFile("🎨 [iTunes API] All strategies failed for: \(title) - \(artist)")
-        return nil
-    }
-
-    // 🔑 同步获取缓存中的封面（供 UI 层直接使用）
-    // 如果缓存命中立即返回，避免 async 开销
-    public func getCachedArtwork(persistentID: String) -> NSImage? {
-        guard !persistentID.isEmpty else { return nil }
-        return artworkCache.object(forKey: persistentID as NSString)
-    }
-
-    /// 延迟重试封面获取（电台首歌特殊处理）
-    /// Music.app 刚开始播放电台时，封面数据可能尚未加载完成
-    private func retryArtworkFetch(persistentID: String, title: String, artist: String, album: String) async {
-        guard await MainActor.run(body: { isStillCurrentTrack(persistentID: persistentID, title: title) }) else { return }
-
-        debugPrint("🔄 [retryArtworkFetch] Retrying for \(title)...\n")
-
-        // 1. 先尝试 ScriptingBridge（Music.app 可能已加载好封面）
-        let sbImage: NSImage? = await withCheckedContinuation { continuation in
-            scriptingBridgeQueue.async { [weak self] in
-                guard let self = self, let app = self.musicApp, app.isRunning else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let image = self.getArtworkImageFromApp(app)
-                continuation.resume(returning: image)
-            }
-        }
-
-        if let image = sbImage {
-            await MainActor.run {
-                if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                    self.setArtwork(image)
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(image, forKey: persistentID as NSString)
-                    }
-                    debugPrint("✅ [retryArtworkFetch] ScriptingBridge retry success\n")
-                }
-            }
-            return
-        }
-
-        // 2. ScriptingBridge 仍然失败，再试一次网络 API
-        if let mkArtwork = await fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-            await MainActor.run {
-                if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                    self.setArtwork(mkArtwork)
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
-                    }
-                    debugPrint("✅ [retryArtworkFetch] API retry success\n")
-                }
-            }
-        } else {
-            debugPrint("⚠️ [retryArtworkFetch] All retries failed for \(title)\n")
-        }
-    }
-
-    // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
-    public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
-        guard !isPreview, !persistentID.isEmpty, let app = musicApp, app.isRunning else {
-            return nil
-        }
-
-        // 先检查缓存
-        if let cached = artworkCache.object(forKey: persistentID as NSString) {
-            return cached
-        }
-
-        // 🔑 串行队列保证 ScriptingBridge 线程安全
-        let image: NSImage? = await withCheckedContinuation { continuation in
-            artworkFetchQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let result = self.getArtworkImageByPersistentID(app, persistentID: persistentID)
-                continuation.resume(returning: result)
-            }
-        }
-
-        // 缓存结果
-        if let image = image {
-            artworkCache.setObject(image, forKey: persistentID as NSString)
-        }
-
-        return image
-    }
-
-    /// 从 SBApplication 获取指定 persistentID 的封面
-    private func getArtworkImageByPersistentID(_ app: SBApplication, persistentID: String) -> NSImage? {
-        let startTime = CFAbsoluteTimeGetCurrent()
-
-        // 1. 先在 currentPlaylist 中查找（限制搜索范围为前 100 首，因为 Up Next 只显示 10 首）
-        if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-           let tracks = playlist.value(forKey: "tracks") as? SBElementArray {
-
-            // 🔑 只遍历前 100 首（Up Next 只显示当前歌曲后的 10 首）
-            let searchLimit = min(tracks.count, 100)
-            for i in 0..<searchLimit {
-                if let track = tracks.object(at: i) as? NSObject,
-                   let trackID = track.value(forKey: "persistentID") as? String,
-                   trackID == persistentID {
-                    if let image = extractArtwork(from: track) {
-                        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                        debugPrint("✅ [getArtworkByPersistentID] Found at index \(i) in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
-                        return image
-                    }
-                }
-            }
-        }
-
-        // 2. 如果在当前播放列表的前 100 首中没找到，尝试用 NSPredicate 在 library 中查找
-        let predicate = NSPredicate(format: "persistentID == %@", persistentID)
-        if let sources = app.value(forKey: "sources") as? SBElementArray, sources.count > 0,
-           let source = sources.object(at: 0) as? NSObject,
-           let libraryPlaylists = source.value(forKey: "libraryPlaylists") as? SBElementArray,
-           libraryPlaylists.count > 0,
-           let libraryPlaylist = libraryPlaylists.object(at: 0) as? NSObject,
-           let tracks = libraryPlaylist.value(forKey: "tracks") as? SBElementArray {
-
-            // 🔑 使用 NSPredicate 过滤（这个在 library 中效率更高）
-            if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
-               filteredTracks.count > 0,
-               let track = filteredTracks.object(at: 0) as? NSObject {
-                if let image = extractArtwork(from: track) {
-                    let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                    debugPrint("✅ [getArtworkByPersistentID] Found in library in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
-                    return image
-                }
-            }
-        }
-
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-        debugPrint("⚠️ [getArtworkByPersistentID] Not found in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
-        return nil
-    }
-
-    private func createPlaceholder() -> NSImage {
-        let size = NSSize(width: 300, height: 300)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        let gradient = NSGradient(colors: [NSColor.systemGray.withAlphaComponent(0.3), NSColor.systemGray.withAlphaComponent(0.1)])
-        gradient?.draw(in: NSRect(origin: .zero, size: size), angle: 45)
-        if let icon = NSImage(systemSymbolName: "music.note", accessibilityDescription: nil) {
-            icon.draw(in: NSRect(x: 110, y: 110, width: 80, height: 80))
-        }
-        image.unlockFocus()
-        return image
-    }
-
-    // MARK: - Playback Controls (用户交互优先，使用高优先级队列)
-
-    public func togglePlayPause() {
-        if isPreview {
-            logger.info("Preview: togglePlayPause")
-            isPlaying.toggle()
-            return
-        }
-
-        // 🔑 Optimistic UI update FIRST (before async call)
-        self.lastUserActionTime = Date()
-        self.isPlaying.toggle()
-
-        // 🔑 用户交互操作使用高优先级队列，保证即时响应
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
-                debugPrint("⚠️ [MusicController] togglePlayPause: app not available\n")
-                return
-            }
-            debugPrint("▶️ [MusicController] togglePlayPause() executing\n")
-            app.perform(Selector(("playpause")))
-        }
-    }
-
-    public func nextTrack() {
-        if isPreview {
-            logger.info("Preview: nextTrack")
-            return
-        }
-        // 🔑 控制操作直接执行，不阻塞 UI
-        // ScriptingBridge 的 perform 是异步的，几乎瞬间返回
-        guard let app = self.musicApp, app.isRunning else {
-            debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
-            return
-        }
-        debugPrint("⏭️ [MusicController] nextTrack() executing\n")
-        app.perform(Selector(("nextTrack")))
-
-        // 🔑 异步获取新曲目信息（不阻塞控制操作）
-        scriptingBridgeQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else { return }
-            self.fetchCurrentTrackInfo(app: app)
-        }
-    }
-
-    public func previousTrack() {
-        if isPreview {
-            logger.info("Preview: previousTrack")
-            return
-        }
-        // Apple Music 标准行为：播放超过3秒时按上一首会回到歌曲开头
-        if currentTime > 3.0 {
-            seek(to: 0)
-        } else {
-            // 🔑 控制操作直接执行，不阻塞 UI
-            guard let app = self.musicApp, app.isRunning else {
-                debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
-                return
-            }
-            debugPrint("⏮️ [MusicController] previousTrack() executing\n")
-            app.perform(Selector(("backTrack")))
-
-            // 🔑 异步获取新曲目信息（不阻塞控制操作）
-            scriptingBridgeQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                guard let self = self, let app = self.musicApp, app.isRunning else { return }
-                self.fetchCurrentTrackInfo(app: app)
-            }
-        }
-    }
-
-    /// 🔑 获取当前曲目信息和封面（在 scriptingBridgeQueue 上调用）
-    private func fetchCurrentTrackInfo(app: SBApplication) {
-        // 获取曲目信息
-        guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject else {
-            debugPrint("⚠️ [fetchCurrentTrackInfo] No current track\n")
-            return
-        }
-
-        let trackName = currentTrack.value(forKey: "name") as? String ?? ""
-        let trackArtist = currentTrack.value(forKey: "artist") as? String ?? ""
-        let trackAlbum = currentTrack.value(forKey: "album") as? String ?? ""
-        let persistentID = currentTrack.value(forKey: "persistentID") as? String ?? ""
-        let duration = currentTrack.value(forKey: "duration") as? Double ?? 0
-
-        // 检查是否真的切换了歌曲
-        if persistentID == self.currentPersistentID {
-            return
-        }
-
-        // 🔑 先更新基本信息（立即响应）
-        DispatchQueue.main.async {
-            self.currentTrackTitle = trackName
-            self.currentArtist = trackArtist
-            self.currentAlbum = trackAlbum
-            self.duration = duration
-            self.currentPersistentID = persistentID
-            self.currentTime = 0
-            self.internalCurrentTime = 0
-            // 重置用户手动打开歌词标记
-            self.userManuallyOpenedLyrics = false
-        }
-
-        // 🔑 封面获取策略：先用缓存/占位图立即响应，再异步获取真实封面
-        let title = trackName
-        let artist = trackArtist
-        let album = trackAlbum
-        let pid = persistentID
-
-        // 1. 检查缓存（立即返回）
-        if !pid.isEmpty, let cached = self.artworkCache.object(forKey: pid as NSString) {
-            DispatchQueue.main.async {
-                self.setArtwork(cached)
-            }
-            return
-        }
-
-        // 2. 先设置占位图（立即响应）
-        DispatchQueue.main.async {
-            self.setArtwork(self.createPlaceholder())
-        }
-
-        // 3. 异步获取封面（不阻塞曲目信息更新）
-        // 🔑 这里仍然在 scriptingBridgeQueue 上，但使用 async 让出控制权
-        let artworkImage = self.getArtworkImageFromApp(app)
-        if let image = artworkImage {
-            if !pid.isEmpty {
-                self.artworkCache.setObject(image, forKey: pid as NSString)
-            }
-            DispatchQueue.main.async {
-                // 确保还是同一首歌
-                if self.currentPersistentID == pid {
-                    self.setArtwork(image)
-                }
-            }
-        } else {
-            // 🔑 ScriptingBridge 获取失败，异步尝试 MusicKit
-            DispatchQueue.main.async {
-                Task {
-                    if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                        await MainActor.run {
-                            if self.currentPersistentID == pid {
-                                self.setArtwork(mkArtwork)
-                                if !pid.isEmpty {
-                                    self.artworkCache.setObject(mkArtwork, forKey: pid as NSString)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    public func seek(to position: Double) {
-        if isPreview {
-            logger.info("Preview: seek to \(position)")
-            currentTime = position
-            internalCurrentTime = position
-            return
-        }
-        // Optimistic UI update
-        currentTime = position
-        internalCurrentTime = position
-        // 🔑 标记 seek 执行中，下次轮询时立即同步
-        seekPending = true
-
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
-                debugPrint("⚠️ [MusicController] seek: app not available\n")
-                return
-            }
-            debugPrint("⏩ [MusicController] seek(to: \(position)) executing\n")
-            app.setValue(position, forKey: "playerPosition")
-        }
-    }
-
-    public func toggleShuffle() {
-        if isPreview {
-            logger.info("Preview: toggleShuffle")
-            shuffleEnabled.toggle()
-            return
-        }
-
-        let newShuffleState = !shuffleEnabled
-        // Optimistic UI update
-        self.shuffleEnabled = newShuffleState
-
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
-                debugPrint("⚠️ [MusicController] toggleShuffle: app not available\n")
-                return
-            }
-            debugPrint("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on scriptingBridgeQueue\n")
-            app.setValue(newShuffleState, forKey: "shuffleEnabled")
-        }
-
-        // Wait a moment for Music.app to apply shuffle, then refresh queue
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.fetchUpNextQueue()
-        }
-    }
-
-    public func playTrack(persistentID: String) {
-        if isPreview {
-            logger.info("Preview: playTrack \(persistentID)")
-            return
-        }
-
-        debugPrint("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n")
-
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async {
-            let script = """
-            tell application "Music"
-                set targetTrack to first track of current playlist whose persistent ID is "\(persistentID)"
-                play targetTrack
-            end tell
-            """
-
-            var error: NSDictionary?
-            if let appleScript = NSAppleScript(source: script) {
-                appleScript.executeAndReturnError(&error)
-                if let error = error {
-                    debugPrint("⚠️ [playTrack] AppleScript error: \(error)\n")
-                } else {
-                    debugPrint("▶️ [playTrack] Started playing via AppleScript\n")
-                }
-            }
-        }
-    }
-
-    public func cycleRepeatMode() {
-        if isPreview {
-            logger.info("Preview: cycleRepeatMode")
-            repeatMode = (repeatMode + 1) % 3
-            return
-        }
-
-        let newMode = (repeatMode + 1) % 3
-        // songRepeat values: 0x6B52704F = off, 0x6B527031 = one, 0x6B52416C = all
-        let repeatValue: Int
-        switch newMode {
-        case 1: repeatValue = 0x6B527031  // one
-        case 2: repeatValue = 0x6B52416C  // all
-        default: repeatValue = 0x6B52704F // off
-        }
-
-        // Optimistic UI update
-        self.repeatMode = newMode
-
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
-                debugPrint("⚠️ [MusicController] cycleRepeatMode: app not available\n")
-                return
-            }
-            debugPrint("🔁 [MusicController] setRepeat(\(newMode)) -> 0x\(String(repeatValue, radix: 16))\n")
-            app.setValue(repeatValue, forKey: "songRepeat")
-        }
-
-        // Refresh queue after repeat mode change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.fetchUpNextQueue()
-        }
-    }
-
-    public func fetchUpNextQueue() {
-        debugPrint("📋 [fetchUpNextQueue] Called, isPreview=\(isPreview)\n")
-
-        guard !isPreview else {
-            // Preview data
-            upNextTracks = [
-                ("Next Song 1", "Artist 1", "Album 1", "1", 180.0),
-                ("Next Song 2", "Artist 2", "Album 2", "2", 200.0),
-                ("Next Song 3", "Artist 3", "Album 3", "3", 220.0)
-            ]
-            recentTracks = [
-                ("Recent Song 1", "Artist A", "Album A", "A", 190.0),
-                ("Recent Song 2", "Artist B", "Album B", "B", 210.0)
-            ]
-            return
-        }
-
-        // 使用 ScriptingBridge 获取队列（App Store 合规）
-        Task {
-            await fetchUpNextViaBridge()
-        }
-
-        // 获取播放历史
-        fetchRecentHistoryViaBridge()
-    }
-
-    /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
-    private func fetchUpNextViaBridge() async {
-        debugPrint("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n")
-        guard let app = musicApp, app.isRunning else {
-            debugPrint("⚠️ [fetchUpNextViaBridge] musicApp not available\n")
-            return
-        }
-
-        // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
-        let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
-            scriptingBridgeQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                let result = self.getUpNextTracksFromApp(app, limit: 10)
-                continuation.resume(returning: result)
-            }
-        }
-
-        await MainActor.run {
-            self.upNextTracks = tracks
-            self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
-
-            // Trigger lyrics preloading for upcoming tracks
-            let tracksToPreload = Array(tracks.prefix(3)).map { (title: $0.title, artist: $0.artist, duration: $0.duration) }
-            if !tracksToPreload.isEmpty {
-                LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
-            }
-        }
-    }
-
-    /// 从 SBApplication 获取 Up Next tracks
-    private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n")
-            return []
-        }
-
-        let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
-        debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(tracks.count) tracks\n")
-
-        var result: [(String, String, String, String, Double)] = []
-        var foundCurrent = false
-        var currentIndex = -1
-
-        for i in 0..<tracks.count {
-            guard let track = tracks.object(at: i) as? NSObject,
-                  let trackID = track.value(forKey: "persistentID") as? String else { continue }
-
-            if foundCurrent {
-                let name = track.value(forKey: "name") as? String ?? ""
-                let artist = track.value(forKey: "artist") as? String ?? ""
-                let album = track.value(forKey: "album") as? String ?? ""
-                let duration = track.value(forKey: "duration") as? Double ?? 0
-
-                // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
-                if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
-                    result.append((name, artist, album, trackID, duration))
-                    // 🔑 移除封面预加载 - extractArtwork 是 ScriptingBridge 操作，会阻塞
-                    // 封面由 PlaylistItemRowCompact 按需异步加载
-                    if result.count >= limit { break }
-                } else if !name.isEmpty {
-                    debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
-                }
-            } else if trackID == currentID {
-                foundCurrent = true
-                currentIndex = i
-            }
-        }
-
-        debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), fetched \(result.count) tracks\n")
-        return result
-    }
-
-    /// 使用 ScriptingBridge 获取播放历史（使用自己的 musicApp 实例）
-    private func fetchRecentHistoryViaBridge() {
-        guard let app = musicApp, app.isRunning else { return }
-
-        // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
-        scriptingBridgeQueue.async { [weak self, app] in
-            guard let self = self else { return }
-
-            let tracks = self.getRecentTracksFromApp(app, limit: 10)
-
-            DispatchQueue.main.async {
-                self.recentTracks = tracks
-                self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
-            }
-        }
-    }
-
-    /// 从 SBApplication 获取播放历史
-    private func getRecentTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            return []
-        }
-
-        var recentList: [(String, String, String, String, Double)] = []
-
-        for i in 0..<tracks.count {
-            guard let track = tracks.object(at: i) as? NSObject,
-                  let trackID = track.value(forKey: "persistentID") as? String else { continue }
-
-            if trackID == currentID {
-                break  // 到达当前歌曲，停止
-            }
-
-            let name = track.value(forKey: "name") as? String ?? ""
-            let artist = track.value(forKey: "artist") as? String ?? ""
-            let album = track.value(forKey: "album") as? String ?? ""
-            let duration = track.value(forKey: "duration") as? Double ?? 0
-
-            // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
-            // 某些较新添加的歌曲可能元数据未完全加载
-            if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
-                recentList.append((name, artist, album, trackID, duration))
-                // 🔑 移除封面预加载 - extractArtwork 是 ScriptingBridge 操作，会阻塞
-                // 封面由 PlaylistItemRowCompact 按需异步加载
-            } else if !name.isEmpty {
-                // 🐛 调试：记录异常的歌曲名称
-                debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
-            }
-        }
-
-        // 返回最后 limit 个，倒序（最近播放的在前）
-        return Array(recentList.suffix(limit).reversed())
-    }
-
-    // MARK: - Volume Control
-
-    public func setVolume(_ level: Int) {
-        if isPreview {
-            logger.info("Preview: setVolume to \(level)")
-            return
-        }
-        let clamped = max(0, min(100, level))
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let app = self?.musicApp else { return }
-            app.setValue(clamped, forKey: "soundVolume")
-        }
-    }
-
-    public func toggleMute() {
-        if isPreview {
-            logger.info("Preview: toggleMute")
-            return
-        }
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let app = self?.musicApp else { return }
-            let currentMute = app.value(forKey: "mute") as? Bool ?? false
-            app.setValue(!currentMute, forKey: "mute")
-        }
-    }
-
-    // MARK: - Library & Favorites
-
-    public func shareCurrentTrack() {
-        if isPreview {
-            logger.info("Preview: shareCurrentTrack")
-            return
-        }
-
-        guard let persistentID = currentPersistentID, !persistentID.isEmpty else {
-            logger.warning("No current track to share")
-            return
-        }
-
-        // Build Apple Music URL
-        let url = "https://music.apple.com/library/song/\(persistentID)"
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(url, forType: .string)
-        logger.info("✅ Copied track URL to clipboard: \(url)")
-    }
-
-    public func addCurrentTrackToLibrary() {
-        if isPreview {
-            logger.info("Preview: addCurrentTrackToLibrary")
-            return
-        }
-
-        guard let app = musicApp, app.isRunning,
-              let track = app.value(forKey: "currentTrack") as? NSObject else { return }
-        track.perform(Selector(("duplicateTo:")), with: app.value(forKey: "sources"))
-        logger.info("✅ Added current track to library")
-    }
-
-    public func toggleStar() {
-        if isPreview {
-            logger.info("Preview: toggleStar")
-            return
-        }
-
-        guard let app = musicApp, app.isRunning,
-              let track = app.value(forKey: "currentTrack") as? NSObject else { return }
-        let currentLoved = track.value(forKey: "loved") as? Bool ?? false
-        track.setValue(!currentLoved, forKey: "loved")
-        logger.info("✅ Toggled loved status of current track")
     }
 }

@@ -478,10 +478,7 @@ public final class LyricsParser {
         if trimmed.isEmpty { return true }
 
         let hasLetters = trimmed.unicodeScalars.contains { scalar in
-            let isCJK = (0x4E00...0x9FFF).contains(scalar.value) ||
-                        (0x3400...0x4DBF).contains(scalar.value) ||
-                        (0x20000...0x2A6DF).contains(scalar.value)
-            return isCJK || CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar)
+            LanguageUtils.isCJKScalar(scalar) || CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar)
         }
         return !hasLetters
     }

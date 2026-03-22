@@ -233,12 +233,7 @@ public final class LyricsScorer {
     private func isLikelyRomaji(_ lyrics: [LyricLine]) -> Bool {
         let sampleTexts = lyrics.prefix(10).map { $0.text }
         return sampleTexts.allSatisfy { text in
-            !text.unicodeScalars.contains { scalar in
-                (0x4E00...0x9FFF).contains(scalar.value) ||  // 中文
-                (0x3040...0x309F).contains(scalar.value) ||  // 平假名
-                (0x30A0...0x30FF).contains(scalar.value) ||  // 片假名
-                (0x3400...0x4DBF).contains(scalar.value)     // 扩展汉字
-            }
+            !text.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
         }
     }
 }

@@ -11,12 +11,16 @@ GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
 ```
 Sources/
 ├── MusicMiniPlayerApp/
-│   └── MusicMiniPlayerApp.swift  - AppDelegate + 窗口管理 + 设置界面
+│   ├── MusicMiniPlayerApp.swift  - AppDelegate + 窗口管理
+│   ├── SettingsView.swift        - 设置视图（菜单栏 + 设置窗口 + 组件）
+│   └── LocalizedStrings.swift    - L10n 本地化 + UserDefaults 绑定 helper
 ├── MusicMiniPlayerCore/
 │   ├── Services/
-│   │   ├── MusicController.swift  - 播放控制 + 状态管理 + 封面获取
-│   │   ├── LyricsService.swift    - 歌词门面 + 缓存 + 翻译
-│   │   ├── MusicBridge.swift      - ScriptingBridge 桥接
+│   │   ├── MusicController.swift          - 核心状态管理 + 队列同步
+│   │   ├── MusicController+Artwork.swift  - 封面提取/获取/缓存
+│   │   ├── MusicController+Playback.swift - 播放控制 + 音量 + 收藏
+│   │   ├── LyricsService.swift            - 歌词门面 + 缓存 + 翻译
+│   │   ├── MusicBridge.swift              - ScriptingBridge 桥接
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift    - 7源并行获取 + 统一匹配
 │   │       ├── LyricsParser.swift     - TTML/LRC/YRC 解析
@@ -25,10 +29,22 @@ Sources/
 │   ├── UI/
 │   │   ├── MiniPlayerView.swift   - 主播放器视图 + 页面切换
 │   │   ├── LyricsView.swift       - 歌词显示 + 滚动 + 翻译
+│   │   ├── LyricLineView.swift    - 歌词行/间奏动画/翻译修饰器
+│   │   ├── HoverableButtons.swift - 按钮组件 + Tab Bar + 圆角工具
 │   │   ├── PlaylistView.swift     - 歌单队列 + 封面加载
 │   │   ├── SnappablePanel.swift   - 可吸附浮窗 + 手势
-│   │   ├── WindowResizeHandler.swift
-│   │   └── ScrollDetector.swift
+│   │   ├── Components/           - 可复用 UI 组件
+│   │   │   ├── SharedControls.swift   - 底部控件
+│   │   │   ├── WindowResizeHandler.swift
+│   │   │   ├── ScrollDetector.swift
+│   │   │   ├── ScrollingText.swift
+│   │   │   ├── VisualEffectView.swift
+│   │   │   ├── ProgressiveBlurView.swift
+│   │   │   ├── FloatingPanel.swift
+│   │   │   └── FloatingWindowModifier.swift
+│   │   └── Background/           - 背景视图
+│   │       ├── FluidGradientBackground.swift
+│   │       └── LiquidBackgroundView.swift
 │   ├── Utils/
 │   │   ├── Extensions.swift
 │   │   ├── HTTPClient.swift       - 统一 HTTP 请求 (GET/POST)

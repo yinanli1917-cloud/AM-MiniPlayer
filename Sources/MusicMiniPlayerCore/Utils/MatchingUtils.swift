@@ -20,6 +20,16 @@ public enum MatchingUtils {
     private static let titleWeight = 35.0
     private static let artistWeight = 25.0
 
+    // ── 规范化 helper ──
+
+    private static func normalizedTitle(_ s: String) -> String {
+        LanguageUtils.normalizeTrackName(s).lowercased()
+    }
+
+    private static func normalizedArtist(_ s: String) -> String {
+        LanguageUtils.normalizeArtistName(s).lowercased()
+    }
+
     // ── 时长匹配 ──
 
     /// 计算时长匹配分数 (0-40分)
@@ -50,8 +60,8 @@ public enum MatchingUtils {
     ///   - actual: 实际标题
     /// - Returns: 匹配分数
     public static func titleMatchScore(target: String, actual: String) -> Double {
-        let targetNormalized = LanguageUtils.normalizeTrackName(target).lowercased()
-        let actualNormalized = LanguageUtils.normalizeTrackName(actual).lowercased()
+        let targetNormalized = normalizedTitle(target)
+        let actualNormalized = normalizedTitle(actual)
 
         // 完全匹配
         if targetNormalized == actualNormalized {
@@ -70,8 +80,8 @@ public enum MatchingUtils {
 
     /// 检查标题是否匹配
     public static func isTitleMatch(target: String, actual: String) -> Bool {
-        let targetNormalized = LanguageUtils.normalizeTrackName(target).lowercased()
-        let actualNormalized = LanguageUtils.normalizeTrackName(actual).lowercased()
+        let targetNormalized = normalizedTitle(target)
+        let actualNormalized = normalizedTitle(actual)
 
         return targetNormalized == actualNormalized ||
                targetNormalized.contains(actualNormalized) ||
@@ -86,8 +96,8 @@ public enum MatchingUtils {
     ///   - actual: 实际艺术家
     /// - Returns: 匹配分数
     public static func artistMatchScore(target: String, actual: String) -> Double {
-        let targetNormalized = LanguageUtils.normalizeArtistName(target).lowercased()
-        let actualNormalized = LanguageUtils.normalizeArtistName(actual).lowercased()
+        let targetNormalized = normalizedArtist(target)
+        let actualNormalized = normalizedArtist(actual)
 
         // 完全匹配
         if targetNormalized == actualNormalized {
@@ -114,8 +124,8 @@ public enum MatchingUtils {
 
     /// 检查艺术家是否匹配
     public static func isArtistMatch(target: String, actual: String) -> Bool {
-        let targetNormalized = LanguageUtils.normalizeArtistName(target).lowercased()
-        let actualNormalized = LanguageUtils.normalizeArtistName(actual).lowercased()
+        let targetNormalized = normalizedArtist(target)
+        let actualNormalized = normalizedArtist(actual)
 
         // 直接匹配
         if targetNormalized == actualNormalized ||
