@@ -1,6 +1,6 @@
 /**
  * [INPUT]: LyricLine (歌词数据模型), MusicController (播放时间)
- * [OUTPUT]: LyricLineView, InterludeDotsView, PreludeDotsView, TranslationLoadingDotsView, SystemTranslationModifier
+ * [OUTPUT]: LyricLineView, InterludeDotsView (+ PreludeDotsView alias), TranslationLoadingDotsView, SystemTranslationModifier
  * [POS]: UI/ 的歌词行子视图，从 LyricsView 拆分出的独立渲染组件
  */
 
@@ -144,64 +144,49 @@ struct LyricLineView: View {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - InterludeDotsView
+// MARK: - InterludeDotsView（前奏/间奏统一动画）
 // ═══════════════════════════════════════════════════════════════════════════════
-/// 间奏加载点视图 - 基于播放时间精确控制动画
+/// 基于播放时间的三点动画 — 前奏（PreludeDotsView）和间奏共用
 
 struct InterludeDotsView: View {
-    let startTime: TimeInterval  // 间奏开始时间（前一句歌词结束时间）
-    let endTime: TimeInterval    // 间奏结束时间（下一句歌词开始时间）
-    let currentTime: TimeInterval  // 🔑 改为直接接收 currentTime
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    let currentTime: TimeInterval
+    /// 是否需要时间范围检查（间奏需要，前奏始终可见）
+    var gateByTimeRange: Bool = true
 
-    // 🔑 淡出动画时长（算入总时长）
     private let fadeOutDuration: TimeInterval = 0.7
 
-    // 🔑 是否在间奏时间范围内
-    private var isInInterlude: Bool {
+    private var isInRange: Bool {
         currentTime >= startTime && currentTime < endTime
     }
 
     var body: some View {
-        // 🔑 总时长，三个点只占用 (总时长 - 淡出时长)
         let totalDuration = endTime - startTime
         let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
         let segmentDuration = dotsActiveDuration / 3.0
 
-        // 计算每个点的精细进度
         let dotProgresses: [CGFloat] = (0..<3).map { index in
-            let dotStartTime = startTime + segmentDuration * Double(index)
-            let dotEndTime = startTime + segmentDuration * Double(index + 1)
-
-            if currentTime <= dotStartTime {
-                return 0.0
-            } else if currentTime >= dotEndTime {
-                return 1.0
-            } else {
-                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
-                return CGFloat(sin(progress * .pi / 2))
-            }
+            let dotStart = startTime + segmentDuration * Double(index)
+            let dotEnd = startTime + segmentDuration * Double(index + 1)
+            if currentTime <= dotStart { return 0.0 }
+            if currentTime >= dotEnd { return 1.0 }
+            return CGFloat(sin((currentTime - dotStart) / (dotEnd - dotStart) * .pi / 2))
         }
 
-        // 🔑 计算整体淡出透明度和模糊
         let fadeOutProgress: CGFloat = {
-            let fadeStartTime = startTime + dotsActiveDuration
-            if currentTime < fadeStartTime {
-                return 0.0
-            } else if currentTime >= endTime {
-                return 1.0
-            } else {
-                let progress = (currentTime - fadeStartTime) / fadeOutDuration
-                return CGFloat(progress)
-            }
+            let fadeStart = startTime + dotsActiveDuration
+            if currentTime < fadeStart { return 0.0 }
+            if currentTime >= endTime { return 1.0 }
+            return CGFloat((currentTime - fadeStart) / fadeOutDuration)
         }()
 
-        let overallOpacity = isInInterlude ? (1.0 - fadeOutProgress) : 0.0
-        let overallBlur = fadeOutProgress * 8
+        let visible = gateByTimeRange ? isInRange : true
+        let overallOpacity = visible ? (1.0 - fadeOutProgress) : 0.0
 
-        // 🔑 呼吸动画：使用缓动函数让脉搏更柔和丝滑
+        // 呼吸动画：x * |x| 产生平方缓动效果
         let rawPhase = sin(currentTime * .pi * 0.8)
-        // 使用 ease-in-out 曲线：让加速和减速都更柔和
-        let breathingPhase = rawPhase * abs(rawPhase)  // x * |x| 产生平方缓动效果
+        let breathingPhase = rawPhase * abs(rawPhase)
 
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { dotIndex in
@@ -216,19 +201,34 @@ struct InterludeDotsView: View {
                     .scaleEffect((0.85 + progress * 0.15) * breathingScale)
                     .animation(.easeOut(duration: 0.3), value: progress)
             }
-            Spacer(minLength: 0)  // 🔑 左对齐
+            Spacer(minLength: 0)
         }
         .padding(.vertical, 8)
         .opacity(overallOpacity)
-        .blur(radius: overallBlur)
-        .animation(.easeOut(duration: 0.2), value: isInInterlude)
+        .blur(radius: fadeOutProgress * 8)
+        .animation(.easeOut(duration: 0.2), value: visible)
+    }
+}
+
+/// 前奏点视图（InterludeDotsView 的便捷别名，不做时间范围门控）
+struct PreludeDotsView: View {
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    @ObservedObject var musicController: MusicController
+
+    var body: some View {
+        InterludeDotsView(
+            startTime: startTime,
+            endTime: endTime,
+            currentTime: musicController.currentTime,
+            gateByTimeRange: false
+        )
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - TranslationLoadingDotsView
 // ═══════════════════════════════════════════════════════════════════════════════
-/// 翻译加载动画 - 三个渐变闪烁的点
 
 struct TranslationLoadingDotsView: View {
     @State private var animationPhase: Int = 0
@@ -249,100 +249,12 @@ struct TranslationLoadingDotsView: View {
     }
 
     private func dotOpacity(for index: Int) -> Double {
-        // 创建波浪式闪烁效果
         let baseOpacity = 0.3
         let highlightOpacity = 0.7
         let phase = Double(animationPhase)
-
-        // 每个点有不同的相位偏移
         let offset = Double(index) * 0.3
         let value = sin((phase + offset) * .pi)
-
         return baseOpacity + (highlightOpacity - baseOpacity) * max(0, value)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - PreludeDotsView
-// ═══════════════════════════════════════════════════════════════════════════════
-/// 前奏加载点视图 - 替换 "..." 省略号歌词
-
-struct PreludeDotsView: View {
-    let startTime: TimeInterval  // 前奏/间奏开始时间
-    let endTime: TimeInterval    // 前奏/间奏结束时间（下一句歌词开始时间）
-    @ObservedObject var musicController: MusicController
-
-    // 🔑 淡出动画时长（算入总时长）
-    private let fadeOutDuration: TimeInterval = 0.7
-
-    private var currentTime: TimeInterval {
-        musicController.currentTime
-    }
-
-    var body: some View {
-        // 🔑 总时长 = 原时长，但三个点只占用 (总时长 - 淡出时长)
-        let totalDuration = endTime - startTime
-        let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
-        let segmentDuration = dotsActiveDuration / 3.0
-
-        // 计算每个点的精细进度
-        let dotProgresses: [CGFloat] = (0..<3).map { index in
-            let dotStartTime = startTime + segmentDuration * Double(index)
-            let dotEndTime = startTime + segmentDuration * Double(index + 1)
-
-            if currentTime <= dotStartTime {
-                return 0.0
-            } else if currentTime >= dotEndTime {
-                return 1.0
-            } else {
-                let progress = (currentTime - dotStartTime) / (dotEndTime - dotStartTime)
-                return CGFloat(sin(progress * .pi / 2))
-            }
-        }
-
-        // 🔑 计算整体淡出透明度和模糊
-        let fadeOutProgress: CGFloat = {
-            let fadeStartTime = startTime + dotsActiveDuration
-            if currentTime < fadeStartTime {
-                return 0.0
-            } else if currentTime >= endTime {
-                return 1.0
-            } else {
-                let progress = (currentTime - fadeStartTime) / fadeOutDuration
-                return CGFloat(progress)
-            }
-        }()
-
-        let overallOpacity = 1.0 - fadeOutProgress
-        let overallBlur = fadeOutProgress * 8
-
-        // 🔑 呼吸动画：使用缓动函数让脉搏更柔和丝滑
-        let rawPhase = sin(currentTime * .pi * 0.8)
-        // 使用 ease-in-out 曲线：让加速和减速都更柔和
-        let breathingPhase = rawPhase * abs(rawPhase)  // x * |x| 产生平方缓动效果
-
-        HStack(spacing: 0) {
-            HStack(spacing: 6) {
-                ForEach(0..<3, id: \.self) { index in
-                    let progress = dotProgresses[index]
-                    // 🔑 只有正在点亮过程中的点（0 < progress < 1）才有呼吸动画
-                    let isLightingUp = progress > 0.0 && progress < 1.0
-                    let breathingScale: CGFloat = isLightingUp ? (1.0 + CGFloat(breathingPhase) * 0.12) : 1.0
-
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 8, height: 8)
-                        .opacity(0.25 + progress * 0.75)
-                        .scaleEffect((0.85 + progress * 0.15) * breathingScale)
-                        .animation(.easeOut(duration: 0.3), value: progress)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        // 🔑 移除 padding，因为外层 VStack 已经有 padding 了
-        .padding(.vertical, 8)
-        .opacity(overallOpacity)
-        .blur(radius: overallBlur)
     }
 }
 

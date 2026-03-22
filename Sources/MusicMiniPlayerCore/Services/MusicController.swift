@@ -225,17 +225,6 @@ public class MusicController: ObservableObject {
 
     // MARK: - Setup
 
-    /// 安全的 MusicKit 授权请求（带异常捕获）
-    @MainActor
-    private func requestMusicKitAuthorizationSafely() async throws {
-        do {
-            await requestMusicKitAuthorization()
-        } catch {
-            logger.error("❌ MusicKit authorization threw error: \(error)")
-            throw error
-        }
-    }
-
     @MainActor
     private func requestMusicKitAuthorization() async {
         let currentStatus = MusicAuthorization.currentStatus
@@ -493,23 +482,12 @@ public class MusicController: ObservableObject {
                             // 🔑 ScriptingBridge 失败，先设占位图，然后异步回退到网络 API
                             self.setArtwork(self.createPlaceholder())
 
-                            // 🔑 电台/流媒体歌曲常见：本地无嵌入封面，需要从网络获取
                             Task { [weak self] in
                                 guard let self = self else { return }
                                 if let mkArtwork = await self.fetchMusicKitArtwork(title: name, artist: artist, album: album) {
-                                    await MainActor.run {
-                                        // 确保还是同一首歌
-                                        if self.isStillCurrentTrack(persistentID: persistentID, title: name) {
-                                            self.setArtwork(mkArtwork)
-                                            if !persistentID.isEmpty {
-                                                self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
-                                            }
-                                            debugPrint("✅ [playerInfoChanged] API fallback success for \(name)\n")
-                                        }
-                                    }
+                                    await self.applyArtworkIfCurrent(mkArtwork, persistentID: persistentID, title: name)
+                                    debugPrint("✅ [playerInfoChanged] API fallback success for \(name)\n")
                                 } else {
-                                    // 🔑 电台首歌特殊处理：延迟 1s 重试 ScriptingBridge
-                                    // Music.app 可能需要时间加载封面数据
                                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                                     await self.retryArtworkFetch(persistentID: persistentID, title: name, artist: artist, album: album, generation: generation)
                                 }

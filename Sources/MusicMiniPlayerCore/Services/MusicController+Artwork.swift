@@ -105,25 +105,14 @@ extension MusicController {
             if let image = self.getArtworkImageFromApp(app) {
                 self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
                 DispatchQueue.main.async {
-                    self.setArtwork(image)
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(image, forKey: persistentID as NSString)
-                    }
+                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title)
                 }
             } else {
-                // 🔑 ScriptingBridge 失败，回退到 API
                 self.logToFile("🎨 [SB] No embedded artwork, falling back to API...")
                 Task {
                     if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
                         self.logToFile("🎨 [API] SUCCESS! Got image \(mkArtwork.size)")
-                        await MainActor.run {
-                            if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                                self.setArtwork(mkArtwork)
-                                if !persistentID.isEmpty {
-                                    self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
-                                }
-                            }
-                        }
+                        await self.applyArtworkIfCurrent(mkArtwork, persistentID: persistentID, title: title)
                     } else {
                         self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
                         await MainActor.run {
@@ -131,7 +120,6 @@ extension MusicController {
                                 self.setArtwork(self.createPlaceholder())
                             }
                         }
-                        // 延迟 1s 重试（电台/流媒体歌曲可能需要时间加载封面）
                         try? await Task.sleep(nanoseconds: 1_000_000_000)
                         await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
                     }
@@ -266,11 +254,20 @@ extension MusicController {
         return artworkCache.object(forKey: persistentID as NSString)
     }
 
+    /// 封面获取成功后统一处理：验证当前歌曲 → 设置封面 → 缓存
+    @MainActor
+    func applyArtworkIfCurrent(_ image: NSImage, persistentID: String, title: String) {
+        guard isStillCurrentTrack(persistentID: persistentID, title: title) else { return }
+        setArtwork(image)
+        if !persistentID.isEmpty {
+            artworkCache.setObject(image, forKey: persistentID as NSString)
+        }
+    }
+
     /// 延迟重试封面获取（电台首歌特殊处理）
     /// Music.app 刚开始播放电台时，封面数据可能尚未加载完成
     func retryArtworkFetch(persistentID: String, title: String, artist: String, album: String, generation: Int? = nil) async {
         guard await MainActor.run(body: { isStillCurrentTrack(persistentID: persistentID, title: title) }) else { return }
-        // 🔑 代数检查：sleep 1s 后歌可能已经换了
         if let gen = generation {
             let current = await MainActor.run { artworkFetchGeneration }
             guard gen == current else {
@@ -281,42 +278,27 @@ extension MusicController {
 
         debugPrint("🔄 [retryArtworkFetch] Retrying for \(title)...\n")
 
-        // 1. 先尝试 ScriptingBridge（Music.app 可能已加载好封面）
+        // 1. 先尝试 ScriptingBridge
         let sbImage: NSImage? = await withCheckedContinuation { continuation in
             scriptingBridgeQueue.async { [weak self] in
                 guard let self = self, let app = self.musicApp, app.isRunning else {
                     continuation.resume(returning: nil)
                     return
                 }
-                let image = self.getArtworkImageFromApp(app)
-                continuation.resume(returning: image)
+                continuation.resume(returning: self.getArtworkImageFromApp(app))
             }
         }
 
         if let image = sbImage {
-            await MainActor.run {
-                if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                    self.setArtwork(image)
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(image, forKey: persistentID as NSString)
-                    }
-                    debugPrint("✅ [retryArtworkFetch] ScriptingBridge retry success\n")
-                }
-            }
+            await applyArtworkIfCurrent(image, persistentID: persistentID, title: title)
+            debugPrint("✅ [retryArtworkFetch] ScriptingBridge retry success\n")
             return
         }
 
-        // 2. ScriptingBridge 仍然失败，再试一次网络 API
+        // 2. ScriptingBridge 仍然失败，再试网络 API
         if let mkArtwork = await fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-            await MainActor.run {
-                if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                    self.setArtwork(mkArtwork)
-                    if !persistentID.isEmpty {
-                        self.artworkCache.setObject(mkArtwork, forKey: persistentID as NSString)
-                    }
-                    debugPrint("✅ [retryArtworkFetch] API retry success\n")
-                }
-            }
+            await applyArtworkIfCurrent(mkArtwork, persistentID: persistentID, title: title)
+            debugPrint("✅ [retryArtworkFetch] API retry success\n")
         } else {
             debugPrint("⚠️ [retryArtworkFetch] All retries failed for \(title)\n")
         }

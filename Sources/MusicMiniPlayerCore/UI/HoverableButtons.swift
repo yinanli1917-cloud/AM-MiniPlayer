@@ -55,36 +55,30 @@ private func hoverableButtonShadowRadius(isLightBackground: Bool) -> CGFloat {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - MusicButtonView
+// MARK: - HoverableActionButton（统一的 Glass 按钮）
 // ═══════════════════════════════════════════════════════════════════════════════
 
-struct MusicButtonView: View {
-    @State private var isHovering = false
+struct HoverableActionButton: View {
+    let action: () -> Void
+    let label: AnyView
+    var helpText: String = ""
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
 
-    // 🔑 只有封面页区分亮度；歌词页始终是暗色样式（无阴影+低透明度）
+    @State private var isHovering = false
     private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
 
     var body: some View {
-        Button(action: {
-            let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
-            NSWorkspace.shared.openApplication(at: musicAppURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-        }) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up.left")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("Music")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .modifier(GlassButtonBackground(
-                fillOpacity: hoverableButtonFillOpacity(isLightBackground: isLightBackground, isHovering: isHovering),
-                shadowOpacity: hoverableButtonShadowOpacity(isLightBackground: isLightBackground),
-                shadowRadius: hoverableButtonShadowRadius(isLightBackground: isLightBackground),
-                isLightBackground: isLightBackground
-            ))
+        Button(action: action) {
+            label
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .modifier(GlassButtonBackground(
+                    fillOpacity: hoverableButtonFillOpacity(isLightBackground: isLightBackground, isHovering: isHovering),
+                    shadowOpacity: hoverableButtonShadowOpacity(isLightBackground: isLightBackground),
+                    shadowRadius: hoverableButtonShadowRadius(isLightBackground: isLightBackground),
+                    isLightBackground: isLightBackground
+                ))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -92,82 +86,62 @@ struct MusicButtonView: View {
                 isHovering = hovering
             }
         }
-        .help("打开 Apple Music")
+        .help(helpText)
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - HideButtonView
-// ═══════════════════════════════════════════════════════════════════════════════
+// ── 便捷工厂（保持调用点不变） ──
+
+struct MusicButtonView: View {
+    var artworkBrightness: CGFloat = 0.5
+    var isAlbumPage: Bool = false
+
+    var body: some View {
+        HoverableActionButton(
+            action: {
+                let url = URL(fileURLWithPath: "/System/Applications/Music.app")
+                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+            },
+            label: AnyView(HStack(spacing: 4) {
+                Image(systemName: "arrow.up.left").font(.system(size: 10, weight: .semibold))
+                Text("Music").font(.system(size: 11, weight: .medium))
+            }),
+            helpText: "打开 Apple Music",
+            artworkBrightness: artworkBrightness,
+            isAlbumPage: isAlbumPage
+        )
+    }
+}
 
 struct HideButtonView: View {
-    @State private var isHovering = false
     var onHide: () -> Void
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
 
-    private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
-
     var body: some View {
-        Button(action: {
-            onHide()
-        }) {
-            Image(systemName: "chevron.up")
-                .font(.system(size: 13, weight: .medium))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .modifier(GlassButtonBackground(
-                fillOpacity: hoverableButtonFillOpacity(isLightBackground: isLightBackground, isHovering: isHovering),
-                shadowOpacity: hoverableButtonShadowOpacity(isLightBackground: isLightBackground),
-                shadowRadius: hoverableButtonShadowRadius(isLightBackground: isLightBackground),
-                isLightBackground: isLightBackground
-            ))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isHovering = hovering
-            }
-        }
-        .help("收起到菜单栏")
+        HoverableActionButton(
+            action: onHide,
+            label: AnyView(Image(systemName: "chevron.up").font(.system(size: 13, weight: .medium))),
+            helpText: "收起到菜单栏",
+            artworkBrightness: artworkBrightness,
+            isAlbumPage: isAlbumPage
+        )
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - ExpandButtonView
-// ═══════════════════════════════════════════════════════════════════════════════
-/// 展开按钮 - 从菜单栏视图展开为浮窗
-
 struct ExpandButtonView: View {
-    @State private var isHovering = false
     var onExpand: () -> Void
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
 
-    private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
-
     var body: some View {
-        Button(action: {
-            onExpand()
-        }) {
-            Image(systemName: "pip.exit")
-                .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .modifier(GlassButtonBackground(
-                fillOpacity: hoverableButtonFillOpacity(isLightBackground: isLightBackground, isHovering: isHovering),
-                shadowOpacity: hoverableButtonShadowOpacity(isLightBackground: isLightBackground),
-                shadowRadius: hoverableButtonShadowRadius(isLightBackground: isLightBackground),
-                isLightBackground: isLightBackground
-            ))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isHovering = hovering
-            }
-        }
-        .help("展开为浮窗")
+        HoverableActionButton(
+            action: onExpand,
+            label: AnyView(Image(systemName: "pip.exit").font(.system(size: 12, weight: .medium))),
+            helpText: "展开为浮窗",
+            artworkBrightness: artworkBrightness,
+            isAlbumPage: isAlbumPage
+        )
     }
 }
 
@@ -298,12 +272,27 @@ struct RoundedCorner: Shape {
     var corners: RectCorner
 
     func path(in rect: CGRect) -> Path {
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-        return Path(path.cgPath)
+        // 每个角独立控制圆角半径
+        let tl = corners.contains(.topLeft) ? radius : 0
+        let tr = corners.contains(.topRight) ? radius : 0
+        let bl = corners.contains(.bottomLeft) ? radius : 0
+        let br = corners.contains(.bottomRight) ? radius : 0
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
+        if tr > 0 { path.addArc(center: CGPoint(x: rect.maxX - tr, y: rect.minY + tr), radius: tr, startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false) }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        if br > 0 { path.addArc(center: CGPoint(x: rect.maxX - br, y: rect.maxY - br), radius: br, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false) }
+        path.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+        if bl > 0 { path.addArc(center: CGPoint(x: rect.minX + bl, y: rect.maxY - bl), radius: bl, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false) }
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
+        if tl > 0 { path.addArc(center: CGPoint(x: rect.minX + tl, y: rect.minY + tl), radius: tl, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false) }
+        path.closeSubpath()
+        return path
     }
 }
 
-// Helper for macOS corners since UIRectCorner is iOS only
 struct RectCorner: OptionSet {
     let rawValue: Int
     static let topLeft = RectCorner(rawValue: 1 << 0)
@@ -311,13 +300,6 @@ struct RectCorner: OptionSet {
     static let bottomLeft = RectCorner(rawValue: 1 << 2)
     static let bottomRight = RectCorner(rawValue: 1 << 3)
     static let allCorners: RectCorner = [.topLeft, .topRight, .bottomLeft, .bottomRight]
-}
-
-extension NSBezierPath {
-    convenience init(roundedRect rect: CGRect, byRoundingCorners corners: RectCorner, cornerRadii: CGSize) {
-        self.init()
-        self.appendRoundedRect(rect, xRadius: cornerRadii.width, yRadius: cornerRadii.height)
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

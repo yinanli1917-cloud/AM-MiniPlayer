@@ -10,6 +10,19 @@ import SwiftUI
 import MusicKit
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Apple Event 常量（Music.app ScriptingBridge 返回值）
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+enum AppleEventCode {
+    static let playing: Int   = 0x6B505370
+    static let stopped: Int   = 0x6B505353
+    static let paused: Int    = 0x6B507073
+    static let repeatOff: Int = 0x6B52704F
+    static let repeatOne: Int = 0x6B527031
+    static let repeatAll: Int = 0x6B52416C
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Playback Controls (用户交互优先，使用高优先级队列)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -115,54 +128,9 @@ extension MusicController {
             self.userManuallyOpenedLyrics = false
         }
 
-        // 🔑 封面获取策略：先用缓存/占位图立即响应，再异步获取真实封面
-        let title = trackName
-        let artist = trackArtist
-        let album = trackAlbum
-        let pid = persistentID
-
-        // 1. 检查缓存（立即返回）
-        if !pid.isEmpty, let cached = self.artworkCache.object(forKey: pid as NSString) {
-            DispatchQueue.main.async {
-                self.setArtwork(cached)
-            }
-            return
-        }
-
-        // 2. 先设置占位图（立即响应）
+        // 🔑 复用 fetchArtwork 统一路径（缓存 → SB → API → 重试）
         DispatchQueue.main.async {
-            self.setArtwork(self.createPlaceholder())
-        }
-
-        // 3. 异步获取封面（不阻塞曲目信息更新）
-        // 🔑 这里仍然在 scriptingBridgeQueue 上，但使用 async 让出控制权
-        let artworkImage = self.getArtworkImageFromApp(app)
-        if let image = artworkImage {
-            if !pid.isEmpty {
-                self.artworkCache.setObject(image, forKey: pid as NSString)
-            }
-            DispatchQueue.main.async {
-                // 确保还是同一首歌
-                if self.currentPersistentID == pid {
-                    self.setArtwork(image)
-                }
-            }
-        } else {
-            // 🔑 ScriptingBridge 获取失败，异步尝试 MusicKit
-            DispatchQueue.main.async {
-                Task {
-                    if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                        await MainActor.run {
-                            if self.currentPersistentID == pid {
-                                self.setArtwork(mkArtwork)
-                                if !pid.isEmpty {
-                                    self.artworkCache.setObject(mkArtwork, forKey: pid as NSString)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
         }
     }
 
@@ -254,12 +222,11 @@ extension MusicController {
         }
 
         let newMode = (repeatMode + 1) % 3
-        // songRepeat values: 0x6B52704F = off, 0x6B527031 = one, 0x6B52416C = all
         let repeatValue: Int
         switch newMode {
-        case 1: repeatValue = 0x6B527031  // one
-        case 2: repeatValue = 0x6B52416C  // all
-        default: repeatValue = 0x6B52704F // off
+        case 1: repeatValue = AppleEventCode.repeatOne
+        case 2: repeatValue = AppleEventCode.repeatAll
+        default: repeatValue = AppleEventCode.repeatOff
         }
 
         // Optimistic UI update
@@ -366,11 +333,8 @@ extension MusicController {
                 let album = track.value(forKey: "album") as? String ?? ""
                 let duration = track.value(forKey: "duration") as? Double ?? 0
 
-                // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
-                if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
+                if isValidTrackName(name, trackID: trackID) {
                     result.append((name, artist, album, trackID, duration))
-                    // 🔑 移除封面预加载 - extractArtwork 是 ScriptingBridge 操作，会阻塞
-                    // 封面由 PlaylistItemRowCompact 按需异步加载
                     if result.count >= limit { break }
                 } else if !name.isEmpty {
                     debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
@@ -426,14 +390,9 @@ extension MusicController {
             let album = track.value(forKey: "album") as? String ?? ""
             let duration = track.value(forKey: "duration") as? Double ?? 0
 
-            // 🔑 过滤无效的歌曲名称（空、纯数字ID、或者与 persistentID 相同）
-            // 某些较新添加的歌曲可能元数据未完全加载
-            if !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber }) {
+            if isValidTrackName(name, trackID: trackID) {
                 recentList.append((name, artist, album, trackID, duration))
-                // 🔑 移除封面预加载 - extractArtwork 是 ScriptingBridge 操作，会阻塞
-                // 封面由 PlaylistItemRowCompact 按需异步加载
             } else if !name.isEmpty {
-                // 🐛 调试：记录异常的歌曲名称
                 debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
             }
         }
@@ -518,5 +477,10 @@ extension MusicController {
         let currentLoved = track.value(forKey: "loved") as? Bool ?? false
         track.setValue(!currentLoved, forKey: "loved")
         logger.info("✅ Toggled loved status of current track")
+    }
+
+    /// 歌曲名有效性验证（过滤空名、纯数字ID、与 persistentID 相同的异常数据）
+    private func isValidTrackName(_ name: String, trackID: String) -> Bool {
+        !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber })
     }
 }

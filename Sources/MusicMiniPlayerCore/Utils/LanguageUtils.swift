@@ -52,18 +52,17 @@ public enum LanguageUtils {
     public static func containsJapanese(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Japanese"]!) }
     public static func containsKorean(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Korean"]!) }
 
-    /// 检测是否包含任何 CJK 字符（中日韩）
+    /// 检测是否包含任何 CJK 字符（中日韩），单次遍历
     public static func containsCJK(_ text: String) -> Bool {
-        containsChinese(text) || containsJapanese(text) || containsKorean(text)
+        let allCJKRanges = scriptRanges["Chinese"]! + scriptRanges["Japanese"]! + scriptRanges["Korean"]!
+        return containsScript(text, ranges: allCJKRanges)
     }
 
-    /// 单字符 CJK 判定（供跨文件去重调用）
+    /// 单字符 CJK 判定（复用 scriptRanges，供跨文件调用）
     public static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
         let v = scalar.value
-        return (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) ||
-               (0x20000...0x2A6DF).contains(v) ||
-               (0x3040...0x309F).contains(v) || (0x30A0...0x30FF).contains(v) ||
-               (0xAC00...0xD7AF).contains(v)
+        let allCJKRanges = scriptRanges["Chinese"]! + scriptRanges["Japanese"]! + scriptRanges["Korean"]!
+        return allCJKRanges.contains { $0.contains(v) }
     }
 
     // MARK: - Southeast Asian Scripts (东南亚)

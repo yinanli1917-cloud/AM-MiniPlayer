@@ -18,9 +18,8 @@ Sources/
 │   ├── Services/
 │   │   ├── MusicController.swift          - 核心状态管理 + 队列同步
 │   │   ├── MusicController+Artwork.swift  - 封面提取/获取/缓存
-│   │   ├── MusicController+Playback.swift - 播放控制 + 音量 + 收藏
+│   │   ├── MusicController+Playback.swift - 播放控制 + 音量 + 收藏 + AppleEventCode
 │   │   ├── LyricsService.swift            - 歌词门面 + 缓存 + 翻译
-│   │   ├── MusicBridge.swift              - ScriptingBridge 桥接
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift    - 7源并行获取 + 统一匹配
 │   │       ├── LyricsParser.swift     - TTML/LRC/YRC 解析

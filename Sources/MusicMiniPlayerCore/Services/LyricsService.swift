@@ -251,15 +251,16 @@ public class LyricsService: ObservableObject {
             return
         }
 
+        // 🔑 取消检查：fetch 完成后再验证，防止已取消的 Task 设置 error
+        guard !Task.isCancelled else { return }
+
         // 选择最佳结果
         guard let bestLyrics = fetcher.selectBest(from: results), !bestLyrics.isEmpty else {
             DebugLogger.log("LyricsService", "❌ SEARCH NO RESULTS: '\(songID)' dur=\(duration) sources=\(results.count)")
-            // 缓存 No Lyrics 状态（6小时过期）
             let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
             lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
 
             await MainActor.run {
-                // 再次验证（MainActor.run 可能有延迟）
                 guard self.currentSongID == songID else { return }
                 self.isLoading = false
                 self.error = "No lyrics found"
@@ -304,8 +305,9 @@ public class LyricsService: ObservableObject {
         self.firstRealLyricIndex = firstRealLyricIndex
         self.translationsAreFromLyricsSource = hasSourceTranslation
         self.isLoading = false
+        self.error = nil  // 🔑 歌词成功加载，清除旧 error（防止 duration 竞态导致 retry 残留）
         self.currentLineIndex = nil
-        self.currentSongID = songID  // 🔑 确保 songID 被更新
+        self.currentSongID = songID
 
         // 🔑 延迟触发翻译，避免与 lyrics 更新同时发生导致 SwiftUI AttributeGraph 递归
         if showTranslation {
@@ -430,13 +432,6 @@ public class LyricsService: ObservableObject {
         lastSystemTranslationLanguage = translationLanguage
         translationsAreFromLyricsSource = false
         debugLogPublic("✅ 翻译完成: \(translatedTexts.count) 行")
-    }
-
-    /// performTranslation (兼容旧 API)
-    @available(macOS 15.0, *)
-    @MainActor
-    public func performTranslation(with session: TranslationSession) async {
-        await performSystemTranslation(session: session)
     }
 
     // ========================================================================
