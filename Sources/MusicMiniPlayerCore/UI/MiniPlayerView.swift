@@ -6,6 +6,7 @@ import Translation
 
 public struct MiniPlayerView: View {
     @EnvironmentObject var musicController: MusicController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // 🔑 使用 musicController.currentPage 替代本地状态，实现浮窗/菜单栏同步
     @State private var isHovering: Bool = false
     @State private var showControls: Bool = false
@@ -48,10 +49,12 @@ public struct MiniPlayerView: View {
             ZStack {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
+                    .accessibilityHidden(true)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
                 WindowDraggableView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityHidden(true)
 
                 // 🔑 使用ZStack叠加所有页面，通过opacity和zIndex控制显示
                 // matchedGeometryEffect: 使用单个浮动Image + invisible placeholders避免crossfade
@@ -61,28 +64,29 @@ public struct MiniPlayerView: View {
                     .opacity(musicController.currentPage == .lyrics ? 1 : 0)
                     .zIndex(musicController.currentPage == .lyrics ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .lyrics)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // Playlist View - 始终存在以支持matchedGeometryEffect
                 PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent)
                     .opacity(musicController.currentPage == .playlist ? 1 : 0)
                     .zIndex(musicController.currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
                     .allowsHitTesting(musicController.currentPage == .playlist)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // Album View - 始终存在以支持matchedGeometryEffect
                 albumPageContent(geometry: geometry)
                     .opacity(musicController.currentPage == .album ? 1 : 0)
                     .zIndex(musicController.currentPage == .album ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
                     .allowsHitTesting(musicController.currentPage == .album)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
                 // 🎯 浮动的Artwork - 单个Image实例，通过matchedGeometry移动
                 if let artwork = musicController.currentArtwork {
                     floatingArtwork(artwork: artwork, geometry: geometry)
                         .zIndex(musicController.currentPage == .album ? 50 : 1)  // 🔑 歌单页 1（同层），专辑页 50（遮住文字）
-                        .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
-                        .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
+                        .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                        .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
+                        .accessibilityHidden(true)
                 }
 
                 // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上
@@ -91,8 +95,8 @@ public struct MiniPlayerView: View {
                     .zIndex(101)  // 在浮动artwork之上
                     .opacity(musicController.currentPage == .album ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .album)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
-                    .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
 
 
             }
@@ -135,28 +139,21 @@ public struct MiniPlayerView: View {
             }
         }
         .onHover { hovering in
-            // 🔑 调试日志
-            let logMsg = "🖱️ onHover: hovering=\(hovering), locked=\(hoverLocked), page=\(musicController.currentPage)\n"
-            let logPath = "/tmp/nanopod_hover.log"
-            if let handle = FileHandle(forWritingAtPath: logPath) {
-                handle.seekToEndOfFile()
-                if let data = logMsg.data(using: .utf8) { handle.write(data) }
-                handle.closeFile()
-            }
-
             // 🔑 如果 hover 状态被锁定（页面切换后短暂期间），忽略 onHover(false)
             if hoverLocked && !hovering { return }
 
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
             let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+            let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
+            let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
+            withAnimation(hoverAnim) {
                 isHovering = hovering
             }
             if hovering {
                 // 🔑 进入时重置模糊和位移状态
                 controlsBlurAmount = 10
                 controlsOffsetY = 30
-                withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
+                withAnimation(controlsAnim) {
                     showControls = true
                     showOverlayContent = true
                     controlsBlurAmount = 0
@@ -164,7 +161,7 @@ public struct MiniPlayerView: View {
                 }
             } else {
                 // 🔑 离开时动画
-                withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
+                withAnimation(controlsAnim) {
                     showOverlayContent = false
                     controlsBlurAmount = 10
                     controlsOffsetY = 30
@@ -176,7 +173,7 @@ public struct MiniPlayerView: View {
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
             if newValue != fullscreenAlbumCover {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                withAnimation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)) {
                     fullscreenAlbumCover = newValue
                 }
             }
@@ -195,17 +192,6 @@ public struct MiniPlayerView: View {
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
         .onChange(of: musicController.currentPage) { oldPage, newPage in
-            // 🔑 日志：确认 onChange 被触发
-            let logMsg = "🔄 onChange: \(oldPage)->\(newPage), hover=\(isHovering), ctrl=\(showControls), overlay=\(showOverlayContent)\n"
-            let logPath = "/tmp/nanopod_page.log"
-            if let handle = FileHandle(forWritingAtPath: logPath) {
-                handle.seekToEndOfFile()
-                if let data = logMsg.data(using: .utf8) { handle.write(data) }
-                handle.closeFile()
-            } else {
-                try? logMsg.write(toFile: logPath, atomically: true, encoding: .utf8)
-            }
-
             // 从歌单/歌词页切换到专辑页时，强制同步 hover 状态
             if newPage == .album && oldPage != .album {
                 let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
@@ -216,7 +202,7 @@ public struct MiniPlayerView: View {
                 // 🔑 用 withAnimation 包裹所有状态变化，确保动画系统正确处理
                 controlsBlurAmount = 10
                 controlsOffsetY = 30
-                withAnimation(.spring(response: animationDuration, dampingFraction: 0.85)) {
+                withAnimation(reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)) {
                     isHovering = true
                     showControls = true
                     showOverlayContent = true
@@ -239,19 +225,6 @@ extension MiniPlayerView {
     @ViewBuilder
     func albumOverlayContent(geometry: GeometryProxy) -> some View {
         GeometryReader { geo in
-            // 🔑 调试日志：写入文件确认渲染时的 isHovering 值
-            let _ = {
-                let logMsg = "📝 albumOverlayContent render: isHovering=\(isHovering), page=\(musicController.currentPage)\n"
-                let logPath = "/tmp/nanopod_hover.log"
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    if let data = logMsg.data(using: .utf8) { handle.write(data) }
-                    handle.closeFile()
-                } else {
-                    try? logMsg.write(toFile: logPath, atomically: true, encoding: .utf8)
-                }
-            }()
-
             // 🔑 全屏模式：封面尺寸始终为窗口宽度；普通模式：根据hover状态变化
             let artSize = fullscreenAlbumCover ? geo.size.width : (isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68)
             // 控件区域高度（与SharedBottomControls一致）
@@ -262,21 +235,6 @@ extension MiniPlayerView {
             let artBottomY = artCenterY + artSize / 2
             // 🔑 非全屏模式：封面左边缘 X 位置
             let artLeftX = (geo.size.width - artSize) / 2
-
-            // 🔑 计算文字 Y 坐标
-            let titleY = isHovering
-                ? geo.size.height - controlsHeight - 4 - 16
-                : (fullscreenAlbumCover ? geo.size.height - 12 - 18 - 8 : artBottomY - 38)
-
-            // 🔑 调试：输出计算值
-            let _ = {
-                let logMsg = "📐 titleY=\(Int(titleY)), isHovering=\(isHovering), fullscreen=\(fullscreenAlbumCover), artSize=\(Int(artSize))\n"
-                if let handle = FileHandle(forWritingAtPath: "/tmp/nanopod_hover.log") {
-                    handle.seekToEndOfFile()
-                    if let data = logMsg.data(using: .utf8) { handle.write(data) }
-                    handle.closeFile()
-                }
-            }()
 
             ZStack {
                 // ═══════════════════════════════════════════
@@ -303,8 +261,9 @@ extension MiniPlayerView {
                                 ? geo.size.height - 12 - 18 - 8  // 全屏非hover: 底边距12 + 艺术家行高18 + 间距8
                                 : artBottomY - 38)   // 普通: 封面底部内，标题位置（距底边38）
                     )
-                    .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
                     .allowsHitTesting(false)
+                    .accessibilityAddTraits(.isHeader)
 
                 // 🔑 艺术家 - matchedGeometryEffect
                 Text(musicController.currentArtist)
@@ -326,7 +285,7 @@ extension MiniPlayerView {
                                 ? geo.size.height - 12 - 8  // 全屏非hover: 底边距12 + 半行高8（艺术家在最下方）
                                 : artBottomY - 18)   // 普通: 封面底部内，艺术家位置（距底边18）
                     )
-                    .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
                     .allowsHitTesting(false)
 
                 // ═══════════════════════════════════════════
@@ -358,6 +317,8 @@ extension MiniPlayerView {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("随机播放")
+                            .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
 
                             Button(action: { musicController.cycleRepeatMode() }) {
                                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
@@ -371,6 +332,7 @@ extension MiniPlayerView {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
                         }
                     }
                     .padding(.horizontal, 32)
@@ -393,8 +355,8 @@ extension MiniPlayerView {
                 .allowsHitTesting(showOverlayContent)
             }
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
-            .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
-            .animation(.spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: showOverlayContent)
+            .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
+            .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: showOverlayContent)
         }
     }
 
@@ -490,6 +452,7 @@ extension MiniPlayerView {
                         .saturation(1.2)
                         .brightness(-0.1)
                         .opacity(isAlbumPage ? 1 : 0)  // 🔑 opacity 动画过渡
+                        .accessibilityHidden(true)
 
                     // ===== Layer 2: 正方形封面（Hero）- 参与 matchedGeometryEffect =====
                     Image(nsImage: artwork)
@@ -526,6 +489,7 @@ extension MiniPlayerView {
                         )
                         .position(x: displayX, y: displayY)
                         .allowsHitTesting(false)
+                        .accessibilityLabel("专辑封面")
                 } else {
                     // 🎯 普通模式：封面图片 + 底部渐进模糊
                     ZStack {
@@ -535,75 +499,18 @@ extension MiniPlayerView {
                             .scaledToFill()
                             .frame(width: artSize, height: artSize)
                             .clipped()
+                            .accessibilityLabel("专辑封面")
 
-                        // 🔑 底部渐进模糊（15-25%）
+                        // 🔑 底部渐进模糊（15-25%）— 3 层递进
                         Group {
-                            // 第1层：模糊 8px，覆盖底部 ~15%
-                            Image(nsImage: artwork)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: artSize + 24, height: artSize + 24)
-                                .blur(radius: 8)
-                                .frame(width: artSize, height: artSize)
-                                .clipped()
-                                .mask(
-                                    LinearGradient(
-                                        stops: [
-                                            .init(color: .clear, location: 0),
-                                            .init(color: .clear, location: 0.82),
-                                            .init(color: .black, location: 0.92),
-                                            .init(color: .black, location: 1.0)
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-
-                            // 第2层：模糊 5px，覆盖底部 ~20%
-                            Image(nsImage: artwork)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: artSize + 16, height: artSize + 16)
-                                .blur(radius: 5)
-                                .frame(width: artSize, height: artSize)
-                                .clipped()
-                                .mask(
-                                    LinearGradient(
-                                        stops: [
-                                            .init(color: .clear, location: 0),
-                                            .init(color: .clear, location: 0.77),
-                                            .init(color: .black, location: 0.87),
-                                            .init(color: .black, location: 1.0)
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-
-                            // 第3层：模糊 2px，覆盖底部 ~25%
-                            Image(nsImage: artwork)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: artSize + 8, height: artSize + 8)
-                                .blur(radius: 2)
-                                .frame(width: artSize, height: artSize)
-                                .clipped()
-                                .mask(
-                                    LinearGradient(
-                                        stops: [
-                                            .init(color: .clear, location: 0),
-                                            .init(color: .clear, location: 0.72),
-                                            .init(color: .black, location: 0.82),
-                                            .init(color: .black, location: 1.0)
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
+                            progressiveBlurLayer(artwork: artwork, size: artSize, expand: 24, blurRadius: 8, fadeStart: 0.82, fadeEnd: 0.92)
+                            progressiveBlurLayer(artwork: artwork, size: artSize, expand: 16, blurRadius: 5, fadeStart: 0.77, fadeEnd: 0.87)
+                            progressiveBlurLayer(artwork: artwork, size: artSize, expand: 8, blurRadius: 2, fadeStart: 0.72, fadeEnd: 0.82)
                         }
                         .opacity(musicController.currentPage == .album && !isHovering ? 1 : 0)
                         .animation(.easeInOut(duration: 0.25), value: isHovering)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                     }
                     .cornerRadius(cornerRadius)
                     .shadow(
@@ -622,6 +529,30 @@ extension MiniPlayerView {
                 }
             }
         }
+    }
+
+    // MARK: - 渐进模糊层（消除 3 层重复代码）
+    @ViewBuilder
+    private func progressiveBlurLayer(artwork: NSImage, size: CGFloat, expand: CGFloat, blurRadius: CGFloat, fadeStart: Double, fadeEnd: Double) -> some View {
+        Image(nsImage: artwork)
+            .resizable()
+            .scaledToFill()
+            .frame(width: size + expand, height: size + expand)
+            .blur(radius: blurRadius)
+            .frame(width: size, height: size)
+            .clipped()
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .clear, location: fadeStart),
+                        .init(color: .black, location: fadeEnd),
+                        .init(color: .black, location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
     }
 
     // MARK: - Album Page Content (抽取为函数支持matchedGeometryEffect)

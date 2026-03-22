@@ -185,9 +185,9 @@ public final class LyricsScorer {
         case "AMLL": return 10
         case "NetEase": return 8
         case "QQ": return 6
-        case "SimpMusic": return 5
         case "LRCLIB": return 3
         case "LRCLIB-Search": return 2
+        case "Genius": return 1
         case "lyrics.ovh": return 0
         default: return 0
         }

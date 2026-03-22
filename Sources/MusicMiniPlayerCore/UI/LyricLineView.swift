@@ -82,7 +82,7 @@ struct LyricLineView: View {
                 HStack(spacing: 0) {
                     Text(translation)
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white.opacity(textOpacity * 0.6))
+                        .foregroundColor(.white.opacity(textOpacity * 0.75))
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .lineSpacing(4)
@@ -132,6 +132,11 @@ struct LyricLineView: View {
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: textOpacity)
         // 🔑 翻译动画已移至容器级别，此处不再单独设置（性能优化）
+        // 🔑 无障碍
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(cleanedText + (translationText.map { "，\($0)" } ?? ""))
+        .accessibilityValue(isCurrent ? "当前播放" : "")
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
         // 🔑 点击整个区域触发跳转
         .contentShape(Rectangle())
         .onTapGesture {

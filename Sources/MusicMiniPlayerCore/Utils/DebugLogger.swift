@@ -18,9 +18,11 @@ public enum DebugLogger {
 
     private static let logPath = "/tmp/nanopod_debug.log"
 
-    // ⚠️ 临时：Release 也开启日志用于诊断 Retry + 封面问题
-    // TODO: 诊断完毕后恢复 #if DEBUG 条件编译
+    #if DEBUG
     private static var enabled = true
+    #else
+    private static var enabled = false
+    #endif
 
     // ── 公共接口 ──
 

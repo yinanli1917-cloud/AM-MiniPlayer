@@ -1,6 +1,6 @@
 /**
  * [INPUT]: LanguageUtils, MatchingUtils, HTTPClient
- * [OUTPUT]: resolveSearchMetadata/fetchChineseMetadata/fetchLocalizedMetadata
+ * [OUTPUT]: resolveSearchMetadata/fetchChineseMetadata/fetchLocalizedMetadata/fetchMetadataFromRegion
  * [POS]: Lyrics 的元信息子模块，负责 iTunes 多区域元信息获取
  * [PROTOCOL]: 变更时更新此头部，然后检查 Services/Lyrics/CLAUDE.md
  */
@@ -123,133 +123,153 @@ public final class MetadataResolver {
 
     // MARK: - 中文区域
 
+    /// CN 候选结构
+    private typealias CNCandidate = (title: String, artist: String, durationDiff: Double, strategy: String)
+
     /// 通过 iTunes CN 获取中文元数据
     public func fetchChineseMetadata(
         title: String,
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String, durationDiff: Double)? {
-        var candidates: [(title: String, artist: String, durationDiff: Double, strategy: String)] = []
         // 🔑 搜索顺序：combined 最精确放最后，先用 artist/title 搜再用 combined 补充
         let searchTerms = [artist, title, "\(title) \(artist)"]
         DebugLogger.log("MetadataResolver", "🇨🇳 CN 搜索开始: '\(title)' by '\(artist)' (\(Int(duration))s)")
 
+        var candidates: [CNCandidate] = []
+        let inputArtistLower = artist.lowercased()
+        let inputTitleLower = title.lowercased()
+        let cleanedInputTitle = cleanTrackTitle(inputTitleLower)
+
         for searchTerm in searchTerms {
-            // 翻译候选按搜索轮次独立追踪（避免 artist-only 搜索的多结果污染）
-            var roundTranslatedCandidates: [(title: String, artist: String, durationDiff: Double, strategy: String)] = []
             guard let results = await searchITunes(term: searchTerm, region: "CN") else {
                 DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(searchTerm)' 无结果")
                 continue
             }
             DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(searchTerm)' 返回 \(results.count) 条")
 
-            let inputArtistLower = artist.lowercased()
-            let inputTitleLower = title.lowercased()
-
-            // 🔑 更智能的标题清理：移除常见后缀但保留核心内容
-            let cleanedInputTitle = inputTitleLower
-                .replacingOccurrences(of: #"\s*\(feat\.?[^)]*\)"#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #"\s*\(ft\.?[^)]*\)"#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #"\s*\(remaster[^)]*\)"#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #"\s*\(live[^)]*\)"#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #"\s*\[.*?\]"#, with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespaces)
+            // 翻译候选按搜索轮次独立追踪（避免 artist-only 搜索的多结果污染）
+            var roundTranslated: [CNCandidate] = []
 
             for result in results {
-                guard let trackName = result["trackName"] as? String,
-                      let artistName = result["artistName"] as? String,
-                      let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
-
-                let trackDuration = Double(trackTimeMillis) / 1000.0
-                let durationDiff = abs(trackDuration - duration)
-                guard durationDiff < 3.0 else { continue }
-
-                let resultArtistLower = artistName.lowercased()
-                var artistMatch = inputArtistLower.contains(resultArtistLower) ||
-                                  resultArtistLower.contains(inputArtistLower)
-
-                if !artistMatch {
-                    artistMatch = inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) } ||
-                                  inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
-                }
-
-                let resultTitleLower = trackName.lowercased()
-                let cleanedResultTitle = resultTitleLower
-                    .replacingOccurrences(of: #"\s*\(feat\.?[^)]*\)"#, with: "", options: .regularExpression)
-                    .replacingOccurrences(of: #"\s*\(ft\.?[^)]*\)"#, with: "", options: .regularExpression)
-                    .replacingOccurrences(of: #"\s*\(remaster[^)]*\)"#, with: "", options: .regularExpression)
-                    .replacingOccurrences(of: #"\s*\(live[^)]*\)"#, with: "", options: .regularExpression)
-                    .replacingOccurrences(of: #"\s*\[.*?\]"#, with: "", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespaces)
-
-                let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
-                                cleanedResultTitle.contains(cleanedInputTitle) ||
-                                cleanedInputTitle.split(separator: " ").filter { $0.count > 3 }.contains { cleanedResultTitle.contains($0.lowercased()) }
-
-                let inputHasChinese = LanguageUtils.containsChinese(title) || LanguageUtils.containsChinese(artist)
-                let resultHasChinese = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsChinese(artistName)
-                let resultIsActuallyLocalized = inputHasChinese || resultHasChinese
-
-                let isCombinedSearch = searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
-
-                // 🔑 匹配策略（按优先级）：
-                // P1: 标题匹配 + 艺术家匹配 → 高置信度
-                // P2: 标题匹配 + 本地化结果 → 中置信度
-                // P3: 时长极精确(<0.5s) + 中文结果 + 输入是纯英文 → 允许中英文翻译
-                //     例如：Julia Peng "None of Your Business" (212s) → 彭佳慧 "关你屁事啊" (212s)
-                let isVeryPreciseDuration = durationDiff < 1.0
-                let inputIsPureEnglish = !inputHasChinese && LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
-                // 🔑 翻译匹配要求结果标题包含 CJK（不仅仅是艺术家）
-                // 避免 "Shang-Hide Night" → "Girl's In Love With Me" by "芳野藤丸" 这种英文→英文错配
-                let resultTitleHasChinese = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) || LanguageUtils.containsKorean(trackName)
-                let allowTranslatedMatch = isVeryPreciseDuration && resultTitleHasChinese && inputIsPureEnglish
-
-                if titleMatch {
-                    // 标题匹配 - 正常流程
-                    if isCombinedSearch && resultIsActuallyLocalized {
-                        candidates.append((trackName, artistName, durationDiff, "combined"))
-                    } else if artistMatch && resultIsActuallyLocalized {
-                        candidates.append((trackName, artistName, durationDiff, "title+artist"))
-                    } else if searchTerm.lowercased() == inputTitleLower && LanguageUtils.containsChinese(trackName) && !LanguageUtils.containsChinese(title) {
-                        candidates.append((trackName, artistName, durationDiff, "title-search+CN"))
-                    }
-                } else if allowTranslatedMatch {
-                    // 🔑 特殊情况：中英文完全翻译（标题和艺术家都是翻译关系）
-                    DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 翻译候选('\(searchTerm)'): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.1f", durationDiff))s")
-                    roundTranslatedCandidates.append((trackName, artistName, durationDiff, "duration-precise+CN"))
+                let matched = matchCNResult(
+                    result, title: title, artist: artist, duration: duration,
+                    searchTerm: searchTerm, cleanedInputTitle: cleanedInputTitle,
+                    inputTitleLower: inputTitleLower, inputArtistLower: inputArtistLower
+                )
+                switch matched {
+                case .direct(let c): candidates.append(c)
+                case .translated(let c): roundTranslated.append(c)
+                case .none: break
                 }
             }
 
-            // 本轮翻译候选：选时长最精确的，但要求足够安全
-            let isArtistOnlySearch = searchTerm.lowercased() == inputArtistLower
-            if candidates.isEmpty && !roundTranslatedCandidates.isEmpty {
-                let sorted = roundTranslatedCandidates.sorted { $0.durationDiff < $1.durationDiff }
-                let best = sorted[0]
+            // 本轮翻译候选验证
+            promoteSafeTranslatedCandidates(
+                roundTranslated: roundTranslated,
+                searchTerm: searchTerm, inputArtistLower: inputArtistLower,
+                candidates: &candidates
+            )
+        }
 
-                // 🔑 artist-only 搜索更严格（同歌手不同歌时长可能极度接近）
-                let maxDuration = isArtistOnlySearch ? 0.35 : 0.5
-                guard best.durationDiff < maxDuration else { continue }
+        guard let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) else { return nil }
+        return (best.title, best.artist, best.durationDiff)
+    }
 
-                // 安全条件：唯一候选 或 最佳标题占多数（如 2/3 的"广岛之恋"）
-                // artist-only 搜索必须唯一候选
-                let bestTitle = best.title.lowercased()
-                let sameTitleCount = sorted.filter { $0.title.lowercased() == bestTitle }.count
-                let isSafe = isArtistOnlySearch
-                    ? sorted.count == 1
-                    : sorted.count == 1 || sameTitleCount >= sorted.count / 2
+    /// CN 单条结果匹配 — 返回直接命中 / 翻译候选 / 无匹配
+    private enum CNMatchResult {
+        case direct(CNCandidate)
+        case translated(CNCandidate)
+        case none
+    }
 
-                if isSafe {
-                    DebugLogger.log("MetadataResolver", "🔄 翻译匹配(\(searchTerm)): '\(best.title)' by '\(best.artist)' Δ\(String(format: "%.1f", best.durationDiff))s [\(sameTitleCount)/\(sorted.count)同名]")
-                    candidates.append(best)
-                }
+    private func matchCNResult(
+        _ result: [String: Any],
+        title: String, artist: String, duration: TimeInterval,
+        searchTerm: String, cleanedInputTitle: String,
+        inputTitleLower: String, inputArtistLower: String
+    ) -> CNMatchResult {
+        guard let trackName = result["trackName"] as? String,
+              let artistName = result["artistName"] as? String,
+              let trackTimeMillis = result["trackTimeMillis"] as? Int else { return .none }
+
+        let trackDuration = Double(trackTimeMillis) / 1000.0
+        let durationDiff = abs(trackDuration - duration)
+        guard durationDiff < 3.0 else { return .none }
+
+        // 艺术家匹配
+        let resultArtistLower = artistName.lowercased()
+        var artistMatch = inputArtistLower.contains(resultArtistLower) ||
+                          resultArtistLower.contains(inputArtistLower)
+        if !artistMatch {
+            artistMatch = inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) } ||
+                          inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
+        }
+
+        // 标题匹配
+        let cleanedResultTitle = cleanTrackTitle(trackName.lowercased())
+        let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
+                        cleanedResultTitle.contains(cleanedInputTitle) ||
+                        cleanedInputTitle.split(separator: " ").filter { $0.count > 3 }.contains { cleanedResultTitle.contains($0.lowercased()) }
+
+        let inputHasChinese = LanguageUtils.containsChinese(title) || LanguageUtils.containsChinese(artist)
+        let resultHasChinese = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsChinese(artistName)
+        let resultIsActuallyLocalized = inputHasChinese || resultHasChinese
+        let isCombinedSearch = searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
+
+        if titleMatch {
+            // 🔑 匹配策略：P1 标题+艺术家 → P2 标题+本地化
+            if isCombinedSearch && resultIsActuallyLocalized {
+                return .direct((trackName, artistName, durationDiff, "combined"))
+            } else if artistMatch && resultIsActuallyLocalized {
+                return .direct((trackName, artistName, durationDiff, "title+artist"))
+            } else if searchTerm.lowercased() == inputTitleLower && LanguageUtils.containsChinese(trackName) && !LanguageUtils.containsChinese(title) {
+                return .direct((trackName, artistName, durationDiff, "title-search+CN"))
             }
+            return .none
         }
 
-        if let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) {
-            return (best.title, best.artist, best.durationDiff)
+        // 🔑 P3: 时长极精确 + CJK 标题 + 纯英文输入 → 翻译候选
+        // 例：Julia Peng "None of Your Business" (212s) → 彭佳慧 "关你屁事啊" (212s)
+        // 要求结果标题含 CJK，避免 "Shang-Hide Night" → "Girl's In Love With Me" 英文→英文错配
+        let inputIsPureEnglish = !inputHasChinese && LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
+        let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) || LanguageUtils.containsKorean(trackName)
+        if durationDiff < 1.0 && resultTitleHasCJK && inputIsPureEnglish {
+            DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 翻译候选('\(searchTerm)'): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.1f", durationDiff))s")
+            return .translated((trackName, artistName, durationDiff, "duration-precise+CN"))
         }
 
-        return nil
+        return .none
+    }
+
+    /// 翻译候选安全验证 — 选时长最精确的，要求唯一或多数同名
+    private func promoteSafeTranslatedCandidates(
+        roundTranslated: [CNCandidate],
+        searchTerm: String, inputArtistLower: String,
+        candidates: inout [CNCandidate]
+    ) {
+        guard candidates.isEmpty, !roundTranslated.isEmpty else { return }
+
+        let sorted = roundTranslated.sorted { $0.durationDiff < $1.durationDiff }
+        let best = sorted[0]
+        let isArtistOnlySearch = searchTerm.lowercased() == inputArtistLower
+
+        // 🔑 artist-only 搜索更严格（同歌手不同歌时长可能极度接近）
+        let maxDuration = isArtistOnlySearch ? 0.35 : 0.5
+        guard best.durationDiff < maxDuration else { return }
+
+        // 安全条件：唯一候选 或 最佳标题占多数（如 2/3 的"广岛之恋"）
+        // artist-only 搜索必须唯一候选
+        let bestTitle = best.title.lowercased()
+        let sameTitleCount = sorted.filter { $0.title.lowercased() == bestTitle }.count
+        let isSafe = isArtistOnlySearch
+            ? sorted.count == 1
+            : sorted.count == 1 || sameTitleCount >= sorted.count / 2
+
+        if isSafe {
+            DebugLogger.log("MetadataResolver", "🔄 翻译匹配(\(searchTerm)): '\(best.title)' by '\(best.artist)' Δ\(String(format: "%.1f", best.durationDiff))s [\(sameTitleCount)/\(sorted.count)同名]")
+            candidates.append(best)
+        }
     }
 
     // MARK: - 多区域
@@ -301,6 +321,9 @@ public final class MetadataResolver {
         LanguageUtils.inferRegions(title: title, artist: artist)
     }
 
+    /// 区域候选结构（三层分类）
+    private typealias RegionCandidate = (trackName: String, artistName: String, durationDiff: Double)
+
     /// 从指定区域获取元信息
     private func fetchMetadataFromRegion(
         title: String,
@@ -317,95 +340,120 @@ public final class MetadataResolver {
             }
             DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(searchTerm)' 返回 \(results.count) 条")
 
-            // 🔑 三层收集：titleMatch > artist+CJK > romanized→CJK
-            typealias Candidate = (trackName: String, artistName: String, durationDiff: Double)
-            var titleCandidates: [Candidate] = []
-            var artistCJKCandidates: [Candidate] = []
-            var romanizedCandidates: [Candidate] = []
-            let inputArtistLower = artist.lowercased()
-            let inputTitleLower = title.lowercased()
-
-            for result in results {
-                guard let trackName = result["trackName"] as? String,
-                      let artistName = result["artistName"] as? String,
-                      let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
-
-                let trackDuration = Double(trackTimeMillis) / 1000.0
-                let durationDiff = abs(trackDuration - duration)
-                guard durationDiff < 2 else { continue }
-
-                let resultArtistLower = artistName.lowercased()
-                let resultTitleLower = trackName.lowercased()
-
-                let artistMatch = inputArtistLower.contains(resultArtistLower) ||
-                                  resultArtistLower.contains(inputArtistLower) ||
-                                  inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) }
-
-                let titleMatch = inputTitleLower.contains(resultTitleLower) ||
-                                 resultTitleLower.contains(inputTitleLower)
-
-                let isLocalized = trackName.lowercased() != inputTitleLower ||
-                                  artistName.lowercased() != inputArtistLower
-
-                guard isLocalized else { continue }
-
-                let resultHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) ||
-                                   LanguageUtils.containsKorean(trackName) || LanguageUtils.containsChinese(artistName) ||
-                                   LanguageUtils.containsJapanese(artistName) || LanguageUtils.containsKorean(artistName)
-
-                // 🔑 艺术家精确匹配（去空格后比较）
-                let artistNoSpace = inputArtistLower.replacingOccurrences(of: " ", with: "")
-                let resultArtistNoSpace = resultArtistLower.replacingOccurrences(of: " ", with: "")
-                let isArtistPreciseMatch = artistNoSpace == resultArtistNoSpace ||
-                                           artistNoSpace.contains(resultArtistNoSpace) ||
-                                           resultArtistNoSpace.contains(artistNoSpace)
-
-                // 匹配策略（三层收集）
-                if titleMatch && (artistMatch || resultHasCJK) {
-                    DebugLogger.log("MetadataResolver", "[\(region)] 候选(titleMatch): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
-                    titleCandidates.append((trackName, artistName, durationDiff))
-                } else if isArtistPreciseMatch && resultHasCJK && durationDiff < 0.5 {
-                    DebugLogger.log("MetadataResolver", "[\(region)] 候选(artist+CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
-                    artistCJKCandidates.append((trackName, artistName, durationDiff))
-                } else if LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist) && durationDiff < 1 {
-                    // 🔑 romanized→CJK：结果标题必须是 CJK（不能 ASCII→ASCII 替换）
-                    // 例：'Yume No Tsuzuki' → '夢の続き' ✓ (CJK 标题)
-                    //     'Moon Style Love' → 'milk tea' ✗ (仍是 ASCII，被拒)
-                    let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) ||
-                                           LanguageUtils.containsJapanese(trackName) ||
-                                           LanguageUtils.containsKorean(trackName)
-                    if resultTitleHasCJK {
-                        DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
-                        romanizedCandidates.append((trackName, artistName, durationDiff))
-                    }
-                }
+            let tiers = classifyRegionResults(
+                results, title: title, artist: artist, duration: duration, region: region
+            )
+            if let best = selectBestRegionCandidate(tiers, region: region) {
+                return best
             }
+        }
+        return nil
+    }
 
-            // titleMatch 最可靠 → 直接取最佳
-            if let best = titleCandidates.min(by: { $0.durationDiff < $1.durationDiff }) {
-                return (best.trackName, best.artistName, region, best.durationDiff)
-            }
-            // artist+CJK 需唯一候选（同歌手不同歌时长可能极度接近）
-            if artistCJKCandidates.count == 1 {
-                let best = artistCJKCandidates[0]
-                DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
-                return (best.trackName, best.artistName, region, best.durationDiff)
-            }
-            // romanized→CJK：唯一候选 或 所有候选标题相同（同一首歌不同版本）
-            if !romanizedCandidates.isEmpty {
-                let sorted = romanizedCandidates.sorted { $0.durationDiff < $1.durationDiff }
-                let best = sorted[0]
-                // 清理标题后比较（忽略 "2024 Remaster" 等后缀）
-                let uniqueTitles = Set(sorted.map { LanguageUtils.normalizeTrackName($0.trackName) })
-                let isSafe = sorted.count == 1 || uniqueTitles.count == 1
-                if isSafe {
-                    DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s [\(sorted.count)个, \(uniqueTitles.count)种]")
-                    return (best.trackName, best.artistName, region, best.durationDiff)
+    /// 区域结果三层分类：titleMatch > artist+CJK > romanized→CJK
+    private func classifyRegionResults(
+        _ results: [[String: Any]],
+        title: String, artist: String, duration: TimeInterval, region: String
+    ) -> (title: [RegionCandidate], artistCJK: [RegionCandidate], romanized: [RegionCandidate]) {
+        var titleCandidates: [RegionCandidate] = []
+        var artistCJKCandidates: [RegionCandidate] = []
+        var romanizedCandidates: [RegionCandidate] = []
+        let inputArtistLower = artist.lowercased()
+        let inputTitleLower = title.lowercased()
+
+        for result in results {
+            guard let trackName = result["trackName"] as? String,
+                  let artistName = result["artistName"] as? String,
+                  let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
+
+            let trackDuration = Double(trackTimeMillis) / 1000.0
+            let durationDiff = abs(trackDuration - duration)
+            guard durationDiff < 2 else { continue }
+
+            let resultArtistLower = artistName.lowercased()
+
+            let artistMatch = inputArtistLower.contains(resultArtistLower) ||
+                              resultArtistLower.contains(inputArtistLower) ||
+                              inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) }
+
+            let titleMatch = inputTitleLower.contains(trackName.lowercased()) ||
+                             trackName.lowercased().contains(inputTitleLower)
+
+            let isLocalized = trackName.lowercased() != inputTitleLower ||
+                              artistName.lowercased() != inputArtistLower
+            guard isLocalized else { continue }
+
+            let resultHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) ||
+                               LanguageUtils.containsKorean(trackName) || LanguageUtils.containsChinese(artistName) ||
+                               LanguageUtils.containsJapanese(artistName) || LanguageUtils.containsKorean(artistName)
+
+            // 🔑 艺术家精确匹配（去空格后比较）
+            let artistNoSpace = inputArtistLower.replacingOccurrences(of: " ", with: "")
+            let resultArtistNoSpace = resultArtistLower.replacingOccurrences(of: " ", with: "")
+            let isArtistPreciseMatch = artistNoSpace == resultArtistNoSpace ||
+                                       artistNoSpace.contains(resultArtistNoSpace) ||
+                                       resultArtistNoSpace.contains(artistNoSpace)
+
+            // 三层收集
+            if titleMatch && (artistMatch || resultHasCJK) {
+                DebugLogger.log("MetadataResolver", "[\(region)] 候选(titleMatch): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
+                titleCandidates.append((trackName, artistName, durationDiff))
+            } else if isArtistPreciseMatch && resultHasCJK && durationDiff < 0.5 {
+                DebugLogger.log("MetadataResolver", "[\(region)] 候选(artist+CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
+                artistCJKCandidates.append((trackName, artistName, durationDiff))
+            } else if LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist) && durationDiff < 1 {
+                // 🔑 romanized→CJK：结果标题必须是 CJK（不能 ASCII→ASCII 替换）
+                let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) ||
+                                       LanguageUtils.containsJapanese(trackName) ||
+                                       LanguageUtils.containsKorean(trackName)
+                if resultTitleHasCJK {
+                    DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
+                    romanizedCandidates.append((trackName, artistName, durationDiff))
                 }
             }
         }
 
-        return nil
+        return (titleCandidates, artistCJKCandidates, romanizedCandidates)
+    }
+
+    /// 区域候选选择 — titleMatch > artist+CJK(唯一) > romanized→CJK(安全)
+    private func selectBestRegionCandidate(
+        _ tiers: (title: [RegionCandidate], artistCJK: [RegionCandidate], romanized: [RegionCandidate]),
+        region: String
+    ) -> (String, String, String, Double)? {
+        // titleMatch 最可靠 → 直接取最佳
+        if let best = tiers.title.min(by: { $0.durationDiff < $1.durationDiff }) {
+            return (best.trackName, best.artistName, region, best.durationDiff)
+        }
+        // artist+CJK 需唯一候选（同歌手不同歌时长可能极度接近）
+        if tiers.artistCJK.count == 1 {
+            let best = tiers.artistCJK[0]
+            DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
+            return (best.trackName, best.artistName, region, best.durationDiff)
+        }
+        // romanized→CJK：唯一候选 或 所有候选标题相同（同一首歌不同版本）
+        guard !tiers.romanized.isEmpty else { return nil }
+        let sorted = tiers.romanized.sorted { $0.durationDiff < $1.durationDiff }
+        let best = sorted[0]
+        // 清理标题后比较（忽略 "2024 Remaster" 等后缀）
+        let uniqueTitles = Set(sorted.map { LanguageUtils.normalizeTrackName($0.trackName) })
+        let isSafe = sorted.count == 1 || uniqueTitles.count == 1
+        guard isSafe else { return nil }
+        DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s [\(sorted.count)个, \(uniqueTitles.count)种]")
+        return (best.trackName, best.artistName, region, best.durationDiff)
+    }
+
+    // MARK: - 工具方法
+
+    /// 清理标题：移除 feat/remaster/live 后缀和方括号标签
+    private func cleanTrackTitle(_ lowercasedTitle: String) -> String {
+        lowercasedTitle
+            .replacingOccurrences(of: #"\s*\(feat\.?[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\(ft\.?[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\(remaster[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\(live[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\[.*?\]"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - iTunes Search API

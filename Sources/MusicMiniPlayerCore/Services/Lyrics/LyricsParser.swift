@@ -1,6 +1,6 @@
 /**
  * [INPUT]: LyricModels 的 LyricLine/LyricWord 结构
- * [OUTPUT]: parseTTML/parseLRC/parseYRC 解析函数 + processLyrics 后处理
+ * [OUTPUT]: parseTTML/parseLRC/parseYRC 解析函数 + processLyrics 后处理 + containsColonMetadata 工具
  * [POS]: Lyrics 的解析子模块，负责将各种歌词格式转换为统一的 LyricLine 数组
  * [PROTOCOL]: 变更时更新此头部，然后检查 Services/Lyrics/CLAUDE.md
  */
@@ -68,70 +68,11 @@ public final class LyricsParser {
             let endString = String(ttmlString[endRange])
             let content = String(ttmlString[contentRange])
 
-            var words: [LyricWord] = []
-            var lineText = ""
-            var translation: String? = nil
+            let translation = extractTranslation(from: content)
+            var (words, lineText) = extractTimedWords(from: content)
 
-            // 提取翻译
-            if let regex = ttmlTranslationSpanRegex {
-                let transMatches = regex.matches(in: content, range: NSRange(content.startIndex..., in: content))
-                if let first = transMatches.first,
-                   let textRange = Range(first.range(at: 1), in: content) {
-                    let transText = String(content[textRange]).trimmingCharacters(in: .whitespaces)
-                    if !transText.isEmpty { translation = transText }
-                }
-            }
-
-            // 提取带时间戳的 span（逐字歌词）
-            if let timedRegex = ttmlTimedSpanRegex {
-                let spanMatches = timedRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
-
-                for spanMatch in spanMatches {
-                    guard spanMatch.numberOfRanges >= 4,
-                          let fullSpanRange = Range(spanMatch.range, in: content) else { continue }
-                    let fullSpan = String(content[fullSpanRange])
-
-                    // 过滤罗马音和背景音
-                    if fullSpan.contains("ttm:role=\"x-roman") || fullSpan.contains("ttm:role=\"x-bg\"") { continue }
-
-                    guard let spanBeginRange = Range(spanMatch.range(at: 1), in: content),
-                          let spanEndRange = Range(spanMatch.range(at: 2), in: content),
-                          let spanTextRange = Range(spanMatch.range(at: 3), in: content) else { continue }
-
-                    let spanBegin = String(content[spanBeginRange])
-                    let spanEnd = String(content[spanEndRange])
-                    let spanText = String(content[spanTextRange])
-
-                    if let wordStart = parseTTMLTime(spanBegin),
-                       let wordEnd = parseTTMLTime(spanEnd) {
-                        words.append(LyricWord(word: spanText, startTime: wordStart, endTime: wordEnd))
-                        lineText += spanText + " "
-                    }
-                }
-            }
-
-            // 回退：普通 span 提取
-            if words.isEmpty, let spanRegex = ttmlCleanSpanRegex {
-                let spanMatches = spanRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
-                for spanMatch in spanMatches {
-                    guard let fullSpanRange = Range(spanMatch.range, in: content) else { continue }
-                    let fullSpan = String(content[fullSpanRange])
-                    if fullSpan.contains("ttm:role") { continue }
-
-                    if spanMatch.numberOfRanges >= 2,
-                       let textRange = Range(spanMatch.range(at: 1), in: content) {
-                        lineText += String(content[textRange]) + " "
-                    }
-                }
-            }
-
-            // 回退：清理标签
-            if lineText.isEmpty {
-                lineText = content
-                    .replacingOccurrences(of: "<span[^>]*ttm:role=\"x-translation\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
-                    .replacingOccurrences(of: "<span[^>]*ttm:role=\"x-roman\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
-                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            }
+            // 回退：普通 span / 清理标签
+            if words.isEmpty { lineText = extractCleanText(from: content) }
 
             lineText = decodeHTMLEntities(lineText.trimmingCharacters(in: .whitespacesAndNewlines))
             guard !lineText.isEmpty else { continue }
@@ -144,6 +85,75 @@ public final class LyricsParser {
 
         lines.sort { $0.startTime < $1.startTime }
         return lines.isEmpty ? nil : lines
+    }
+
+    // MARK: - TTML 子解析器
+
+    /// 提取翻译 span
+    private func extractTranslation(from content: String) -> String? {
+        guard let regex = ttmlTranslationSpanRegex else { return nil }
+        let transMatches = regex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+        guard let first = transMatches.first,
+              let textRange = Range(first.range(at: 1), in: content) else { return nil }
+        let transText = String(content[textRange]).trimmingCharacters(in: .whitespaces)
+        return transText.isEmpty ? nil : transText
+    }
+
+    /// 提取带时间戳的 span（逐字歌词）
+    private func extractTimedWords(from content: String) -> (words: [LyricWord], text: String) {
+        guard let timedRegex = ttmlTimedSpanRegex else { return ([], "") }
+
+        var words: [LyricWord] = []
+        var lineText = ""
+        let spanMatches = timedRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+
+        for spanMatch in spanMatches {
+            guard spanMatch.numberOfRanges >= 4,
+                  let fullSpanRange = Range(spanMatch.range, in: content) else { continue }
+            let fullSpan = String(content[fullSpanRange])
+
+            // 过滤罗马音和背景音
+            if fullSpan.contains("ttm:role=\"x-roman") || fullSpan.contains("ttm:role=\"x-bg\"") { continue }
+
+            guard let spanBeginRange = Range(spanMatch.range(at: 1), in: content),
+                  let spanEndRange = Range(spanMatch.range(at: 2), in: content),
+                  let spanTextRange = Range(spanMatch.range(at: 3), in: content) else { continue }
+
+            if let wordStart = parseTTMLTime(String(content[spanBeginRange])),
+               let wordEnd = parseTTMLTime(String(content[spanEndRange])) {
+                let spanText = String(content[spanTextRange])
+                words.append(LyricWord(word: spanText, startTime: wordStart, endTime: wordEnd))
+                lineText += spanText + " "
+            }
+        }
+
+        return (words, lineText)
+    }
+
+    /// 回退提取：普通 span → 清理标签
+    private func extractCleanText(from content: String) -> String {
+        // 尝试普通 span 提取
+        if let spanRegex = ttmlCleanSpanRegex {
+            var lineText = ""
+            let spanMatches = spanRegex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+            for spanMatch in spanMatches {
+                guard let fullSpanRange = Range(spanMatch.range, in: content) else { continue }
+                let fullSpan = String(content[fullSpanRange])
+                if fullSpan.contains("ttm:role") { continue }
+
+                if spanMatch.numberOfRanges >= 2,
+                   let textRange = Range(spanMatch.range(at: 1), in: content) {
+                    lineText += String(content[textRange]) + " "
+                }
+            }
+            if !lineText.isEmpty { return lineText }
+        }
+
+        // 最终回退：清理所有标签
+        return content
+            .replacingOccurrences(of: "<span[^>]*ttm:role=\"x-translation\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "<span[^>]*ttm:role=\"x-roman\"[^>]*>[^<]*</span>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
     }
 
     /// 解析 TTML 时间格式
@@ -338,7 +348,7 @@ public final class LyricsParser {
         var colonCountInFirstLines = 0
         for i in 0..<min(5, rawLyrics.count) {
             let trimmed = rawLyrics[i].text.trimmingCharacters(in: .whitespaces)
-            if trimmed.contains("：") || trimmed.contains(":") {
+            if containsColonMetadata(trimmed) {
                 colonCountInFirstLines += 1
             }
         }
@@ -347,7 +357,7 @@ public final class LyricsParser {
         for line in rawLyrics {
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
             let duration = line.endTime - line.startTime
-            let hasColon = trimmed.contains("：") || trimmed.contains(":")
+            let hasColon = containsColonMetadata(trimmed)
             let hasTitleSeparator = trimmed.contains(" - ") && trimmed.count < 50
 
             let isPureSymbolLine = isPureSymbols(trimmed)
@@ -464,13 +474,18 @@ public final class LyricsParser {
 
     // MARK: - 工具函数
 
+    /// 检测冒号元信息（"词：xxx" 或 "Lyrics: xxx"）
+    private func containsColonMetadata(_ text: String) -> Bool {
+        text.contains("：") || text.contains(":")
+    }
+
+    private static let htmlEntityMap: [(String, String)] = [
+        ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&"),
+        ("&quot;", "\""), ("&apos;", "'"), ("&#39;", "'"),
+    ]
+
     private func decodeHTMLEntities(_ text: String) -> String {
-        text.replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&apos;", with: "'")
-            .replacingOccurrences(of: "&#39;", with: "'")
+        Self.htmlEntityMap.reduce(text) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
     }
 
     private func isPureSymbols(_ text: String) -> Bool {

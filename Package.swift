@@ -49,5 +49,9 @@ let package = Package(
                 ])
             ]
         ),
+        .testTarget(
+            name: "MusicMiniPlayerTests",
+            dependencies: ["MusicMiniPlayerCore"]
+        ),
     ]
 )

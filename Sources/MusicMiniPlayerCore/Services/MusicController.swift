@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 ScriptingBridge, MusicKit, LyricsService
+ * [INPUT]: 依赖 ScriptingBridge, MusicKit, LyricsService, AppleScriptRunner
  * [OUTPUT]: 导出 MusicController（播放状态 + 队列同步）
- * [POS]: MusicMiniPlayerCore 的核心状态管理器
+ * [POS]: MusicMiniPlayerCore 的核心状态管理器（薄门面）
  */
 
 import Foundation
@@ -31,7 +31,10 @@ public class MusicController: ObservableObject {
 
     let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "MusicController")
 
-    // Published properties
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - @Published 状态（SwiftUI 视图绑定层）
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
     @Published public var isPlaying: Bool = false
     @Published public var currentTrackTitle: String = kNotPlayingSentinel
     @Published public var currentArtist: String = ""
@@ -45,22 +48,22 @@ public class MusicController: ObservableObject {
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
-
-    // 共享页面状态 - 浮窗和菜单栏弹窗同步
     @Published public var currentPage: PlayerPage = .album
-    // 追踪用户是否手动打开了歌词页面（No Lyrics 时自动跳回用）
     @Published public var userManuallyOpenedLyrics: Bool = false
-    // 封面亮度检测 - true = 浅色背景（需要深色 UI）
     @Published public var isLightBackground: Bool = false
-
-    // 核心状态
-    var musicApp: SBApplication?
-    private var pollingTimer: Timer?
-    private var interpolationTimer: Timer?
-    private var queueCheckTimer: Timer?
-    private var lastPollTime: Date = .distantPast
-    var internalCurrentTime: Double = 0  // 内部精确时间，不触发重绘
     @Published public var currentPersistentID: String?
+    @Published public var musicKitAuthorized: Bool = false
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - 内部状态
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    var musicApp: SBApplication?
+    var internalCurrentTime: Double = 0
+    var isPreview: Bool = false
+    var seekPending = false
+    var lastUserActionTime: Date = .distantPast
+
     public var lyricsService: LyricsService { LyricsService.shared }
 
     var artworkCache: NSCache<NSString, NSImage> = {
@@ -69,56 +72,74 @@ public class MusicController: ObservableObject {
         cache.totalCostLimit = 100 * 1024 * 1024  // 100MB
         return cache
     }()
-    var isPreview: Bool = false
 
     // ScriptingBridge 队列：核心操作(高优先级) / 封面获取(后台串行)
     let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
     let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
+
     /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
     var artworkFetchingForKey: String?
 
-    /// 封面获取代数：每次切歌递增，旧代任务在 SB 队列排到时直接跳过
-    /// 解决电台快速切歌时 scriptingBridgeQueue 堆积导致封面不更新的问题
-    var artworkFetchGeneration: Int = 0
+    /// 封面获取代数：线程安全，用 os_unfair_lock 保护
+    /// 每次切歌递增，旧代任务在 SB 队列排到时直接跳过
+    private var _artworkFetchGeneration: Int = 0
+    private var _generationLock = os_unfair_lock()
+
+    var artworkFetchGeneration: Int {
+        get {
+            os_unfair_lock_lock(&_generationLock)
+            defer { os_unfair_lock_unlock(&_generationLock) }
+            return _artworkFetchGeneration
+        }
+        set {
+            os_unfair_lock_lock(&_generationLock)
+            _artworkFetchGeneration = newValue
+            os_unfair_lock_unlock(&_generationLock)
+        }
+    }
+
+    /// 递增并返回新代数（原子操作）
+    func incrementGeneration() -> Int {
+        os_unfair_lock_lock(&_generationLock)
+        _artworkFetchGeneration += 1
+        let gen = _artworkFetchGeneration
+        os_unfair_lock_unlock(&_generationLock)
+        return gen
+    }
 
     @inline(__always)
     func logToFile(_ message: String) {
         DebugLogger.log("Artwork", message)
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Timer 管理
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private var pollingTimer: Timer?
+    private var interpolationTimer: Timer?
+    private var queueCheckTimer: Timer?
+    private var interpolationTimerActive = false
+    private var lastPollTime: Date = .distantPast
+
     // Queue sync state
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
-    private var interpolationTimerActive = false
-    var seekPending = false
-    var lastUserActionTime: Date = .distantPast
     private let userActionLockDuration: TimeInterval = 1.5
+
+    // 防止 AppleScript 轮询重叠
+    private var lastUpdateTime: Date = .distantPast
+    private let updateTimeout: TimeInterval = 0.4
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Init / Deinit
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     public init(preview: Bool = false) {
         debugPrint("🎬 [MusicController] init() called with preview=\(preview)\n")
         self.isPreview = preview
         if preview {
-            debugPrint("🎬 [MusicController] PREVIEW mode - returning early\n")
-            logger.info("Initializing MusicController in PREVIEW mode")
-            self.musicApp = nil
-            self.isPlaying = false
-            self.currentTrackTitle = "Preview Track"
-            self.currentArtist = "Preview Artist"
-            self.currentAlbum = "Preview Album"
-            self.currentArtwork = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Preview")
-
-            // Populate dummy data for preview
-            self.recentTracks = [
-                (title: "Recent Song 1", artist: "Artist A", album: "Album A", persistentID: "1", duration: 190.0),
-                (title: "Recent Song 2", artist: "Artist B", album: "Album B", persistentID: "2", duration: 210.0),
-                (title: "Recent Song 3", artist: "Artist C", album: "Album C", persistentID: "3", duration: 180.0)
-            ]
-
-            self.upNextTracks = [
-                (title: "Next Song 1", artist: "Artist X", album: "Album X", persistentID: "4", duration: 200.0),
-                (title: "Next Song 2", artist: "Artist Y", album: "Album Y", persistentID: "5", duration: 220.0),
-                (title: "Next Song 3", artist: "Artist Z", album: "Album Z", persistentID: "6", duration: 195.0)
-            ]
+            setupPreviewData()
             return
         }
 
@@ -126,15 +147,23 @@ public class MusicController: ObservableObject {
         logger.info("🎯 Initializing MusicController - will connect after setup")
 
         setupNotifications()
-        startPolling()
+        startTimers()
 
-        // Auto-connect after a brief delay to ensure initialization is complete
-        debugPrint("🎯 [MusicController] Scheduling connect() in 0.2s\n")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             debugPrint("🎯 [MusicController] connect() timer fired\n")
             self?.connect()
         }
     }
+
+    deinit {
+        stopTimers()
+        queueObserverTask?.cancel()
+        DistributedNotificationCenter.default().removeObserver(self)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Connect
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     public func connect() {
         debugPrint("🔌 [MusicController] connect() called\n")
@@ -147,7 +176,6 @@ public class MusicController: ObservableObject {
         debugPrint("🔌 [MusicController] Attempting to connect to Music.app...\n")
         logger.info("🔌 connect() called - Attempting to connect to Music.app...")
 
-        // Initialize SBApplication
         guard let app = SBApplication(bundleIdentifier: "com.apple.Music") else {
             debugPrint("❌ [MusicController] Failed to create SBApplication\n")
             logger.error("❌ Failed to create SBApplication for Music.app")
@@ -158,53 +186,41 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // Store the app reference directly
         self.musicApp = app
         debugPrint("✅ [MusicController] SBApplication created successfully\n")
         logger.info("✅ Successfully created and stored SBApplication for Music.app")
 
-        // Launch Music.app if it's not running
-        debugPrint("🔍 [connect] Checking app.isRunning...\n")
         let isRunning = app.isRunning
-        debugPrint("🔍 [connect] app.isRunning = \(isRunning)\n")
-
         if !isRunning {
             debugPrint("🚀 [connect] Music.app is not running, launching it...\n")
             app.activate()
-
-            // Wait a bit for Music.app to launch
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.updatePlayerState()
-                // 🔑 启动后也获取队列
                 self.fetchUpNextQueue()
             }
         } else {
             debugPrint("✅ [connect] Music.app is already running\n")
-            // Trigger immediate update
             DispatchQueue.main.async {
                 self.updatePlayerState()
-                // 🔑 连接成功后立即获取队列
                 self.fetchUpNextQueue()
             }
         }
 
-        // 🔑 启动时请求 MusicKit 授权（用于获取封面等）
         Task { @MainActor in
             await requestMusicKitAuthorization()
         }
     }
 
-    // 🔑 公开的 MusicKit 授权状态
-    @Published public var musicKitAuthorized: Bool = false
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - MusicKit 授权
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    /// 公开的授权请求方法（供设置界面调用）
     @MainActor
     public func requestMusicKitAccess() async {
         await requestMusicKitAuthorization()
         musicKitAuthorized = MusicAuthorization.currentStatus == .authorized
     }
 
-    /// 获取当前 MusicKit 授权状态
     public var musicKitAuthStatus: String {
         switch MusicAuthorization.currentStatus {
         case .authorized: return "已授权"
@@ -214,16 +230,6 @@ public class MusicController: ObservableObject {
         @unknown default: return "未知"
         }
     }
-
-    deinit {
-        pollingTimer?.invalidate()
-        interpolationTimer?.invalidate()
-        queueCheckTimer?.invalidate()
-        queueObserverTask?.cancel()
-        DistributedNotificationCenter.default().removeObserver(self)
-    }
-
-    // MARK: - Setup
 
     @MainActor
     private func requestMusicKitAuthorization() async {
@@ -243,7 +249,6 @@ public class MusicController: ObservableObject {
         }
     }
 
-    /// 显示 MusicKit 授权引导对话框
     @MainActor
     public func showMusicKitAuthorizationGuide() {
         let alert = NSAlert()
@@ -264,12 +269,15 @@ public class MusicController: ObservableObject {
         alert.addButton(withTitle: "稍后")
 
         if alert.runModal() == .alertFirstButtonReturn {
-            // 打开系统设置 - 隐私与安全性
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_MediaLibrary") {
                 NSWorkspace.shared.open(url)
             }
         }
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Setup
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     private func setupNotifications() {
         DistributedNotificationCenter.default().addObserver(
@@ -280,7 +288,32 @@ public class MusicController: ObservableObject {
         )
     }
 
-    private func startPolling() {
+    private func setupPreviewData() {
+        debugPrint("🎬 [MusicController] PREVIEW mode - returning early\n")
+        logger.info("Initializing MusicController in PREVIEW mode")
+        self.musicApp = nil
+        self.isPlaying = false
+        self.currentTrackTitle = "Preview Track"
+        self.currentArtist = "Preview Artist"
+        self.currentAlbum = "Preview Album"
+        self.currentArtwork = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Preview")
+        self.recentTracks = [
+            (title: "Recent Song 1", artist: "Artist A", album: "Album A", persistentID: "1", duration: 190.0),
+            (title: "Recent Song 2", artist: "Artist B", album: "Album B", persistentID: "2", duration: 210.0),
+            (title: "Recent Song 3", artist: "Artist C", album: "Album C", persistentID: "3", duration: 180.0)
+        ]
+        self.upNextTracks = [
+            (title: "Next Song 1", artist: "Artist X", album: "Album X", persistentID: "4", duration: 200.0),
+            (title: "Next Song 2", artist: "Artist Y", album: "Album Y", persistentID: "5", duration: 220.0),
+            (title: "Next Song 3", artist: "Artist Z", album: "Album Z", persistentID: "6", duration: 195.0)
+        ]
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Timer 生命周期
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private func startTimers() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
@@ -291,8 +324,6 @@ public class MusicController: ObservableObject {
             RunLoop.main.add(self.pollingTimer!, forMode: .common)
             self.pollingTimer?.fire()
 
-            // interpolationTimer 由 updateTimerState() 动态控制（仅播放时运行）
-
             // 2s 队列 hash 检测
             self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.checkQueueHashAndRefresh()
@@ -302,6 +333,16 @@ public class MusicController: ObservableObject {
 
             self.setupMusicKitQueueObserver()
         }
+    }
+
+    private func stopTimers() {
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+        interpolationTimer?.invalidate()
+        interpolationTimer = nil
+        interpolationTimerActive = false
+        queueCheckTimer?.invalidate()
+        queueCheckTimer = nil
     }
 
     /// 根据播放状态动态启停 60fps 插值 Timer（减少 CPU 占用）
@@ -322,7 +363,9 @@ public class MusicController: ObservableObject {
         }
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Queue Sync (双层检测)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     private func checkQueueHashAndRefresh() {
         guard !isPreview else { return }
@@ -341,23 +384,12 @@ public class MusicController: ObservableObject {
         }
     }
 
-    /// 从 SBApplication 获取队列 hash
     private func getQueueHashFromApp(_ app: SBApplication) -> String? {
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject else {
-            debugPrint("⚠️ [getQueueHash] No currentPlaylist\n")
-            return nil
-        }
-        guard let playlistName = playlist.value(forKey: "name") as? String else {
-            debugPrint("⚠️ [getQueueHash] No playlist name\n")
-            return nil
-        }
-        guard let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
-            debugPrint("⚠️ [getQueueHash] No tracks\n")
-            return nil
-        }
-        guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+              let playlistName = playlist.value(forKey: "name") as? String,
+              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
               let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            debugPrint("⚠️ [getQueueHash] No currentTrack\n")
             return nil
         }
         return "\(playlistName):\(tracks.count):\(currentID)"
@@ -378,6 +410,10 @@ public class MusicController: ObservableObject {
         }
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - 时间插值
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
     private func interpolateTime() {
         guard isPlaying, !isPreview else { return }
         let elapsed = Date().timeIntervalSince(lastPollTime)
@@ -394,7 +430,9 @@ public class MusicController: ObservableObject {
         }
     }
 
-    // MARK: - State Updates
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - 通知处理（playerInfoChanged 拆分）
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @objc private func playerInfoChanged(_ notification: Notification) {
         guard let userInfo = notification.userInfo as? [String: Any] else { return }
@@ -402,345 +440,217 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // 播放状态
-            if let state = userInfo["Player State"] as? String {
-                // Only update if we haven't performed a user action recently
-                if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
-                    self.isPlaying = (state == "Playing")
-                }
-            }
+            self.applyPlaybackState(from: userInfo)
+            let (trackChanged, newName, newArtist, newAlbum) = self.applyTrackMetadata(from: userInfo)
 
-            // 🔑 先提取新值（在更新属性之前）
-            let newName = userInfo["Name"] as? String
-            let newArtist = userInfo["Artist"] as? String
-            let newAlbum = userInfo["Album"] as? String
-
-            // 🔑 在更新属性之前检测变化
-            let trackChanged = (newName != nil && newName != self.currentTrackTitle) ||
-                              (newArtist != nil && newArtist != self.currentArtist)
-
-            // 更新属性
-            if let name = newName {
-                self.currentTrackTitle = name
-            }
-            if let artist = newArtist {
-                self.currentArtist = artist
-            }
-            if let album = newAlbum {
-                self.currentAlbum = album
-            }
-            if let totalTime = userInfo["Total Time"] as? Int {
-                self.duration = Double(totalTime) / 1000.0
-            }
-
-            // 🔑 歌曲变化时获取封面（一次性在后台获取 persistentID + artwork）
             if trackChanged, let name = newName, let artist = newArtist {
-                let album = newAlbum ?? self.currentAlbum
-                self.logger.info("🎵 Track changed (notification): \(name) - \(artist)")
-                debugPrint("🎵 [playerInfoChanged] Track changed: \(name) - \(artist)\n")
-
-                // 🔑 递增封面代数，让旧的 SB 队列任务自动跳过
-                self.artworkFetchGeneration += 1
-                let generation = self.artworkFetchGeneration
-
-                // 🔑 优化：一次性获取 persistentID + artwork，避免两次排队
-                self.scriptingBridgeQueue.async { [weak self] in
-                    guard let self = self, let app = self.musicApp, app.isRunning else { return }
-                    // 🔑 代数检查：如果已经切到下一首，直接跳过
-                    guard self.artworkFetchGeneration == generation else {
-                        debugPrint("⏭️ [playerInfoChanged] SB task stale (gen \(generation) vs \(self.artworkFetchGeneration)), skipping\n")
-                        return
-                    }
-
-                    var persistentID = ""
-                    var artworkImage: NSImage? = nil
-
-                    // 1. 获取 persistentID
-                    if let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-                       let trackID = currentTrack.value(forKey: "persistentID") as? String {
-                        persistentID = trackID
-                    }
-
-                    // 2. 先检查缓存
-                    if !persistentID.isEmpty, let cached = self.artworkCache.object(forKey: persistentID as NSString) {
-                        artworkImage = cached
-                        debugPrint("✅ [playerInfoChanged] Artwork cache hit for \(persistentID.prefix(8))\n")
-                    } else {
-                        // 3. 缓存未命中，获取 artwork
-                        artworkImage = self.getArtworkImageFromApp(app)
-                        if let image = artworkImage, !persistentID.isEmpty {
-                            self.artworkCache.setObject(image, forKey: persistentID as NSString)
-                        }
-                    }
-
-                    // 4. 回主线程更新 UI
-                    DispatchQueue.main.async {
-                        self.currentPersistentID = persistentID
-                        if let image = artworkImage {
-                            self.setArtwork(image)
-                        } else {
-                            // 🔑 ScriptingBridge 失败，先设占位图，然后异步回退到网络 API
-                            self.setArtwork(self.createPlaceholder())
-
-                            Task { [weak self] in
-                                guard let self = self else { return }
-                                if let mkArtwork = await self.fetchMusicKitArtwork(title: name, artist: artist, album: album) {
-                                    await self.applyArtworkIfCurrent(mkArtwork, persistentID: persistentID, title: name)
-                                    debugPrint("✅ [playerInfoChanged] API fallback success for \(name)\n")
-                                } else {
-                                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                    await self.retryArtworkFetch(persistentID: persistentID, title: name, artist: artist, album: album, generation: generation)
-                                }
-                            }
-                        }
-                        // 🔑 歌曲切换时也刷新 Up Next 队列
-                        self.fetchUpNextQueue()
-
-                        // 🔑 直接用通知的 name/artist 触发歌词获取
-                        // 不依赖 processPlayerState（persistentID 为空时不触发）
-                        // 也不依赖 SwiftUI onChange（可能被 updatePlayerState 竞态覆盖）
-                        self.lyricsService.fetchLyrics(for: name, artist: artist, duration: self.duration)
-                    }
-                }
+                self.handleTrackChange(name: name, artist: artist, album: newAlbum ?? self.currentAlbum)
             }
 
             self.updatePlayerState()
         }
     }
 
+    /// 从通知 userInfo 应用播放状态（Playing/Paused）
+    private func applyPlaybackState(from userInfo: [String: Any]) {
+        guard let state = userInfo["Player State"] as? String,
+              Date().timeIntervalSince(lastUserActionTime) > userActionLockDuration else { return }
+        isPlaying = (state == "Playing")
+    }
+
+    /// 从通知 userInfo 应用曲目元信息，返回 (是否切歌, 新标题, 新艺术家, 新专辑)
+    private func applyTrackMetadata(from userInfo: [String: Any]) -> (Bool, String?, String?, String?) {
+        let newName = userInfo["Name"] as? String
+        let newArtist = userInfo["Artist"] as? String
+        let newAlbum = userInfo["Album"] as? String
+
+        let trackChanged = (newName != nil && newName != currentTrackTitle) ||
+                          (newArtist != nil && newArtist != currentArtist)
+
+        if let name = newName { currentTrackTitle = name }
+        if let artist = newArtist { currentArtist = artist }
+        if let album = newAlbum { currentAlbum = album }
+        if let totalTime = userInfo["Total Time"] as? Int {
+            duration = Double(totalTime) / 1000.0
+        }
+
+        return (trackChanged, newName, newArtist, newAlbum)
+    }
+
+    /// 切歌时：获取 persistentID + 封面 + 歌词 + 刷新队列
+    private func handleTrackChange(name: String, artist: String, album: String) {
+        logger.info("🎵 Track changed (notification): \(name) - \(artist)")
+        debugPrint("🎵 [playerInfoChanged] Track changed: \(name) - \(artist)\n")
+
+        let generation = incrementGeneration()
+
+        // 一次性获取 persistentID + artwork，避免两次排队
+        scriptingBridgeQueue.async { [weak self] in
+            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            guard self.artworkFetchGeneration == generation else {
+                debugPrint("⏭️ [playerInfoChanged] SB task stale (gen \(generation) vs \(self.artworkFetchGeneration)), skipping\n")
+                return
+            }
+
+            let (persistentID, artworkImage) = self.fetchIDAndArtwork(from: app)
+
+            DispatchQueue.main.async {
+                self.currentPersistentID = persistentID
+                if let image = artworkImage {
+                    self.setArtwork(image)
+                } else {
+                    self.handleArtworkMiss(persistentID: persistentID, name: name, artist: artist, album: album, generation: generation)
+                }
+                self.fetchUpNextQueue()
+                // 🔑 直接用通知的 name/artist 触发歌词获取
+                Task { @MainActor in
+                    self.lyricsService.fetchLyrics(for: name, artist: artist, duration: self.duration)
+                }
+            }
+        }
+    }
+
+    /// 从 SB app 获取 persistentID 和缓存/嵌入封面（在 scriptingBridgeQueue 上调用）
+    private func fetchIDAndArtwork(from app: SBApplication) -> (String, NSImage?) {
+        var persistentID = ""
+        if let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+           let trackID = currentTrack.value(forKey: "persistentID") as? String {
+            persistentID = trackID
+        }
+
+        // 先检查缓存
+        if !persistentID.isEmpty, let cached = artworkCache.object(forKey: persistentID as NSString) {
+            debugPrint("✅ [playerInfoChanged] Artwork cache hit for \(persistentID.prefix(8))\n")
+            return (persistentID, cached)
+        }
+
+        // 缓存未命中，从 SB 获取
+        let artworkImage = getArtworkImageFromApp(app)
+        if let image = artworkImage, !persistentID.isEmpty {
+            artworkCache.setObject(image, forKey: persistentID as NSString)
+        }
+        return (persistentID, artworkImage)
+    }
+
+    /// SB 封面获取失败时：占位图 + 网络回退
+    private func handleArtworkMiss(persistentID: String, name: String, artist: String, album: String, generation: Int) {
+        setArtwork(createPlaceholder())
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            if let mkArtwork = await self.fetchMusicKitArtwork(title: name, artist: artist, album: album) {
+                await self.applyArtworkIfCurrent(mkArtwork, persistentID: persistentID, title: name)
+                debugPrint("✅ [playerInfoChanged] API fallback success for \(name)\n")
+            } else {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await self.retryArtworkFetch(persistentID: persistentID, title: name, artist: artist, album: album, generation: generation)
+            }
+        }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - State Updates（轮询路径）
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
     func updatePlayerState() {
         guard !isPreview else { return }
 
-        // 🔑 直接使用 AppleScript（更可靠，不会阻塞主线程）
-        // ScriptingBridge 在主线程调用时可能导致卡死
-        updatePlayerStateViaAppleScript()
-    }
-
-    /// 处理播放器状态更新（共用逻辑）
-    private func processPlayerState(
-        isPlaying: Bool,
-        position: Double,
-        shuffle: Bool,
-        repeatMode: Int,
-        trackName: String,
-        trackArtist: String,
-        trackAlbum: String,
-        trackDuration: Double,
-        persistentID: String,
-        bitRate: Int,
-        sampleRate: Int
-    ) {
-        // Determine audio quality
-        var quality: String? = nil
-        if sampleRate >= 176400 || bitRate >= 3000 {
-            quality = "Hi-Res Lossless"
-        } else if sampleRate >= 44100 && bitRate >= 1000 {
-            quality = "Lossless"
-        }
-
-        // 检测歌曲是否变化（支持电台等无 persistentID 场景）
-        let isFirstTrack = self.currentPersistentID == nil && !persistentID.isEmpty
-        let trackChangedByID = !persistentID.isEmpty && persistentID != self.currentPersistentID
-        let trackChangedByTitle = persistentID.isEmpty && trackName != self.currentTrackTitle
-        let trackChanged = trackChangedByID || trackChangedByTitle || isFirstTrack
-        DebugLogger.log("PlayerState", "📊 track='\(trackName)' pid='\(persistentID)' dur=\(trackDuration) changed=\(trackChanged) (byID=\(trackChangedByID) byTitle=\(trackChangedByTitle) first=\(isFirstTrack)) curPID='\(self.currentPersistentID ?? "nil")'")
-
-
-        DispatchQueue.main.async {
-            // Update playing state (only if not recently toggled by user)
-            // 🔑 值守卫：只在值变化时赋值，避免无谓的 SwiftUI 重绘
-            if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
-                if self.isPlaying != isPlaying { self.isPlaying = isPlaying }
-                if self.shuffleEnabled != shuffle { self.shuffleEnabled = shuffle }
-                if self.repeatMode != repeatMode { self.repeatMode = repeatMode }
-            }
-
-            if !trackName.isEmpty && trackName != "NOT_PLAYING" {
-                if self.currentTrackTitle != trackName { self.currentTrackTitle = trackName }
-                if self.currentArtist != trackArtist { self.currentArtist = trackArtist }
-                if self.currentAlbum != trackAlbum { self.currentAlbum = trackAlbum }
-                if self.duration != trackDuration { self.duration = trackDuration }
-
-                // 🔑 时间同步策略：
-                // - internalCurrentTime 总是更新为轮询返回的真实位置
-                // - lastPollTime 更新为当前时间
-                // - currentTime 的更新由 interpolateTime() 负责（单调递增）
-                // - 只有在以下情况强制更新 currentTime：
-                //   1. seekPending 为 true（用户 seek 了）
-                //   2. 暂停状态
-                //   3. 时间差距太大（>2秒，说明播放器跳转了）
-                let timeDiff = abs(position - self.currentTime)
-
-                self.internalCurrentTime = position
-                self.lastPollTime = Date()
-
-                // 🔑 只有在 seek、暂停、或时间差太大时才强制更新显示时间
-                if self.seekPending || !self.isPlaying || timeDiff > 2.0 {
-                    self.currentTime = position
-                    self.seekPending = false
-                }
-
-                if self.audioQuality != quality { self.audioQuality = quality }
-
-                // Fetch artwork if track changed
-                if trackChanged {
-                    debugPrint("🎵 [updatePlayerState] Track changed: \(trackName) by \(trackArtist)\n")
-                    self.logger.info("🎵 Track changed: \(trackName) by \(trackArtist)")
-
-                    self.currentPersistentID = persistentID
-                    self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
-
-                    // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
-                    self.lyricsService.fetchLyrics(for: trackName, artist: trackArtist, duration: trackDuration)
-
-                    // 🔑 歌曲切换时重置"用户手动打开歌词"标记
-                    debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(self.userManuallyOpenedLyrics))\n")
-                    self.userManuallyOpenedLyrics = false
-                }
-            } else {
-                // No track playing
-                if self.currentTrackTitle != kNotPlayingSentinel {
-                    self.logger.info("⏹️ No track playing")
-                }
-                self.currentTrackTitle = kNotPlayingSentinel
-                self.currentArtist = ""
-                self.currentAlbum = ""
-                self.duration = 0
-                self.currentTime = 0
-                self.internalCurrentTime = 0
-                self.audioQuality = nil
-            }
-
-            // 🔑 根据播放状态动态启停高频 Timer
-            self.updateTimerState()
-        }
-    }
-
-    // 用于防止状态更新重叠 - 使用时间戳而非布尔值以避免卡死
-    private var lastUpdateTime: Date = .distantPast
-    private let updateTimeout: TimeInterval = 0.4  // 0.4秒超时，因为轮询间隔是0.5秒
-
-    /// 使用 AppleScript 获取播放状态（回退方式）
-    private func updatePlayerStateViaAppleScript() {
-        // 使用时间戳检测超时，而不是布尔值锁
+        // 超时节流：避免 AppleScript 轮询重叠
         let now = Date()
         let timeSinceLastUpdate = now.timeIntervalSince(lastUpdateTime)
-        if timeSinceLastUpdate < updateTimeout {
-            return
-        }
+        guard timeSinceLastUpdate >= updateTimeout else { return }
         lastUpdateTime = now
         debugPrint("📊 [updatePlayerState] Fallback to AppleScript (last: \(String(format: "%.2f", timeSinceLastUpdate))s ago)\n")
 
-        let script = """
-        tell application "Music"
-            try
-                set playerState to player state as string
-                set isPlaying to "false"
-                if playerState is "playing" then
-                    set isPlaying to "true"
-                end if
-
-                set shuffleState to "false"
-                if shuffle enabled then
-                    set shuffleState to "true"
-                end if
-
-                set repeatState to song repeat as string
-
-                if exists current track then
-                    set trackName to name of current track
-                    set trackArtist to artist of current track
-                    set trackAlbum to album of current track
-                    set trackDuration to duration of current track as string
-                    set trackID to persistent ID of current track
-                    set trackPosition to player position as string
-                    set trackBitRate to bit rate of current track as string
-                    set trackSampleRate to sample rate of current track as string
-
-                    return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate & "|||" & shuffleState & "|||" & repeatState
-                else
-                    return isPlaying & "|||NOT_PLAYING|||||||0||||||0|||0|||0|||" & shuffleState & "|||" & repeatState
-                end if
-            on error errMsg
-                return "ERROR:" & errMsg
-            end try
-        end tell
-        """
-
-        // 🔑 使用独立的后台队列，不阻塞 scriptingBridgeQueue
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self,
+                  let snapshot = AppleScriptRunner.fetchPlayerState() else { return }
 
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-
-            let outputPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-            } catch {
-                debugPrint("❌ [updatePlayerState] Failed to launch osascript: \(error)\n")
-                return
-            }
-
-            // 🔑 使用 DispatchQueue 超时而不是 while 循环阻塞
-            let timeoutWorkItem = DispatchWorkItem {
-                if process.isRunning {
-                    debugPrint("⏱️ [updatePlayerState] Timeout!\n")
-                    process.terminate()
-                }
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5, execute: timeoutWorkItem)
-
-            process.waitUntilExit()
-            timeoutWorkItem.cancel()
-
-            guard process.terminationStatus == 0 else { return }
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            guard let resultString = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !resultString.isEmpty,
-                  !resultString.hasPrefix("ERROR:") else {
-                return
-            }
-
-            let parts = resultString.components(separatedBy: "|||")
-            guard parts.count >= 11 else { return }
-
-            let isPlaying = parts[0] == "true"
-            let trackName = parts[1]
-            let trackArtist = parts[2]
-            let trackAlbum = parts[3]
-            let trackDuration = Double(parts[4]) ?? 0
-            let persistentID = parts[5]
-            let position = Double(parts[6]) ?? 0
-            let bitRate = Int(parts[7]) ?? 0
-            let sampleRate = Int(parts[8]) ?? 0
-            let shuffleState = parts[9] == "true"
-            let repeatStateStr = parts[10].trimmingCharacters(in: .whitespacesAndNewlines)
-            let repeatState: Int
-            switch repeatStateStr {
-            case "one": repeatState = 1
-            case "all": repeatState = 2
-            default: repeatState = 0
-            }
-
-            self.processPlayerState(
-                isPlaying: isPlaying,
-                position: position,
-                shuffle: shuffleState,
-                repeatMode: repeatState,
-                trackName: trackName,
-                trackArtist: trackArtist,
-                trackAlbum: trackAlbum,
-                trackDuration: trackDuration,
-                persistentID: persistentID,
-                bitRate: bitRate,
-                sampleRate: sampleRate
-            )
+            self.processPlayerState(snapshot)
         }
+    }
+
+    /// 处理播放器状态更新（共用逻辑）
+    private func processPlayerState(_ s: PlayerStateSnapshot) {
+        // 音质判定
+        var quality: String? = nil
+        if s.sampleRate >= 176400 || s.bitRate >= 3000 {
+            quality = "Hi-Res Lossless"
+        } else if s.sampleRate >= 44100 && s.bitRate >= 1000 {
+            quality = "Lossless"
+        }
+
+        // 切歌检测
+        let isFirstTrack = self.currentPersistentID == nil && !s.persistentID.isEmpty
+        let trackChangedByID = !s.persistentID.isEmpty && s.persistentID != self.currentPersistentID
+        let trackChangedByTitle = s.persistentID.isEmpty && s.trackName != self.currentTrackTitle
+        let trackChanged = trackChangedByID || trackChangedByTitle || isFirstTrack
+        DebugLogger.log("PlayerState", "📊 track='\(s.trackName)' pid='\(s.persistentID)' dur=\(s.trackDuration) changed=\(trackChanged) (byID=\(trackChangedByID) byTitle=\(trackChangedByTitle) first=\(isFirstTrack)) curPID='\(self.currentPersistentID ?? "nil")'")
+
+        DispatchQueue.main.async {
+            self.applySnapshot(s, quality: quality, trackChanged: trackChanged)
+        }
+    }
+
+    /// 将快照应用到 @Published 属性（主线程，由 processPlayerState 在 DispatchQueue.main.async 中调用）
+    private func applySnapshot(_ s: PlayerStateSnapshot, quality: String?, trackChanged: Bool) {
+        // 值守卫：只在值变化时赋值，避免无谓的 SwiftUI 重绘
+        if Date().timeIntervalSince(lastUserActionTime) > userActionLockDuration {
+            if isPlaying != s.isPlaying { isPlaying = s.isPlaying }
+            if shuffleEnabled != s.shuffle { shuffleEnabled = s.shuffle }
+            if repeatMode != s.repeatMode { repeatMode = s.repeatMode }
+        }
+
+        guard !s.trackName.isEmpty && s.trackName != "NOT_PLAYING" else {
+            applyNoTrack()
+            updateTimerState()
+            return
+        }
+
+        if currentTrackTitle != s.trackName { currentTrackTitle = s.trackName }
+        if currentArtist != s.trackArtist { currentArtist = s.trackArtist }
+        if currentAlbum != s.trackAlbum { currentAlbum = s.trackAlbum }
+        if duration != s.trackDuration { duration = s.trackDuration }
+
+        // 时间同步
+        let timeDiff = abs(s.position - currentTime)
+        internalCurrentTime = s.position
+        lastPollTime = Date()
+        if seekPending || !isPlaying || timeDiff > 2.0 {
+            currentTime = s.position
+            seekPending = false
+        }
+
+        if audioQuality != quality { audioQuality = quality }
+
+        if trackChanged {
+            debugPrint("🎵 [updatePlayerState] Track changed: \(s.trackName) by \(s.trackArtist)\n")
+            logger.info("🎵 Track changed: \(s.trackName) by \(s.trackArtist)")
+
+            currentPersistentID = s.persistentID
+            fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID)
+            // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
+            Task { @MainActor in
+                self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration)
+            }
+            debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(userManuallyOpenedLyrics))\n")
+            userManuallyOpenedLyrics = false
+        }
+
+        updateTimerState()
+    }
+
+    /// 无曲目播放时重置状态
+    private func applyNoTrack() {
+        if currentTrackTitle != kNotPlayingSentinel {
+            logger.info("⏹️ No track playing")
+        }
+        currentTrackTitle = kNotPlayingSentinel
+        currentArtist = ""
+        currentAlbum = ""
+        duration = 0
+        currentTime = 0
+        internalCurrentTime = 0
+        audioQuality = nil
     }
 }

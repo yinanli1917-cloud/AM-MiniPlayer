@@ -72,7 +72,7 @@
     "duration": 260,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh", "LRCLIB"],
+      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh", "LRCLIB", "Genius"],
       "firstLineContains": null
     }
   },
@@ -94,7 +94,7 @@
     "duration": 197,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ"],
+      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ", "Genius"],
       "firstLineContains": null
     }
   },

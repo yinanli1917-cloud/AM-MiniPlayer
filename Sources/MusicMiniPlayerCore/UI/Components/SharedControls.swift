@@ -73,6 +73,7 @@ struct SharedBottomControls: View {
     var translationButton: AnyView? = nil  // 🔑 可选的翻译按钮
     @State private var isDraggingProgressBar: Bool = false
     @State private var isControlAreaHovering: Bool = false  // 🔑 整个控件区域的hover状态
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {  // 🔑 spacing=0 让翻译按钮紧贴进度条
@@ -97,6 +98,7 @@ struct SharedBottomControls: View {
                         Text(formatTime(musicController.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
+                            .accessibilityHidden(true)
 
                         Spacer()
 
@@ -110,6 +112,7 @@ struct SharedBottomControls: View {
                         Text("-" + formatTime(musicController.duration - musicController.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
+                            .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
                 }
@@ -120,6 +123,7 @@ struct SharedBottomControls: View {
                 // Left navigation button
                 leftNavigationButton
                     .frame(width: 26, height: 26)
+                    .accessibilityLabel(currentPage == .lyrics ? "歌词（已选中）" : "歌词")
 
                 Spacer()
 
@@ -128,24 +132,28 @@ struct SharedBottomControls: View {
                     musicController.previousTrack()
                 }
                 .frame(width: 30, height: 30)
+                .accessibilityLabel("上一首")
 
                 // Play/Pause
                 HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
                     musicController.togglePlayPause()
                 }
                 .frame(width: 30, height: 30)
+                .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
 
                 // Next Track
                 HoverableControlButton(iconName: "forward.fill", size: 17) {
                     musicController.nextTrack()
                 }
                 .frame(width: 30, height: 30)
+                .accessibilityLabel("下一首")
 
                 Spacer()
 
                 // Right navigation button
                 playlistNavigationButton
                     .frame(width: 26, height: 26)
+                    .accessibilityLabel(currentPage == .playlist ? "播放列表（已选中）" : "播放列表")
                 }
                 .buttonStyle(.plain)
             }
@@ -169,8 +177,8 @@ struct SharedBottomControls: View {
             iconName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
             isActive: currentPage == .lyrics
         ) {
-            // 🔑 快速但不弹性的动画
-            withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
+            let animation: Animation? = reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 1.0)
+            withAnimation(animation) {
                 if currentPage == .album {
                     // 🔑 用户手动打开歌词页面
                     musicController.userManuallyOpenedLyrics = true
@@ -191,8 +199,8 @@ struct SharedBottomControls: View {
             iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
             isActive: currentPage == .playlist
         ) {
-            // 🔑 快速但不弹性的动画
-            withAnimation(.spring(response: 0.2, dampingFraction: 1.0)) {
+            let animation: Animation? = reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 1.0)
+            withAnimation(animation) {
                 if currentPage == .album {
                     currentPage = .playlist
                 } else if currentPage == .playlist {
@@ -238,7 +246,8 @@ struct SharedBottomControls: View {
             .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                let animation: Animation? = reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)
+                withAnimation(animation) {
                     isProgressBarHovering = hovering
                 }
             }
@@ -262,16 +271,22 @@ struct SharedBottomControls: View {
         }
         .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
         .padding(.horizontal, 20)  // 🔑 进度条额外padding
+        .accessibilityLabel("播放进度")
+        .accessibilityValue("\(formatTime(musicController.currentTime)) / \(formatTime(musicController.duration))")
+        .accessibilityAddTraits(.allowsDirectInteraction)
     }
 
     private func qualityBadge(_ quality: String) -> some View {
         return HStack(spacing: 2) {
             if quality == "Hi-Res Lossless" {
                 Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 8))
+                    .accessibilityHidden(true)
             } else if quality == "Dolby Atmos" {
                 Image(systemName: "spatial.audio.badge.checkmark").font(.system(size: 8))
+                    .accessibilityHidden(true)
             } else {
                 Image(systemName: "waveform").font(.system(size: 8))
+                    .accessibilityHidden(true)
             }
             Text(quality).font(.system(size: 9, weight: .semibold))
         }
@@ -280,6 +295,8 @@ struct SharedBottomControls: View {
         .background(.ultraThinMaterial)
         .cornerRadius(4)
         .foregroundColor(.white.opacity(0.9))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("音频质量：\(quality)")
     }
 
     private func formatTime(_ time: Double) -> String {
@@ -296,6 +313,7 @@ struct HoverableControlButton: View {
     let size: CGFloat
     let action: () -> Void
     @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -310,7 +328,8 @@ struct HoverableControlButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
+            let animation: Animation? = reduceMotion ? nil : .easeInOut(duration: 0.2)
+            withAnimation(animation) {
                 isHovering = hovering
             }
         }
@@ -322,6 +341,7 @@ struct NavigationIconButton: View {
     let isActive: Bool
     let action: () -> Void
     @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -336,7 +356,8 @@ struct NavigationIconButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
+            let animation: Animation? = reduceMotion ? nil : .easeInOut(duration: 0.2)
+            withAnimation(animation) {
                 isHovering = hovering
             }
         }

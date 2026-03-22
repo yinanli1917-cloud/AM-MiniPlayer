@@ -71,7 +71,7 @@ func testSong(
     let elapsed = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
 
     // ── 构建每个源的摘要 ──
-    let knownSources = ["AMLL", "NetEase", "QQ", "SimpMusic", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"]
+    let knownSources = ["AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
     let allSources: [SourceResult] = knownSources.map { name in
         if let r = fetchResults.first(where: { $0.source == name }) {
             return SourceResult(name: name, found: true, score: round(r.score * 10) / 10, lines: r.lyrics.count)

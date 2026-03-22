@@ -1,684 +1,192 @@
+/**
+ * [INPUT]: 依赖 MusicController, LyricsService, LyricLineView, SharedBottomControls
+ * [OUTPUT]: 导出 LyricsView
+ * [POS]: UI 的 歌词全屏视图
+ */
 import SwiftUI
 import AppKit
 import Translation
 
+// MARK: - Accessibility
+
+// MARK: - State Structs
+
+/// 手动滚动相关状态
+private struct ScrollState {
+    var isManualScrolling = false
+    var manualScrollOffset: CGFloat = 0     // 显示用（含橡皮筋）
+    var rawScrollOffset: CGFloat = 0        // 原始累积（不含橡皮筋）
+    var lastVelocity: CGFloat = 0
+    var scrollLocked = false
+    var hasTriggeredSlowScroll = false
+    var lockedLineIndex: Int? = nil
+}
+
+/// 行高度 + 累积高度缓存
+private struct CacheState {
+    var lineHeights: [Int: CGFloat] = [:]
+    var cachedTotalContentHeight: CGFloat = 0
+    var cachedAccumulatedHeights: [Int: CGFloat] = [:]
+    var heightCacheInvalidated = true
+    var lyricsContainerHeight: CGFloat = 300
+}
+
+/// AMLL 波浪动画状态
+private struct WaveState {
+    var lineTargetIndices: [Int: Int] = [:]
+    var lastCurrentIndex: Int = -1
+    var workItems: [DispatchWorkItem] = []
+}
+
+// MARK: - LyricsView
+
 public struct LyricsView: View {
     @EnvironmentObject var musicController: MusicController
     @StateObject private var lyricsService = LyricsService.shared
-    @State private var isHovering: Bool = false
-    @State private var isProgressBarHovering: Bool = false
-    @State private var dragPosition: CGFloat? = nil
-    @State private var isManualScrolling: Bool = false
-    @State private var autoScrollTimer: Timer? = nil
-    @State private var showControls: Bool = true
-    // 🔑 控件模糊渐入效果（初始值为 0，在 onAppear/页面切换时触发动画）
-    @State private var controlsBlurAmount: CGFloat = 0
-    @State private var controlsOffsetY: CGFloat = 0
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
-    @State private var lastVelocity: CGFloat = 0
-    @State private var scrollLocked: Bool = false
-    @State private var hasTriggeredSlowScroll: Bool = false
 
-    // 🔑 手动滚动 Y 轴偏移量
-    @State private var manualScrollOffset: CGFloat = 0  // 显示用（含橡皮筋）
-    @State private var rawScrollOffset: CGFloat = 0     // 原始累积（不含橡皮筋）
-    // 🔑 行高度缓存（用于精确计算位置）
-    @State private var lineHeights: [Int: CGFloat] = [:]
-    // 🔑 手动滚动时锁定的行索引（防止歌词在手动滚动时跟随播放移动）
-    @State private var lockedLineIndex: Int? = nil
-    // 🔑 AMLL 波浪效果：每行的目标 currentIndex（用于错开动画触发时间）
-    @State private var lineTargetIndices: [Int: Int] = [:]
-    // 🔑 上一次的 currentIndex（用于检测变化并触发波浪）
-    @State private var lastCurrentIndex: Int = -1
-    // 🔑 波浪动画 Work Item（用于取消未完成的动画）
-    @State private var waveAnimationWorkItems: [DispatchWorkItem] = []
+    // ── 分组状态 ──
+    @State private var scroll = ScrollState()
+    @State private var cache = CacheState()
+    @State private var wave = WaveState()
 
-    // 🔑 性能优化：缓存总高度和累积高度，避免滚动时重复计算
-    @State private var cachedTotalContentHeight: CGFloat = 0
-    @State private var cachedAccumulatedHeights: [Int: CGFloat] = [:]  // [lineIndex: accumulatedHeight]
-    @State private var heightCacheInvalidated: Bool = true
-    // 🔑 缓存歌词容器高度，供 @escaping 闭包使用（GeometryProxy 不可逃逸）
-    @State private var lyricsContainerHeight: CGFloat = 300
+    // ── UI 状态 ──
+    @State private var isHovering = false
+    @State private var isProgressBarHovering = false
+    @State private var dragPosition: CGFloat? = nil
+    @State private var showControls = true
+    @State private var controlsBlurAmount: CGFloat = 0
+    @State private var controlsOffsetY: CGFloat = 0
+    @State private var autoScrollTimer: Timer? = nil
 
-    // 🔑 系统翻译会话配置 (仅 macOS 15.0+)
-    // 使用 Any 类型来避免编译时的可用性检查
+    // ── 翻译状态 ──
     @State private var translationSessionConfigAny: Any?
-    // 🔑 翻译触发器本地状态（用于强制视图重建）
     @State private var localTranslationTrigger: Int = 0
 
-    // 🔑 全屏封面模式（从 UserDefaults 读取）
+    // ── 无障碍 ──
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // ── 设置 ──
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
 
-    public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil, onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
+    public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil,
+                onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
         self._currentPage = currentPage
         self.openWindow = openWindow
         self.onHide = onHide
         self.onExpand = onExpand
     }
 
-    // 🔑 更新翻译会话配置 (仅 macOS 15.0+)
-    private func updateTranslationSessionConfig() {
-        if #available(macOS 15.0, *) {
-            let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
-
-            // 检测歌词源语言（如果已有歌词）
-            if !lyricsService.lyrics.isEmpty {
-                let lyricTexts = lyricsService.lyrics.map { $0.text }
-                if let sourceLang = TranslationService.detectLanguage(for: lyricTexts) {
-                    translationSessionConfigAny = TranslationSession.Configuration(
-                        source: sourceLang,
-                        target: targetLang
-                    )
-                    return
-                }
-            }
-
-            // 默认配置（source 为 nil 让系统自动检测）
-            translationSessionConfigAny = TranslationSession.Configuration(
-                source: nil,
-                target: targetLang
-            )
-        }
-    }
+    // MARK: - Body
 
     public var body: some View {
         ZStack {
-            // Background - 全屏模式用流体渐变，普通模式用 Liquid Glass
-            if fullscreenAlbumCover {
-                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
-                    .id(musicController.currentTrackTitle)  // 🔑 强制在歌曲切换时重建
-                    .ignoresSafeArea()
-            } else {
-                LiquidBackgroundView(artwork: musicController.currentArtwork)
-                    .ignoresSafeArea()
-            }
-
-            // Main lyrics container
+            backgroundLayer
             VStack(spacing: 0) {
                 if lyricsService.isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .foregroundColor(.white)
-                        .overlay(
-                            Group {
-                                if showControls {
-                                    controlBar
-                                }
-                            }
-                        )
+                    loadingView
                 } else if let error = lyricsService.error {
-                    VStack(spacing: 12) {
-                        Image(systemName: "music.note")
-                            .font(.system(size: 36))
-                            .foregroundColor(.white.opacity(0.3))
-                        Text(error)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
-
-                        Button(action: {
-                            lyricsService.fetchLyrics(
-                                for: musicController.currentTrackTitle,
-                                artist: musicController.currentArtist,
-                                duration: musicController.duration,
-                                forceRefresh: true
-                            )
-                        }) {
-                            HStack(spacing: 5) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 10, weight: .semibold))
-                                Text("Retry")
-                                    .font(.system(size: 12, weight: .semibold))
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color.white.opacity(0.2))
-                            .cornerRadius(6)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                    .overlay(
-                        Group {
-                            if showControls {
-                                controlBar
-                            }
-                        }
-                    )
+                    errorView(error)
                 } else if lyricsService.lyrics.isEmpty {
                     emptyStateView
-                        .overlay(
-                            Group {
-                                if showControls {
-                                    controlBar
-                                }
-                            }
-                        )
                 } else {
-                    // 🔑 AMLL 风格：VStack 自适应高度 + Y 轴整体偏移
-                    // 🔑 性能优化核心思路：
-                    // - 自动滚动：每行单独计算偏移（波浪动画）
-                    // - 手动滚动：整个容器统一偏移（避免重新计算每行）
-                    // 🔑 使用歌曲 ID 强制重建整个歌词视图，避免切歌时视图残留
-                    let lyricsViewID = "\(musicController.currentTrackTitle)-\(musicController.currentArtist)"
-                    GeometryReader { geo in
-                        let containerHeight = geo.size.height
-                        let controlBarHeight: CGFloat = 120
-                        let currentIndex = lyricsService.currentLineIndex ?? 0
-                        // 🔑 同步容器高度到 @State（供 @escaping 滚动闭包使用）
-                        let _ = updateLyricsContainerHeight(containerHeight)
-
-                        // 🔑 锚点位置：当前行在容器的 24% 高度处
-                        let anchorY = (containerHeight - controlBarHeight) * 0.24
-
-                        let _ = updateLyricsContainerHeight(containerHeight)
-                        ZStack(alignment: .topLeading) {  // 🔑 使用 ZStack 实现 AMLL 风格布局
-                            ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
-                                if index == 0 || index >= lyricsService.firstRealLyricIndex {
-                                    // 🔑 性能优化：手动滚动时使用锁定的基础偏移（不包含 manualScrollOffset）
-                                    // manualScrollOffset 在容器级别应用，避免触发每行重新计算
-                                    let lineOffset: CGFloat = {
-                                        if isManualScrolling {
-                                            // 🔑 手动滚动时：所有行统一用 lockedLineIndex
-                                            // 不能用 lockedLineTargetIndices（波浪动画逐行快照），
-                                            // 否则不同行锚定到不同 targetIndex → 基础偏移不一致 → 行重叠
-                                            let frozenTargetIndex = lockedLineIndex ?? currentIndex
-                                            return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
-                                        } else {
-                                            // 自动滚动：使用该行的目标索引计算偏移（波浪动画）
-                                            let lineTargetIndex = lineTargetIndices[index] ?? currentIndex
-                                            return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
-                                        }
-                                    }()
-
-                                    Group {
-                                        if isPreludeEllipsis(line.text) {
-                                            let nextLineStartTime: TimeInterval = {
-                                                if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
-                                                    return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
-                                                }
-                                                for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
-                                                    let nextLine = lyricsService.lyrics[nextIndex]
-                                                    if !isPreludeEllipsis(nextLine.text) {
-                                                        return nextLine.startTime
-                                                    }
-                                                }
-                                                return line.endTime
-                                            }()
-
-                                            PreludeDotsView(
-                                                startTime: line.startTime,
-                                                endTime: nextLineStartTime,
-                                                musicController: musicController
-                                            )
-                                            .frame(height: 30)
-                                            .padding(.horizontal, 32)
-                                            .padding(.vertical, 8)  // 🔑 前奏点的 padding
-                                        } else {
-                                            // 普通歌词行 + 间奏动画
-                                            VStack(spacing: 0) {
-                                                LyricLineView(
-                                                    line: line,
-                                                    index: index,
-                                                    currentIndex: currentIndex,
-                                                    isScrolling: isManualScrolling,
-                                                    currentTime: musicController.currentTime,
-                                                    onTap: {
-                                                        autoScrollTimer?.invalidate()
-                                                        autoScrollTimer = nil
-                                                        isManualScrolling = false
-                                                        lyricsService.isManualScrolling = false  // 同步到 LyricsService
-                                                        lockedLineIndex = nil
-                                                        rawScrollOffset = 0
-                                                        manualScrollOffset = 0
-                                                        musicController.seek(to: line.startTime)
-                                                    },
-                                                    showTranslation: lyricsService.showTranslation,
-                                                    isTranslating: lyricsService.isTranslating
-                                                )
-                                                .padding(.horizontal, 32)
-
-                                                // 🔑 间奏检测：当前行结束到下一行开始 >= 5秒时显示动画
-                                                if let interludeInfo = checkForInterlude(at: index) {
-                                                    InterludeDotsView(
-                                                        startTime: interludeInfo.startTime,
-                                                        endTime: interludeInfo.endTime,
-                                                        currentTime: musicController.currentTime
-                                                    )
-                                                    .frame(height: 30)
-                                                    .padding(.top, 8)
-                                                    .padding(.horizontal, 32)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    // 🔑 存储每行高度用于计算偏移
-                                    .background(
-                                        GeometryReader { lineGeo in
-                                            Color.clear.onAppear {
-                                                if lineHeights[index] != lineGeo.size.height {
-                                                    lineHeights[index] = lineGeo.size.height
-                                                    heightCacheInvalidated = true  // 🔑 使缓存失效
-                                                }
-                                            }
-                                            .onChange(of: lineGeo.size.height) { _, newHeight in
-                                                if lineHeights[index] != newHeight {
-                                                    lineHeights[index] = newHeight
-                                                    heightCacheInvalidated = true  // 🔑 使缓存失效
-                                                }
-                                            }
-                                        }
-                                    )
-                                    // 🔑 AMLL 核心：每行有自己的 Y 偏移（基于该行的目标索引）
-                                    .offset(y: lineOffset + calculateLinePosition(index: index))
-                                    // 🔑 每行单独的 spring 动画（手动滚动时禁用）
-                                    // 🔑 监听完整偏移值（lineOffset + linePosition），
-                                    // 这样翻译导致的行高变化也会触发平滑动画
-                                    .animation(
-                                        isManualScrolling ? nil : .interpolatingSpring(
-                                            mass: 1,
-                                            stiffness: 100,
-                                            damping: 16.5,
-                                            initialVelocity: 0
-                                        ),
-                                        value: {
-                                            let fullOffset = lineOffset + calculateLinePosition(index: index)
-                                            return isManualScrolling ? 0 : fullOffset
-                                        }()
-                                    )
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        // 🔑 性能关键：手动滚动偏移在容器级别应用，而不是每行单独计算
-                        // 这样 manualScrollOffset 变化只会触发一次 transform，而不是 N 次（N = 歌词行数）
-                        // 🔑 不用三元！isManualScrolling=false 时三元直接跳 0，
-                        // manualScrollOffset 的动画没人读 → 容器跳变 → 歌词卡顿
-                        .offset(y: manualScrollOffset)
-                    }
-                    .modifier(BottomFadeMask(isActive: showControls))
-                    // 🔑 强制在歌曲切换时重建整个 GeometryReader，避免 ZStack 视图残留
-                    .id(lyricsViewID)
-                    // 🔑 滚轮事件监听（与 PlaylistView 一致）
-                    .contentShape(Rectangle())
-                    .scrollDetectionWithVelocity(
-                        onScrollStarted: {
-                            // 🔑 滚动开始时立即锁定状态，之后滚动只更新 manualScrollOffset
-                            autoScrollTimer?.invalidate()
-
-                            // 先更新缓存（同步，但只在需要时）
-                            if heightCacheInvalidated {
-                                updateHeightCache()
-                            }
-
-                            // 🔑 锁定当前状态
-                            let currentIdx = lyricsService.currentLineIndex ?? 0
-                            lockedLineIndex = currentIdx
-                            rawScrollOffset = manualScrollOffset
-                            isManualScrolling = true
-                            lyricsService.isManualScrolling = true  // 同步到 LyricsService
-
-                            lastVelocity = 0
-                            scrollLocked = false
-                            hasTriggeredSlowScroll = false
-                        },
-                        onScrollEnded: {
-                            // 🔑 松手后立即弹回边界
-                            let (maxUp, maxDown) = scrollBounds()
-                            if rawScrollOffset > maxUp || rawScrollOffset < -maxDown {
-                                rawScrollOffset = min(maxUp, max(-maxDown, rawScrollOffset))
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                    manualScrollOffset = rawScrollOffset
-                                }
-                            }
-
-                            // 🔑 2 秒后 spring 回当前播放行
-                            autoScrollTimer?.invalidate()
-                            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-                                lockedLineIndex = nil
-                                rawScrollOffset = 0
-                                withAnimation(.interpolatingSpring(
-                                    mass: 1,
-                                    stiffness: 100,
-                                    damping: 16.5,
-                                    initialVelocity: 0
-                                )) {
-                                    isManualScrolling = false
-                                    lyricsService.isManualScrolling = false
-                                    manualScrollOffset = 0
-                                }
-                                scrollLocked = false
-                                hasTriggeredSlowScroll = false
-
-                                // 🔑 恢复后如果鼠标在窗口内则显示控件（带 blur+offset 动画）
-                                if isHovering {
-                                    controlsBlurAmount = 10
-                                    controlsOffsetY = 30
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                        showControls = true
-                                        controlsBlurAmount = 0
-                                        controlsOffsetY = 0
-                                    }
-                                }
-                            }
-                        },
-                        onScrollWithVelocity: { deltaY, velocity in
-                            // 🔑 Apple 风格橡皮筋：raw 累积 + overscroll 衰减
-                            rawScrollOffset += deltaY
-                            let (maxUp, maxDown) = scrollBounds()
-                            let dim = max(lyricsContainerHeight * 0.4, 120)
-
-                            // 🔑 overscroll 区域：每帧衰减 rawScrollOffset 向边界靠拢
-                            // 模拟原生橡皮筋的"回拉力"，而非仅在松手后弹回
-                            if rawScrollOffset > maxUp {
-                                let overshoot = rawScrollOffset - maxUp
-                                rawScrollOffset = maxUp + overshoot * 0.92
-                                manualScrollOffset = maxUp + rubberBand(rawScrollOffset - maxUp, dim)
-                            } else if rawScrollOffset < -maxDown {
-                                let overshoot = rawScrollOffset + maxDown  // 负值
-                                rawScrollOffset = -maxDown + overshoot * 0.92
-                                manualScrollOffset = -maxDown + rubberBand(rawScrollOffset + maxDown, dim)
-                            } else {
-                                manualScrollOffset = rawScrollOffset
-                            }
-
-                            let absVelocity = abs(velocity)
-                            let threshold: CGFloat = 800
-
-                            // 🔑 与 PlaylistView 完全一致的逻辑
-                            if deltaY < 0 {
-                                // 往上滚：隐藏控件
-                                if showControls {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                        showControls = false
-                                        controlsBlurAmount = 10
-                                        controlsOffsetY = 30
-                                    }
-                                }
-                                scrollLocked = true
-                            } else if absVelocity >= threshold {
-                                // 快速滚动：隐藏控件
-                                if !scrollLocked {
-                                    scrollLocked = true
-                                }
-                                if showControls {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                        showControls = false
-                                        controlsBlurAmount = 10
-                                        controlsOffsetY = 30
-                                    }
-                                }
-                            } else if deltaY > 0 && !scrollLocked && !hasTriggeredSlowScroll {
-                                // 慢速往下滚：显示控件
-                                hasTriggeredSlowScroll = true
-                                if !showControls {
-                                    controlsBlurAmount = 10
-                                    controlsOffsetY = 30
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                        showControls = true
-                                        controlsBlurAmount = 0
-                                        controlsOffsetY = 0
-                                    }
-                                }
-                            }
-
-                            lastVelocity = absVelocity
-                        },
-                        isEnabled: currentPage == .lyrics
-                    )
-                    // 🔑 底部控件 overlay（与 PlaylistView 相同实现 + 滑入滑出动画）
-                    .overlay(
-                        VStack {
-                            Spacer()
-                            ZStack(alignment: .bottom) {
-                                // 🔑 已改用 BottomFadeMask，不需要模糊背景
-                                Color.clear.frame(height: 1).allowsHitTesting(false)
-
-                                SharedBottomControls(
-                                    currentPage: $currentPage,
-                                    isHovering: $isHovering,
-                                    showControls: $showControls,
-                                    isProgressBarHovering: $isProgressBarHovering,
-                                    dragPosition: $dragPosition,
-                                    translationButton: !lyricsService.lyrics.isEmpty ? AnyView(TranslationButtonView(lyricsService: lyricsService)) : nil
-                                )
-                            }
-                            // 🔑 blur + move-in 动画
-                            .blur(radius: controlsBlurAmount)
-                            .offset(y: controlsOffsetY)
-                        }
-                        .allowsHitTesting(showControls)
-                        .opacity(showControls ? 1 : 0)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showControls)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsBlurAmount)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsOffsetY)
-                    )
+                    scrollableLyricsContent
                 }
             }
         }
-        .overlay(alignment: .topLeading) {
-            // Music按钮 - overlay不接收hover事件，不改变布局
-            if showControls {
-                MusicButtonView()
-                    .padding(12)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            // 🔑 Hide/Expand 按钮 - 翻译按钮已移到底部进度条上方
-            if showControls {
-                HStack(spacing: 8) {
-                    // Hide/Expand 按钮
-                    if onExpand != nil {
-                        // 菜单栏模式：显示展开按钮
-                        ExpandButtonView(onExpand: onExpand!)
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    } else if onHide != nil {
-                        // 浮窗模式：显示收起按钮
-                        HideButtonView(onHide: onHide!)
-                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    } else {
-                        // 无回调时的默认行为
-                        HideButtonView(onHide: {
-                            if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
-                                window.orderOut(nil)
-                            }
-                        })
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    }
-                }
-                .padding(12)
-            }
-        }
-        .onHover { hovering in
-            isHovering = hovering
-            // 🔑 鼠标离开窗口时总是隐藏控件（无论是否在滚动）
-            if !hovering {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                    showControls = false
-                    controlsBlurAmount = 10
-                    controlsOffsetY = 30
-                }
-            }
-            // 🔑 只在非滚动状态时，鼠标进入显示控件
-            else if !isManualScrolling {
-                // 🔑 进入时重置模糊和位移状态
-                controlsBlurAmount = 10
-                controlsOffsetY = 30
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                    showControls = true
-                    controlsBlurAmount = 0
-                    controlsOffsetY = 0
-                }
-            }
-            // 滚动时鼠标进入不自动显示控件（由scroll逻辑控制）
-        }
-        // 🔑 当切换到歌词页面时，显示控件（因为是从hover状态切换过来的）
+        .overlay(alignment: .topLeading) { musicButtonOverlay }
+        .overlay(alignment: .topTrailing) { windowButtonsOverlay }
+        .onHover { hovering in handleHover(hovering) }
+        // ── onChange: 页面切换 ──
         .onChange(of: currentPage) { _, newPage in
             if newPage == .lyrics {
-                // 🔑 假设是从 hover 状态切换过来的，设置 isHovering = true
                 isHovering = true
-                // 🔑 触发 blur + move-in 动画
-                controlsBlurAmount = 10
-                controlsOffsetY = 30
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                    showControls = true
-                    controlsBlurAmount = 0
-                    controlsOffsetY = 0
-                }
+                animateControlsIn()
             }
         }
+        // ── onAppear + 歌曲切换 ──
         .onAppear {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
-            // 🔑 macOS 15.0+: 初始化翻译会话配置
-            if #available(macOS 15.0, *) {
-                updateTranslationSessionConfig()
-            }
+            if #available(macOS 15.0, *) { updateTranslationSessionConfig() }
         }
-          .onChange(of: musicController.currentTrackTitle) {
+        .onChange(of: musicController.currentTrackTitle) {
             debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
-            // 🔑 歌曲切换时取消未完成的波浪动画
             cancelWaveAnimations()
-            lineTargetIndices.removeAll()
-            lastCurrentIndex = -1
-            // 🔑 使高度缓存失效
-            heightCacheInvalidated = true
-            lineHeights.removeAll()
-
+            wave.lineTargetIndices.removeAll()
+            wave.lastCurrentIndex = -1
+            cache.heightCacheInvalidated = true
+            cache.lineHeights.removeAll()
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
         }
-        // 🔑 macOS 15.0+: 歌词加载完成后更新翻译会话配置
-        .onChange(of: lyricsService.lyrics.count) { _, newCount in
-            if #available(macOS 15.0, *), newCount > 0 {
-                updateTranslationSessionConfig()
-            }
-            // 🔑 歌词变化时使缓存失效
-            heightCacheInvalidated = true
+        .onChange(of: musicController.currentTime) {
+            lyricsService.updateCurrentTime(musicController.currentTime)
         }
-        // 🔑 macOS 15.0+: 歌词加载完成时（isLoading: true -> false），检查是否需要触发系统翻译
+        // ── onChange: 翻译相关 ──
+        .onChange(of: lyricsService.lyrics.count) { _, newCount in
+            if #available(macOS 15.0, *), newCount > 0 { updateTranslationSessionConfig() }
+            cache.heightCacheInvalidated = true
+        }
         .onChange(of: lyricsService.isLoading) { oldValue, newValue in
             if #available(macOS 15.0, *) {
-                // 从加载中变为加载完成
                 if oldValue && !newValue && !lyricsService.lyrics.isEmpty {
                     updateTranslationSessionConfig()
                 }
             }
         }
-        // 🔑 macOS 15.0+: 翻译语言变化时更新配置
         .onChange(of: lyricsService.translationLanguage) { _, _ in
-            if #available(macOS 15.0, *) {
-                updateTranslationSessionConfig()
-            }
+            if #available(macOS 15.0, *) { updateTranslationSessionConfig() }
         }
-        // 🔑 macOS 15.0+: 翻译开关变化时更新配置（确保重新触发翻译）
         .onChange(of: lyricsService.showTranslation) { _, newValue in
-            // 🔑 翻译开关变化会影响行高，但不立即使缓存失效
-            // 让 SwiftUI 的自然布局动画先执行，然后延迟更新缓存
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                heightCacheInvalidated = true
+                cache.heightCacheInvalidated = true
             }
-            if #available(macOS 15.0, *), newValue {
-                updateTranslationSessionConfig()
-            }
+            if #available(macOS 15.0, *), newValue { updateTranslationSessionConfig() }
         }
-        // 🔑 macOS 15.0+: 翻译请求触发器变化时，确保配置已更新
         .onChange(of: lyricsService.translationRequestTrigger) { _, newValue in
             if #available(macOS 15.0, *) {
-                // 确保 config 已更新，这样 .translationTask 才能正确触发
                 updateTranslationSessionConfig()
-                // 🔑 更新本地触发器，强制视图重建
                 localTranslationTrigger = newValue
             }
         }
-        // 🔑 翻译状态变化会影响行高（显示/隐藏加载动画和翻译内容）
         .onChange(of: lyricsService.isTranslating) { _, _ in
-            // 🔑 延迟更新缓存，让自然动画先执行
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                heightCacheInvalidated = true
+                cache.heightCacheInvalidated = true
             }
         }
-        .onChange(of: musicController.currentTime) {
-            lyricsService.updateCurrentTime(musicController.currentTime)
-        }
-        // 🔑 监听 LyricsService 的手动滚动状态（由 SnappablePanel 触发）
+        // ── onChange: 滚动 + 波浪 + 错误 ──
         .onChange(of: lyricsService.isManualScrolling) { _, newValue in
-            if newValue && !isManualScrolling {
-                // SnappablePanel 触发了手动滚动模式
-                if heightCacheInvalidated {
-                    updateHeightCache()
-                }
-                let currentIdx = lyricsService.currentLineIndex ?? 0
-                lockedLineIndex = currentIdx
-                isManualScrolling = true
-
-                lastVelocity = 0
-                scrollLocked = false
-                hasTriggeredSlowScroll = false
-
-                // 启动 2 秒后自动恢复的计时器
-                autoScrollTimer?.invalidate()
-                autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-                    isManualScrolling = false
-                    lyricsService.isManualScrolling = false
-                    lockedLineIndex = nil
-
-                    withAnimation(.interpolatingSpring(
-                        mass: 1,
-                        stiffness: 100,
-                        damping: 16.5,
-                        initialVelocity: 0
-                    )) {
-                        manualScrollOffset = 0
-                    }
-                    rawScrollOffset = 0
-                    scrollLocked = false
-                    hasTriggeredSlowScroll = false
-                }
-                RunLoop.main.add(autoScrollTimer!, forMode: .common)
-            }
+            handleExternalManualScroll(newValue)
         }
-        // 🔑 AMLL 波浪效果：监听当前行变化，触发波浪动画
         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
             guard let newIndex = newValue else { return }
-            let oldIndex = oldValue ?? lastCurrentIndex
-
-            if newIndex != lastCurrentIndex && !isManualScrolling {
+            let oldIndex = oldValue ?? wave.lastCurrentIndex
+            if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
                 triggerWaveAnimation(from: oldIndex, to: newIndex)
-                lastCurrentIndex = newIndex
+                wave.lastCurrentIndex = newIndex
             }
         }
-        // 🔑 No Lyrics 时自动跳回专辑页面（除非用户手动打开了歌词页面）
         .onChange(of: lyricsService.error) { _, newError in
-            // 只有当：1. 有错误（No lyrics）2. 用户没有手动打开歌词页面 3. 当前在歌词页面
-            // 才自动跳回专辑页面
             if newError != nil && !musicController.userManuallyOpenedLyrics && currentPage == .lyrics {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                     currentPage = .album
                 }
             }
         }
-        // 🔑 监听全屏封面设置变化
+        // ── onChange: 设置 ──
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
             if newValue != fullscreenAlbumCover {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    fullscreenAlbumCover = newValue
-                }
+                withAnimation(.easeInOut(duration: 0.3)) { fullscreenAlbumCover = newValue }
             }
         }
-        // 🔑 macOS 15.0+: 系统翻译集成
         .modifier(SystemTranslationModifier(
             translationSessionConfigAny: translationSessionConfigAny,
             lyricsService: lyricsService,
@@ -687,29 +195,244 @@ public struct LyricsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Subviews
+    // MARK: - Sub-views
 
-    private var emptyStateView: some View {
-        VStack(spacing: 10) {  // 🔑 缩小: 12→10
+    private var backgroundLayer: some View {
+        Group {
+            if fullscreenAlbumCover {
+                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                    .id(musicController.currentTrackTitle)
+                    .ignoresSafeArea()
+            } else {
+                LiquidBackgroundView(artwork: musicController.currentArtwork)
+                    .ignoresSafeArea()
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var loadingView: some View {
+        ProgressView()
+            .accessibilityLabel("加载歌词中")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundColor(.white)
+            .overlay(Group { if showControls { controlBar } })
+    }
+
+    private func errorView(_ error: String) -> some View {
+        VStack(spacing: 12) {
             Image(systemName: "music.note")
-                .font(.system(size: 36))  // 🔑 缩小: 48→36
+                .font(.system(size: 36))
                 .foregroundColor(.white.opacity(0.3))
-            Text("No lyrics available")
-                .font(.system(size: 13, weight: .medium))  // 🔑 缩小: 16→13
+            Text(error)
+                .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.white.opacity(0.5))
+            Button(action: {
+                lyricsService.fetchLyrics(
+                    for: musicController.currentTrackTitle,
+                    artist: musicController.currentArtist,
+                    duration: musicController.duration,
+                    forceRefresh: true
+                )
+            }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Retry")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.2))
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("重试加载歌词")
+            .accessibilityHint("点击重新获取歌词")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .overlay(Group { if showControls { controlBar } })
     }
-    
+
+    private var emptyStateView: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "music.note")
+                .font(.system(size: 36))
+                .foregroundColor(.white.opacity(0.3))
+            Text("No lyrics available")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.5))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("暂无歌词")
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .overlay(Group { if showControls { controlBar } })
+    }
+
+    private var scrollableLyricsContent: some View {
+        let lyricsViewID = "\(musicController.currentTrackTitle)-\(musicController.currentArtist)"
+
+        return GeometryReader { geo in
+            let containerHeight = geo.size.height
+            let controlBarHeight: CGFloat = 120
+            let currentIndex = lyricsService.currentLineIndex ?? 0
+            let _ = updateLyricsContainerHeight(containerHeight)
+            let anchorY = (containerHeight - controlBarHeight) * 0.24
+
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
+                    if index == 0 || index >= lyricsService.firstRealLyricIndex {
+                        let lineOffset = calculateLineOffset(
+                            index: index, currentIndex: currentIndex, anchorY: anchorY
+                        )
+
+                        lyricLineContent(line: line, index: index, currentIndex: currentIndex)
+                            .background(lineHeightTracker(index: index))
+                            .offset(y: lineOffset + calculateAccumulatedHeight(upTo: index))
+                            .animation(
+                                scroll.isManualScrolling || reduceMotion ? nil : .interpolatingSpring(
+                                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+                                ),
+                                value: {
+                                    let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+                                    return scroll.isManualScrolling ? 0 : fullOffset
+                                }()
+                            )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .offset(y: scroll.manualScrollOffset)
+        }
+        .modifier(BottomFadeMask(isActive: showControls))
+        .id(lyricsViewID)
+        .contentShape(Rectangle())
+        .scrollDetectionWithVelocity(
+            onScrollStarted: { handleScrollStarted() },
+            onScrollEnded: { handleScrollEnded() },
+            onScrollWithVelocity: { deltaY, velocity in handleScrollDelta(deltaY, velocity: velocity) },
+            isEnabled: currentPage == .lyrics
+        )
+        .overlay(bottomControlsOverlay)
+    }
+
+    // MARK: - Lyric Line Helpers
+
+    private func lyricLineContent(line: LyricLine, index: Int, currentIndex: Int) -> some View {
+        Group {
+            if isPreludeEllipsis(line.text) {
+                let nextLineStartTime: TimeInterval = {
+                    if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
+                        return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
+                    }
+                    for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
+                        let nextLine = lyricsService.lyrics[nextIndex]
+                        if !isPreludeEllipsis(nextLine.text) { return nextLine.startTime }
+                    }
+                    return line.endTime
+                }()
+
+                PreludeDotsView(
+                    startTime: line.startTime,
+                    endTime: nextLineStartTime,
+                    musicController: musicController
+                )
+                .frame(height: 30)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 0) {
+                    LyricLineView(
+                        line: line,
+                        index: index,
+                        currentIndex: currentIndex,
+                        isScrolling: scroll.isManualScrolling,
+                        currentTime: musicController.currentTime,
+                        onTap: { handleLineTap(line: line) },
+                        showTranslation: lyricsService.showTranslation,
+                        isTranslating: lyricsService.isTranslating
+                    )
+                    .padding(.horizontal, 32)
+
+                    if let interludeInfo = checkForInterlude(at: index) {
+                        InterludeDotsView(
+                            startTime: interludeInfo.startTime,
+                            endTime: interludeInfo.endTime,
+                            currentTime: musicController.currentTime
+                        )
+                        .frame(height: 30)
+                        .padding(.top, 8)
+                        .padding(.horizontal, 32)
+                    }
+                }
+            }
+        }
+    }
+
+    private func lineHeightTracker(index: Int) -> some View {
+        GeometryReader { lineGeo in
+            Color.clear.onAppear {
+                if cache.lineHeights[index] != lineGeo.size.height {
+                    cache.lineHeights[index] = lineGeo.size.height
+                    cache.heightCacheInvalidated = true
+                }
+            }
+            .onChange(of: lineGeo.size.height) { _, newHeight in
+                if cache.lineHeights[index] != newHeight {
+                    cache.lineHeights[index] = newHeight
+                    cache.heightCacheInvalidated = true
+                }
+            }
+        }
+    }
+
+    private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
+        if scroll.isManualScrolling {
+            let frozenTargetIndex = scroll.lockedLineIndex ?? currentIndex
+            return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
+        } else {
+            let lineTargetIndex = wave.lineTargetIndices[index] ?? currentIndex
+            return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
+        }
+    }
+
+    // MARK: - Overlay 组件
+
+    private var bottomControlsOverlay: some View {
+        VStack {
+            Spacer()
+            ZStack(alignment: .bottom) {
+                Color.clear.frame(height: 1).allowsHitTesting(false)
+                SharedBottomControls(
+                    currentPage: $currentPage,
+                    isHovering: $isHovering,
+                    showControls: $showControls,
+                    isProgressBarHovering: $isProgressBarHovering,
+                    dragPosition: $dragPosition,
+                    translationButton: !lyricsService.lyrics.isEmpty
+                        ? AnyView(TranslationButtonView(lyricsService: lyricsService)) : nil
+                )
+            }
+            .blur(radius: controlsBlurAmount)
+            .offset(y: controlsOffsetY)
+        }
+        .allowsHitTesting(showControls)
+        .opacity(showControls ? 1 : 0)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showControls)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsBlurAmount)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsOffsetY)
+    }
+
     private var controlBar: some View {
         VStack {
             Spacer()
-
-            // 渐变模糊 + 控件区域
             ZStack(alignment: .bottom) {
-                // 🔑 已改用 BottomFadeMask，不需要模糊背景
                 Color.clear.frame(height: 1).allowsHitTesting(false)
-
                 SharedBottomControls(
                     currentPage: $currentPage,
                     isHovering: $isHovering,
@@ -722,268 +445,300 @@ public struct LyricsView: View {
         }
         .transition(.opacity.combined(with: .offset(y: 20)))
     }
-    
-    private var timeAndProgressBar: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text(formatTime(musicController.currentTime))
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundColor(.white.opacity(0.6))
-                    .frame(width: 35, alignment: .leading)
 
-                Spacer()
-
-                if let quality = musicController.audioQuality {
-                    qualityBadge(quality)
-                }
-
-                Spacer()
-
-                Text("-" + formatTime(musicController.duration - musicController.currentTime))
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundColor(.white.opacity(0.6))
-                    .frame(width: 35, alignment: .trailing)
-            }
-            .padding(.horizontal, 28)
-
-            progressBar
+    @ViewBuilder
+    private var musicButtonOverlay: some View {
+        if showControls {
+            MusicButtonView()
+                .accessibilityLabel("打开 Music")
+                .padding(12)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
         }
     }
-    
-    private func qualityBadge(_ quality: String) -> some View {
-        HStack(spacing: 2) {
-            if quality == "Hi-Res Lossless" {
-                Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 8))
-            } else if quality == "Dolby Atmos" {
-                Image(systemName: "spatial.audio.badge.checkmark").font(.system(size: 8))
-            } else {
-                Image(systemName: "waveform").font(.system(size: 8))
-            }
-            Text(quality).font(.system(size: 9, weight: .semibold))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(.ultraThinMaterial)
-        .cornerRadius(4)
-        .foregroundColor(.white.opacity(0.9))
-    }
-    
-    private var progressBar: some View {
-        GeometryReader { geo in
-            let currentProgress: CGFloat = musicController.duration > 0 ? (dragPosition ?? CGFloat(musicController.currentTime / musicController.duration)) : 0
 
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.2)).frame(height: isProgressBarHovering ? 8 : 6)
-                Capsule().fill(Color.white).frame(width: geo.size.width * currentProgress, height: isProgressBarHovering ? 8 : 6)
+    @ViewBuilder
+    private var windowButtonsOverlay: some View {
+        if showControls {
+            let hideAction: () -> Void = onHide ?? {
+                NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel })?.orderOut(nil)
             }
-            .scaleEffect(isProgressBarHovering ? 1.05 : 1.0)
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    isProgressBarHovering = hovering
+            HStack(spacing: 8) {
+                if onExpand != nil {
+                    ExpandButtonView(onExpand: onExpand!)
+                        .accessibilityLabel("展开")
+                } else {
+                    HideButtonView(onHide: hideAction)
+                        .accessibilityLabel("返回")
                 }
             }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged({ value in
-                        let percentage = min(max(0, value.location.x / geo.size.width), 1)
-                        dragPosition = percentage
-                    })
-                    .onEnded({ value in
-                        let percentage = min(max(0, value.location.x / geo.size.width), 1)
-                        let time = percentage * musicController.duration
-                        musicController.seek(to: time)
-                        dragPosition = nil
-                    })
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            .padding(12)
+        }
+    }
+
+    // MARK: - 交互处理
+
+    private func animateControlsIn() {
+        controlsBlurAmount = 10
+        controlsOffsetY = 30
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            showControls = true
+            controlsBlurAmount = 0
+            controlsOffsetY = 0
+        }
+    }
+
+    private func animateControlsOut() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            showControls = false
+            controlsBlurAmount = 10
+            controlsOffsetY = 30
+        }
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        isHovering = hovering
+        if !hovering {
+            animateControlsOut()
+        } else if !scroll.isManualScrolling {
+            animateControlsIn()
+        }
+    }
+
+    private func handleLineTap(line: LyricLine) {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+        scroll.isManualScrolling = false
+        lyricsService.isManualScrolling = false
+        scroll.lockedLineIndex = nil
+        scroll.rawScrollOffset = 0
+        scroll.manualScrollOffset = 0
+        musicController.seek(to: line.startTime)
+    }
+
+    private func handleExternalManualScroll(_ newValue: Bool) {
+        guard newValue && !scroll.isManualScrolling else { return }
+
+        if cache.heightCacheInvalidated { updateHeightCache() }
+        let currentIdx = lyricsService.currentLineIndex ?? 0
+        scroll.lockedLineIndex = currentIdx
+        scroll.isManualScrolling = true
+        scroll.lastVelocity = 0
+        scroll.scrollLocked = false
+        scroll.hasTriggeredSlowScroll = false
+
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
+            scroll.isManualScrolling = false
+            lyricsService.isManualScrolling = false
+            scroll.lockedLineIndex = nil
+            withAnimation(.interpolatingSpring(
+                mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+            )) {
+                scroll.manualScrollOffset = 0
+            }
+            scroll.rawScrollOffset = 0
+            scroll.scrollLocked = false
+            scroll.hasTriggeredSlowScroll = false
+        }
+        RunLoop.main.add(autoScrollTimer!, forMode: .common)
+    }
+
+    // MARK: - 滚动处理
+
+    private func handleScrollStarted() {
+        autoScrollTimer?.invalidate()
+        if cache.heightCacheInvalidated { updateHeightCache() }
+
+        let currentIdx = lyricsService.currentLineIndex ?? 0
+        scroll.lockedLineIndex = currentIdx
+        scroll.rawScrollOffset = scroll.manualScrollOffset
+        scroll.isManualScrolling = true
+        lyricsService.isManualScrolling = true
+        scroll.lastVelocity = 0
+        scroll.scrollLocked = false
+        scroll.hasTriggeredSlowScroll = false
+    }
+
+    private func handleScrollEnded() {
+        // 松手后立即弹回边界
+        let (maxUp, maxDown) = scrollBounds()
+        if scroll.rawScrollOffset > maxUp || scroll.rawScrollOffset < -maxDown {
+            scroll.rawScrollOffset = min(maxUp, max(-maxDown, scroll.rawScrollOffset))
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                scroll.manualScrollOffset = scroll.rawScrollOffset
+            }
+        }
+
+        // 2 秒后 spring 回当前播放行
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
+            scroll.lockedLineIndex = nil
+            scroll.rawScrollOffset = 0
+            withAnimation(.interpolatingSpring(
+                mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+            )) {
+                scroll.isManualScrolling = false
+                lyricsService.isManualScrolling = false
+                scroll.manualScrollOffset = 0
+            }
+            scroll.scrollLocked = false
+            scroll.hasTriggeredSlowScroll = false
+
+            // 恢复后如果鼠标在窗口内则显示控件
+            if isHovering { animateControlsIn() }
+        }
+    }
+
+    private func handleScrollDelta(_ deltaY: CGFloat, velocity: CGFloat) {
+        // Apple 风格橡皮筋
+        scroll.rawScrollOffset += deltaY
+        let (maxUp, maxDown) = scrollBounds()
+        let dim = max(cache.lyricsContainerHeight * 0.4, 120)
+
+        if scroll.rawScrollOffset > maxUp {
+            let overshoot = scroll.rawScrollOffset - maxUp
+            scroll.rawScrollOffset = maxUp + overshoot * 0.92
+            scroll.manualScrollOffset = maxUp + rubberBand(scroll.rawScrollOffset - maxUp, dim)
+        } else if scroll.rawScrollOffset < -maxDown {
+            let overshoot = scroll.rawScrollOffset + maxDown
+            scroll.rawScrollOffset = -maxDown + overshoot * 0.92
+            scroll.manualScrollOffset = -maxDown + rubberBand(scroll.rawScrollOffset + maxDown, dim)
+        } else {
+            scroll.manualScrollOffset = scroll.rawScrollOffset
+        }
+
+        let absVelocity = abs(velocity)
+        let threshold: CGFloat = 800
+
+        if deltaY < 0 {
+            if showControls { animateControlsOut() }
+            scroll.scrollLocked = true
+        } else if absVelocity >= threshold {
+            if !scroll.scrollLocked { scroll.scrollLocked = true }
+            if showControls { animateControlsOut() }
+        } else if deltaY > 0 && !scroll.scrollLocked && !scroll.hasTriggeredSlowScroll {
+            scroll.hasTriggeredSlowScroll = true
+            if !showControls { animateControlsIn() }
+        }
+
+        scroll.lastVelocity = absVelocity
+    }
+
+    // MARK: - 翻译
+
+    private func updateTranslationSessionConfig() {
+        if #available(macOS 15.0, *) {
+            let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
+
+            if !lyricsService.lyrics.isEmpty {
+                let lyricTexts = lyricsService.lyrics.map { $0.text }
+                if let sourceLang = TranslationService.detectLanguage(for: lyricTexts) {
+                    translationSessionConfigAny = TranslationSession.Configuration(
+                        source: sourceLang, target: targetLang
+                    )
+                    return
+                }
+            }
+
+            translationSessionConfigAny = TranslationSession.Configuration(
+                source: nil, target: targetLang
             )
-            .frame(maxHeight: .infinity, alignment: .center)
         }
-        .frame(height: 20)
-        .padding(.horizontal, 20)
-    }
-    
-    private var playbackControls: some View {
-        HStack(spacing: 0) {
-            Spacer().frame(width: 12)
-            Button(action: { withAnimation(.spring(response: 5.0, dampingFraction: 0.8)) { currentPage = .album } }) {
-                Image(systemName: "quote.bubble.fill").font(.system(size: 16)).foregroundColor(.white).frame(width: 28, height: 28)
-            }
-            Spacer()
-            Button(action: musicController.previousTrack) {
-                Image(systemName: "backward.fill").font(.system(size: 20)).foregroundColor(.white).frame(width: 32, height: 32)
-            }
-            Spacer().frame(width: 10)
-            Button(action: musicController.togglePlayPause) {
-                ZStack {
-                    Image(systemName: musicController.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 24)).foregroundColor(.white)
-                }
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            Spacer().frame(width: 10)
-            Button(action: musicController.nextTrack) {
-                Image(systemName: "forward.fill").font(.system(size: 20)).foregroundColor(.white).frame(width: 32, height: 32)
-            }
-            Spacer()
-            Button(action: { withAnimation(.spring(response: 5.0, dampingFraction: 0.8)) { currentPage = .playlist } }) {
-                Image(systemName: "music.note.list").font(.system(size: 16)).foregroundColor(.white.opacity(0.7)).frame(width: 28, height: 28)
-            }
-            Spacer().frame(width: 12)
-        }
-        .buttonStyle(.plain)
     }
 
-    private func formatTime(_ time: Double) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
+    // MARK: - 工具函数
 
-    /// 🔑 检测是否为前奏/间奏省略号占位符
     private func isPreludeEllipsis(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・"]
         return ellipsisPatterns.contains(trimmed) || trimmed.isEmpty
     }
 
-    /// 🔑 检测是否有间奏（当前行结束到下一行开始 >= 5秒）
     private func checkForInterlude(at index: Int) -> (startTime: TimeInterval, endTime: TimeInterval)? {
         let lyrics = lyricsService.lyrics
         guard index + 1 < lyrics.count else { return nil }
-
         let currentLine = lyrics[index]
         let nextLine = lyrics[index + 1]
-
-        // 跳过省略号行
-        if isPreludeEllipsis(currentLine.text) || isPreludeEllipsis(nextLine.text) {
-            return nil
-        }
-
-        // 计算间隔：下一行开始时间 - 当前行结束时间
+        if isPreludeEllipsis(currentLine.text) || isPreludeEllipsis(nextLine.text) { return nil }
         let gap = nextLine.startTime - currentLine.endTime
-        if gap >= 5.0 {
-            return (startTime: currentLine.endTime, endTime: nextLine.startTime)
-        }
-        return nil
+        return gap >= 5.0 ? (startTime: currentLine.endTime, endTime: nextLine.startTime) : nil
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════
-    // MARK: - 滚动边界 + Apple 橡皮筋
-    // ═══════════════════════════════════════════════════════════════════════════════
+    // MARK: - 滚动边界 + 橡皮筋
 
-    /// Apple UIScrollView 橡皮筋公式：f(x) = d * (1 - 1/(x*c/d + 1))
-    private func rubberBand(_ offset: CGFloat, _ dimension: CGFloat) -> CGFloat {
-        let c: CGFloat = 0.55
-        let absX = abs(offset)
-        let result = (1.0 - (1.0 / ((absX * c / dimension) + 1.0))) * dimension
-        return offset < 0 ? -result : result
+    private func rubberBand(_ x: CGFloat, _ d: CGFloat) -> CGFloat {
+        let result = (1.0 - (1.0 / ((abs(x) * 0.55 / d) + 1.0))) * d
+        return x < 0 ? -result : result
     }
 
-    /// 滚动边界：第一行到顶部 / 最后一行到底部
     private func scrollBounds() -> (maxUp: CGFloat, maxDown: CGFloat) {
-        let totalH = calculateTotalContentHeight()
-        let idx = lockedLineIndex ?? (lyricsService.currentLineIndex ?? 0)
+        let idx = scroll.lockedLineIndex ?? (lyricsService.currentLineIndex ?? 0)
         let curOffset = calculateAccumulatedHeight(upTo: idx)
-        let containerH = lyricsContainerHeight
-        let anchorY = (containerH - 120) * 0.24
-        let visibleBottom = (containerH - 120) - anchorY  // 锚点以下的可见区域
-
-        let maxUp = max(0, curOffset - anchorY)
-        let maxDown = max(0, totalH - curOffset - visibleBottom)
-        return (maxUp, maxDown)
+        let anchorY = (cache.lyricsContainerHeight - 120) * 0.24
+        let visibleBottom = (cache.lyricsContainerHeight - 120) - anchorY
+        return (max(0, curOffset - anchorY),
+                max(0, calculateTotalContentHeight() - curOffset - visibleBottom))
     }
 
-    /// 🔑 计算从第一行到指定行的累积高度（用于 VStack offset）
-    /// 使用缓存优化，避免滚动时重复计算
+    // MARK: - 高度计算 + 缓存
+
+    private var renderedIndices: [Int] {
+        lyricsService.lyrics.enumerated()
+            .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
+            .map { $0.offset }
+    }
+
     private func calculateAccumulatedHeight(upTo targetIndex: Int) -> CGFloat {
-        // 🔑 如果缓存有效，直接返回缓存值
-        if !heightCacheInvalidated, let cached = cachedAccumulatedHeights[targetIndex] {
+        if !cache.heightCacheInvalidated, let cached = cache.cachedAccumulatedHeights[targetIndex] {
             return cached
         }
 
-        let spacing: CGFloat = 6  // 🔑 与 VStack spacing 保持一致
+        let spacing: CGFloat = 6, defaultHeight: CGFloat = 36
         var totalHeight: CGFloat = 0
-        let defaultHeight: CGFloat = 36  // 默认行高（用于尚未测量的行）
-
-        // 获取实际渲染的行索引列表
-        let renderedIndices = lyricsService.lyrics.enumerated()
-            .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
-            .map { $0.offset }
-
-        // 计算目标行在渲染列表中的位置
-        guard let targetPosition = renderedIndices.firstIndex(of: targetIndex) else {
-            return 0
-        }
-
-        // 累加目标行之前所有行的高度 + 间距
+        let indices = renderedIndices
+        guard let targetPosition = indices.firstIndex(of: targetIndex) else { return 0 }
         for i in 0..<targetPosition {
-            let lineIndex = renderedIndices[i]
-            let height = lineHeights[lineIndex] ?? defaultHeight
-            totalHeight += height + spacing
+            totalHeight += (cache.lineHeights[indices[i]] ?? defaultHeight) + spacing
         }
-
         return totalHeight
     }
 
-    /// 🔑 计算某行在容器中的位置（相对于第一行）
-    /// 用于 ZStack 布局中确定每行的 Y 位置
-    private func calculateLinePosition(index: Int) -> CGFloat {
-        // 🔑 复用累积高度缓存
-        return calculateAccumulatedHeight(upTo: index)
-    }
-
-    /// 🔑 同步容器高度到 @State（供 @escaping 闭包使用，GeometryProxy 不可逃逸）
     private func updateLyricsContainerHeight(_ height: CGFloat) {
-        if lyricsContainerHeight != height {
-            DispatchQueue.main.async { lyricsContainerHeight = height }
+        if cache.lyricsContainerHeight != height {
+            DispatchQueue.main.async { cache.lyricsContainerHeight = height }
         }
     }
 
-    /// 🔑 计算内容总高度（使用缓存）
     private func calculateTotalContentHeight() -> CGFloat {
-        // 🔑 如果缓存有效，直接返回缓存值
-        if !heightCacheInvalidated && cachedTotalContentHeight > 0 {
-            return cachedTotalContentHeight
+        if !cache.heightCacheInvalidated && cache.cachedTotalContentHeight > 0 {
+            return cache.cachedTotalContentHeight
         }
 
-        let spacing: CGFloat = 6  // 🔑 与 VStack spacing 保持一致
+        let spacing: CGFloat = 6, defaultHeight: CGFloat = 36
+        let indices = renderedIndices
         var totalHeight: CGFloat = 0
-        let defaultHeight: CGFloat = 36
-
-        let renderedIndices = lyricsService.lyrics.enumerated()
-            .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
-            .map { $0.offset }
-
-        for (i, lineIndex) in renderedIndices.enumerated() {
-            let height = lineHeights[lineIndex] ?? defaultHeight
-            totalHeight += height
-            if i < renderedIndices.count - 1 {
-                totalHeight += spacing
-            }
+        for (i, lineIndex) in indices.enumerated() {
+            totalHeight += cache.lineHeights[lineIndex] ?? defaultHeight
+            if i < indices.count - 1 { totalHeight += spacing }
         }
-
         return totalHeight
     }
 
-    /// 🔑 更新高度缓存（在歌词变化或行高变化时调用）
     private func updateHeightCache() {
         let spacing: CGFloat = 6
         let defaultHeight: CGFloat = 36
-
-        let renderedIndices = lyricsService.lyrics.enumerated()
-            .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
-            .map { $0.offset }
+        let indices = renderedIndices
 
         var accumulatedHeight: CGFloat = 0
         var newAccumulatedHeights: [Int: CGFloat] = [:]
         var totalHeight: CGFloat = 0
 
-        for (i, lineIndex) in renderedIndices.enumerated() {
+        for (i, lineIndex) in indices.enumerated() {
             newAccumulatedHeights[lineIndex] = accumulatedHeight
-            let height = lineHeights[lineIndex] ?? defaultHeight
+            let height = cache.lineHeights[lineIndex] ?? defaultHeight
             totalHeight += height
-            if i < renderedIndices.count - 1 {
+            if i < indices.count - 1 {
                 totalHeight += spacing
                 accumulatedHeight += height + spacing
             } else {
@@ -991,80 +746,66 @@ public struct LyricsView: View {
             }
         }
 
-        cachedAccumulatedHeights = newAccumulatedHeights
-        cachedTotalContentHeight = totalHeight
-        heightCacheInvalidated = false
+        cache.cachedAccumulatedHeights = newAccumulatedHeights
+        cache.cachedTotalContentHeight = totalHeight
+        cache.heightCacheInvalidated = false
     }
 
-    /// 🔑 AMLL 波浪效果：触发波浪动画
-    /// 真相：波浪是从屏幕当前可见区域的顶部开始的！
-    /// 我们的布局中，高亮行在 anchorY (24% 位置)，所以屏幕顶部大约是高亮行往上 2-3 行
-    /// 高亮行及之后的行：延迟间隔逐渐变小（甩尾加速效果）
-    private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
-        guard !isManualScrolling else { return }
+    // MARK: - AMLL 波浪动画
 
+    private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
+        guard !scroll.isManualScrolling else { return }
         let totalLines = lyricsService.lyrics.count
         guard totalLines > 0 else { return }
 
-        // 🔑 取消之前未完成的波浪动画
-        for workItem in waveAnimationWorkItems {
-            workItem.cancel()
+        cancelWaveAnimations()
+
+        let indices = renderedIndices
+
+        // reduceMotion：跳过波浪延迟，所有行立即更新
+        if reduceMotion {
+            for lineIndex in indices { wave.lineTargetIndices[lineIndex] = newIndex }
+            return
         }
-        waveAnimationWorkItems.removeAll()
 
-        // 获取实际渲染的行索引列表（按顺序）
-        let renderedIndices = lyricsService.lyrics.enumerated()
-            .filter { idx, _ in idx == 0 || idx >= lyricsService.firstRealLyricIndex }
-            .map { $0.offset }
-
-        // 🔑 AMLL 核心：波浪从当前屏幕可见区域的顶部开始
         let visibleTopLineIndex = max(0, newIndex - 3)
-        let startPosition = renderedIndices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
+        let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
         var delay: Double = 0
-        var currentDelayStep: Double = 0.05  // 基础延迟步长 50ms
+        var currentDelayStep: Double = 0.05
 
-        // 🔑 屏幕顶部之上的行（已滚出屏幕）：立即更新，无延迟
+        // 屏幕顶部之上的行：立即更新
         for i in 0..<startPosition {
-            let lineIndex = renderedIndices[i]
-            lineTargetIndices[lineIndex] = newIndex
+            wave.lineTargetIndices[indices[i]] = newIndex
         }
 
-        // 🔑 从屏幕顶部开始向下遍历
-        for i in startPosition..<renderedIndices.count {
-            let lineIndex = renderedIndices[i]
+        // 从屏幕顶部开始向下遍历
+        for i in startPosition..<indices.count {
+            let lineIndex = indices[i]
 
             if delay < 0.01 {
-                // 🔑 屏幕顶部第一行：立即更新目标索引
-                lineTargetIndices[lineIndex] = newIndex
+                wave.lineTargetIndices[lineIndex] = newIndex
             } else {
-                // 🔑 其他行：使用 DispatchWorkItem 以便可以取消
                 let workItem = DispatchWorkItem { [self] in
-                    guard !isManualScrolling else { return }
-                    lineTargetIndices[lineIndex] = newIndex
+                    guard !scroll.isManualScrolling else { return }
+                    wave.lineTargetIndices[lineIndex] = newIndex
                 }
-                waveAnimationWorkItems.append(workItem)
+                wave.workItems.append(workItem)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             }
 
-            // 🔑 累加延迟
             delay += currentDelayStep
-
-            // 🔑 AMLL 甩尾加速：高亮行及之后的行，延迟步长逐渐变小
-            if lineIndex >= newIndex {
-                currentDelayStep /= 1.05
-            }
+            if lineIndex >= newIndex { currentDelayStep /= 1.05 }
         }
     }
 
-    /// 🔑 取消所有未完成的波浪动画
     private func cancelWaveAnimations() {
-        for workItem in waveAnimationWorkItems {
-            workItem.cancel()
-        }
-        waveAnimationWorkItems.removeAll()
+        for workItem in wave.workItems { workItem.cancel() }
+        wave.workItems.removeAll()
     }
 }
+
+// MARK: - Preview
 
 #if DEBUG
 struct LyricsView_Previews: PreviewProvider {
@@ -1076,9 +817,3 @@ struct LyricsView_Previews: PreviewProvider {
     }
 }
 #endif
-
-
-
-
-
-

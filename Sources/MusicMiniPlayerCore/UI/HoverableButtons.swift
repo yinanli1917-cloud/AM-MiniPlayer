@@ -62,10 +62,12 @@ struct HoverableActionButton: View {
     let action: () -> Void
     let label: AnyView
     var helpText: String = ""
+    var accessibilityText: String = ""  // 🔑 无障碍标签，独立于 helpText
     var artworkBrightness: CGFloat = 0.5
     var isAlbumPage: Bool = false
 
     @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
 
     var body: some View {
@@ -82,11 +84,16 @@ struct HoverableActionButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
+            if reduceMotion {
                 isHovering = hovering
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isHovering = hovering
+                }
             }
         }
         .help(helpText)
+        .accessibilityLabel(accessibilityText.isEmpty ? helpText : accessibilityText)
     }
 }
 
@@ -107,6 +114,7 @@ struct MusicButtonView: View {
                 Text("Music").font(.system(size: 11, weight: .medium))
             }),
             helpText: "打开 Apple Music",
+            accessibilityText: "打开 Apple Music",
             artworkBrightness: artworkBrightness,
             isAlbumPage: isAlbumPage
         )
@@ -123,6 +131,7 @@ struct HideButtonView: View {
             action: onHide,
             label: AnyView(Image(systemName: "chevron.up").font(.system(size: 13, weight: .medium))),
             helpText: "收起到菜单栏",
+            accessibilityText: "隐藏播放器",
             artworkBrightness: artworkBrightness,
             isAlbumPage: isAlbumPage
         )
@@ -139,6 +148,7 @@ struct ExpandButtonView: View {
             action: onExpand,
             label: AnyView(Image(systemName: "pip.exit").font(.system(size: 12, weight: .medium))),
             helpText: "展开为浮窗",
+            accessibilityText: "展开播放器",
             artworkBrightness: artworkBrightness,
             isAlbumPage: isAlbumPage
         )
@@ -153,6 +163,7 @@ struct ExpandButtonView: View {
 struct TranslationButtonView: View {
     @ObservedObject var lyricsService: LyricsService
     @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // 🔑 记录是否已经尝试过强制重试（防止无限重试）
     @State private var hasTriedForceRetry = false
 
@@ -193,8 +204,12 @@ struct TranslationButtonView: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
+            if reduceMotion {
                 isHovering = hovering
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isHovering = hovering
+                }
             }
         }
         // 🔑 歌曲切换时重置重试标记
@@ -202,6 +217,7 @@ struct TranslationButtonView: View {
             hasTriedForceRetry = false
         }
         .help("Toggle Translation")
+        .accessibilityLabel(lyricsService.showTranslation ? "关闭翻译" : "开启翻译")
     }
 }
 
@@ -216,12 +232,13 @@ struct PlaylistTabBarIntegrated: View {
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
-                // Background Capsule - 恢复原来的透明设计
+                // Background Capsule - 恢复原来的透明设计（装饰性）
                 Capsule()
                     .fill(Color.white.opacity(0.1))
                     .frame(height: 32)
+                    .accessibilityHidden(true)
 
-                // Selection Capsule
+                // Selection Capsule（装饰性）
                 GeometryReader { geo in
                     Capsule()
                         .fill(Color.white.opacity(0.25))
@@ -229,6 +246,7 @@ struct PlaylistTabBarIntegrated: View {
                         .offset(x: selectedTab == 0 ? 2 : geo.size.width / 2 + 2, y: 2)
                         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
                 }
+                .accessibilityHidden(true)
 
                 // Tab Labels
                 HStack(spacing: 0) {
@@ -240,6 +258,8 @@ struct PlaylistTabBarIntegrated: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("播放历史")
+                    .accessibilityAddTraits(selectedTab == 0 ? .isSelected : [])
 
                     Button(action: { selectedTab = 1 }) {
                         Text("Up Next")
@@ -249,9 +269,13 @@ struct PlaylistTabBarIntegrated: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("待播清单")
+                    .accessibilityAddTraits(selectedTab == 1 ? .isSelected : [])
                 }
             }
             .frame(height: 32)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("播放列表标签栏")
         }
         .padding(.horizontal, 50)
     }
