@@ -128,9 +128,8 @@ struct LyricLineView: View {
         .padding(.horizontal, -8)  // 🔑 抵消内部 padding，保持文字对齐
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: textOpacity)
+        // 统一用 currentIndex 驱动，避免 3 个独立 spring solver
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: currentIndex)
         // 🔑 翻译动画已移至容器级别，此处不再单独设置（性能优化）
         // 🔑 无障碍
         .accessibilityElement(children: .ignore)
