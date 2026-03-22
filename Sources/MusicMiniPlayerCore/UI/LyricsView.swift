@@ -285,8 +285,10 @@ public struct LyricsView: View {
             let containerHeight = geo.size.height
             let controlBarHeight: CGFloat = 120
             let liveIndex = lyricsService.currentLineIndex ?? 0
-            // 手动滚动时冻结高亮行，不跟随播放进度
-            let displayIndex = scroll.isManualScrolling ? (scroll.frozenDisplayIndex ?? liveIndex) : liveIndex
+            // AMLL: 高亮瞬时切换，位移通过 wave spring 过渡
+            let displayIndex = scroll.isManualScrolling
+                ? (scroll.frozenDisplayIndex ?? liveIndex)
+                : liveIndex
             let _ = updateLyricsContainerHeight(containerHeight)
             let _ = ensureHeightCache()
             let anchorY = (containerHeight - controlBarHeight) * 0.24
@@ -791,6 +793,10 @@ public struct LyricsView: View {
 
     // MARK: - AMLL 波浪动画
 
+    /// AMLL 精确复刻波浪动画
+    /// 从可视区顶部（当前行上方 ~3 行）开始，wave 向下扫过整个可视区
+    /// 每行的 position + scale + blur + opacity 全部跟随 wave stagger
+    /// baseDelay=0.05s，过 scrollToIndex 后 /= 1.05（AMLL 源码精确参数）
     private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
         guard !scroll.isManualScrolling else { return }
         let lyrics = lyricsService.lyrics
@@ -800,10 +806,10 @@ public struct LyricsView: View {
 
         let indices = renderedIndices
 
-        // 快歌（两行间隔 < 1.5s）或 reduceMotion：跳过波浪延迟
+        // 快歌（两行间隔 < 1.0s）或 reduceMotion：跳过波浪延迟
         let isFastSong: Bool = {
             guard newIndex > 0, newIndex < lyrics.count, oldIndex >= 0, oldIndex < lyrics.count else { return false }
-            return abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime) < 1.5
+            return abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime) < 1.0
         }()
 
         if reduceMotion || isFastSong {
@@ -811,22 +817,25 @@ public struct LyricsView: View {
             return
         }
 
+        // AMLL: wave 从可视区顶部开始，当前行在 wave 中间位置
+        // 锚点在 24% 处 → 上方约 3 行可见
         let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
         var delay: Double = 0
-        var currentDelayStep: Double = 0.05
+        var baseDelay: Double = 0.05
 
-        // 屏幕顶部之上的行：立即更新
+        // 可视区顶部之上：即时更新（不可见，无需动画）
         for i in 0..<startPosition {
             wave.lineTargetIndices[indices[i]] = newIndex
         }
 
-        // 从屏幕顶部开始向下遍历
+        // 从可视区顶部向下：wave stagger 扫过整个屏幕
         for i in startPosition..<indices.count {
             let lineIndex = indices[i]
 
-            if delay < 0.01 {
+            if delay < 0.001 {
+                // 第一行无延迟，直接启动 spring
                 wave.lineTargetIndices[lineIndex] = newIndex
             } else {
                 let workItem = DispatchWorkItem { [self] in
@@ -837,8 +846,9 @@ public struct LyricsView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             }
 
-            delay += currentDelayStep
-            if lineIndex >= newIndex { currentDelayStep /= 1.05 }
+            delay += baseDelay
+            // AMLL: 过了 scrollToIndex 后每行递减，波浪越远越柔和
+            if lineIndex >= newIndex { baseDelay /= 1.05 }
         }
     }
 

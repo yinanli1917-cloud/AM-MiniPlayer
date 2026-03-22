@@ -56,11 +56,10 @@ struct LyricLineView: View {
             return CGFloat(absDistance) * 1.5
         }()
 
-        // 🔑 行级高亮：当前行全白，其他行半透明（用 foregroundColor 控制，不用外层 opacity）
         let textOpacity: CGFloat = {
-            if isScrolling { return 0.6 }  // 滚动时所有行统一透明度
-            if isCurrent { return 1.0 }    // 当前行全白
-            return 0.35                     // 其他行固定 35% 透明度
+            if isScrolling { return 0.6 }
+            if isCurrent { return 1.0 }
+            return 0.35
         }()
 
         // 🔑 稳定版本：简单的行级高亮（等待正确的逐字高亮实现）
@@ -128,8 +127,9 @@ struct LyricLineView: View {
         .padding(.horizontal, -8)  // 🔑 抵消内部 padding，保持文字对齐
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
-        // 统一用 currentIndex 驱动，避免 3 个独立 spring solver
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: currentIndex)
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: textOpacity)
         // 🔑 翻译动画已移至容器级别，此处不再单独设置（性能优化）
         // 🔑 无障碍
         .accessibilityElement(children: .ignore)
