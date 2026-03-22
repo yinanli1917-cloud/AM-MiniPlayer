@@ -235,6 +235,13 @@ public final class MetadataResolver {
         let inputIsPureEnglish = !inputHasChinese && LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
         let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) || LanguageUtils.containsKorean(trackName)
         if durationDiff < 1.0 && resultTitleHasCJK && inputIsPureEnglish {
+            // 🔑 艺术家校验：同脚本（都是 ASCII）必须匹配，防止不同歌手错配
+            // "NCT DREAM" vs "NewJeans" → 都是 ASCII 且不匹配 → 拒绝
+            // "彭佳慧" vs "Julia Peng" → 不同脚本 → 无法校验 → 放行（靠时长兜底）
+            let resultArtistIsASCII = LanguageUtils.isPureASCII(artistName)
+            if resultArtistIsASCII && !artistMatch {
+                return .none
+            }
             DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 翻译候选('\(searchTerm)'): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.1f", durationDiff))s")
             return .translated((trackName, artistName, durationDiff, "duration-precise+CN"))
         }
@@ -406,7 +413,10 @@ public final class MetadataResolver {
                 let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) ||
                                        LanguageUtils.containsJapanese(trackName) ||
                                        LanguageUtils.containsKorean(trackName)
-                if resultTitleHasCJK {
+                // 🔑 艺术家校验：与 CN P3 同规则 — 同脚本（都是 ASCII）必须匹配
+                let resultArtistIsASCII = LanguageUtils.isPureASCII(artistName)
+                let artistBlocked = resultArtistIsASCII && !artistMatch
+                if resultTitleHasCJK && !artistBlocked {
                     DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                     romanizedCandidates.append((trackName, artistName, durationDiff))
                 }

@@ -70,8 +70,12 @@ public final class LyricsScorer {
         // 3. 行数加分（最多 15 分）
         score += min(Double(lyrics.count) * 0.5, 15)
 
+        // 🔑 纯文本源（Genius/lyrics.ovh）的时间轴是 createUnsyncedLyrics 伪造的
+        // 均匀分布 → 时长/覆盖度永远满分，这不是真实信号，不参与评分
+        let isUnsyncedSource = source == "Genius" || source == "lyrics.ovh"
+
         // 4. 时长匹配评分（最多 15 分，或扣分）
-        if duration > 0 {
+        if duration > 0 && !isUnsyncedSource {
             let lyricsDuration = (lyrics.last?.endTime ?? 0) - (lyrics.first?.startTime ?? 0)
             let durationDiff = abs(lyricsDuration - duration)
             let durationDiffRatio = durationDiff / duration
@@ -84,7 +88,7 @@ public final class LyricsScorer {
         }
 
         // 5. 时间轴覆盖度（最多 8 分）
-        if duration > 0 {
+        if duration > 0 && !isUnsyncedSource {
             let lastLyricEnd = lyrics.last?.endTime ?? 0
             let firstLyricStart = lyrics.first?.startTime ?? 0
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)

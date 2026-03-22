@@ -112,7 +112,8 @@ public final class LyricsFetcher {
         let reliable = results.filter { r in
             if r.score <= 0 { return false }
             // 纯文本源低分且无其他可信源 → 丢弃（宁缺勿错）
-            if unsyncedSources.contains(r.source) && r.score < 55 && !hasReliableAlternative { return false }
+            // 🔑 阈值 35：纯文本源不计时长/覆盖度（伪造的），满分约 46
+            if unsyncedSources.contains(r.source) && r.score < 35 && !hasReliableAlternative { return false }
             return true
         }
 

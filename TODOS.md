@@ -1,5 +1,63 @@
 # TODOS
 
+## Visual / Accessibility
+
+### 浅色封面背景对比度问题
+
+**What:** 浅色封面（如 Ella Fitzgerald 白色封面）下，Liquid Glass 背景变浅，白字不可读。需要参考 Apple Music iOS 方案（封面 blur+压暗做背景，不依赖系统透明材质）。
+
+**Why:** 当前 `LiquidBackgroundView` 用 `NSVisualEffectView(.behindWindow)` 透过桌面内容，颜色覆盖层无法控制最终亮度。
+
+**Context:** 已尝试 shadow（太丑）、dominantColor 亮度钳位（无效）、封面 blur+brightness（改歪 UI）。正确方案需要实时调参验证，不适合盲改。Apple Music 用封面 `blur(40) + brightness(-0.3) + saturation(1.5)` 替代系统材质，但需注意对深色封面的影响。
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** None
+
+## Features
+
+### 逐字高亮歌词
+
+**What:** AMLL-TTML-DB 和 NetEase YRC 已提供逐字时间轴数据，实现逐字高亮渲染。
+
+**Why:** 当前只有行级高亮，逐字高亮是 Apple Music 级体验的核心差异点。
+
+**Effort:** L
+**Priority:** P1
+**Depends on:** None
+
+### 引导页面（Onboarding）
+
+**What:** 首次启动引导页面，介绍核心功能和权限授予。
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
+### 快捷键映射
+
+**What:** 全局快捷键支持（播放/暂停、上/下一首、显示/隐藏窗口等）。
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
+### 适配网易云/QQ音乐播放器
+
+**What:** 除 Apple Music 外，适配网易云音乐和 QQ 音乐 macOS 客户端作为播放源。
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** None
+
+### macOS 26 Menu Bar 深入适配
+
+**What:** macOS 26 menu bar 有 bug，待 Apple 修复后深入适配（增加图标等）。
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Apple 修复 macOS 26 menu bar bug
+
 ## Code Quality
 
 ### 小清理: 按钮重复 + Binding 重复 + asyncAfter 竞态

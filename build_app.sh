@@ -27,9 +27,11 @@ cat > nanoPod.app/Contents/Info.plist << 'PLIST'
     <key>CFBundleDisplayName</key>
     <string>nanoPod</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>2.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>2.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -74,32 +76,27 @@ cat > nanoPod.entitlements << 'ENTITLEMENTS'
 ENTITLEMENTS
 
 echo "🎨 Copying icon resources..."
-# Copy all resources from Resources folder (icns + Assets.car)
-if [ -f "Resources/AppIcon.icns" ]; then
+# 优先使用 .icon 原生格式（macOS 26 Liquid Glass）
+if [ -d "AppIcon.icon" ] && command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
+    echo "🎨 Compiling AppIcon.icon using actool..."
+    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
+    if [ -f "partial_info.plist" ]; then
+        echo "✅ AppIcon compiled successfully"
+        rm partial_info.plist
+    else
+        echo "⚠️  actool failed, falling back to icns"
+        [ -f "Resources/AppIcon.icns" ] && cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/
+    fi
+elif [ -f "Resources/AppIcon.icns" ]; then
     echo "🎨 Copying AppIcon.icns..."
     cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/
     echo "✅ AppIcon.icns copied"
-fi
-if [ -f "Resources/Assets.car" ]; then
+elif [ -f "Resources/Assets.car" ]; then
     echo "🎨 Copying Assets.car..."
     cp Resources/Assets.car nanoPod.app/Contents/Resources/
     echo "✅ Assets.car copied"
-fi
-if [ ! -f "Resources/AppIcon.icns" ] && [ ! -f "Resources/Assets.car" ]; then
-    if command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
-        echo "🎨 Compiling AppIcon.icon using actool..."
-        if [ -d "AppIcon.icon" ]; then
-            xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
-            if [ -f "partial_info.plist" ]; then
-                echo "✅ AppIcon compiled successfully"
-                rm partial_info.plist
-            else
-                echo "⚠️  actool failed, icon may be missing"
-            fi
-        fi
-    else
-        echo "⚠️  No icon available (missing Resources and no Xcode)"
-    fi
+else
+    echo "⚠️  No icon available"
 fi
 
 # Ad-hoc code sign with entitlements (required for AppleScript automation on modern macOS)

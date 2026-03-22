@@ -126,9 +126,13 @@ final class LyricsScorerTests: XCTestCase {
 
         let scoreAMLL = scorer.calculateScore(lyrics, source: "AMLL", duration: 240, translationEnabled: false)
         let scoreOVH = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: 240, translationEnabled: false)
+        let scoreNetEase = scorer.calculateScore(lyrics, source: "NetEase", duration: 240, translationEnabled: false)
 
-        // AMLL 比 lyrics.ovh 多 10 分
-        XCTAssertEqual(scoreAMLL - scoreOVH, 10, accuracy: 0.1)
+        // 🔑 纯文本源（lyrics.ovh/Genius）不计时长/覆盖度（伪造时间轴不应得分）
+        // AMLL 比 lyrics.ovh 多：源加成差(10) + 时长匹配(15) + 覆盖度(~8) ≈ 33
+        XCTAssertGreaterThan(scoreAMLL - scoreOVH, 20)
+        // 同类型对标源（AMLL vs NetEase）差异仅为源加成
+        XCTAssertEqual(scoreAMLL - scoreNetEase, 2, accuracy: 0.1)  // AMLL(10) - NetEase(8) = 2
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
