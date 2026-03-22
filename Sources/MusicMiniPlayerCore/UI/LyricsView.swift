@@ -291,18 +291,21 @@ public struct LyricsView: View {
             let _ = ensureHeightCache()
             let anchorY = (containerHeight - controlBarHeight) * 0.24
 
-            // 可视区裁剪：仅自动播放时裁剪（手动滚动无动画，开销低，全量渲染）
-            let visibleRange = 10
+            // 可视区裁剪：仅自动播放且高度已测全时裁剪
+            let visibleRange = 12
+            let heightsReady = cache.lineHeights.count >= renderedIndices.count
+            let shouldCull = !scroll.isManualScrolling && heightsReady
 
             ZStack(alignment: .topLeading) {
                 ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                     if index == 0 || index >= lyricsService.firstRealLyricIndex {
-                        let isVisible = scroll.isManualScrolling || abs(index - displayIndex) <= visibleRange
-                        if isVisible {
-                            let lineOffset = calculateLineOffset(
-                                index: index, currentIndex: displayIndex, anchorY: anchorY
-                            )
+                        let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
 
+                        let lineOffset = calculateLineOffset(
+                            index: index, currentIndex: displayIndex, anchorY: anchorY
+                        )
+
+                        if isVisible {
                             lyricLineContent(line: line, index: index, currentIndex: displayIndex)
                                 .background(lineHeightTracker(index: index))
                                 .offset(y: lineOffset + calculateAccumulatedHeight(upTo: index))
@@ -316,12 +319,12 @@ public struct LyricsView: View {
                                     }()
                                 )
                         } else {
-                            // 屏幕外：轻量占位，保留高度测量
-                            Color.clear
-                                .frame(height: cache.lineHeights[index] ?? 36)
+                            // 屏幕外：用真实内容测高但不显示（opacity 0 + 禁动画）
+                            lyricLineContent(line: line, index: index, currentIndex: displayIndex)
                                 .background(lineHeightTracker(index: index))
-                                .offset(y: calculateAccumulatedHeight(upTo: index)
-                                    + anchorY - calculateAccumulatedHeight(upTo: displayIndex))
+                                .opacity(0)
+                                .allowsHitTesting(false)
+                                .offset(y: lineOffset + calculateAccumulatedHeight(upTo: index))
                         }
                     }
                 }
@@ -724,7 +727,7 @@ public struct LyricsView: View {
             return cached
         }
 
-        let spacing: CGFloat = 6, defaultHeight: CGFloat = 36
+        let spacing: CGFloat = 6, defaultHeight: CGFloat = 46
         var totalHeight: CGFloat = 0
         let indices = renderedIndices
         guard let targetPosition = indices.firstIndex(of: targetIndex) else { return 0 }
@@ -745,7 +748,7 @@ public struct LyricsView: View {
             return cache.cachedTotalContentHeight
         }
 
-        let spacing: CGFloat = 6, defaultHeight: CGFloat = 36
+        let spacing: CGFloat = 6, defaultHeight: CGFloat = 46
         let indices = renderedIndices
         var totalHeight: CGFloat = 0
         for (i, lineIndex) in indices.enumerated() {
@@ -797,7 +800,7 @@ public struct LyricsView: View {
 
         let indices = renderedIndices
 
-        // reduceMotion 或快歌（两行间隔 < 1.5s）：跳过波浪延迟，直接 snap
+        // 快歌（两行间隔 < 1.5s）或 reduceMotion：跳过波浪延迟
         let isFastSong: Bool = {
             guard newIndex > 0, newIndex < lyrics.count, oldIndex >= 0, oldIndex < lyrics.count else { return false }
             return abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime) < 1.5
@@ -811,41 +814,31 @@ public struct LyricsView: View {
         let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
+        var delay: Double = 0
+        var currentDelayStep: Double = 0.05
+
         // 屏幕顶部之上的行：立即更新
         for i in 0..<startPosition {
             wave.lineTargetIndices[indices[i]] = newIndex
         }
 
-        // 按延迟批量分组，减少 @State 写入次数
-        var delayBatches: [Double: [Int]] = [:]
-        var delay: Double = 0
-        var currentDelayStep: Double = 0.05
-
+        // 从屏幕顶部开始向下遍历
         for i in startPosition..<indices.count {
             let lineIndex = indices[i]
 
             if delay < 0.01 {
                 wave.lineTargetIndices[lineIndex] = newIndex
             } else {
-                // 量化延迟到 0.02s 精度，合并相近的行
-                let quantized = (delay / 0.02).rounded() * 0.02
-                delayBatches[quantized, default: []].append(lineIndex)
+                let workItem = DispatchWorkItem { [self] in
+                    guard !scroll.isManualScrolling else { return }
+                    wave.lineTargetIndices[lineIndex] = newIndex
+                }
+                wave.workItems.append(workItem)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             }
 
             delay += currentDelayStep
             if lineIndex >= newIndex { currentDelayStep /= 1.05 }
-        }
-
-        // 每批一个 workItem，批量更新 @State（减少 body 重算次数）
-        for (batchDelay, lineIndices) in delayBatches {
-            let workItem = DispatchWorkItem { [self] in
-                guard !scroll.isManualScrolling else { return }
-                for lineIndex in lineIndices {
-                    wave.lineTargetIndices[lineIndex] = newIndex
-                }
-            }
-            wave.workItems.append(workItem)
-            DispatchQueue.main.asyncAfter(deadline: .now() + batchDelay, execute: workItem)
         }
     }
 
