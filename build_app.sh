@@ -34,8 +34,12 @@ cat > nanoPod.app/Contents/Info.plist << 'PLIST'
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>nanoPod needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
     <key>NSAppleMusicUsageDescription</key>
@@ -112,6 +116,13 @@ fi
 
 # Clean up entitlements file
 rm -f nanoPod.entitlements
+
+# Fix macOS 26 menu bar database (remove stale MusicMiniPlayer entries)
+if python3 scripts/fix_menubar.py 2>/dev/null; then
+    killall ControlCenter 2>/dev/null
+    killall cfprefsd 2>/dev/null
+    echo "🔧 Menu bar database cleaned"
+fi
 
 echo "✅ App bundle created at nanoPod.app"
 echo "🚀 You can now open it with: open nanoPod.app"

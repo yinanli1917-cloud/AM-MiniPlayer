@@ -50,13 +50,9 @@
 **Priority:** P2
 **Depends on:** None
 
-### macOS 26 Menu Bar 深入适配
+### ~~macOS 26 Menu Bar 深入适配~~ ✅ FIXED
 
-**What:** macOS 26 menu bar 有 bug，待 Apple 修复后深入适配（增加图标等）。
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** Apple 修复 macOS 26 menu bar bug
+**What:** Added `LSUIElement=true` + `NSPrincipalClass=NSApplication` to Info.plist. Root cause: macOS 26's "Allow in Menu Bar" system only recognizes apps that declare `LSUIElement` — dynamic `setActivationPolicy(.accessory)` alone was insufficient.
 
 ## Code Quality
 

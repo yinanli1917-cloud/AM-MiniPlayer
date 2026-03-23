@@ -65,6 +65,8 @@ Tests/MusicMiniPlayerTests/         - 77 个单元测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     └── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
 
+scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
+
 docs/lyrics_test_cases.json        - 15 条预定义歌词测试用例
 docs/lyrics_benchmark_cases.json   - 100 首全球基准测试（10 语言区域 × 10 首）
 postmortem/001~006                 - 已知 bug 根因 + 解决方案
@@ -111,6 +113,10 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ Always use `source: nil`, let Apple's Translation framework auto-detect
 - ❌ Genius/lyrics.ovh skip timing penalties (duration/coverage/gap) → inflated scores (~46) beat synced sources (~39)
   ✅ `selectBest` prefers synced sources with score >= 30 over unsynced; romaji penalty applies to all unsynced sources
+- ❌ Dynamic `setActivationPolicy(.regular↔.accessory)` in FloatingWindowDelegate → macOS 26 destroys NSStatusItem visibility on every toggle
+  ✅ Use `LSUIElement=true` in Info.plist, only change activation policy in `updateDockVisibility()`
+- ❌ Bundle ID change (MusicMiniPlayer→nanoPod) leaves stale `menuItemLocations` in ControlCenter's `trackedApplications` → status item placed at x=-1 (off-screen)
+  ✅ Run `scripts/fix_menubar.py` to clean stale entries; build_app.sh runs it automatically
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)

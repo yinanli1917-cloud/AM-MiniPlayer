@@ -18,8 +18,12 @@
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>nanoPod needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
     <key>NSAppleMusicUsageDescription</key>

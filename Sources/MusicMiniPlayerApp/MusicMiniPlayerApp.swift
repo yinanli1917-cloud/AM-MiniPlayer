@@ -404,24 +404,6 @@ class FloatingWindowDelegate: NSObject, NSWindowDelegate {
         sender.orderOut(nil)
         return false
     }
-
-    // 窗口成为 key window 时，临时切换到 regular 策略以显示 menu bar
-    func windowDidBecomeKey(_ notification: Notification) {
-        if !UserDefaults.standard.bool(forKey: "showInDock") {
-            NSApp.setActivationPolicy(.regular)
-        }
-    }
-
-    // 窗口失去 key window 时，恢复原来的激活策略
-    func windowDidResignKey(_ notification: Notification) {
-        if !UserDefaults.standard.bool(forKey: "showInDock") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                if NSApp.keyWindow == nil {
-                    NSApp.setActivationPolicy(.accessory)
-                }
-            }
-        }
-    }
 }
 
 class SettingsWindowDelegate: NSObject, NSWindowDelegate {
