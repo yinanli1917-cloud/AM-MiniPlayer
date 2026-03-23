@@ -11,6 +11,12 @@ import SwiftUI
 import MusicKit
 import os
 
+// MARK: - 窗口移动通知（SnappablePanel ↔ MusicController）
+public extension Notification.Name {
+    static let windowMovementBegan = Notification.Name("windowMovementBegan")
+    static let windowMovementEnded = Notification.Name("windowMovementEnded")
+}
+
 // MARK: - 共享常量
 
 /// 未播放时的哨兵值 — 各模块用此判断"无有效曲目"
@@ -121,6 +127,9 @@ public class MusicController: ObservableObject {
     private var queueCheckTimer: Timer?
     private var interpolationTimerActive = false
     private var lastPollTime: Date = .distantPast
+
+    // 窗口移动期间暂停 interpolation（避免 60Hz Timer 和 DisplayLink 争帧预算）
+    private var windowMovementPaused = false
 
     // Queue sync state
     private var lastQueueHash: String = ""
@@ -332,6 +341,7 @@ public class MusicController: ObservableObject {
             self.queueCheckTimer?.fire()
 
             self.setupMusicKitQueueObserver()
+            self.setupWindowMovementObserver()
         }
     }
 
@@ -346,20 +356,38 @@ public class MusicController: ObservableObject {
     }
 
     /// 根据播放状态动态启停 60fps 插值 Timer（减少 CPU 占用）
+    /// 窗口移动期间自动暂停，避免与 DisplayLink 争帧预算
     private func updateTimerState() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if self.isPlaying && !self.interpolationTimerActive {
+            let shouldRun = self.isPlaying && !self.windowMovementPaused
+            if shouldRun && !self.interpolationTimerActive {
                 self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
                     self?.interpolateTime()
                 }
                 RunLoop.main.add(self.interpolationTimer!, forMode: .common)
                 self.interpolationTimerActive = true
-            } else if !self.isPlaying && self.interpolationTimerActive {
+            } else if !shouldRun && self.interpolationTimerActive {
                 self.interpolationTimer?.invalidate()
                 self.interpolationTimer = nil
                 self.interpolationTimerActive = false
             }
+        }
+    }
+
+    /// 窗口移动开始/结束通知（SnappablePanel 发出）
+    func setupWindowMovementObserver() {
+        NotificationCenter.default.addObserver(
+            forName: .windowMovementBegan, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.windowMovementPaused = true
+            self?.updateTimerState()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .windowMovementEnded, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.windowMovementPaused = false
+            self?.updateTimerState()
         }
     }
 

@@ -102,6 +102,11 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             // 检查事件是否发生在当前窗口内
             guard let window = self.window, event.window == window else { return }
 
+            // 🔑 过滤横向主导事件（由 SnappablePanel 处理贴边隐藏，避免冲突导致抽搐）
+            let absX = abs(event.scrollingDeltaX)
+            let absY = abs(event.scrollingDeltaY)
+            if absX > absY * 1.5 && absX > 1.0 { return }
+
             // 🔑 动量阶段感知：macOS 触控板在手指抬起后继续发送 momentum events
             let isMomentum = event.momentumPhase != []
 

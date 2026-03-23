@@ -423,7 +423,16 @@ public struct LyricsView: View {
             return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
         } else {
             let lineTargetIndex = wave.lineTargetIndices[index] ?? currentIndex
-            return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
+            let accHeight = calculateAccumulatedHeight(upTo: lineTargetIndex)
+            let offset = anchorY - accHeight
+
+            // 仅对当前行附近 ±2 行打日志，避免刷屏
+            if abs(index - currentIndex) <= 2 {
+                DebugLogger.logHiRes("OFFSET",
+                    "L\(index) target=\(lineTargetIndex) accH=\(String(format: "%.1f", accHeight)) " +
+                    "offset=\(String(format: "%.1f", offset))")
+            }
+            return offset
         }
     }
 
@@ -805,11 +814,16 @@ public struct LyricsView: View {
         cancelWaveAnimations()
 
         let indices = renderedIndices
+        let waveStartTime = DebugLogger.hiResNow
+
+        DebugLogger.logHiRes("WAVE", "━━━ trigger \(oldIndex)→\(newIndex) ━━━")
 
         // 快歌（两行间隔 < 1.0s）或 reduceMotion：跳过波浪延迟
         let isFastSong: Bool = {
             guard newIndex > 0, newIndex < lyrics.count, oldIndex >= 0, oldIndex < lyrics.count else { return false }
-            return abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime) < 1.0
+            let gap = abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime)
+            DebugLogger.logHiRes("WAVE", "行间距=\(String(format: "%.3f", gap))s \(gap < 1.0 ? "→快歌跳过" : "")")
+            return gap < 1.0
         }()
 
         if reduceMotion || isFastSong {
@@ -837,9 +851,17 @@ public struct LyricsView: View {
             if delay < 0.001 {
                 // 第一行无延迟，直接启动 spring
                 wave.lineTargetIndices[lineIndex] = newIndex
+                DebugLogger.logHiRes("WAVE", "L\(lineIndex) 即时 delay=0ms")
             } else {
+                let scheduledDelay = delay
                 let workItem = DispatchWorkItem { [self] in
                     guard !scroll.isManualScrolling else { return }
+                    let actualElapsed = DebugLogger.hiResNow - waveStartTime
+                    let drift = (actualElapsed - scheduledDelay) * 1000  // ms
+                    DebugLogger.logHiRes("WAVE",
+                        "L\(lineIndex) 预定=\(String(format: "%.1f", scheduledDelay*1000))ms " +
+                        "实际=\(String(format: "%.1f", actualElapsed*1000))ms " +
+                        "漂移=\(String(format: "%+.1f", drift))ms")
                     wave.lineTargetIndices[lineIndex] = newIndex
                 }
                 wave.workItems.append(workItem)

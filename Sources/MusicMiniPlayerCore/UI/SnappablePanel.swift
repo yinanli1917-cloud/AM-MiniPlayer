@@ -1,15 +1,16 @@
 import AppKit
 import SwiftUI
+import QuartzCore
 
 /// 带物理惯性的可吸附窗口面板 - 复刻 iOS PiP 体验
 public class SnappablePanel: NSPanel {
-    
+
     // MARK: - Configuration
 
     public var cornerMargin: CGFloat = 16
-    public var projectionFactor: CGFloat = 0.12
+    public var projectionFactor: CGFloat = 0.28
     public var snapToCorners: Bool = true
-    public var edgeHiddenVisibleWidth: CGFloat = 6  // 🔑 贴边隐藏时露出的宽度
+    public var edgeHiddenVisibleWidth: CGFloat = 6  // 贴边隐藏时露出的宽度
 
     // MARK: - Callbacks
 
@@ -17,30 +18,29 @@ public class SnappablePanel: NSPanel {
     public var onEdgeHiddenChanged: ((Bool) -> Void)?
     /// 获取当前页面状态（用于判断是否允许双指拖拽）
     public var currentPageProvider: (() -> PlayerPage)?
-    /// 🔑 获取当前是否处于手动滚动状态（歌词页面）
+    /// 获取当前是否处于手动滚动状态（歌词页面）
     public var isManualScrollingProvider: (() -> Bool)?
-    /// 🔑 触发进入手动滚动状态（歌词页面）
+    /// 触发进入手动滚动状态（歌词页面）
     public var onTriggerManualScroll: (() -> Void)?
-    
+
     // MARK: - Drag State
-    
+
     private var dragStartLocation: NSPoint = .zero
     private var dragStartOrigin: NSPoint = .zero
     private var isDragging = false
-    
+
     // 速度追踪
     private var positionHistory: [(pos: NSPoint, time: CFTimeInterval)] = []
     private let historySize = 5
-    
-    // 动画状态
+
+    // ── 动画状态 ──
     private var isAnimating = false
     private var animationTarget: NSPoint = .zero
-    private var animationTimer: Timer?
-    
-    // 弹簧动画参数
+
+    // 弹簧速度（调用方设置初始速度）
     private var springVelocityX: CGFloat = 0
     private var springVelocityY: CGFloat = 0
-    
+
     // 贴边隐藏状态
     private(set) public var isEdgeHidden = false
     private(set) public var hiddenEdge: Edge = .none
@@ -48,9 +48,9 @@ public class SnappablePanel: NSPanel {
     public enum Edge {
         case none, left, right
     }
-    
+
     // MARK: - Init
-    
+
     public override init(contentRect: NSRect,
                          styleMask style: NSWindow.StyleMask,
                          backing: NSWindow.BackingStoreType,
@@ -59,18 +59,18 @@ public class SnappablePanel: NSPanel {
         self.isMovableByWindowBackground = false
         self.acceptsMouseMovedEvents = true
     }
-    
+
     deinit {
-        animationTimer?.invalidate()
+        stopAllAnimations()
     }
-    
+
     // MARK: - Stage Manager Detection
-    
+
     private func isStageManagerEnabled() -> Bool {
         let defaults = UserDefaults(suiteName: "com.apple.WindowManager")
         return defaults?.bool(forKey: "GloballyEnabled") ?? false
     }
-    
+
     // MARK: - Event Override
 
     public override func sendEvent(_ event: NSEvent) {
@@ -81,16 +81,14 @@ public class SnappablePanel: NSPanel {
             handleMouseDragged(event)
         case .leftMouseUp:
             handleMouseUp(event)
-        // 🔑 鼠标移动 - 用于贴边隐藏的 hover 效果
         case .mouseMoved:
             handleMouseMoved(event)
-        // 双指拖拽支持
         case .scrollWheel:
             if let provider = currentPageProvider {
                 let currentPage = provider()
 
                 if currentPage == .album {
-                    // 🔑 专辑页面：双指触控板手势用于贴边/隐藏（全方向）
+                    // ── 专辑页面：双指触控板手势用于贴边/隐藏（全方向）──
                     if event.phase == .began || event.phase == .changed {
                         handleScrollDrag(event)
                     } else if event.phase == .ended {
@@ -99,64 +97,50 @@ public class SnappablePanel: NSPanel {
                         super.sendEvent(event)
                     }
                 } else {
-                    // 🔑 歌词/歌单页面：横向手势用于隐藏，纵向手势传递给 ScrollView
-                    // 🔑 两次滑动逻辑：自然滚动时第一次横滑进入手动滚动，第二次才隐藏
-                    if event.phase == .began {
-                        // 重置标志
-                        justTriggeredManualScroll = false
-                        // 开始时判断是否为横向主导手势
-                        let isHorizontalDominant = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5
-                        if isHorizontalDominant {
-                            // 🔑 检查是否已经在手动滚动状态
-                            let isManualScrolling = isManualScrollingProvider?() ?? false
-                            if isManualScrolling {
-                                // 已在手动滚动状态，这次横滑可以隐藏
-                                isHorizontalScrollGesture = true
-                                horizontalScrollAccumulated = 0
-                                handleHorizontalHideGesture(event)
-                            } else {
-                                // 不在手动滚动状态，第一次横滑只触发进入手动滚动
-                                onTriggerManualScroll?()
-                                justTriggeredManualScroll = true  // 🔑 标记本次手势已触发手动滚动
-                                isHorizontalScrollGesture = false
-                                horizontalScrollAccumulated = 0
-                                super.sendEvent(event)
-                            }
-                        } else {
-                            isHorizontalScrollGesture = false
-                            horizontalScrollAccumulated = 0
-                            super.sendEvent(event)
+                    // ── 歌词/歌单页面：横向 = 贴边隐藏，纵向 = 传递给内容 ──
+                    // 无需二次滑动，横向手势直接生效
+
+                    // 抑制横向手势的残余动量（防止泄漏给 ScrollDetector 引发抽搐）
+                    if event.momentumPhase != [] {
+                        if suppressMomentum {
+                            if event.momentumPhase == .ended { suppressMomentum = false }
+                            return  // 吞掉
                         }
+                        super.sendEvent(event)
+                        return
+                    }
+
+                    if event.phase == .began {
+                        scrollGestureDirection = .undecided
+                        horizontalGestureStartOrigin = frame.origin
+                        scrollVelocityX = 0
+                        suppressMomentum = false
+                        super.sendEvent(event)
                     } else if event.phase == .changed {
-                        if isHorizontalScrollGesture {
-                            handleHorizontalHideGesture(event)
-                        } else if !justTriggeredManualScroll {
-                            // 🔑 只有在本次手势周期内没有触发过手动滚动时，才检查是否切换
-                            // 累积横向滚动量，如果超过阈值且已在手动滚动状态则切换为横向手势
-                            horizontalScrollAccumulated += event.scrollingDeltaX
-                            let isManualScrolling = isManualScrollingProvider?() ?? false
-                            let shouldSwitchToHorizontal = isManualScrolling &&
-                                abs(horizontalScrollAccumulated) > 30 &&
-                                abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 2
-                            if shouldSwitchToHorizontal {
-                                isHorizontalScrollGesture = true
-                                handleHorizontalHideGesture(event)
-                            } else {
-                                super.sendEvent(event)
+                        // 首次有效 delta 确定方向，一旦确定不再切换
+                        if scrollGestureDirection == .undecided {
+                            let absX = abs(event.scrollingDeltaX)
+                            let absY = abs(event.scrollingDeltaY)
+                            if absX > absY * 1.2 && absX > 2.0 {
+                                scrollGestureDirection = .horizontal
+                            } else if absY > 1.0 {
+                                scrollGestureDirection = .vertical
+                                horizontalGestureStartOrigin = nil
                             }
+                        }
+                        if scrollGestureDirection == .horizontal {
+                            handleHorizontalHideGesture(event)
                         } else {
-                            // 本次手势已触发手动滚动，继续传递事件
                             super.sendEvent(event)
                         }
                     } else if event.phase == .ended {
-                        if isHorizontalScrollGesture {
+                        if scrollGestureDirection == .horizontal {
                             handleHorizontalHideGestureEnd(event)
-                            isHorizontalScrollGesture = false
+                            suppressMomentum = true
                         } else {
                             super.sendEvent(event)
                         }
-                        horizontalScrollAccumulated = 0
-                        justTriggeredManualScroll = false  // 🔑 手势结束，重置标志
+                        scrollGestureDirection = .undecided
                     } else {
                         super.sendEvent(event)
                     }
@@ -168,64 +152,60 @@ public class SnappablePanel: NSPanel {
             super.sendEvent(event)
         }
     }
-    
+
     // MARK: - Mouse Drag
-    
+
     private func handleMouseDown(_ event: NSEvent) {
-        // 🔑 如果窗口处于贴边隐藏状态，点击恢复窗口，不穿透到内容
         if isEdgeHidden {
             restoreFromEdge()
-            // 不调用 super.sendEvent(event)，阻止这次点击穿透
             return
         }
 
-        // 🔑 检查是否点击在交互式视图或底部控件区域
         if let hitView = contentView?.hitTest(event.locationInWindow),
            isInteractiveView(hitView) {
             super.sendEvent(event)
             return
         }
 
-        // 🔑 底部控件区域（进度条等）不触发窗口拖拽
         if isInBottomControlsArea(event: event) {
             super.sendEvent(event)
             return
         }
 
         stopAllAnimations()
-        // 🔑 拖拽开始时立即通知UI恢复非hover状态
         onDragStateChanged?(false)
 
         let mousePos = NSEvent.mouseLocation
         dragStartLocation = mousePos
         dragStartOrigin = frame.origin
         isDragging = true
+        NotificationCenter.default.post(name: .windowMovementBegan, object: self)
 
         positionHistory.removeAll()
         positionHistory.append((pos: mousePos, time: CACurrentMediaTime()))
 
         super.sendEvent(event)
     }
-    
+
     private func handleMouseDragged(_ event: NSEvent) {
         guard isDragging else {
             super.sendEvent(event)
             return
         }
-        
+
         let mousePos = NSEvent.mouseLocation
         let now = CACurrentMediaTime()
-        
+
         positionHistory.append((pos: mousePos, time: now))
         if positionHistory.count > historySize {
             positionHistory.removeFirst()
         }
-        
+
         let dx = mousePos.x - dragStartLocation.x
         let dy = mousePos.y - dragStartLocation.y
         setFrameOrigin(NSPoint(x: dragStartOrigin.x + dx, y: dragStartOrigin.y + dy))
     }
-    
+
     private func handleMouseUp(_ event: NSEvent) {
         guard isDragging else {
             super.sendEvent(event)
@@ -233,6 +213,7 @@ public class SnappablePanel: NSPanel {
         }
 
         isDragging = false
+        NotificationCenter.default.post(name: .windowMovementEnded, object: self)
 
         let mousePos = NSEvent.mouseLocation
         let distance = hypot(mousePos.x - dragStartLocation.x, mousePos.y - dragStartLocation.y)
@@ -242,11 +223,10 @@ public class SnappablePanel: NSPanel {
             return
         }
 
-        // 🔑 所有页面：鼠标拖拽只移动窗口，不触发贴角/贴边
-        // 贴边/隐藏由双指触控板手势处理
+        // 鼠标拖拽只移动窗口，贴边/隐藏由双指触控板手势处理
         super.sendEvent(event)
     }
-    
+
     // MARK: - Scroll (双指) Drag
 
     private var scrollDragOrigin: NSPoint = .zero
@@ -254,56 +234,57 @@ public class SnappablePanel: NSPanel {
     private var scrollVelocityX: CGFloat = 0
     private var scrollVelocityY: CGFloat = 0
 
-    // 🔑 横向隐藏手势状态（歌词/歌单页面）
-    private var isHorizontalScrollGesture = false
-    private var horizontalScrollAccumulated: CGFloat = 0
-    private var justTriggeredManualScroll = false  // 🔑 防止同一手势周期内触发隐藏
-    
+    // ── 横向隐藏手势状态（歌词/歌单页面）──
+    private enum GestureDirection { case undecided, horizontal, vertical }
+    private var scrollGestureDirection: GestureDirection = .undecided
+    private var horizontalGestureStartOrigin: NSPoint? = nil  // 手势前位置（取消时弹回）
+    private var suppressMomentum = false
+
     private func handleScrollDrag(_ event: NSEvent) {
-        // 检查是否是双指手势（触控板）
         guard abs(event.scrollingDeltaX) > 0 || abs(event.scrollingDeltaY) > 0 else {
             super.sendEvent(event)
             return
         }
-        
+
         if !isScrollDragging {
-            // 开始双指拖拽
             if isEdgeHidden {
                 restoreFromEdge()
                 return
             }
-            
+
             stopAllAnimations()
-            // 🔑 拖拽开始时立即通知UI恢复非hover状态
             onDragStateChanged?(false)
-            
+
             scrollDragOrigin = frame.origin
             isScrollDragging = true
+            NotificationCenter.default.post(name: .windowMovementBegan, object: self)
             positionHistory.removeAll()
         }
-        
-        // 移动窗口 - 直接使用 scrollingDelta
+
         let sensitivity: CGFloat = 1.5
         let newX = frame.origin.x + event.scrollingDeltaX * sensitivity
-        let newY = frame.origin.y - event.scrollingDeltaY * sensitivity  // Y 轴反向
+        let newY = frame.origin.y - event.scrollingDeltaY * sensitivity
         setFrameOrigin(NSPoint(x: newX, y: newY))
-        
-        // 记录速度
-        scrollVelocityX = event.scrollingDeltaX * sensitivity * 60  // 转换为 px/s
+
+        scrollVelocityX = event.scrollingDeltaX * sensitivity * 60
         scrollVelocityY = -event.scrollingDeltaY * sensitivity * 60
-        
+
         let now = CACurrentMediaTime()
         positionHistory.append((pos: frame.origin, time: now))
         if positionHistory.count > historySize {
             positionHistory.removeFirst()
         }
     }
-    
+
     private func handleScrollEnd(_ event: NSEvent) {
         guard isScrollDragging else { return }
         isScrollDragging = false
 
         let velocity = CGPoint(x: scrollVelocityX, y: scrollVelocityY)
+
+        // 解析解无 Euler 能量增益，传入完整速度
+        springVelocityX = velocity.x
+        springVelocityY = velocity.y
 
         if checkAndHideToEdgeWithVelocity(velocity) {
             return
@@ -311,8 +292,6 @@ public class SnappablePanel: NSPanel {
 
         if snapToCorners {
             animationTarget = calculateTargetCorner(velocity: velocity)
-            springVelocityX = velocity.x * 0.3
-            springVelocityY = velocity.y * 0.3
             startSpringAnimation()
         }
     }
@@ -321,10 +300,7 @@ public class SnappablePanel: NSPanel {
 
     private func handleHorizontalHideGesture(_ event: NSEvent) {
         let sensitivity: CGFloat = 1.5
-        horizontalScrollAccumulated += event.scrollingDeltaX * sensitivity
-        scrollVelocityX = event.scrollingDeltaX * sensitivity * 60  // 转换为 px/s
-
-        // 🔑 实时移动窗口（仅水平方向）
+        scrollVelocityX = event.scrollingDeltaX * sensitivity * 60  // px/s
         let newX = frame.origin.x + event.scrollingDeltaX * sensitivity
         setFrameOrigin(NSPoint(x: newX, y: frame.origin.y))
     }
@@ -332,56 +308,55 @@ public class SnappablePanel: NSPanel {
     private func handleHorizontalHideGestureEnd(_ event: NSEvent) {
         let velocity = CGPoint(x: scrollVelocityX, y: 0)
 
-        // 🔑 检查是否满足隐藏条件
+        // 解析解无 Euler 能量增益，传入完整速度
+        springVelocityX = velocity.x
+        springVelocityY = 0
+
         if checkAndHideToEdgeWithVelocity(velocity) {
-            horizontalScrollAccumulated = 0
+            horizontalGestureStartOrigin = nil
             return
         }
 
-        // 🔑 没有隐藏，回弹到最近的角落
-        if snapToCorners {
-            animationTarget = calculateTargetCorner(velocity: velocity)
-            springVelocityX = velocity.x * 0.3
-            springVelocityY = 0
+        // 没有隐藏 → 弹回手势开始前的位置
+        if let origin = horizontalGestureStartOrigin {
+            animationTarget = origin
             startSpringAnimation()
         }
-
-        horizontalScrollAccumulated = 0
+        horizontalGestureStartOrigin = nil
     }
-    
+
     // MARK: - Edge Hiding
-    
+
     private func checkAndHideToEdgeWithVelocity(_ velocity: CGPoint) -> Bool {
         guard let screen = screen ?? NSScreen.main else { return false }
         let visible = screen.visibleFrame
-        
+
         let threshold: CGFloat = 20
         let stageManagerOn = isStageManagerEnabled()
-        
+
         let nearLeftEdge = frame.origin.x < visible.minX + threshold
         let nearRightEdge = frame.origin.x + frame.width > visible.maxX - threshold
         let horizontalDominant = abs(velocity.x) > abs(velocity.y) * 0.8
-        
+
         if !stageManagerOn && nearLeftEdge && velocity.x < -50 && horizontalDominant {
             hideToEdge(.left)
             return true
         }
-        
+
         if nearRightEdge && velocity.x > 50 && horizontalDominant {
             hideToEdge(.right)
             return true
         }
-        
+
         return false
     }
-    
+
     private func hideToEdge(_ edge: Edge) {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
 
         hiddenEdge = edge
 
-        // 🔑 贴边隐藏，露出 edgeHiddenVisibleWidth
         let targetX: CGFloat = edge == .left
             ? visible.minX - frame.width + edgeHiddenVisibleWidth
             : visible.maxX - edgeHiddenVisibleWidth
@@ -390,8 +365,7 @@ public class SnappablePanel: NSPanel {
         let targetY = isTop ? visible.maxY - frame.height - cornerMargin : visible.minY + cornerMargin
 
         animationTarget = NSPoint(x: targetX, y: targetY)
-        springVelocityX = 0
-        springVelocityY = 0
+        // 不清零速度 — 保留手势动量，窗口顺滑滑入边缘
         startSpringAnimation()
 
         isEdgeHidden = true
@@ -422,14 +396,9 @@ public class SnappablePanel: NSPanel {
     // MARK: - Edge Peek (hover 时偷看效果)
 
     private var isEdgePeeking = false
-    private let peekAmount: CGFloat = 30  // hover 时露出的额外宽度
-
-    // 🔑 peek 动画参数（更快更干脆）
-    private let peekStiffness: CGFloat = 500
-    private let peekDamping: CGFloat = 30
+    private let peekAmount: CGFloat = 30
 
     private func handleMouseMoved(_ event: NSEvent) {
-        // 只在贴边隐藏状态下处理
         guard isEdgeHidden else {
             super.sendEvent(event)
             return
@@ -438,11 +407,9 @@ public class SnappablePanel: NSPanel {
         let mouseInWindow = frame.contains(NSEvent.mouseLocation)
 
         if mouseInWindow && !isEdgePeeking {
-            // 鼠标进入，开始偷看
             isEdgePeeking = true
             peekFromEdge()
         } else if !mouseInWindow && isEdgePeeking {
-            // 鼠标离开，结束偷看
             isEdgePeeking = false
             hideBackToEdge()
         }
@@ -450,7 +417,6 @@ public class SnappablePanel: NSPanel {
         super.sendEvent(event)
     }
 
-    /// 偷看：稍微露出窗口
     private func peekFromEdge() {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
@@ -462,10 +428,9 @@ public class SnappablePanel: NSPanel {
         animationTarget = NSPoint(x: targetX, y: frame.origin.y)
         springVelocityX = 0
         springVelocityY = 0
-        startPeekAnimation()  // 🔑 使用更快的 peek 动画
+        startPeekAnimation()
     }
 
-    /// 回到贴边隐藏状态
     private func hideBackToEdge() {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
@@ -477,149 +442,237 @@ public class SnappablePanel: NSPanel {
         animationTarget = NSPoint(x: targetX, y: frame.origin.y)
         springVelocityX = 0
         springVelocityY = 0
-        startPeekAnimation()  // 🔑 使用更快的 peek 动画
+        startPeekAnimation()
     }
 
-    // 🔑 专门用于 peek 的快速动画
-    private func startPeekAnimation() {
-        stopAllAnimations()
-        isAnimating = true
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - 弹簧动画（快照窗口 + Spring 解析解）
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🔑 核心问题：setFrameOrigin 每帧触发 WindowServer 对重内容的合成
+    //    (Metal shader + blur + SwiftUI) → 帧预算不够 → 掉帧
+    // 🔑 解法（JNWAnimatableWindow 技术）：
+    //    1. 截取窗口内容为 CGImage
+    //    2. 创建轻量快照窗口（一个 CALayer + 一张图片）
+    //    3. 弹簧动画只移动快照窗口（compositing 成本趋零）
+    //    4. 动画结束：移动真实窗口 → 显示 → 销毁快照
 
-        // 🔑 60fps（从 120fps 降低，减少 CPU 占用）
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] _ in
-            self?.updatePeekAnimation()
-        }
-        RunLoop.main.add(animationTimer!, forMode: .common)
-    }
-
-    private func updatePeekAnimation() {
-        guard isAnimating else { return }
-
-        let current = frame.origin
-        let target = animationTarget
-
-        let dt: CGFloat = 1.0 / 60.0  // 🔑 60fps
-
-        let dx = target.x - current.x
-        let dy = target.y - current.y
-
-        let forceX = peekStiffness * dx - peekDamping * springVelocityX
-        let forceY = peekStiffness * dy - peekDamping * springVelocityY
-
-        springVelocityX += forceX * dt
-        springVelocityY += forceY * dt
-
-        let newX = current.x + springVelocityX * dt
-        let newY = current.y + springVelocityY * dt
-
-        setFrameOrigin(NSPoint(x: newX, y: newY))
-
-        let distance = hypot(dx, dy)
-        let speed = hypot(springVelocityX, springVelocityY)
-
-        // 🔑 提高收敛阈值，更快结束动画
-        if distance < 0.5 && speed < 5 {
-            setFrameOrigin(target)
-            isAnimating = false
-            animationTimer?.invalidate()
-            animationTimer = nil
-        }
-    }
-    
-    // MARK: - Spring Animation
-
-    private func stopAllAnimations() {
-        isAnimating = false
-        animationTimer?.invalidate()
-        animationTimer = nil
-    }
+    private var shadowWasEnabled = true
+    private var currentSpring = Spring(duration: 0.5, bounce: 0.15)
+    private var animStartTime: CFTimeInterval = 0
+    private var animInitialOrigin: NSPoint = .zero
+    private var animInitVelX: CGFloat = 0
+    private var animInitVelY: CGFloat = 0
+    private var displayLink: AnyObject?
+    private var animationTimer: Timer?
+    private var snapshotWindow: NSWindow?
 
     private func startSpringAnimation() {
+        // WWDC23 手势吸附推荐：duration=0.5 bounce=0.15
+        currentSpring = Spring(duration: 0.5, bounce: 0.15)
+        launchSnapshotAnimation()
+    }
+
+    private func startPeekAnimation() {
+        // peek: 快速无过冲
+        currentSpring = Spring(duration: 0.3, bounce: 0.0)
+        launchSnapshotAnimation()
+    }
+
+    // ── 快照窗口创建 ──
+
+    private func captureSnapshot() -> NSWindow? {
+        guard let cv = contentView else { return nil }
+
+        // Retina 感知截图
+        let bounds = cv.bounds
+        guard let bitmapRep = cv.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cv.cacheDisplay(in: bounds, to: bitmapRep)
+        guard let cgImage = bitmapRep.cgImage else { return nil }
+
+        // 轻量快照窗口：borderless + 单 CALayer
+        let snap = NSWindow(
+            contentRect: frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        snap.isOpaque = false
+        snap.backgroundColor = .clear
+        snap.hasShadow = false
+        snap.level = level
+        snap.collectionBehavior = collectionBehavior
+        snap.ignoresMouseEvents = true
+
+        let hostView = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        hostView.wantsLayer = true
+        snap.contentView = hostView
+
+        let layer = hostView.layer!
+        layer.contents = cgImage
+        layer.contentsGravity = .resize
+        // 匹配窗口圆角
+        layer.cornerRadius = 12
+        layer.masksToBounds = true
+
+        return snap
+    }
+
+    // ── 快照动画启动 ──
+
+    private func launchSnapshotAnimation() {
         stopAllAnimations()
         isAnimating = true
 
-        // 🔑 60fps（从 120fps 降低，减少 CPU 占用）
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] _ in
-            self?.updateSpringAnimation()
+        animStartTime = CACurrentMediaTime()
+        animInitialOrigin = frame.origin
+        animInitVelX = springVelocityX
+        animInitVelY = springVelocityY
+
+        NotificationCenter.default.post(name: .windowMovementBegan, object: self)
+
+        // 创建快照，失败时退化到直接移动
+        if let snap = captureSnapshot() {
+            snap.setFrameOrigin(frame.origin)
+            snap.orderFront(nil)
+            snapshotWindow = snap
+
+            // 隐藏真实窗口（保留在窗口列表，不触发状态变化）
+            alphaValue = 0
         }
-        RunLoop.main.add(animationTimer!, forMode: .common)
+
+        // DisplayLink 驱动弹簧曲线
+        if #available(macOS 14.0, *) {
+            let link = self.displayLink(
+                target: self,
+                selector: #selector(displayLinkFired(_:))
+            )
+            link.preferredFrameRateRange = CAFrameRateRange(
+                minimum: 60, maximum: 120, preferred: 120
+            )
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        } else {
+            animationTimer = Timer.scheduledTimer(
+                withTimeInterval: 1.0 / 60.0, repeats: true
+            ) { [weak self] _ in self?.renderFrame() }
+            RunLoop.main.add(animationTimer!, forMode: .common)
+        }
     }
 
-    private func updateSpringAnimation() {
+    @available(macOS 14.0, *)
+    @objc private func displayLinkFired(_ link: CADisplayLink) {
+        renderFrame()
+    }
+
+    /// 每帧：Spring 解析解 → 移动快照窗口（compositing 近零开销）
+    private func renderFrame() {
         guard isAnimating else { return }
 
-        let current = frame.origin
-        let target = animationTarget
+        let t = CACurrentMediaTime() - animStartTime
+        let targetDx = animationTarget.x - animInitialOrigin.x
+        let targetDy = animationTarget.y - animInitialOrigin.y
 
-        let stiffness: CGFloat = 280
-        let damping: CGFloat = 24
-        let mass: CGFloat = 1.0
-        let dt: CGFloat = 1.0 / 60.0  // 🔑 60fps
+        let x = animInitialOrigin.x + currentSpring.value(
+            target: targetDx, initialVelocity: animInitVelX, time: t
+        )
+        let y = animInitialOrigin.y + currentSpring.value(
+            target: targetDy, initialVelocity: animInitVelY, time: t
+        )
 
-        let dx = target.x - current.x
-        let dy = target.y - current.y
+        let pos = NSPoint(x: x, y: y)
 
-        let forceX = stiffness * dx - damping * springVelocityX
-        let forceY = stiffness * dy - damping * springVelocityY
+        // 有快照 → 移动快照（轻量），没有 → 移动真实窗口（降级）
+        if snapshotWindow != nil {
+            snapshotWindow?.setFrameOrigin(pos)
+        } else {
+            setFrameOrigin(pos)
+        }
 
-        springVelocityX += (forceX / mass) * dt
-        springVelocityY += (forceY / mass) * dt
-
-        let newX = current.x + springVelocityX * dt
-        let newY = current.y + springVelocityY * dt
-
-        setFrameOrigin(NSPoint(x: newX, y: newY))
-
-        let distance = hypot(dx, dy)
-        let speed = hypot(springVelocityX, springVelocityY)
-
-        // 🔑 提高收敛阈值，更快结束动画
-        if distance < 0.5 && speed < 5 {
-            setFrameOrigin(target)
-            isAnimating = false
-            animationTimer?.invalidate()
-            animationTimer = nil
+        if t >= Double(currentSpring.settlingDuration) {
+            finishAnimation()
         }
     }
-    
+
+    // ── 动画完成：切回真实窗口 ──
+
+    private func finishAnimation() {
+        // 移动真实窗口到目标
+        setFrameOrigin(animationTarget)
+
+        // 销毁快照、显示真实窗口
+        if snapshotWindow != nil {
+            alphaValue = 1
+            snapshotWindow?.orderOut(nil)
+            snapshotWindow = nil
+        }
+
+        stopAllAnimations()
+    }
+
+    private func stopAllAnimations() {
+        let wasAnimating = isAnimating
+        isAnimating = false
+
+        if #available(macOS 14.0, *) {
+            (displayLink as? CADisplayLink)?.invalidate()
+        }
+        displayLink = nil
+        animationTimer?.invalidate()
+        animationTimer = nil
+
+        // 中断时：快照在哪就把真实窗口放哪
+        if let snap = snapshotWindow {
+            setFrameOrigin(snap.frame.origin)
+            alphaValue = 1
+            snap.orderOut(nil)
+            snapshotWindow = nil
+        }
+
+        if shadowWasEnabled && !hasShadow { hasShadow = true }
+
+        if wasAnimating {
+            NotificationCenter.default.post(name: .windowMovementEnded, object: self)
+        }
+    }
+
     // MARK: - Velocity Calculation
-    
+
     private func calculateReleaseVelocity() -> CGPoint {
         guard positionHistory.count >= 2 else { return .zero }
-        
+
         let recent = positionHistory.suffix(3)
         guard recent.count >= 2 else { return .zero }
-        
+
         let samples = Array(recent)
         let p1 = samples.first!
         let p2 = samples.last!
-        
+
         let dt = p2.time - p1.time
         guard dt > 0.001 else { return .zero }
-        
+
         return CGPoint(
             x: (p2.pos.x - p1.pos.x) / CGFloat(dt),
             y: (p2.pos.y - p1.pos.y) / CGFloat(dt)
         )
     }
-    
+
     // MARK: - Corner Calculation
-    
+
     private func calculateTargetCorner(velocity: CGPoint) -> NSPoint {
         guard let screen = screen ?? NSScreen.main else { return frame.origin }
         let visible = screen.visibleFrame
-        
+
         let projectedX = frame.origin.x + velocity.x * projectionFactor
         let projectedY = frame.origin.y + velocity.y * projectionFactor
-        
+
         let centerX = projectedX + frame.width / 2
         let centerY = projectedY + frame.height / 2
-        
+
         let isRight = centerX > visible.midX
         let isTop = centerY > visible.midY
-        
+
         let margin = cornerMargin
-        
+
         if isTop && isRight {
             return NSPoint(x: visible.maxX - frame.width - margin, y: visible.maxY - frame.height - margin)
         } else if isTop {
@@ -630,9 +683,9 @@ public class SnappablePanel: NSPanel {
             return NSPoint(x: visible.minX + margin, y: visible.minY + margin)
         }
     }
-    
+
     // MARK: - Interactive View Check
-    
+
     private func isInteractiveView(_ view: NSView) -> Bool {
         var v: NSView? = view
         while let current = v {
@@ -642,33 +695,27 @@ public class SnappablePanel: NSPanel {
         }
         return false
     }
-    
-    /// 检查点击位置是否在底部控件区域（进度条等）
+
     private func isInBottomControlsArea(event: NSEvent) -> Bool {
         let locationInWindow = event.locationInWindow
-        // 底部 100px 是控件区域，不应该触发窗口拖拽
-        // 注意：窗口坐标系原点在左下角
         return locationInWindow.y < 100
     }
-    
+
     // MARK: - Public API
-    
+
     public func snapToNearestCorner() {
         animationTarget = calculateTargetCorner(velocity: .zero)
         springVelocityX = 0
         springVelocityY = 0
         startSpringAnimation()
     }
-    
+
     public override var canBecomeKey: Bool { true }
     public override var canBecomeMain: Bool { false }
 
-    // 🔑 点击时激活应用，以便 menu bar 显示 app 菜单
     public override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
-        // 让窗口成为 key window
         makeKey()
-        // 激活应用程序
         if !UserDefaults.standard.bool(forKey: "showInDock") {
             NSApp.setActivationPolicy(.regular)
         }
