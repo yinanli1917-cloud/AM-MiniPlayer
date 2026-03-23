@@ -32,11 +32,15 @@ private struct CacheState {
     var lyricsContainerHeight: CGFloat = 300
 }
 
-/// AMLL 波浪动画状态
+/// AMLL 波浪动画状态（纯计算驱动，无 timer）
 private struct WaveState {
-    var lineTargetIndices: [Int: Int] = [:]
     var lastCurrentIndex: Int = -1
-    var workItems: [DispatchWorkItem] = []
+    /// wave 参数：每行的延迟阈值（秒），在 trigger 时预计算
+    var lineDelays: [Int: Double] = [:]
+    var startTime: Double = 0
+    var oldIndex: Int = 0
+    var newIndex: Int = 0
+    var isActive: Bool = false
 }
 
 // MARK: - LyricsView
@@ -119,7 +123,6 @@ public struct LyricsView: View {
         .onChange(of: musicController.currentTrackTitle) {
             debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             cancelWaveAnimations()
-            wave.lineTargetIndices.removeAll()
             wave.lastCurrentIndex = -1
             cache.heightCacheInvalidated = true
             cache.lineHeights.removeAll()
@@ -403,13 +406,15 @@ public struct LyricsView: View {
     private func lineHeightTracker(index: Int) -> some View {
         GeometryReader { lineGeo in
             Color.clear.onAppear {
-                if cache.lineHeights[index] != lineGeo.size.height {
-                    cache.lineHeights[index] = lineGeo.size.height
+                let h = lineGeo.size.height
+                if abs((cache.lineHeights[index] ?? 0) - h) > 2.0 {
+                    cache.lineHeights[index] = h
                     cache.heightCacheInvalidated = true
                 }
             }
             .onChange(of: lineGeo.size.height) { _, newHeight in
-                if cache.lineHeights[index] != newHeight {
+                // 忽略 ≤2pt 的微小变化（scale 动画引起的抖动）
+                if abs((cache.lineHeights[index] ?? 0) - newHeight) > 2.0 {
                     cache.lineHeights[index] = newHeight
                     cache.heightCacheInvalidated = true
                 }
@@ -417,22 +422,21 @@ public struct LyricsView: View {
         }
     }
 
+    /// 计算每行在 wave 中应跟随的 target index（纯时间计算，无 timer）
+    private func waveTargetIndex(for lineIndex: Int, currentIndex: Int) -> Int {
+        guard wave.isActive else { return currentIndex }
+        guard let delay = wave.lineDelays[lineIndex] else { return wave.newIndex }
+        let elapsed = CACurrentMediaTime() - wave.startTime
+        return elapsed >= delay ? wave.newIndex : wave.oldIndex
+    }
+
     private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
         if scroll.isManualScrolling {
             let frozenTargetIndex = scroll.lockedLineIndex ?? currentIndex
             return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
         } else {
-            let lineTargetIndex = wave.lineTargetIndices[index] ?? currentIndex
-            let accHeight = calculateAccumulatedHeight(upTo: lineTargetIndex)
-            let offset = anchorY - accHeight
-
-            // 仅对当前行附近 ±2 行打日志，避免刷屏
-            if abs(index - currentIndex) <= 2 {
-                DebugLogger.logHiRes("OFFSET",
-                    "L\(index) target=\(lineTargetIndex) accH=\(String(format: "%.1f", accHeight)) " +
-                    "offset=\(String(format: "%.1f", offset))")
-            }
-            return offset
+            let lineTargetIndex = waveTargetIndex(for: index, currentIndex: currentIndex)
+            return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
         }
     }
 
@@ -800,83 +804,61 @@ public struct LyricsView: View {
         cache.heightCacheInvalidated = false
     }
 
-    // MARK: - AMLL 波浪动画
+    // MARK: - AMLL 波浪动画（纯计算驱动）
 
-    /// AMLL 精确复刻波浪动画
-    /// 从可视区顶部（当前行上方 ~3 行）开始，wave 向下扫过整个可视区
-    /// 每行的 position + scale + blur + opacity 全部跟随 wave stagger
-    /// baseDelay=0.05s，过 scrollToIndex 后 /= 1.05（AMLL 源码精确参数）
+    /// AMLL 波浪动画 — 预计算每行延迟，body 每帧重算时自动驱动
+    /// 不用任何 timer/GCD，彻底消除主线程阻塞导致的批量坍缩
     private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
         guard !scroll.isManualScrolling else { return }
         let lyrics = lyricsService.lyrics
         guard !lyrics.isEmpty else { return }
 
-        cancelWaveAnimations()
-
         let indices = renderedIndices
-        let waveStartTime = DebugLogger.hiResNow
-
-        DebugLogger.logHiRes("WAVE", "━━━ trigger \(oldIndex)→\(newIndex) ━━━")
 
         // 快歌（两行间隔 < 1.0s）或 reduceMotion：跳过波浪延迟
         let isFastSong: Bool = {
             guard newIndex > 0, newIndex < lyrics.count, oldIndex >= 0, oldIndex < lyrics.count else { return false }
-            let gap = abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime)
-            DebugLogger.logHiRes("WAVE", "行间距=\(String(format: "%.3f", gap))s \(gap < 1.0 ? "→快歌跳过" : "")")
-            return gap < 1.0
+            return abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime) < 1.0
         }()
 
         if reduceMotion || isFastSong {
-            for lineIndex in indices { wave.lineTargetIndices[lineIndex] = newIndex }
+            wave.isActive = false
+            wave.lineDelays.removeAll()
+            wave.oldIndex = newIndex
+            wave.newIndex = newIndex
             return
         }
 
-        // AMLL: wave 从可视区顶部开始，当前行在 wave 中间位置
-        // 锚点在 24% 处 → 上方约 3 行可见
+        // 预计算每行的延迟阈值
         let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
         var delay: Double = 0
         var baseDelay: Double = 0.05
+        var lineDelays: [Int: Double] = [:]
 
-        // 可视区顶部之上：即时更新（不可见，无需动画）
+        // 可视区上方：延迟 = 0（即时切换）
         for i in 0..<startPosition {
-            wave.lineTargetIndices[indices[i]] = newIndex
+            lineDelays[indices[i]] = 0
         }
 
-        // 从可视区顶部向下：wave stagger 扫过整个屏幕
         for i in startPosition..<indices.count {
             let lineIndex = indices[i]
-
-            if delay < 0.001 {
-                // 第一行无延迟，直接启动 spring
-                wave.lineTargetIndices[lineIndex] = newIndex
-                DebugLogger.logHiRes("WAVE", "L\(lineIndex) 即时 delay=0ms")
-            } else {
-                let scheduledDelay = delay
-                let workItem = DispatchWorkItem { [self] in
-                    guard !scroll.isManualScrolling else { return }
-                    let actualElapsed = DebugLogger.hiResNow - waveStartTime
-                    let drift = (actualElapsed - scheduledDelay) * 1000  // ms
-                    DebugLogger.logHiRes("WAVE",
-                        "L\(lineIndex) 预定=\(String(format: "%.1f", scheduledDelay*1000))ms " +
-                        "实际=\(String(format: "%.1f", actualElapsed*1000))ms " +
-                        "漂移=\(String(format: "%+.1f", drift))ms")
-                    wave.lineTargetIndices[lineIndex] = newIndex
-                }
-                wave.workItems.append(workItem)
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-            }
-
+            lineDelays[lineIndex] = delay
             delay += baseDelay
-            // AMLL: 过了 scrollToIndex 后每行递减，波浪越远越柔和
             if lineIndex >= newIndex { baseDelay /= 1.05 }
         }
+
+        wave.lineDelays = lineDelays
+        wave.oldIndex = oldIndex >= 0 ? oldIndex : newIndex
+        wave.newIndex = newIndex
+        wave.startTime = CACurrentMediaTime()
+        wave.isActive = true
     }
 
     private func cancelWaveAnimations() {
-        for workItem in wave.workItems { workItem.cancel() }
-        wave.workItems.removeAll()
+        wave.isActive = false
+        wave.lineDelays.removeAll()
     }
 }
 
