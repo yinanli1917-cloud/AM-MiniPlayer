@@ -141,7 +141,7 @@ Config files: `Package.swift`, `build_app.sh`, `Resources/AppIcon.icns`
 /postmortem onboarding    # Analyze historical commits
 ```
 
-Existing postmortems: 001 (Section recursion), 002 (Page switch state), 003 (Artwork concurrency), 004 (Lyrics spacing), 005 (MetadataResolver batch regression), 006 (romanized→CJK mismatch)
+Existing postmortems: 001 (Section recursion), 002 (Page switch state), 003 (Artwork concurrency), 004 (Lyrics spacing), 005 (MetadataResolver batch regression), 006 (romanized→CJK mismatch), 007 (Chinese translation leak trilogy)
 
 ## Compact Instructions
 

@@ -46,6 +46,8 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 | POSTM-003 | 封面加载并发阻塞导致 UI 卡顿 | 2025-12-17 | Architecture | P0 | ✅ 已完成 |
 | POSTM-004 | 歌词视图手动滚动和间距问题 | 2025-12-20 | Architecture | P1 | ✅ 已完成 |
 | POSTM-005 | MetadataResolver 多轮优化引发 9 首歌批量回归 | 2026-03-16 | Process | P1 | ✅ 已完成 |
+| POSTM-006 | romanized→CJK 路径 ASCII→ASCII 错配 | 2026-03-18 | Bug | P1 | ✅ 已完成 |
+| POSTM-007 | Chinese Translation Leak — Three Root Causes | 2026-03-22 | Bug | P1 | ✅ 已完成 |
 
 ---
 
@@ -58,7 +60,8 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - [POSTM-004](./004-lyrics-scroll-spacing.md) - 歌词视图滚动和间距
 
 #### 🐛 Bug (代码缺陷)
-- 待填充
+- [POSTM-006](./006-romanized-cjk-false-positive.md) - romanized→CJK ASCII→ASCII 错配
+- [POSTM-007](./007-chinese-translation-leak-trilogy.md) - Chinese Translation Leak (3 root causes)
 
 #### 📊 Scale (性能/资源问题)
 - 待填充
@@ -84,6 +87,8 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - 过早简化（Premature Simplification）- POSTM-004: 固定行高无法支持动态内容
 - 缺少生命周期管理 - POSTM-002: SwiftUI 没有提供视图生命周期钩子
 - 无覆盖率简化（Simplification Without Coverage）- POSTM-005: 移除匹配优先级前没有大规模回归测试
+- 共享 Unicode 范围需要上下文 - POSTM-007: CJK Unified 不等于"中文"，日文汉字需假名上下文区分
+- 安全策略也有副作用 - POSTM-007: "不丢弃任何行"导致翻译泄漏持续存在
 
 ---
 
