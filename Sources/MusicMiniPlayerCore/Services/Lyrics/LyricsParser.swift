@@ -327,7 +327,7 @@ public final class LyricsParser {
     public func processLyrics(_ rawLyrics: [LyricLine]) -> (lyrics: [LyricLine], firstRealLyricIndex: Int) {
         guard !rawLyrics.isEmpty else { return ([], 0) }
 
-        // 如果歌词只有1-2行且包含纯音乐提示，返回空
+        // 纯音乐检测
         if rawLyrics.count <= 2 {
             for line in rawLyrics {
                 let text = line.text.trimmingCharacters(in: .whitespaces)
@@ -337,62 +337,12 @@ public final class LyricsParser {
             }
         }
 
-        // 过滤元信息行
-        var filteredLyrics: [LyricLine] = []
-        var firstRealLyricStartTime: TimeInterval = 0
-        var foundFirstRealLyric = false
-        var consecutiveColonLines = 0
-        var colonRegionEndTime: TimeInterval = 0
-
-        // 检测冒号区域
-        var colonCountInFirstLines = 0
-        for i in 0..<min(5, rawLyrics.count) {
-            let trimmed = rawLyrics[i].text.trimmingCharacters(in: .whitespaces)
-            if containsColonMetadata(trimmed) {
-                colonCountInFirstLines += 1
-            }
-        }
-        let isColonMetadataRegion = colonCountInFirstLines >= 2
-
-        for line in rawLyrics {
-            let trimmed = line.text.trimmingCharacters(in: .whitespaces)
-            let duration = line.endTime - line.startTime
-            let hasColon = containsColonMetadata(trimmed)
-            let hasTitleSeparator = trimmed.contains(" - ") && trimmed.count < 50
-
-            let isPureSymbolLine = isPureSymbols(trimmed)
-            let isMetadataKeyword = isMetadataKeywordLine(trimmed)
-
-            if !foundFirstRealLyric && hasColon {
-                consecutiveColonLines += 1
-                if consecutiveColonLines >= 2 || isColonMetadataRegion {
-                    colonRegionEndTime = line.endTime + 5.0
-                }
-            } else if !foundFirstRealLyric && !hasColon && !hasTitleSeparator {
-                consecutiveColonLines = 0
-            }
-
-            let isMetadata = !foundFirstRealLyric && (
-                trimmed.isEmpty || isPureSymbolLine || hasTitleSeparator || isMetadataKeyword ||
-                (hasColon && line.startTime < colonRegionEndTime) ||
-                (hasColon && duration < 10.0) ||
-                (!hasColon && duration < 2.0 && trimmed.count < 10)
-            )
-
-            if isMetadata {
-                continue
-            } else {
-                if !foundFirstRealLyric {
-                    foundFirstRealLyric = true
-                    firstRealLyricStartTime = line.startTime
-                }
-                filteredLyrics.append(line)
-            }
-        }
+        // 🔑 统一元信息剥离（任意位置，不限开头）
+        var filteredLyrics = stripMetadataLines(rawLyrics)
+        let firstRealLyricStartTime = filteredLyrics.first?.startTime ?? rawLyrics.first?.startTime ?? 0
 
         if filteredLyrics.isEmpty {
             filteredLyrics = rawLyrics
-            firstRealLyricStartTime = rawLyrics.first?.startTime ?? 0
         }
 
         // 修复 endTime
@@ -421,6 +371,236 @@ public final class LyricsParser {
         // 插入前奏占位符
         let loadingLine = LyricLine(text: "⋯", startTime: 0, endTime: firstRealLyricStartTime)
         return ([loadingLine] + filteredLyrics, 1)
+    }
+
+    // MARK: - 元信息剥离（merge 前调用）
+
+    /// 剥离任意位置的元信息行（作词/作曲/编曲/演唱等）
+    /// 🔑 必须在 mergeLyricsWithTranslation 之前调用，否则元信息行会吃掉翻译时间戳
+    public func stripMetadataLines(_ lines: [LyricLine]) -> [LyricLine] {
+        lines.filter { line in
+            let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return false }
+            // 高置信度关键词匹配（任意位置生效）
+            if isMetadataKeywordLine(trimmed) { return false }
+            // 标题分隔符行（"Song - Artist"，含 " - " 且出现在歌曲开头 ≤1s）
+            // QQ/NetEase 常在 0s 放 "Song Title (ver.) - Artist" 的元信息行
+            if trimmed.contains(" - ") && line.startTime <= 1.0 { return false }
+            // 纯符号行
+            if isPureSymbols(trimmed) { return false }
+            return true
+        }
+    }
+
+    /// 检测并提取混排翻译（韩/英+中 交替出现在相邻时间戳）
+    /// 将中文行从主歌词移到前一行的 translation 属性，返回 (处理后歌词, 是否检测到混排)
+    public func extractInterleavedTranslations(_ lines: [LyricLine]) -> (lyrics: [LyricLine], detected: Bool) {
+        guard lines.count > 1 else { return (lines, false) }
+
+        // Pass 1: 标记"纯中文翻译行"（含汉字、无韩文假名、非纯 ASCII）
+        var isTranslationLine = Array(repeating: false, count: lines.count)
+        var pairCount = 0
+        for i in 0..<(lines.count - 1) {
+            let gap = abs(lines[i + 1].startTime - lines[i].startTime)
+            guard gap < 2.0 else { continue }
+            let curChinese = isSolelyChineseLine(lines[i].text)
+            let nextChinese = isSolelyChineseLine(lines[i + 1].text)
+            // 一行纯中文、另一行非纯中文 → 中文行是翻译
+            if curChinese && !nextChinese { isTranslationLine[i] = true; pairCount += 1 }
+            else if !curChinese && nextChinese { isTranslationLine[i + 1] = true; pairCount += 1 }
+        }
+
+        guard pairCount >= 3 else { return (lines, false) }
+
+        // Pass 2: 中文行附着到最近的非中文行作为 translation
+        var result: [LyricLine] = []
+        for i in 0..<lines.count {
+            if isTranslationLine[i] { continue }
+            var line = lines[i]
+            // 检查下一行是否是翻译
+            if i + 1 < lines.count && isTranslationLine[i + 1] && line.translation == nil {
+                line = LyricLine(text: line.text, startTime: line.startTime, endTime: line.endTime,
+                                 words: line.words, translation: lines[i + 1].text)
+            }
+            // 检查前一行是否是未被认领的翻译（中文行在原文行前面的情况）
+            if i > 0 && isTranslationLine[i - 1] && line.translation == nil {
+                let prevClaimed = (i >= 2 && !isTranslationLine[i - 2])
+                if !prevClaimed {
+                    line = LyricLine(text: line.text, startTime: line.startTime, endTime: line.endTime,
+                                     words: line.words, translation: lines[i - 1].text)
+                }
+            }
+            result.append(line)
+        }
+        return (result, true)
+    }
+
+    /// 判断是否为"纯中文行"（含汉字，无韩文/假名，非纯 ASCII）
+    private func isSolelyChineseLine(_ text: String) -> Bool {
+        LanguageUtils.containsChinese(text) &&
+        !LanguageUtils.containsKorean(text) &&
+        !LanguageUtils.containsJapanese(text) &&
+        !LanguageUtils.isPureASCII(text)
+    }
+
+    /// 通用中文翻译剥离：对非中文歌曲，将主歌词行中的中文内容移到 .translation
+    /// 处理三种场景：
+    /// 1. 纯中文行 → 附着到相邻非中文行的 .translation
+    /// 2. 拉丁/韩/日 + 中文同行 → 拆分，中文部分移到 .translation
+    /// 3. 无法配对的纯中文行 → 丢弃（确认为翻译泄漏）
+    /// 安全规则：含日文假名的行不拆分（CJK 字符是日文汉字，不是中文翻译）
+    public func stripChineseTranslations(_ lines: [LyricLine]) -> [LyricLine] {
+        guard lines.count > 3 else { return lines }
+
+        // 统计含中文的行数，≥3 行才触发（避免误伤正常中文歌）
+        let chineseLineCount = lines.filter { lineContainsChinese($0.text) }.count
+        let nonChineseLineCount = lines.filter {
+            let t = $0.text.trimmingCharacters(in: .whitespaces)
+            return !t.isEmpty && !lineContainsChinese(t)
+        }.count
+
+        // 非中文行少于中文行 → 中文歌，不处理
+        guard chineseLineCount >= 3 && nonChineseLineCount >= chineseLineCount else { return lines }
+
+        // Pass 1: 标记纯中文行 + 拆分混排行
+        var processed: [(line: LyricLine, isPureChinese: Bool)] = []
+        for line in lines {
+            let text = line.text.trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty, line.translation == nil, lineContainsChinese(text) else {
+                processed.append((line, false))
+                continue
+            }
+
+            // Lines with Japanese kana: split at kana→CJK boundary instead of stripping all CJK
+            if LanguageUtils.containsJapanese(text) {
+                let (jpPart, cnPart) = splitJapaneseAndChinese(text)
+                if cnPart.count >= 2 && jpPart.count >= 2 {
+                    processed.append((LyricLine(
+                        text: jpPart, startTime: line.startTime, endTime: line.endTime,
+                        words: line.words, translation: cnPart
+                    ), false))
+                } else {
+                    processed.append((line, false))
+                }
+                continue
+            }
+
+            let nonCN = stripChineseChars(text)
+            let cnPart = extractChineseChars(text)
+
+            if nonCN.count >= 2 && cnPart.count >= 2 {
+                // Mixed line → split (Korean+Chinese, English+Chinese)
+                processed.append((LyricLine(
+                    text: nonCN, startTime: line.startTime, endTime: line.endTime,
+                    words: line.words, translation: cnPart
+                ), false))
+            } else if isSolelyChineseLine(text) {
+                processed.append((line, true))
+            } else {
+                processed.append((line, false))
+            }
+        }
+
+        // Pass 2: pair pure Chinese lines with adjacent non-Chinese lines
+        var result: [LyricLine] = []
+        var skipIndices = Set<Int>()
+
+        for i in 0..<processed.count {
+            if skipIndices.contains(i) { continue }
+            let (line, isPureCN) = processed[i]
+
+            if !isPureCN {
+                // Non-Chinese line: claim next pure Chinese line as translation
+                var finalLine = line
+                if finalLine.translation == nil,
+                   i + 1 < processed.count, processed[i + 1].isPureChinese {
+                    finalLine = LyricLine(
+                        text: finalLine.text, startTime: finalLine.startTime,
+                        endTime: finalLine.endTime, words: finalLine.words,
+                        translation: processed[i + 1].line.text
+                    )
+                    skipIndices.insert(i + 1)
+                }
+                result.append(finalLine)
+            } else {
+                // Pure Chinese line not claimed by previous line → drop it
+                // It's a confirmed translation leak (song is non-Chinese, guard passed above)
+                continue
+            }
+        }
+
+        return result
+    }
+
+    /// Split Japanese+Chinese mixed text at the kana→pure-CJK boundary.
+    /// "もう知っている我 都已了然" → ("もう知っている", "我 都已了然")
+    /// Heuristic: split right after the last kana character.
+    /// CJK chars between kana are kanji; CJK chars after all kana ended are Chinese.
+    private func splitJapaneseAndChinese(_ text: String) -> (japanese: String, chinese: String) {
+        let scalars = Array(text.unicodeScalars)
+        guard !scalars.isEmpty else { return (text, "") }
+
+        // Find the last kana position
+        var lastKanaIdx = -1
+        for (i, s) in scalars.enumerated() {
+            let v = s.value
+            let isKana = (0x3040...0x309F).contains(v) || (0x30A0...0x30FF).contains(v)
+            if isKana { lastKanaIdx = i }
+        }
+
+        guard lastKanaIdx >= 0 else { return (text, "") }
+
+        // Split right after the last kana — everything after is Chinese
+        let splitIdx = lastKanaIdx + 1
+        let jpScalars = scalars[0..<splitIdx]
+        let cnScalars = scalars[splitIdx...]
+
+        let jp = String(String.UnicodeScalarView(jpScalars)).trimmingCharacters(in: .whitespaces)
+        let cn = String(String.UnicodeScalarView(cnScalars)).trimmingCharacters(in: .whitespaces)
+
+        return (jp, cn)
+    }
+
+    /// 检测文本是否包含中文字符（不含日文假名）
+    private func lineContainsChinese(_ text: String) -> Bool {
+        text.unicodeScalars.contains { v in
+            (0x4E00...0x9FFF).contains(v.value) || (0x3400...0x4DBF).contains(v.value)
+        }
+    }
+
+    /// 从文本中提取非中文部分（保留拉丁、韩文、日文假名、数字、标点）
+    private func stripChineseChars(_ text: String) -> String {
+        var result = ""
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            let isChinese = (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v)
+            if !isChinese {
+                result.append(Character(scalar))
+            }
+        }
+        return result.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
+    }
+
+    /// 从文本中提取中文部分
+    private func extractChineseChars(_ text: String) -> String {
+        var result = ""
+        var inChinese = false
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            let isChinese = (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v)
+            let isPunct = (0x3000...0x303F).contains(v) || (0xFF00...0xFFEF).contains(v)
+                || scalar == "，" || scalar == "。" || scalar == "！" || scalar == "？"
+            if isChinese {
+                inChinese = true
+                result.append(Character(scalar))
+            } else if inChinese && (isPunct || scalar == " ") {
+                result.append(Character(scalar))
+            } else if inChinese && !isChinese {
+                inChinese = false
+            }
+        }
+        return result.trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - 翻译合并
@@ -498,12 +678,22 @@ public final class LyricsParser {
         return !hasLetters
     }
 
+    /// 检测元信息关键词行 或 泛化的信用行格式（"标签：名字/名字"）
     private func isMetadataKeywordLine(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
-        let keywords = ["词", "曲", "编曲", "作曲", "作词", "翻译", "LRC", "lrc",
-                       "Lyrics", "Music", "Arrangement", "Composer", "Lyricist"]
-        for keyword in keywords {
-            if trimmed.hasPrefix(keyword) || trimmed.contains(keyword + "：") || trimmed.contains(keyword + ":") {
+
+        // 泛化检测：短标签 + 冒号 + 名字分隔符（/ ; ,）
+        // 匹配 "Composed by：A/B/C"、"词：无"、"Producer: xxx" 等任意信用格式
+        for sep in ["：", ": "] {
+            guard let range = trimmed.range(of: sep) else { continue }
+            let label = String(trimmed[trimmed.startIndex..<range.lowerBound])
+            let value = String(trimmed[range.upperBound...])
+            // 标签短（≤15字符）+ 值非空 + 值像信用（含分隔符 或 短标签是 CJK）
+            guard label.count <= 15, !value.isEmpty else { continue }
+            let labelTrimmed = label.trimmingCharacters(in: .whitespaces)
+            let hasSeparators = value.contains("/") || value.contains(";") || value.contains("；")
+            let isCJKLabel = LanguageUtils.containsCJK(labelTrimmed) && labelTrimmed.count <= 4
+            if hasSeparators || isCJKLabel || value.count <= 20 {
                 return true
             }
         }

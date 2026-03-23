@@ -47,7 +47,8 @@ func testSong(
     title: String,
     artist: String,
     duration: TimeInterval,
-    expectation: TestExpectation?
+    expectation: TestExpectation?,
+    translationEnabled: Bool = false
 ) async -> VerifyResult {
     let start = CFAbsoluteTimeGetCurrent()
     let fetcher = LyricsFetcher.shared
@@ -55,7 +56,7 @@ func testSong(
     // ── 并行查询所有源 ──
     let fetchResults = await fetcher.fetchAllSources(
         title: title, artist: artist,
-        duration: duration, translationEnabled: false
+        duration: duration, translationEnabled: translationEnabled
     )
 
     // ── 选择最佳 ──
@@ -119,6 +120,80 @@ func testSong(
         warnings: warnings,
         allSources: allSources
     )
+}
+
+/// 测试单首歌 + 返回歌词数组（避免 benchmark 重复获取）
+func testSongWithLyrics(
+    id: String,
+    title: String,
+    artist: String,
+    duration: TimeInterval,
+    expectation: TestExpectation?,
+    translationEnabled: Bool = false
+) async -> (result: VerifyResult, lyrics: [LyricLine]) {
+    let start = CFAbsoluteTimeGetCurrent()
+    let fetcher = LyricsFetcher.shared
+
+    let fetchResults = await fetcher.fetchAllSources(
+        title: title, artist: artist,
+        duration: duration, translationEnabled: translationEnabled
+    )
+
+    let bestLyrics = fetcher.selectBest(from: fetchResults)
+    let selectedResult = fetchResults.first { result in
+        guard let firstBest = bestLyrics?.first,
+              let firstResult = result.lyrics.first else { return false }
+        return firstBest.id == firstResult.id
+    }
+
+    let elapsed = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+    let knownSources = ["AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
+    let allSources: [SourceResult] = knownSources.map { name in
+        if let r = fetchResults.first(where: { $0.source == name }) {
+            return SourceResult(name: name, found: true, score: round(r.score * 10) / 10, lines: r.lyrics.count)
+        }
+        return SourceResult(name: name, found: false, score: 0, lines: 0)
+    }
+
+    let lyrics = bestLyrics ?? []
+    let firstReal = lyrics.first {
+        let t = $0.text.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
+    }
+    let hasTranslation = lyrics.contains { $0.hasTranslation }
+    let hasSyllable = lyrics.contains { $0.hasSyllableSync }
+
+    var failures: [String] = []
+    if let exp = expectation {
+        failures = checkExpectation(
+            exp, source: selectedResult?.source,
+            lyrics: lyrics, firstReal: firstReal
+        )
+    }
+
+    let warnings = validateContent(
+        title: title, artist: artist,
+        source: selectedResult?.source,
+        score: selectedResult?.score,
+        lyrics: lyrics
+    )
+
+    let result = VerifyResult(
+        id: id, title: title, artist: artist,
+        duration: Int(duration), passed: failures.isEmpty,
+        selectedSource: selectedResult?.source,
+        selectedScore: selectedResult?.score,
+        lyricsLineCount: lyrics.count,
+        hasTranslation: hasTranslation,
+        hasSyllableSync: hasSyllable,
+        firstRealLine: firstReal?.text,
+        elapsedMs: elapsed,
+        failures: failures,
+        warnings: warnings,
+        allSources: allSources
+    )
+
+    return (result, lyrics)
 }
 
 // =========================================================================

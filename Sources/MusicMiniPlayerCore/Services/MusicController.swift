@@ -81,7 +81,7 @@ public class MusicController: ObservableObject {
 
     // ScriptingBridge 队列：核心操作(高优先级) / 封面获取(后台串行)
     let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
-    let artworkFetchQueue = DispatchQueue(label: "com.nanoPod.artworkFetch", qos: .utility)
+    // artworkFetchQueue removed — all SB calls must go through scriptingBridgeQueue
 
     /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
     var artworkFetchingForKey: String?

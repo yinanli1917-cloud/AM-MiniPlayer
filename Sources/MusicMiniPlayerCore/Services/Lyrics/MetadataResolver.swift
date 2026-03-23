@@ -46,17 +46,6 @@ public final class MetadataResolver {
         }
 
         if let localizedMetadata = await fetchLocalizedMetadata(title: title, artist: artist, duration: duration) {
-            let inputIsPureASCII = LanguageUtils.isPureASCII(title)
-            let resultHasCJK = LanguageUtils.containsJapanese(localizedMetadata.title) ||
-                               LanguageUtils.containsKorean(localizedMetadata.title) ||
-                               LanguageUtils.containsChinese(localizedMetadata.title)
-            let isLikelyEnglish = LanguageUtils.isLikelyEnglishArtist(artist)
-
-            if inputIsPureASCII && resultHasCJK && isLikelyEnglish {
-                DebugLogger.log("MetadataResolver", "⚠️ 拒绝 CJK 替换: '\(artist)' 是常见英语艺术家")
-                return (title, artist)
-            }
-
             DebugLogger.log("MetadataResolver", "✅ 多区域解析成功: '\(localizedMetadata.title)' by '\(localizedMetadata.artist)' (region: \(localizedMetadata.region), Δ\(String(format: "%.2f", localizedMetadata.durationDiff))s)")
             return (localizedMetadata.title, localizedMetadata.artist)
         }
@@ -79,14 +68,13 @@ public final class MetadataResolver {
         let cnResult = await cnTask
         let localizedResult = await localizedTask
 
-        // 多区域结果过滤（已知英文艺术家拒绝 CJK 替换，避免翻唱版覆盖原版）
+        // 🔑 输出验证：多区域返回 CJK 标题但 CN 完全无匹配 → 大概率误配
+        // 泛化防线：不猜输入国籍，靠 CN 交叉验证（真正的日/韩歌 CN 也能搜到）
         var localized: (title: String, artist: String)?
         if let loc = localizedResult {
-            let resultHasCJK = LanguageUtils.containsJapanese(loc.title) ||
-                               LanguageUtils.containsKorean(loc.title) ||
-                               LanguageUtils.containsChinese(loc.title)
-            if resultHasCJK && LanguageUtils.isLikelyEnglishArtist(artist) {
-                DebugLogger.log("MetadataResolver", "⚠️ 拒绝 CJK 替换: '\(artist)' 是已知英语艺术家")
+            let resultTitleHasCJK = LanguageUtils.containsCJK(loc.title)
+            if resultTitleHasCJK && cnResult == nil {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配）: '\(loc.title)' by '\(loc.artist)'")
             } else {
                 DebugLogger.log("MetadataResolver", "🌏 多区域解析: '\(loc.title)' by '\(loc.artist)' (region: \(loc.region))")
                 localized = (loc.title, loc.artist)

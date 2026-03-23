@@ -145,44 +145,15 @@ public enum LanguageUtils {
             regions.append("JP")
         }
 
-        // 🔑 纯 ASCII 非已知英文艺术家 → 尝试日韩区域（罗马字名）
-        if regions.isEmpty && isPureASCII(artist) && !isLikelyEnglishArtist(artist) {
+        // 🔑 纯 ASCII → 尝试日韩区域（可能是罗马字名）
+        // 宽进严出：不猜输入国籍，MetadataResolver 靠 CN 交叉验证过滤误配
+        if regions.isEmpty && isPureASCII(artist) {
             regions.append(contentsOf: ["JP", "KR"])
         }
 
         return regions
     }
 
-    /// 启发式判断是否为已知英文艺术家
-    /// 🔑 只用高置信度信号（已知列表 + 英文词缀），不猜单词名
-    /// 单词名无法区分英文乐队（Jungle）和日文艺术家（EPO），安全性靠匹配验证保障
-    public static func isLikelyEnglishArtist(_ artist: String) -> Bool {
-        let lowercased = artist.lowercased()
-
-        // 英文词缀（高置信度：The Beatles, DJ Tiesto, MC Hammer）
-        let englishPrefixes = ["the ", "dj ", "mc "]
-        let englishSuffixes = [" band", " brothers", " sisters", " boys", " girls",
-                              " orchestra", " choir", " ensemble", " trio", " quartet"]
-
-        for prefix in englishPrefixes {
-            if lowercased.hasPrefix(prefix) { return true }
-        }
-        for suffix in englishSuffixes {
-            if lowercased.hasSuffix(suffix) { return true }
-        }
-
-        // 已知英文艺术家（高置信度）
-        let knownEnglishArtists = [
-            "taylor swift", "ed sheeran", "adele", "beyonce", "drake",
-            "coldplay", "maroon 5", "imagine dragons", "one republic",
-            "bruno mars", "lady gaga", "justin bieber", "ariana grande",
-            "the weeknd", "billie eilish", "dua lipa", "harry styles",
-            "post malone", "travis scott", "bad bunny", "olivia rodrigo",
-            "doja cat", "lil nas x", "twenty one pilots", "panic at the disco"
-        ]
-
-        return knownEnglishArtists.contains { lowercased.contains($0) }
-    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

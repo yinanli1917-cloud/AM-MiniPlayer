@@ -315,9 +315,9 @@ extension MusicController {
             return cached
         }
 
-        // 🔑 串行队列保证 ScriptingBridge 线程安全
+        // 🔑 必须用 scriptingBridgeQueue — SB 不是线程安全的，双队列并发会 PAC crash
         let image: NSImage? = await withCheckedContinuation { continuation in
-            artworkFetchQueue.async { [weak self] in
+            scriptingBridgeQueue.async { [weak self] in
                 guard let self = self else {
                     continuation.resume(returning: nil)
                     return

@@ -1,0 +1,1402 @@
+[
+  {
+    "id": "BM-EN-01",
+    "title": "Shape of You",
+    "artist": "Ed Sheeran",
+    "duration": 234,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-02",
+    "title": "Blinding Lights",
+    "artist": "The Weeknd",
+    "duration": 200,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-03",
+    "title": "Bohemian Rhapsody",
+    "artist": "Queen",
+    "duration": 355,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-04",
+    "title": "Hotel California",
+    "artist": "Eagles",
+    "duration": 391,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-05",
+    "title": "Bad Guy",
+    "artist": "Billie Eilish",
+    "duration": 194,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-06",
+    "title": "Someone Like You",
+    "artist": "Adele",
+    "duration": 285,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-07",
+    "title": "Rolling in the Deep",
+    "artist": "Adele",
+    "duration": 228,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-08",
+    "title": "Uptown Funk",
+    "artist": "Mark Ronson",
+    "duration": 270,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-09",
+    "title": "Thinking Out Loud",
+    "artist": "Ed Sheeran",
+    "duration": 281,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-10",
+    "title": "Stay",
+    "artist": "The Kid LAROI",
+    "duration": 141,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-11",
+    "title": "Shake It Off",
+    "artist": "Taylor Swift",
+    "duration": 219,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-EN-12",
+    "title": "Anti-Hero",
+    "artist": "Taylor Swift",
+    "duration": 200,
+    "region": "en",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-01",
+    "title": "Dynamite",
+    "artist": "BTS",
+    "duration": 199,
+    "region": "ko",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-02",
+    "title": "Butter",
+    "artist": "BTS",
+    "duration": 165,
+    "region": "ko",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-03",
+    "title": "Spring Day",
+    "artist": "BTS",
+    "duration": 285,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-04",
+    "title": "How You Like That",
+    "artist": "BLACKPINK",
+    "duration": 183,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-05",
+    "title": "Hype Boy",
+    "artist": "NewJeans",
+    "duration": 179,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-06",
+    "title": "Supernatural",
+    "artist": "NewJeans",
+    "duration": 186,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-07",
+    "title": "Love Lee",
+    "artist": "AKMU",
+    "duration": 205,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-08",
+    "title": "TOMBOY",
+    "artist": "(G)I-DLE",
+    "duration": 177,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-09",
+    "title": "Next Level",
+    "artist": "aespa",
+    "duration": 236,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-10",
+    "title": "God's Menu",
+    "artist": "Stray Kids",
+    "duration": 203,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-11",
+    "title": "LILAC",
+    "artist": "IU",
+    "duration": 214,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-KO-12",
+    "title": "Celebrity",
+    "artist": "IU",
+    "duration": 195,
+    "region": "ko",
+    "expectedLyricsLang": "Korean",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-01",
+    "title": "夜に駆ける",
+    "artist": "YOASOBI",
+    "duration": 258,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-02",
+    "title": "アイドル",
+    "artist": "YOASOBI",
+    "duration": 232,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-03",
+    "title": "うっせぇわ",
+    "artist": "Ado",
+    "duration": 209,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-04",
+    "title": "踊",
+    "artist": "Ado",
+    "duration": 191,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-05",
+    "title": "紅蓮華",
+    "artist": "LiSA",
+    "duration": 234,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-06",
+    "title": "炎",
+    "artist": "LiSA",
+    "duration": 272,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-07",
+    "title": "Lemon",
+    "artist": "米津玄師",
+    "duration": 254,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-08",
+    "title": "Pretender",
+    "artist": "Official髭男dism",
+    "duration": 327,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-09",
+    "title": "残酷な天使のテーゼ",
+    "artist": "高橋洋子",
+    "duration": 264,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-10",
+    "title": "前前前世",
+    "artist": "RADWIMPS",
+    "duration": 269,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-11",
+    "title": "すずめ",
+    "artist": "RADWIMPS",
+    "duration": 259,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-JA-12",
+    "title": "ドライフラワー",
+    "artist": "優里",
+    "duration": 285,
+    "region": "ja",
+    "expectedLyricsLang": "Japanese",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-01",
+    "title": "晴天",
+    "artist": "周杰伦",
+    "duration": 269,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-02",
+    "title": "七里香",
+    "artist": "周杰伦",
+    "duration": 299,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-03",
+    "title": "青花瓷",
+    "artist": "周杰伦",
+    "duration": 240,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-04",
+    "title": "稻香",
+    "artist": "周杰伦",
+    "duration": 223,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-05",
+    "title": "那些年",
+    "artist": "胡夏",
+    "duration": 263,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-06",
+    "title": "光年之外",
+    "artist": "G.E.M.邓紫棋",
+    "duration": 235,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-07",
+    "title": "起风了",
+    "artist": "买辣椒也用券",
+    "duration": 325,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-08",
+    "title": "漠河舞厅",
+    "artist": "柳爽",
+    "duration": 271,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-09",
+    "title": "可惜没如果",
+    "artist": "林俊杰",
+    "duration": 312,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-10",
+    "title": "孤勇者",
+    "artist": "陈奕迅",
+    "duration": 261,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-11",
+    "title": "富士山下",
+    "artist": "陈奕迅",
+    "duration": 280,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ZH-12",
+    "title": "泡沫",
+    "artist": "G.E.M.邓紫棋",
+    "duration": 270,
+    "region": "zh",
+    "expectedLyricsLang": "Chinese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-01",
+    "title": "Despacito",
+    "artist": "Luis Fonsi",
+    "duration": 229,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-02",
+    "title": "La Bicicleta",
+    "artist": "Carlos Vives",
+    "duration": 218,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-03",
+    "title": "Hips Don't Lie",
+    "artist": "Shakira",
+    "duration": 218,
+    "region": "es",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-04",
+    "title": "Vivir Mi Vida",
+    "artist": "Marc Anthony",
+    "duration": 279,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-05",
+    "title": "Me Gustas Tú",
+    "artist": "Manu Chao",
+    "duration": 234,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-06",
+    "title": "Bailando",
+    "artist": "Enrique Iglesias",
+    "duration": 250,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-07",
+    "title": "Danza Kuduro",
+    "artist": "Don Omar",
+    "duration": 199,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-08",
+    "title": "Waka Waka (This Time for Africa)",
+    "artist": "Shakira",
+    "duration": 212,
+    "region": "es",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-09",
+    "title": "Bzrp Music Sessions, Vol. 53",
+    "artist": "Bizarrap",
+    "duration": 218,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-ES-10",
+    "title": "Gasolina",
+    "artist": "Daddy Yankee",
+    "duration": 192,
+    "region": "es",
+    "expectedLyricsLang": "Spanish",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-01",
+    "title": "Tum Hi Ho",
+    "artist": "Arijit Singh",
+    "duration": 262,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-02",
+    "title": "Kal Ho Naa Ho",
+    "artist": "Sonu Nigam",
+    "duration": 322,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-03",
+    "title": "Tere Bina",
+    "artist": "A.R. Rahman",
+    "duration": 312,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-04",
+    "title": "Chaiyya Chaiyya",
+    "artist": "Sukhwinder Singh",
+    "duration": 366,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-05",
+    "title": "Jai Ho",
+    "artist": "A.R. Rahman",
+    "duration": 324,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-06",
+    "title": "Kun Faya Kun",
+    "artist": "A.R. Rahman",
+    "duration": 467,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-07",
+    "title": "Kesariya",
+    "artist": "Arijit Singh",
+    "duration": 268,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-08",
+    "title": "Chaleya",
+    "artist": "Arijit Singh",
+    "duration": 226,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-09",
+    "title": "Apna Bana Le",
+    "artist": "Arijit Singh",
+    "duration": 262,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-HI-10",
+    "title": "Rang De Basanti",
+    "artist": "A.R. Rahman",
+    "duration": 355,
+    "region": "hi",
+    "expectedLyricsLang": "Hindi",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-01",
+    "title": "La Vie en rose",
+    "artist": "Édith Piaf",
+    "duration": 197,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-02",
+    "title": "Alors on danse",
+    "artist": "Stromae",
+    "duration": 207,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-03",
+    "title": "Papaoutai",
+    "artist": "Stromae",
+    "duration": 233,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-04",
+    "title": "Dernière Danse",
+    "artist": "Indila",
+    "duration": 217,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-05",
+    "title": "Je Veux",
+    "artist": "ZAZ",
+    "duration": 198,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-06",
+    "title": "Formidable",
+    "artist": "Stromae",
+    "duration": 225,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-07",
+    "title": "Tous les mêmes",
+    "artist": "Stromae",
+    "duration": 222,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-FR-08",
+    "title": "Non, je ne regrette rien",
+    "artist": "Édith Piaf",
+    "duration": 142,
+    "region": "fr",
+    "expectedLyricsLang": "French",
+    "expectSourceTranslation": true,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-01",
+    "title": "Garota de Ipanema",
+    "artist": "Tom Jobim",
+    "duration": 313,
+    "region": "pt",
+    "expectedLyricsLang": "Portuguese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-02",
+    "title": "Mas Que Nada",
+    "artist": "Jorge Ben Jor",
+    "duration": 177,
+    "region": "pt",
+    "expectedLyricsLang": "Portuguese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-03",
+    "title": "Ai Se Eu Te Pego",
+    "artist": "Michel Teló",
+    "duration": 176,
+    "region": "pt",
+    "expectedLyricsLang": "Portuguese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-04",
+    "title": "Evidências",
+    "artist": "Chitãozinho & Xororó",
+    "duration": 276,
+    "region": "pt",
+    "expectedLyricsLang": "Portuguese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-05",
+    "title": "Andar com Fé",
+    "artist": "Gilberto Gil",
+    "duration": 233,
+    "region": "pt",
+    "expectedLyricsLang": "Portuguese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-06",
+    "title": "País Tropical",
+    "artist": "Jorge Ben Jor",
+    "duration": 206,
+    "region": "pt",
+    "expectedLyricsLang": "Portuguese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-07",
+    "title": "Envolver",
+    "artist": "Anitta",
+    "duration": 186,
+    "region": "pt",
+    "expectedLyricsLang": "Portuguese",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-PT-08",
+    "title": "Boys Don't Cry",
+    "artist": "Anitta",
+    "duration": 188,
+    "region": "pt",
+    "expectedLyricsLang": "English",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-01",
+    "title": "ลืมไปแล้วว่าลืมไม่ได้",
+    "artist": "Three Man Down",
+    "duration": 267,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-02",
+    "title": "คนมีเสน่ห์",
+    "artist": "Palmy",
+    "duration": 240,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-03",
+    "title": "ใจความสำคัญ",
+    "artist": "Scrubb",
+    "duration": 257,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-04",
+    "title": "ปล่อย",
+    "artist": "Slot Machine",
+    "duration": 256,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-05",
+    "title": "ทางของฝุ่น",
+    "artist": "Bodyslam",
+    "duration": 290,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-06",
+    "title": "รักติดไซเรน",
+    "artist": "Ink Waruntorn",
+    "duration": 222,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-07",
+    "title": "ชีวิตยังคงสวยงาม",
+    "artist": "Bodyslam",
+    "duration": 283,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-TH-08",
+    "title": "คิดถึง",
+    "artist": "Num Kala",
+    "duration": 253,
+    "region": "th",
+    "expectedLyricsLang": "Thai",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-01",
+    "title": "أحواك",
+    "artist": "Abdel Halim Hafez",
+    "duration": 312,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-02",
+    "title": "نسّم علينا الهوا",
+    "artist": "Fairuz",
+    "duration": 284,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-03",
+    "title": "حبيبي يا نور العين",
+    "artist": "Amr Diab",
+    "duration": 284,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-04",
+    "title": "تملي معاك",
+    "artist": "Amr Diab",
+    "duration": 303,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-05",
+    "title": "أح يا قلبي",
+    "artist": "Nancy Ajram",
+    "duration": 244,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-06",
+    "title": "فين حبيبي",
+    "artist": "Cheb Khaled",
+    "duration": 252,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-07",
+    "title": "يا طير",
+    "artist": "Mashrou' Leila",
+    "duration": 271,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "BM-AR-08",
+    "title": "عيني عيني",
+    "artist": "Amr Diab",
+    "duration": 247,
+    "region": "ar",
+    "expectedLyricsLang": "Arabic",
+    "expectSourceTranslation": false,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  }
+]

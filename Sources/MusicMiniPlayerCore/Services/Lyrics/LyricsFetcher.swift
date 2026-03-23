@@ -533,16 +533,24 @@ public final class LyricsFetcher {
             guard let lrc = json["lrc"] as? [String: Any],
                   let lyricText = lrc["lyric"] as? String, !lyricText.isEmpty else { return nil }
 
-            var lyrics = parser.parseLRC(lyricText)
+            // 🔑 先剥元信息再处理翻译
+            var lyrics = parser.stripMetadataLines(parser.parseLRC(lyricText))
 
-            // 合并翻译
-            if let tlyric = json["tlyric"] as? [String: Any],
-               let translatedText = tlyric["lyric"] as? String, !translatedText.isEmpty {
-                let translatedLyrics = parser.parseLRC(translatedText)
+            // 检测混排翻译（韩/英+中 交替）→ 提取中文行为 translation 属性
+            let (extracted, isInterleaved) = parser.extractInterleavedTranslations(lyrics)
+            if isInterleaved {
+                lyrics = extracted
+            } else if let tlyric = json["tlyric"] as? [String: Any],
+                      let translatedText = tlyric["lyric"] as? String, !translatedText.isEmpty {
+                // 正常双轨 → 合并翻译
+                let translatedLyrics = parser.stripMetadataLines(parser.parseLRC(translatedText))
                 if !translatedLyrics.isEmpty {
                     lyrics = parser.mergeLyricsWithTranslation(original: lyrics, translated: translatedLyrics)
                 }
             }
+
+            // 🔑 最后一道防线：剥离非中文歌曲中的中文翻译（纯中文行/混排行/日中混排）
+            lyrics = parser.stripChineseTranslations(lyrics)
 
             return parser.applyTimeOffset(to: lyrics, offset: netEaseTimeOffset)
         } catch {
@@ -610,15 +618,21 @@ public final class LyricsFetcher {
 
             guard let lyricText = json["lyric"] as? String, !lyricText.isEmpty else { return nil }
 
-            var lyrics = parser.parseLRC(lyricText)
+            // 🔑 先剥元信息再处理翻译
+            var lyrics = parser.stripMetadataLines(parser.parseLRC(lyricText))
 
-            // 合并翻译
-            if let transText = json["trans"] as? String, !transText.isEmpty {
-                let translatedLyrics = parser.parseLRC(transText)
+            let (extracted, isInterleaved) = parser.extractInterleavedTranslations(lyrics)
+            if isInterleaved {
+                lyrics = extracted
+            } else if let transText = json["trans"] as? String, !transText.isEmpty {
+                let translatedLyrics = parser.stripMetadataLines(parser.parseLRC(transText))
                 if !translatedLyrics.isEmpty {
                     lyrics = parser.mergeLyricsWithTranslation(original: lyrics, translated: translatedLyrics)
                 }
             }
+
+            // 🔑 最后一道防线：剥离非中文歌曲中的中文翻译
+            lyrics = parser.stripChineseTranslations(lyrics)
 
             return lyrics
         } catch {

@@ -95,17 +95,29 @@ public final class LyricsScorer {
             score += coverageRatio * 8
         }
 
-        // 6. 翻译加成（开启翻译时，有翻译加 15 分）
-        if translationEnabled && lyrics.contains(where: { $0.hasTranslation }) {
+        // 6. 内部间隙惩罚：连续行间超长空洞说明歌词不完整
+        // 阈值较高（>45s）以避免误伤正常器乐间奏（通常 <40s）
+        if !isUnsyncedSource && lyrics.count >= 5 {
+            let maxGap = (1..<lyrics.count).map { lyrics[$0].startTime - lyrics[$0 - 1].startTime }.max() ?? 0
+            if maxGap > 45 { score -= 20 }
+        }
+
+        // 7. 混排翻译惩罚（先算惩罚，再决定翻译加成）
+        // 低质量用户上传歌词把翻译嵌入主文本（如韩文歌行内混中文）
+        let mixPenalty = mixedTranslationPenalty(lyrics)
+        score -= mixPenalty
+
+        // 7. 翻译加成（混排源不给加成 — 翻译已泄入主文本，不是真正的分离翻译）
+        if translationEnabled && lyrics.contains(where: { $0.hasTranslation }) && mixPenalty == 0 {
             score += 15
         }
 
-        // 7. 罗马音惩罚
+        // 8. 罗马音惩罚
         if source == "lyrics.ovh" && isLikelyRomaji(lyrics) {
             score -= 15
         }
 
-        // 8. 来源加成
+        // 9. 来源加成
         score += sourceBonus(for: source)
 
         return min(score, 100)
@@ -239,5 +251,45 @@ public final class LyricsScorer {
         return sampleTexts.allSatisfy { text in
             !text.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
         }
+    }
+
+    // MARK: - 混排翻译惩罚
+
+    /// 检测歌词主文本中是否混入了翻译（同行内多种非拉丁脚本共存）
+    /// 例如：`내 심박수를 믿어 我相信 自己的心跳声` — 韩文+中文同行
+    /// 返回惩罚分数（0-25）
+    private func mixedTranslationPenalty(_ lyrics: [LyricLine]) -> Double {
+        let validLines = lyrics.filter {
+            let t = $0.text.trimmingCharacters(in: .whitespaces)
+            return !t.isEmpty && t.count > 5
+        }
+        guard validLines.count >= 5 else { return 0 }
+
+        let sample = Array(validLines.prefix(20))
+        var mixedCount = 0
+
+        for line in sample {
+            let text = line.text
+            // 统计同一行中出现的非拉丁脚本种类
+            let hasChinese = LanguageUtils.containsChinese(text)
+            let hasKorean = LanguageUtils.containsKorean(text)
+            let hasJapanese = LanguageUtils.containsJapanese(text)
+
+            // 中文+韩文同行（最常见的翻译泄漏）
+            if hasChinese && hasKorean { mixedCount += 1; continue }
+            // 中文+日文假名同行（中文翻译混入日文歌词）
+            if hasChinese && hasJapanese { mixedCount += 1; continue }
+        }
+
+        let mixedRatio = Double(mixedCount) / Double(sample.count)
+
+        // ≥30% 行混排 → 重惩罚（25分）
+        if mixedRatio >= 0.3 { return 25 }
+        // ≥15% 行混排 → 中惩罚（15分）
+        if mixedRatio >= 0.15 { return 15 }
+        // 少量混排 → 轻惩罚
+        if mixedCount >= 2 { return 8 }
+
+        return 0
     }
 }
