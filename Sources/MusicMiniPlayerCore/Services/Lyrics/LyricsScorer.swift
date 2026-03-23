@@ -95,29 +95,30 @@ public final class LyricsScorer {
             score += coverageRatio * 8
         }
 
-        // 6. 内部间隙惩罚：连续行间超长空洞说明歌词不完整
-        // 阈值较高（>45s）以避免误伤正常器乐间奏（通常 <40s）
+        // 6. Internal gap penalty: >45s hole means incomplete lyrics
         if !isUnsyncedSource && lyrics.count >= 5 {
-            let maxGap = (1..<lyrics.count).map { lyrics[$0].startTime - lyrics[$0 - 1].startTime }.max() ?? 0
+            var maxGap: Double = 0
+            for i in 1..<lyrics.count {
+                maxGap = max(maxGap, lyrics[i].startTime - lyrics[i - 1].startTime)
+            }
             if maxGap > 45 { score -= 20 }
         }
 
-        // 7. 混排翻译惩罚（先算惩罚，再决定翻译加成）
-        // 低质量用户上传歌词把翻译嵌入主文本（如韩文歌行内混中文）
+        // 7. Mixed translation penalty
         let mixPenalty = mixedTranslationPenalty(lyrics)
         score -= mixPenalty
 
-        // 7. 翻译加成（混排源不给加成 — 翻译已泄入主文本，不是真正的分离翻译）
+        // 8. Translation bonus (skip if mixed — translation leaked into main text)
         if translationEnabled && lyrics.contains(where: { $0.hasTranslation }) && mixPenalty == 0 {
             score += 15
         }
 
-        // 8. 罗马音惩罚
-        if source == "lyrics.ovh" && isLikelyRomaji(lyrics) {
+        // 9. Romaji penalty (all unsynced sources that return romanized CJK)
+        if isUnsyncedSource && isLikelyRomaji(lyrics) {
             score -= 15
         }
 
-        // 9. 来源加成
+        // 10. Source bonus
         score += sourceBonus(for: source)
 
         return min(score, 100)
@@ -246,9 +247,15 @@ public final class LyricsScorer {
     }
 
     /// 检测是否可能是罗马音歌词
+    /// 忽略 Genius 风格的段落标记（[Chorus], [副歌: 林二汶] 等）只检查实际歌词行
     private func isLikelyRomaji(_ lyrics: [LyricLine]) -> Bool {
-        let sampleTexts = lyrics.prefix(10).map { $0.text }
-        return sampleTexts.allSatisfy { text in
+        let lyricsLines = lyrics.filter { line in
+            let t = line.text.trimmingCharacters(in: .whitespaces)
+            return !t.isEmpty && !(t.hasPrefix("[") && t.hasSuffix("]"))
+        }
+        let sample = lyricsLines.prefix(10).map { $0.text }
+        guard !sample.isEmpty else { return false }
+        return sample.allSatisfy { text in
             !text.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
         }
     }

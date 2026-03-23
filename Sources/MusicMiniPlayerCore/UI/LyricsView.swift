@@ -384,7 +384,8 @@ public struct LyricsView: View {
                         currentTime: musicController.currentTime,
                         onTap: { handleLineTap(line: line) },
                         showTranslation: lyricsService.showTranslation,
-                        isTranslating: lyricsService.isTranslating
+                        isTranslating: lyricsService.isTranslating,
+                        translationFailed: lyricsService.translationFailed
                     )
                     .padding(.horizontal, 32)
 
@@ -678,17 +679,9 @@ public struct LyricsView: View {
     private func updateTranslationSessionConfig() {
         if #available(macOS 15.0, *) {
             let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
-
-            if !lyricsService.lyrics.isEmpty {
-                let lyricTexts = lyricsService.lyrics.map { $0.text }
-                if let sourceLang = TranslationService.detectLanguage(for: lyricTexts) {
-                    translationSessionConfigAny = TranslationSession.Configuration(
-                        source: sourceLang, target: targetLang
-                    )
-                    return
-                }
-            }
-
+            // Always let Apple's Translation framework auto-detect source language.
+            // NLLanguageRecognizer misclassifies short English lines as Danish/Slovak,
+            // causing unsupported language pair failures (e.g. da→zh).
             translationSessionConfigAny = TranslationSession.Configuration(
                 source: nil, target: targetLang
             )

@@ -65,6 +65,16 @@ public enum LanguageUtils {
         return allCJKRanges.contains { $0.contains(v) }
     }
 
+    /// Scalar-level Chinese detection (CJK Unified Ideographs — shared with Japanese kanji)
+    public static func isChineseScalar(_ scalar: Unicode.Scalar) -> Bool {
+        scriptRanges["Chinese"]!.contains { $0.contains(scalar.value) }
+    }
+
+    /// Scalar-level Japanese kana detection (hiragana + katakana only, excludes kanji)
+    public static func isJapaneseKana(_ scalar: Unicode.Scalar) -> Bool {
+        scriptRanges["Japanese"]!.contains { $0.contains(scalar.value) }
+    }
+
     // MARK: - Southeast Asian Scripts (东南亚)
 
     public static func containsThai(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Thai"]!) }

@@ -107,6 +107,10 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ Use `resultTitleHasCJK` (title-only check) → Prevents "Moon Style Love"→"milk tea" mismatch
 - ❌ `isLikelyEnglishArtist` with "word=English" heuristic → False positives on EPO/JADOES
   ✅ Use only high-confidence signals (known list + English affixes), safety backed by `resultTitleHasCJK`
+- ❌ `TranslationSession.Configuration(source: detectLanguage())` → NLLanguageRecognizer misclassifies English as Danish/Slovak → unsupported pair → instant failure → dots flash then vanish
+  ✅ Always use `source: nil`, let Apple's Translation framework auto-detect
+- ❌ Genius/lyrics.ovh skip timing penalties (duration/coverage/gap) → inflated scores (~46) beat synced sources (~39)
+  ✅ `selectBest` prefers synced sources with score >= 30 over unsynced; romaji penalty applies to all unsynced sources
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)
@@ -141,7 +145,7 @@ Config files: `Package.swift`, `build_app.sh`, `Resources/AppIcon.icns`
 /postmortem onboarding    # Analyze historical commits
 ```
 
-Existing postmortems: 001 (Section recursion), 002 (Page switch state), 003 (Artwork concurrency), 004 (Lyrics spacing), 005 (MetadataResolver batch regression), 006 (romanized→CJK mismatch), 007 (Chinese translation leak trilogy)
+Existing postmortems: 001 (Section recursion), 002 (Page switch state), 003 (Artwork concurrency), 004 (Lyrics spacing), 005 (MetadataResolver batch regression), 006 (romanized→CJK mismatch), 007 (Chinese translation leak trilogy), 008 (Translation dots flash + Genius score inflation)
 
 ## Compact Instructions
 

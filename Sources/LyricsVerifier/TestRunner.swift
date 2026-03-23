@@ -40,89 +40,7 @@ struct SourceResult: Codable {
 // MARK: - 核心测试函数
 // =========================================================================
 
-/// 测试单首歌的歌词管线
-/// 调用 LyricsFetcher.shared 的 public API，走真实代码路径
-func testSong(
-    id: String,
-    title: String,
-    artist: String,
-    duration: TimeInterval,
-    expectation: TestExpectation?,
-    translationEnabled: Bool = false
-) async -> VerifyResult {
-    let start = CFAbsoluteTimeGetCurrent()
-    let fetcher = LyricsFetcher.shared
-
-    // ── 并行查询所有源 ──
-    let fetchResults = await fetcher.fetchAllSources(
-        title: title, artist: artist,
-        duration: duration, translationEnabled: translationEnabled
-    )
-
-    // ── 选择最佳 ──
-    let bestLyrics = fetcher.selectBest(from: fetchResults)
-
-    // 通过 LyricLine.id 匹配找到选中的源
-    let selectedResult = fetchResults.first { result in
-        guard let firstBest = bestLyrics?.first,
-              let firstResult = result.lyrics.first else { return false }
-        return firstBest.id == firstResult.id
-    }
-
-    let elapsed = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
-
-    // ── 构建每个源的摘要 ──
-    let knownSources = ["AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
-    let allSources: [SourceResult] = knownSources.map { name in
-        if let r = fetchResults.first(where: { $0.source == name }) {
-            return SourceResult(name: name, found: true, score: round(r.score * 10) / 10, lines: r.lyrics.count)
-        }
-        return SourceResult(name: name, found: false, score: 0, lines: 0)
-    }
-
-    // ── 歌词特征 ──
-    let lyrics = bestLyrics ?? []
-    let firstReal = lyrics.first {
-        let t = $0.text.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
-    }
-    let hasTranslation = lyrics.contains { $0.hasTranslation }
-    let hasSyllable = lyrics.contains { $0.hasSyllableSync }
-
-    // ── 对比期望值 ──
-    var failures: [String] = []
-    if let exp = expectation {
-        failures = checkExpectation(
-            exp, source: selectedResult?.source,
-            lyrics: lyrics, firstReal: firstReal
-        )
-    }
-
-    // ── 内容验证（自动检测疑似错配）──
-    let warnings = validateContent(
-        title: title, artist: artist,
-        source: selectedResult?.source,
-        score: selectedResult?.score,
-        lyrics: lyrics
-    )
-
-    return VerifyResult(
-        id: id, title: title, artist: artist,
-        duration: Int(duration), passed: failures.isEmpty,
-        selectedSource: selectedResult?.source,
-        selectedScore: selectedResult?.score,
-        lyricsLineCount: lyrics.count,
-        hasTranslation: hasTranslation,
-        hasSyllableSync: hasSyllable,
-        firstRealLine: firstReal?.text,
-        elapsedMs: elapsed,
-        failures: failures,
-        warnings: warnings,
-        allSources: allSources
-    )
-}
-
-/// 测试单首歌 + 返回歌词数组（避免 benchmark 重复获取）
+/// Core test: fetch lyrics and return both result and raw lyrics
 func testSongWithLyrics(
     id: String,
     title: String,
@@ -160,8 +78,6 @@ func testSongWithLyrics(
         let t = $0.text.trimmingCharacters(in: .whitespaces)
         return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
     }
-    let hasTranslation = lyrics.contains { $0.hasTranslation }
-    let hasSyllable = lyrics.contains { $0.hasSyllableSync }
 
     var failures: [String] = []
     if let exp = expectation {
@@ -184,8 +100,8 @@ func testSongWithLyrics(
         selectedSource: selectedResult?.source,
         selectedScore: selectedResult?.score,
         lyricsLineCount: lyrics.count,
-        hasTranslation: hasTranslation,
-        hasSyllableSync: hasSyllable,
+        hasTranslation: lyrics.contains { $0.hasTranslation },
+        hasSyllableSync: lyrics.contains { $0.hasSyllableSync },
         firstRealLine: firstReal?.text,
         elapsedMs: elapsed,
         failures: failures,
@@ -194,6 +110,22 @@ func testSongWithLyrics(
     )
 
     return (result, lyrics)
+}
+
+/// Convenience wrapper when caller doesn't need raw lyrics
+func testSong(
+    id: String,
+    title: String,
+    artist: String,
+    duration: TimeInterval,
+    expectation: TestExpectation?,
+    translationEnabled: Bool = false
+) async -> VerifyResult {
+    await testSongWithLyrics(
+        id: id, title: title, artist: artist,
+        duration: duration, expectation: expectation,
+        translationEnabled: translationEnabled
+    ).result
 }
 
 // =========================================================================

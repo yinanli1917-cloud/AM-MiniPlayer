@@ -20,6 +20,7 @@ struct LyricLineView: View {
     var onTap: (() -> Void)? = nil  // 🔑 点击回调
     var showTranslation: Bool = false  // 🔑 是否显示翻译
     var isTranslating: Bool = false  // 🔑 是否正在翻译中
+    var translationFailed: Bool = false  // 🔑 翻译是否失败
 
     @State private var isHovering: Bool = false
     // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
@@ -92,6 +93,14 @@ struct LyricLineView: View {
                 // 🔑 翻译加载中动画
                 HStack(spacing: 4) {
                     TranslationLoadingDotsView()
+                    Spacer(minLength: 0)
+                }
+            } else if showTranslation && translationFailed && isCurrent {
+                // 🔑 翻译失败提示（仅当前行显示）
+                HStack(spacing: 4) {
+                    Text("Translation unavailable")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white.opacity(0.3))
                     Spacer(minLength: 0)
                 }
             }

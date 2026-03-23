@@ -453,10 +453,10 @@ public final class LyricsParser {
         guard lines.count > 3 else { return lines }
 
         // 统计含中文的行数，≥3 行才触发（避免误伤正常中文歌）
-        let chineseLineCount = lines.filter { lineContainsChinese($0.text) }.count
+        let chineseLineCount = lines.filter { LanguageUtils.containsChinese($0.text) }.count
         let nonChineseLineCount = lines.filter {
             let t = $0.text.trimmingCharacters(in: .whitespaces)
-            return !t.isEmpty && !lineContainsChinese(t)
+            return !t.isEmpty && !LanguageUtils.containsChinese(t)
         }.count
 
         // 非中文行少于中文行 → 中文歌，不处理
@@ -466,7 +466,7 @@ public final class LyricsParser {
         var processed: [(line: LyricLine, isPureChinese: Bool)] = []
         for line in lines {
             let text = line.text.trimmingCharacters(in: .whitespaces)
-            guard !text.isEmpty, line.translation == nil, lineContainsChinese(text) else {
+            guard !text.isEmpty, line.translation == nil, LanguageUtils.containsChinese(text) else {
                 processed.append((line, false))
                 continue
             }
@@ -532,75 +532,44 @@ public final class LyricsParser {
         return result
     }
 
-    /// Split Japanese+Chinese mixed text at the kana→pure-CJK boundary.
-    /// "もう知っている我 都已了然" → ("もう知っている", "我 都已了然")
-    /// Heuristic: split right after the last kana character.
-    /// CJK chars between kana are kanji; CJK chars after all kana ended are Chinese.
+    /// Split at the last kana position: "もう知っている我 都已了然" → ("もう知っている", "我 都已了然")
     private func splitJapaneseAndChinese(_ text: String) -> (japanese: String, chinese: String) {
-        let scalars = Array(text.unicodeScalars)
-        guard !scalars.isEmpty else { return (text, "") }
+        let scalars = text.unicodeScalars
+        guard let lastKana = scalars.indices.last(where: { LanguageUtils.isJapaneseKana(scalars[$0]) })
+        else { return (text, "") }
 
-        // Find the last kana position
-        var lastKanaIdx = -1
-        for (i, s) in scalars.enumerated() {
-            let v = s.value
-            let isKana = (0x3040...0x309F).contains(v) || (0x30A0...0x30FF).contains(v)
-            if isKana { lastKanaIdx = i }
-        }
-
-        guard lastKanaIdx >= 0 else { return (text, "") }
-
-        // Split right after the last kana — everything after is Chinese
-        let splitIdx = lastKanaIdx + 1
-        let jpScalars = scalars[0..<splitIdx]
-        let cnScalars = scalars[splitIdx...]
-
-        let jp = String(String.UnicodeScalarView(jpScalars)).trimmingCharacters(in: .whitespaces)
-        let cn = String(String.UnicodeScalarView(cnScalars)).trimmingCharacters(in: .whitespaces)
-
+        let splitIdx = scalars.index(after: lastKana)
+        let jp = String(scalars[scalars.startIndex..<splitIdx]).trimmingCharacters(in: .whitespaces)
+        let cn = String(scalars[splitIdx...]).trimmingCharacters(in: .whitespaces)
         return (jp, cn)
     }
 
-    /// 检测文本是否包含中文字符（不含日文假名）
-    private func lineContainsChinese(_ text: String) -> Bool {
-        text.unicodeScalars.contains { v in
-            (0x4E00...0x9FFF).contains(v.value) || (0x3400...0x4DBF).contains(v.value)
-        }
-    }
-
-    /// 从文本中提取非中文部分（保留拉丁、韩文、日文假名、数字、标点）
+    /// Extract non-Chinese portion (keeps Latin, Korean, kana, digits, punctuation)
     private func stripChineseChars(_ text: String) -> String {
-        var result = ""
-        for scalar in text.unicodeScalars {
-            let v = scalar.value
-            let isChinese = (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v)
-            if !isChinese {
-                result.append(Character(scalar))
-            }
-        }
-        return result.trimmingCharacters(in: .whitespaces)
+        var out = String.UnicodeScalarView()
+        for s in text.unicodeScalars where !LanguageUtils.isChineseScalar(s) { out.append(s) }
+        return String(out).trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
     }
 
-    /// 从文本中提取中文部分
+    /// Extract Chinese portion (keeps CJK chars + adjacent CJK punctuation)
     private func extractChineseChars(_ text: String) -> String {
-        var result = ""
+        var out = String.UnicodeScalarView()
         var inChinese = false
-        for scalar in text.unicodeScalars {
-            let v = scalar.value
-            let isChinese = (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v)
+        for s in text.unicodeScalars {
+            let v = s.value
             let isPunct = (0x3000...0x303F).contains(v) || (0xFF00...0xFFEF).contains(v)
-                || scalar == "，" || scalar == "。" || scalar == "！" || scalar == "？"
-            if isChinese {
+                || s == "，" || s == "。" || s == "！" || s == "？"
+            if LanguageUtils.isChineseScalar(s) {
                 inChinese = true
-                result.append(Character(scalar))
-            } else if inChinese && (isPunct || scalar == " ") {
-                result.append(Character(scalar))
-            } else if inChinese && !isChinese {
+                out.append(s)
+            } else if inChinese && (isPunct || s == " ") {
+                out.append(s)
+            } else {
                 inChinese = false
             }
         }
-        return result.trimmingCharacters(in: .whitespaces)
+        return String(out).trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - 翻译合并

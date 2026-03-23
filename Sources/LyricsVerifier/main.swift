@@ -109,9 +109,9 @@ private func runAdHoc(args: [String]) async {
     if dumpMode {
         log("\n=== LYRICS DUMP (\(lyrics.count) lines) ===")
         for (i, line) in lyrics.enumerated() {
-            let hasCJK = line.text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
-            let hasKana = line.text.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) }
-            let hasKorean = line.text.unicodeScalars.contains { (0xAC00...0xD7AF).contains($0.value) }
+            let hasCJK = LanguageUtils.containsChinese(line.text)
+            let hasKana = LanguageUtils.containsJapanese(line.text)
+            let hasKorean = LanguageUtils.containsKorean(line.text)
             let cnFlag = (hasCJK && !hasKana && !hasKorean) ? " 🚨CN" : ""
             log("  [\(String(format: "%02d", i))] \(String(format: "%6.1f", line.startTime))s  \(line.text)\(cnFlag)")
             if let trans = line.translation {

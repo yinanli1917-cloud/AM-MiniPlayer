@@ -107,22 +107,28 @@ public final class LyricsFetcher {
     /// ⚠️ 纯文本源（lyrics.ovh/Genius）低分且无其他可信源时拒绝（宁缺勿错）
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
         let unsyncedSources: Set<String> = ["lyrics.ovh", "Genius"]
-        let hasReliableAlternative = results.contains { !unsyncedSources.contains($0.source) && $0.score >= 50 }
 
         let reliable = results.filter { r in
             if r.score <= 0 { return false }
-            // 纯文本源低分且无其他可信源 → 丢弃（宁缺勿错）
-            // 🔑 阈值 35：纯文本源不计时长/覆盖度（伪造的），满分约 46
-            if unsyncedSources.contains(r.source) && r.score < 35 && !hasReliableAlternative { return false }
             return true
         }
 
-        // 优先选择质量通过的最高分
+        // 🔑 Synced sources (NetEase/QQ/AMLL/LRCLIB) with score >= 30 always beat unsynced
+        // Unsynced sources skip timing penalties, inflating scores unfairly (~46 max vs synced ~39)
+        let synced = reliable.filter { !unsyncedSources.contains($0.source) }
+        let bestSynced = synced.first(where: { scorer.analyzeQuality($0.lyrics).isValid })
+            ?? synced.first
+
+        if let synced = bestSynced, synced.score >= 30 {
+            DebugLogger.log("🏆 最终选择: \(synced.source) (synced preferred)")
+            return synced.lyrics
+        }
+
+        // Fallback: best overall (including unsynced)
         if let best = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
             DebugLogger.log("🏆 最终选择: \(best.source)")
             return best.lyrics
         }
-        // 回退到最高分
         if let best = reliable.first {
             DebugLogger.log("⚠️ 降级使用: \(best.source)")
             return best.lyrics

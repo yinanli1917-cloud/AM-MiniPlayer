@@ -47,6 +47,7 @@ public class LyricsService: ObservableObject {
 
     @Published public var translationRequestTrigger: Int = 0
     @Published public var isTranslating: Bool = false
+    @Published public var translationFailed: Bool = false
     @Published public var isManualScrolling: Bool = false
 
     // 🔧 第一句真正歌词的索引
@@ -180,6 +181,7 @@ public class LyricsService: ObservableObject {
         currentSongTranslationID = nil
         translationsAreFromLyricsSource = false
         isTranslating = false
+        translationFailed = false
 
         // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
         clearAllTranslations()
@@ -414,12 +416,15 @@ public class LyricsService: ObservableObject {
         }
 
         isTranslating = true
+        translationFailed = false
         defer { isTranslating = false }
         debugLogPublic("🔄 开始翻译: \(lyrics.count) 行")
 
         let lyricTexts = lyrics.map { $0.text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: lyricTexts) else {
             debugLogPublic("❌ 翻译失败")
+            translationFailed = true
+            currentSongTranslationID = translationID  // Prevent retry for same song
             return
         }
 
