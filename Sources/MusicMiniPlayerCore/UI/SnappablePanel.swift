@@ -365,7 +365,9 @@ public class SnappablePanel: NSPanel {
         let targetY = isTop ? visible.maxY - frame.height - cornerMargin : visible.minY + cornerMargin
 
         animationTarget = NSPoint(x: targetX, y: targetY)
-        // 不清零速度 — 保留手势动量，窗口顺滑滑入边缘
+        // 清零速度：贴边距离近，高速度只会制造过冲 + 更多重窗口帧
+        springVelocityX = 0
+        springVelocityY = 0
         startSpringAnimation()
 
         isEdgeHidden = true
@@ -446,15 +448,11 @@ public class SnappablePanel: NSPanel {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - 弹簧动画（快照窗口 + Spring 解析解）
+    // MARK: - 弹簧动画（SwiftUI.Spring 解析解 + DisplayLink）
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🔑 核心问题：setFrameOrigin 每帧触发 WindowServer 对重内容的合成
-    //    (Metal shader + blur + SwiftUI) → 帧预算不够 → 掉帧
-    // 🔑 解法（JNWAnimatableWindow 技术）：
-    //    1. 截取窗口内容为 CGImage
-    //    2. 创建轻量快照窗口（一个 CALayer + 一张图片）
-    //    3. 弹簧动画只移动快照窗口（compositing 成本趋零）
-    //    4. 动画结束：移动真实窗口 → 显示 → 销毁快照
+    // 🔑 直接移动真实窗口：用户要看到 hover 动画随窗口飞的灵动感
+    // 🔑 SwiftUI.Spring 解析解：闭式解无数值噪声，WWDC23 参数
+    // 🔑 性能：暂停 interpolation timer + 关阴影 + disableScreenUpdatesUntilFlush
 
     private var shadowWasEnabled = true
     private var currentSpring = Spring(duration: 0.5, bounce: 0.15)
@@ -464,62 +462,19 @@ public class SnappablePanel: NSPanel {
     private var animInitVelY: CGFloat = 0
     private var displayLink: AnyObject?
     private var animationTimer: Timer?
-    private var snapshotWindow: NSWindow?
 
     private func startSpringAnimation() {
         // WWDC23 手势吸附推荐：duration=0.5 bounce=0.15
         currentSpring = Spring(duration: 0.5, bounce: 0.15)
-        launchSnapshotAnimation()
+        launchAnimation()
     }
 
     private func startPeekAnimation() {
-        // peek: 快速无过冲
         currentSpring = Spring(duration: 0.3, bounce: 0.0)
-        launchSnapshotAnimation()
+        launchAnimation()
     }
 
-    // ── 快照窗口创建 ──
-
-    private func captureSnapshot() -> NSWindow? {
-        guard let cv = contentView else { return nil }
-
-        // Retina 感知截图
-        let bounds = cv.bounds
-        guard let bitmapRep = cv.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
-        cv.cacheDisplay(in: bounds, to: bitmapRep)
-        guard let cgImage = bitmapRep.cgImage else { return nil }
-
-        // 轻量快照窗口：borderless + 单 CALayer
-        let snap = NSWindow(
-            contentRect: frame,
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-        snap.isOpaque = false
-        snap.backgroundColor = .clear
-        snap.hasShadow = false
-        snap.level = level
-        snap.collectionBehavior = collectionBehavior
-        snap.ignoresMouseEvents = true
-
-        let hostView = NSView(frame: NSRect(origin: .zero, size: frame.size))
-        hostView.wantsLayer = true
-        snap.contentView = hostView
-
-        let layer = hostView.layer!
-        layer.contents = cgImage
-        layer.contentsGravity = .resize
-        // 匹配窗口圆角
-        layer.cornerRadius = 12
-        layer.masksToBounds = true
-
-        return snap
-    }
-
-    // ── 快照动画启动 ──
-
-    private func launchSnapshotAnimation() {
+    private func launchAnimation() {
         stopAllAnimations()
         isAnimating = true
 
@@ -528,19 +483,11 @@ public class SnappablePanel: NSPanel {
         animInitVelX = springVelocityX
         animInitVelY = springVelocityY
 
+        shadowWasEnabled = hasShadow
+        if hasShadow { hasShadow = false }
+
         NotificationCenter.default.post(name: .windowMovementBegan, object: self)
 
-        // 创建快照，失败时退化到直接移动
-        if let snap = captureSnapshot() {
-            snap.setFrameOrigin(frame.origin)
-            snap.orderFront(nil)
-            snapshotWindow = snap
-
-            // 隐藏真实窗口（保留在窗口列表，不触发状态变化）
-            alphaValue = 0
-        }
-
-        // DisplayLink 驱动弹簧曲线
         if #available(macOS 14.0, *) {
             let link = self.displayLink(
                 target: self,
@@ -564,7 +511,6 @@ public class SnappablePanel: NSPanel {
         renderFrame()
     }
 
-    /// 每帧：Spring 解析解 → 移动快照窗口（compositing 近零开销）
     private func renderFrame() {
         guard isAnimating else { return }
 
@@ -579,34 +525,13 @@ public class SnappablePanel: NSPanel {
             target: targetDy, initialVelocity: animInitVelY, time: t
         )
 
-        let pos = NSPoint(x: x, y: y)
-
-        // 有快照 → 移动快照（轻量），没有 → 移动真实窗口（降级）
-        if snapshotWindow != nil {
-            snapshotWindow?.setFrameOrigin(pos)
-        } else {
-            setFrameOrigin(pos)
-        }
+        disableScreenUpdatesUntilFlush()
+        setFrameOrigin(NSPoint(x: x, y: y))
 
         if t >= Double(currentSpring.settlingDuration) {
-            finishAnimation()
+            setFrameOrigin(animationTarget)
+            stopAllAnimations()
         }
-    }
-
-    // ── 动画完成：切回真实窗口 ──
-
-    private func finishAnimation() {
-        // 移动真实窗口到目标
-        setFrameOrigin(animationTarget)
-
-        // 销毁快照、显示真实窗口
-        if snapshotWindow != nil {
-            alphaValue = 1
-            snapshotWindow?.orderOut(nil)
-            snapshotWindow = nil
-        }
-
-        stopAllAnimations()
     }
 
     private func stopAllAnimations() {
@@ -619,14 +544,6 @@ public class SnappablePanel: NSPanel {
         displayLink = nil
         animationTimer?.invalidate()
         animationTimer = nil
-
-        // 中断时：快照在哪就把真实窗口放哪
-        if let snap = snapshotWindow {
-            setFrameOrigin(snap.frame.origin)
-            alphaValue = 1
-            snap.orderOut(nil)
-            snapshotWindow = nil
-        }
 
         if shadowWasEnabled && !hasShadow { hasShadow = true }
 
