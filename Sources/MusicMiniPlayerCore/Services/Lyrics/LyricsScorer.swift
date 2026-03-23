@@ -95,13 +95,16 @@ public final class LyricsScorer {
             score += coverageRatio * 8
         }
 
-        // 6. Internal gap penalty: >45s hole means incomplete lyrics
+        // 6. Internal gap penalty: large hole means incomplete lyrics
+        // 🔑 阈值按歌曲时长缩放：长歌允许更长的间奏（如 J-Pop 5:32 有 49.8s 间奏）
         if !isUnsyncedSource && lyrics.count >= 5 {
             var maxGap: Double = 0
             for i in 1..<lyrics.count {
                 maxGap = max(maxGap, lyrics[i].startTime - lyrics[i - 1].startTime)
             }
-            if maxGap > 45 { score -= 20 }
+            // 🔑 阈值按歌曲时长缩放：长歌允许更长的间奏（如 J-Pop 5:32 有 49.8s 间奏）
+            let gapThreshold = max(45, duration * 0.15)
+            if maxGap > gapThreshold { score -= 20 }
         }
 
         // 7. Mixed translation penalty
@@ -284,8 +287,10 @@ public final class LyricsScorer {
 
             // 中文+韩文同行（最常见的翻译泄漏）
             if hasChinese && hasKorean { mixedCount += 1; continue }
-            // 中文+日文假名同行（中文翻译混入日文歌词）
-            if hasChinese && hasJapanese { mixedCount += 1; continue }
+            // 🔑 中文+日文：仅当存在韩文时才视为泄漏
+            // 日文本身就是 kanji（containsChinese）+ kana（containsJapanese），不是混排
+            // 真正的泄漏场景：中文翻译+韩文混入 → 已由上面的 Chinese+Korean 覆盖
+            if hasChinese && hasJapanese && hasKorean { mixedCount += 1; continue }
         }
 
         let mixedRatio = Double(mixedCount) / Double(sample.count)

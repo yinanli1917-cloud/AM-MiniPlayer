@@ -31,6 +31,63 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String) {
+        // 🔑 双标题拆分：Apple Music 格式 "English Title / Romanized Title"
+        // 先用完整标题尝试，失败则逐半尝试（后半优先：通常是原语言罗马字）
+        let result = await resolveTitle(title: title, artist: artist, duration: duration)
+        let titleResolved = result.title != title
+
+        // 🔑 双标题判定：只有标题本身被解析为不同值才算"已解决"
+        // 仅艺术家变化（如 "Yumi Matsutoya" → "松任谷由实"）时标题仍是双标题，需要拆分
+        if titleResolved { return result }
+
+        let halves = splitDualTitle(title)
+        guard let halves else {
+            // 非双标题：即使仅艺术家变化也接受
+            if result.artist != artist { return result }
+            return (title, artist)
+        }
+        // 保存可能已解析的艺术家（后续半段解析可复用）
+        let resolvedArtist = result.artist
+
+        // 后半优先（通常是原语言罗马字标题），再试前半
+        // 🔑 双标题半段跳过 CN 交叉验证：罗马字半段 CN 几乎不可能搜到，
+        //    但 JP/KR 精确时长匹配（如 Δ0.176s）已足够可靠
+        for half in [halves.second, halves.first] {
+            // 🔑 双标题半段：优先直接多区域 → CJK 标题（最可靠路径）
+            // 例如 "Kage Ni Natte" → iTunes JP 直接返回 "影になって"
+            if LanguageUtils.isPureASCII(half) {
+                if let localized = await fetchLocalizedMetadata(title: half, artist: artist, duration: duration) {
+                    if LanguageUtils.containsCJK(localized.title) {
+                        DebugLogger.log("MetadataResolver", "✅ 双标题多区域命中: '\(half)' → '\(localized.title)' by '\(localized.artist)' (region: \(localized.region))")
+                        return (localized.title, localized.artist)
+                    }
+                }
+            }
+            // 多区域失败 → 尝试完整解析路径，但拒绝回环到原始双标题
+            let halfResult = await resolveTitle(title: half, artist: resolvedArtist, duration: duration)
+            if halfResult.title != half && halfResult.title != title {
+                DebugLogger.log("MetadataResolver", "✅ 双标题拆分命中: '\(half)' → '\(halfResult.title)' by '\(halfResult.artist)'")
+                return halfResult
+            }
+        }
+
+        return (title, artist)
+    }
+
+    /// 拆分 Apple Music 双标题（"A / B" → (A, B)），仅当 " / " 分隔且两侧非空
+    public func splitDualTitle(_ title: String) -> (first: String, second: String)? {
+        let parts = title.components(separatedBy: " / ")
+        guard parts.count == 2,
+              !parts[0].trimmingCharacters(in: .whitespaces).isEmpty,
+              !parts[1].trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return (parts[0].trimmingCharacters(in: .whitespaces),
+                parts[1].trimmingCharacters(in: .whitespaces))
+    }
+
+    /// 单标题解析（从 resolveSearchMetadata 抽取，双标题拆分复用）
+    private func resolveTitle(
+        title: String, artist: String, duration: TimeInterval
+    ) async -> (title: String, artist: String) {
         let inputAllASCII = LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
 
         // 🔑 罗马字输入：CN + 多区域并行，优先 CJK 标题
@@ -293,12 +350,16 @@ public final class MetadataResolver {
             for await result in group {
                 if let r = result {
                     DebugLogger.log("MetadataResolver", "🔍 区域结果: '\(r.0)' by '\(r.1)' (region: \(r.2), Δ\(String(format: "%.2f", r.3))s)")
-                    // 🔑 优先选含 CJK 的结果（多区域解析的目的是获取本地化标题）
-                    let rHasCJK = LanguageUtils.containsCJK(r.0) || LanguageUtils.containsCJK(r.1)
+                    // 🔑 优先选标题含 CJK 的结果（多区域解析核心目的是获取本地化标题）
+                    // 标题 CJK > 仅艺术家 CJK > 无 CJK，同级别时选时长最近
+                    let rTitleCJK = LanguageUtils.containsCJK(r.0)
+                    let rHasCJK = rTitleCJK || LanguageUtils.containsCJK(r.1)
+                    let bestTitleCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) } ?? false
                     let bestHasCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) || LanguageUtils.containsCJK($0.1) } ?? false
                     if bestMatch == nil ||
+                       (rTitleCJK && !bestTitleCJK) ||
                        (rHasCJK && !bestHasCJK) ||
-                       (rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
+                       (rTitleCJK == bestTitleCJK && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
                         bestMatch = r
                     }
                 }

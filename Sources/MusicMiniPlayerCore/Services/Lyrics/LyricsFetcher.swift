@@ -405,9 +405,19 @@ public final class LyricsFetcher {
         let rawOriginalArtist: String
         let duration: TimeInterval
 
-        /// resolved + original 的标题/艺术家对（供 buildCandidates 匹配）
+        /// resolved + original + dual-title halves 的标题/艺术家对（供 buildCandidates 匹配）
         var titlePairs: [(String, String)] {
-            [(rawTitle, simplifiedTitle), (rawOriginalTitle, simplifiedOriginalTitle)]
+            var pairs = [(rawTitle, simplifiedTitle), (rawOriginalTitle, simplifiedOriginalTitle)]
+            // 🔑 双标题：将每一半也加入匹配对，覆盖 "We're All Free / Kage Ni Natte" 场景
+            for raw in [rawTitle, rawOriginalTitle] {
+                if let halves = MetadataResolver.shared.splitDualTitle(raw) {
+                    for half in [halves.first, halves.second] {
+                        let simplified = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(half))
+                        pairs.append((half, simplified))
+                    }
+                }
+            }
+            return pairs
         }
         var artistPairs: [(String, String)] {
             [(rawArtist, simplifiedArtist), (rawOriginalArtist, simplifiedOriginalArtist)]
@@ -444,6 +454,18 @@ public final class LyricsFetcher {
         if params.simplifiedOriginalTitle != params.simplifiedTitle ||
            params.simplifiedOriginalArtist != params.simplifiedArtist {
             keywords.append(("\(params.simplifiedOriginalTitle) \(params.simplifiedOriginalArtist)", "original"))
+        }
+        // 🔑 双标题拆分：每一半 + artist 作为独立搜索轮次
+        for raw in [params.rawTitle, params.rawOriginalTitle] {
+            if let halves = MetadataResolver.shared.splitDualTitle(raw) {
+                for (half, label) in [(halves.second, "dual-2nd"), (halves.first, "dual-1st")] {
+                    let simplified = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(half))
+                    let kw = "\(simplified) \(params.simplifiedArtist)"
+                    if !keywords.contains(where: { $0.0 == kw }) {
+                        keywords.append((kw, label))
+                    }
+                }
+            }
         }
         keywords.append((params.simplifiedArtist, "artist only"))
         keywords.append(contentsOf: extraKeywords)
