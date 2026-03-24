@@ -73,7 +73,9 @@ func testSongWithLyrics(
         return SourceResult(name: name, found: false, score: 0, lines: 0)
     }
 
-    let lyrics = bestLyrics ?? []
+    let rawLyrics = bestLyrics ?? []
+    // Rescale as last resort (mirrors LyricsService behavior)
+    let lyrics = fetcher.rescaleTimestamps(rawLyrics, duration: duration)
     let firstReal = lyrics.first {
         let t = $0.text.trimmingCharacters(in: .whitespaces)
         return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
@@ -87,11 +89,13 @@ func testSongWithLyrics(
         )
     }
 
+    // Validate on raw lyrics to detect overshoot before rescaling
     let warnings = validateContent(
         title: title, artist: artist,
         source: selectedResult?.source,
         score: selectedResult?.score,
-        lyrics: lyrics
+        lyrics: rawLyrics,
+        duration: duration
     )
 
     let result = VerifyResult(
@@ -166,14 +170,16 @@ private func checkExpectation(
 // MARK: - 内容验证（自动检测疑似问题）
 // =========================================================================
 
-/// 三层内容验证：
-/// 1. 错配检测：首行是否包含明显错误的歌名/艺术家
-/// 2. 语言一致性：歌词语言是否与歌曲语言合理
-/// 3. 低质量源标记：lyrics.ovh 单一来源 + 低分 = 高风险
+/// Four-layer content validation:
+/// 1. Title mismatch: first line contains wrong song name
+/// 2. Language consistency: lyrics language vs song language
+/// 3. Low-quality source flag: lyrics.ovh single source + low score
+/// 4. Timestamp overshoot: lyrics extend past song duration (wrong version)
 private func validateContent(
     title: String, artist: String,
     source: String?, score: Double?,
-    lyrics: [LyricLine]
+    lyrics: [LyricLine],
+    duration: TimeInterval = 0
 ) -> [String] {
     guard !lyrics.isEmpty, let source = source else { return [] }
     var warnings: [String] = []
@@ -233,6 +239,14 @@ private func validateContent(
     // ── 3. 低质量源标记 ──
     if source == "lyrics.ovh" && (score ?? 0) < 55 {
         warnings.append("⚠️ 仅 lyrics.ovh 低分命中（高错配风险）")
+    }
+
+    // ── 4. Timestamp overshoot detection ──
+    // Lyrics extend past song duration = wrong version selected
+    if duration > 0, lyrics.count >= 2,
+       let last = lyrics.last, last.startTime > duration {
+        let overshoot = last.startTime - duration
+        warnings.append("⚠️ 时间轴溢出: 末行 \(String(format: "%.1f", last.startTime))s > 歌曲 \(Int(duration))s (溢出\(String(format: "+%.1f", overshoot))s, 版本不匹配)")
     }
 
     return warnings

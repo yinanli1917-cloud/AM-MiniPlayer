@@ -249,7 +249,7 @@ public class LyricsService: ObservableObject {
         // 🔑 关键：验证 songID 仍然匹配（防止旧任务覆盖新结果）
         let currentID = await MainActor.run { currentSongID }
         guard currentID == songID else {
-            logger.warning("⚠️ Song changed during fetch, discarding: \(songID)")
+            DebugLogger.log("LyricsService", "⚠️ Song changed during fetch, discarding: \(songID)")
             return
         }
 
@@ -270,8 +270,11 @@ public class LyricsService: ObservableObject {
             return
         }
 
+        // Last-resort rescale: if best lyrics still overshoot, no source had the right version
+        let aligned = fetcher.rescaleTimestamps(bestLyrics, duration: duration)
+
         // 处理歌词（修复 endTime、添加前奏占位符等）
-        let processed = parser.processLyrics(bestLyrics)
+        let processed = parser.processLyrics(aligned)
 
         // 检查是否有歌词源翻译
         let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
@@ -288,7 +291,7 @@ public class LyricsService: ObservableObject {
         await MainActor.run {
             // 🔑 再次验证 songID（MainActor.run 可能有延迟）
             guard self.currentSongID == songID else {
-                self.logger.warning("⚠️ Song changed before apply, discarding: \(songID)")
+                DebugLogger.log("LyricsService", "⚠️ Song changed before apply, discarding: \(songID)")
                 return
             }
             applyLyrics(processed.lyrics,
@@ -488,7 +491,8 @@ public class LyricsService: ObservableObject {
 
                 guard let bestLyrics = self.fetcher.selectBest(from: results), !bestLyrics.isEmpty else { return }
 
-                let processed = self.parser.processLyrics(bestLyrics)
+                let aligned = self.fetcher.rescaleTimestamps(bestLyrics, duration: track.duration)
+                let processed = self.parser.processLyrics(aligned)
                 let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
 
                 let cacheItem = CachedLyricsItem(

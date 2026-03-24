@@ -60,11 +60,14 @@ public final class LyricsFetcher {
         duration: TimeInterval,
         translationEnabled: Bool
     ) async -> [LyricsFetchResult] {
-        DebugLogger.log("🚀 fetchAllSources START: '\(title)' by '\(artist)' (\(Int(duration))s)")
+        // Sanitize: strip quotes/brackets that break search APIs (e.g. Nat "King" Cole)
+        let cleanTitle = title.replacingOccurrences(of: "\"", with: "")
+        let cleanArtist = artist.replacingOccurrences(of: "\"", with: "")
+        DebugLogger.log("🚀 fetchAllSources START: '\(cleanTitle)' by '\(cleanArtist)' (\(Int(duration))s)")
 
         // 获取统一的搜索元信息
         let (searchTitle, searchArtist) = await metadataResolver.resolveSearchMetadata(
-            title: title, artist: artist, duration: duration
+            title: cleanTitle, artist: cleanArtist, duration: duration
         )
 
         if searchTitle != title || searchArtist != artist {
@@ -134,6 +137,45 @@ public final class LyricsFetcher {
             return best.lyrics
         }
         return nil
+    }
+
+    // MARK: - Timestamp Rescaling (Last Resort)
+
+    /// Rescale lyrics timestamps when they overshoot the song duration.
+    /// Only used as a fallback after scoring — means no source had the right version.
+    /// Assumes tempo difference, not structural difference.
+    public func rescaleTimestamps(_ lyrics: [LyricLine], duration: TimeInterval) -> [LyricLine] {
+        guard lyrics.count >= 2, duration > 0 else { return lyrics }
+
+        let lastStart = lyrics.last!.startTime
+        guard lastStart > duration else { return lyrics }
+
+        let firstStart = lyrics.first!.startTime
+        let lyricsSpan = lastStart - firstStart
+        guard lyricsSpan > 0 else { return lyrics }
+
+        // Target: last line lands ~5s before song ends
+        let buffer = min(5.0, duration * 0.05)
+        let targetLastStart = duration - buffer
+        let scale = (targetLastStart - firstStart) / lyricsSpan
+
+        DebugLogger.log("⏱️ Timestamp rescale: \(String(format: "%.1f", lastStart))s → \(String(format: "%.1f", targetLastStart))s (×\(String(format: "%.3f", scale)))")
+
+        return lyrics.map { line in
+            let newStart = firstStart + (line.startTime - firstStart) * scale
+            let newEnd = firstStart + (line.endTime - firstStart) * scale
+            let newWords = line.words.map { word in
+                LyricWord(
+                    word: word.word,
+                    startTime: firstStart + (word.startTime - firstStart) * scale,
+                    endTime: firstStart + (word.endTime - firstStart) * scale
+                )
+            }
+            return LyricLine(
+                text: line.text, startTime: newStart, endTime: newEnd,
+                words: newWords, translation: line.translation
+            )
+        }
     }
 
     // MARK: - 统一匹配工具

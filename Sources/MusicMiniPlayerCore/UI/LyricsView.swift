@@ -548,10 +548,13 @@ public struct LyricsView: View {
     private func handleLineTap(line: LyricLine) {
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
+        // Sync line index to tapped position BEFORE unfreezing
+        // Prevents double-jump: frozen → old liveIndex → tapped line
+        lyricsService.updateCurrentTime(line.startTime)
         scroll.isManualScrolling = false
         lyricsService.isManualScrolling = false
         scroll.lockedLineIndex = nil
-        scroll.frozenDisplayIndex = nil  // 解冻高亮行
+        scroll.frozenDisplayIndex = nil
         scroll.rawScrollOffset = 0
         scroll.manualScrollOffset = 0
         musicController.seek(to: line.startTime)
@@ -572,16 +575,16 @@ public struct LyricsView: View {
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
             lyricsService.updateCurrentTime(musicController.currentTime)
-            scroll.isManualScrolling = false
-            lyricsService.isManualScrolling = false
             scroll.lockedLineIndex = nil
-            scroll.frozenDisplayIndex = nil  // 解冻高亮行
+            scroll.rawScrollOffset = 0
             withAnimation(.interpolatingSpring(
                 mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
             )) {
+                scroll.frozenDisplayIndex = nil
+                scroll.isManualScrolling = false
+                lyricsService.isManualScrolling = false
                 scroll.manualScrollOffset = 0
             }
-            scroll.rawScrollOffset = 0
             scroll.scrollLocked = false
             scroll.hasTriggeredSlowScroll = false
         }
@@ -622,11 +625,13 @@ public struct LyricsView: View {
             lyricsService.updateCurrentTime(musicController.currentTime)
 
             scroll.lockedLineIndex = nil
-            scroll.frozenDisplayIndex = nil  // 解冻高亮行
             scroll.rawScrollOffset = 0
             withAnimation(.interpolatingSpring(
                 mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
             )) {
+                // Unfreeze highlight and manual scroll flag atomically
+                // Prevents intermediate state where frozenDisplayIndex=nil but isManualScrolling=true
+                scroll.frozenDisplayIndex = nil
                 scroll.isManualScrolling = false
                 lyricsService.isManualScrolling = false
                 scroll.manualScrollOffset = 0

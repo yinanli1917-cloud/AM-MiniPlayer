@@ -76,15 +76,26 @@ public final class LyricsScorer {
 
         // 4. 时长匹配评分（最多 15 分，或扣分）
         if duration > 0 && !isUnsyncedSource {
-            let lyricsDuration = (lyrics.last?.endTime ?? 0) - (lyrics.first?.startTime ?? 0)
-            let durationDiff = abs(lyricsDuration - duration)
-            let durationDiffRatio = durationDiff / duration
+            let lastStart = lyrics.last?.startTime ?? 0
 
-            if durationDiffRatio < 0.01 { score += 15 }
-            else if durationDiffRatio < 0.03 { score += 12 }
-            else if durationDiffRatio < 0.05 { score += 8 }
-            else if durationDiffRatio < 0.10 { score += 4 }
-            else if durationDiffRatio >= 0.20 { score -= 20 }
+            // 🔑 Overshoot penalty: lyrics extend past song end = likely wrong version
+            // Moderate: prefer correctly-timed sources, but don't lose to unsynced
+            // (Rescaling will fix the timing as a last resort)
+            if lastStart > duration {
+                let overshootRatio = (lastStart - duration) / duration
+                // Scale: 5% over → -5, 10% over → -10, 15%+ over → -15
+                score -= min(15, overshootRatio * 100)
+            } else {
+                let lyricsDuration = (lyrics.last?.endTime ?? 0) - (lyrics.first?.startTime ?? 0)
+                let durationDiff = abs(lyricsDuration - duration)
+                let durationDiffRatio = durationDiff / duration
+
+                if durationDiffRatio < 0.01 { score += 15 }
+                else if durationDiffRatio < 0.03 { score += 12 }
+                else if durationDiffRatio < 0.05 { score += 8 }
+                else if durationDiffRatio < 0.10 { score += 4 }
+                else if durationDiffRatio >= 0.20 { score -= 20 }
+            }
         }
 
         // 5. 时间轴覆盖度（最多 8 分）
