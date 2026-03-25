@@ -146,6 +146,11 @@ extension MusicController {
         internalCurrentTime = position
         // 🔑 标记 seek 执行中，下次轮询时立即同步
         seekPending = true
+        // 🔑 Immediately update lyrics line index while seekPending is true.
+        // interpolateTime() may skip this if diff < 0.1 (recent poll race),
+        // deferring the update until the next poll when seekPending is already cleared
+        // — which lets wave animation trigger and blank the screen.
+        lyricsService.updateCurrentTime(position)
 
         // 🔑 用户交互操作使用高优先级队列
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
