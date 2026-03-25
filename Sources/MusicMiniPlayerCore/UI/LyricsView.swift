@@ -30,6 +30,9 @@ private struct CacheState {
     var cachedAccumulatedHeights: [Int: CGFloat] = [:]
     var heightCacheInvalidated = true
     var lyricsContainerHeight: CGFloat = 300
+    /// Cached renderedIndices — invalidated only when lyrics change
+    var renderedIndicesCached: [Int] = []
+    var renderedIndicesValid = false
 }
 
 /// AMLL 波浪动画状态（纯计算驱动，无 timer）
@@ -125,21 +128,19 @@ public struct LyricsView: View {
             cancelWaveAnimations()
             wave.lastCurrentIndex = -1
             cache.heightCacheInvalidated = true
+            cache.renderedIndicesValid = false
             cache.lineHeights.removeAll()
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
         }
-        .onChange(of: musicController.currentTime) {
-            // 手动滚动时停止更新行索引，避免高亮行跟着跳
-            if !scroll.isManualScrolling {
-                lyricsService.updateCurrentTime(musicController.currentTime)
-            }
-        }
+        // currentTime → lyrics line index update moved to MusicController.interpolateTime()
+        // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
         // ── onChange: 翻译相关 ──
         .onChange(of: lyricsService.lyrics.count) { _, newCount in
             if #available(macOS 15.0, *), newCount > 0 { updateTranslationSessionConfig() }
             cache.heightCacheInvalidated = true
+            cache.renderedIndicesValid = false
         }
         .onChange(of: lyricsService.isLoading) { oldValue, newValue in
             if #available(macOS 15.0, *) {
@@ -295,6 +296,8 @@ public struct LyricsView: View {
             let _ = updateLyricsContainerHeight(containerHeight)
             let _ = ensureHeightCache()
             let anchorY = (containerHeight - controlBarHeight) * 0.24
+            // Pre-compute wave elapsed once per frame (avoids per-line CACurrentMediaTime calls)
+            let waveElapsed = wave.isActive ? CACurrentMediaTime() - wave.startTime : 0.0
 
             // 可视区裁剪：仅自动播放且高度已测全时裁剪
             let visibleRange = 12
@@ -307,36 +310,33 @@ public struct LyricsView: View {
                         let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
 
                         let lineOffset = calculateLineOffset(
-                            index: index, currentIndex: displayIndex, anchorY: anchorY
+                            index: index, currentIndex: displayIndex, anchorY: anchorY, waveElapsed: waveElapsed
                         )
+                        let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
 
                         if isVisible {
                             lyricLineContent(line: line, index: index, currentIndex: displayIndex)
                                 .background(lineHeightTracker(index: index))
-                                .offset(y: lineOffset + calculateAccumulatedHeight(upTo: index))
+                                .offset(y: fullOffset)
                                 .animation(
                                     scroll.isManualScrolling || reduceMotion ? nil : .interpolatingSpring(
                                         mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
                                     ),
-                                    value: {
-                                        let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
-                                        return scroll.isManualScrolling ? 0 : fullOffset
-                                    }()
+                                    value: scroll.isManualScrolling ? 0 : fullOffset
                                 )
                         } else {
-                            // 屏幕外：用真实内容测高但不显示（opacity 0 + 禁动画）
+                            // Off-screen: keep offset for animation continuity, skip rendering
                             lyricLineContent(line: line, index: index, currentIndex: displayIndex)
                                 .background(lineHeightTracker(index: index))
                                 .opacity(0)
                                 .allowsHitTesting(false)
-                                .offset(y: lineOffset + calculateAccumulatedHeight(upTo: index))
+                                .offset(y: fullOffset)
                         }
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .offset(y: scroll.manualScrollOffset)
-            .drawingGroup()
         }
         .modifier(BottomFadeMask(isActive: showControls))
         .id(lyricsViewID)
@@ -369,7 +369,7 @@ public struct LyricsView: View {
                 PreludeDotsView(
                     startTime: line.startTime,
                     endTime: nextLineStartTime,
-                    musicController: musicController
+                    timePublisher: musicController.timePublisher
                 )
                 .frame(height: 30)
                 .padding(.horizontal, 32)
@@ -381,7 +381,7 @@ public struct LyricsView: View {
                         index: index,
                         currentIndex: currentIndex,
                         isScrolling: scroll.isManualScrolling,
-                        currentTime: musicController.currentTime,
+                        isActive: lyricsService.activeLineIndices.contains(index),
                         onTap: { handleLineTap(line: line) },
                         showTranslation: lyricsService.showTranslation,
                         isTranslating: lyricsService.isTranslating,
@@ -390,10 +390,10 @@ public struct LyricsView: View {
                     .padding(.horizontal, 32)
 
                     if let interludeInfo = checkForInterlude(at: index) {
-                        InterludeDotsView(
+                        ObservingInterludeDotsView(
                             startTime: interludeInfo.startTime,
                             endTime: interludeInfo.endTime,
-                            currentTime: musicController.currentTime
+                            timePublisher: musicController.timePublisher
                         )
                         .frame(height: 30)
                         .padding(.top, 8)
@@ -424,19 +424,19 @@ public struct LyricsView: View {
     }
 
     /// 计算每行在 wave 中应跟随的 target index（纯时间计算，无 timer）
-    private func waveTargetIndex(for lineIndex: Int, currentIndex: Int) -> Int {
+    /// `elapsed` is pre-computed once per frame to avoid per-line CACurrentMediaTime() calls
+    private func waveTargetIndex(for lineIndex: Int, currentIndex: Int, elapsed: Double) -> Int {
         guard wave.isActive else { return currentIndex }
         guard let delay = wave.lineDelays[lineIndex] else { return wave.newIndex }
-        let elapsed = CACurrentMediaTime() - wave.startTime
         return elapsed >= delay ? wave.newIndex : wave.oldIndex
     }
 
-    private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
+    private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat, waveElapsed: Double) -> CGFloat {
         if scroll.isManualScrolling {
             let frozenTargetIndex = scroll.lockedLineIndex ?? currentIndex
             return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
         } else {
-            let lineTargetIndex = waveTargetIndex(for: index, currentIndex: currentIndex)
+            let lineTargetIndex = waveTargetIndex(for: index, currentIndex: currentIndex, elapsed: waveElapsed)
             return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
         }
     }
@@ -551,6 +551,11 @@ public struct LyricsView: View {
         // Sync line index to tapped position BEFORE unfreezing
         // Prevents double-jump: frozen → old liveIndex → tapped line
         lyricsService.updateCurrentTime(line.startTime)
+        // Sync wave state so the next natural line advance doesn't see a stale lastCurrentIndex
+        // (the onChange that normally updates this is blocked by isManualScrolling=true above)
+        if let idx = lyricsService.currentLineIndex {
+            wave.lastCurrentIndex = idx
+        }
         scroll.isManualScrolling = false
         lyricsService.isManualScrolling = false
         scroll.lockedLineIndex = nil
@@ -729,10 +734,15 @@ public struct LyricsView: View {
 
     // MARK: - 高度计算 + 缓存
 
+    /// Self-caching: computes once, serves from cache until invalidated
     private var renderedIndices: [Int] {
-        lyricsService.lyrics.enumerated()
+        if cache.renderedIndicesValid { return cache.renderedIndicesCached }
+        let result = lyricsService.lyrics.enumerated()
             .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
             .map { $0.offset }
+        cache.renderedIndicesCached = result
+        cache.renderedIndicesValid = true
+        return result
     }
 
     private func calculateAccumulatedHeight(upTo targetIndex: Int) -> CGFloat {
@@ -740,7 +750,7 @@ public struct LyricsView: View {
             return cached
         }
 
-        let spacing: CGFloat = 6, defaultHeight: CGFloat = 46
+        let spacing: CGFloat = 6, defaultHeight: CGFloat = 36
         var totalHeight: CGFloat = 0
         let indices = renderedIndices
         guard let targetPosition = indices.firstIndex(of: targetIndex) else { return 0 }
@@ -813,13 +823,20 @@ public struct LyricsView: View {
 
         let indices = renderedIndices
 
-        // 快歌（两行间隔 < 1.0s）或 reduceMotion：跳过波浪延迟
+        // Skip wave cascade when: fast song (< 1s between lines), nearby jump (1-2 lines),
+        // or reduceMotion. Nearby jumps look like a "stumble" with wave stagger because the
+        // gap between flipped and unflipped lines temporarily expands then contracts.
         let isFastSong: Bool = {
             guard newIndex > 0, newIndex < lyrics.count, oldIndex >= 0, oldIndex < lyrics.count else { return false }
             return abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime) < 1.0
         }()
+        let isNearbyJump = abs(newIndex - oldIndex) <= 2
 
-        if reduceMotion || isFastSong {
+        // Also skip wave on explicit user seeks (progress bar / tap-to-jump)
+        // — seekPending is set synchronously in seek() and cleared by the next poll.
+        // Without this, wave positions lines at the OLD offset while culling only shows
+        // lines near the NEW index, producing a blank screen until delays expire.
+        if reduceMotion || isFastSong || isNearbyJump || musicController.seekPending {
             wave.isActive = false
             wave.lineDelays.removeAll()
             wave.oldIndex = newIndex
