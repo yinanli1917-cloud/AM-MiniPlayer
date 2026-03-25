@@ -328,18 +328,18 @@ final class LyricsParserTests: XCTestCase {
 
     func testMergeLyricsWithTranslation() {
         let original = [
-            LyricLine(text: "你好", startTime: 10, endTime: 15),
-            LyricLine(text: "世界", startTime: 15, endTime: 20),
+            LyricLine(text: "Stay in the middle", startTime: 10, endTime: 15),
+            LyricLine(text: "Like you a little", startTime: 15, endTime: 20),
         ]
         let translated = [
-            LyricLine(text: "Hello", startTime: 10, endTime: 15),
-            LyricLine(text: "World", startTime: 15, endTime: 20),
+            LyricLine(text: "留在中间", startTime: 10, endTime: 15),
+            LyricLine(text: "像你一样", startTime: 15, endTime: 20),
         ]
         let merged = parser.mergeLyricsWithTranslation(original: original, translated: translated)
 
-        XCTAssertEqual(merged[0].text, "你好")
-        XCTAssertEqual(merged[0].translation, "Hello")
-        XCTAssertEqual(merged[1].translation, "World")
+        XCTAssertEqual(merged[0].text, "Stay in the middle")
+        XCTAssertEqual(merged[0].translation, "留在中间")
+        XCTAssertEqual(merged[1].translation, "像你一样")
     }
 
     func testMergeLyricsWithTranslation_emptyTranslation() {

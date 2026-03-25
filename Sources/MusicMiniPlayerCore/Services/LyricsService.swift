@@ -423,17 +423,26 @@ public class LyricsService: ObservableObject {
         defer { isTranslating = false }
         debugLogPublic("🔄 开始翻译: \(lyrics.count) 行")
 
-        let lyricTexts = lyrics.map { $0.text }
-        guard let translatedTexts = await TranslationService.translationTask(session, lyrics: lyricTexts) else {
+        // 🔑 Filter out vocable lines BEFORE sending to translation API
+        // Vocables (woo, la la, oh oh) cause hallucinated translations
+        var eligibleIndices: [Int] = []
+        for i in 0..<lyrics.count {
+            if !isVocableLine(lyrics[i].text) {
+                eligibleIndices.append(i)
+            }
+        }
+
+        let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
+        guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
             debugLogPublic("❌ 翻译失败")
             translationFailed = true
             currentSongTranslationID = translationID  // Prevent retry for same song
             return
         }
 
-        // 合并翻译
-        for i in 0..<min(lyrics.count, translatedTexts.count) {
-            lyrics[i].translation = translatedTexts[i]
+        // 🔑 Map translations back to eligible indices only — vocable lines get no translation
+        for (translationIdx, lyricsIdx) in eligibleIndices.enumerated() where translationIdx < translatedTexts.count {
+            lyrics[lyricsIdx].translation = translatedTexts[translationIdx]
         }
 
         currentSongTranslationID = translationID

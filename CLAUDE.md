@@ -2,7 +2,7 @@
 Swift 5.9 + SwiftUI + ScriptingBridge + MusicKit + Apple Music API
 GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
 
-> **Rules**: Only run `git push` when the user explicitly asks. Never use private APIs.
+> **Rules**: Only run `git push` when the user explicitly asks. Never use private APIs. Before handing over to the user, you must determine how to verify or test the bug fix / new feature and execute the verification; stay in the verification loop until confirmed working.
 
 ---
 
@@ -113,6 +113,10 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ Always use `source: nil`, let Apple's Translation framework auto-detect
 - ❌ Genius/lyrics.ovh skip timing penalties (duration/coverage/gap) → inflated scores (~46) beat synced sources (~39)
   ✅ `selectBest` prefers synced sources with score >= 30 over unsynced; romaji penalty applies to all unsynced sources
+- ❌ P4 (artist-only match) without title guard → Same-artist collisions when durations align (NewJeans "How Sweet" 191s → "Supernatural" 191s)
+  ✅ P4 requires token overlap or CJK title — blocks coincidental duration-only matches
+- ❌ QQ Music timestamps used raw → Consistently ~0.4s late (verified across 614 lines, 16 songs, median +0.42s vs NetEase)
+  ✅ `qqTimeOffset = 0.4` applied via `applyTimeOffset` (same pattern as NetEase 0.7s)
 - ❌ Dynamic `setActivationPolicy(.regular↔.accessory)` in FloatingWindowDelegate → macOS 26 destroys NSStatusItem visibility on every toggle
   ✅ Use `LSUIElement=true` in Info.plist, only change activation policy in `updateDockVisibility()`
 - ❌ Bundle ID change (MusicMiniPlayer→nanoPod) leaves stale `menuItemLocations` in ControlCenter's `trackedApplications` → status item placed at x=-1 (off-screen)
@@ -122,7 +126,7 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
 ### Matching Algorithm (Unified SearchCandidate)
 
 NetEase/QQ share `SearchCandidate<ID>` + `selectBestCandidate()` priority chain:
-- P1: Title + Artist + Duration < 3s → P2: Title + Artist + Duration < 20s → P3: Title-only + Duration < 1s → P4: Artist-only + Duration < 1s
+- P1: Title + Artist + Duration < 3s → P2: Title + Artist + Duration < 20s → P3: Title-only + Duration < 1s → P4: Artist-only + Duration < 0.5s + title token overlap or CJK
 - `isTitleMatch()` / `isArtistMatch()` handle Simplified/Traditional Chinese + CJK uniformly
 - Dual-title matching with original + resolved (MetadataResolver preserves original title after translation)
 

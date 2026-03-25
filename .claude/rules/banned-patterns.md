@@ -29,6 +29,29 @@ Full architecture reference: `docs/playlist-architecture.md`
 - ❌ `romanized→CJK` using `resultHasCJK` (includes artist) → Use `resultTitleHasCJK` (title-only)
 - ❌ `isLikelyEnglishArtist` word-heuristic → False positives on EPO/JADOES; use high-confidence signals only
 
+### Candidate Matching Traps
+
+- ❌ Title-only match without artist verification (old P3: `titleMatch && durationDiff < 1`) → Common titles match wrong songs ("Once Upon a Time" by Sinatra → Hatsune Miku version)
+- ✅ Three-rule principle: ALL candidate matches require title + artist + duration — no exceptions
+- ❌ Artist-only match without title signal (`artistMatch && durationDiff < X`) → Same-artist different-song collision (NewJeans "How Sweet" 191s → "Supernatural" 191s)
+- ✅ P3 (artist-only + duration) must require token overlap or CJK title — prevents coincidental duration matches from returning wrong lyrics
+- ❌ Trusting test suite pass rate as proxy for lyrics correctness → Benchmark covers ~100 songs, false positives in uncovered songs go undetected
+- ✅ Always verify matched song name in debug log matches requested song; check lyrics TEXT content, not just scores
+
+### Translation Traps
+
+- ❌ Sending vocable/onomatopoeia lines to Translation API → Apple Translation hallucinates meaningful text for "woo woo", "la la la", etc.
+- ✅ Filter vocable lines BEFORE translation batch; vocable lines get no translation
+- ❌ `NSCache.setObject(image, forKey:)` without cost → `totalCostLimit` ignored, only `countLimit` applies; cache eviction too aggressive
+- ✅ Always use `setObject(_:forKey:cost:)` with pixel-based cost; `totalCostLimit` as sole governor, no `countLimit`
+
+### Timing / Interpolation Traps
+
+- ❌ `lastPollTime = Date()` in `applySnapshot` (main thread) → Position was measured BEFORE AppleScript ran; timestamp is too late by AS execution + dispatch latency
+- ✅ Capture `measurementTime` BEFORE osascript execution, pass through `PlayerStateSnapshot`, use as `lastPollTime`
+- ❌ Strict monotonic guard (`clampedTime >= currentTime`) in `interpolateTime` → Overshoot from interpolation is never corrected; poll resync blocked
+- ✅ Allow backward corrections up to 0.5s so poll-based resync can correct interpolation overshoot
+
 ### Menu Bar / Activation Policy Traps
 
 - ❌ Dynamic `setActivationPolicy(.regular↔.accessory)` toggling in window delegates → macOS 26 hides NSStatusItem at x=-1

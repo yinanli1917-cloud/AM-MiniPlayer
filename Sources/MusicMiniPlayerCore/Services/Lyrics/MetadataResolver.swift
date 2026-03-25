@@ -149,8 +149,17 @@ public final class MetadataResolver {
             return (cnResult!.title, cnResult!.artist)
         }
         if locHasCJKTitle {
-            DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先多区域: '\(localized!.title)' by '\(localized!.artist)'")
-            return localized!
+            // 🔑 CN found same ASCII title + ASCII artist → genuinely English song
+            // JP/KR CJK result is an unrelated song with similar duration (e.g., Frank Sinatra → random JP)
+            let cnConfirmsEnglish = cnResult.map {
+                $0.title.lowercased() == title.lowercased() && LanguageUtils.isPureASCII($0.artist)
+            } ?? false
+            if cnConfirmsEnglish {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝多区域 CJK（CN 确认英文歌）: '\(localized!.title)' vs CN '\(cnResult!.title)'")
+            } else {
+                DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先多区域: '\(localized!.title)' by '\(localized!.artist)'")
+                return localized!
+            }
         }
 
         // 都没有 CJK 标题 → 仅当标题未被篡改时接受本地化艺术家

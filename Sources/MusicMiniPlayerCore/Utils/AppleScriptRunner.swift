@@ -23,6 +23,8 @@ struct PlayerStateSnapshot {
     let persistentID: String
     let bitRate: Int
     let sampleRate: Int
+    /// Wall clock time when position was measured (before AppleScript execution)
+    let measurementTime: Date
 }
 
 enum AppleScriptRunner {
@@ -75,8 +77,10 @@ enum AppleScriptRunner {
     /// - Parameter timeout: osascript 超时秒数
     /// - Returns: 解析成功返回 snapshot，失败返回 nil
     static func fetchPlayerState(timeout: TimeInterval = 0.5) -> PlayerStateSnapshot? {
+        // 🔑 Capture wall clock BEFORE osascript runs — position reflects this moment
+        let measurementTime = Date()
         guard let raw = executeOsascript(playerStateScript, timeout: timeout) else { return nil }
-        return parseResponse(raw)
+        return parseResponse(raw, measurementTime: measurementTime)
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -125,7 +129,7 @@ enum AppleScriptRunner {
     }
 
     /// 解析 "|||" 分隔的响应字符串
-    private static func parseResponse(_ raw: String) -> PlayerStateSnapshot? {
+    private static func parseResponse(_ raw: String, measurementTime: Date) -> PlayerStateSnapshot? {
         let parts = raw.components(separatedBy: "|||")
         guard parts.count >= 11 else { return nil }
 
@@ -148,7 +152,8 @@ enum AppleScriptRunner {
             trackDuration: Double(parts[4]) ?? 0,
             persistentID: parts[5],
             bitRate: Int(parts[7]) ?? 0,
-            sampleRate: Int(parts[8]) ?? 0
+            sampleRate: Int(parts[8]) ?? 0,
+            measurementTime: measurementTime
         )
     }
 }

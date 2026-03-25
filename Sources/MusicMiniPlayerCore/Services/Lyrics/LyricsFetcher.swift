@@ -24,6 +24,7 @@ public final class LyricsFetcher {
     private let logger = Logger(subsystem: "com.nanoPod", category: "LyricsFetcher")
 
     private let netEaseTimeOffset: Double = 0.7
+    private let qqTimeOffset: Double = 0.4
     private var amllIndex: [AMLLIndexEntry] = []
     private var amllIndexLastUpdate: Date?
     private var amllIndexLoadFailed: Date?
@@ -190,9 +191,10 @@ public final class LyricsFetcher {
     }
 
     /// 统一优先级选择（消除 NetEase/QQ 的重复匹配逻辑）
-    /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s → P3: 仅标题+时长<1s
-    /// P4: 仅艺术家+时长极精确(<0.5s) — 用于罗马字/翻译标题 vs CJK 标题的场景
-    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String) -> ID? {
+    /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s
+    /// P3: 仅艺术家+时长极精确(<0.5s) — 用于罗马字/翻译标题 vs CJK 标题的场景
+    /// 🔑 No title-only tier: all matches require artist verification (three-rule principle)
+    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "") -> ID? {
         let sorted = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sorted.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }
         DebugLogger.log(source, "🎯 候选: \(desc.joined(separator: ", "))")
@@ -201,10 +203,24 @@ public final class LyricsFetcher {
         let priorities: [(String, (SearchCandidate<ID>) -> Bool)] = [
             ("P1", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 3 }),
             ("P2", { $0.titleMatch && $0.artistMatch && $0.durationDiff < 20 }),
-            ("P3", { $0.titleMatch && $0.durationDiff < 1 }),
-            // 🔑 P4: 仅艺术家匹配 + 时长极精确 — 安全地覆盖罗马字/翻译标题场景
+            // 🔑 P3: 仅艺术家匹配 + 时长极精确 — 覆盖罗马字/翻译标题场景
             // 例如: "Try to Say" → "言い出しかねて -TRY TO SAY-" (Δ0.4s, 同歌手)
-            ("P4", { $0.artistMatch && $0.durationDiff < 0.5 }),
+            // 限制: 结果标题不能和输入完全无关（至少分享一个 3+ 字符 token）
+            ("P3", { candidate in
+                guard candidate.artistMatch && candidate.durationDiff < 0.5 else { return false }
+                guard !inputTitle.isEmpty else { return false }
+                // 防止同歌手不同歌碰巧时长一致的误匹配
+                let inputTokens = inputTitle.lowercased()
+                    .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+                let resultTokens = LanguageUtils.normalizeTrackName(candidate.name).lowercased()
+                    .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+                let hasTokenOverlap = inputTokens.contains { t in
+                    t.count >= 3 && resultTokens.contains(where: { $0.contains(t) || t.contains($0) })
+                }
+                // CJK 标题允许无 token 重叠（罗马字 vs 汉字/假名）
+                let resultHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
+                return hasTokenOverlap || resultHasCJK
+            }),
         ]
 
         for (label, predicate) in priorities {
@@ -522,7 +538,7 @@ public final class LyricsFetcher {
                 let candidates = buildCandidates(
                     songs: songs, params: params, extractSong: extractSong
                 )
-                if let id = selectBestCandidate(candidates, source: source) { return id }
+                if let id = selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle) { return id }
             } catch { continue }
         }
         return nil
@@ -704,7 +720,7 @@ public final class LyricsFetcher {
             // 🔑 最后一道防线：剥离非中文歌曲中的中文翻译
             lyrics = parser.stripChineseTranslations(lyrics)
 
-            return lyrics
+            return parser.applyTimeOffset(to: lyrics, offset: qqTimeOffset)
         } catch {
             return nil
         }

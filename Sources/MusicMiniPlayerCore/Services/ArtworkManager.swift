@@ -43,8 +43,15 @@ public final class ArtworkManager {
     // ========================================================================
 
     private init() {
-        cache.countLimit = 100
-        cache.totalCostLimit = 50 * 1024 * 1024  // 50MB
+        cache.totalCostLimit = 50 * 1024 * 1024  // 50MB — sole governor, no countLimit
+    }
+
+    /// Estimate NSImage memory cost (RGBA, 4 bytes/pixel)
+    private func imageCost(_ image: NSImage) -> Int {
+        let rep = image.representations.first
+        let w = rep?.pixelsWide ?? Int(image.size.width)
+        let h = rep?.pixelsHigh ?? Int(image.size.height)
+        return max(w * h * 4, 1)
     }
 
     // ========================================================================
@@ -60,7 +67,7 @@ public final class ArtworkManager {
     /// 缓存封面
     public func setCached(_ image: NSImage, persistentID: String) {
         guard !persistentID.isEmpty else { return }
-        cache.setObject(image, forKey: persistentID as NSString)
+        cache.setObject(image, forKey: persistentID as NSString, cost: imageCost(image))
     }
 
     // ========================================================================

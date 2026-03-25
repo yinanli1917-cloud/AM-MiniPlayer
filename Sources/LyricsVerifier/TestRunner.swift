@@ -74,9 +74,11 @@ func testSongWithLyrics(
     }
 
     let rawLyrics = bestLyrics ?? []
-    // Rescale as last resort (mirrors LyricsService behavior)
-    let lyrics = fetcher.rescaleTimestamps(rawLyrics, duration: duration)
-    let firstReal = lyrics.first {
+    // Rescale + processLyrics (mirrors LyricsService behavior)
+    let rescaled = fetcher.rescaleTimestamps(rawLyrics, duration: duration)
+    let processed = LyricsParser.shared.processLyrics(rescaled)
+    let lyrics = processed.lyrics
+    let firstReal = lyrics.dropFirst(processed.firstRealLyricIndex).first {
         let t = $0.text.trimmingCharacters(in: .whitespaces)
         return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
     }

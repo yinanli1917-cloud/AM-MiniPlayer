@@ -74,10 +74,17 @@ public class MusicController: ObservableObject {
 
     var artworkCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 100
-        cache.totalCostLimit = 100 * 1024 * 1024  // 100MB
+        cache.totalCostLimit = 100 * 1024 * 1024  // 100MB — sole governor, no countLimit
         return cache
     }()
+
+    /// Estimate NSImage memory cost for NSCache (RGBA, 4 bytes/pixel)
+    static func imageCacheCost(_ image: NSImage) -> Int {
+        let rep = image.representations.first
+        let w = rep?.pixelsWide ?? Int(image.size.width)
+        let h = rep?.pixelsHigh ?? Int(image.size.height)
+        return max(w * h * 4, 1)
+    }
 
     // ScriptingBridge 队列：核心操作(高优先级) / 封面获取(后台串行)
     let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
@@ -450,9 +457,11 @@ public class MusicController: ObservableObject {
         let interpolatedTime = internalCurrentTime + elapsed
         let clampedTime = duration > 0 ? min(interpolatedTime, duration) : interpolatedTime
 
-        // 单调递增（除非差距 >2s 说明 seek 了），阈值 0.1s 减少重绘
-        if clampedTime >= currentTime || (currentTime - clampedTime) > 2.0 {
-            if abs(clampedTime - currentTime) >= 0.1 {
+        // 🔑 Allow backward corrections up to 0.5s (poll resync after overshoot)
+        // Only block large backward jumps (> 2s = seek, handled by applySnapshot)
+        let diff = clampedTime - currentTime
+        if diff >= 0 || diff > -0.5 {
+            if abs(diff) >= 0.1 {
                 currentTime = clampedTime
             }
         }
@@ -555,7 +564,7 @@ public class MusicController: ObservableObject {
         // 缓存未命中，从 SB 获取
         let artworkImage = getArtworkImageFromApp(app)
         if let image = artworkImage, !persistentID.isEmpty {
-            artworkCache.setObject(image, forKey: persistentID as NSString)
+            artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
         }
         return (persistentID, artworkImage)
     }
@@ -641,9 +650,11 @@ public class MusicController: ObservableObject {
         if duration != s.trackDuration { duration = s.trackDuration }
 
         // 时间同步
+        // 🔑 Use measurementTime (captured before AppleScript ran) instead of Date()
+        // Eliminates systematic lag from AS execution + thread dispatch
         let timeDiff = abs(s.position - currentTime)
         internalCurrentTime = s.position
-        lastPollTime = Date()
+        lastPollTime = s.measurementTime
         if seekPending || !isPlaying || timeDiff > 2.0 {
             currentTime = s.position
             seekPending = false
@@ -680,5 +691,6 @@ public class MusicController: ObservableObject {
         currentTime = 0
         internalCurrentTime = 0
         audioQuality = nil
+        setArtwork(nil)
     }
 }

@@ -368,6 +368,14 @@ public final class LyricsParser {
             )
         }
 
+        // 🔑 Strip translations from vocable lines — source translations (NetEase tlyric)
+        // hallucinate meaningful text for "woo woo", "la la la", etc.
+        filteredLyrics = filteredLyrics.map { line in
+            guard line.hasTranslation, isVocableLine(line.text) else { return line }
+            return LyricLine(text: line.text, startTime: line.startTime, endTime: line.endTime,
+                             words: line.words, translation: nil)
+        }
+
         // 插入前奏占位符
         let loadingLine = LyricLine(text: "⋯", startTime: 0, endTime: firstRealLyricStartTime)
         return ([loadingLine] + filteredLyrics, 1)
@@ -575,8 +583,16 @@ public final class LyricsParser {
     // MARK: - 翻译合并
 
     /// 合并原文歌词和翻译歌词（O(n) 时间戳索引匹配）
+    /// 🔑 Rejects tlyric with low content rate (mostly empty lines = partial adaptation, not translation)
     public func mergeLyricsWithTranslation(original: [LyricLine], translated: [LyricLine]) -> [LyricLine] {
         guard !translated.isEmpty else { return original }
+
+        // 🔑 Coverage check: tlyric must cover >= 50% of original lines
+        // Partial adaptations (14 lines for 69-line song) are not real translations
+        guard Double(translated.count) / Double(max(original.count, 1)) >= 0.5 else {
+            DebugLogger.log("LyricsParser", "⚠️ tlyric rejected: only \(translated.count)/\(original.count) lines (partial)")
+            return original
+        }
 
         // 按 startTime 建立索引，O(n) 查找
         let translationMap = Dictionary(
@@ -586,12 +602,11 @@ public final class LyricsParser {
 
         return original.map { line in
             let key = Int(line.startTime * 10)
-            // 精确匹配（±0.1s 内）或扩展搜索（±1.0s）
             let matchText = translationMap[key]
                 ?? translationMap[key - 1] ?? translationMap[key + 1]
                 ?? translationMap[key - 5] ?? translationMap[key + 5]
 
-            guard let text = matchText else { return line }
+            guard let text = matchText, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return line }
             return LyricLine(
                 text: line.text, startTime: line.startTime, endTime: line.endTime,
                 words: line.words, translation: text

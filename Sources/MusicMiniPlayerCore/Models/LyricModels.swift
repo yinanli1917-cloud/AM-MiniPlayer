@@ -81,6 +81,42 @@ public let kInstrumentalPatterns: [String] = [
 ]
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Vocable Detection (LyricsParser + LyricsService shared)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Vocable syllables that should NOT be translated
+private let kVocableSyllables: Set<String> = [
+    "woo", "ooh", "oh", "ah", "uh", "eh", "mm", "hmm", "hm",
+    "la", "na", "da", "ba", "do", "doo", "sha", "ra",
+    "yeah", "yay", "hey", "hoo", "whoa", "wo", "oo",
+    "ooo", "aah", "ohh", "shh", "mmm",
+]
+
+/// Detect vocable/onomatopoeia lines — translations of these are hallucinated nonsense
+/// e.g., "Woo woo woo woo ooh", "La la la", "Oh oh oh oh"
+public func isVocableLine(_ text: String) -> Bool {
+    let cleaned = text.lowercased()
+        .replacingOccurrences(of: ",", with: " ")
+        .replacingOccurrences(of: "-", with: " ")
+        .replacingOccurrences(of: "~", with: "")
+        .replacingOccurrences(of: "～", with: "")
+        .replacingOccurrences(of: "!", with: "")
+        .trimmingCharacters(in: .whitespaces)
+
+    guard !cleaned.isEmpty else { return false }
+
+    let words = cleaned.split(separator: " ").map { String($0) }.filter { !$0.isEmpty }
+    guard !words.isEmpty else { return false }
+
+    return words.allSatisfy { word in
+        if kVocableSyllables.contains(word) { return true }
+        // Repeated single vowel/consonant: "ooooh", "aaah", "mmmm"
+        let unique = Set(word)
+        return unique.count <= 2 && word.count >= 2
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Cache Item (歌词缓存)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

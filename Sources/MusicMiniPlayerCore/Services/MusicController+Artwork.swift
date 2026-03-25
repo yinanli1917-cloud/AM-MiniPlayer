@@ -260,7 +260,7 @@ extension MusicController {
         guard isStillCurrentTrack(persistentID: persistentID, title: title) else { return }
         setArtwork(image)
         if !persistentID.isEmpty {
-            artworkCache.setObject(image, forKey: persistentID as NSString)
+            artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
         }
     }
 
@@ -329,7 +329,7 @@ extension MusicController {
 
         // 缓存结果
         if let image = image {
-            artworkCache.setObject(image, forKey: persistentID as NSString)
+            artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
         }
 
         return image
