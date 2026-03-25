@@ -111,6 +111,8 @@ public func isVocableLine(_ text: String) -> Bool {
     return words.allSatisfy { word in
         if kVocableSyllables.contains(word) { return true }
         // Repeated single vowel/consonant: "ooooh", "aaah", "mmmm"
+        // 🔑 ASCII only — Korean 2-syllable words (거기, 숨지) have unique.count=2 but are real words
+        guard word.allSatisfy({ $0.isASCII }) else { return false }
         let unique = Set(word)
         return unique.count <= 2 && word.count >= 2
     }
