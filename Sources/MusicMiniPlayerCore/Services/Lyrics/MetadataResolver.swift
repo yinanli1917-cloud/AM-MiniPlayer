@@ -164,6 +164,13 @@ public final class MetadataResolver {
 
         // 都没有 CJK 标题 → 仅当标题未被篡改时接受本地化艺术家
         // 🔑 ASCII→不同ASCII 的标题替换是错误匹配（如 "Moon Style Love" → "milk tea"）
+        // 🔑 日文假名优先：歌词库(NetEase/QQ)存日文原名(中原めいこ)，不存中文汉字(中原明子)
+        //    当多区域艺术家含假名时，优先使用 → 直接命中歌词库
+        if let loc = localized, loc.title.lowercased() == title.lowercased(),
+           LanguageUtils.containsJapanese(loc.artist) {
+            DebugLogger.log("MetadataResolver", "✅ 罗马字→假名艺术家优先: '\(loc.title)' by '\(loc.artist)'")
+            return loc
+        }
         if let cn = cnResult, cn.title.lowercased() == title.lowercased() || !LanguageUtils.isPureASCII(cn.title) {
             DebugLogger.log("MetadataResolver", "⚠️ 罗马字仅艺术家解析(CN): '\(cn.title)' by '\(cn.artist)'")
             return (cn.title, cn.artist)
@@ -425,6 +432,7 @@ public final class MetadataResolver {
         var romanizedCandidates: [RegionCandidate] = []
         let inputArtistLower = artist.lowercased()
         let inputTitleLower = title.lowercased()
+        let normalizedInputTitle = LanguageUtils.normalizeTrackName(title).lowercased()
 
         for result in results {
             guard let trackName = result["trackName"] as? String,
@@ -441,8 +449,9 @@ public final class MetadataResolver {
                               resultArtistLower.contains(inputArtistLower) ||
                               inputArtistLower.split(separator: " ").contains { resultArtistLower.contains($0.lowercased()) }
 
-            let titleMatch = inputTitleLower.contains(trackName.lowercased()) ||
-                             trackName.lowercased().contains(inputTitleLower)
+            // 🔑 Normalized equality — prevents "(Instrumental)" / "(Winter ver.)" from matching original
+            let normalizedResult = LanguageUtils.normalizeTrackName(trackName).lowercased()
+            let titleMatch = normalizedInputTitle == normalizedResult
 
             let isLocalized = trackName.lowercased() != inputTitleLower ||
                               artistName.lowercased() != inputArtistLower
@@ -489,8 +498,14 @@ public final class MetadataResolver {
         _ tiers: (title: [RegionCandidate], artistCJK: [RegionCandidate], romanized: [RegionCandidate]),
         region: String
     ) -> (String, String, String, Double)? {
-        // titleMatch 最可靠 → 直接取最佳
-        if let best = tiers.title.min(by: { $0.durationDiff < $1.durationDiff }) {
+        // titleMatch 最可靠 → 取最佳（同时长时优先无后缀标题）
+        if !tiers.title.isEmpty {
+            let sorted = tiers.title.sorted { $0.durationDiff < $1.durationDiff }
+            // 🔑 Among candidates within 0.1s of the best duration, prefer shortest raw title.
+            // This makes "How Sweet" beat "How Sweet (Instrumental)" when both normalize equally.
+            let threshold = sorted[0].durationDiff + 0.1
+            let close = sorted.filter { $0.durationDiff <= threshold }
+            let best = close.min(by: { $0.trackName.count < $1.trackName.count }) ?? sorted[0]
             return (best.trackName, best.artistName, region, best.durationDiff)
         }
         // artist+CJK 需唯一候选（同歌手不同歌时长可能极度接近）
