@@ -130,6 +130,16 @@ public struct LyricsView: View {
             cache.heightCacheInvalidated = true
             cache.renderedIndicesValid = false
             cache.lineHeights.removeAll()
+            // 🔑 Reset manual scroll state — prevents stuck isManualScrolling
+            // when track changes during a manual scroll (timer would fire on stale state)
+            autoScrollTimer?.invalidate()
+            autoScrollTimer = nil
+            scroll.isManualScrolling = false
+            lyricsService.isManualScrolling = false
+            scroll.manualScrollOffset = 0
+            scroll.rawScrollOffset = 0
+            scroll.frozenDisplayIndex = nil
+            scroll.lockedLineIndex = nil
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration)
@@ -580,6 +590,10 @@ public struct LyricsView: View {
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
             lyricsService.updateCurrentTime(musicController.currentTime)
+            // 🔑 Sync wave state BEFORE unfreezing (same pattern as handleLineTap/handleScrollEnded)
+            if let idx = lyricsService.currentLineIndex {
+                wave.lastCurrentIndex = idx
+            }
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
             withAnimation(.interpolatingSpring(
@@ -628,6 +642,13 @@ public struct LyricsView: View {
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
             // 恢复前先同步到最新播放位置，避免跳回旧位置
             lyricsService.updateCurrentTime(musicController.currentTime)
+            // 🔑 Sync wave state BEFORE unfreezing — same pattern as handleLineTap.
+            // Without this, interpolateTime() calls updateCurrentTime the instant
+            // isManualScrolling goes false, onChange sees a stale wave.lastCurrentIndex,
+            // and triggers a wave cascade that blanks the screen.
+            if let idx = lyricsService.currentLineIndex {
+                wave.lastCurrentIndex = idx
+            }
 
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0

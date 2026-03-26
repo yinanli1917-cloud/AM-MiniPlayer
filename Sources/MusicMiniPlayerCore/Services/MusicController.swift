@@ -29,6 +29,14 @@ public enum PlayerPage {
     case playlist
 }
 
+// MARK: - TimePublisher (isolated high-frequency time updates)
+/// Separate ObservableObject for currentTime to avoid triggering objectWillChange
+/// on MusicController at 10Hz. Only views that need time reactivity (progress bar,
+/// interlude dots) observe this. LyricsView's ForEach body won't re-evaluate on time changes.
+public class TimePublisher: ObservableObject {
+    @Published public var currentTime: Double = 0
+}
+
 // MARK: - MusicController
 
 public class MusicController: ObservableObject {
@@ -47,7 +55,13 @@ public class MusicController: ObservableObject {
     @Published public var currentAlbum: String = ""
     @Published public var currentArtwork: NSImage? = nil
     @Published public var duration: Double = 0
-    @Published public var currentTime: Double = 0
+    // currentTime is NOT @Published to avoid triggering objectWillChange at 10Hz,
+    // which would cause ALL views observing MusicController to re-evaluate body.
+    // Views needing time reactivity observe timePublisher instead.
+    public var currentTime: Double = 0 {
+        didSet { timePublisher.currentTime = currentTime }
+    }
+    public let timePublisher = TimePublisher()
     @Published public var connectionError: String? = nil
     @Published public var audioQuality: String? = nil // "Lossless", "Hi-Res Lossless", "Dolby Atmos", nil
     @Published public var shuffleEnabled: Bool = false
@@ -129,7 +143,8 @@ public class MusicController: ObservableObject {
     // MARK: - Timer 管理
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    private var pollingTimer: Timer?
+    private var pollingTimer: Timer?          // 0.5s — lightweight SB position reads
+    private var fullSyncTimer: Timer?          // 30s — full SB state sync safety net
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var interpolationTimerActive = false
@@ -333,15 +348,22 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // 0.5s 轮询（歌词同步需要），.common mode 保证拖动时也更新
+            // 0.5s lightweight SB position poll (lyrics sync needs sub-second accuracy)
             self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                self?.updatePlayerState()
+                self?.pollPositionViaSB()
             }
             RunLoop.main.add(self.pollingTimer!, forMode: .common)
-            self.pollingTimer?.fire()
 
-            // 2s 队列 hash 检测
-            self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            // 30s full state sync (safety net for shuffle/repeat/quality)
+            // Notifications handle track changes; SB poll handles position/playing state
+            self.fullSyncTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+                self?.updatePlayerState()
+            }
+            RunLoop.main.add(self.fullSyncTimer!, forMode: .common)
+            self.fullSyncTimer?.fire()  // initial full sync on startup
+
+            // 5s 队列 hash 检测 (notification path catches most changes immediately)
+            self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
                 self?.checkQueueHashAndRefresh()
             }
             RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
@@ -355,6 +377,8 @@ public class MusicController: ObservableObject {
     private func stopTimers() {
         pollingTimer?.invalidate()
         pollingTimer = nil
+        fullSyncTimer?.invalidate()
+        fullSyncTimer = nil
         interpolationTimer?.invalidate()
         interpolationTimer = nil
         interpolationTimerActive = false
@@ -452,9 +476,12 @@ public class MusicController: ObservableObject {
     private func interpolateTime() {
         guard isPlaying, !isPreview else { return }
         let elapsed = Date().timeIntervalSince(lastPollTime)
-        guard elapsed >= 0 && elapsed < 3.0 else { return }
+        guard elapsed >= 0 else { return }
+        // 🔑 Cap at 3s instead of bailing — prevents total freeze when SB queue
+        // is blocked by artwork fetch. Interpolation drifts slightly but lyrics keep scrolling.
+        let cappedElapsed = min(elapsed, 3.0)
 
-        let interpolatedTime = internalCurrentTime + elapsed
+        let interpolatedTime = internalCurrentTime + cappedElapsed
         let clampedTime = duration > 0 ? min(interpolatedTime, duration) : interpolatedTime
 
         // 🔑 Allow backward corrections up to 0.5s (poll resync after overshoot)
@@ -463,6 +490,11 @@ public class MusicController: ObservableObject {
         if diff >= 0 || diff > -0.5 {
             if abs(diff) >= 0.1 {
                 currentTime = clampedTime
+                // Update lyrics line index here (not in LyricsView's onChange)
+                // to avoid triggering unnecessary SwiftUI body re-evaluations
+                if !lyricsService.isManualScrolling {
+                    lyricsService.updateCurrentTime(clampedTime)
+                }
             }
         }
     }
@@ -481,10 +513,18 @@ public class MusicController: ObservableObject {
             let (trackChanged, newName, newArtist, newAlbum) = self.applyTrackMetadata(from: userInfo)
 
             if trackChanged, let name = newName, let artist = newArtist {
+                // 🔑 Reset time state BEFORE dispatching heavy SB work.
+                // Without this, interpolateTime() uses old track's position (e.g. 180s)
+                // while the SB queue is blocked by artwork fetch (1-3s), freezing lyrics.
+                self.currentTime = 0
+                self.internalCurrentTime = 0
+                self.lastPollTime = Date()
                 self.handleTrackChange(name: name, artist: artist, album: newAlbum ?? self.currentAlbum)
             }
 
-            self.updatePlayerState()
+            // Lightweight SB poll for position sync (notification doesn't carry position)
+            self.pollPositionViaSB()
+            self.updateTimerState()
         }
     }
 
@@ -521,7 +561,8 @@ public class MusicController: ObservableObject {
 
         let generation = incrementGeneration()
 
-        // 一次性获取 persistentID + artwork，避免两次排队
+        // 🔑 Artwork + ID fetch on SB queue — NO Thread.sleep here.
+        // Duration verification retries are dispatched separately (below) so polls aren't blocked.
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self, let app = self.musicApp, app.isRunning else { return }
             guard self.artworkFetchGeneration == generation else {
@@ -531,17 +572,51 @@ public class MusicController: ObservableObject {
 
             let (persistentID, artworkImage) = self.fetchIDAndArtwork(from: app)
 
+            // Single immediate duration attempt (no retry, no sleep)
+            var sbDuration: Double = 0
+            if let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+               let sbName = currentTrack.value(forKey: "name") as? String,
+               sbName == name,
+               let dur = currentTrack.value(forKey: "duration") as? Double, dur > 0 {
+                sbDuration = dur
+            }
+
             DispatchQueue.main.async {
                 self.currentPersistentID = persistentID
+                if sbDuration > 0 { self.duration = sbDuration }
                 if let image = artworkImage {
                     self.setArtwork(image)
                 } else {
                     self.handleArtworkMiss(persistentID: persistentID, name: name, artist: artist, album: album, generation: generation)
                 }
                 self.fetchUpNextQueue()
-                // 🔑 直接用通知的 name/artist 触发歌词获取
+                let fetchDuration = sbDuration > 0 ? sbDuration : self.duration
                 Task { @MainActor in
-                    self.lyricsService.fetchLyrics(for: name, artist: artist, duration: self.duration)
+                    self.lyricsService.fetchLyrics(for: name, artist: artist, duration: fetchDuration)
+                }
+
+                // 🔑 Duration retry OFF the SB queue — delayed dispatch lets Music.app settle
+                // without blocking position polls. If first attempt got duration, skip retry.
+                if sbDuration == 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        self?.retryDurationFetch(name: name, generation: generation)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Retry duration fetch after a delay — separate SB queue block so polls aren't starved
+    private func retryDurationFetch(name: String, generation: Int) {
+        scriptingBridgeQueue.async { [weak self] in
+            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            guard self.artworkFetchGeneration == generation else { return }
+            if let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+               let sbName = currentTrack.value(forKey: "name") as? String,
+               sbName == name,
+               let dur = currentTrack.value(forKey: "duration") as? Double, dur > 0 {
+                DispatchQueue.main.async {
+                    self.duration = dur
                 }
             }
         }
@@ -586,23 +661,115 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - State Updates（轮询路径）
+    // MARK: - Lightweight SB Position Poll (0.5s, in-process IPC)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+    /// Reads only playerPosition + playerState via ScriptingBridge (no process spawn).
+    /// ~0.1ms vs ~15-25ms for osascript. Called at 2Hz for lyrics sync.
+    private func pollPositionViaSB() {
+        guard !isPreview, let app = musicApp, app.isRunning else { return }
+
+        scriptingBridgeQueue.async { [weak self] in
+            guard let self = self else { return }
+            let measurementTime = Date()
+
+            // SB direct property reads — in-process Mach port IPC, no osascript spawn
+            let position = app.value(forKey: "playerPosition") as? Double ?? 0
+            let stateRaw = app.value(forKey: "playerState") as? Int ?? 0
+            let playing = (stateRaw == Self.sbPlaying)
+
+            DispatchQueue.main.async {
+                // Update playing state (respect user action lock)
+                if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
+                    if self.isPlaying != playing { self.isPlaying = playing }
+                }
+
+                // Time sync — same logic as applySnapshot
+                let timeDiff = abs(position - self.currentTime)
+                self.internalCurrentTime = position
+                self.lastPollTime = measurementTime
+                if self.seekPending || !self.isPlaying || timeDiff > 2.0 {
+                    let wasSeeking = self.seekPending
+                    self.currentTime = position
+                    self.seekPending = false
+                    // 🔑 Update lyrics on hard time sync — safety net for when
+                    // interpolateTime() was stale (SB queue blocked by artwork fetch).
+                    // Skip during seek: seek() already called updateCurrentTime, and
+                    // triggerWaveAnimation needs seekPending=true to skip the cascade.
+                    if !wasSeeking && !self.lyricsService.isManualScrolling {
+                        self.lyricsService.updateCurrentTime(position)
+                    }
+                }
+
+                self.updateTimerState()
+            }
+        }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Full State Sync (10s safety net, pure SB — no process spawn)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // SB FourCC codes (verified empirically — differ from AppleEventCode constants)
+    private static let sbPlaying: Int  = 0x6B505350  // 'kPSP'
+    private static let sbStopped: Int  = 0x6B505353  // 'kPSS'
+    private static let sbRepeatOne: Int = 0x6B527031  // 'kRp1'
+    private static let sbRepeatAll: Int = 0x6B416C6C  // 'kAll'
+
     func updatePlayerState() {
-        guard !isPreview else { return }
+        guard !isPreview, let app = musicApp, app.isRunning else { return }
 
-        // 超时节流：避免 AppleScript 轮询重叠
+        // 超时节流
         let now = Date()
-        let timeSinceLastUpdate = now.timeIntervalSince(lastUpdateTime)
-        guard timeSinceLastUpdate >= updateTimeout else { return }
+        guard now.timeIntervalSince(lastUpdateTime) >= updateTimeout else { return }
         lastUpdateTime = now
-        debugPrint("📊 [updatePlayerState] Fallback to AppleScript (last: \(String(format: "%.2f", timeSinceLastUpdate))s ago)\n")
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self,
-                  let snapshot = AppleScriptRunner.fetchPlayerState() else { return }
+        scriptingBridgeQueue.async { [weak self] in
+            guard let self = self else { return }
+            let measurementTime = Date()
 
+            // Read all state via SB (in-process Mach IPC, no osascript spawn)
+            let position = app.value(forKey: "playerPosition") as? Double ?? 0
+            let stateRaw = app.value(forKey: "playerState") as? Int ?? 0
+            let shuffle = app.value(forKey: "shuffleEnabled") as? Bool ?? false
+            let repeatRaw = app.value(forKey: "songRepeat") as? Int ?? 0
+
+            let repeatMode: Int = {
+                if repeatRaw == Self.sbRepeatOne { return 1 }
+                if repeatRaw == Self.sbRepeatAll { return 2 }
+                return 0
+            }()
+
+            guard let track = app.value(forKey: "currentTrack") as? NSObject else {
+                DispatchQueue.main.async {
+                    self.applyNoTrack()
+                    self.updateTimerState()
+                }
+                return
+            }
+
+            let trackName = track.value(forKey: "name") as? String ?? ""
+            let trackArtist = track.value(forKey: "artist") as? String ?? ""
+            let trackAlbum = track.value(forKey: "album") as? String ?? ""
+            let trackDuration = track.value(forKey: "duration") as? Double ?? 0
+            let persistentID = track.value(forKey: "persistentID") as? String ?? ""
+            let bitRate = track.value(forKey: "bitRate") as? Int ?? 0
+            let sampleRate = track.value(forKey: "sampleRate") as? Int ?? 0
+
+            let snapshot = PlayerStateSnapshot(
+                isPlaying: stateRaw == Self.sbPlaying,
+                position: position,
+                shuffle: shuffle,
+                repeatMode: repeatMode,
+                trackName: trackName,
+                trackArtist: trackArtist,
+                trackAlbum: trackAlbum,
+                trackDuration: trackDuration,
+                persistentID: persistentID,
+                bitRate: bitRate,
+                sampleRate: sampleRate,
+                measurementTime: measurementTime
+            )
             self.processPlayerState(snapshot)
         }
     }
@@ -656,8 +823,12 @@ public class MusicController: ObservableObject {
         internalCurrentTime = s.position
         lastPollTime = s.measurementTime
         if seekPending || !isPlaying || timeDiff > 2.0 {
+            let wasSeeking = seekPending
             currentTime = s.position
             seekPending = false
+            if !wasSeeking && !lyricsService.isManualScrolling {
+                lyricsService.updateCurrentTime(s.position)
+            }
         }
 
         if audioQuality != quality { audioQuality = quality }
