@@ -655,13 +655,10 @@ struct PlaylistItemRowCompact: View {
             return
         }
 
-        if let localImg = await musicController.fetchArtworkByPersistentID(persistentID: pid) {
-            await MainActor.run {
-                if currentArtworkID == pid { artwork = localImg }
-            }
-            return
-        }
-
+        // 🔑 Skip SB path — each fetchArtworkByPersistentID blocks the serial
+        // scriptingBridgeQueue for 100-200ms, and 10+ playlist rows prefetching
+        // back-to-back starve position polls for 10-23s, freezing lyrics/progress.
+        // MusicKit/iTunes API runs on URLSession (concurrent), zero SB contention.
         let img = await musicController.fetchMusicKitArtwork(
             title: track.title,
             artist: track.artist,

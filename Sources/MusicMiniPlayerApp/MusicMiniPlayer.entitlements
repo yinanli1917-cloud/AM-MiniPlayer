@@ -14,10 +14,16 @@
 	<key>com.apple.security.network.client</key>
 	<true/>
 
-	<!-- ✅ 指定可控制的 App (App Store 要求) -->
-	<key>com.apple.security.temporary-exception.apple-events</key>
-	<array>
-		<string>com.apple.Music</string>
-	</array>
+	<!-- ✅ Fine-grained Music.app scripting access (preferred over temporary-exception) -->
+	<key>com.apple.security.scripting-targets</key>
+	<dict>
+		<key>com.apple.Music</key>
+		<array>
+			<string>com.apple.Music.playback</string>
+			<string>com.apple.Music.library.read</string>
+			<string>com.apple.Music.library.read-write</string>
+			<string>com.apple.Music.user-interface</string>
+		</array>
+	</dict>
 </dict>
 </plist>

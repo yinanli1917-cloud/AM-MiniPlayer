@@ -1,141 +1,58 @@
 [
   {
-    "id": "T01",
-    "title": "None of Your Business (feat. Kumachan)",
-    "artist": "Julia Peng",
-    "duration": 212,
+    "id": "MH-01",
+    "title": "Behind You (2021 Remaster)",
+    "artist": "Hitomi Tohyama",
+    "duration": 208,
+    "playlist": "Midnight Highway '86",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": null,
       "firstLineContains": null
     }
   },
   {
-    "id": "T02",
-    "title": "Between Love and You",
-    "artist": "Naiwen Yang",
-    "duration": 240,
+    "id": "MH-02",
+    "title": "Mick Jagger Ni Hohoemi O (2012 Remastered)",
+    "artist": "Akina Nakamori",
+    "duration": 283,
+    "playlist": "Midnight Highway '86",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": null,
       "firstLineContains": null
     }
   },
   {
-    "id": "C01",
-    "title": "女爵",
-    "artist": "杨乃文",
-    "duration": 252,
+    "id": "MH-03",
+    "title": "MORNING HIGHWAY",
+    "artist": "Anri",
+    "duration": 233,
+    "playlist": "Midnight Highway '86",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "acceptableSources": null,
       "firstLineContains": null
     }
   },
   {
-    "id": "C02",
-    "title": "叶子 (电视剧《蔷薇之恋》原声带版)",
-    "artist": "阿桑",
-    "duration": 295,
+    "id": "MH-04",
+    "title": "Tell Me Oh Mama",
+    "artist": "Naoko Gushima",
+    "duration": 238,
+    "playlist": "Midnight Highway '86",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": null,
       "firstLineContains": null
     }
   },
   {
-    "id": "C03",
-    "title": "晴天",
-    "artist": "周杰伦",
-    "duration": 269,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "C04",
-    "title": "起风了",
-    "artist": "买辣椒也用券",
-    "duration": 325,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "R03",
-    "title": "Koibitotachi no Chiheisen",
-    "artist": "Momoko Kikuchi",
-    "duration": 260,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh", "LRCLIB", "Genius"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "J01",
-    "title": "残酷な天使のテーゼ",
-    "artist": "高橋洋子",
-    "duration": 263,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["AMLL", "NetEase", "QQ"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "K01",
-    "title": "Love Lee",
-    "artist": "AKMU",
-    "duration": 197,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ", "Genius"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "E01",
-    "title": "Bohemian Rhapsody",
-    "artist": "Queen",
-    "duration": 355,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "E02",
-    "title": "Hotel California",
-    "artist": "Eagles",
-    "duration": 391,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "E03",
-    "title": "Shape of You",
-    "artist": "Ed Sheeran",
-    "duration": 234,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
-      "firstLineContains": null
-    }
-  },
-  {
-    "id": "R04",
-    "title": "Moon Style Love",
-    "artist": "JADOES",
-    "duration": 288,
+    "id": "MH-05",
+    "title": "Last Story",
+    "artist": "Hatsumi Shibata",
+    "duration": 294,
+    "playlist": "Midnight Highway '86",
     "expectation": {
       "shouldFindLyrics": false,
       "acceptableSources": null,
@@ -143,24 +60,902 @@
     }
   },
   {
-    "id": "R05",
-    "title": "Escape",
-    "artist": "EPO",
-    "duration": 260,
+    "id": "MH-06",
+    "title": "恋の予感",
+    "artist": "Yoshie Kashiwabara",
+    "duration": 285,
+    "playlist": "Midnight Highway '86",
     "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "lyrics.ovh"],
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
       "firstLineContains": null
     }
   },
   {
-    "id": "R06",
-    "title": "Stardust Night",
-    "artist": "JADOES",
-    "duration": 330,
+    "id": "MH-07",
+    "title": "Natsuno Klaxon",
+    "artist": "Junichi Inagaki",
+    "duration": 230,
+    "playlist": "Midnight Highway '86",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-08",
+    "title": "Lonesome Season",
+    "artist": "Yukiko Okada",
+    "duration": 226,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-09",
+    "title": "Yes-No",
+    "artist": "Off Course",
+    "duration": 273,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-10",
+    "title": "ソー・ロング・マイ・ラヴ",
+    "artist": "小田和正",
+    "duration": 352,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-11",
+    "title": "夕陽の一滴",
+    "artist": "藤谷美紀",
+    "duration": 261,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-12",
+    "title": "Omoide Wa Azayaka Ni",
+    "artist": "田中好子",
+    "duration": 246,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-13",
+    "title": "PUZZLE",
+    "artist": "中原めいこ",
+    "duration": 246,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-14",
+    "title": "alone (2022 Remaster)",
+    "artist": "Sugiyama Kiyotaka",
+    "duration": 274,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-15",
+    "title": "ソフトポップ",
+    "artist": "Minami Kitasono",
+    "duration": 306,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-16",
+    "title": "北酒場 (日文)",
+    "artist": "Teresa Teng",
+    "duration": 232,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-17",
+    "title": "The Season In The Sun",
+    "artist": "TUBE",
+    "duration": 244,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-18",
+    "title": "Love Squall (feat. Yoshie Nakano)",
+    "artist": "Yuji Ohno & Lupintic Five with Friends",
+    "duration": 303,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-19",
+    "title": "Kimi ha 1000%",
+    "artist": "1986 OMEGA TRIBE",
+    "duration": 251,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "MH-20",
+    "title": "Mayonaka no Door / Stay With Me",
+    "artist": "Miki Matsubara",
+    "duration": 312,
+    "playlist": "Midnight Highway '86",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-01",
+    "title": "愛不了多久",
+    "artist": "Sandy Lam",
+    "duration": 300,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-02",
+    "title": "約定",
+    "artist": "Faye Wong",
+    "duration": 268,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-03",
+    "title": "我永遠珍惜你我",
+    "artist": "Shirley Wong",
+    "duration": 225,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-04",
+    "title": "夜機",
+    "artist": "Hins Cheung",
+    "duration": 256,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-05",
+    "title": "只有你不知道",
+    "artist": "A Li Yue",
+    "duration": 261,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-06",
+    "title": "情已逝",
+    "artist": "Jacky Cheung",
+    "duration": 282,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-07",
+    "title": "天荒愛未老",
+    "artist": "Vivian Chow",
+    "duration": 194,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-08",
+    "title": "初戀的地方",
+    "artist": "Teresa Teng",
+    "duration": 151,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-09",
+    "title": "怎樣",
+    "artist": "Penny Tai",
+    "duration": 271,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-10",
+    "title": "Understanding",
+    "artist": "Winnie Hsin",
+    "duration": 295,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-11",
+    "title": "Radio Love Songs",
+    "artist": "Karen Mok",
+    "duration": 248,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-12",
+    "title": "人生何處不相逢",
+    "artist": "Priscilla Chan",
+    "duration": 233,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-13",
+    "title": "Wan Shui Qian Shan Zong Shi Qing",
+    "artist": "Liza Wang",
+    "duration": 179,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-14",
+    "title": "滾滾紅塵",
+    "artist": "Sarah Chen",
+    "duration": 189,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-15",
+    "title": "Jailbird",
+    "artist": "Cass Phang",
+    "duration": 288,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-16",
+    "title": "製造浪漫",
+    "artist": "Kelly Chen & Ronald Cheng",
+    "duration": 285,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-17",
+    "title": "為我獻上心韻",
+    "artist": "Susanna Kwan",
+    "duration": 212,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-18",
+    "title": "念念不忘",
+    "artist": "Juno Mak",
+    "duration": 271,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-19",
+    "title": "撈月亮的人",
+    "artist": "Miriam Yeung",
+    "duration": 220,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "PE-20",
+    "title": "走在紅毯那一天",
+    "artist": "Julia Peng",
+    "duration": 266,
+    "playlist": "Pearl of the East",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-01",
+    "title": "I'm Lost",
+    "artist": "Nat \"King\" Cole & George Shearing Quintet",
+    "duration": 211,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-02",
+    "title": "Nancy (With the Laughing Face)",
+    "artist": "Frank Sinatra",
+    "duration": 218,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-03",
+    "title": "Emotions",
+    "artist": "Brenda Lee",
+    "duration": 171,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-04",
+    "title": "All You Need Is Love",
+    "artist": "The Beatles",
+    "duration": 228,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-05",
+    "title": "Am I That Easy to Forget (Overdub Version)",
+    "artist": "Jim Reeves",
+    "duration": 149,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-06",
+    "title": "April In Torino",
+    "artist": "Eddie Higgins Trio",
+    "duration": 264,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-07",
+    "title": "As Time Goes By",
+    "artist": "Dooley Wilson",
+    "duration": 165,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-08",
+    "title": "Autumn In New York",
+    "artist": "Ella Fitzgerald & Louis Armstrong",
+    "duration": 357,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-09",
+    "title": "Beyond the Sea",
+    "artist": "Bobby Darin",
+    "duration": 172,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-10",
+    "title": "Billie Jean",
+    "artist": "Michael Jackson",
+    "duration": 294,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-11",
+    "title": "Breakfast At Tiffany's",
+    "artist": "Henry Mancini",
+    "duration": 166,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-12",
+    "title": "Brother, Brother",
+    "artist": "Tom Browne",
+    "duration": 330,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-13",
+    "title": "Can't Stop The Stars",
+    "artist": "Jungle",
+    "duration": 222,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-14",
+    "title": "Casablanca",
+    "artist": "Bertie Higgins",
+    "duration": 275,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-15",
+    "title": "Ya Sé",
+    "artist": "Daniel, Me Estás Matando",
+    "duration": 275,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-16",
+    "title": "Reminiscencias (Remastered)",
+    "artist": "Julio Jaramillo",
+    "duration": 138,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-17",
+    "title": "Luna rossa",
+    "artist": "Claudio Villa",
+    "duration": 200,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-18",
+    "title": "La valse à mille temps",
+    "artist": "Jacques Brel",
+    "duration": 232,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-19",
+    "title": "Hier encore",
+    "artist": "Charles Aznavour",
+    "duration": 142,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "HN-20",
+    "title": "La vie en rose (Single Version)",
+    "artist": "Louis Armstrong and His Orchestra",
+    "duration": 205,
+    "playlist": "Harlem Nights & Blue Notes",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-04",
+    "title": "might start singing",
+    "artist": "sheldon charlot",
+    "duration": 127,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-05",
+    "title": "Ylang Ylang",
+    "artist": "FKJ & ((( O )))",
+    "duration": 213,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-06",
+    "title": "April 15",
+    "artist": "Idris Thomas",
+    "duration": 180,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-09",
+    "title": "Escape",
+    "artist": "Kilgore Doubtfire",
+    "duration": 281,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-12",
+    "title": "Kinderszenen, Op. 15: No. 7, Träumerei (Grand Piano)",
+    "artist": "Víkingur Ólafsson",
+    "duration": 161,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-13",
+    "title": "Manhattan",
+    "artist": "Stephan Moccio",
+    "duration": 204,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-14",
+    "title": "La Javanaise",
+    "artist": "Khatia Buniatishvili",
+    "duration": 203,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-15",
+    "title": "Hurry Sundown",
+    "artist": "Little Richard",
+    "duration": 169,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-16",
+    "title": "Pop n Olive",
+    "artist": "Samara Cyn & Sherwyn",
+    "duration": 181,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-17",
+    "title": "Jiggle Jiggle",
+    "artist": "Duke & Jones & Louis Theroux",
+    "duration": 97,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-18",
+    "title": "Kodak",
+    "artist": "El Michels Affair",
+    "duration": 176,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-01",
+    "title": "Head Empty",
+    "artist": "Tsundere Twintails",
+    "duration": 184,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-02",
+    "title": "Soft Memories",
+    "artist": "James Clarke",
+    "duration": 121,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-10",
+    "title": "Florence",
+    "artist": "Kevin Penkin",
+    "duration": 115,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "AS-11",
+    "title": "Dreamscape",
+    "artist": "Austin Farwell",
+    "duration": 114,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "POP-01",
+    "title": "How Sweet",
+    "artist": "NewJeans",
+    "duration": 219,
+    "playlist": "Popular Hits",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "POP-02",
+    "title": "OMG",
+    "artist": "NewJeans",
+    "duration": 212,
+    "playlist": "Popular Hits",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "POP-03",
+    "title": "Ditto",
+    "artist": "NewJeans",
+    "duration": 186,
+    "playlist": "Popular Hits",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "POP-04",
+    "title": "春よ、来い",
+    "artist": "松任谷由実",
+    "duration": 277,
+    "playlist": "Popular Hits",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": null,
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "INS-05",
+    "title": "Gentle Wave",
+    "artist": "Jiro Inagaki and His Soul Media",
+    "duration": 322,
+    "playlist": "Ambient Stories Untold",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "acceptableSources": null,
       "firstLineContains": null
     }
   }

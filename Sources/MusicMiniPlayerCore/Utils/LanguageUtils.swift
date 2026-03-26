@@ -179,7 +179,9 @@ public extension LanguageUtils {
             // 圆括号内容（feat/ft/with/版本标注/OST 等）
             #"\s*\((feat|ft)\.?[^)]*\)"#,
             // 🔑 支持 "(2021 Remaster)" 等年份在前的变体
-            #"\s*\((\d+\s+)?(with|remaster|live|acoustic|remix|radio|deluxe|cover|extended|original|official|bonus|edit|clean|explicit|instrumental|karaoke|from\s+|ost|theme|soundtrack|full\s*version)[^)]*\)"#,
+            #"\s*\((\d+\s+)?(with|remaster|live|acoustic|remix|radio|deluxe|cover|extended|original|official|bonus|edit|clean|explicit|instrumental|karaoke|from\s+|ost|theme|soundtrack|full\s*version|single\s*version|single)[^)]*\)"#,
+            // CJK language/version tags in half-width parens: (日文), (韓文), (國語版), (粵語), etc.
+            #"\s*\([日韓中英國粵台閩文語版]+\)"#,
             // 中文全角括号
             #"\s*（[^）]*）"#,
             #"\s*《[^》]*》"#,

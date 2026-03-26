@@ -107,15 +107,19 @@ public final class LyricsScorer {
         }
 
         // 6. Internal gap penalty: large hole means incomplete lyrics
-        // 🔑 阈值按歌曲时长缩放：长歌允许更长的间奏（如 J-Pop 5:32 有 49.8s 间奏）
-        if !isUnsyncedSource && lyrics.count >= 5 {
+        // 🔑 Scaled by gap size: bigger gap = heavier penalty (missing a section is fatal)
+        if !isUnsyncedSource && lyrics.count >= 5 && duration > 0 {
             var maxGap: Double = 0
             for i in 1..<lyrics.count {
                 maxGap = max(maxGap, lyrics[i].startTime - lyrics[i - 1].startTime)
             }
-            // 🔑 阈值按歌曲时长缩放：长歌允许更长的间奏（如 J-Pop 5:32 有 49.8s 间奏）
-            let gapThreshold = max(45, duration * 0.15)
-            if maxGap > gapThreshold { score -= 20 }
+            let gapRatio = maxGap / duration
+            // >30% of song missing → -35 (catastrophic, likely incomplete lyrics)
+            // >20% → -25, >10% → -15, >7% → -8
+            if gapRatio > 0.30 { score -= 35 }
+            else if gapRatio > 0.20 { score -= 25 }
+            else if gapRatio > 0.10 { score -= 15 }
+            else if gapRatio > 0.07 { score -= 8 }
         }
 
         // 7. Mixed translation penalty
@@ -166,19 +170,23 @@ public final class LyricsScorer {
             let prev = realLyrics[i - 1]
             let curr = realLyrics[i]
 
-            // 时间倒退
-            if curr.startTime < prev.startTime - 0.1 {
+            // 🔑 Harmony detection: consecutive lines starting within 2s are intentional
+            // (K-pop multi-member vocals, overlapping parts) — not data errors
+            let isHarmony = abs(curr.startTime - prev.startTime) < 2.0
+
+            // 时间倒退 (true reversal, not harmony)
+            if curr.startTime < prev.startTime - 0.1 && !isHarmony {
                 timeReverseCount += 1
             }
 
-            // 时间重叠
-            if curr.startTime < prev.endTime - 0.5 {
+            // 时间重叠 (only penalize non-harmony overlaps)
+            if curr.startTime < prev.endTime - 0.5 && !isHarmony {
                 overlapCount += 1
             }
 
-            // 太短行
+            // 太短行 (harmony lines naturally have short durations — skip)
             let duration = curr.endTime - curr.startTime
-            if duration > 0 && duration < 0.5 {
+            if duration > 0 && duration < 0.5 && !isHarmony {
                 tooShortLineCount += 1
             }
         }

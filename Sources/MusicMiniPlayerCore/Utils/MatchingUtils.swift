@@ -173,8 +173,10 @@ public enum MatchingUtils {
         public let artistMatch: Bool
 
         /// 是否通过最低质量阈值
+        /// When title AND artist both match, relax duration to 30s (different mixes/edits of same song)
         public var isAcceptable: Bool {
-            score >= 50 && durationDiff < 5
+            let maxDuration: TimeInterval = (titleMatch && artistMatch) ? 30 : 5
+            return score >= 50 && durationDiff < maxDuration
         }
     }
 

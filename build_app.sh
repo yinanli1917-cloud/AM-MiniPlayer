@@ -71,10 +71,18 @@ cat > nanoPod.entitlements << 'ENTITLEMENTS'
     <false/>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
-    <key>com.apple.security.temporary-exception.apple-events</key>
-    <array>
-        <string>com.apple.Music</string>
-    </array>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.scripting-targets</key>
+    <dict>
+        <key>com.apple.Music</key>
+        <array>
+            <string>com.apple.Music.playback</string>
+            <string>com.apple.Music.library.read</string>
+            <string>com.apple.Music.library.read-write</string>
+            <string>com.apple.Music.user-interface</string>
+        </array>
+    </dict>
 </dict>
 </plist>
 ENTITLEMENTS

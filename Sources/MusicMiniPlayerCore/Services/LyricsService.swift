@@ -23,6 +23,8 @@ public class LyricsService: ObservableObject {
 
     @Published public var lyrics: [LyricLine] = []
     @Published public var currentLineIndex: Int? = nil
+    /// Lines whose time range contains the current playback time (for overlapping highlight)
+    @Published public var activeLineIndices: Set<Int> = []
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
 
@@ -193,6 +195,7 @@ public class LyricsService: ObservableObject {
             // 🔑 先清空旧歌词，避免切歌时新旧歌词重叠
             lyrics = []
             currentLineIndex = nil
+            activeLineIndices = []
 
             // 处理 No Lyrics 缓存
             if cached.isNoLyrics {
@@ -223,6 +226,7 @@ public class LyricsService: ObservableObject {
         isLoading = true
         lyrics = []  // 立即清空旧歌词
         currentLineIndex = nil
+        activeLineIndices = []
         error = nil
 
         DebugLogger.log("LyricsService", "🔄 开始异步获取...")
@@ -312,6 +316,7 @@ public class LyricsService: ObservableObject {
         self.isLoading = false
         self.error = nil  // 🔑 歌词成功加载，清除旧 error（防止 duration 竞态导致 retry 残留）
         self.currentLineIndex = nil
+        self.activeLineIndices = []
         self.currentSongID = songID
 
         // 🔑 延迟触发翻译，避免与 lyrics 更新同时发生导致 SwiftUI AttributeGraph 递归
@@ -332,6 +337,7 @@ public class LyricsService: ObservableObject {
 
         guard !lyrics.isEmpty else {
             currentLineIndex = nil
+            if !activeLineIndices.isEmpty { activeLineIndices = [] }
             return
         }
 
@@ -342,25 +348,51 @@ public class LyricsService: ObservableObject {
                 if currentLineIndex != 0 {
                     currentLineIndex = 0
                 }
+                if !activeLineIndices.isEmpty { activeLineIndices = [] }
                 return
             }
         }
 
-        // 时间匹配
+        // Scroll anchor: latest line whose startTime has been reached
         var bestMatch: Int? = nil
+        // Active lines: all lines whose time range contains current time (for overlapping highlight)
+        var newActive: Set<Int> = []
+
         for index in firstRealLyricIndex..<lyrics.count {
-            let triggerTime = lyrics[index].startTime - scrollAnimationLeadTime
+            let line = lyrics[index]
+            let triggerTime = line.startTime - scrollAnimationLeadTime
             if time >= triggerTime {
                 bestMatch = index
-            } else {
-                break
+            }
+            // Harmony sustain: rapid-tempo lines (gap < 1.5s to next) stay highlighted 1.5s longer,
+            // creating a trailing glow where 2-3 harmony lines are visible simultaneously
+            let nextStart = (index + 1 < lyrics.count) ? lyrics[index + 1].startTime : Double.infinity
+            let gapToNext = nextStart - line.startTime
+            let effectiveEnd = gapToNext < 1.5 ? line.endTime + 1.5 : line.endTime
+
+            if time >= triggerTime && time < effectiveEnd {
+                newActive.insert(index)
             }
         }
 
         if let newIndex = bestMatch, currentLineIndex != newIndex {
-            currentLineIndex = newIndex
+            if currentLineIndex == nil || newIndex > currentLineIndex! {
+                currentLineIndex = newIndex
+            } else {
+                // Backward hysteresis: absorbs SB position jitter (~0.3s) while allowing
+                // real seeks (>1s jump). Without this, jitter around a line boundary
+                // causes currentLineIndex to bounce (5→6→5→6), each triggering wave animation.
+                let currentTrigger = lyrics[currentLineIndex!].startTime - scrollAnimationLeadTime
+                if time < currentTrigger - 0.8 {
+                    currentLineIndex = newIndex
+                }
+            }
         } else if bestMatch == nil {
             currentLineIndex = nil
+        }
+
+        if newActive != activeLineIndices {
+            activeLineIndices = newActive
         }
     }
 

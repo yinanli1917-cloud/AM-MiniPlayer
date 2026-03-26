@@ -589,11 +589,8 @@ public struct LyricsView: View {
 
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-            lyricsService.updateCurrentTime(musicController.currentTime)
-            // 🔑 Sync wave state BEFORE unfreezing (same pattern as handleLineTap/handleScrollEnded)
-            if let idx = lyricsService.currentLineIndex {
-                wave.lastCurrentIndex = idx
-            }
+            // Sync wave to latest line index BEFORE unfreezing (single-writer: no updateCurrentTime here)
+            wave.lastCurrentIndex = lyricsService.currentLineIndex ?? 0
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
             withAnimation(.interpolatingSpring(
@@ -640,15 +637,10 @@ public struct LyricsView: View {
         // 2 秒后 spring 回当前播放行
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-            // 恢复前先同步到最新播放位置，避免跳回旧位置
-            lyricsService.updateCurrentTime(musicController.currentTime)
-            // 🔑 Sync wave state BEFORE unfreezing — same pattern as handleLineTap.
-            // Without this, interpolateTime() calls updateCurrentTime the instant
-            // isManualScrolling goes false, onChange sees a stale wave.lastCurrentIndex,
-            // and triggers a wave cascade that blanks the screen.
-            if let idx = lyricsService.currentLineIndex {
-                wave.lastCurrentIndex = idx
-            }
+            // Sync wave to latest line index BEFORE unfreezing.
+            // Do NOT call updateCurrentTime() here — let interpolateTime() handle it
+            // naturally on the next frame after isManualScrolling clears (single-writer).
+            wave.lastCurrentIndex = lyricsService.currentLineIndex ?? 0
 
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
@@ -853,11 +845,12 @@ public struct LyricsView: View {
         }()
         let isNearbyJump = abs(newIndex - oldIndex) <= 2
 
-        // Also skip wave on explicit user seeks (progress bar / tap-to-jump)
-        // — seekPending is set synchronously in seek() and cleared by the next poll.
-        // Without this, wave positions lines at the OLD offset while culling only shows
-        // lines near the NEW index, producing a blank screen until delays expire.
-        if reduceMotion || isFastSong || isNearbyJump || musicController.seekPending {
+        // Skip wave on large jumps (seek, track change, large time discontinuity).
+        // Uses structural invariant (jump distance) instead of seekPending flag,
+        // which suffers a timing race: poll clears seekPending before SwiftUI's
+        // onChange(currentLineIndex) fires, causing wave to trigger from wrong origin.
+        let isLargeJump = abs(newIndex - oldIndex) > 4
+        if reduceMotion || isFastSong || isNearbyJump || isLargeJump {
             wave.isActive = false
             wave.lineDelays.removeAll()
             wave.oldIndex = newIndex

@@ -45,6 +45,12 @@ Full architecture reference: `docs/playlist-architecture.md`
 - ❌ `NSCache.setObject(image, forKey:)` without cost → `totalCostLimit` ignored, only `countLimit` applies; cache eviction too aggressive
 - ✅ Always use `setObject(_:forKey:cost:)` with pixel-based cost; `totalCostLimit` as sole governor, no `countLimit`
 
+### Duration / Notification Traps
+
+- ❌ Trust notification's "Total Time" for track duration → carries PREVIOUS track's duration (race condition)
+- ❌ Read SB `currentTrack.duration` without verifying track name → SB currentTrack may not have transitioned yet
+- ✅ Read SB `currentTrack.name` first, verify it matches the notification's track name, retry with delay if mismatch
+
 ### Timing / Interpolation Traps
 
 - ❌ `lastPollTime = Date()` in `applySnapshot` (main thread) → Position was measured BEFORE AppleScript ran; timestamp is too late by AS execution + dispatch latency
@@ -58,3 +64,19 @@ Full architecture reference: `docs/playlist-architecture.md`
 - ❌ Changing bundle ID without cleaning ControlCenter's `trackedApplications` → stale `menuItemLocations` causes permanent x=-1
 - ✅ Use `LSUIElement=true` in Info.plist; only `updateDockVisibility()` may change activation policy
 - ✅ On bundle ID change, run `scripts/fix_menubar.py` to clean stale entries from macOS 26's ControlCenter database
+
+### Title Matching Traps
+
+- ❌ `isTitleMatch` using `.contains()` substring matching → "How Sweet (BRLLNT Remix)".contains("How Sweet") = true → remix wins P1 when duration is close
+- ✅ `isTitleMatch` must use equality only after `normalizeTrackName`; known variants (Remix, Instrumental) are stripped by normalization, unknown variants remain and fail equality
+- ❌ MetadataResolver `titleMatch` using raw `.contains()` → "How Sweet (Instrumental)" matches "How Sweet" and wins on duration
+- ✅ MetadataResolver must use `normalizeTrackName` + equality; among close-duration candidates (within 0.1s), prefer shortest raw title (no variant suffix)
+
+### Candidate Priority / Multi-Language Traps
+
+- ❌ P2 (title+artist+Δ<20s) before P3 (artist+Δ<0.5s+CJK) → loose title match beats precise CJK match. BTS "Spring Day" at 274s → JP version "Spring Day" (Δ10s, title match) wins over KR "봄날" (Δ0s, CJK)
+- ✅ P2 must be artist+Δ<0.5s+CJK/token, P3 is title+artist+Δ<20s — precise duration + CJK is stronger signal
+- ❌ Speaker/part tags ("JJ：", "Bruno Mars：", "合：") not stripped → clutters lyrics display, wastes lines, inflates line count
+- ✅ `stripMetadataLines` must detect speaker tags: short line (≤20 chars) ending with colon, no content after
+- ❌ `isMetadataKeywordLine` label limit ≤15 chars → misses "Background Vocals by", "Recording Engineers" etc.
+- ✅ Label limit raised to ≤25 chars to cover long credit labels

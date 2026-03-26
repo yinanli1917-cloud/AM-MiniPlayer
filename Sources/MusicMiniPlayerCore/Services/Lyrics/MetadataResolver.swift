@@ -125,13 +125,16 @@ public final class MetadataResolver {
         let cnResult = await cnTask
         let localizedResult = await localizedTask
 
-        // 🔑 输出验证：多区域返回 CJK 标题但 CN 完全无匹配 → 大概率误配
-        // 泛化防线：不猜输入国籍，靠 CN 交叉验证（真正的日/韩歌 CN 也能搜到）
+        // 🔑 输出验证：多区域返回 CJK 标题但 CN 完全无匹配 → 可能误配
+        // 但当艺术家名精确匹配时（"mei ehara" = "mei ehara"），CN 验证不必要：
+        // 准确的艺术家 + 精确时长 + 区域 CJK 标题已足够可靠
         var localized: (title: String, artist: String)?
         if let loc = localizedResult {
             let resultTitleHasCJK = LanguageUtils.containsCJK(loc.title)
-            if resultTitleHasCJK && cnResult == nil {
-                DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配）: '\(loc.title)' by '\(loc.artist)'")
+            let artistMatchesExactly = LanguageUtils.normalizeArtistName(loc.artist).lowercased() ==
+                                       LanguageUtils.normalizeArtistName(artist).lowercased()
+            if resultTitleHasCJK && cnResult == nil && !artistMatchesExactly {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配 + 艺术家不匹配）: '\(loc.title)' by '\(loc.artist)'")
             } else {
                 DebugLogger.log("MetadataResolver", "🌏 多区域解析: '\(loc.title)' by '\(loc.artist)' (region: \(loc.region))")
                 localized = (loc.title, loc.artist)
@@ -267,11 +270,13 @@ public final class MetadataResolver {
                           inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
         }
 
-        // 标题匹配
+        // 标题匹配 (normalize Traditional→Simplified for CN matching: 約定 ↔ 约定)
         let cleanedResultTitle = cleanTrackTitle(trackName.lowercased())
-        let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
-                        cleanedResultTitle.contains(cleanedInputTitle) ||
-                        cleanedInputTitle.split(separator: " ").filter { $0.count > 3 }.contains { cleanedResultTitle.contains($0.lowercased()) }
+        let inputSimplified = LanguageUtils.toSimplifiedChinese(cleanedInputTitle)
+        let resultSimplified = LanguageUtils.toSimplifiedChinese(cleanedResultTitle)
+        let titleMatch = inputSimplified.contains(resultSimplified) ||
+                        resultSimplified.contains(inputSimplified) ||
+                        inputSimplified.split(separator: " ").filter { $0.count > 3 }.contains { resultSimplified.contains($0.lowercased()) }
 
         let inputHasChinese = LanguageUtils.containsChinese(title) || LanguageUtils.containsChinese(artist)
         let resultHasChinese = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsChinese(artistName)
@@ -279,13 +284,22 @@ public final class MetadataResolver {
         let isCombinedSearch = searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
 
         if titleMatch {
-            // 🔑 匹配策略：P1 标题+艺术家 → P2 标题+本地化
+            // 🔑 匹配策略：P1 标题+艺术家 → P2 标题+本地化 → P2b 跨脚本艺术家
             if isCombinedSearch && resultIsActuallyLocalized {
                 return .direct((trackName, artistName, durationDiff, "combined"))
             } else if artistMatch && resultIsActuallyLocalized {
                 return .direct((trackName, artistName, durationDiff, "title+artist"))
             } else if searchTerm.lowercased() == inputTitleLower && LanguageUtils.containsChinese(trackName) && !LanguageUtils.containsChinese(title) {
                 return .direct((trackName, artistName, durationDiff, "title-search+CN"))
+            }
+            // 🔑 P2b: Cross-script artist tolerance — "Faye Wong" vs "王菲"
+            // When title matches + duration close + artists are different scripts (one ASCII, other CJK),
+            // this is the canonical "EN artist name for CJK artist" case. Accept it.
+            let inputArtistIsASCII = LanguageUtils.isPureASCII(artist)
+            let resultArtistHasCJK = LanguageUtils.containsCJK(artistName)
+            if !artistMatch && inputArtistIsASCII && resultArtistHasCJK && durationDiff < 2.0 {
+                DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 跨脚本艺术家('\(searchTerm)'): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.1f", durationDiff))s (input artist: '\(artist)')")
+                return .direct((trackName, artistName, durationDiff, "title+crossScript"))
             }
             return .none
         }
@@ -535,6 +549,7 @@ public final class MetadataResolver {
             .replacingOccurrences(of: #"\s*\(ft\.?[^)]*\)"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s*\(remaster[^)]*\)"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s*\(live[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\([日韓中英國粵台閩文語版]+\)"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s*\[.*?\]"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
     }

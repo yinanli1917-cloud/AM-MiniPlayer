@@ -389,6 +389,8 @@ public final class LyricsParser {
         lines.filter { line in
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { return false }
+            // Genius section tags: [Verse 1], [Chorus: Artist], [Bridge], [Outro], [Intro], etc.
+            if isSectionTag(trimmed) { return false }
             // 高置信度关键词匹配（任意位置生效）
             if isMetadataKeywordLine(trimmed) { return false }
             // 标题分隔符行（"Song - Artist"，含 " - " 且出现在歌曲开头 ≤1s）
@@ -660,6 +662,19 @@ public final class LyricsParser {
             LanguageUtils.isCJKScalar(scalar) || CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar)
         }
         return !hasLetters
+    }
+
+    /// 检测 Genius 风格的 section tag: [Verse 1], [Chorus: Artist, Artist], [Bridge], [Outro], etc.
+    /// Generalized: any line that is exactly "[…]" where content is short and non-lyrical
+    private func isSectionTag(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("["), trimmed.hasSuffix("]"),
+              trimmed.count >= 3, trimmed.count <= 80 else { return false }
+        // Extract content between brackets
+        let inner = String(trimmed.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        // Must not be empty; must not look like a timestamp "[00:01.23]"
+        guard !inner.isEmpty, inner.first?.isNumber != true else { return false }
+        return true
     }
 
     /// 检测元信息关键词行 或 泛化的信用行格式（"标签：名字/名字"）

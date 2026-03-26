@@ -1,98 +1,69 @@
-# HANDOFF — 2026-03-23 (歌词翻译泄漏修复 + 全球基准测试)
+# HANDOFF — 2026-03-26 (Session 4)
 
-## 当前任务
-修复非中文歌曲（特别是 K-pop）主歌词行显示中文翻译的 bug，同时建立全球歌词基准测试系统。
+## Current Task
+Two open issues from lyrics pipeline testing:
+1. **Slow lyrics fetching** — user reports it's slower than before (early return optimization may have regressed)
+2. **MetadataResolver mismatches low-quality sources** — LRCLIB/lyrics.ovh/Genius win over NetEase/QQ due to scoring, not because they're better
 
-## 完成状态
-- ✅ 全球基准测试系统（10 区域 × 100 首热门歌曲，`swift run LyricsVerifier benchmark`）
-- ✅ 五层验证器（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
-- ✅ `LyricsScorer` 混排翻译惩罚（同行中韩/中日混排 → 降分 + 取消翻译加成）
-- ✅ `LyricsParser.stripChineseTranslations()` — 通用中文翻译剥离
-- 🔄 **Supernatural 修复效果待用户验证** — 代码已部署，app 已重启，但用户尚未确认最终效果
-- 🔄 **QQ 匹配到错误版本** — "Supernatural (Winter ver.) 颁奖礼现场版" 时间轴与原版不对齐
+## Completion Status
+- ✅ Genius section tags stripped (`isSectionTag` in `stripMetadataLines`)
+- ✅ Timestamp overflow clamped (`rescaleTimestamps` endTime clamp)
+- ✅ Language tags stripped (`(日文)` etc. in `normalizeTrackName` + `cleanTrackTitle`)
+- ✅ EN→CJK artist resolution (cross-script tolerance in `matchCNResult`)
+- ✅ Traditional↔Simplified CN title matching (`toSimplifiedChinese` in `matchCNResult`)
+- ✅ CN cross-validation guard relaxed (exact artist match bypasses CN requirement)
+- ✅ SimpMusic source restored (was removed in 91dbf10 refactor)
+- ✅ NetEase lyrics-retry fallback (when matched song has no lyrics, retry excluding that ID)
+- ✅ NetEase/QQ search limit increased to 30
+- ✅ P2 duration threshold widened to 30s (was 20s)
+- ✅ `isAcceptable` duration relaxed to 30s when title+artist both match
+- ✅ 11 test cases corrected to `shouldFindLyrics: false`
+- ✅ 77/77 unit tests pass
+- 🔄 **Slow fetching** — user says it's noticeably slower than before optimizations
+- 🔄 **MetadataResolver quality** — low-quality sources (LRCLIB/Genius) sometimes win over NetEase/QQ
+- ⏳ Test case duration for POP-01 "How Sweet" needs fixing: 191→219s
 
-## 关键决策
+## Key Decisions (this session)
+- `isSectionTag`: generalized `[…]` line detection (any short non-timestamp bracket content)
+- CN cross-validation: relaxed when artist name matches exactly — indie JP artists (mei ehara) were being blocked because CN iTunes had nothing
+- P2 30s threshold: Apple Music durations differ significantly from NetEase/QQ versions (e.g., "How Sweet" AM=219s vs NetEase remix=192s). Old 20s threshold rejected legitimate matches
+- SimpMusic restored but its API is behind Vercel bot protection — effectively dead, kept for when/if it comes back
+- NetEase retry: when P1 matches a remix with no lyrics, retry excluding that ID to find the original
 
-### 1. 通用中文剥离（替代碎片化修复）
-之前尝试了三个碎片化方案都不够：
-- `extractInterleavedTranslations()` — 只检测纯中文独立行，漏掉同行混排
-- `splitInlineTranslations()` — 只处理 Latin+CJK，漏掉 CJK+CJK（日+中）
-- 评分惩罚 — 所有源都混排时无效
+## Known Issues / Pitfalls
 
-最终方案 `stripChineseTranslations()`：
-- 统计中文行 vs 非中文行，中文歌不触发（安全阈值）
-- 混排行（英+中、日+中、韩+中）→ 拆分，中文移到 `.translation`
-- 纯中文行 → 附着到相邻非中文行的 `.translation`
-- **不丢弃任何行** — 无法配对的保留原样，避免时间间隙
+### 1. Speed regression
+User had previously optimized early-return. Current session added:
+- SimpMusic source (8th parallel source, always times out due to Vercel block → 6s wasted)
+- NetEase retry (second full search round when first match has no lyrics)
+- Search limit 30 instead of 20 (slightly more data per request)
 
-### 2. 评分惩罚仍保留
-`LyricsScorer.mixedTranslationPenalty()` 作为第一道防线：
-- 同行中韩/中日混排 ≥30% → -25 分 + 取消翻译加成
-- 让干净源在评分中胜出
+**Fix approach**: Remove SimpMusic (dead API), or add a fast-fail check. Consider if early return threshold (80pts) is still effective.
 
-### 3. 全球基准测试独立于回归测试
-- `docs/lyrics_benchmark_cases.json` — 100 首，与现有 15 条回归测试分开
-- `BenchmarkValidator.swift` — 翻译泄漏检测用 Unicode 脚本检测
-- `benchmark` 子命令支持 `--region` 过滤
+### 2. MetadataResolver mismatch pattern
+The user reports that MetadataResolver sometimes resolves to titles/artists that only match low-quality sources. Root cause: MetadataResolver queries iTunes API which may return different metadata than what NetEase/QQ index. When the resolved title doesn't match NetEase/QQ's database, only LRCLIB/Genius find results.
 
-## 已知问题 / 排查方向
+**Fix approach**: The scoring system already has source bonuses (NetEase +8, QQ +6, LRCLIB +3, Genius +0). The issue is when NetEase/QQ return NO results and only low-quality sources return anything. The `selectBest` logic prefers synced≥30 over unsynced, which is correct. The real fix is improving MetadataResolver's title resolution to align with NetEase/QQ's database naming — possibly by sending BOTH original and resolved titles to each source.
 
-### **核心问题：用户反馈修复后仍显示中文**
-可能原因（按优先级排序）：
-1. **QQ 匹配到 "Winter ver. 颁奖礼现场版"** — 时间轴不对齐，歌词卡顿。QQ P1 优先级选了 Δ2.0s 的 Winter ver 而非 Δ4-5s 的原版。需要在候选匹配中降低 live/remix/ver. 变体的优先级
-2. **`stripChineseTranslations` 仍有遗漏** — 某些混排模式可能没被覆盖（如中文标点、数字混入）
-3. **系统翻译覆盖** — Apple Translation 框架把韩/英翻译成中文后，如果 `.translation` 显示逻辑有问题，可能看起来像泄漏
-4. **纯中文行保留后的视觉效果** — 无法配对的纯中文行仍作为主歌词显示
+### 3. LRCLIB flakiness
+LRCLIB exact match API returns data via curl but sometimes fails silently in the app. Likely connection pooling or timeout issue in `HTTPClient.getJSON`. Debug logging added to `fetchFromLRCLIB` to trace this.
 
-### 其他遗留
-- `extractInterleavedTranslations` gap<2.0s 阈值可能太紧
-- Spring Day 在 NetEase 返回日文版歌词（P2 匹配到日文翻唱）
-- 泰文/阿拉伯文歌曲大部分无歌词源覆盖
+### 4. QQ Music API non-determinism
+QQ's search API returns different result sets across calls. Songs that appear in one run may not appear in the next. No fix — this is QQ's API behavior. The title-only search fallback helps but doesn't guarantee consistency.
 
-## 下一步行动
-1. **让用户播放 Supernatural 验证** — 检查截图中主歌词行是否还有中文
-2. **如果仍有中文**：在 `LyricsService.applyLyrics()` 加 DebugLogger 逐行打印 `.text` 和 `.translation`，确认到底是源数据问题还是渲染问题
-3. **QQ 版本匹配修复**：在候选匹配中对 "(Winter ver.)"、"(Live)"、"颁奖礼" 等变体降低优先级或跳过
-4. **跑完整 benchmark** 确认无回归：`swift run LyricsVerifier benchmark --no-local-translation`
-5. **回归测试确认**：`swift run LyricsVerifier run`（11/15 通过，R05/R06 是 lyrics.ovh 不稳定）
+## Next Steps
+1. **Fix speed**: Remove dead SimpMusic source, profile the early-return path
+2. **Fix MetadataResolver quality**: Send both original AND resolved titles to NetEase/QQ (currently only resolved title is sent) — this ensures NetEase/QQ can match even when MetadataResolver resolves to a different name
+3. **Fix POP-01 test case**: Change duration from 191 to 219
+4. **Run full 80-case regression** to verify no regressions from this session's changes
 
-## 新增文件
-- `Sources/LyricsVerifier/BenchmarkCases.swift` — 基准测试数据模型 + JSON 加载器
-- `Sources/LyricsVerifier/BenchmarkValidator.swift` — 五层验证（翻译泄漏/语言/源翻译/ML翻译/时间轴）
-- `docs/lyrics_benchmark_cases.json` — 100 首全球热门歌曲测试用例
-
-## 修改文件
-- `Sources/MusicMiniPlayerCore/Services/Lyrics/LyricsParser.swift` — `stripChineseTranslations()` 通用中文剥离
-- `Sources/MusicMiniPlayerCore/Services/Lyrics/LyricsScorer.swift` — `mixedTranslationPenalty()` 混排惩罚
-- `Sources/MusicMiniPlayerCore/Services/Lyrics/LyricsFetcher.swift` — NetEase/QQ 路径调用 `stripChineseTranslations`
-- `Sources/LyricsVerifier/TestRunner.swift` — `translationEnabled` 参数 + `testSongWithLyrics()`
-- `Sources/LyricsVerifier/main.swift` — `benchmark` 子命令
-- `CLAUDE.md` — 目录清单 + benchmark 命令
-
-## 调试命令速查
-```bash
-# 单首歌验证
-swift run LyricsVerifier check "Supernatural" "NewJeans" 186
-
-# 韩文区基准测试
-swift run LyricsVerifier benchmark --region ko --no-local-translation
-
-# 全量基准测试
-swift run LyricsVerifier benchmark --no-local-translation
-
-# 回归测试
-swift run LyricsVerifier run
-
-# App debug log
-cat /tmp/nanopod_debug.log | grep -i supernatural
-
-# 构建 + 重启
-./build_app.sh && pkill -9 nanoPod; sleep 1; open nanoPod.app
-
-# NetEase 原始歌词
-curl -s "https://music.163.com/api/song/lyric?id=3314634768&lv=1&tv=1" \
-  -H "User-Agent: Mozilla/5.0" -H "Referer: https://music.163.com"
-```
+## Changed Files
+- `LyricsFetcher.swift`: SimpMusic restored, retry fallback, title-only search, limit=30, P2→30s
+- `LyricsParser.swift`: `isSectionTag` for Genius `[Verse]`/`[Chorus]` stripping
+- `MetadataResolver.swift`: cross-script artist tolerance, Trad→Simp CN matching, CN guard relaxed
+- `LanguageUtils.swift`: CJK language tag regex `(日文)` etc.
+- `MatchingUtils.swift`: `isAcceptable` duration 30s when title+artist match
+- `docs/lyrics_test_cases.json`: 11 songs corrected to `shouldFindLyrics: false` (user edited externally)
 
 ---
-*Created by Claude Code · 2026-03-23 09:50*
+*Created by Claude Code · 2026-03-26T09:40*

@@ -16,7 +16,13 @@ public enum DebugLogger {
 
     // ── 配置 ──
 
-    private static let logPath = "/tmp/nanopod_debug.log"
+    private static let logPath: String = {
+        // Sandbox-safe: use app's container if sandboxed, /tmp otherwise
+        if let container = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            return container.appendingPathComponent("nanopod_debug.log").path
+        }
+        return "/tmp/nanopod_debug.log"
+    }()
 
     #if DEBUG
     private static var enabled = true

@@ -16,7 +16,8 @@ struct LyricLineView: View {
     let index: Int
     let currentIndex: Int
     let isScrolling: Bool
-    var currentTime: TimeInterval = 0  // 保留用于将来逐字高亮
+    /// True when this line's time range overlaps current playback time (Apple Music-style multi-highlight)
+    var isActive: Bool = false
     var onTap: (() -> Void)? = nil  // 🔑 点击回调
     var showTranslation: Bool = false  // 🔑 是否显示翻译
     var isTranslating: Bool = false  // 🔑 是否正在翻译中
@@ -27,15 +28,22 @@ struct LyricLineView: View {
     @State private var internalShowTranslation: Bool = false
 
     private var distance: Int { index - currentIndex }
-    private var isCurrent: Bool { distance == 0 }
-    private var isPast: Bool { distance < 0 }
-    private var absDistance: Int { abs(distance) }
+    /// Line is "current" if it's the scroll anchor OR its time range is active (overlapping lyrics)
+    private var isCurrent: Bool { isActive || distance == 0 }
+    /// Harmony trailing: still active but scroll has moved past — fading glow effect
+    private var isHarmonyTrailing: Bool { isActive && distance < 0 }
+    private var isPast: Bool { !isActive && distance < 0 }
+    private var absDistance: Int { isCurrent ? 0 : abs(distance) }
 
-    // 🔑 清理歌词文本
+    // 🔑 清理歌词文本（pre-compiled regex avoids per-frame NSRegularExpression creation）
+    private static let timestampRegex = try! NSRegularExpression(pattern: "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]")
+
     private var cleanedText: String {
-        let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
-        return line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
+        let range = NSRange(line.text.startIndex..., in: line.text)
+        let cleaned = Self.timestampRegex.stringByReplacingMatches(
+            in: line.text, range: range, withTemplate: ""
+        )
+        return cleaned.trimmingCharacters(in: .whitespaces)
     }
 
     // 🔑 翻译文本（如果有）
@@ -47,6 +55,7 @@ struct LyricLineView: View {
     var body: some View {
         let scale: CGFloat = {
             if isScrolling { return 0.95 }
+            if isHarmonyTrailing { return 0.97 }
             if isCurrent { return 1.0 }
             return 0.95
         }()
@@ -54,11 +63,13 @@ struct LyricLineView: View {
         let blur: CGFloat = {
             if isScrolling { return 0 }
             if isCurrent { return 0 }
-            return CGFloat(absDistance) * 1.5
+            // Cap at 8pt — higher values are perceptually identical but more expensive
+            return min(CGFloat(absDistance) * 1.5, 8)
         }()
 
         let textOpacity: CGFloat = {
             if isScrolling { return 0.6 }
+            if isHarmonyTrailing { return 0.65 }
             if isCurrent { return 1.0 }
             return 0.35
         }()
@@ -227,14 +238,30 @@ struct InterludeDotsView: View {
 struct PreludeDotsView: View {
     let startTime: TimeInterval
     let endTime: TimeInterval
-    @ObservedObject var musicController: MusicController
+    @ObservedObject var timePublisher: TimePublisher
 
     var body: some View {
         InterludeDotsView(
             startTime: startTime,
             endTime: endTime,
-            currentTime: musicController.currentTime,
+            currentTime: timePublisher.currentTime,
             gateByTimeRange: false
+        )
+    }
+}
+
+/// Wrapper that observes TimePublisher independently — isolates time updates
+/// from parent ForEach to prevent full lyrics list re-evaluation on every tick
+struct ObservingInterludeDotsView: View {
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    @ObservedObject var timePublisher: TimePublisher
+
+    var body: some View {
+        InterludeDotsView(
+            startTime: startTime,
+            endTime: endTime,
+            currentTime: timePublisher.currentTime
         )
     }
 }

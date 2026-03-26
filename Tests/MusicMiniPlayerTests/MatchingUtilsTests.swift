@@ -227,11 +227,18 @@ final class MatchingUtilsTests: XCTestCase {
     }
 
     func testThreshold_justBelow50() {
-        // 时长差太大 → durationDiff >= 5 → 不 acceptable
-        let result = MatchingUtils.calculateMatch(
+        // title+artist match → relaxed to 30s, so durationDiff=10 IS acceptable
+        let matchBoth = MatchingUtils.calculateMatch(
             targetTitle: "Love Story", targetArtist: "Taylor Swift", targetDuration: 240,
             actualTitle: "Love Story", actualArtist: "Taylor Swift", actualDuration: 250
         )
-        XCTAssertFalse(result.isAcceptable) // durationDiff = 10 >= 5
+        XCTAssertTrue(matchBoth.isAcceptable) // durationDiff=10 < 30 (relaxed)
+
+        // Only title match (no artist) → strict 5s, durationDiff=10 → NOT acceptable
+        let matchTitleOnly = MatchingUtils.calculateMatch(
+            targetTitle: "Love Story", targetArtist: "Taylor Swift", targetDuration: 240,
+            actualTitle: "Love Story", actualArtist: "Someone Else", actualDuration: 250
+        )
+        XCTAssertFalse(matchTitleOnly.isAcceptable) // durationDiff=10 >= 5, no artist match
     }
 }

@@ -83,17 +83,18 @@ postmortem/001~006                 - 已知 bug 根因 + 解决方案
 - `artworkFetchQueue` (low priority): Playlist artwork prefetching
 - ⚠️ ScriptingBridge must only be called on `scriptingBridgeQueue` — calling from main thread will crash
 
-### Lyrics Source Architecture (7 Parallel Sources + Quality Scoring)
+### Lyrics Source Architecture (6 Parallel Sources + Quality Scoring)
 
 | Source | Bonus | Notes |
 |--------|-------|-------|
 | AMLL-TTML-DB | +10 | Word-level timestamps |
 | NetEase | +8 | Chinese primary, YRC + translation |
 | QQ Music | +6 | Chinese secondary, supports translation |
-| SimpMusic | +5 | Global, YouTube Music community |
 | LRCLIB | +3 | Exact match |
 | LRCLIB-Search | +2 | Fuzzy search |
 | lyrics.ovh | +0 | Plain text fallback |
+
+All sources receive both resolved (MetadataResolver) and original titles — resolved first, original as fallback.
 
 Matching weights: Duration (40%) + Title (35%) + Artist (25%), threshold >= 50
 Multi-region metadata: Auto-detects Japanese/Korean/Thai/Vietnamese characters, queries corresponding iTunes regional API
@@ -126,7 +127,7 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
 ### Matching Algorithm (Unified SearchCandidate)
 
 NetEase/QQ share `SearchCandidate<ID>` + `selectBestCandidate()` priority chain:
-- P1: Title + Artist + Duration < 3s → P2: Title + Artist + Duration < 20s → P3: Title-only + Duration < 1s → P4: Artist-only + Duration < 0.5s + title token overlap or CJK
+- P1: Title + Artist + Duration < 3s → P2: Artist + Duration < 0.5s + CJK/token overlap → P3: Title + Artist + Duration < 20s
 - `isTitleMatch()` / `isArtistMatch()` handle Simplified/Traditional Chinese + CJK uniformly
 - Dual-title matching with original + resolved (MetadataResolver preserves original title after translation)
 
@@ -155,7 +156,7 @@ Config files: `Package.swift`, `build_app.sh`, `Resources/AppIcon.icns`
 /postmortem onboarding    # Analyze historical commits
 ```
 
-Existing postmortems: 001 (Section recursion), 002 (Page switch state), 003 (Artwork concurrency), 004 (Lyrics spacing), 005 (MetadataResolver batch regression), 006 (romanized→CJK mismatch), 007 (Chinese translation leak trilogy), 008 (Translation dots flash + Genius score inflation)
+Existing postmortems: 001 (Section recursion), 002 (Page switch state), 003 (Artwork concurrency), 004 (Lyrics spacing), 005 (MetadataResolver batch regression), 006 (romanized→CJK mismatch), 007 (Chinese translation leak trilogy), 008 (Translation dots flash + Genius score inflation), 009 (Candidate priority inversion + speaker tags)
 
 ## Compact Instructions
 

@@ -100,9 +100,12 @@ public class MusicController: ObservableObject {
         return max(w * h * 4, 1)
     }
 
-    // ScriptingBridge 队列：核心操作(高优先级) / 封面获取(后台串行)
+    // ScriptingBridge queues: heavy ops (artwork/queue) vs lightweight polls (position/state)
+    // Two INDEPENDENT SB instances prevent artwork fetch (1-3s) from starving position polls.
     let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
-    // artworkFetchQueue removed — all SB calls must go through scriptingBridgeQueue
+    let pollQueue = DispatchQueue(label: "com.nanoPod.poll", qos: .userInteractive)
+    /// Dedicated SB instance for position polling — never blocked by heavy ops on scriptingBridgeQueue
+    var pollApp: SBApplication?
 
     /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
     var artworkFetchingForKey: String?
@@ -148,7 +151,7 @@ public class MusicController: ObservableObject {
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var interpolationTimerActive = false
-    private var lastPollTime: Date = .distantPast
+    var lastPollTime: Date = .distantPast
 
     // 窗口移动期间暂停 interpolation（避免 60Hz Timer 和 DisplayLink 争帧预算）
     private var windowMovementPaused = false
@@ -218,7 +221,8 @@ public class MusicController: ObservableObject {
         }
 
         self.musicApp = app
-        debugPrint("✅ [MusicController] SBApplication created successfully\n")
+        self.pollApp = SBApplication(bundleIdentifier: "com.apple.Music")
+        debugPrint("✅ [MusicController] SBApplication created (main + poll)\n")
         logger.info("✅ Successfully created and stored SBApplication for Music.app")
 
         let isRunning = app.isRunning
@@ -354,9 +358,9 @@ public class MusicController: ObservableObject {
             }
             RunLoop.main.add(self.pollingTimer!, forMode: .common)
 
-            // 30s full state sync (safety net for shuffle/repeat/quality)
-            // Notifications handle track changes; SB poll handles position/playing state
-            self.fullSyncTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            // 5s full state sync (safety net for rapid track switching, shuffle/repeat/quality)
+            // Catches TOCTOU races in notification handler that 0.5s polls can't detect
+            self.fullSyncTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
                 self?.updatePlayerState()
             }
             RunLoop.main.add(self.fullSyncTimer!, forMode: .common)
@@ -477,21 +481,22 @@ public class MusicController: ObservableObject {
         guard isPlaying, !isPreview else { return }
         let elapsed = Date().timeIntervalSince(lastPollTime)
         guard elapsed >= 0 else { return }
-        // 🔑 Cap at 3s instead of bailing — prevents total freeze when SB queue
-        // is blocked by artwork fetch. Interpolation drifts slightly but lyrics keep scrolling.
-        let cappedElapsed = min(elapsed, 3.0)
+        // No cap — pollApp on dedicated pollQueue delivers every 0.5s reliably.
+        // elapsed is typically 0-0.5s; clamp to duration handles the upper bound.
 
-        let interpolatedTime = internalCurrentTime + cappedElapsed
+        let interpolatedTime = internalCurrentTime + elapsed
         let clampedTime = duration > 0 ? min(interpolatedTime, duration) : interpolatedTime
 
-        // 🔑 Allow backward corrections up to 0.5s (poll resync after overshoot)
-        // Only block large backward jumps (> 2s = seek, handled by applySnapshot)
+        // Allow backward corrections up to 0.5s (poll resync after interpolation overshoot).
+        // Larger backward jumps are force-synced by poll/snapshot setting currentTime directly.
         let diff = clampedTime - currentTime
         if diff >= 0 || diff > -0.5 {
+            // 0.1s hysteresis: avoid 60fps churn on timePublisher + updateCurrentTime.
+            // Effective update rate ~10Hz — plenty for lyrics line sync and progress bar.
             if abs(diff) >= 0.1 {
                 currentTime = clampedTime
-                // Update lyrics line index here (not in LyricsView's onChange)
-                // to avoid triggering unnecessary SwiftUI body re-evaluations
+                // 🔑 Single writer: ONLY interpolateTime() calls updateCurrentTime.
+                // poll/snapshot update the anchor (internalCurrentTime + lastPollTime) only.
                 if !lyricsService.isManualScrolling {
                     lyricsService.updateCurrentTime(clampedTime)
                 }
@@ -582,6 +587,11 @@ public class MusicController: ObservableObject {
             }
 
             DispatchQueue.main.async {
+                // 🔑 Re-check generation: fetchIDAndArtwork took 0.5-2s on the SB queue,
+                // during which a rapid track change could have incremented generation.
+                // Without this, stale persistentID/duration/artwork overwrites the current track.
+                guard self.artworkFetchGeneration == generation else { return }
+
                 self.currentPersistentID = persistentID
                 if sbDuration > 0 { self.duration = sbDuration }
                 if let image = artworkImage {
@@ -595,8 +605,6 @@ public class MusicController: ObservableObject {
                     self.lyricsService.fetchLyrics(for: name, artist: artist, duration: fetchDuration)
                 }
 
-                // 🔑 Duration retry OFF the SB queue — delayed dispatch lets Music.app settle
-                // without blocking position polls. If first attempt got duration, skip retry.
                 if sbDuration == 0 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                         self?.retryDurationFetch(name: name, generation: generation)
@@ -664,41 +672,37 @@ public class MusicController: ObservableObject {
     // MARK: - Lightweight SB Position Poll (0.5s, in-process IPC)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    /// Reads only playerPosition + playerState via ScriptingBridge (no process spawn).
-    /// ~0.1ms vs ~15-25ms for osascript. Called at 2Hz for lyrics sync.
+    /// Reads only playerPosition + playerState via dedicated pollApp/pollQueue.
+    /// ~0.1ms per call. Never blocked by artwork fetch or queue scan on scriptingBridgeQueue.
+    /// Does NOT call updateCurrentTime — only interpolateTime() drives lyrics line updates.
     private func pollPositionViaSB() {
-        guard !isPreview, let app = musicApp, app.isRunning else { return }
+        guard !isPreview, let app = pollApp, app.isRunning else { return }
 
-        scriptingBridgeQueue.async { [weak self] in
+        pollQueue.async { [weak self] in
             guard let self = self else { return }
             let measurementTime = Date()
 
-            // SB direct property reads — in-process Mach port IPC, no osascript spawn
             let position = app.value(forKey: "playerPosition") as? Double ?? 0
             let stateRaw = app.value(forKey: "playerState") as? Int ?? 0
             let playing = (stateRaw == Self.sbPlaying)
 
             DispatchQueue.main.async {
-                // Update playing state (respect user action lock)
                 if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
                     if self.isPlaying != playing { self.isPlaying = playing }
                 }
 
-                // Time sync — same logic as applySnapshot
+                // Update anchor for interpolation — NO updateCurrentTime here.
+                // Only interpolateTime() calls updateCurrentTime (single-writer principle).
                 let timeDiff = abs(position - self.currentTime)
                 self.internalCurrentTime = position
                 self.lastPollTime = measurementTime
+
+                // Force currentTime sync on: seek, pause, or large external jump (>2s).
+                // Large jumps happen when user scrubs in Music.app or notification race.
+                // interpolateTime's 0.5s backward limit can't correct these alone.
                 if self.seekPending || !self.isPlaying || timeDiff > 2.0 {
-                    let wasSeeking = self.seekPending
                     self.currentTime = position
                     self.seekPending = false
-                    // 🔑 Update lyrics on hard time sync — safety net for when
-                    // interpolateTime() was stale (SB queue blocked by artwork fetch).
-                    // Skip during seek: seek() already called updateCurrentTime, and
-                    // triggerWaveAnimation needs seekPending=true to skip the cascade.
-                    if !wasSeeking && !self.lyricsService.isManualScrolling {
-                        self.lyricsService.updateCurrentTime(position)
-                    }
                 }
 
                 self.updateTimerState()
@@ -816,19 +820,14 @@ public class MusicController: ObservableObject {
         if currentAlbum != s.trackAlbum { currentAlbum = s.trackAlbum }
         if duration != s.trackDuration { duration = s.trackDuration }
 
-        // 时间同步
-        // 🔑 Use measurementTime (captured before AppleScript ran) instead of Date()
-        // Eliminates systematic lag from AS execution + thread dispatch
+        // Time sync — update anchor for interpolation, NO updateCurrentTime here.
+        // Only interpolateTime() drives lyrics line updates (single-writer principle).
         let timeDiff = abs(s.position - currentTime)
         internalCurrentTime = s.position
         lastPollTime = s.measurementTime
         if seekPending || !isPlaying || timeDiff > 2.0 {
-            let wasSeeking = seekPending
             currentTime = s.position
             seekPending = false
-            if !wasSeeking && !lyricsService.isManualScrolling {
-                lyricsService.updateCurrentTime(s.position)
-            }
         }
 
         if audioQuality != quality { audioQuality = quality }
