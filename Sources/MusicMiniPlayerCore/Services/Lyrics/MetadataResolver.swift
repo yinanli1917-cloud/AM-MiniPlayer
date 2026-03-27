@@ -1,11 +1,12 @@
 /**
- * [INPUT]: LanguageUtils, MatchingUtils, HTTPClient
+ * [INPUT]: LanguageUtils, MatchingUtils, MusicKit
  * [OUTPUT]: resolveSearchMetadata/fetchChineseMetadata/fetchLocalizedMetadata/fetchMetadataFromRegion
- * [POS]: Lyrics 的元信息子模块，负责 iTunes 多区域元信息获取
+ * [POS]: Lyrics 的元信息子模块，负责 MusicKit 全球目录元信息获取
  * [PROTOCOL]: 变更时更新此头部，然后检查 Services/Lyrics/CLAUDE.md
  */
 
 import Foundation
+import MusicKit
 
 // ============================================================
 // MARK: - 元信息解析器
@@ -552,28 +553,29 @@ public final class MetadataResolver {
             .trimmingCharacters(in: .whitespaces)
     }
 
-    // MARK: - iTunes Search API
+    // MARK: - Music Catalog Search (MusicKit — no rate limits, no external HTTP)
 
     private func searchITunes(term: String, region: String, limit: Int = 30) async -> [[String: Any]]? {
-        guard var components = URLComponents(string: "https://itunes.apple.com/search") else { return nil }
-        components.queryItems = [
-            URLQueryItem(name: "term", value: term),
-            URLQueryItem(name: "country", value: region),
-            URLQueryItem(name: "media", value: "music"),
-            URLQueryItem(name: "limit", value: String(limit))
-        ]
-
-        guard let url = components.url else { return nil }
-
+        // 🔑 Use MusicKit's on-device catalog search instead of iTunes HTTP API.
+        // MusicKit searches the global Apple Music catalog directly — no rate limiting,
+        // no 403s, no regional endpoints needed. The `region` parameter is ignored
+        // because MusicKit automatically uses the user's Apple Music storefront.
         do {
-            let (data, response) = try await HTTPClient.getData(url: url, timeout: 6.0)
-            guard (200...299).contains(response.statusCode) else { return nil }
+            var request = MusicCatalogSearchRequest(term: term, types: [Song.self])
+            request.limit = limit
+            let response = try await request.response()
 
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let results = json["results"] as? [[String: Any]] else { return nil }
-
-            return results
+            // Convert MusicKit Song objects to the same [[String: Any]] format
+            // that the rest of MetadataResolver expects (trackName, artistName, trackTimeMillis)
+            return response.songs.map { song in
+                [
+                    "trackName": song.title as Any,
+                    "artistName": song.artistName as Any,
+                    "trackTimeMillis": Int((song.duration ?? 0) * 1000) as Any
+                ]
+            }
         } catch {
+            DebugLogger.log("MetadataResolver", "⚠️ MusicKit search failed: \(error.localizedDescription)")
             return nil
         }
     }
