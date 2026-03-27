@@ -553,20 +553,25 @@ public final class MetadataResolver {
             .trimmingCharacters(in: .whitespaces)
     }
 
-    // MARK: - Music Catalog Search (MusicKit — no rate limits, no external HTTP)
+    // MARK: - Catalog Search (MusicKit primary → iTunes HTTP fallback)
 
     private func searchITunes(term: String, region: String, limit: Int = 30) async -> [[String: Any]]? {
-        // 🔑 Use MusicKit's on-device catalog search instead of iTunes HTTP API.
-        // MusicKit searches the global Apple Music catalog directly — no rate limiting,
-        // no 403s, no regional endpoints needed. The `region` parameter is ignored
-        // because MusicKit automatically uses the user's Apple Music storefront.
+        // 🔑 MusicKit first (on-device, no rate limits), iTunes HTTP fallback (multi-region)
+        // MusicKit searches the user's storefront — fast and reliable but limited to one region.
+        // iTunes HTTP searches a SPECIFIC region — needed for cross-region resolution
+        // (e.g., HK user searching JP storefront for EPO's Japanese catalog).
+        if let musicKitResults = await searchViaMusicKit(term: term, limit: limit), !musicKitResults.isEmpty {
+            return musicKitResults
+        }
+        return await searchViaITunesAPI(term: term, region: region, limit: limit)
+    }
+
+    private func searchViaMusicKit(term: String, limit: Int) async -> [[String: Any]]? {
         do {
             var request = MusicCatalogSearchRequest(term: term, types: [Song.self])
             request.limit = limit
             let response = try await request.response()
-
-            // Convert MusicKit Song objects to the same [[String: Any]] format
-            // that the rest of MetadataResolver expects (trackName, artistName, trackTimeMillis)
+            guard !response.songs.isEmpty else { return nil }
             return response.songs.map { song in
                 [
                     "trackName": song.title as Any,
@@ -575,7 +580,26 @@ public final class MetadataResolver {
                 ]
             }
         } catch {
-            DebugLogger.log("MetadataResolver", "⚠️ MusicKit search failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func searchViaITunesAPI(term: String, region: String, limit: Int) async -> [[String: Any]]? {
+        guard var components = URLComponents(string: "https://itunes.apple.com/search") else { return nil }
+        components.queryItems = [
+            URLQueryItem(name: "term", value: term),
+            URLQueryItem(name: "country", value: region),
+            URLQueryItem(name: "media", value: "music"),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        guard let url = components.url else { return nil }
+        do {
+            let (data, response) = try await HTTPClient.getData(url: url, timeout: 4.0)
+            guard (200...299).contains(response.statusCode) else { return nil }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = json["results"] as? [[String: Any]] else { return nil }
+            return results
+        } catch {
             return nil
         }
     }
