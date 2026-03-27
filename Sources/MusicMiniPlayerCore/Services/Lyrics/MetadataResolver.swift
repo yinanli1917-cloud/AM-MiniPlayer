@@ -269,11 +269,13 @@ public final class MetadataResolver {
                           inputArtistLower.split(separator: "&").contains { resultArtistLower.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
         }
 
-        // 标题匹配
+        // 标题匹配（含简繁体统一转换）
         let cleanedResultTitle = cleanTrackTitle(trackName.lowercased())
-        let titleMatch = cleanedInputTitle.contains(cleanedResultTitle) ||
-                        cleanedResultTitle.contains(cleanedInputTitle) ||
-                        cleanedInputTitle.split(separator: " ").filter { $0.count > 3 }.contains { cleanedResultTitle.contains($0.lowercased()) }
+        let simpInput = LanguageUtils.toSimplifiedChinese(cleanedInputTitle)
+        let simpResult = LanguageUtils.toSimplifiedChinese(cleanedResultTitle)
+        let titleMatch = simpInput.contains(simpResult) ||
+                        simpResult.contains(simpInput) ||
+                        simpInput.split(separator: " ").filter { $0.count > 3 }.contains { simpResult.contains($0.lowercased()) }
 
         let inputHasChinese = LanguageUtils.containsChinese(title) || LanguageUtils.containsChinese(artist)
         let resultHasChinese = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsChinese(artistName)
@@ -281,13 +283,22 @@ public final class MetadataResolver {
         let isCombinedSearch = searchTerm.lowercased() == "\(inputTitleLower) \(inputArtistLower)"
 
         if titleMatch {
-            // 🔑 匹配策略：P1 标题+艺术家 → P2 标题+本地化
+            // 🔑 匹配策略：P1 标题+艺术家 → P2 标题+本地化 → P3 标题+跨脚本艺术家
             if isCombinedSearch && resultIsActuallyLocalized {
                 return .direct((trackName, artistName, durationDiff, "combined"))
             } else if artistMatch && resultIsActuallyLocalized {
                 return .direct((trackName, artistName, durationDiff, "title+artist"))
             } else if searchTerm.lowercased() == inputTitleLower && LanguageUtils.containsChinese(trackName) && !LanguageUtils.containsChinese(title) {
                 return .direct((trackName, artistName, durationDiff, "title-search+CN"))
+            }
+            // 🔑 P3: 标题匹配 + 跨脚本艺术家（一方 ASCII，另一方 CJK）
+            // Cantopop/Mandapop: "翻風" + "Cass Phang" → iTunes 返回 "翻风" + "彭羚"
+            // 标题已匹配 + 时长 < 3s 已通过 → 艺术家跨脚本不匹配不应阻止解析
+            let inputArtistIsASCII = LanguageUtils.isPureASCII(artist)
+            let resultArtistIsASCII = LanguageUtils.isPureASCII(artistName)
+            let isCrossScriptArtist = inputArtistIsASCII != resultArtistIsASCII
+            if !artistMatch && isCrossScriptArtist && resultIsActuallyLocalized {
+                return .direct((trackName, artistName, durationDiff, "title+cross-script-artist"))
             }
             return .none
         }

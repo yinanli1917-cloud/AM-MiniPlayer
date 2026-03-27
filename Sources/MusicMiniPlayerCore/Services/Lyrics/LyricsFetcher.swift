@@ -542,7 +542,21 @@ public final class LyricsFetcher {
             guard durationDiff < 20 else { return nil }
 
             let titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
-            let artistMatch = params.artistPairs.contains { isArtistMatch(input: $0.0, result: s.artist, simplifiedInput: $0.1) }
+            var artistMatch = params.artistPairs.contains { isArtistMatch(input: $0.0, result: s.artist, simplifiedInput: $0.1) }
+
+            // 🔑 Cross-script artist tolerance: when title matches and one artist is ASCII
+            // while the other is CJK, accept as artist match. CJK artists with English names
+            // (Cass Phang/彭羚, Eman Lam/林二汶, Sandy Lam/林憶蓮) can't be matched by
+            // string comparison — the English and Chinese names share no characters.
+            if !artistMatch && titleMatch {
+                let inputArtistIsASCII = params.artistPairs.contains { LanguageUtils.isPureASCII($0.0) }
+                let resultArtistIsCJK = LanguageUtils.containsCJK(s.artist)
+                let resultArtistIsASCII = LanguageUtils.isPureASCII(s.artist)
+                let inputArtistIsCJK = params.artistPairs.contains { LanguageUtils.containsCJK($0.0) }
+                if (inputArtistIsASCII && resultArtistIsCJK) || (inputArtistIsCJK && resultArtistIsASCII) {
+                    artistMatch = true
+                }
+            }
 
             return SearchCandidate(
                 id: s.id, name: s.name, artist: s.artist,
