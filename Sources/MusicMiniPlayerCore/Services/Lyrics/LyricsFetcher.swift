@@ -296,7 +296,9 @@ public final class LyricsFetcher {
                 else if entryArtist.contains(artistLower) || artistLower.contains(entryArtist) { score += 40; artistMatched = true; break }
             }
 
-            if !artistMatched { continue }
+            // Allow title-only match for AMLL — CJK↔Latin artist names won't match textually
+            // but an exact title match with the right TTML file is reliable enough
+            if !artistMatched && score < 100 { continue }
             if score > 0 && (bestMatch == nil || score > bestMatch!.score) {
                 bestMatch = (entry, score)
             }
@@ -354,10 +356,11 @@ public final class LyricsFetcher {
                 let aLow = artistName.lowercased()
                 if aLow == artistLower { score += 80 }
                 else if aLow.contains(artistLower) || artistLower.contains(aLow) { score += 40 }
-                else { score -= 50 }
+                // Don't penalize artist mismatch — CJK↔Latin names won't match textually
+                // (e.g. "周杰倫" vs "Jay Chou"). Title + duration is strong enough for AMLL.
                 let dd = abs(trackDuration - duration)
                 if dd < 1 { score += 50 } else if dd < 3 { score += 30 } else if dd < 5 { score += 10 } else { score -= 30 }
-                if score >= 100 && (bestMatch == nil || score > bestMatch!.score) { bestMatch = (trackId, score) }
+                if score >= 80 && (bestMatch == nil || score > bestMatch!.score) { bestMatch = (trackId, score) }
             }
             return bestMatch?.trackId
         } catch { return nil }

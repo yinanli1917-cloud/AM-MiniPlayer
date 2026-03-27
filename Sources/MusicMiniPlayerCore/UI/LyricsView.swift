@@ -391,6 +391,7 @@ public struct LyricsView: View {
                         index: index,
                         currentIndex: currentIndex,
                         isScrolling: scroll.isManualScrolling,
+                        musicController: musicController,
                         onTap: { handleLineTap(line: line) },
                         showTranslation: lyricsService.showTranslation,
                         isTranslating: lyricsService.isTranslating,

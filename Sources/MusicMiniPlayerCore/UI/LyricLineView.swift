@@ -16,11 +16,11 @@ struct LyricLineView: View {
     let index: Int
     let currentIndex: Int
     let isScrolling: Bool
-    var currentTime: TimeInterval = 0  // 保留用于将来逐字高亮
-    var onTap: (() -> Void)? = nil  // 🔑 点击回调
-    var showTranslation: Bool = false  // 🔑 是否显示翻译
-    var isTranslating: Bool = false  // 🔑 是否正在翻译中
-    var translationFailed: Bool = false  // 🔑 翻译是否失败
+    var musicController: MusicController? = nil  // For word-by-word fill animation
+    var onTap: (() -> Void)? = nil
+    var showTranslation: Bool = false
+    var isTranslating: Bool = false
+    var translationFailed: Bool = false
 
     @State private var isHovering: Bool = false
     // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
@@ -63,16 +63,35 @@ struct LyricLineView: View {
             return 0.35
         }()
 
-        // 🔑 稳定版本：简单的行级高亮（等待正确的逐字高亮实现）
-        // 参考 AMLL/LyricFever 样式：翻译显示在原文下方
+        // AMLL-style per-word gradient fill for syllable-synced, line-level sweep otherwise
         VStack(alignment: .leading, spacing: 4) {
-            // 🔑 主歌词行
+            // Main lyrics line
             HStack(spacing: 0) {
-                Text(cleanedText)
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundColor(.white.opacity(textOpacity))
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                if line.hasSyllableSync && isCurrent, let mc = musicController {
+                    // Per-word fill: each word has its own gradient mask (60fps via TimelineView)
+                    TimelineView(.animation) { _ in
+                        WordByWordText(
+                            words: line.words,
+                            lineText: cleanedText,
+                            currentTime: mc.wordFillTime
+                        )
+                    }
+                } else if isCurrent, let mc = musicController {
+                    // Line-level sweep for lines without word timestamps
+                    TimelineView(.animation) { _ in
+                        Text(cleanedText)
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(lineSweepGradient(at: mc.wordFillTime))
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text(cleanedText)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundColor(.white.opacity(textOpacity))
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Spacer(minLength: 0)
             }
@@ -153,6 +172,152 @@ struct LyricLineView: View {
         .onHover { hovering in
             if isScrolling { isHovering = hovering }
         }
+    }
+
+    // ── Line-Level Sweep (fallback for non-syllable-synced lines) ───────────
+
+    /// Line-level gradient sweep from startTime to endTime.
+    private func lineSweepGradient(at time: TimeInterval) -> LinearGradient {
+        let start = line.startTime, end = line.endTime
+        let progress: CGFloat = {
+            guard end > start else { return time >= start ? 1 : 0 }
+            if time <= start { return 0 }
+            if time >= end { return 1 }
+            return CGFloat((time - start) / (end - start))
+        }()
+        let dim = Color.white.opacity(0.4)
+        if progress <= 0 { return LinearGradient(colors: [dim], startPoint: .leading, endPoint: .trailing) }
+        if progress >= 1 { return LinearGradient(colors: [.white], startPoint: .leading, endPoint: .trailing) }
+        let fade: CGFloat = 0.04
+        return LinearGradient(
+            stops: [
+                .init(color: .white, location: max(0, progress - fade)),
+                .init(color: dim, location: min(1, progress + fade))
+            ],
+            startPoint: .leading, endPoint: .trailing
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - Per-Word Fill (AMLL-style)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Renders each word as a separate view with its own gradient mask sweep.
+/// AMLL technique: each word gets `mask-image` with `mask-position` driven by word timing.
+private struct WordByWordText: View {
+    let words: [LyricWord]
+    let lineText: String
+    let currentTime: TimeInterval
+
+    /// Whether words need inter-word spaces (TTML=yes, YRC/CJK=no).
+    /// Compare concatenated words against original line text to detect spacing.
+    private var needsSpaces: Bool {
+        guard lineText.contains(" ") else { return false }
+        let joined = words.map(\.word).joined()
+        let stripped = lineText.replacingOccurrences(of: " ", with: "")
+        // If joining without spaces matches the stripped text, original had spaces
+        return joined == stripped
+    }
+
+    var body: some View {
+        WordFlowLayout {
+            ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
+                let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
+                WordFillSpan(
+                    text: word.word + suffix,
+                    progress: CGFloat(word.progress(at: currentTime))
+                )
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Single word with AMLL-style gradient mask fill.
+/// Two layers: dimmed base + bright overlay masked by a sweeping gradient.
+/// Fade width = height/2 (matches AMLL's `word.height / 2`).
+private struct WordFillSpan: View {
+    let text: String
+    let progress: CGFloat
+
+    private let font: Font = .system(size: 24, weight: .semibold)
+    private let dimOpacity: CGFloat = 0.4    // AMLL: rgba(0,0,0,0.25) → 25% visibility
+    private let brightOpacity: CGFloat = 1.0 // AMLL: rgba(0,0,0,0.85) → 85% visibility
+
+    var body: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(Color.white.opacity(dimOpacity))
+            .overlay {
+                Text(text)
+                    .font(font)
+                    .foregroundStyle(Color.white.opacity(brightOpacity))
+                    .mask { sweepMask }
+            }
+            // AMLL float: word lifts 0.05em (~1.2pt at 24pt) during play
+            .offset(y: progress > 0 && progress < 1 ? -1.2 : 0)
+            .animation(.easeOut(duration: 0.3), value: progress > 0 && progress < 1)
+    }
+
+    @ViewBuilder
+    private var sweepMask: some View {
+        if progress <= 0 {
+            Color.clear
+        } else if progress >= 1 {
+            Color.white
+        } else {
+            GeometryReader { geo in
+                // AMLL: fade width = word height / 2
+                let fadeW = geo.size.height * 0.5
+                let w = geo.size.width
+                let frontX = w * progress
+                // Gradient: bright from left → fades to clear at the sweep front
+                LinearGradient(
+                    stops: [
+                        .init(color: .white, location: 0),
+                        .init(color: .white, location: max(0, (frontX - fadeW) / w)),
+                        .init(color: .clear, location: min(1, frontX / w))
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+        }
+    }
+}
+
+/// Flow layout that wraps words like natural text.
+private struct WordFlowLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (i, pos) in arrange(proposal: proposal, subviews: subviews).positions.enumerated() {
+            subviews[i].place(
+                at: CGPoint(x: bounds.minX + pos.x, y: bounds.minY + pos.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxW = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0, maxX: CGFloat = 0
+
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > maxW && x > 0 {
+                x = 0; y += rowH; rowH = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            x += size.width
+            rowH = max(rowH, size.height)
+            maxX = max(maxX, x)
+        }
+        return (CGSize(width: maxX, height: y + rowH), positions)
     }
 }
 

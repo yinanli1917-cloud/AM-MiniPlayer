@@ -62,6 +62,9 @@ public class MusicController: ObservableObject {
         didSet { timePublisher.currentTime = currentTime }
     }
     public let timePublisher = TimePublisher()
+    /// High-frequency time for word-by-word lyrics animation (updated every frame, no threshold).
+    /// NOT @Published — read by TimelineView inside LyricLineView to avoid triggering SwiftUI diffs.
+    public private(set) var wordFillTime: TimeInterval = 0
     @Published public var connectionError: String? = nil
     @Published public var audioQuality: String? = nil // "Lossless", "Hi-Res Lossless", "Dolby Atmos", nil
     @Published public var shuffleEnabled: Bool = false
@@ -484,6 +487,10 @@ public class MusicController: ObservableObject {
         let interpolatedTime = internalCurrentTime + cappedElapsed
         let clampedTime = duration > 0 ? min(interpolatedTime, duration) : interpolatedTime
 
+        // Always update wordFillTime at frame rate (no threshold) for smooth word-by-word animation.
+        // Not @Published, so no SwiftUI diffs — only read by TimelineView inside LyricLineView.
+        wordFillTime = clampedTime
+
         // 🔑 Allow backward corrections up to 0.5s (poll resync after overshoot)
         // Only block large backward jumps (> 2s = seek, handled by applySnapshot)
         let diff = clampedTime - currentTime
@@ -517,6 +524,7 @@ public class MusicController: ObservableObject {
                 // Without this, interpolateTime() uses old track's position (e.g. 180s)
                 // while the SB queue is blocked by artwork fetch (1-3s), freezing lyrics.
                 self.currentTime = 0
+                self.wordFillTime = 0
                 self.internalCurrentTime = 0
                 self.lastPollTime = Date()
                 self.handleTrackChange(name: name, artist: artist, album: newAlbum ?? self.currentAlbum)
@@ -691,6 +699,7 @@ public class MusicController: ObservableObject {
                 if self.seekPending || !self.isPlaying || timeDiff > 2.0 {
                     let wasSeeking = self.seekPending
                     self.currentTime = position
+                    self.wordFillTime = position
                     self.seekPending = false
                     // 🔑 Update lyrics on hard time sync — safety net for when
                     // interpolateTime() was stale (SB queue blocked by artwork fetch).
@@ -825,6 +834,7 @@ public class MusicController: ObservableObject {
         if seekPending || !isPlaying || timeDiff > 2.0 {
             let wasSeeking = seekPending
             currentTime = s.position
+            wordFillTime = s.position
             seekPending = false
             if !wasSeeking && !lyricsService.isManualScrolling {
                 lyricsService.updateCurrentTime(s.position)
@@ -860,6 +870,7 @@ public class MusicController: ObservableObject {
         currentAlbum = ""
         duration = 0
         currentTime = 0
+        wordFillTime = 0
         internalCurrentTime = 0
         audioQuality = nil
         setArtwork(nil)
