@@ -310,15 +310,29 @@ private struct WordFillSpan: View {
         )
     }
 
+    // AMLL: scale = 1 + y * 0.1 * amount (amount = 0.7-1.0 based on duration)
+    private var scaleAmount: CGFloat {
+        let y = empEasing
+        guard y > 0 else { return 1.0 }
+        let amount: CGFloat
+        if wordDuration >= 3.0 { amount = 1.0 }
+        else if wordDuration >= 2.0 { amount = 0.8 }
+        else if wordDuration >= 1.2 { amount = 0.7 }
+        else { amount = 0.3 }  // subtle scale for short words too
+        return 1.0 + y * 0.1 * amount
+    }
+
     var body: some View {
         Text(text)
             .font(font)
             .foregroundStyle(sweepGradient)
-            // AMLL: up = 0.05em, duration = max(1000, wordDuration)ms, ease-out, fill: "both"
-            .offset(y: (isActive || hasPlayed) ? -1.2 : 0)
+            // AMLL scale: peaks via bell-curve easing, up to 1.1x
+            .scaleEffect(scaleAmount)
+            // AMLL float: 0.05em rise, persists after word ends
+            .offset(y: (isActive || hasPlayed) ? -2.0 : 0)
             .animation(.easeOut(duration: max(1.0, wordDuration)), value: isActive || hasPlayed)
-            // AMLL: textShadow rgba(255,255,255,glowLevel) 0 0 10px
-            .shadow(color: .white.opacity(Double(glowLevel)), radius: 10)
+            // AMLL glow: rgba(255,255,255,glowLevel) 0 0 radius
+            .shadow(color: .white.opacity(Double(glowLevel) * 1.2), radius: 12)
     }
 }
 
