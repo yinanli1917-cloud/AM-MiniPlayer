@@ -52,7 +52,7 @@ public final class LyricsFetcher {
     }
 
     // MARK: - 并行获取
-    private let earlyReturnThreshold: Double = 80.0
+    private let earlyReturnThreshold: Double = 60.0
 
     /// 并行获取所有歌词源（含早期返回优化）
     public func fetchAllSources(
@@ -107,34 +107,17 @@ public final class LyricsFetcher {
         return results.sorted { $0.score > $1.score }
     }
 
-    /// 选择最佳结果（优先质量通过的，回退到最高分）
-    /// ⚠️ 纯文本源（lyrics.ovh/Genius）低分且无其他可信源时拒绝（宁缺勿错）
+    /// Select best lyrics result — unified single-pass, no source-type overrides.
+    /// Timestamp authenticity is already baked into the score via CV-based detection.
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
-        let unsyncedSources: Set<String> = ["lyrics.ovh", "Genius"]
-
-        let reliable = results.filter { r in
-            if r.score <= 0 { return false }
-            return true
-        }
-
-        // 🔑 Synced sources (NetEase/QQ/AMLL/LRCLIB) with score >= 30 always beat unsynced
-        // Unsynced sources skip timing penalties, inflating scores unfairly (~46 max vs synced ~39)
-        let synced = reliable.filter { !unsyncedSources.contains($0.source) }
-        let bestSynced = synced.first(where: { scorer.analyzeQuality($0.lyrics).isValid })
-            ?? synced.first
-
-        if let synced = bestSynced, synced.score >= 30 {
-            DebugLogger.log("🏆 最终选择: \(synced.source) (synced preferred)")
-            return synced.lyrics
-        }
-
-        // Fallback: best overall (including unsynced)
+        let reliable = results.filter { $0.score > 0 }
+        // Results already sorted by score desc from fetchAllSources
         if let best = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
-            DebugLogger.log("🏆 最终选择: \(best.source)")
+            DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)))")
             return best.lyrics
         }
         if let best = reliable.first {
-            DebugLogger.log("⚠️ 降级使用: \(best.source)")
+            DebugLogger.log("⚠️ 降级使用: \(best.source) (score=\(String(format: "%.1f", best.score)))")
             return best.lyrics
         }
         return nil

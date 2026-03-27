@@ -125,13 +125,15 @@ public final class MetadataResolver {
         let cnResult = await cnTask
         let localizedResult = await localizedTask
 
-        // 🔑 输出验证：多区域返回 CJK 标题但 CN 完全无匹配 → 大概率误配
-        // 泛化防线：不猜输入国籍，靠 CN 交叉验证（真正的日/韩歌 CN 也能搜到）
+        // 🔑 输出验证：多区域返回 CJK 标题但 CN 完全无匹配 → 可能误配
+        // 例外：艺术家名精确匹配时可信（HK/TW 粤语艺术家可能不在 CN iTunes）
         var localized: (title: String, artist: String)?
         if let loc = localizedResult {
             let resultTitleHasCJK = LanguageUtils.containsCJK(loc.title)
-            if resultTitleHasCJK && cnResult == nil {
-                DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配）: '\(loc.title)' by '\(loc.artist)'")
+            let artistMatchesExactly = LanguageUtils.normalizeArtistName(loc.artist).lowercased() ==
+                                       LanguageUtils.normalizeArtistName(artist).lowercased()
+            if resultTitleHasCJK && cnResult == nil && !artistMatchesExactly {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配 + 艺术家不匹配）: '\(loc.title)' by '\(loc.artist)'")
             } else {
                 DebugLogger.log("MetadataResolver", "🌏 多区域解析: '\(loc.title)' by '\(loc.artist)' (region: \(loc.region))")
                 localized = (loc.title, loc.artist)
@@ -295,7 +297,7 @@ public final class MetadataResolver {
         // 要求结果标题含 CJK，避免 "Shang-Hide Night" → "Girl's In Love With Me" 英文→英文错配
         let inputIsPureEnglish = !inputHasChinese && LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist)
         let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) || LanguageUtils.containsKorean(trackName)
-        if durationDiff < 1.0 && resultTitleHasCJK && inputIsPureEnglish {
+        if durationDiff < 3.0 && resultTitleHasCJK && inputIsPureEnglish {
             // 🔑 艺术家校验：同脚本（都是 ASCII）必须匹配，防止不同歌手错配
             // "NCT DREAM" vs "NewJeans" → 都是 ASCII 且不匹配 → 拒绝
             // "彭佳慧" vs "Julia Peng" → 不同脚本 → 无法校验 → 放行（靠时长兜底）

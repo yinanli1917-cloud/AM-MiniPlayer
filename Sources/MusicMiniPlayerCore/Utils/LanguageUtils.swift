@@ -155,10 +155,11 @@ public enum LanguageUtils {
             regions.append("JP")
         }
 
-        // 🔑 纯 ASCII → 尝试日韩区域（可能是罗马字名）
-        // 宽进严出：不猜输入国籍，MetadataResolver 靠 CN 交叉验证过滤误配
+        // 🔑 纯 ASCII → 搜索所有 CJK 相关区域（不猜输入国籍）
+        // 覆盖：日文罗马字(JP)、韩文罗马化(KR)、粤语英文名(HK)、台湾华语(TW)
+        // 宽进严出：MetadataResolver 靠匹配逻辑过滤误配
         if regions.isEmpty && isPureASCII(artist) {
-            regions.append(contentsOf: ["JP", "KR"])
+            regions.append(contentsOf: ["JP", "KR", "HK", "TW"])
         }
 
         return regions

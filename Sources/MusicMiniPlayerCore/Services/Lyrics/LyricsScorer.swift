@@ -58,38 +58,28 @@ public final class LyricsScorer {
 
         var score: Double = 0
 
-        // 1. 逐字时间轴加分（最重要，最多 30 分）
+        // 1. Syllable sync (word-level timestamps, max 30)
         let syllableSyncCount = lyrics.filter { $0.hasSyllableSync }.count
         let syllableSyncRatio = Double(syllableSyncCount) / Double(lyrics.count)
         score += syllableSyncRatio * 30
 
-        // 2. 质量分析分（最多 30 分）
+        // 2. Quality analysis (max 30)
         let qualityAnalysis = analyzeQuality(lyrics)
         score += (qualityAnalysis.qualityScore / 100.0) * 30
 
-        // 3. 行数加分（最多 15 分）
+        // 3. Line count (max 15)
         score += min(Double(lyrics.count) * 0.5, 15)
 
-        // 🔑 纯文本源（Genius/lyrics.ovh）的时间轴是 createUnsyncedLyrics 伪造的
-        // 均匀分布 → 时长/覆盖度永远满分，这不是真实信号，不参与评分
-        let isUnsyncedSource = source == "Genius" || source == "lyrics.ovh"
-
-        // 4. 时长匹配评分（最多 15 分，或扣分）
-        if duration > 0 && !isUnsyncedSource {
+        // 4. Duration match (max 15, applies to ALL sources uniformly)
+        if duration > 0 {
             let lastStart = lyrics.last?.startTime ?? 0
-
-            // 🔑 Overshoot penalty: lyrics extend past song end = likely wrong version
-            // Moderate: prefer correctly-timed sources, but don't lose to unsynced
-            // (Rescaling will fix the timing as a last resort)
             if lastStart > duration {
                 let overshootRatio = (lastStart - duration) / duration
-                // Scale: 5% over → -5, 10% over → -10, 15%+ over → -15
                 score -= min(15, overshootRatio * 100)
             } else {
                 let lyricsDuration = (lyrics.last?.endTime ?? 0) - (lyrics.first?.startTime ?? 0)
                 let durationDiff = abs(lyricsDuration - duration)
                 let durationDiffRatio = durationDiff / duration
-
                 if durationDiffRatio < 0.01 { score += 15 }
                 else if durationDiffRatio < 0.03 { score += 12 }
                 else if durationDiffRatio < 0.05 { score += 8 }
@@ -98,22 +88,20 @@ public final class LyricsScorer {
             }
         }
 
-        // 5. 时间轴覆盖度（最多 8 分）
-        if duration > 0 && !isUnsyncedSource {
+        // 5. Coverage (max 8, applies to ALL sources uniformly)
+        if duration > 0 {
             let lastLyricEnd = lyrics.last?.endTime ?? 0
             let firstLyricStart = lyrics.first?.startTime ?? 0
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
             score += coverageRatio * 8
         }
 
-        // 6. Internal gap penalty: large hole means incomplete lyrics
-        // 🔑 阈值按歌曲时长缩放：长歌允许更长的间奏（如 J-Pop 5:32 有 49.8s 间奏）
-        if !isUnsyncedSource && lyrics.count >= 5 {
+        // 6. Internal gap penalty (applies to ALL sources uniformly)
+        if lyrics.count >= 5 {
             var maxGap: Double = 0
             for i in 1..<lyrics.count {
                 maxGap = max(maxGap, lyrics[i].startTime - lyrics[i - 1].startTime)
             }
-            // 🔑 阈值按歌曲时长缩放：长歌允许更长的间奏（如 J-Pop 5:32 有 49.8s 间奏）
             let gapThreshold = max(45, duration * 0.15)
             if maxGap > gapThreshold { score -= 20 }
         }
@@ -122,17 +110,21 @@ public final class LyricsScorer {
         let mixPenalty = mixedTranslationPenalty(lyrics)
         score -= mixPenalty
 
-        // 8. Translation bonus (skip if mixed — translation leaked into main text)
+        // 8. Translation bonus
         if translationEnabled && lyrics.contains(where: { $0.hasTranslation }) && mixPenalty == 0 {
             score += 15
         }
 
-        // 9. Romaji penalty (all unsynced sources that return romanized CJK)
-        if isUnsyncedSource && isLikelyRomaji(lyrics) {
+        // 9. Romaji penalty (universal — romanized lyrics are lower quality from any source)
+        if isLikelyRomaji(lyrics) {
             score -= 15
         }
 
-        // 10. Source bonus
+        // 10. Timestamp authenticity (replaces source-name-based isUnsyncedSource)
+        // Fabricated timestamps have uniform spacing (CV ≈ 0); real timestamps have natural variation
+        score += timestampAuthenticityScore(lyrics)
+
+        // 11. Source bonus
         score += sourceBonus(for: source)
 
         return min(score, 100)
@@ -219,9 +211,31 @@ public final class LyricsScorer {
         case "LRCLIB": return 3
         case "LRCLIB-Search": return 2
         case "Genius": return 1
-        case "lyrics.ovh": return 0
+        case "lyrics.ovh": return -2
         default: return 0
         }
+    }
+
+    // MARK: - Timestamp Authenticity
+
+    /// Detect fabricated vs authentic timestamps using coefficient of variation
+    /// Fabricated (createUnsyncedLyrics): perfectly uniform spacing → CV ≈ 0
+    /// Authentic (synced sources): natural variation in line durations → CV > 0.15
+    private func timestampAuthenticityScore(_ lyrics: [LyricLine]) -> Double {
+        guard lyrics.count >= 5 else { return 0 }
+        var gaps: [Double] = []
+        for i in 1..<lyrics.count {
+            let gap = lyrics[i].startTime - lyrics[i - 1].startTime
+            if gap > 0 { gaps.append(gap) }
+        }
+        guard gaps.count >= 4 else { return 0 }
+        let mean = gaps.reduce(0, +) / Double(gaps.count)
+        guard mean > 0 else { return 0 }
+        let variance = gaps.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(gaps.count)
+        let cv = sqrt(variance) / mean
+        if cv < 0.05 { return -15 }  // Clearly fabricated (uniform distribution)
+        if cv > 0.15 { return 15 }   // Authentic (natural variation)
+        return 0                       // Ambiguous
     }
 
     // MARK: - 辅助函数
