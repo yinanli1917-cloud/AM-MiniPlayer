@@ -453,13 +453,13 @@ struct InterludeDotsView: View {
 struct PreludeDotsView: View {
     let startTime: TimeInterval
     let endTime: TimeInterval
-    @ObservedObject var musicController: MusicController
+    @ObservedObject var timePublisher: TimePublisher
 
     var body: some View {
         InterludeDotsView(
             startTime: startTime,
             endTime: endTime,
-            currentTime: musicController.currentTime,
+            currentTime: timePublisher.currentTime,
             gateByTimeRange: false
         )
     }

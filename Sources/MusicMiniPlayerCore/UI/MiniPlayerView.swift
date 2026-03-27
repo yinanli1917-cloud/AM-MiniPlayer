@@ -342,6 +342,7 @@ extension MiniPlayerView {
 
                     // 🔑 SharedBottomControls
                     SharedBottomControls(
+                        timePublisher: musicController.timePublisher,
                         currentPage: $musicController.currentPage,
                         isHovering: $isHovering,
                         showControls: $showControls,

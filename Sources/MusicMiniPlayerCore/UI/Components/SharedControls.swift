@@ -64,6 +64,7 @@ struct RoundedCornerSlideModifier: ViewModifier {
 // MARK: - Shared Bottom Controls
 struct SharedBottomControls: View {
     @EnvironmentObject var musicController: MusicController
+    @ObservedObject var timePublisher: TimePublisher
     @Binding var currentPage: PlayerPage
     @Binding var isHovering: Bool
     @Binding var showControls: Bool
@@ -95,7 +96,7 @@ struct SharedBottomControls: View {
 
                     // Time labels - 移到进度条下方，padding与进度条一致
                     HStack {
-                        Text(formatTime(musicController.currentTime))
+                        Text(formatTime(timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
                             .accessibilityHidden(true)
@@ -109,7 +110,7 @@ struct SharedBottomControls: View {
 
                         Spacer()
 
-                        Text("-" + formatTime(musicController.duration - musicController.currentTime))
+                        Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundColor(.white.opacity(0.6))
                             .accessibilityHidden(true)
@@ -219,7 +220,7 @@ struct SharedBottomControls: View {
         return GeometryReader { geo in
             let currentProgress: CGFloat = {
                 if musicController.duration > 0 {
-                    return dragPosition ?? CGFloat(musicController.currentTime / musicController.duration)
+                    return dragPosition ?? CGFloat(timePublisher.currentTime / musicController.duration)
                 }
                 return 0
             }()
@@ -272,7 +273,7 @@ struct SharedBottomControls: View {
         .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
         .padding(.horizontal, 20)  // 🔑 进度条额外padding
         .accessibilityLabel("播放进度")
-        .accessibilityValue("\(formatTime(musicController.currentTime)) / \(formatTime(musicController.duration))")
+        .accessibilityValue("\(formatTime(timePublisher.currentTime)) / \(formatTime(musicController.duration))")
         .accessibilityAddTraits(.allowsDirectInteraction)
     }
 

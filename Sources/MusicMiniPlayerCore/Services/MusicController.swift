@@ -492,17 +492,17 @@ public class MusicController: ObservableObject {
         wordFillTime = clampedTime
 
         // 🔑 Allow backward corrections up to 0.5s (poll resync after overshoot)
-        // Only block large backward jumps (> 2s = seek, handled by applySnapshot)
+        // Only block large backward jumps (> 2s = seek, handled by poll hard-sync)
         let diff = clampedTime - currentTime
-        if diff >= 0 || diff > -0.5 {
-            if abs(diff) >= 0.1 {
-                currentTime = clampedTime
-                // Update lyrics line index here (not in LyricsView's onChange)
-                // to avoid triggering unnecessary SwiftUI body re-evaluations
-                if !lyricsService.isManualScrolling {
-                    lyricsService.updateCurrentTime(clampedTime)
-                }
-            }
+        if (diff >= 0 || diff > -0.5) && abs(diff) >= 0.1 {
+            currentTime = clampedTime
+        }
+        // 🔑 Only drive lyrics FORWARD — backward jitter from SB polls must not
+        // bounce currentLineIndex. Backward lyrics corrections come from:
+        // - seek() calls updateCurrentTime directly
+        // - poll hard-sync (timeDiff > 2.0) calls updateCurrentTime directly
+        if diff >= 0.1 && !lyricsService.isManualScrolling {
+            lyricsService.updateCurrentTime(clampedTime)
         }
     }
 

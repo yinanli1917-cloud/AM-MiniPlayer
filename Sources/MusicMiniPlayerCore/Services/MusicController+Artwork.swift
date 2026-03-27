@@ -83,21 +83,45 @@ extension MusicController {
         artworkFetchGeneration += 1
         let generation = artworkFetchGeneration
 
-        logToFile("🎨 Cache MISS, starting sequential fetch (SB first, API fallback)...")
+        logToFile("🎨 Cache MISS, starting concurrent fetch (SB + API in parallel)...")
 
-        // 🔑 串行优先级策略：优先 ScriptingBridge（与系统一致），失败才用 API
+        // 🔑 Concurrent strategy: fire SB and API in parallel.
+        // SB queue may be blocked 10-23s by playlist scanning — if API is sequential
+        // after SB, radio tracks change before artwork arrives. Concurrent fetch ensures
+        // API artwork shows in 1-2s regardless of SB queue state.
+
+        // Path 1: API fetch — starts immediately, no SB queue dependency
+        Task { [weak self] in
+            guard let self else { return }
+            if let image = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+                self.logToFile("🎨 [API] SUCCESS! Got image \(image.size)")
+                await MainActor.run {
+                    guard self.artworkFetchGeneration == generation else { return }
+                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title)
+                }
+            } else {
+                self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
+                await MainActor.run {
+                    guard self.artworkFetchGeneration == generation else { return }
+                    if self.isStillCurrentTrack(persistentID: persistentID, title: title)
+                        && self.currentArtwork == nil {
+                        self.setArtwork(self.createPlaceholder())
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
+            }
+        }
+
+        // Path 2: SB fetch — higher quality local artwork, overrides API if available
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self,
                   let app = self.musicApp,
                   app.isRunning else {
-                DispatchQueue.main.async { [weak self] in self?.artworkFetchingForKey = nil }
                 return
             }
-
-            // 🔑 代数检查：SB 队列堆积时旧任务直接跳过
             guard self.artworkFetchGeneration == generation else {
                 self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
-                DispatchQueue.main.async { [weak self] in self?.artworkFetchingForKey = nil }
                 return
             }
 
@@ -105,24 +129,8 @@ extension MusicController {
             if let image = self.getArtworkImageFromApp(app) {
                 self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
                 DispatchQueue.main.async {
+                    guard self.artworkFetchGeneration == generation else { return }
                     self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title)
-                }
-            } else {
-                self.logToFile("🎨 [SB] No embedded artwork, falling back to API...")
-                Task {
-                    if let mkArtwork = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-                        self.logToFile("🎨 [API] SUCCESS! Got image \(mkArtwork.size)")
-                        await self.applyArtworkIfCurrent(mkArtwork, persistentID: persistentID, title: title)
-                    } else {
-                        self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
-                        await MainActor.run {
-                            if self.isStillCurrentTrack(persistentID: persistentID, title: title) {
-                                self.setArtwork(self.createPlaceholder())
-                            }
-                        }
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
-                    }
                 }
             }
         }

@@ -245,6 +245,7 @@ public struct PlaylistView: View {
                         Color.clear.frame(height: 1).allowsHitTesting(false)
 
                         SharedBottomControls(
+                            timePublisher: musicController.timePublisher,
                             currentPage: $currentPage,
                             isHovering: $isHovering,
                             showControls: $showControls,

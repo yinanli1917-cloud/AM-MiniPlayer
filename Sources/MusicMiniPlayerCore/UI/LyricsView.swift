@@ -379,7 +379,7 @@ public struct LyricsView: View {
                 PreludeDotsView(
                     startTime: line.startTime,
                     endTime: nextLineStartTime,
-                    musicController: musicController
+                    timePublisher: musicController.timePublisher
                 )
                 .frame(height: 30)
                 .padding(.horizontal, 32)
@@ -403,7 +403,7 @@ public struct LyricsView: View {
                         PreludeDotsView(
                             startTime: interludeInfo.startTime,
                             endTime: interludeInfo.endTime,
-                            musicController: musicController
+                            timePublisher: musicController.timePublisher
                         )
                         .frame(height: 30)
                         .padding(.top, 8)
@@ -458,6 +458,7 @@ public struct LyricsView: View {
             ZStack(alignment: .bottom) {
                 Color.clear.frame(height: 1).allowsHitTesting(false)
                 SharedBottomControls(
+                    timePublisher: musicController.timePublisher,
                     currentPage: $currentPage,
                     isHovering: $isHovering,
                     showControls: $showControls,
@@ -483,6 +484,7 @@ public struct LyricsView: View {
             ZStack(alignment: .bottom) {
                 Color.clear.frame(height: 1).allowsHitTesting(false)
                 SharedBottomControls(
+                    timePublisher: musicController.timePublisher,
                     currentPage: $currentPage,
                     isHovering: $isHovering,
                     showControls: $showControls,
@@ -852,11 +854,12 @@ public struct LyricsView: View {
         }()
         let isNearbyJump = abs(newIndex - oldIndex) <= 2
 
-        // Also skip wave on explicit user seeks (progress bar / tap-to-jump)
-        // — seekPending is set synchronously in seek() and cleared by the next poll.
-        // Without this, wave positions lines at the OLD offset while culling only shows
-        // lines near the NEW index, producing a blank screen until delays expire.
-        if reduceMotion || isFastSong || isNearbyJump || musicController.seekPending {
+        // Skip wave on large jumps (seeks, track changes, or large time discontinuities).
+        // Using jump distance instead of seekPending flag — the flag has a race condition:
+        // seek() sets it, but poll clears it before SwiftUI's onChange delivers the event.
+        // Jump distance is a structural invariant, immune to timing races.
+        let isLargeJump = abs(newIndex - oldIndex) > 4
+        if reduceMotion || isFastSong || isNearbyJump || isLargeJump {
             wave.isActive = false
             wave.lineDelays.removeAll()
             wave.oldIndex = newIndex
