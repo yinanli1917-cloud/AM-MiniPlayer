@@ -362,8 +362,8 @@ public struct LyricsView: View {
 
     // MARK: - Lyric Line Helpers
 
+    @ViewBuilder
     private func lyricLineContent(line: LyricLine, index: Int, currentIndex: Int) -> some View {
-        Group {
             if isPreludeEllipsis(line.text) {
                 let nextLineStartTime: TimeInterval = {
                     if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
@@ -379,7 +379,7 @@ public struct LyricsView: View {
                 PreludeDotsView(
                     startTime: line.startTime,
                     endTime: nextLineStartTime,
-                    timePublisher: musicController.timePublisher
+                    musicController: musicController
                 )
                 .frame(height: 30)
                 .padding(.horizontal, 32)
@@ -391,7 +391,6 @@ public struct LyricsView: View {
                         index: index,
                         currentIndex: currentIndex,
                         isScrolling: scroll.isManualScrolling,
-                        isActive: lyricsService.activeLineIndices.contains(index),
                         onTap: { handleLineTap(line: line) },
                         showTranslation: lyricsService.showTranslation,
                         isTranslating: lyricsService.isTranslating,
@@ -400,10 +399,10 @@ public struct LyricsView: View {
                     .padding(.horizontal, 32)
 
                     if let interludeInfo = checkForInterlude(at: index) {
-                        ObservingInterludeDotsView(
+                        PreludeDotsView(
                             startTime: interludeInfo.startTime,
                             endTime: interludeInfo.endTime,
-                            timePublisher: musicController.timePublisher
+                            musicController: musicController
                         )
                         .frame(height: 30)
                         .padding(.top, 8)
@@ -411,7 +410,6 @@ public struct LyricsView: View {
                     }
                 }
             }
-        }
     }
 
     private func lineHeightTracker(index: Int) -> some View {

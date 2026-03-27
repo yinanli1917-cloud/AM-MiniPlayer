@@ -148,7 +148,7 @@ public class MusicController: ObservableObject {
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var interpolationTimerActive = false
-    private var lastPollTime: Date = .distantPast
+    var lastPollTime: Date = .distantPast
 
     // 窗口移动期间暂停 interpolation（避免 60Hz Timer 和 DisplayLink 争帧预算）
     private var windowMovementPaused = false
