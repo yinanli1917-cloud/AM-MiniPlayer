@@ -232,40 +232,95 @@ private struct WordByWordText: View {
         WordFlowLayout {
             ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
                 let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
+                let du = word.endTime - word.startTime
                 WordFillSpan(
                     text: word.word + suffix,
-                    progress: CGFloat(word.progress(at: currentTime))
+                    progress: CGFloat(word.progress(at: currentTime)),
+                    emphasisProgress: Self.emphasisProgress(for: word, at: currentTime),
+                    wordDuration: du,
+                    isActive: currentTime >= word.startTime && currentTime < word.endTime,
+                    hasPlayed: currentTime >= word.endTime
                 )
             }
         }
         .fixedSize(horizontal: false, vertical: true)
     }
+
+    /// AMLL: `animateDu = max(du * 1.2, 2000ms)`. Returns 0→1 over the extended duration.
+    static func emphasisProgress(for word: LyricWord, at time: TimeInterval) -> CGFloat {
+        let du = word.endTime - word.startTime
+        let emphDuration = max(du * 1.2, 2.0)
+        guard emphDuration > 0 else { return 0 }
+        let t = (time - word.startTime) / emphDuration
+        return CGFloat(min(max(t, 0), 1))
+    }
 }
 
-/// Single word with AMLL-style gradient mask fill.
-/// Two layers: dimmed base + bright overlay masked by a sweeping gradient.
-/// Fade width = height/2 (matches AMLL's `word.height / 2`).
+// ── WordFillSpan ─────────────────────────────────────────────────────────────
+// AMLL's three animation systems per word, translated to SwiftUI:
+//
+// 1. Mask sweep: gradient slides left→right based on word.progress(at:)
+// 2. Float: rises -1.2pt with ease-out over max(1s, wordDuration),
+//    STAYS elevated after word ends (AMLL `fill: "both"`),
+//    settles back when line deactivates (view switches to plain Text)
+// 3. Glow: text-shadow with AMLL's exact formula:
+//    glowLevel = max(0, x < 0.4 ? y/2 : y - 0.5) * blur
+//    Duration = max(wordDuration * 1.2, 2s), so glow outlasts the word
+
 private struct WordFillSpan: View {
     let text: String
     let progress: CGFloat
+    let emphasisProgress: CGFloat
+    let wordDuration: TimeInterval
+    let isActive: Bool    // currently being sung
+    let hasPlayed: Bool   // finished singing
 
     private let font: Font = .system(size: 24, weight: .semibold)
-    private let dimOpacity: CGFloat = 0.4    // AMLL: rgba(0,0,0,0.25) → 25% visibility
-    private let brightOpacity: CGFloat = 1.0 // AMLL: rgba(0,0,0,0.85) → 85% visibility
+
+    // AMLL emphasis easing: bezIn(0→0.4) then 1-bezOut(0.4→1)
+    // Approximated with smoothstep for performance
+    private var empEasingValue: CGFloat {
+        let x = emphasisProgress
+        guard x > 0 && x < 1 else { return 0 }
+        let mid: CGFloat = 0.4
+        if x < mid {
+            let t = x / mid
+            return t * t * (3 - 2 * t)
+        } else {
+            let t = (x - mid) / (1 - mid)
+            return 1 - t * t * (3 - 2 * t)
+        }
+    }
+
+    // AMLL glow formula: max(0, x < 0.4 ? y/2 : y - 0.5) * blur
+    // blur ranges 0.5-0.8 based on word duration
+    private var glowLevel: CGFloat {
+        let y = empEasingValue
+        let x = emphasisProgress
+        guard x > 0 && x < 1 else { return 0 }
+        let blur: CGFloat = wordDuration >= 3.0 ? 0.8 : (wordDuration >= 2.0 ? 0.6 : 0.5)
+        return max(0, x < 0.4 ? y / 2 : y - 0.5) * blur
+    }
 
     var body: some View {
         Text(text)
             .font(font)
-            .foregroundStyle(Color.white.opacity(dimOpacity))
+            .foregroundStyle(Color.white.opacity(0.4))
             .overlay {
                 Text(text)
                     .font(font)
-                    .foregroundStyle(Color.white.opacity(brightOpacity))
+                    .foregroundStyle(Color.white)
                     .mask { sweepMask }
             }
-            // AMLL float: word lifts 0.05em (~1.2pt at 24pt) during play
-            .offset(y: progress > 0 && progress < 1 ? -1.2 : 0)
-            .animation(.easeOut(duration: 0.3), value: progress > 0 && progress < 1)
+            // AMLL float: duration = max(1s, wordDuration), ease-out.
+            // `fill: "both"` → stays elevated after word ends.
+            .offset(y: (isActive || hasPlayed) ? -1.2 : 0)
+            .animation(
+                .easeOut(duration: max(1.0, wordDuration)),
+                value: isActive || hasPlayed
+            )
+            // AMLL glow: rgba(255,255,255,glowLevel) 0 0 10px
+            .shadow(color: .white.opacity(Double(glowLevel)), radius: 10)
     }
 
     @ViewBuilder
@@ -276,11 +331,9 @@ private struct WordFillSpan: View {
             Color.white
         } else {
             GeometryReader { geo in
-                // AMLL: fade width = word height / 2
                 let fadeW = geo.size.height * 0.5
                 let w = geo.size.width
                 let frontX = w * progress
-                // Gradient: bright from left → fades to clear at the sweep front
                 LinearGradient(
                     stops: [
                         .init(color: .white, location: 0),
