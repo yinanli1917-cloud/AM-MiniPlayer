@@ -551,21 +551,34 @@ public final class LyricsFetcher {
             let durationDiff = abs(s.duration - params.duration)
             guard durationDiff < 20 else { return nil }
 
-            let titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
+            var titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
             var artistMatch = params.artistPairs.contains { isArtistMatch(input: $0.0, result: s.artist, simplifiedInput: $0.1) }
 
-            // 🔑 Cross-script artist tolerance: when title matches and one artist is ASCII
-            // while the other is CJK, accept as artist match. CJK artists with English names
-            // (Cass Phang/彭羚, Eman Lam/林二汶, Sandy Lam/林憶蓮) can't be matched by
-            // string comparison — the English and Chinese names share no characters.
-            if !artistMatch && titleMatch {
-                let inputArtistIsASCII = params.artistPairs.contains { LanguageUtils.isPureASCII($0.0) }
-                let resultArtistIsCJK = LanguageUtils.containsCJK(s.artist)
-                let resultArtistIsASCII = LanguageUtils.isPureASCII(s.artist)
-                let inputArtistIsCJK = params.artistPairs.contains { LanguageUtils.containsCJK($0.0) }
-                if (inputArtistIsASCII && resultArtistIsCJK) || (inputArtistIsCJK && resultArtistIsASCII) {
-                    artistMatch = true
-                }
+            // 🔑 Cross-script tolerance: CJK artists with English names (Cass Phang/彭羚,
+            // Eman Lam/林二汶) can't be matched by string comparison. When one side is ASCII
+            // and the other is CJK, infer the match from context:
+            // - Title matches → artist is cross-script → accept (e.g. 翻風 + Cass Phang)
+            // - Artist from search results (same person) + title is cross-script → accept
+            //   (e.g. NetEase returns 林二汶's songs for "Eman Lam", title 仙乐飘飘处处闻 ≠ ASCII input)
+            let inputArtistIsASCII = params.artistPairs.contains { LanguageUtils.isPureASCII($0.0) }
+            let resultArtistIsCJK = LanguageUtils.containsCJK(s.artist)
+            let resultArtistIsASCII = LanguageUtils.isPureASCII(s.artist)
+            let inputArtistIsCJK = params.artistPairs.contains { LanguageUtils.containsCJK($0.0) }
+            let isCrossScriptArtist = (inputArtistIsASCII && resultArtistIsCJK) || (inputArtistIsCJK && resultArtistIsASCII)
+
+            if !artistMatch && titleMatch && isCrossScriptArtist {
+                artistMatch = true
+            }
+
+            // 🔑 Cross-script title: when artist resolved via search (NetEase returns 林二汶
+            // for "Eman Lam") but title is completely different script (ASCII romanization vs CJK),
+            // treat as title match — the search engine already confirmed the artist, and the
+            // CJK title IS the song (romanized input just can't match CJK characters).
+            let inputTitleIsASCII = LanguageUtils.isPureASCII(params.rawTitle) && LanguageUtils.isPureASCII(params.rawOriginalTitle)
+            let resultTitleIsCJK = LanguageUtils.containsCJK(s.name)
+            if !titleMatch && isCrossScriptArtist && inputTitleIsASCII && resultTitleIsCJK {
+                titleMatch = true
+                artistMatch = true
             }
 
             return SearchCandidate(
@@ -618,7 +631,8 @@ public final class LyricsFetcher {
     }
 
     private func fetchNetEaseLyrics(songId: Int) async -> [LyricLine]? {
-        guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1") else { return nil }
+        // 🔑 yv=1 requests YRC (word-level) lyrics alongside LRC/tlyric
+        guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1&yv=1") else { return nil }
 
         do {
             let json = try await HTTPClient.getJSON(url: url, headers: [
@@ -626,11 +640,20 @@ public final class LyricsFetcher {
                 "Referer": "https://music.163.com"
             ], timeout: 6.0)
 
-            guard let lrc = json["lrc"] as? [String: Any],
-                  let lyricText = lrc["lyric"] as? String, !lyricText.isEmpty else { return nil }
+            // 🔑 Prefer YRC (word-level) over LRC — skip LRC parse entirely when YRC available
+            var lyrics: [LyricLine]
 
-            // 🔑 先剥元信息再处理翻译
-            var lyrics = parser.stripMetadataLines(parser.parseLRC(lyricText))
+            if let yrc = json["yrc"] as? [String: Any],
+               let yrcText = yrc["lyric"] as? String, !yrcText.isEmpty,
+               let yrcLines = parser.parseYRC(yrcText, timeOffset: 0) {
+                lyrics = parser.stripMetadataLines(yrcLines)
+                DebugLogger.log("NetEase", "🎯 YRC word-level: \(lyrics.count) lines, \(lyrics.filter { $0.hasSyllableSync }.count) synced")
+            } else if let lrc = json["lrc"] as? [String: Any],
+                      let lyricText = lrc["lyric"] as? String, !lyricText.isEmpty {
+                lyrics = parser.stripMetadataLines(parser.parseLRC(lyricText))
+            } else {
+                return nil
+            }
 
             // 检测混排翻译（韩/英+中 交替）→ 提取中文行为 translation 属性
             let (extracted, isInterleaved) = parser.extractInterleavedTranslations(lyrics)
