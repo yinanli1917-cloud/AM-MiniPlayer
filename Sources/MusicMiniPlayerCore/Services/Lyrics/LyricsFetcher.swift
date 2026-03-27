@@ -111,7 +111,17 @@ public final class LyricsFetcher {
     /// Timestamp authenticity is already baked into the score via CV-based detection.
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
         let reliable = results.filter { $0.score > 0 }
-        // Results already sorted by score desc from fetchAllSources
+        // Prefer syllable-synced source (word-level timestamps) if available and valid.
+        // Pattern: synced with score >= 30 beats any non-synced source.
+        if let synced = reliable.first(where: {
+            $0.lyrics.contains(where: { $0.hasSyllableSync }) &&
+            $0.score >= 30 &&
+            scorer.analyzeQuality($0.lyrics).isValid
+        }) {
+            DebugLogger.log("🏆 最终选择 (syllable-synced): \(synced.source) (score=\(String(format: "%.1f", synced.score)))")
+            return synced.lyrics
+        }
+        // Fallback: best valid result by score
         if let best = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
             DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)))")
             return best.lyrics

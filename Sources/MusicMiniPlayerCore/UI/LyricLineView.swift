@@ -77,22 +77,13 @@ struct LyricLineView: View {
             // Main lyrics line
             HStack(spacing: 0) {
                 if line.hasSyllableSync && isCurrent, let mc = musicController {
-                    // Per-word fill: each word has its own gradient mask (60fps via TimelineView)
+                    // Per-word fill: each word has its own gradient sweep (60fps via TimelineView)
                     TimelineView(.animation) { _ in
                         WordByWordText(
                             words: line.words,
                             lineText: cleanedText,
                             currentTime: mc.wordFillTime
                         )
-                    }
-                } else if isCurrent, let mc = musicController {
-                    // Line-level sweep for lines without word timestamps
-                    TimelineView(.animation) { _ in
-                        Text(cleanedText)
-                            .font(.system(size: 24, weight: .semibold))
-                            .foregroundStyle(lineSweepGradient(at: mc.wordFillTime))
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     Text(cleanedText)
@@ -183,29 +174,6 @@ struct LyricLineView: View {
         }
     }
 
-    // ── Line-Level Sweep (fallback for non-syllable-synced lines) ───────────
-
-    /// Line-level gradient sweep from startTime to endTime.
-    private func lineSweepGradient(at time: TimeInterval) -> LinearGradient {
-        let start = line.startTime, end = line.endTime
-        let progress: CGFloat = {
-            guard end > start else { return time >= start ? 1 : 0 }
-            if time <= start { return 0 }
-            if time >= end { return 1 }
-            return CGFloat((time - start) / (end - start))
-        }()
-        let dim = Color.white.opacity(0.4)
-        if progress <= 0 { return LinearGradient(colors: [dim], startPoint: .leading, endPoint: .trailing) }
-        if progress >= 1 { return LinearGradient(colors: [.white], startPoint: .leading, endPoint: .trailing) }
-        let fade: CGFloat = 0.04
-        return LinearGradient(
-            stops: [
-                .init(color: .white, location: max(0, progress - fade)),
-                .init(color: dim, location: min(1, progress + fade))
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -277,9 +245,8 @@ private struct WordFillSpan: View {
 
     private let font: Font = .system(size: 24, weight: .semibold)
 
-    // AMLL emphasis easing: bezIn(0→0.4) then 1-bezOut(0.4→1)
-    // Approximated with smoothstep for performance
-    private var empEasingValue: CGFloat {
+    // AMLL emphasis easing: smoothstep approximation of bezIn(0→0.4) + 1-bezOut(0.4→1)
+    private var empEasing: CGFloat {
         let x = emphasisProgress
         guard x > 0 && x < 1 else { return 0 }
         let mid: CGFloat = 0.4
@@ -292,59 +259,42 @@ private struct WordFillSpan: View {
         }
     }
 
-    // AMLL glow formula: max(0, x < 0.4 ? y/2 : y - 0.5) * blur
-    // blur ranges 0.5-0.8 based on word duration
+    // AMLL glow: max(0, x < 0.4 ? y/2 : y - 0.5) * blur
     private var glowLevel: CGFloat {
-        let y = empEasingValue
-        let x = emphasisProgress
+        let x = emphasisProgress, y = empEasing
         guard x > 0 && x < 1 else { return 0 }
         let blur: CGFloat = wordDuration >= 3.0 ? 0.8 : (wordDuration >= 2.0 ? 0.6 : 0.5)
         return max(0, x < 0.4 ? y / 2 : y - 0.5) * blur
     }
 
+    /// Single Text + foregroundStyle(LinearGradient) — no overlay, no GeometryReader.
+    /// Eliminates layout passes and view diffs that cause jerkiness and layout shifts.
+    private var sweepGradient: LinearGradient {
+        let dim = Color.white.opacity(0.4)
+        guard progress > 0 && progress < 1 else {
+            let c = progress >= 1 ? Color.white : dim
+            return LinearGradient(colors: [c], startPoint: .leading, endPoint: .trailing)
+        }
+        // AMLL fade edge: ~4% of line width
+        let fade: CGFloat = 0.04
+        return LinearGradient(
+            stops: [
+                .init(color: .white, location: max(0, progress - fade)),
+                .init(color: dim, location: min(1, progress + fade))
+            ],
+            startPoint: .leading, endPoint: .trailing
+        )
+    }
+
     var body: some View {
         Text(text)
             .font(font)
-            .foregroundStyle(Color.white.opacity(0.4))
-            .overlay {
-                Text(text)
-                    .font(font)
-                    .foregroundStyle(Color.white)
-                    .mask { sweepMask }
-            }
-            // AMLL float: duration = max(1s, wordDuration), ease-out.
-            // `fill: "both"` → stays elevated after word ends.
+            .foregroundStyle(sweepGradient)
+            // AMLL float: max(1s, wordDuration) ease-out, persists after word ends
             .offset(y: (isActive || hasPlayed) ? -1.2 : 0)
-            .animation(
-                .easeOut(duration: max(1.0, wordDuration)),
-                value: isActive || hasPlayed
-            )
+            .animation(.easeOut(duration: max(1.0, wordDuration)), value: isActive || hasPlayed)
             // AMLL glow: rgba(255,255,255,glowLevel) 0 0 10px
             .shadow(color: .white.opacity(Double(glowLevel)), radius: 10)
-    }
-
-    @ViewBuilder
-    private var sweepMask: some View {
-        if progress <= 0 {
-            Color.clear
-        } else if progress >= 1 {
-            Color.white
-        } else {
-            GeometryReader { geo in
-                let fadeW = geo.size.height * 0.5
-                let w = geo.size.width
-                let frontX = w * progress
-                LinearGradient(
-                    stops: [
-                        .init(color: .white, location: 0),
-                        .init(color: .white, location: max(0, (frontX - fadeW) / w)),
-                        .init(color: .clear, location: min(1, frontX / w))
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            }
-        }
     }
 }
 
