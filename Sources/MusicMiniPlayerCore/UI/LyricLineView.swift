@@ -31,11 +31,20 @@ struct LyricLineView: View {
     private var isPast: Bool { distance < 0 }
     private var absDistance: Int { abs(distance) }
 
-    // 🔑 清理歌词文本
+    // 🔑 清理歌词文本 — strip timestamp tags + TTML-artifact CJK spaces
     private var cleanedText: String {
         let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
-        return line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        var text = line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
+        // TTML parser adds " " between each span. For CJK (avg word ≤ 2 chars),
+        // these spaces are artifacts — strip them so characters pack naturally.
+        if line.hasSyllableSync && !line.words.isEmpty {
+            let avgLen = Double(line.words.reduce(0) { $0 + $1.word.count }) / Double(line.words.count)
+            if avgLen <= 2 {
+                text = line.words.map(\.word).joined()
+            }
+        }
+        return text
     }
 
     // 🔑 翻译文本（如果有）
@@ -210,14 +219,13 @@ private struct WordByWordText: View {
     let lineText: String
     let currentTime: TimeInterval
 
-    /// Whether words need inter-word spaces (TTML=yes, YRC/CJK=no).
-    /// Compare concatenated words against original line text to detect spacing.
+    /// Whether words need inter-word spaces.
+    /// CJK TTML: each character is a word (avg ≤ 2 chars) → no spaces (font provides width).
+    /// Latin TTML: words are multi-char (avg > 2) → need spaces between words.
     private var needsSpaces: Bool {
-        guard lineText.contains(" ") else { return false }
-        let joined = words.map(\.word).joined()
-        let stripped = lineText.replacingOccurrences(of: " ", with: "")
-        // If joining without spaces matches the stripped text, original had spaces
-        return joined == stripped
+        guard !words.isEmpty else { return false }
+        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
+        return avgLen > 2
     }
 
     var body: some View {
