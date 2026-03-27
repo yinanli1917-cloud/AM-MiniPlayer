@@ -108,20 +108,11 @@ public final class LyricsFetcher {
     }
 
     /// Select best lyrics result — unified single-pass, no source-type overrides.
-    /// Timestamp authenticity is already baked into the score via CV-based detection.
+    /// Unified single-pass selection — no source-type branching.
+    /// Timestamp authenticity and syllable sync are already in the score via CV detection + step 1.
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
         let reliable = results.filter { $0.score > 0 }
-        // Prefer syllable-synced source (word-level timestamps) if available and valid.
-        // Pattern: synced with score >= 30 beats any non-synced source.
-        if let synced = reliable.first(where: {
-            $0.lyrics.contains(where: { $0.hasSyllableSync }) &&
-            $0.score >= 30 &&
-            scorer.analyzeQuality($0.lyrics).isValid
-        }) {
-            DebugLogger.log("🏆 最终选择 (syllable-synced): \(synced.source) (score=\(String(format: "%.1f", synced.score)))")
-            return synced.lyrics
-        }
-        // Fallback: best valid result by score
+        // Single pass: highest score with quality validation. No source-type preferences.
         if let best = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
             DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)))")
             return best.lyrics
@@ -567,17 +558,6 @@ public final class LyricsFetcher {
             let isCrossScriptArtist = (inputArtistIsASCII && resultArtistIsCJK) || (inputArtistIsCJK && resultArtistIsASCII)
 
             if !artistMatch && titleMatch && isCrossScriptArtist {
-                artistMatch = true
-            }
-
-            // 🔑 Cross-script title: when artist resolved via search (NetEase returns 林二汶
-            // for "Eman Lam") but title is completely different script (ASCII romanization vs CJK),
-            // treat as title match — the search engine already confirmed the artist, and the
-            // CJK title IS the song (romanized input just can't match CJK characters).
-            let inputTitleIsASCII = LanguageUtils.isPureASCII(params.rawTitle) && LanguageUtils.isPureASCII(params.rawOriginalTitle)
-            let resultTitleIsCJK = LanguageUtils.containsCJK(s.name)
-            if !titleMatch && isCrossScriptArtist && inputTitleIsASCII && resultTitleIsCJK {
-                titleMatch = true
                 artistMatch = true
             }
 
