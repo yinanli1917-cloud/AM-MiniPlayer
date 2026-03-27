@@ -72,17 +72,29 @@ struct LyricLineView: View {
             return 0.35
         }()
 
-        // AMLL-style per-word gradient fill for syllable-synced, line-level sweep otherwise
+        // Syllable-synced lines ALWAYS use WordByWordText (same FlowLayout in all states)
+        // to prevent layout jumps when transitioning between current/non-current.
         VStack(alignment: .leading, spacing: 4) {
             // Main lyrics line
             HStack(spacing: 0) {
-                if line.hasSyllableSync && isCurrent, let mc = musicController {
-                    // Per-word fill: each word has its own gradient sweep (60fps via TimelineView)
-                    TimelineView(.animation) { _ in
+                if line.hasSyllableSync {
+                    if isCurrent, let mc = musicController {
+                        // Current: animated per-word fill (60fps via TimelineView)
+                        TimelineView(.animation) { _ in
+                            WordByWordText(
+                                words: line.words,
+                                lineText: cleanedText,
+                                currentTime: mc.wordFillTime,
+                                staticOpacity: nil
+                            )
+                        }
+                    } else {
+                        // Past/future: same FlowLayout, uniform static opacity
                         WordByWordText(
                             words: line.words,
                             lineText: cleanedText,
-                            currentTime: mc.wordFillTime
+                            currentTime: 0,
+                            staticOpacity: textOpacity
                         )
                     }
                 } else {
@@ -181,15 +193,15 @@ struct LyricLineView: View {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Renders each word as a separate view with its own gradient mask sweep.
-/// AMLL technique: each word gets `mask-image` with `mask-position` driven by word timing.
+/// Used for ALL states of syllable-synced lines (current + past + future)
+/// to prevent layout jumps when transitioning between states.
 private struct WordByWordText: View {
     let words: [LyricWord]
     let lineText: String
     let currentTime: TimeInterval
+    /// Non-nil for non-current lines: uniform static opacity, no animation.
+    var staticOpacity: CGFloat? = nil
 
-    /// Whether words need inter-word spaces.
-    /// CJK TTML: each character is a word (avg ≤ 2 chars) → no spaces (font provides width).
-    /// Latin TTML: words are multi-char (avg > 2) → need spaces between words.
     private var needsSpaces: Bool {
         guard !words.isEmpty else { return false }
         let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
@@ -200,15 +212,21 @@ private struct WordByWordText: View {
         WordFlowLayout {
             ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
                 let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
-                let du = word.endTime - word.startTime
-                WordFillSpan(
-                    text: word.word + suffix,
-                    progress: CGFloat(word.progress(at: currentTime)),
-                    emphasisProgress: Self.emphasisProgress(for: word, at: currentTime),
-                    wordDuration: du,
-                    isActive: currentTime >= word.startTime && currentTime < word.endTime,
-                    hasPlayed: currentTime >= word.endTime
-                )
+                if let opacity = staticOpacity {
+                    // Non-current: static uniform color, same layout as animated
+                    Text(word.word + suffix)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(opacity))
+                } else {
+                    WordFillSpan(
+                        text: word.word + suffix,
+                        progress: CGFloat(word.progress(at: currentTime)),
+                        emphasisProgress: Self.emphasisProgress(for: word, at: currentTime),
+                        wordDuration: word.endTime - word.startTime,
+                        isActive: currentTime >= word.startTime && currentTime < word.endTime,
+                        hasPlayed: currentTime >= word.endTime
+                    )
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -219,67 +237,73 @@ private struct WordByWordText: View {
         let du = word.endTime - word.startTime
         let emphDuration = max(du * 1.2, 2.0)
         guard emphDuration > 0 else { return 0 }
-        let t = (time - word.startTime) / emphDuration
-        return CGFloat(min(max(t, 0), 1))
+        return CGFloat(min(max((time - word.startTime) / emphDuration, 0), 1))
     }
 }
 
 // ── WordFillSpan ─────────────────────────────────────────────────────────────
-// AMLL's three animation systems per word, translated to SwiftUI:
+// AMLL exact parameters (from lyric-line.ts source):
 //
-// 1. Mask sweep: gradient slides left→right based on word.progress(at:)
-// 2. Float: rises -1.2pt with ease-out over max(1s, wordDuration),
-//    STAYS elevated after word ends (AMLL `fill: "both"`),
-//    settles back when line deactivates (view switches to plain Text)
-// 3. Glow: text-shadow with AMLL's exact formula:
-//    glowLevel = max(0, x < 0.4 ? y/2 : y - 0.5) * blur
-//    Duration = max(wordDuration * 1.2, 2s), so glow outlasts the word
+// Mask: bright = rgba(0,0,0,0.85), dark = rgba(0,0,0,0.25)
+//       fadeWidth = word.height / 2 ≈ 6% of line width at 24pt
+// Float: up = 0.05em = 1.2pt, duration = max(1000, wordDuration)ms
+//        easing: ease-out, fill: "both", composite: "add"
+// Glow:  glowLevel = max(0, x < 0.4 ? y/2 : y - 0.5) * blur
+//        blur = {1200-2000ms: 0.5, 2000-3000: 0.6, 3000+: 0.8}
+//        textShadow: rgba(255,255,255, glowLevel) 0 0 10px
 
 private struct WordFillSpan: View {
     let text: String
     let progress: CGFloat
     let emphasisProgress: CGFloat
     let wordDuration: TimeInterval
-    let isActive: Bool    // currently being sung
-    let hasPlayed: Bool   // finished singing
+    let isActive: Bool
+    let hasPlayed: Bool
 
     private let font: Font = .system(size: 24, weight: .semibold)
+    // AMLL exact: bright = 0.85 opacity, dark = 0.25 opacity
+    private let brightOpacity: CGFloat = 0.85
+    private let dimOpacity: CGFloat = 0.25
 
-    // AMLL emphasis easing: smoothstep approximation of bezIn(0→0.4) + 1-bezOut(0.4→1)
+    // AMLL emphasis easing: bezier(0.3,0,0.25,1) → bezier(0.5,0,0.3,1)
+    // Smoothstep approximation (visually identical, avoids bezier solver)
     private var empEasing: CGFloat {
         let x = emphasisProgress
         guard x > 0 && x < 1 else { return 0 }
-        let mid: CGFloat = 0.4
+        let mid: CGFloat = 0.4  // AMLL: EMP_EASING_MID
         if x < mid {
-            let t = x / mid
-            return t * t * (3 - 2 * t)
+            let t = x / mid; return t * t * (3 - 2 * t)
         } else {
-            let t = (x - mid) / (1 - mid)
-            return 1 - t * t * (3 - 2 * t)
+            let t = (x - mid) / (1 - mid); return 1 - t * t * (3 - 2 * t)
         }
     }
 
-    // AMLL glow: max(0, x < 0.4 ? y/2 : y - 0.5) * blur
+    // AMLL exact glow formula + duration-based blur
     private var glowLevel: CGFloat {
         let x = emphasisProgress, y = empEasing
         guard x > 0 && x < 1 else { return 0 }
-        let blur: CGFloat = wordDuration >= 3.0 ? 0.8 : (wordDuration >= 2.0 ? 0.6 : 0.5)
+        let blur: CGFloat
+        if wordDuration >= 3.0 { blur = 0.8 }
+        else if wordDuration >= 2.0 { blur = 0.6 }
+        else if wordDuration >= 1.2 { blur = 0.5 }
+        else { return 0 }  // AMLL: no glow for words < 1200ms
         return max(0, x < 0.4 ? y / 2 : y - 0.5) * blur
     }
 
-    /// Single Text + foregroundStyle(LinearGradient) — no overlay, no GeometryReader.
-    /// Eliminates layout passes and view diffs that cause jerkiness and layout shifts.
     private var sweepGradient: LinearGradient {
-        let dim = Color.white.opacity(0.4)
+        let dim = Color.white.opacity(dimOpacity)
+        let bright = Color.white.opacity(brightOpacity)
         guard progress > 0 && progress < 1 else {
-            let c = progress >= 1 ? Color.white : dim
-            return LinearGradient(colors: [c], startPoint: .leading, endPoint: .trailing)
+            return LinearGradient(
+                colors: [progress >= 1 ? bright : dim],
+                startPoint: .leading, endPoint: .trailing
+            )
         }
-        // AMLL fade edge: ~4% of line width
-        let fade: CGFloat = 0.04
+        // AMLL: fadeWidth = word.height / 2. At 24pt (~32px height), fade ≈ 16px ≈ 6%
+        let fade: CGFloat = 0.06
         return LinearGradient(
             stops: [
-                .init(color: .white, location: max(0, progress - fade)),
+                .init(color: bright, location: max(0, progress - fade)),
                 .init(color: dim, location: min(1, progress + fade))
             ],
             startPoint: .leading, endPoint: .trailing
@@ -290,10 +314,10 @@ private struct WordFillSpan: View {
         Text(text)
             .font(font)
             .foregroundStyle(sweepGradient)
-            // AMLL float: max(1s, wordDuration) ease-out, persists after word ends
+            // AMLL: up = 0.05em, duration = max(1000, wordDuration)ms, ease-out, fill: "both"
             .offset(y: (isActive || hasPlayed) ? -1.2 : 0)
             .animation(.easeOut(duration: max(1.0, wordDuration)), value: isActive || hasPlayed)
-            // AMLL glow: rgba(255,255,255,glowLevel) 0 0 10px
+            // AMLL: textShadow rgba(255,255,255,glowLevel) 0 0 10px
             .shadow(color: .white.opacity(Double(glowLevel)), radius: 10)
     }
 }
