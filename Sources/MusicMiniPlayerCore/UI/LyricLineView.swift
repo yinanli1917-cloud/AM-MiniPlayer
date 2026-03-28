@@ -287,13 +287,15 @@ private func empEasing(_ x: CGFloat, mid: CGFloat = 0.5) -> CGFloat {
     }
 }
 
-/// AMLL shouldEmphasize: CJK >= 1s (any length); non-CJK >= 1s && trimmed 2-7 chars
+/// shouldEmphasize: AMLL uses 1s threshold, but at 24pt/250px mini-player scale
+/// the subtle effects become too frequent. Raised to 1.5s for CJK, 1.5s for non-CJK
+/// to reserve emphasis for truly held notes.
 private func shouldEmphasize(_ text: String, duration: TimeInterval) -> Bool {
     let trimmed = text.trimmingCharacters(in: .whitespaces)
     if trimmed.unicodeScalars.contains(where: { $0.value >= 0x4E00 && $0.value <= 0x9FFF }) {
-        return duration >= 1.0
+        return duration >= 1.5
     }
-    return duration >= 1.0 && trimmed.count > 1 && trimmed.count <= 7
+    return duration >= 1.5 && trimmed.count > 1 && trimmed.count <= 7
 }
 
 /// AMLL amount: (du/2000)^3 if <1, sqrt if >1, *0.6, clamped 1.2
@@ -328,6 +330,7 @@ private struct WordTimingAttribute: TextAttribute {
     let amount: CGFloat
     let blurLevel: CGFloat
     let du: TimeInterval       // emphasis duration (max(1s, wordDuration) * lastBoost)
+    let lineEndTime: TimeInterval  // last word's endTime — for post-line fade-out
 }
 
 @available(macOS 15.0, *)
@@ -364,6 +367,7 @@ private struct SyllableSyncedLine: View {
     }
 
     private func buildText() -> Text {
+        let lineEnd = words.last?.endTime ?? 0
         var result = Text("")
         for (index, word) in words.enumerated() {
             let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
@@ -377,7 +381,8 @@ private struct SyllableSyncedLine: View {
                     isEmphasis: shouldEmphasize(text, duration: duration),
                     amount: emphasisAmount(duration: duration, isLast: isLast),
                     blurLevel: emphasisBlurLevel(duration: duration, isLast: isLast),
-                    du: max(1.0, duration) * (isLast ? 1.2 : 1.0)
+                    du: max(1.0, duration) * (isLast ? 1.2 : 1.0),
+                    lineEndTime: lineEnd
                 ))
         }
         return result
@@ -416,19 +421,31 @@ private struct LyricsTextRenderer: TextRenderer {
         guard isAnimated else { return }
 
         // ── Pass 2: Bright overlay clipped by sweep progress per word ──
+        // After lineEndTime, the bright overlay fades out over 1.5s (ease-in)
+        // so the last line / word before interlude dims naturally.
         for run in layout.flattenedRuns {
             guard let attr = run[WordTimingAttribute.self] else { continue }
             let duration = attr.endTime - attr.startTime
             let progress = wordProgress(attr, duration)
             guard progress > 0 else { continue }
 
+            // Post-line fade-out: after all words end, bright → dim over 1.5s
+            let fadeOutDuration: TimeInterval = 1.5
+            let timeSinceLineEnd = currentTime - attr.lineEndTime
+            let postLineFade: CGFloat = {
+                guard timeSinceLineEnd > 0 else { return 1.0 }  // line still active
+                if timeSinceLineEnd >= fadeOutDuration { return 0 }  // fully faded
+                let t = timeSinceLineEnd / fadeOutDuration
+                return CGFloat(1.0 - t * t)  // ease-in: slow start, fast finish
+            }()
+            guard postLineFade > 0 else { continue }  // fully faded, skip bright pass
+
             let runRect = run.typographicBounds.rect
             let floatY = baseFloat(for: attr)
 
             if attr.isEmphasis {
-                // Emphasis words: per-glyph rendering with stagger
                 drawEmphasisBright(run: run, attr: attr, progress: progress,
-                                   floatY: floatY, in: context)
+                                   floatY: floatY, fade: postLineFade, in: context)
             } else {
                 // Normal words: clip-based bright overlay + edge glow
                 let clipW = runRect.width * progress
@@ -436,7 +453,7 @@ private struct LyricsTextRenderer: TextRenderer {
                                       width: clipW, height: runRect.height + 40)
 
                 var brightCtx = context
-                brightCtx.opacity = Double(brightAlpha)
+                brightCtx.opacity = Double(brightAlpha * postLineFade)
                 brightCtx.translateBy(x: 0, y: floatY)
                 brightCtx.clip(to: Path(clipRect))
                 brightCtx.draw(run, options: .disablesSubpixelQuantization)
@@ -449,7 +466,7 @@ private struct LyricsTextRenderer: TextRenderer {
                     var glowCtx = context
                     glowCtx.translateBy(x: 0, y: floatY)
                     glowCtx.addFilter(.blur(radius: 10))
-                    glowCtx.fill(Path(glowRect), with: .color(.white.opacity(0.5)))
+                    glowCtx.fill(Path(glowRect), with: .color(.white.opacity(0.5 * Double(postLineFade))))
                 }
             }
         }
@@ -458,7 +475,7 @@ private struct LyricsTextRenderer: TextRenderer {
     // ── Emphasis: per-glyph bright rendering with stagger/scale/spread/glow ──
     private func drawEmphasisBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat,
-        floatY: CGFloat, in context: GraphicsContext
+        floatY: CGFloat, fade: CGFloat = 1.0, in context: GraphicsContext
     ) {
         let glyphCount = max(1, run.count)
         let runWidth = run.typographicBounds.width
@@ -476,7 +493,7 @@ private struct LyricsTextRenderer: TextRenderer {
             guard brightness > 0 else { continue }
 
             var ctx = context
-            ctx.opacity = Double(brightAlpha) * Double(brightness)
+            ctx.opacity = Double(brightAlpha * fade) * Double(brightness)
 
             // Per-glyph stagger delay
             let charDelay = (attr.du / 2.5 / Double(glyphCount)) * Double(i)
