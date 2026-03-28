@@ -78,24 +78,43 @@ struct LyricLineView: View {
             // Main lyrics line
             HStack(spacing: 0) {
                 if line.hasSyllableSync {
-                    if isCurrent, let mc = musicController {
-                        // Current: animated per-word fill (60fps via TimelineView)
-                        TimelineView(.animation) { _ in
-                            WordByWordText(
+                    if #available(macOS 15.0, *) {
+                        if isCurrent, let mc = musicController {
+                            TimelineView(.animation) { _ in
+                                SyllableSyncedLine(
+                                    words: line.words,
+                                    currentTime: mc.wordFillTime,
+                                    isAnimated: true,
+                                    staticOpacity: 0
+                                )
+                            }
+                        } else {
+                            SyllableSyncedLine(
                                 words: line.words,
-                                lineText: cleanedText,
-                                currentTime: mc.wordFillTime,
-                                staticOpacity: nil
+                                currentTime: 0,
+                                isAnimated: false,
+                                staticOpacity: textOpacity
                             )
                         }
                     } else {
-                        // Past/future: same FlowLayout, uniform static opacity
-                        WordByWordText(
-                            words: line.words,
-                            lineText: cleanedText,
-                            currentTime: 0,
-                            staticOpacity: textOpacity
-                        )
+                        // macOS 14 fallback: per-word WordFillSpan
+                        if isCurrent, let mc = musicController {
+                            TimelineView(.animation) { _ in
+                                WordByWordText(
+                                    words: line.words,
+                                    lineText: cleanedText,
+                                    currentTime: mc.wordFillTime,
+                                    staticOpacity: nil
+                                )
+                            }
+                        } else {
+                            WordByWordText(
+                                words: line.words,
+                                lineText: cleanedText,
+                                currentTime: 0,
+                                staticOpacity: textOpacity
+                            )
+                        }
                     }
                 } else {
                     Text(cleanedText)
@@ -296,7 +315,227 @@ private func emphasisBlurLevel(duration: TimeInterval, isLast: Bool) -> CGFloat 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - WordFillSpan (unified AMLL word-level renderer)
+// MARK: - TextRenderer Lyrics (macOS 15+ per-glyph rendering)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Uses TextRenderer for CSS-equivalent per-glyph transforms while preserving
+// kerning and text layout. This is what Apple Music likely uses natively.
+
+@available(macOS 15.0, *)
+private struct WordTimingAttribute: TextAttribute {
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    let isEmphasis: Bool
+    let amount: CGFloat
+    let blurLevel: CGFloat
+    let du: TimeInterval       // emphasis duration (max(1s, wordDuration) * lastBoost)
+}
+
+@available(macOS 15.0, *)
+extension Text.Layout {
+    var flattenedRuns: some RandomAccessCollection<Text.Layout.Run> {
+        flatMap { line in line }
+    }
+}
+
+/// Builds a single concatenated Text with per-word timing attributes.
+@available(macOS 15.0, *)
+private struct SyllableSyncedLine: View {
+    let words: [LyricWord]
+    let currentTime: TimeInterval
+    let isAnimated: Bool           // true for current line, false for past/future
+    let staticOpacity: CGFloat     // used when !isAnimated
+
+    private var needsSpaces: Bool {
+        guard !words.isEmpty else { return false }
+        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
+        return avgLen > 2
+    }
+
+    var body: some View {
+        buildText()
+            .font(.system(size: 24, weight: .semibold))
+            .foregroundColor(.white)
+            .textRenderer(LyricsTextRenderer(
+                currentTime: currentTime,
+                isAnimated: isAnimated,
+                staticOpacity: staticOpacity
+            ))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func buildText() -> Text {
+        var result = Text("")
+        for (index, word) in words.enumerated() {
+            let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
+            let text = word.word + suffix
+            let duration = word.endTime - word.startTime
+            let isLast = (index == words.count - 1)
+            result = result + Text(text)
+                .customAttribute(WordTimingAttribute(
+                    startTime: word.startTime,
+                    endTime: word.endTime,
+                    isEmphasis: shouldEmphasize(text, duration: duration),
+                    amount: emphasisAmount(duration: duration, isLast: isLast),
+                    blurLevel: emphasisBlurLevel(duration: duration, isLast: isLast),
+                    du: max(1.0, duration) * (isLast ? 1.2 : 1.0)
+                ))
+        }
+        return result
+    }
+}
+
+@available(macOS 15.0, *)
+private struct LyricsTextRenderer: TextRenderer {
+    let currentTime: TimeInterval
+    let isAnimated: Bool
+    let staticOpacity: CGFloat
+    private let brightAlpha: CGFloat = 1.0
+    private let dimAlpha: CGFloat = 0.35
+
+    var displayPadding: EdgeInsets {
+        EdgeInsets(top: 20, leading: 20, bottom: 20, trailing: 20)
+    }
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        // ── Pass 1: Dim base layer (all text at dim opacity) ──
+        for run in layout.flattenedRuns {
+            var ctx = context
+            if !isAnimated {
+                ctx.opacity = staticOpacity
+            } else {
+                ctx.opacity = Double(dimAlpha)
+                // Base float for dim layer too (words that played stay floated)
+                if let attr = run[WordTimingAttribute.self] {
+                    let floatY = baseFloat(for: attr)
+                    ctx.translateBy(x: 0, y: floatY)
+                }
+            }
+            ctx.draw(run, options: .disablesSubpixelQuantization)
+        }
+
+        guard isAnimated else { return }
+
+        // ── Pass 2: Bright overlay clipped by sweep progress per word ──
+        for run in layout.flattenedRuns {
+            guard let attr = run[WordTimingAttribute.self] else { continue }
+            let duration = attr.endTime - attr.startTime
+            let progress = wordProgress(attr, duration)
+            guard progress > 0 else { continue }
+
+            let runRect = run.typographicBounds.rect
+            let floatY = baseFloat(for: attr)
+
+            if attr.isEmphasis {
+                // Emphasis words: per-glyph rendering with stagger
+                drawEmphasisBright(run: run, attr: attr, progress: progress,
+                                   floatY: floatY, in: context)
+            } else {
+                // Normal words: clip-based bright overlay + edge glow
+                let clipW = runRect.width * progress
+                let clipRect = CGRect(x: runRect.minX, y: runRect.minY - 20,
+                                      width: clipW, height: runRect.height + 40)
+
+                var brightCtx = context
+                brightCtx.opacity = Double(brightAlpha)
+                brightCtx.translateBy(x: 0, y: floatY)
+                brightCtx.clip(to: Path(clipRect))
+                brightCtx.draw(run, options: .disablesSubpixelQuantization)
+
+                // Edge glow: white halo at the sweep boundary
+                if progress > 0 && progress < 1 {
+                    let edgeX = runRect.minX + clipW
+                    let glowRect = CGRect(x: edgeX - 3, y: runRect.minY - 4,
+                                          width: 6, height: runRect.height + 8)
+                    var glowCtx = context
+                    glowCtx.translateBy(x: 0, y: floatY)
+                    glowCtx.addFilter(.blur(radius: 10))
+                    glowCtx.fill(Path(glowRect), with: .color(.white.opacity(0.5)))
+                }
+            }
+        }
+    }
+
+    // ── Emphasis: per-glyph bright rendering with stagger/scale/spread/glow ──
+    private func drawEmphasisBright(
+        run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat,
+        floatY: CGFloat, in context: GraphicsContext
+    ) {
+        let glyphCount = max(1, run.count)
+        let runWidth = run.typographicBounds.width
+
+        var accWidth: CGFloat = 0
+        for (i, glyph) in run.enumerated() {
+            let glyphWidth = glyph.typographicBounds.width
+            let glyphFraction = runWidth > 0 ? (accWidth + glyphWidth / 2) / runWidth : 0
+            accWidth += glyphWidth
+
+            // Only draw bright for glyphs that have been swept
+            // Smooth transition at boundary
+            let dist = glyphFraction - progress
+            let brightness = min(1, max(0, 1.0 - dist / 0.08))
+            guard brightness > 0 else { continue }
+
+            var ctx = context
+            ctx.opacity = Double(brightAlpha) * Double(brightness)
+
+            // Per-glyph stagger delay
+            let charDelay = (attr.du / 2.5 / Double(glyphCount)) * Double(i)
+            let t1 = CGFloat(min(1, max(0, (currentTime - attr.startTime - charDelay) / attr.du)))
+            let charEasing = empEasing(t1)
+
+            // Scale centered on glyph
+            let scale = 1.0 + charEasing * 0.1 * attr.amount
+            let gc = glyph.typographicBounds.rect
+            ctx.translateBy(x: gc.midX, y: gc.midY)
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -gc.midX, y: -gc.midY)
+
+            // Spread: push outward from center
+            let spreadX = -charEasing * 0.03 * attr.amount * CGFloat(glyphCount / 2 - i) * 24
+
+            // Emphasis float: staggered sin(x*PI)
+            let floatDu = attr.du * 1.4
+            let floatDelay = max(0, charDelay - 0.4)
+            let t2 = CGFloat(min(1, max(0, (currentTime - attr.startTime - floatDelay) / floatDu)))
+            let charFloat: CGFloat = (t2 > 0 && t2 < 1) ? -sin(t2 * .pi) * 1.5 : 0
+            let emphLift = -charEasing * 0.6 * attr.amount
+
+            ctx.translateBy(x: spreadX, y: floatY + charFloat + emphLift)
+
+            // Per-glyph glow
+            if charEasing > 0 && attr.blurLevel > 0 {
+                ctx.addFilter(.shadow(
+                    color: .white.opacity(Double(charEasing * attr.blurLevel) * 1.5),
+                    radius: 12
+                ))
+            }
+
+            ctx.draw(glyph, options: .disablesSubpixelQuantization)
+        }
+    }
+
+    // ── Helpers ──
+    private func wordProgress(_ attr: WordTimingAttribute, _ duration: TimeInterval) -> CGFloat {
+        guard duration > 0 else { return currentTime >= attr.startTime ? 1 : 0 }
+        if currentTime <= attr.startTime { return 0 }
+        if currentTime >= attr.endTime { return 1 }
+        return CGFloat((currentTime - attr.startTime) / duration)
+    }
+
+    private func baseFloat(for attr: WordTimingAttribute) -> CGFloat {
+        let duration = attr.endTime - attr.startTime
+        let progress = wordProgress(attr, duration)
+        let hasPlayed = currentTime >= attr.endTime
+        let isActive = currentTime >= attr.startTime && currentTime < attr.endTime
+        let target: CGFloat = -2.0
+        if hasPlayed { return target }
+        if isActive { return target * (1.0 - pow(1.0 - Double(progress), 3)) }
+        return 0
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - WordFillSpan (fallback for macOS 14)
 // ═══════════════════════════════════════════════════════════════════════════════
 // AMLL easing curves for timing accuracy, amplified magnitudes for 250px mini player.
 // AMLL is designed for full-screen (48-72pt); our 24pt/250px viewport needs ~2x amplification.
