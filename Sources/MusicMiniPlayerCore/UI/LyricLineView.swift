@@ -502,12 +502,11 @@ private struct LyricsTextRenderer: TextRenderer {
 
             ctx.translateBy(x: spreadX, y: floatY + charFloat + emphLift)
 
-            // Per-glyph glow
+            // Per-glyph glow — AMLL: alpha=empEasing*blur, radius=min(0.3em, blur*0.3em)
             if charEasing > 0 && attr.blurLevel > 0 {
-                ctx.addFilter(.shadow(
-                    color: .white.opacity(Double(charEasing * attr.blurLevel) * 1.5),
-                    radius: 12
-                ))
+                let glowAlpha = Double(charEasing * attr.blurLevel)
+                let glowRadius = min(0.3 * 24, attr.blurLevel * 0.3 * 24)  // em→pt
+                ctx.addFilter(.shadow(color: .white.opacity(glowAlpha), radius: glowRadius))
             }
 
             ctx.draw(glyph, options: .disablesSubpixelQuantization)
@@ -522,15 +521,21 @@ private struct LyricsTextRenderer: TextRenderer {
         return CGFloat((currentTime - attr.startTime) / duration)
     }
 
+    /// AMLL base float: duration = max(1s, wordDuration), ease-out, fill:both.
+    /// The float is ALWAYS at least 1s long — short words still float slowly,
+    /// creating a gentle wave-like cascade across words in the line.
     private func baseFloat(for attr: WordTimingAttribute) -> CGFloat {
-        let duration = attr.endTime - attr.startTime
-        let progress = wordProgress(attr, duration)
-        let hasPlayed = currentTime >= attr.endTime
-        let isActive = currentTime >= attr.startTime && currentTime < attr.endTime
         let target: CGFloat = -2.0
-        if hasPlayed { return target }
-        if isActive { return target * (1.0 - pow(1.0 - Double(progress), 3)) }
-        return 0
+        guard currentTime >= attr.startTime else { return 0 }
+        // Float duration: at least 1s, matching AMLL's max(1000, wordDuration)
+        let wordDuration = attr.endTime - attr.startTime
+        let floatDuration = max(1.0, wordDuration)
+        let elapsed = currentTime - attr.startTime
+        if elapsed >= floatDuration { return target }  // fill: both — stays forever
+        // ease-out: fast start, slow finish (cubic ease-out)
+        let t = elapsed / floatDuration
+        let eased = 1.0 - pow(1.0 - t, 3)
+        return target * eased
     }
 }
 
