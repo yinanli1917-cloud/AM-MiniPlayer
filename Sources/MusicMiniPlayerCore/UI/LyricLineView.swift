@@ -192,14 +192,13 @@ struct LyricLineView: View {
 // MARK: - Per-Word Fill (AMLL-style)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Renders each word as a separate view with its own gradient mask sweep.
+/// Renders each word with gradient sweep + word-level emphasis effects.
 /// Used for ALL states of syllable-synced lines (current + past + future)
 /// to prevent layout jumps when transitioning between states.
 private struct WordByWordText: View {
     let words: [LyricWord]
     let lineText: String
     let currentTime: TimeInterval
-    /// Non-nil for non-current lines: uniform static opacity, no animation.
     var staticOpacity: CGFloat? = nil
 
     private var needsSpaces: Bool {
@@ -212,8 +211,8 @@ private struct WordByWordText: View {
         WordFlowLayout {
             ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
                 let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
+                let isLast = (index == words.count - 1)
                 if let opacity = staticOpacity {
-                    // Non-current: static uniform color, same layout as animated
                     Text(word.word + suffix)
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(opacity))
@@ -221,75 +220,143 @@ private struct WordByWordText: View {
                     WordFillSpan(
                         text: word.word + suffix,
                         progress: CGFloat(word.progress(at: currentTime)),
-                        emphasisProgress: Self.emphasisProgress(for: word, at: currentTime),
                         wordDuration: word.endTime - word.startTime,
+                        wordStartTime: word.startTime,
+                        currentTime: currentTime,
                         isActive: currentTime >= word.startTime && currentTime < word.endTime,
-                        hasPlayed: currentTime >= word.endTime
+                        hasPlayed: currentTime >= word.endTime,
+                        isLastWordOfLine: isLast
                     )
                 }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
     }
+}
 
-    /// AMLL: `animateDu = max(du * 1.2, 2000ms)`. Returns 0→1 over the extended duration.
-    static func emphasisProgress(for word: LyricWord, at time: TimeInterval) -> CGFloat {
-        let du = word.endTime - word.startTime
-        let emphDuration = max(du * 1.2, 2.0)
-        guard emphDuration > 0 else { return 0 }
-        return CGFloat(min(max((time - word.startTime) / emphDuration, 0), 1))
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - Cubic Bezier Easing (AMLL-faithful)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Evaluates a cubic bezier curve y(t) for a given x, using Newton-Raphson.
+/// Control points: (x1,y1), (x2,y2), with implicit (0,0) and (1,1).
+private func cubicBezier(x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat, x: CGFloat) -> CGFloat {
+    guard x > 0 && x < 1 else { return x <= 0 ? 0 : 1 }
+    // Newton-Raphson: solve bezierX(t) = x for t, then return bezierY(t)
+    var t = x  // initial guess
+    for _ in 0..<8 {
+        let bx = 3*(1-t)*(1-t)*t*x1 + 3*(1-t)*t*t*x2 + t*t*t - x
+        let dx = 3*(1-t)*(1-t)*x1 + 6*(1-t)*t*(x2-x1) + 3*t*t*(1-x2)
+        guard abs(dx) > 1e-6 else { break }
+        t -= bx / dx
+        t = min(1, max(0, t))
+    }
+    return 3*(1-t)*(1-t)*t*y1 + 3*(1-t)*t*t*y2 + t*t*t
+}
+
+// AMLL exact beziers
+private let bezIn = { (x: CGFloat) in cubicBezier(x1: 0.2, y1: 0.4, x2: 0.58, y2: 1.0, x: x) }
+private let bezOut = { (x: CGFloat) in cubicBezier(x1: 0.3, y1: 0.0, x2: 0.58, y2: 1.0, x: x) }
+
+/// AMLL empEasing: rises via bezIn to mid, falls via bezOut from mid.
+private func empEasing(_ x: CGFloat, mid: CGFloat = 0.5) -> CGFloat {
+    guard x > 0 && x < 1 else { return 0 }
+    if x < mid {
+        return bezIn(min(1, max(0, x / mid)))
+    } else {
+        return 1 - bezOut(min(1, max(0, (x - mid) / (1 - mid))))
     }
 }
 
-// ── WordFillSpan ─────────────────────────────────────────────────────────────
-// AMLL exact parameters (from lyric-line.ts source):
+/// AMLL shouldEmphasize: CJK >= 1s (any length); non-CJK >= 1s && trimmed 2-7 chars
+private func shouldEmphasize(_ text: String, duration: TimeInterval) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespaces)
+    if trimmed.unicodeScalars.contains(where: { $0.value >= 0x4E00 && $0.value <= 0x9FFF }) {
+        return duration >= 1.0
+    }
+    return duration >= 1.0 && trimmed.count > 1 && trimmed.count <= 7
+}
+
+/// AMLL amount: (du/2000)^3 if <1, sqrt if >1, *0.6, clamped 1.2
+private func emphasisAmount(duration: TimeInterval, isLast: Bool) -> CGFloat {
+    var a = duration / 2.0
+    a = a > 1 ? sqrt(a) : a * a * a
+    a *= 0.6
+    if isLast { a *= 1.6 }  // AMLL: last word of line boost
+    return min(1.2, a)
+}
+
+/// AMLL blur: (du/3000)^3 if <1, sqrt if >1, *0.5, clamped 0.8
+private func emphasisBlurLevel(duration: TimeInterval, isLast: Bool) -> CGFloat {
+    var b = duration / 3.0
+    b = b > 1 ? sqrt(b) : b * b * b
+    b *= 0.5
+    if isLast { b *= 1.5 }  // AMLL: last word of line boost
+    return min(0.8, b)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - WordFillSpan (unified AMLL word-level renderer)
+// ═══════════════════════════════════════════════════════════════════════════════
+// AMLL easing curves for timing accuracy, amplified magnitudes for 250px mini player.
+// AMLL is designed for full-screen (48-72pt); our 24pt/250px viewport needs ~2x amplification.
 //
-// Mask: bright = rgba(0,0,0,0.85), dark = rgba(0,0,0,0.25)
-//       fadeWidth = word.height / 2 ≈ 6% of line width at 24pt
-// Float: up = 0.05em = 1.2pt, duration = max(1000, wordDuration)ms
-//        easing: ease-out, fill: "both", composite: "add"
-// Glow:  glowLevel = max(0, x < 0.4 ? y/2 : y - 0.5) * blur
-//        blur = {1200-2000ms: 0.5, 2000-3000: 0.6, 3000+: 0.8}
-//        textShadow: rgba(255,255,255, glowLevel) 0 0 10px
+// Three animation systems:
+//   System 1: Base float — ALL words, ease-out, permanent
+//   System 2: Sweep gradient — ALL words, LinearGradient bright→dim
+//   System 3: Emphasis — scale + glow + lift + float, empEasing curve
 
 private struct WordFillSpan: View {
     let text: String
     let progress: CGFloat
-    let emphasisProgress: CGFloat
     let wordDuration: TimeInterval
+    let wordStartTime: TimeInterval
+    let currentTime: TimeInterval
     let isActive: Bool
     let hasPlayed: Bool
+    let isLastWordOfLine: Bool
 
     private let font: Font = .system(size: 24, weight: .semibold)
-    // AMLL exact: bright = 0.85 opacity, dark = 0.25 opacity
-    private let brightOpacity: CGFloat = 0.85
-    private let dimOpacity: CGFloat = 0.25
+    // AMLL active line: bright=1.0, dark=0.4 (from updateMaskAlphaTargets at scale=1.0)
+    private let brightOpacity: CGFloat = 1.0
+    private let dimOpacity: CGFloat = 0.4
 
-    // AMLL emphasis easing: bezier(0.3,0,0.25,1) → bezier(0.5,0,0.3,1)
-    // Smoothstep approximation (visually identical, avoids bezier solver)
-    private var empEasing: CGFloat {
-        let x = emphasisProgress
-        guard x > 0 && x < 1 else { return 0 }
-        let mid: CGFloat = 0.4  // AMLL: EMP_EASING_MID
-        if x < mid {
-            let t = x / mid; return t * t * (3 - 2 * t)
-        } else {
-            let t = (x - mid) / (1 - mid); return 1 - t * t * (3 - 2 * t)
+    // ── Emphasis parameters ──
+    // AMLL empEasing curve for timing, but ALL active words get a minimum scale/glow
+    private var isEmphasis: Bool { shouldEmphasize(text, duration: wordDuration) }
+    private var du: TimeInterval {
+        var d = max(1.0, wordDuration)
+        if isLastWordOfLine { d *= 1.2 }
+        return d
+    }
+    // amount: emphasis words use AMLL formula; non-emphasis get base=0.3 for subtle life
+    private var amount: CGFloat {
+        if isEmphasis {
+            return emphasisAmount(duration: wordDuration, isLast: isLastWordOfLine)
         }
+        return 0.3  // All active words get subtle scale/glow
+    }
+    // blurLevel: emphasis words use AMLL formula; non-emphasis get base=0.3
+    private var blurLevel: CGFloat {
+        if isEmphasis {
+            return emphasisBlurLevel(duration: wordDuration, isLast: isLastWordOfLine)
+        }
+        return 0.3
     }
 
-    // AMLL exact glow formula + duration-based blur
-    private var glowLevel: CGFloat {
-        let x = emphasisProgress, y = empEasing
-        guard x > 0 && x < 1 else { return 0 }
-        let blur: CGFloat
-        if wordDuration >= 3.0 { blur = 0.8 }
-        else if wordDuration >= 2.0 { blur = 0.6 }
-        else if wordDuration >= 1.2 { blur = 0.5 }
-        else { return 0 }  // AMLL: no glow for words < 1200ms
-        return max(0, x < 0.4 ? y / 2 : y - 0.5) * blur
+    // ── System 1: Base float (ALL words) ──
+    // AMLL: -0.05em, amplified to 2pt for mini-player visibility
+    private var baseFloatY: CGFloat {
+        let target: CGFloat = -2.0
+        if hasPlayed { return target }
+        if isActive {
+            let eased = 1.0 - pow(1.0 - Double(progress), 3)
+            return target * eased
+        }
+        return 0
     }
 
+    // ── System 2: Sweep gradient (ALL words) ──
     private var sweepGradient: LinearGradient {
         let dim = Color.white.opacity(dimOpacity)
         let bright = Color.white.opacity(brightOpacity)
@@ -299,7 +366,6 @@ private struct WordFillSpan: View {
                 startPoint: .leading, endPoint: .trailing
             )
         }
-        // AMLL: fadeWidth = word.height / 2. At 24pt (~32px height), fade ≈ 16px ≈ 6%
         let fade: CGFloat = 0.06
         return LinearGradient(
             stops: [
@@ -310,31 +376,66 @@ private struct WordFillSpan: View {
         )
     }
 
-    // AMLL: scale = 1 + y * 0.1 * amount (amount = 0.7-1.0 based on duration)
-    private var scaleAmount: CGFloat {
-        let y = empEasing
-        guard y > 0 else { return 1.0 }
-        let amount: CGFloat
-        if wordDuration >= 3.0 { amount = 1.0 }
-        else if wordDuration >= 2.0 { amount = 0.8 }
-        else if wordDuration >= 1.2 { amount = 0.7 }
-        else { amount = 0.3 }  // subtle scale for short words too
-        return 1.0 + y * 0.1 * amount
+    // ── System 3: Emphasis scale/glow/lift/float ──
+    // Uses empEasing curve (AMLL cubic bezier) for correct timing
+    private var emphasisProgress: CGFloat {
+        guard du > 0 else { return 0 }
+        let t = (currentTime - wordStartTime) / du
+        return CGFloat(min(1, max(0, t)))
+    }
+    private var easing: CGFloat {
+        guard isActive || (hasPlayed && emphasisProgress < 1) else { return 0 }
+        return empEasing(emphasisProgress)
+    }
+
+    // Scale: 1 + empEasing * 0.1 * amount (all active words, emphasis words scale more)
+    private var totalScale: CGFloat {
+        guard easing > 0 else { return 1.0 }
+        return 1.0 + easing * 0.1 * amount
+    }
+
+    // Emphasis lift (Y): subtle upward shift tied to emphasis peak
+    private var emphasisLiftY: CGFloat {
+        guard easing > 0, isEmphasis else { return 0 }
+        return -easing * 0.6 * amount  // amplified from AMLL's 0.025em
+    }
+
+    // Glow: fixed 12pt radius for visibility, AMLL empEasing for opacity timing
+    private var glowOpacity: Double {
+        guard easing > 0 else { return 0 }
+        return Double(easing * blurLevel) * 1.5  // 1.5x boost for mini-player
+    }
+    private let glowRadius: CGFloat = 12  // fixed for visibility at small scale
+
+    // Emphasis float: sin(x*PI) breathing, du*1.4 duration, starts 400ms early
+    private var emphasisFloatY: CGFloat {
+        guard isEmphasis else { return 0 }
+        let floatDu = du * 1.4
+        guard floatDu > 0 else { return 0 }
+        let t = (currentTime - wordStartTime + 0.4) / floatDu
+        let clamped = CGFloat(min(1, max(0, t)))
+        guard clamped > 0 && clamped < 1 else { return 0 }
+        return -sin(clamped * .pi) * 1.5  // amplified from AMLL's 0.05em
+    }
+
+    // ── Combined offset Y ──
+    private var totalOffsetY: CGFloat {
+        baseFloatY + emphasisLiftY + emphasisFloatY
     }
 
     var body: some View {
         Text(text)
             .font(font)
             .foregroundStyle(sweepGradient)
-            // AMLL scale: peaks via bell-curve easing, up to 1.1x
-            .scaleEffect(scaleAmount)
-            // AMLL float: 0.05em rise, persists after word ends
-            .offset(y: (isActive || hasPlayed) ? -2.0 : 0)
-            .animation(.easeOut(duration: max(1.0, wordDuration)), value: isActive || hasPlayed)
-            // AMLL glow: rgba(255,255,255,glowLevel) 0 0 radius
-            .shadow(color: .white.opacity(Double(glowLevel) * 1.2), radius: 12)
+            .scaleEffect(totalScale)
+            .offset(y: totalOffsetY)
+            .shadow(color: .white.opacity(glowOpacity), radius: glowRadius)
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - WordFlowLayout
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Flow layout that wraps words like natural text.
 private struct WordFlowLayout: Layout {
