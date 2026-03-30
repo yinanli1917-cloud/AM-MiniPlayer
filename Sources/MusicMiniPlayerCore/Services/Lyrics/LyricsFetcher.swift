@@ -622,11 +622,13 @@ public final class LyricsFetcher {
 
             // 🔑 Prefer YRC (word-level) over LRC — skip LRC parse entirely when YRC available
             var lyrics: [LyricLine]
+            var isYRC = false
 
             if let yrc = json["yrc"] as? [String: Any],
                let yrcText = yrc["lyric"] as? String, !yrcText.isEmpty,
                let yrcLines = parser.parseYRC(yrcText, timeOffset: 0) {
                 lyrics = parser.stripMetadataLines(yrcLines)
+                isYRC = true
                 DebugLogger.log("NetEase", "🎯 YRC word-level: \(lyrics.count) lines, \(lyrics.filter { $0.hasSyllableSync }.count) synced")
             } else if let lrc = json["lrc"] as? [String: Any],
                       let lyricText = lrc["lyric"] as? String, !lyricText.isEmpty {
@@ -635,13 +637,22 @@ public final class LyricsFetcher {
                 return nil
             }
 
-            // 检测混排翻译（韩/英+中 交替）→ 提取中文行为 translation 属性
-            let (extracted, isInterleaved) = parser.extractInterleavedTranslations(lyrics)
-            if isInterleaved {
-                lyrics = extracted
-            } else if let tlyric = json["tlyric"] as? [String: Any],
-                      let translatedText = tlyric["lyric"] as? String, !translatedText.isEmpty {
-                // 正常双轨 → 合并翻译
+            // 🔑 YRC is authoritative word-level data — ALL lines are original lyrics.
+            // Skip interleaved detection + Chinese stripping for YRC to prevent:
+            // - Bilingual songs having Chinese lyrics misidentified as translations
+            // - Mixed lines like "别醒了 Whiskey" being split incorrectly
+            // - Real tlyric translations being blocked by false interleaved detection
+            if !isYRC {
+                // 检测混排翻译（韩/英+中 交替）→ 提取中文行为 translation 属性
+                let (extracted, isInterleaved) = parser.extractInterleavedTranslations(lyrics)
+                if isInterleaved {
+                    lyrics = extracted
+                }
+            }
+
+            // Merge tlyric translations (separate track) — applies to both YRC and LRC
+            if let tlyric = json["tlyric"] as? [String: Any],
+               let translatedText = tlyric["lyric"] as? String, !translatedText.isEmpty {
                 let translatedLyrics = parser.stripMetadataLines(parser.parseLRC(translatedText))
                 if !translatedLyrics.isEmpty {
                     lyrics = parser.mergeLyricsWithTranslation(original: lyrics, translated: translatedLyrics)
@@ -649,7 +660,10 @@ public final class LyricsFetcher {
             }
 
             // 🔑 最后一道防线：剥离非中文歌曲中的中文翻译（纯中文行/混排行/日中混排）
-            lyrics = parser.stripChineseTranslations(lyrics)
+            // YRC data is authoritative — skip stripping to preserve bilingual original lyrics
+            if !isYRC {
+                lyrics = parser.stripChineseTranslations(lyrics)
+            }
 
             return parser.applyTimeOffset(to: lyrics, offset: netEaseTimeOffset)
         } catch {

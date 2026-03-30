@@ -144,7 +144,8 @@ extension MusicController {
         // Optimistic UI update
         currentTime = position
         internalCurrentTime = position
-        lastPollTime = Date()  // 🔑 Reset so interpolateTime() starts fresh — prevents overshoot into next line
+        lastPollTime = Date()
+        lastFrameTime = Date()  // 🔑 Reset frame clock so next interpolation adds ~0, not pre-seek delta
         // 🔑 标记 seek 执行中，下次轮询时立即同步
         seekPending = true
         // 🔑 Immediately update lyrics line index while seekPending is true.

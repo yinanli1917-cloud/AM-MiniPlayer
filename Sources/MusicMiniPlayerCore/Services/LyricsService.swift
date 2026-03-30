@@ -358,7 +358,17 @@ public class LyricsService: ObservableObject {
         }
 
         if let newIndex = bestMatch, currentLineIndex != newIndex {
-            currentLineIndex = newIndex
+            if currentLineIndex == nil || newIndex > currentLineIndex! {
+                currentLineIndex = newIndex
+            } else {
+                // Backward hysteresis: absorbs SB position jitter (~0.3s) while allowing
+                // real seeks (>1s jump). Without this, jitter around a line boundary
+                // causes currentLineIndex to bounce (5→6→5→6), each triggering wave animation.
+                let currentTrigger = lyrics[currentLineIndex!].startTime - scrollAnimationLeadTime
+                if time < currentTrigger - 0.8 {
+                    currentLineIndex = newIndex
+                }
+            }
         } else if bestMatch == nil {
             currentLineIndex = nil
         }

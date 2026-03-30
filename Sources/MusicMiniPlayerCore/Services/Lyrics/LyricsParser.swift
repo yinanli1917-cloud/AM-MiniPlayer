@@ -283,9 +283,19 @@ public final class LyricsParser {
                 }
             }
 
+            // Merge punctuation-only tokens into adjacent words.
+            // YRC splits contractions character-by-character ("I" + "'" + "m "),
+            // assigning held-note durations to punctuation. Merging creates proper
+            // word units so the sweep gradient fills across visible characters.
+            words = mergeYRCPunctuationTokens(words)
+
             if lineText.isEmpty {
                 lineText = content.replacingOccurrences(of: "\\(\\d+,\\d+,\\d+\\)", with: "", options: .regularExpression)
             }
+
+            // Rebuild lineText from merged words
+            let mergedText = words.map(\.word).joined()
+            if !mergedText.isEmpty { lineText = mergedText }
 
             lineText = decodeHTMLEntities(lineText.trimmingCharacters(in: .whitespaces))
             guard !lineText.isEmpty else { continue }
@@ -297,6 +307,53 @@ public final class LyricsParser {
 
         lines.sort { $0.startTime < $1.startTime }
         return lines.isEmpty ? nil : lines
+    }
+
+    // MARK: - YRC Token Merge
+
+    /// Merge punctuation-only tokens and contraction fragments into adjacent words.
+    /// YRC tokenizes "I'm" as ["I", "'", "m "] with held-note durations on punctuation.
+    /// Merging produces ["I'm "] so the sweep gradient fills across visible characters.
+    private func mergeYRCPunctuationTokens(_ words: [LyricWord]) -> [LyricWord] {
+        guard words.count > 1 else { return words }
+
+        let punctuation = CharacterSet.alphanumerics.union(.whitespaces).inverted
+        var merged: [LyricWord] = []
+
+        for word in words {
+            let stripped = word.word.trimmingCharacters(in: .whitespaces)
+            let isPunct = !stripped.isEmpty && stripped.unicodeScalars.allSatisfy { punctuation.contains($0) }
+
+            if isPunct, let last = merged.last {
+                // Merge punctuation into previous word
+                merged[merged.count - 1] = LyricWord(
+                    word: last.word + word.word,
+                    startTime: last.startTime,
+                    endTime: word.endTime
+                )
+            } else if isPunct && merged.isEmpty {
+                merged.append(word)
+            } else if let last = merged.last {
+                let lastText = last.word.trimmingCharacters(in: .whitespaces)
+                let lastIsPunct = !lastText.isEmpty && lastText.unicodeScalars.allSatisfy { punctuation.contains($0) }
+                let lastEndsWithApostrophe = lastText.hasSuffix("'") || lastText.hasSuffix("\u{2019}")
+
+                if lastIsPunct || (lastEndsWithApostrophe && stripped.count <= 2) {
+                    // Merge: leading punctuation forward, or contraction tail ("m", "t", "s", "re", "ll", "ve")
+                    merged[merged.count - 1] = LyricWord(
+                        word: last.word + word.word,
+                        startTime: last.startTime,
+                        endTime: word.endTime
+                    )
+                } else {
+                    merged.append(word)
+                }
+            } else {
+                merged.append(word)
+            }
+        }
+
+        return merged
     }
 
     // MARK: - 无时间轴歌词

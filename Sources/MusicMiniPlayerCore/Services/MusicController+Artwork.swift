@@ -113,10 +113,11 @@ extension MusicController {
             }
         }
 
-        // Path 2: SB fetch — higher quality local artwork, overrides API if available
-        scriptingBridgeQueue.async { [weak self] in
+        // Path 2: SB fetch on dedicated artworkQueue — never blocked by position polls.
+        // Uses artworkApp (separate SBApplication instance) so it runs in parallel.
+        artworkQueue.async { [weak self] in
             guard let self = self,
-                  let app = self.musicApp,
+                  let app = self.artworkApp ?? self.musicApp,
                   app.isRunning else {
                 return
             }
@@ -161,8 +162,54 @@ extension MusicController {
             }
         }
 
-        // Track 2: iTunes Search API (开发版回退)
+        // Track 2: Deezer API (free, no auth, no 403 — iTunes Search API returns 403)
+        if let image = await fetchArtworkViaDeezer(title: title, artist: artist) {
+            return image
+        }
+
+        // Track 3: iTunes Search API (last resort, may 403)
         return await fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
+    }
+
+    /// Deezer API — free, no auth, reliable artwork source
+    private func fetchArtworkViaDeezer(title: String, artist: String) async -> NSImage? {
+        let query = "artist:\"\(artist)\" track:\"\(title)\""
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://api.deezer.com/search?q=\(encoded)&limit=5") else {
+            return nil
+        }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = json["data"] as? [[String: Any]],
+                  !results.isEmpty else {
+                return nil
+            }
+
+            // Match by artist name (case-insensitive contains)
+            let artistLower = artist.lowercased()
+            let titleLower = title.lowercased()
+            let best = results.first { r in
+                let rArtist = (r["artist"] as? [String: Any])?["name"] as? String ?? ""
+                let rTitle = (r["title"] as? String) ?? ""
+                return rArtist.lowercased().contains(artistLower) || artistLower.contains(rArtist.lowercased())
+                    || rTitle.lowercased().contains(titleLower)
+            } ?? results.first
+
+            guard let match = best,
+                  let album = match["album"] as? [String: Any],
+                  let coverUrl = album["cover_big"] as? String,  // 500x500
+                  let imageUrl = URL(string: coverUrl) else {
+                return nil
+            }
+
+            let (imageData, _) = try await URLSession.shared.data(from: imageUrl)
+            DebugLogger.log("Artwork", "🎨 [Deezer] 命中: '\(match["title"] ?? "?")' by '\((match["artist"] as? [String: Any])?["name"] ?? "?")'")
+            return NSImage(data: imageData)
+        } catch {
+            return nil
+        }
     }
 
     /// MusicKit 方式获取封面（需要开发者签名 + entitlement）
@@ -286,10 +333,12 @@ extension MusicController {
 
         debugPrint("🔄 [retryArtworkFetch] Retrying for \(title)...\n")
 
-        // 1. 先尝试 ScriptingBridge
+        // 1. 先尝试 ScriptingBridge (on dedicated artwork queue)
         let sbImage: NSImage? = await withCheckedContinuation { continuation in
-            scriptingBridgeQueue.async { [weak self] in
-                guard let self = self, let app = self.musicApp, app.isRunning else {
+            artworkQueue.async { [weak self] in
+                guard let self = self,
+                      let app = self.artworkApp ?? self.musicApp,
+                      app.isRunning else {
                     continuation.resume(returning: nil)
                     return
                 }
@@ -314,19 +363,19 @@ extension MusicController {
 
     // Fetch artwork by persistentID using ScriptingBridge (for playlist items)
     public func fetchArtworkByPersistentID(persistentID: String) async -> NSImage? {
-        guard !isPreview, !persistentID.isEmpty, let app = musicApp, app.isRunning else {
-            return nil
-        }
+        guard !isPreview, !persistentID.isEmpty else { return nil }
 
         // 先检查缓存
         if let cached = artworkCache.object(forKey: persistentID as NSString) {
             return cached
         }
 
-        // 🔑 必须用 scriptingBridgeQueue — SB 不是线程安全的，双队列并发会 PAC crash
+        // 🔑 Use dedicated artworkQueue — separate SB instance, won't block position polls
         let image: NSImage? = await withCheckedContinuation { continuation in
-            scriptingBridgeQueue.async { [weak self] in
-                guard let self = self else {
+            artworkQueue.async { [weak self] in
+                guard let self = self,
+                      let app = self.artworkApp ?? self.musicApp,
+                      app.isRunning else {
                     continuation.resume(returning: nil)
                     return
                 }

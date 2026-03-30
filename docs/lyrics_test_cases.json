@@ -105,7 +105,7 @@
     "duration": 355,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": null
     }
   },

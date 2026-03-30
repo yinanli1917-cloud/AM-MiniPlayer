@@ -590,11 +590,8 @@ public struct LyricsView: View {
 
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-            lyricsService.updateCurrentTime(musicController.currentTime)
-            // 🔑 Sync wave state BEFORE unfreezing (same pattern as handleLineTap/handleScrollEnded)
-            if let idx = lyricsService.currentLineIndex {
-                wave.lastCurrentIndex = idx
-            }
+            // Sync wave to latest line index BEFORE unfreezing (single-writer: no updateCurrentTime here)
+            wave.lastCurrentIndex = lyricsService.currentLineIndex ?? 0
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
             withAnimation(.interpolatingSpring(
@@ -641,15 +638,10 @@ public struct LyricsView: View {
         // 2 秒后 spring 回当前播放行
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-            // 恢复前先同步到最新播放位置，避免跳回旧位置
-            lyricsService.updateCurrentTime(musicController.currentTime)
-            // 🔑 Sync wave state BEFORE unfreezing — same pattern as handleLineTap.
-            // Without this, interpolateTime() calls updateCurrentTime the instant
-            // isManualScrolling goes false, onChange sees a stale wave.lastCurrentIndex,
-            // and triggers a wave cascade that blanks the screen.
-            if let idx = lyricsService.currentLineIndex {
-                wave.lastCurrentIndex = idx
-            }
+            // Sync wave to latest line index BEFORE unfreezing.
+            // Do NOT call updateCurrentTime() here — let interpolateTime() handle it
+            // naturally on the next frame after isManualScrolling clears (single-writer).
+            wave.lastCurrentIndex = lyricsService.currentLineIndex ?? 0
 
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0

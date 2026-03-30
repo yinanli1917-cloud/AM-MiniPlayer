@@ -51,7 +51,7 @@ final class LyricsScorerTests: XCTestCase {
         XCTAssertEqual(scorer.sourceBonus(for: "LRCLIB"), 3)
         XCTAssertEqual(scorer.sourceBonus(for: "LRCLIB-Search"), 2)
         XCTAssertEqual(scorer.sourceBonus(for: "Genius"), 1)
-        XCTAssertEqual(scorer.sourceBonus(for: "lyrics.ovh"), 0)
+        XCTAssertEqual(scorer.sourceBonus(for: "lyrics.ovh"), -2)
         XCTAssertEqual(scorer.sourceBonus(for: "UnknownSource"), 0)
     }
 
@@ -128,9 +128,8 @@ final class LyricsScorerTests: XCTestCase {
         let scoreOVH = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: 240, translationEnabled: false)
         let scoreNetEase = scorer.calculateScore(lyrics, source: "NetEase", duration: 240, translationEnabled: false)
 
-        // 🔑 纯文本源（lyrics.ovh/Genius）不计时长/覆盖度（伪造时间轴不应得分）
-        // AMLL 比 lyrics.ovh 多：源加成差(10) + 时长匹配(15) + 覆盖度(~8) ≈ 33
-        XCTAssertGreaterThan(scoreAMLL - scoreOVH, 20)
+        // 🔑 Duration/coverage now apply uniformly; diff is source bonus only: AMLL(10) - lyrics.ovh(-2) = 12
+        XCTAssertEqual(scoreAMLL - scoreOVH, 12, accuracy: 1)
         // 同类型对标源（AMLL vs NetEase）差异仅为源加成
         XCTAssertEqual(scoreAMLL - scoreNetEase, 2, accuracy: 0.1)  // AMLL(10) - NetEase(8) = 2
     }
