@@ -415,8 +415,12 @@ private struct LyricsTextRenderer: TextRenderer {
             return
         }
 
-        // ── Pass 1: Dim base layer (all text at dim opacity) ──
+        // ── Pass 1: Dim base layer (non-emphasis only) ──
+        // Emphasis runs are drawn entirely in Pass 2 as a single layer with
+        // a bright→dim gradient mask — no dim base needed. Drawing them here
+        // would create a ghost at the untransformed position.
         for run in layout.flattenedRuns {
+            if let attr = run[WordTimingAttribute.self], attr.isEmphasis { continue }
             var ctx = context
             ctx.opacity = Double(dimAlpha)
             if let attr = run[WordTimingAttribute.self] {
@@ -489,64 +493,81 @@ private struct LyricsTextRenderer: TextRenderer {
         }
     }
 
-    // ── Emphasis: per-glyph bright rendering with stagger/scale/spread/glow ──
-    // Emphasis words need per-glyph transforms (scale, spread, float) so we can't
-    // use a single gradient mask. The emphasis effects dominate visually, so the
-    // slight per-glyph step in sweep opacity is imperceptible.
+    // ── Emphasis: single-layer with bright→dim gradient mask ──
+    // AMLL: single element per character, CSS mask transitions bright→dim directly.
+    // No separate dim base layer — eliminates ghost at untransformed position.
+    // Glyphs drawn at full opacity, gradient mask controls bright/dim regions.
     private func drawEmphasisBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat,
         floatY: CGFloat, fade: CGFloat, in context: GraphicsContext
     ) {
+        let runRect = run.typographicBounds.rect
+        let sweepX = runRect.minX + runRect.width * progress
         let glyphCount = max(1, run.count)
-        let runWidth = run.typographicBounds.width
-        let fadeRatio = runWidth > 0 ? fadeHalfPt / runWidth : 0.06
+        let bright = Color.white.opacity(Double(brightAlpha * fade))
+        let dim = Color.white.opacity(Double(dimAlpha))
 
-        var accWidth: CGFloat = 0
-        for (i, glyph) in run.enumerated() {
-            let glyphWidth = glyph.typographicBounds.width
-            let glyphFraction = runWidth > 0 ? (accWidth + glyphWidth / 2) / runWidth : 0
-            accWidth += glyphWidth
+        context.drawLayer { layerCtx in
+            // Draw emphasis glyphs at full opacity with per-glyph transforms
+            for (i, glyph) in run.enumerated() {
+                var ctx = layerCtx
+                // Full white — the gradient mask below will set final alpha
 
-            // Soft sweep opacity (per-glyph interpolation)
-            let softStep = min(1.0, max(0, (progress - glyphFraction + fadeRatio) / (fadeRatio * 2)))
-            let brightBoost = (brightAlpha - dimAlpha) * fade
-            guard softStep > 0 else { continue }
+                // Per-glyph stagger delay
+                let charDelay = (attr.du / 2.5 / Double(glyphCount)) * Double(i)
+                let t1 = CGFloat(min(1, max(0, (currentTime - attr.startTime - charDelay) / attr.du)))
+                let charEasing = empEasing(t1)
 
-            var ctx = context
-            ctx.opacity = Double(brightBoost * softStep)
+                // Scale centered on glyph
+                let scale = 1.0 + charEasing * 0.1 * attr.amount
+                let gc = glyph.typographicBounds.rect
+                ctx.translateBy(x: gc.midX, y: gc.midY)
+                ctx.scaleBy(x: scale, y: scale)
+                ctx.translateBy(x: -gc.midX, y: -gc.midY)
 
-            // Per-glyph stagger delay
-            let charDelay = (attr.du / 2.5 / Double(glyphCount)) * Double(i)
-            let t1 = CGFloat(min(1, max(0, (currentTime - attr.startTime - charDelay) / attr.du)))
-            let charEasing = empEasing(t1)
+                // Spread: push outward from center
+                let spreadX = -charEasing * 0.03 * attr.amount * CGFloat(glyphCount / 2 - i) * 24
 
-            // Scale centered on glyph
-            let scale = 1.0 + charEasing * 0.1 * attr.amount
-            let gc = glyph.typographicBounds.rect
-            ctx.translateBy(x: gc.midX, y: gc.midY)
-            ctx.scaleBy(x: scale, y: scale)
-            ctx.translateBy(x: -gc.midX, y: -gc.midY)
+                // Emphasis float: staggered sin(x*PI), AMLL: -0.05em, du*1.4, starts 400ms early
+                let floatDu = attr.du * 1.4
+                let floatDelay = max(0, charDelay - 0.4)
+                let t2 = CGFloat(min(1, max(0, (currentTime - attr.startTime - floatDelay) / floatDu)))
+                let charFloat: CGFloat = (t2 > 0 && t2 < 1) ? -sin(t2 * .pi) * 1.2 : 0
+                let emphLift = -charEasing * 0.6 * attr.amount
 
-            // Spread: push outward from center
-            let spreadX = -charEasing * 0.03 * attr.amount * CGFloat(glyphCount / 2 - i) * 24
+                ctx.translateBy(x: spreadX, y: floatY + charFloat + emphLift)
 
-            // Emphasis float: staggered sin(x*PI)
-            let floatDu = attr.du * 1.4
-            let floatDelay = max(0, charDelay - 0.4)
-            let t2 = CGFloat(min(1, max(0, (currentTime - attr.startTime - floatDelay) / floatDu)))
-            let charFloat: CGFloat = (t2 > 0 && t2 < 1) ? -sin(t2 * .pi) * 1.5 : 0
-            let emphLift = -charEasing * 0.6 * attr.amount
+                // Per-glyph glow — AMLL: alpha=empEasing*blur, radius=min(0.3em, blur*0.3em)
+                if charEasing > 0 && attr.blurLevel > 0 {
+                    let glowAlpha = Double(charEasing * attr.blurLevel)
+                    let glowRadius = min(0.3 * 24, attr.blurLevel * 0.3 * 24)
+                    ctx.addFilter(.shadow(color: .white.opacity(glowAlpha), radius: glowRadius))
+                }
 
-            ctx.translateBy(x: spreadX, y: floatY + charFloat + emphLift)
-
-            // Per-glyph glow — AMLL: alpha=empEasing*blur, radius=min(0.3em, blur*0.3em)
-            if charEasing > 0 && attr.blurLevel > 0 {
-                let glowAlpha = Double(charEasing * attr.blurLevel)
-                let glowRadius = min(0.3 * 24, attr.blurLevel * 0.3 * 24)
-                ctx.addFilter(.shadow(color: .white.opacity(glowAlpha), radius: glowRadius))
+                ctx.draw(glyph, options: .disablesSubpixelQuantization)
             }
 
-            ctx.draw(glyph, options: .disablesSubpixelQuantization)
+            // Gradient mask: bright→dim (not opaque→clear)
+            // This is the AMLL approach — single layer, mask controls alpha directly.
+            let padded = runRect.insetBy(dx: -40, dy: -40)
+            let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
+            let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+
+            var maskCtx = layerCtx
+            maskCtx.blendMode = .destinationIn
+            maskCtx.fill(
+                Path(padded),
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: bright, location: 0),
+                        .init(color: bright, location: max(0, leftEdge)),
+                        .init(color: dim, location: min(1, rightEdge)),
+                        .init(color: dim, location: 1),
+                    ]),
+                    startPoint: CGPoint(x: padded.minX, y: 0),
+                    endPoint: CGPoint(x: padded.maxX, y: 0)
+                )
+            )
         }
     }
 
