@@ -394,91 +394,112 @@ private struct LyricsTextRenderer: TextRenderer {
     let currentTime: TimeInterval
     let isAnimated: Bool
     let staticOpacity: CGFloat
-    private let brightAlpha: CGFloat = 1.0
-    private let dimAlpha: CGFloat = 0.35
+    // AMLL values (from updateMaskAlphaTargets at scale=1.0)
+    private let brightAlpha: CGFloat = 0.85
+    private let dimAlpha: CGFloat = 0.25
+    // AMLL fade width: word.height / 2 = 12pt for 24pt font
+    private let fadeHalfPt: CGFloat = 12
 
     var displayPadding: EdgeInsets {
         EdgeInsets(top: 20, leading: 20, bottom: 20, trailing: 20)
     }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        // ── Static lines: single pass at staticOpacity ──
+        guard isAnimated else {
+            for run in layout.flattenedRuns {
+                var ctx = context
+                ctx.opacity = Double(staticOpacity)
+                ctx.draw(run, options: .disablesSubpixelQuantization)
+            }
+            return
+        }
+
         // ── Pass 1: Dim base layer (all text at dim opacity) ──
         for run in layout.flattenedRuns {
             var ctx = context
-            if !isAnimated {
-                ctx.opacity = staticOpacity
-            } else {
-                ctx.opacity = Double(dimAlpha)
-                // Base float for dim layer too (words that played stay floated)
-                if let attr = run[WordTimingAttribute.self] {
-                    let floatY = baseFloat(for: attr)
-                    ctx.translateBy(x: 0, y: floatY)
-                }
+            ctx.opacity = Double(dimAlpha)
+            if let attr = run[WordTimingAttribute.self] {
+                ctx.translateBy(x: 0, y: baseFloat(for: attr))
             }
             ctx.draw(run, options: .disablesSubpixelQuantization)
         }
 
-        guard isAnimated else { return }
-
-        // ── Pass 2: Bright overlay clipped by sweep progress per word ──
-        // After lineEndTime, the bright overlay fades out over 1.5s (ease-in)
-        // so the last line / word before interlude dims naturally.
+        // ── Pass 2: Bright overlay with gradient mask (sub-pixel sweep) ──
+        // AMLL uses CSS mask-image: linear-gradient sliding across each word.
+        // SwiftUI equivalent: drawLayer + destinationIn blend with gradient fill.
         for run in layout.flattenedRuns {
             guard let attr = run[WordTimingAttribute.self] else { continue }
             let duration = attr.endTime - attr.startTime
             let progress = wordProgress(attr, duration)
             guard progress > 0 else { continue }
 
-            // Post-line fade-out: after all words end, bright → dim over 1.5s
-            let fadeOutDuration: TimeInterval = 1.5
-            let timeSinceLineEnd = currentTime - attr.lineEndTime
-            let postLineFade: CGFloat = {
-                guard timeSinceLineEnd > 0 else { return 1.0 }  // line still active
-                if timeSinceLineEnd >= fadeOutDuration { return 0 }  // fully faded
-                let t = timeSinceLineEnd / fadeOutDuration
-                return CGFloat(1.0 - t * t)  // ease-in: slow start, fast finish
-            }()
-            guard postLineFade > 0 else { continue }  // fully faded, skip bright pass
+            let postLineFade = postLineFadeOut(attr)
+            guard postLineFade > 0 else { continue }
 
-            let runRect = run.typographicBounds.rect
             let floatY = baseFloat(for: attr)
 
             if attr.isEmphasis {
                 drawEmphasisBright(run: run, attr: attr, progress: progress,
                                    floatY: floatY, fade: postLineFade, in: context)
             } else {
-                // Normal words: clip-based bright overlay + edge glow
-                let clipW = runRect.width * progress
-                let clipRect = CGRect(x: runRect.minX, y: runRect.minY - 20,
-                                      width: clipW, height: runRect.height + 40)
-
-                var brightCtx = context
-                brightCtx.opacity = Double(brightAlpha * postLineFade)
-                brightCtx.translateBy(x: 0, y: floatY)
-                brightCtx.clip(to: Path(clipRect))
-                brightCtx.draw(run, options: .disablesSubpixelQuantization)
-
-                // Edge glow: white halo at the sweep boundary
-                if progress > 0 && progress < 1 {
-                    let edgeX = runRect.minX + clipW
-                    let glowRect = CGRect(x: edgeX - 3, y: runRect.minY - 4,
-                                          width: 6, height: runRect.height + 8)
-                    var glowCtx = context
-                    glowCtx.translateBy(x: 0, y: floatY)
-                    glowCtx.addFilter(.blur(radius: 10))
-                    glowCtx.fill(Path(glowRect), with: .color(.white.opacity(0.5 * Double(postLineFade))))
-                }
+                drawSweepBright(run: run, progress: progress, floatY: floatY,
+                                fade: postLineFade, in: context)
             }
         }
     }
 
+    // ── Normal words: gradient-masked bright overlay (sub-pixel smooth) ──
+    private func drawSweepBright(
+        run: Text.Layout.Run, progress: CGFloat, floatY: CGFloat,
+        fade: CGFloat, in context: GraphicsContext
+    ) {
+        let runRect = run.typographicBounds.rect
+        let brightBoost = brightAlpha - dimAlpha
+        let sweepX = runRect.minX + runRect.width * progress
+
+        context.drawLayer { layerCtx in
+            // Draw bright text into sublayer
+            var textCtx = layerCtx
+            textCtx.opacity = Double(brightBoost * fade)
+            textCtx.translateBy(x: 0, y: floatY)
+            textCtx.draw(run, options: .disablesSubpixelQuantization)
+
+            // Apply gradient mask via destinationIn — sub-pixel smooth sweep
+            // The gradient ramps from opaque (left, already sung) to clear (right, upcoming)
+            let padded = runRect.insetBy(dx: -20, dy: -20)
+            let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
+            let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+
+            var maskCtx = layerCtx
+            maskCtx.blendMode = .destinationIn
+            maskCtx.fill(
+                Path(padded),
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: .white, location: 0),
+                        .init(color: .white, location: max(0, leftEdge)),
+                        .init(color: .clear, location: min(1, rightEdge)),
+                        .init(color: .clear, location: 1),
+                    ]),
+                    startPoint: CGPoint(x: padded.minX, y: 0),
+                    endPoint: CGPoint(x: padded.maxX, y: 0)
+                )
+            )
+        }
+    }
+
     // ── Emphasis: per-glyph bright rendering with stagger/scale/spread/glow ──
+    // Emphasis words need per-glyph transforms (scale, spread, float) so we can't
+    // use a single gradient mask. The emphasis effects dominate visually, so the
+    // slight per-glyph step in sweep opacity is imperceptible.
     private func drawEmphasisBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat,
-        floatY: CGFloat, fade: CGFloat = 1.0, in context: GraphicsContext
+        floatY: CGFloat, fade: CGFloat, in context: GraphicsContext
     ) {
         let glyphCount = max(1, run.count)
         let runWidth = run.typographicBounds.width
+        let fadeRatio = runWidth > 0 ? fadeHalfPt / runWidth : 0.06
 
         var accWidth: CGFloat = 0
         for (i, glyph) in run.enumerated() {
@@ -486,14 +507,13 @@ private struct LyricsTextRenderer: TextRenderer {
             let glyphFraction = runWidth > 0 ? (accWidth + glyphWidth / 2) / runWidth : 0
             accWidth += glyphWidth
 
-            // Only draw bright for glyphs that have been swept
-            // Smooth transition at boundary
-            let dist = glyphFraction - progress
-            let brightness = min(1, max(0, 1.0 - dist / 0.08))
-            guard brightness > 0 else { continue }
+            // Soft sweep opacity (per-glyph interpolation)
+            let softStep = min(1.0, max(0, (progress - glyphFraction + fadeRatio) / (fadeRatio * 2)))
+            let brightBoost = (brightAlpha - dimAlpha) * fade
+            guard softStep > 0 else { continue }
 
             var ctx = context
-            ctx.opacity = Double(brightAlpha * fade) * Double(brightness)
+            ctx.opacity = Double(brightBoost * softStep)
 
             // Per-glyph stagger delay
             let charDelay = (attr.du / 2.5 / Double(glyphCount)) * Double(i)
@@ -522,7 +542,7 @@ private struct LyricsTextRenderer: TextRenderer {
             // Per-glyph glow — AMLL: alpha=empEasing*blur, radius=min(0.3em, blur*0.3em)
             if charEasing > 0 && attr.blurLevel > 0 {
                 let glowAlpha = Double(charEasing * attr.blurLevel)
-                let glowRadius = min(0.3 * 24, attr.blurLevel * 0.3 * 24)  // em→pt
+                let glowRadius = min(0.3 * 24, attr.blurLevel * 0.3 * 24)
                 ctx.addFilter(.shadow(color: .white.opacity(glowAlpha), radius: glowRadius))
             }
 
@@ -531,6 +551,16 @@ private struct LyricsTextRenderer: TextRenderer {
     }
 
     // ── Helpers ──
+
+    private func postLineFadeOut(_ attr: WordTimingAttribute) -> CGFloat {
+        let fadeOutDuration: TimeInterval = 1.5
+        let timeSinceLineEnd = currentTime - attr.lineEndTime
+        guard timeSinceLineEnd > 0 else { return 1.0 }
+        if timeSinceLineEnd >= fadeOutDuration { return 0 }
+        let t = timeSinceLineEnd / fadeOutDuration
+        return CGFloat(1.0 - t * t)  // ease-in: slow start, fast finish
+    }
+
     private func wordProgress(_ attr: WordTimingAttribute, _ duration: TimeInterval) -> CGFloat {
         guard duration > 0 else { return currentTime >= attr.startTime ? 1 : 0 }
         if currentTime <= attr.startTime { return 0 }

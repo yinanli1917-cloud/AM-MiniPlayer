@@ -59,8 +59,20 @@ public struct LyricLine: Identifiable, Equatable {
         self.text = text
         self.startTime = startTime
         self.endTime = endTime
-        self.words = words
         self.translation = translation
+
+        // Invariant: words must be consistent with text.
+        // If words exist but their concatenation doesn't match text,
+        // they're stale (e.g., text was split/modified after parsing).
+        if !words.isEmpty {
+            let wordsText = words.map(\.word).joined()
+                .replacingOccurrences(of: " ", with: "")
+            let normalizedText = text.replacingOccurrences(of: " ", with: "")
+            self.words = normalizedText.hasPrefix(wordsText)
+                || wordsText.hasPrefix(normalizedText) ? words : []
+        } else {
+            self.words = words
+        }
     }
 }
 

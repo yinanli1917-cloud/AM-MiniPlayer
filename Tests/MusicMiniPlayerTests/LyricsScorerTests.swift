@@ -26,12 +26,13 @@ final class LyricsScorerTests: XCTestCase {
         return (0..<count).map { i in
             let start = Double(i) * interval
             let end = start + interval
+            let lineText = "歌词第\(i)行内容，长度足够"
             let words = withWords
-                ? [LyricWord(word: "word", startTime: start, endTime: end)]
+                ? [LyricWord(word: lineText, startTime: start, endTime: end)]
                 : []
             let translation = withTranslation ? "翻译\(i)" : nil
             return LyricLine(
-                text: "歌词第\(i)行内容，长度足够",
+                text: lineText,
                 startTime: start,
                 endTime: end,
                 words: words,
