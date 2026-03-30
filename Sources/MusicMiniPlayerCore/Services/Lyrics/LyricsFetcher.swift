@@ -52,7 +52,11 @@ public final class LyricsFetcher {
     }
 
     // MARK: - 并行获取
-    private let earlyReturnThreshold: Double = 60.0
+    // Only high-tier sources can trigger early return — prevents fast low-tier sources
+    // (LRCLIB) from cancelling slower high-quality sources (AMLL/NetEase/QQ) that provide
+    // syllable sync, translations, and better matching.
+    private let earlyReturnThreshold: Double = 70.0
+    private let earlyReturnSources: Set<String> = ["AMLL", "NetEase", "QQ"]
 
     /// 并行获取所有歌词源（含早期返回优化）
     public func fetchAllSources(
@@ -94,8 +98,9 @@ public final class LyricsFetcher {
                     results.append(r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count)")
 
-                    // 🔑 早期返回：已有高质量结果时不等慢源
-                    if r.score >= self.earlyReturnThreshold {
+                    // 🔑 早期返回：仅高质量源（AMLL/NetEase/QQ）可触发
+                    // LRCLIB 等低层源即使分数够也不能取消高层源，避免丢失翻译和逐字同步
+                    if r.score >= self.earlyReturnThreshold && self.earlyReturnSources.contains(r.source) {
                         DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold))")
                         group.cancelAll()
                         break
@@ -650,9 +655,15 @@ public final class LyricsFetcher {
                 }
             }
 
-            // Merge tlyric translations (separate track) — applies to both YRC and LRC
-            if let tlyric = json["tlyric"] as? [String: Any],
-               let translatedText = tlyric["lyric"] as? String, !translatedText.isEmpty {
+            // Merge translations: prefer ytlrc (YRC-aligned, exact timestamps) over tlyric (LRC timestamps)
+            let translationSource: String? = {
+                if isYRC, let ytlrc = json["ytlrc"] as? [String: Any],
+                   let text = ytlrc["lyric"] as? String, !text.isEmpty { return text }
+                if let tlyric = json["tlyric"] as? [String: Any],
+                   let text = tlyric["lyric"] as? String, !text.isEmpty { return text }
+                return nil
+            }()
+            if let translatedText = translationSource {
                 let translatedLyrics = parser.stripMetadataLines(parser.parseLRC(translatedText))
                 if !translatedLyrics.isEmpty {
                     lyrics = parser.mergeLyricsWithTranslation(original: lyrics, translated: translatedLyrics)

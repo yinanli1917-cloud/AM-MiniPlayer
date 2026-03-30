@@ -127,16 +127,19 @@ public final class MetadataResolver {
         let localizedResult = await localizedTask
 
         // 🔑 输出验证：多区域返回 CJK 标题但 CN 完全无匹配 → 可能误配
-        // 例外：艺术家名精确匹配时可信（HK/TW 粤语艺术家可能不在 CN iTunes）
+        // 例外：艺术家名精确匹配 或 时长极精确（<1s）时可信
+        // 时长精确: 不同语言的不同歌恰好同时长 + 同 romanized 关键词的概率极低
+        // 典型场景: JP/KR 艺术家不在 CN 目录（菊池桃子、EPO），CN 搜索为空属正常
         var localized: (title: String, artist: String)?
         if let loc = localizedResult {
             let resultTitleHasCJK = LanguageUtils.containsCJK(loc.title)
             let artistMatchesExactly = LanguageUtils.normalizeArtistName(loc.artist).lowercased() ==
                                        LanguageUtils.normalizeArtistName(artist).lowercased()
-            if resultTitleHasCJK && cnResult == nil && !artistMatchesExactly {
-                DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配 + 艺术家不匹配）: '\(loc.title)' by '\(loc.artist)'")
+            let durationPrecise = loc.durationDiff < 1.0
+            if resultTitleHasCJK && cnResult == nil && !artistMatchesExactly && !durationPrecise {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配 + 艺术家不匹配 + 时长不精确）: '\(loc.title)' by '\(loc.artist)' Δ\(String(format: "%.1f", loc.durationDiff))s")
             } else {
-                DebugLogger.log("MetadataResolver", "🌏 多区域解析: '\(loc.title)' by '\(loc.artist)' (region: \(loc.region))")
+                DebugLogger.log("MetadataResolver", "🌏 多区域解析: '\(loc.title)' by '\(loc.artist)' (region: \(loc.region), Δ\(String(format: "%.2f", loc.durationDiff))s)")
                 localized = (loc.title, loc.artist)
             }
         }
@@ -556,14 +559,18 @@ public final class MetadataResolver {
     // MARK: - Catalog Search (MusicKit primary → iTunes HTTP fallback)
 
     private func searchITunes(term: String, region: String, limit: Int = 30) async -> [[String: Any]]? {
-        // 🔑 MusicKit first (on-device, no rate limits), iTunes HTTP fallback (multi-region)
-        // MusicKit searches the user's storefront — fast and reliable but limited to one region.
-        // iTunes HTTP searches a SPECIFIC region — needed for cross-region resolution
-        // (e.g., HK user searching JP storefront for EPO's Japanese catalog).
-        if let musicKitResults = await searchViaMusicKit(term: term, limit: limit), !musicKitResults.isEmpty {
-            return musicKitResults
-        }
-        return await searchViaITunesAPI(term: term, region: region, limit: limit)
+        // 🔑 MusicKit (user's storefront) + iTunes HTTP (specific region) in parallel.
+        // MusicKit is fast/on-device but region-agnostic — it can't search TW/HK/JP storefronts.
+        // iTunes HTTP is region-specific — essential for cross-region resolution.
+        // Running both ensures: MusicKit covers user's locale, HTTP covers target region.
+        // Duplicates are harmless — matching logic picks the best candidate regardless.
+        async let mkTask = searchViaMusicKit(term: term, limit: limit)
+        async let httpTask = searchViaITunesAPI(term: term, region: region, limit: limit)
+
+        var results: [[String: Any]] = []
+        if let mk = await mkTask { results.append(contentsOf: mk) }
+        if let http = await httpTask { results.append(contentsOf: http) }
+        return results.isEmpty ? nil : results
     }
 
     private func searchViaMusicKit(term: String, limit: Int) async -> [[String: Any]]? {
@@ -594,7 +601,7 @@ public final class MetadataResolver {
         ]
         guard let url = components.url else { return nil }
         do {
-            let (data, response) = try await HTTPClient.getData(url: url, timeout: 4.0)
+            let (data, response) = try await HTTPClient.getData(url: url, timeout: 6.0)
             guard (200...299).contains(response.statusCode) else { return nil }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = json["results"] as? [[String: Any]] else { return nil }
