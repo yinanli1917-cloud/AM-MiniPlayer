@@ -127,14 +127,14 @@ struct LyricLineView: View {
                 Spacer(minLength: 0)
             }
 
-            // Translation line — per-line gradient sweep for current line,
-            // each line clips its own mask so no bleeding across VStack gap
+            // Translation line — sweep only for syllable-synced originals;
+            // line-level originals get static translation at matching opacity.
             if internalShowTranslation, let translation = translationText {
-                if isCurrent, let mc = musicController {
+                if isCurrent && line.hasSyllableSync, let mc = musicController {
                     TimelineView(.animation) { _ in
                         TranslationSweepText(
                             text: translation,
-                            words: line.hasSyllableSync ? line.words : [],
+                            words: line.words,
                             lineStartTime: line.startTime,
                             lineEndTime: line.endTime,
                             currentTime: mc.wordFillTime
