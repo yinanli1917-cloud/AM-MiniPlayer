@@ -35,15 +35,13 @@ private struct CacheState {
     var renderedIndicesValid = false
 }
 
-/// AMLL 波浪动画状态（纯计算驱动，无 timer）
+/// AMLL wave animation state (GCD-driven: each line's target mutated independently via asyncAfter)
 private struct WaveState {
     var lastCurrentIndex: Int = -1
-    /// wave 参数：每行的延迟阈值（秒），在 trigger 时预计算
-    var lineDelays: [Int: Double] = [:]
-    var startTime: Double = 0
-    var oldIndex: Int = 0
-    var newIndex: Int = 0
-    var isActive: Bool = false
+    /// Per-line target index — updated staggered via GCD, read in body for offset calculation
+    var lineTargetIndices: [Int: Int] = [:]
+    /// Pending DispatchWorkItems for cancellation on seek/track-change
+    var workItems: [DispatchWorkItem] = []
 }
 
 // MARK: - LyricsView
@@ -126,6 +124,7 @@ public struct LyricsView: View {
         .onChange(of: musicController.currentTrackTitle) {
             debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             cancelWaveAnimations()
+            wave.lineTargetIndices.removeAll()
             wave.lastCurrentIndex = -1
             cache.heightCacheInvalidated = true
             cache.renderedIndicesValid = false
@@ -306,10 +305,8 @@ public struct LyricsView: View {
             let _ = updateLyricsContainerHeight(containerHeight)
             let _ = ensureHeightCache()
             let anchorY = (containerHeight - controlBarHeight) * 0.24
-            // Pre-compute wave elapsed once per frame (avoids per-line CACurrentMediaTime calls)
-            let waveElapsed = wave.isActive ? CACurrentMediaTime() - wave.startTime : 0.0
 
-            // 可视区裁剪：仅自动播放且高度已测全时裁剪
+            // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12
             let heightsReady = cache.lineHeights.count >= renderedIndices.count
             let shouldCull = !scroll.isManualScrolling && heightsReady
@@ -320,28 +317,21 @@ public struct LyricsView: View {
                         let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
 
                         let lineOffset = calculateLineOffset(
-                            index: index, currentIndex: displayIndex, anchorY: anchorY, waveElapsed: waveElapsed
+                            index: index, currentIndex: displayIndex, anchorY: anchorY
                         )
                         let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
 
-                        if isVisible {
-                            lyricLineContent(line: line, index: index, currentIndex: displayIndex)
-                                .background(lineHeightTracker(index: index))
-                                .offset(y: fullOffset)
-                                .animation(
-                                    scroll.isManualScrolling || reduceMotion ? nil : .interpolatingSpring(
-                                        mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
-                                    ),
-                                    value: scroll.isManualScrolling ? 0 : fullOffset
-                                )
-                        } else {
-                            // Off-screen: keep offset for animation continuity, skip rendering
-                            lyricLineContent(line: line, index: index, currentIndex: displayIndex)
-                                .background(lineHeightTracker(index: index))
-                                .opacity(0)
-                                .allowsHitTesting(false)
-                                .offset(y: fullOffset)
-                        }
+                        lyricLineContent(line: line, index: index, currentIndex: displayIndex)
+                            .background(lineHeightTracker(index: index))
+                            .opacity(isVisible ? 1 : 0)
+                            .allowsHitTesting(isVisible)
+                            .offset(y: fullOffset)
+                            .animation(
+                                scroll.isManualScrolling || reduceMotion ? nil : .interpolatingSpring(
+                                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+                                ),
+                                value: scroll.isManualScrolling ? 0 : fullOffset
+                            )
                     }
                 }
             }
@@ -432,20 +422,15 @@ public struct LyricsView: View {
         }
     }
 
-    /// 计算每行在 wave 中应跟随的 target index（纯时间计算，无 timer）
-    /// `elapsed` is pre-computed once per frame to avoid per-line CACurrentMediaTime() calls
-    private func waveTargetIndex(for lineIndex: Int, currentIndex: Int, elapsed: Double) -> Int {
-        guard wave.isActive else { return currentIndex }
-        guard let delay = wave.lineDelays[lineIndex] else { return wave.newIndex }
-        return elapsed >= delay ? wave.newIndex : wave.oldIndex
-    }
-
-    private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat, waveElapsed: Double) -> CGFloat {
+    private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
         if scroll.isManualScrolling {
             let frozenTargetIndex = scroll.lockedLineIndex ?? currentIndex
             return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
         } else {
-            let lineTargetIndex = waveTargetIndex(for: index, currentIndex: currentIndex, elapsed: waveElapsed)
+            // GCD wave: each line's target is updated independently via asyncAfter.
+            // Lines not yet flipped retain the previous wave's target (= oldIndex),
+            // creating the stagger. Fallback to currentIndex for lines never in a wave.
+            let lineTargetIndex = wave.lineTargetIndices[index] ?? currentIndex
             return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
         }
     }
@@ -563,10 +548,16 @@ public struct LyricsView: View {
         // Prevents double-jump: frozen → old liveIndex → tapped line
         lyricsService.updateCurrentTime(line.startTime)
         // Sync wave state so the next natural line advance doesn't see a stale lastCurrentIndex
-        // (the onChange that normally updates this is blocked by isManualScrolling=true above)
         if let idx = lyricsService.currentLineIndex {
             wave.lastCurrentIndex = idx
         }
+        // Cancel pending wave work items and set all targets to new index (instant jump)
+        for item in wave.workItems { item.cancel() }
+        wave.workItems.removeAll()
+        let newIdx = lyricsService.currentLineIndex ?? 0
+        for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
+        // Unfreeze — no withAnimation! The .animation(value: fullOffset) on each line
+        // handles the spring transition naturally when fullOffset changes.
         scroll.isManualScrolling = false
         lyricsService.isManualScrolling = false
         scroll.lockedLineIndex = nil
@@ -590,8 +581,11 @@ public struct LyricsView: View {
 
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-            // Sync wave to latest line index BEFORE unfreezing (single-writer: no updateCurrentTime here)
-            wave.lastCurrentIndex = lyricsService.currentLineIndex ?? 0
+            // Sync wave to latest line index BEFORE unfreezing
+            let newIdx = lyricsService.currentLineIndex ?? 0
+            wave.lastCurrentIndex = newIdx
+            // Set all targets to current index so spring transitions correctly
+            for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
             withAnimation(.interpolatingSpring(
@@ -638,10 +632,10 @@ public struct LyricsView: View {
         // 2 秒后 spring 回当前播放行
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
-            // Sync wave to latest line index BEFORE unfreezing.
-            // Do NOT call updateCurrentTime() here — let interpolateTime() handle it
-            // naturally on the next frame after isManualScrolling clears (single-writer).
-            wave.lastCurrentIndex = lyricsService.currentLineIndex ?? 0
+            // Sync wave to latest line index BEFORE unfreezing
+            let newIdx = lyricsService.currentLineIndex ?? 0
+            wave.lastCurrentIndex = newIdx
+            for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
 
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
@@ -828,67 +822,65 @@ public struct LyricsView: View {
 
     // MARK: - AMLL 波浪动画（纯计算驱动）
 
-    /// AMLL 波浪动画 — 预计算每行延迟，body 每帧重算时自动驱动
-    /// 不用任何 timer/GCD，彻底消除主线程阻塞导致的批量坍缩
+    /// AMLL wave animation — GCD-driven stagger.
+    /// Each line's target is updated independently via DispatchWorkItem + asyncAfter.
+    /// Each mutation triggers a SwiftUI body re-evaluation, starting that line's spring
+    /// at a genuinely different wall-clock time — creating natural stagger.
     private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
         guard !scroll.isManualScrolling else { return }
         let lyrics = lyricsService.lyrics
         guard !lyrics.isEmpty else { return }
 
+        // Cancel pending work items from previous wave
+        for item in wave.workItems { item.cancel() }
+        wave.workItems.removeAll()
+
         let indices = renderedIndices
 
-        // Skip wave cascade when: fast song (< 1s between lines), nearby jump (1-2 lines),
-        // or reduceMotion. Nearby jumps look like a "stumble" with wave stagger because the
-        // gap between flipped and unflipped lines temporarily expands then contracts.
-        let isFastSong: Bool = {
-            guard newIndex > 0, newIndex < lyrics.count, oldIndex >= 0, oldIndex < lyrics.count else { return false }
-            return abs(lyrics[newIndex].startTime - lyrics[oldIndex].startTime) < 1.0
-        }()
-        let isNearbyJump = abs(newIndex - oldIndex) <= 2
-
-        // Skip wave on large jumps (seeks, track changes, or large time discontinuities).
-        // Using jump distance instead of seekPending flag — the flag has a race condition:
-        // seek() sets it, but poll clears it before SwiftUI's onChange delivers the event.
-        // Jump distance is a structural invariant, immune to timing races.
+        // Skip wave on large jumps (seeks) or accessibility
         let isLargeJump = abs(newIndex - oldIndex) > 4
-        if reduceMotion || isFastSong || isNearbyJump || isLargeJump {
-            wave.isActive = false
-            wave.lineDelays.removeAll()
-            wave.oldIndex = newIndex
-            wave.newIndex = newIndex
+        if reduceMotion || isLargeJump {
+            for idx in indices { wave.lineTargetIndices[idx] = newIndex }
             return
         }
 
-        // 预计算每行的延迟阈值
+        // Wave starts from 3 lines above the new current line
         let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
         var delay: Double = 0
-        var baseDelay: Double = 0.05
-        var lineDelays: [Int: Double] = [:]
+        var baseDelay: Double = 0.08
 
-        // 可视区上方：延迟 = 0（即时切换）
+        // Above visible top: instant update
         for i in 0..<startPosition {
-            lineDelays[indices[i]] = 0
+            wave.lineTargetIndices[indices[i]] = newIndex
         }
 
+        // Visible lines: staggered via GCD asyncAfter
         for i in startPosition..<indices.count {
             let lineIndex = indices[i]
-            lineDelays[lineIndex] = delay
+
+            if delay < 0.01 {
+                // First visible line: immediate
+                wave.lineTargetIndices[lineIndex] = newIndex
+            } else {
+                let workItem = DispatchWorkItem { [self] in
+                    guard !scroll.isManualScrolling else { return }
+                    wave.lineTargetIndices[lineIndex] = newIndex
+                }
+                wave.workItems.append(workItem)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+            }
+
             delay += baseDelay
+            // AMLL tail acceleration: lines past current get progressively faster
             if lineIndex >= newIndex { baseDelay /= 1.05 }
         }
-
-        wave.lineDelays = lineDelays
-        wave.oldIndex = oldIndex >= 0 ? oldIndex : newIndex
-        wave.newIndex = newIndex
-        wave.startTime = CACurrentMediaTime()
-        wave.isActive = true
     }
 
     private func cancelWaveAnimations() {
-        wave.isActive = false
-        wave.lineDelays.removeAll()
+        for item in wave.workItems { item.cancel() }
+        wave.workItems.removeAll()
     }
 }
 

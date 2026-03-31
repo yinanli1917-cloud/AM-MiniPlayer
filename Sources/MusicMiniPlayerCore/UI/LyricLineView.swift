@@ -127,17 +127,30 @@ struct LyricLineView: View {
                 Spacer(minLength: 0)
             }
 
-            // 🔑 翻译行 - 使用 internalShowTranslation 控制，实现开启时的平滑动画
+            // Translation line — per-line gradient sweep for current line,
+            // each line clips its own mask so no bleeding across VStack gap
             if internalShowTranslation, let translation = translationText {
-                HStack(spacing: 0) {
-                    Text(translation)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white.opacity(textOpacity * 0.75))
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .lineSpacing(4)
+                if isCurrent, let mc = musicController {
+                    TimelineView(.animation) { _ in
+                        TranslationSweepText(
+                            text: translation,
+                            words: line.hasSyllableSync ? line.words : [],
+                            lineStartTime: line.startTime,
+                            lineEndTime: line.endTime,
+                            currentTime: mc.wordFillTime
+                        )
+                    }
+                } else {
+                    HStack(spacing: 0) {
+                        Text(translation)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white.opacity(textOpacity * 0.75))
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .lineSpacing(4)
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
+                    }
                 }
             } else if showTranslation && isTranslating {
                 // 🔑 翻译加载中动画
@@ -205,6 +218,131 @@ struct LyricLineView: View {
         }
     }
 
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - Translation Sweep (per-line gradient reveal)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Translation sweep view — uses the same TextRenderer approach as the original lyrics.
+/// The TextRenderer gets per-visual-line runs, so the gradient naturally handles wrapping.
+private struct TranslationSweepText: View {
+    let text: String
+    let words: [LyricWord]
+    let lineStartTime: TimeInterval
+    let lineEndTime: TimeInterval
+    let currentTime: TimeInterval
+
+    /// Progress 0→1 matching the original lyrics' visual fill.
+    private var lineProgress: CGFloat {
+        guard !words.isEmpty else {
+            let duration = lineEndTime - lineStartTime
+            guard duration > 0 else { return currentTime >= lineStartTime ? 1 : 0 }
+            if currentTime <= lineStartTime { return 0 }
+            if currentTime >= lineEndTime { return 1 }
+            return CGFloat((currentTime - lineStartTime) / duration)
+        }
+        let count = CGFloat(words.count)
+        for (i, word) in words.enumerated() {
+            if currentTime < word.startTime { return CGFloat(i) / count }
+            if currentTime < word.endTime {
+                return (CGFloat(i) + CGFloat(word.progress(at: currentTime))) / count
+            }
+        }
+        return 1.0
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if #available(macOS 15.0, *) {
+                Text(text)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .textRenderer(TranslationSweepRenderer(progress: lineProgress))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(4)
+            } else {
+                Text(text)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(4)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// TextRenderer for translation — same dim-base + bright-sweep technique as LyricsTextRenderer.
+/// Each visual line is a separate run, so the gradient mask is per-line (no cross-line bleeding).
+/// Progress is distributed across actual rendered line widths sequentially.
+@available(macOS 15.0, *)
+private struct TranslationSweepRenderer: TextRenderer {
+    let progress: CGFloat
+    private let brightAlpha: CGFloat = 0.75
+    private let dimAlpha: CGFloat = 0.20
+    private let fadeHalfPt: CGFloat = 8
+
+    var displayPadding: EdgeInsets {
+        EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
+    }
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        let runs = Array(layout.flattenedRuns)
+        let totalWidth = runs.reduce(CGFloat(0)) { $0 + $1.typographicBounds.rect.width }
+        guard totalWidth > 0 else { return }
+        let filledWidth = progress * totalWidth
+
+        // Pass 1: Dim base — all text visible at dim opacity
+        for run in runs {
+            var ctx = context
+            ctx.opacity = Double(dimAlpha)
+            ctx.draw(run, options: .disablesSubpixelQuantization)
+        }
+
+        // Pass 2: Bright overlay with per-run gradient mask (same as LyricsTextRenderer)
+        let brightBoost = brightAlpha - dimAlpha
+        var cumWidth: CGFloat = 0
+        for run in runs {
+            let runRect = run.typographicBounds.rect
+            let localFilled = filledWidth - cumWidth
+
+            if localFilled > 0 {
+                let localProgress = min(1.0, localFilled / max(1, runRect.width))
+                let sweepX = runRect.minX + runRect.width * localProgress
+
+                context.drawLayer { layerCtx in
+                    var textCtx = layerCtx
+                    textCtx.opacity = Double(brightBoost)
+                    textCtx.draw(run, options: .disablesSubpixelQuantization)
+
+                    let padded = runRect.insetBy(dx: -20, dy: -20)
+                    let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
+                    let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+
+                    var maskCtx = layerCtx
+                    maskCtx.blendMode = .destinationIn
+                    maskCtx.fill(
+                        Path(padded),
+                        with: .linearGradient(
+                            Gradient(stops: [
+                                .init(color: .white, location: 0),
+                                .init(color: .white, location: max(0, leftEdge)),
+                                .init(color: .clear, location: min(1, rightEdge)),
+                                .init(color: .clear, location: 1),
+                            ]),
+                            startPoint: CGPoint(x: padded.minX, y: 0),
+                            endPoint: CGPoint(x: padded.maxX, y: 0)
+                        )
+                    )
+                }
+            }
+
+            cumWidth += runRect.width
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -415,12 +553,17 @@ private struct LyricsTextRenderer: TextRenderer {
             return
         }
 
-        // ── Pass 1: Dim base layer (non-emphasis only) ──
-        // Emphasis runs are drawn entirely in Pass 2 as a single layer with
-        // a bright→dim gradient mask — no dim base needed. Drawing them here
-        // would create a ghost at the untransformed position.
+        // ── Pass 1: Dim base layer ──
+        // All words get a dim base. Emphasis words with active sweep (progress > 0)
+        // skip the dim base here — Pass 2 draws them as a single layer with bright→dim
+        // gradient mask to avoid a ghost at the untransformed position.
+        // But pre-sweep emphasis words (progress == 0) MUST be drawn here, otherwise
+        // they're invisible (Pass 2 also skips them via the progress > 0 guard).
         for run in layout.flattenedRuns {
-            if let attr = run[WordTimingAttribute.self], attr.isEmphasis { continue }
+            if let attr = run[WordTimingAttribute.self], attr.isEmphasis {
+                let progress = wordProgress(attr, attr.endTime - attr.startTime)
+                if progress > 0 { continue } // Sweep active → Pass 2 handles it
+            }
             var ctx = context
             ctx.opacity = Double(dimAlpha)
             if let attr = run[WordTimingAttribute.self] {
