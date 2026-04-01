@@ -121,7 +121,7 @@ public final class LyricsParser {
 
             if let wordStart = parseTTMLTime(String(content[spanBeginRange])),
                let wordEnd = parseTTMLTime(String(content[spanEndRange])) {
-                let spanText = String(content[spanTextRange])
+                let spanText = decodeHTMLEntities(String(content[spanTextRange]))
                 words.append(LyricWord(word: spanText, startTime: wordStart, endTime: wordEnd))
                 lineText += spanText + " "
             }
@@ -289,6 +289,14 @@ public final class LyricsParser {
             // word units so the sweep gradient fills across visible characters.
             words = mergeYRCPunctuationTokens(words)
 
+            // Cap word durations: NetEase YRC inflates the last word to fill remaining
+            // song time (e.g., "漏" at 42.6s). Cap to 3s so the sweep completes promptly.
+            words = words.map { word in
+                let dur = word.endTime - word.startTime
+                guard dur > 3.0 else { return word }
+                return LyricWord(word: word.word, startTime: word.startTime, endTime: word.startTime + 3.0)
+            }
+
             if lineText.isEmpty {
                 lineText = content.replacingOccurrences(of: "\\(\\d+,\\d+,\\d+\\)", with: "", options: .regularExpression)
             }
@@ -301,7 +309,10 @@ public final class LyricsParser {
             guard !lineText.isEmpty else { continue }
 
             let startTime = max(0, Double(lineStartMs) / 1000.0 - timeOffset)
-            let endTime = max(0, Double(lineStartMs + lineDurationMs) / 1000.0 - timeOffset)
+            var endTime = max(0, Double(lineStartMs + lineDurationMs) / 1000.0 - timeOffset)
+            // Clamp line endTime to last word's endTime — prevents bloated tail
+            // (YRC line duration often extends far past the actual last syllable)
+            if let lastWord = words.last { endTime = min(endTime, lastWord.endTime) }
             lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
         }
 
@@ -659,9 +670,12 @@ public final class LyricsParser {
 
         return original.map { line in
             let key = Int(line.startTime * 10)
-            let matchText = translationMap[key]
-                ?? translationMap[key - 1] ?? translationMap[key + 1]
-                ?? translationMap[key - 5] ?? translationMap[key + 5]
+            // Scan continuous range [key-5 .. key+5] (±50ms), prefer closest match
+            var matchText: String?
+            for offset in 0...5 {
+                if let t = translationMap[key + offset] { matchText = t; break }
+                if offset > 0, let t = translationMap[key - offset] { matchText = t; break }
+            }
 
             guard let text = matchText, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return line }
             return LyricLine(

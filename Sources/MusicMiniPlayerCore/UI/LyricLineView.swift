@@ -539,7 +539,7 @@ private struct LyricsTextRenderer: TextRenderer {
     private let fadeHalfPt: CGFloat = 12
 
     var displayPadding: EdgeInsets {
-        EdgeInsets(top: 20, leading: 20, bottom: 20, trailing: 20)
+        EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
     }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
@@ -553,23 +553,25 @@ private struct LyricsTextRenderer: TextRenderer {
             return
         }
 
-        // ── Pass 1: Dim base layer ──
-        // All words get a dim base. Emphasis words with active sweep (progress > 0)
-        // skip the dim base here — Pass 2 draws them as a single layer with bright→dim
-        // gradient mask to avoid a ghost at the untransformed position.
-        // But pre-sweep emphasis words (progress == 0) MUST be drawn here, otherwise
-        // they're invisible (Pass 2 also skips them via the progress > 0 guard).
+        // ── Pass 1: Dim base layer (ALL words, including emphasis) ──
+        // Every word gets a dim base at its baseFloat position. Pass 2 adds
+        // the bright overlay on top. For emphasis words, the minor ghost during
+        // active transforms is imperceptible because Pass 2's bright mask
+        // dominates visually. After emphasis ends (charEasing→0), transforms
+        // converge to identity and both passes align exactly — no blink.
         for run in layout.flattenedRuns {
-            if let attr = run[WordTimingAttribute.self], attr.isEmphasis {
-                let progress = wordProgress(attr, attr.endTime - attr.startTime)
-                if progress > 0 { continue } // Sweep active → Pass 2 handles it
-            }
             var ctx = context
             ctx.opacity = Double(dimAlpha)
             if let attr = run[WordTimingAttribute.self] {
                 ctx.translateBy(x: 0, y: baseFloat(for: attr))
             }
             ctx.draw(run, options: .disablesSubpixelQuantization)
+        }
+
+        // Compute full line bounding rect for unified gradient mask (unibody sweep)
+        var lineRect = CGRect.null
+        for run in layout.flattenedRuns {
+            lineRect = lineRect.union(run.typographicBounds.rect)
         }
 
         // ── Pass 2: Bright overlay with gradient mask (sub-pixel sweep) ──
@@ -588,10 +590,10 @@ private struct LyricsTextRenderer: TextRenderer {
 
             if attr.isEmphasis {
                 drawEmphasisBright(run: run, attr: attr, progress: progress,
-                                   floatY: floatY, fade: postLineFade, in: context)
+                                   floatY: floatY, fade: postLineFade, lineRect: lineRect, in: context)
             } else {
                 drawSweepBright(run: run, progress: progress, floatY: floatY,
-                                fade: postLineFade, in: context)
+                                fade: postLineFade, lineRect: lineRect, in: context)
             }
         }
     }
@@ -599,7 +601,7 @@ private struct LyricsTextRenderer: TextRenderer {
     // ── Normal words: gradient-masked bright overlay (sub-pixel smooth) ──
     private func drawSweepBright(
         run: Text.Layout.Run, progress: CGFloat, floatY: CGFloat,
-        fade: CGFloat, in context: GraphicsContext
+        fade: CGFloat, lineRect: CGRect, in context: GraphicsContext
     ) {
         let runRect = run.typographicBounds.rect
         let brightBoost = brightAlpha - dimAlpha
@@ -613,8 +615,8 @@ private struct LyricsTextRenderer: TextRenderer {
             textCtx.draw(run, options: .disablesSubpixelQuantization)
 
             // Apply gradient mask via destinationIn — sub-pixel smooth sweep
-            // The gradient ramps from opaque (left, already sung) to clear (right, upcoming)
-            let padded = runRect.insetBy(dx: -20, dy: -20)
+            // Use line-level rect so the gradient is uniform across all words (unibody wipe)
+            let padded = lineRect.insetBy(dx: -20, dy: -20)
             let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
             let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
 
@@ -642,7 +644,7 @@ private struct LyricsTextRenderer: TextRenderer {
     // Glyphs drawn at full opacity, gradient mask controls bright/dim regions.
     private func drawEmphasisBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat,
-        floatY: CGFloat, fade: CGFloat, in context: GraphicsContext
+        floatY: CGFloat, fade: CGFloat, lineRect: CGRect, in context: GraphicsContext
     ) {
         let runRect = run.typographicBounds.rect
         let sweepX = runRect.minX + runRect.width * progress
@@ -692,7 +694,8 @@ private struct LyricsTextRenderer: TextRenderer {
 
             // Gradient mask: bright→dim (not opaque→clear)
             // This is the AMLL approach — single layer, mask controls alpha directly.
-            let padded = runRect.insetBy(dx: -40, dy: -40)
+            // Use line-level rect for unified sweep across all emphasis glyphs.
+            let padded = lineRect.insetBy(dx: -40, dy: -40)
             let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
             let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
 
