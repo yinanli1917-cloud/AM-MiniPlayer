@@ -58,6 +58,11 @@ public final class LyricsScorer {
 
         var score: Double = 0
 
+        // 0. Timestamp authenticity — computed first because it gates steps 4 & 5
+        // Fabricated timestamps (uniform spacing, CV ≈ 0) should not earn duration/coverage bonuses
+        // because those metrics are circular: createUnsyncedLyrics constructs timestamps FROM duration
+        let authenticity = timestampAuthenticity(lyrics)
+
         // 1. Syllable sync (word-level timestamps, max 30)
         let syllableSyncCount = lyrics.filter { $0.hasSyllableSync }.count
         let syllableSyncRatio = Double(syllableSyncCount) / Double(lyrics.count)
@@ -70,8 +75,8 @@ public final class LyricsScorer {
         // 3. Line count (max 15)
         score += min(Double(lyrics.count) * 0.5, 15)
 
-        // 4. Duration match (max 15, applies to ALL sources uniformly)
-        if duration > 0 {
+        // 4. Duration match (max 15) — gated: only for authentic timestamps
+        if duration > 0 && authenticity != .fabricated {
             let lastStart = lyrics.last?.startTime ?? 0
             if lastStart > duration {
                 let overshootRatio = (lastStart - duration) / duration
@@ -88,8 +93,8 @@ public final class LyricsScorer {
             }
         }
 
-        // 5. Coverage (max 8, applies to ALL sources uniformly)
-        if duration > 0 {
+        // 5. Coverage (max 8) — gated: only for authentic timestamps
+        if duration > 0 && authenticity != .fabricated {
             let lastLyricEnd = lyrics.last?.endTime ?? 0
             let firstLyricStart = lyrics.first?.startTime ?? 0
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
@@ -120,9 +125,12 @@ public final class LyricsScorer {
             score -= 15
         }
 
-        // 10. Timestamp authenticity (replaces source-name-based isUnsyncedSource)
-        // Fabricated timestamps have uniform spacing (CV ≈ 0); real timestamps have natural variation
-        score += timestampAuthenticityScore(lyrics)
+        // 10. Authenticity bonus/penalty (on top of gating)
+        switch authenticity {
+        case .fabricated: score -= 15
+        case .authentic: score += 15
+        case .unknown: break
+        }
 
         // 11. Source bonus
         score += sourceBonus(for: source)
@@ -218,24 +226,30 @@ public final class LyricsScorer {
 
     // MARK: - Timestamp Authenticity
 
-    /// Detect fabricated vs authentic timestamps using coefficient of variation
+    private enum TimestampAuthenticity {
+        case fabricated  // Uniform spacing (CV ≈ 0) — constructed from duration
+        case authentic   // Natural variation (CV > 0.15) — real synced timestamps
+        case unknown     // Not enough data or ambiguous
+    }
+
+    /// Classify timestamps as fabricated vs authentic using coefficient of variation.
     /// Fabricated (createUnsyncedLyrics): perfectly uniform spacing → CV ≈ 0
     /// Authentic (synced sources): natural variation in line durations → CV > 0.15
-    private func timestampAuthenticityScore(_ lyrics: [LyricLine]) -> Double {
-        guard lyrics.count >= 5 else { return 0 }
+    /// Gates duration match and coverage scoring — fabricated timestamps earn 0 on both.
+    private func timestampAuthenticity(_ lyrics: [LyricLine]) -> TimestampAuthenticity {
         var gaps: [Double] = []
         for i in 1..<lyrics.count {
             let gap = lyrics[i].startTime - lyrics[i - 1].startTime
             if gap > 0 { gaps.append(gap) }
         }
-        guard gaps.count >= 4 else { return 0 }
+        guard gaps.count >= 2 else { return .unknown }
         let mean = gaps.reduce(0, +) / Double(gaps.count)
-        guard mean > 0 else { return 0 }
+        guard mean > 0 else { return .unknown }
         let variance = gaps.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(gaps.count)
         let cv = sqrt(variance) / mean
-        if cv < 0.05 { return -15 }  // Clearly fabricated (uniform distribution)
-        if cv > 0.15 { return 15 }   // Authentic (natural variation)
-        return 0                       // Ambiguous
+        if cv < 0.05 { return .fabricated }
+        if cv > 0.15 { return .authentic }
+        return .unknown
     }
 
     // MARK: - 辅助函数

@@ -66,22 +66,22 @@ final class LyricsScorerTests: XCTestCase {
     }
 
     func testCalculateScore_syncedHighQuality() {
-        // 有逐字、高质量、时长匹配、来源 AMLL
-        let lyrics = makeLyrics(count: 40, duration: 240, withWords: true)
+        // 有逐字、高质量、时长匹配、来源 AMLL — authentic timestamps
+        let lyrics = makeAuthenticLyrics(count: 40, duration: 240, withWords: true)
         let score = scorer.calculateScore(lyrics, source: "AMLL", duration: 240, translationEnabled: false)
 
-        // 应该是高分：逐字30 + 质量~30 + 行数15 + 时长15 + 覆盖8 + AMLL10 ≈ 100+
+        // 逐字30 + 质量~30 + 行数15 + 时长~12 + 覆盖~8 + 真实+15 + AMLL10 ≈ 100
         XCTAssertGreaterThan(score, 80)
     }
 
     func testCalculateScore_unsyncedLowQuality() {
-        // 无逐字、无翻译、来源 lyrics.ovh
+        // 无逐字、无翻译、来源 lyrics.ovh — fabricated timestamps
         let lyrics = makeLyrics(count: 10, duration: 240)
         let score = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: 240, translationEnabled: false)
 
-        // 无逐字(0) + 质量~30 + 行数5 + 时长~15 + 覆盖~8 + ovh(0) ≈ 58
-        XCTAssertGreaterThan(score, 30)
-        XCTAssertLessThan(score, 80)
+        // Fabricated: duration/coverage gated → 质量30 + 行数5 - 伪造15 + ovh(-2) ≈ 18
+        XCTAssertGreaterThan(score, 10)
+        XCTAssertLessThan(score, 30)
     }
 
     func testCalculateScore_translationBonus() {
@@ -106,7 +106,8 @@ final class LyricsScorerTests: XCTestCase {
     }
 
     func testCalculateScore_durationMismatchPenalty() {
-        let lyrics = makeLyrics(count: 20, duration: 240)
+        // Authentic timestamps so duration scoring isn't gated
+        let lyrics = makeAuthenticLyrics(count: 20, duration: 240)
         // 时长差 20% 以上应被罚分
         let scoreGoodDuration = scorer.calculateScore(lyrics, source: "LRCLIB", duration: 240, translationEnabled: false)
         let scoreBadDuration = scorer.calculateScore(lyrics, source: "LRCLIB", duration: 600, translationEnabled: false)
@@ -184,5 +185,98 @@ final class LyricsScorerTests: XCTestCase {
         let lyrics = makeLyrics(count: 30, duration: 240)
         let analysis = scorer.analyzeQuality(lyrics)
         XCTAssertGreaterThan(analysis.qualityScore, 90)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Fabricated Timestamp Gating
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Lyrics with natural timing variation (simulates real synced sources)
+    private func makeAuthenticLyrics(
+        count: Int,
+        duration: TimeInterval = 240,
+        withWords: Bool = false
+    ) -> [LyricLine] {
+        // Real lyrics have varied line durations (verses vs chorus vs bridge)
+        let variations: [Double] = [1.2, 0.8, 1.0, 1.5, 0.6, 1.1, 0.9, 1.3, 0.7, 1.4]
+        let baseInterval = duration / Double(count)
+        var time = 0.0
+        return (0..<count).map { i in
+            let factor = variations[i % variations.count]
+            let lineLength = baseInterval * factor
+            let start = time
+            let end = start + lineLength
+            time = end
+            let text = "歌词第\(i)行内容，长度足够"
+            let words = withWords
+                ? [LyricWord(word: text, startTime: start, endTime: end)]
+                : []
+            return LyricLine(
+                text: text,
+                startTime: start, endTime: end,
+                words: words
+            )
+        }
+    }
+
+    /// Simulates createUnsyncedLyrics output with interlude (like Genius/lyrics.ovh)
+    /// The interlude shares startTime 0 with line 1, reducing non-zero gaps
+    private func makeFabricatedWithInterlude(
+        lineCount: Int,
+        duration: TimeInterval
+    ) -> [LyricLine] {
+        let timePerLine = duration / Double(lineCount)
+        var lines = (0..<lineCount).map { i in
+            LyricLine(
+                text: "歌词第\(i)行内容，长度足够",
+                startTime: Double(i) * timePerLine,
+                endTime: Double(i + 1) * timePerLine
+            )
+        }
+        // Prepend interlude at same startTime as first line (like processRawLyrics does)
+        lines.insert(LyricLine(text: "⋯", startTime: 0, endTime: 0), at: 0)
+        return lines
+    }
+
+    func testFabricatedTimestamps_shortFabricatedShouldScoreLow() {
+        // Production regression: "Burgundy Red" Genius scored 41 with 4 fabricated lines
+        // 4 uniformly-spaced lines for a 378s song is clearly fabricated
+        // Authenticity detection must work even with < 5 lines
+        let texts = [
+            "Alright let us surf on the time",
+            "Only we own the ride tonight",
+            "Maybe we could come find out",
+            "Secrets in burgundy red sky",
+        ]
+        let timePerLine = 378.0 / Double(texts.count)
+        let lines = texts.enumerated().map { i, text in
+            LyricLine(
+                text: text,
+                startTime: Double(i) * timePerLine,
+                endTime: Double(i + 1) * timePerLine
+            )
+        }
+        let score = scorer.calculateScore(lines, source: "Genius", duration: 378, translationEnabled: false)
+        XCTAssertLessThan(score, 30,
+            "Fabricated 4-line English text for 378s song scored \(score), should be < 30")
+    }
+
+    func testFabricatedTimestamps_gatesDurationAndCoverage() {
+        // Production regression: lyrics.ovh "Moon" scored 32 with 22 fabricated lines
+        // Fabricated timestamps should not earn duration match or coverage bonuses
+        let lineCount = 22
+        let duration = 317.0
+        let lines = (0..<lineCount).map { i in
+            LyricLine(
+                text: "Hit dogs will holler I will howl at the moon number \(i)",
+                startTime: Double(i) * (duration / Double(lineCount)),
+                endTime: Double(i + 1) * (duration / Double(lineCount))
+            )
+        }
+        let score = scorer.calculateScore(lines, source: "lyrics.ovh", duration: duration, translationEnabled: false)
+        // Without gating: ~32 (duration +15, coverage +8 are free points from fabrication)
+        // With gating: those bonuses should be zeroed → score drops significantly
+        XCTAssertLessThan(score, 15,
+            "22 fabricated lines scored \(score), should be < 15 with duration/coverage gated")
     }
 }

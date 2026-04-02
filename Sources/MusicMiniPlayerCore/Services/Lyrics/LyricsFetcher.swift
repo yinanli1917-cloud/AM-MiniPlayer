@@ -59,51 +59,82 @@ public final class LyricsFetcher {
     private let earlyReturnSources: Set<String> = ["AMLL", "NetEase", "QQ"]
 
     /// 并行获取所有歌词源（含早期返回优化）
+    /// Two-phase pipeline: all sources start immediately with original params,
+    /// MetadataResolver runs concurrently and retries failed sources if it changed params.
     public func fetchAllSources(
         title: String,
         artist: String,
         duration: TimeInterval,
         translationEnabled: Bool
     ) async -> [LyricsFetchResult] {
-        // Sanitize: strip quotes/brackets that break search APIs (e.g. Nat "King" Cole)
         let cleanTitle = title.replacingOccurrences(of: "\"", with: "")
         let cleanArtist = artist.replacingOccurrences(of: "\"", with: "")
         DebugLogger.log("🚀 fetchAllSources START: '\(cleanTitle)' by '\(cleanArtist)' (\(Int(duration))s)")
 
-        // 获取统一的搜索元信息
-        let (searchTitle, searchArtist) = await metadataResolver.resolveSearchMetadata(
-            title: cleanTitle, artist: cleanArtist, duration: duration
-        )
+        let ot = cleanTitle, oa = cleanArtist
+        let d = duration, te = translationEnabled
+        var results: [LyricsFetchResult] = []
+        var earlyReturned = false
 
-        if searchTitle != title || searchArtist != artist {
-            DebugLogger.log("🔄 元信息解析: '\(searchTitle)' by '\(searchArtist)'")
+        // 🔑 MetadataResolver runs concurrently — does NOT block fetchers
+        let resolveTask = Task {
+            await self.metadataResolver.resolveSearchMetadata(
+                title: cleanTitle, artist: cleanArtist, duration: duration
+            )
         }
 
-        var results: [LyricsFetchResult] = []
-
-        let st = searchTitle, sa = searchArtist, d = duration, te = translationEnabled
-        let ot = title, oa = artist
+        // Phase 1: All 7 sources start immediately with original params
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
-            // 🔑 7 个并行源
-            group.addTask { await self.fetchFromAMLL(title: st, artist: sa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromLRCLIB(title: st, artist: sa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromLRCLIBSearch(title: st, artist: sa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromLyricsOVH(title: st, artist: sa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromGenius(title: st, artist: sa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromAMLL(title: ot, artist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromLRCLIB(title: ot, artist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromLRCLIBSearch(title: ot, artist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
 
             for await result in group {
                 if let r = result {
                     results.append(r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count)")
 
-                    // 🔑 早期返回：仅高质量源（AMLL/NetEase/QQ）可触发
-                    // LRCLIB 等低层源即使分数够也不能取消高层源，避免丢失翻译和逐字同步
                     if r.score >= self.earlyReturnThreshold && self.earlyReturnSources.contains(r.source) {
                         DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold))")
+                        earlyReturned = true
                         group.cancelAll()
                         break
+                    }
+                }
+            }
+        }
+
+        // Phase 2: If early return fired, skip MetadataResolver entirely
+        if earlyReturned {
+            resolveTask.cancel()
+            return results.sorted { $0.score > $1.score }
+        }
+
+        // Phase 2: If MetadataResolver changed params, retry ALL sources with resolved params.
+        // Phase 1 with original params may match wrong songs (e.g., "Such a Perfect Day" → Lou Reed).
+        // Resolved CJK params yield correct matches — keep the higher score per source.
+        let (searchTitle, searchArtist) = await resolveTask.value
+        if searchTitle != ot || searchArtist != oa {
+            DebugLogger.log("🔄 元信息解析: '\(searchTitle)' by '\(searchArtist)' — retrying all sources")
+            let st = searchTitle, sa = searchArtist
+
+            await withTaskGroup(of: LyricsFetchResult?.self) { group in
+                group.addTask { await self.fetchFromAMLL(title: st, artist: sa, duration: d, translationEnabled: te) }
+                group.addTask { await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
+                group.addTask { await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
+                group.addTask { await self.fetchFromLRCLIB(title: st, artist: sa, duration: d, translationEnabled: te) }
+                group.addTask { await self.fetchFromLRCLIBSearch(title: st, artist: sa, duration: d, translationEnabled: te) }
+                group.addTask { await self.fetchFromLyricsOVH(title: st, artist: sa, duration: d, translationEnabled: te) }
+                group.addTask { await self.fetchFromGenius(title: st, artist: sa, duration: d, translationEnabled: te) }
+
+                for await result in group {
+                    if let r = result {
+                        results.append(r)
+                        DebugLogger.log("✅ [retry] \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count)")
                     }
                 }
             }
