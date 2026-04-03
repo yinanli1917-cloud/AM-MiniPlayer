@@ -110,10 +110,15 @@ public class MusicController: ObservableObject {
     // position polling and metadata reads. Without this, artwork extraction (1-3s)
     // blocks position polls, causing the serial-queue starvation that made osascript faster.
     var artworkApp: SBApplication?
-    let artworkQueue = DispatchQueue(label: "com.nanoPod.artwork", qos: .utility)
+    var artworkQueue = DispatchQueue(label: "com.nanoPod.artwork", qos: .utility)
 
     /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
     var artworkFetchingForKey: String?
+
+    /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
+    var sbAppliedForGeneration: Int = -1
+    /// artworkQueue 最近一次响应时间 — 超过 5s 未响应视为卡死，需重建
+    var lastArtworkQueueHeartbeat = Date()
 
     /// 封面获取代数：线程安全，用 os_unfair_lock 保护
     /// 每次切歌递增，旧代任务在 SB 队列排到时直接跳过
@@ -618,7 +623,7 @@ public class MusicController: ObservableObject {
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
         // fetchArtwork uses artworkQueue (separate SB instance) + API in parallel.
         // Empty persistentID = title-based dedup; cache backfill happens when SB returns ID.
-        fetchArtwork(for: name, artist: artist, album: album, persistentID: "")
+        fetchArtwork(for: name, artist: artist, album: album, persistentID: "", generation: generation)
         Task { @MainActor in
             self.lyricsService.fetchLyrics(for: name, artist: artist, duration: self.duration)
         }
@@ -880,8 +885,9 @@ public class MusicController: ObservableObject {
             debugPrint("🎵 [updatePlayerState] Track changed: \(s.trackName) by \(s.trackArtist)\n")
             logger.info("🎵 Track changed: \(s.trackName) by \(s.trackArtist)")
 
+            let generation = incrementGeneration()
             currentPersistentID = s.persistentID
-            fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID)
+            fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID, generation: generation)
             // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
             Task { @MainActor in
                 self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration)

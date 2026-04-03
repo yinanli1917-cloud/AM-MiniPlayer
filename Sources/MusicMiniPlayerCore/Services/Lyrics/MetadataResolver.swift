@@ -379,20 +379,25 @@ public final class MetadataResolver {
                 }
             }
 
+            let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
             var bestMatch: (String, String, String, Double)? = nil
             for await result in group {
                 if let r = result {
                     DebugLogger.log("MetadataResolver", "🔍 区域结果: '\(r.0)' by '\(r.1)' (region: \(r.2), Δ\(String(format: "%.2f", r.3))s)")
-                    // 🔑 优先选标题含 CJK 的结果（多区域解析核心目的是获取本地化标题）
-                    // 标题 CJK > 仅艺术家 CJK > 无 CJK，同级别时选时长最近
+                    // 🔑 Priority: titleMatch > titleCJK > hasCJK > closest duration
+                    // A correct-title result always beats a wrong-title CJK result.
+                    // e.g., JP "Street Dancer" by 岩崎宏美 beats KR "真夜中のドア" by Hiromi Iwasaki
+                    let rTitleMatch = LanguageUtils.normalizeTrackName(r.0).lowercased() == inputTitleNorm
                     let rTitleCJK = LanguageUtils.containsCJK(r.0)
                     let rHasCJK = rTitleCJK || LanguageUtils.containsCJK(r.1)
+                    let bestTitleMatch = bestMatch.map { LanguageUtils.normalizeTrackName($0.0).lowercased() == inputTitleNorm } ?? false
                     let bestTitleCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) } ?? false
                     let bestHasCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) || LanguageUtils.containsCJK($0.1) } ?? false
                     if bestMatch == nil ||
-                       (rTitleCJK && !bestTitleCJK) ||
-                       (rHasCJK && !bestHasCJK) ||
-                       (rTitleCJK == bestTitleCJK && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
+                       (rTitleMatch && !bestTitleMatch) ||
+                       (rTitleMatch == bestTitleMatch && rTitleCJK && !bestTitleCJK) ||
+                       (rTitleMatch == bestTitleMatch && rHasCJK && !bestHasCJK) ||
+                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
                         bestMatch = r
                     }
                 }

@@ -130,7 +130,8 @@ extension MusicController {
 
         // 🔑 复用 fetchArtwork 统一路径（缓存 → SB → API → 重试）
         DispatchQueue.main.async {
-            self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID)
+            let generation = self.incrementGeneration()
+            self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID, generation: generation)
         }
     }
 

@@ -61,8 +61,10 @@ extension MusicController {
         return currentTrackTitle == title
     }
 
-    func fetchArtwork(for title: String, artist: String, album: String, persistentID: String) {
-        logToFile("🎨 fetchArtwork: \(title) - \(artist)")
+    /// 🔑 generation 由调用方提供（handleTrackChange / applySnapshot 各自 incrementGeneration）
+    /// 不再内部递增 — 修复了双递增导致 handleTrackChange SB 块永远 stale 的 bug
+    func fetchArtwork(for title: String, artist: String, album: String, persistentID: String, generation: Int) {
+        logToFile("🎨 fetchArtwork: \(title) - \(artist) gen=\(generation)")
 
         // Check cache first（空 persistentID 跳过缓存）
         if !persistentID.isEmpty, let cached = artworkCache.object(forKey: persistentID as NSString) {
@@ -79,25 +81,17 @@ extension MusicController {
         }
         artworkFetchingForKey = fetchKey
 
-        // 🔑 递增封面代数，让旧任务自动跳过
-        artworkFetchGeneration += 1
-        let generation = artworkFetchGeneration
-
         logToFile("🎨 Cache MISS, starting concurrent fetch (SB + API in parallel)...")
 
-        // 🔑 Concurrent strategy: fire SB and API in parallel.
-        // SB queue may be blocked 10-23s by playlist scanning — if API is sequential
-        // after SB, radio tracks change before artwork arrives. Concurrent fetch ensures
-        // API artwork shows in 1-2s regardless of SB queue state.
-
-        // Path 1: API fetch — starts immediately, no SB queue dependency
+        // ━━━ Path 1: API fetch — starts immediately, no SB queue dependency ━━━
+        // API is provisional — if SB already applied for this generation, API result is discarded.
         Task { [weak self] in
             guard let self else { return }
             if let image = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
                 self.logToFile("🎨 [API] SUCCESS! Got image \(image.size)")
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
-                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title)
+                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, generation: generation, source: .api)
                 }
             } else {
                 self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
@@ -113,14 +107,23 @@ extension MusicController {
             }
         }
 
-        // Path 2: SB fetch on dedicated artworkQueue — never blocked by position polls.
-        // Uses artworkApp (separate SBApplication instance) so it runs in parallel.
+        // ━━━ Path 2: SB fetch — authoritative source, always overrides API ━━━
+        // 🔑 Queue health check: if artworkQueue hasn't responded in 5s, it's stuck
+        // (SB IPC can hang indefinitely when Music.app is loading radio metadata).
+        // Recreate queue + SB instance to recover — old thread leaks but is bounded.
+        if Date().timeIntervalSince(lastArtworkQueueHeartbeat) > 5.0 {
+            logToFile("🎨 [SB] artworkQueue stuck (no heartbeat >5s), recreating...")
+            artworkApp = SBApplication(bundleIdentifier: "com.apple.Music")
+            artworkQueue = DispatchQueue(label: "com.nanoPod.artwork.\(generation)", qos: .utility)
+            lastArtworkQueueHeartbeat = Date()
+        }
+
         artworkQueue.async { [weak self] in
-            guard let self = self,
-                  let app = self.artworkApp ?? self.musicApp,
-                  app.isRunning else {
-                return
-            }
+            guard let self = self else { return }
+            defer { DispatchQueue.main.async { self.lastArtworkQueueHeartbeat = Date() } }
+
+            guard let app = self.artworkApp ?? self.musicApp,
+                  app.isRunning else { return }
             guard self.artworkFetchGeneration == generation else {
                 self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
                 return
@@ -131,7 +134,7 @@ extension MusicController {
                 self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
                 DispatchQueue.main.async {
                     guard self.artworkFetchGeneration == generation else { return }
-                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title)
+                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, generation: generation, source: .sb)
                 }
             }
         }
@@ -309,11 +312,24 @@ extension MusicController {
         return artworkCache.object(forKey: persistentID as NSString)
     }
 
-    /// 封面获取成功后统一处理：验证当前歌曲 → 设置封面 → 缓存
+    enum ArtworkSource { case sb, api }
+
+    /// 封面获取成功后统一处理：验证当前歌曲 → 源优先级 → 设置封面 → 缓存
+    /// 🔑 SB 是权威源（与 Apple Music 显示一致）— 一旦 SB 应用，API 不可覆盖。
+    /// API 仅在 SB 尚未返回时作为临时显示。SB 到达后自动覆盖 API 结果。
     @MainActor
-    func applyArtworkIfCurrent(_ image: NSImage, persistentID: String, title: String) {
+    func applyArtworkIfCurrent(_ image: NSImage, persistentID: String, title: String, generation: Int, source: ArtworkSource) {
         guard isStillCurrentTrack(persistentID: persistentID, title: title) else { return }
+        guard artworkFetchGeneration == generation else { return }
+
+        // SB already applied for this generation — API must not overwrite
+        if source == .api && sbAppliedForGeneration == generation {
+            logToFile("🎨 [API] SB already applied for gen \(generation), discarding API result")
+            return
+        }
+
         setArtwork(image)
+        if source == .sb { sbAppliedForGeneration = generation }
         if !persistentID.isEmpty {
             artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
         }
@@ -321,43 +337,24 @@ extension MusicController {
 
     /// 延迟重试封面获取（电台首歌特殊处理）
     /// Music.app 刚开始播放电台时，封面数据可能尚未加载完成
-    func retryArtworkFetch(persistentID: String, title: String, artist: String, album: String, generation: Int? = nil) async {
+    /// 🔑 不再使用 withCheckedContinuation + artworkQueue — 如果 SB 卡死，continuation
+    /// 永远不会 resume，Task 永远挂起。初始 fetchArtwork 已经并行尝试了 SB，
+    /// 重试只走 API（不阻塞、不挂起）。
+    func retryArtworkFetch(persistentID: String, title: String, artist: String, album: String, generation: Int) async {
         guard await MainActor.run(body: { isStillCurrentTrack(persistentID: persistentID, title: title) }) else { return }
-        if let gen = generation {
-            let current = await MainActor.run { artworkFetchGeneration }
-            guard gen == current else {
-                debugPrint("⏭️ [retryArtworkFetch] stale gen \(gen) vs \(current), skipping\n")
-                return
-            }
-        }
-
-        debugPrint("🔄 [retryArtworkFetch] Retrying for \(title)...\n")
-
-        // 1. 先尝试 ScriptingBridge (on dedicated artwork queue)
-        let sbImage: NSImage? = await withCheckedContinuation { continuation in
-            artworkQueue.async { [weak self] in
-                guard let self = self,
-                      let app = self.artworkApp ?? self.musicApp,
-                      app.isRunning else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: self.getArtworkImageFromApp(app))
-            }
-        }
-
-        if let image = sbImage {
-            await applyArtworkIfCurrent(image, persistentID: persistentID, title: title)
-            debugPrint("✅ [retryArtworkFetch] ScriptingBridge retry success\n")
+        let current = await MainActor.run { artworkFetchGeneration }
+        guard generation == current else {
+            debugPrint("⏭️ [retryArtworkFetch] stale gen \(generation) vs \(current), skipping\n")
             return
         }
 
-        // 2. ScriptingBridge 仍然失败，再试网络 API
-        if let mkArtwork = await fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-            await applyArtworkIfCurrent(mkArtwork, persistentID: persistentID, title: title)
+        debugPrint("🔄 [retryArtworkFetch] Retrying API for \(title)...\n")
+
+        if let image = await fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+            await applyArtworkIfCurrent(image, persistentID: persistentID, title: title, generation: generation, source: .api)
             debugPrint("✅ [retryArtworkFetch] API retry success\n")
         } else {
-            debugPrint("⚠️ [retryArtworkFetch] All retries failed for \(title)\n")
+            debugPrint("⚠️ [retryArtworkFetch] API retry failed for \(title)\n")
         }
     }
 

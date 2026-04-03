@@ -127,17 +127,29 @@ struct LyricLineView: View {
                 Spacer(minLength: 0)
             }
 
-            // Translation line — sweep only for syllable-synced originals;
-            // line-level originals get static translation at matching opacity.
+            // Translation line — same view identity in all states (like SyllableSyncedLine)
+            // to prevent lag when switching between current/non-current.
             if internalShowTranslation, let translation = translationText {
-                if isCurrent && line.hasSyllableSync, let mc = musicController {
-                    TimelineView(.animation) { _ in
+                if line.hasSyllableSync {
+                    if isCurrent, let mc = musicController {
+                        TimelineView(.animation) { _ in
+                            TranslationSweepText(
+                                text: translation,
+                                words: line.words,
+                                lineStartTime: line.startTime,
+                                lineEndTime: line.endTime,
+                                currentTime: mc.wordFillTime,
+                                staticOpacity: nil
+                            )
+                        }
+                    } else {
                         TranslationSweepText(
                             text: translation,
                             words: line.words,
                             lineStartTime: line.startTime,
                             lineEndTime: line.endTime,
-                            currentTime: mc.wordFillTime
+                            currentTime: 0,
+                            staticOpacity: textOpacity * 0.75
                         )
                     }
                 } else {
@@ -232,6 +244,7 @@ private struct TranslationSweepText: View {
     let lineStartTime: TimeInterval
     let lineEndTime: TimeInterval
     let currentTime: TimeInterval
+    var staticOpacity: CGFloat? = nil  // non-nil → static rendering (non-current)
 
     /// Progress 0→1 matching the original lyrics' visual fill.
     private var lineProgress: CGFloat {
@@ -258,14 +271,19 @@ private struct TranslationSweepText: View {
                 Text(text)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.white)
-                    .textRenderer(TranslationSweepRenderer(progress: lineProgress))
+                    .textRenderer(TranslationSweepRenderer(
+                        progress: staticOpacity != nil ? 1.0 : lineProgress,
+                        currentTime: currentTime,
+                        lineEndTime: lineEndTime,
+                        staticOpacity: staticOpacity
+                    ))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .lineSpacing(4)
             } else {
                 Text(text)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.75))
+                    .foregroundColor(.white.opacity(staticOpacity ?? 0.75))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .lineSpacing(4)
@@ -281,6 +299,9 @@ private struct TranslationSweepText: View {
 @available(macOS 15.0, *)
 private struct TranslationSweepRenderer: TextRenderer {
     let progress: CGFloat
+    let currentTime: TimeInterval
+    let lineEndTime: TimeInterval
+    var staticOpacity: CGFloat? = nil  // non-nil → render at flat opacity (non-current)
     private let brightAlpha: CGFloat = 0.75
     private let dimAlpha: CGFloat = 0.20
     private let fadeHalfPt: CGFloat = 8
@@ -290,6 +311,16 @@ private struct TranslationSweepRenderer: TextRenderer {
     }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        // Static mode: flat opacity, no sweep (matching original lyrics' static path)
+        if let opacity = staticOpacity {
+            for run in layout.flattenedRuns {
+                var ctx = context
+                ctx.opacity = Double(opacity)
+                ctx.draw(run, options: .disablesSubpixelQuantization)
+            }
+            return
+        }
+
         let runs = Array(layout.flattenedRuns)
         let totalWidth = runs.reduce(CGFloat(0)) { $0 + $1.typographicBounds.rect.width }
         guard totalWidth > 0 else { return }
@@ -303,7 +334,11 @@ private struct TranslationSweepRenderer: TextRenderer {
         }
 
         // Pass 2: Bright overlay with per-run gradient mask (same as LyricsTextRenderer)
-        let brightBoost = brightAlpha - dimAlpha
+        // Apply postLineFadeOut so translation dims in sync with original lyrics.
+        // AMLL: translation_opacity = main_opacity × 0.3 — always proportional.
+        let fade = postLineFadeOut()
+        guard fade > 0 else { return }
+        let brightBoost = (brightAlpha - dimAlpha) * fade
         var cumWidth: CGFloat = 0
         for run in runs {
             let runRect = run.typographicBounds.rect
@@ -342,6 +377,16 @@ private struct TranslationSweepRenderer: TextRenderer {
 
             cumWidth += runRect.width
         }
+    }
+
+    /// Fade bright overlay after line ends — syncs with LyricsTextRenderer.postLineFadeOut.
+    private func postLineFadeOut() -> CGFloat {
+        let fadeOutDuration: TimeInterval = 1.5
+        let timeSinceLineEnd = currentTime - lineEndTime
+        guard timeSinceLineEnd > 0 else { return 1.0 }
+        if timeSinceLineEnd >= fadeOutDuration { return 0 }
+        let t = timeSinceLineEnd / fadeOutDuration
+        return CGFloat(1.0 - t * t)
     }
 }
 
@@ -539,7 +584,12 @@ private struct LyricsTextRenderer: TextRenderer {
     private let fadeHalfPt: CGFloat = 12
 
     var displayPadding: EdgeInsets {
-        EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
+        // Top 10: emphasis float (-2pt), lift, charFloat, glow all extend upward.
+        // Bottom 4: only glow shadow extends down (max radius ~6pt, gaussian falloff;
+        // 4pt captures the visible portion). Emphasis float/lift/spread go UP not down.
+        // Keeping bottom tight prevents a disproportionate gap before translation
+        // on short multi-line lyrics (2-3 visual lines).
+        EdgeInsets(top: 10, leading: 10, bottom: 4, trailing: 10)
     }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
@@ -553,13 +603,12 @@ private struct LyricsTextRenderer: TextRenderer {
             return
         }
 
-        // ── Pass 1: Dim base layer (ALL words, including emphasis) ──
-        // Every word gets a dim base at its baseFloat position. Pass 2 adds
-        // the bright overlay on top. For emphasis words, the minor ghost during
-        // active transforms is imperceptible because Pass 2's bright mask
-        // dominates visually. After emphasis ends (charEasing→0), transforms
-        // converge to identity and both passes align exactly — no blink.
+        // ── Pass 1: Dim base layer (non-emphasis words only) ──
+        // Emphasis words are fully handled by drawEmphasisBright (single layer
+        // with gradient mask for both bright and dim regions). Drawing them here
+        // would create a ghost at the untransformed position — visible 割裂感.
         for run in layout.flattenedRuns {
+            if let attr = run[WordTimingAttribute.self], attr.isEmphasis { continue }
             var ctx = context
             ctx.opacity = Double(dimAlpha)
             if let attr = run[WordTimingAttribute.self] {
@@ -581,10 +630,15 @@ private struct LyricsTextRenderer: TextRenderer {
             guard let attr = run[WordTimingAttribute.self] else { continue }
             let duration = attr.endTime - attr.startTime
             let progress = wordProgress(attr, duration)
-            guard progress > 0 else { continue }
+            // Non-emphasis: Pass 1 provides dim base, skip when not yet started.
+            // Emphasis: no Pass 1 — must draw here at dimAlpha even before startTime.
+            guard progress > 0 || attr.isEmphasis else { continue }
 
             let postLineFade = postLineFadeOut(attr)
-            guard postLineFade > 0 else { continue }
+            // Non-emphasis: Pass 1 provides dim base, so skip when fade is done.
+            // Emphasis: no Pass 1 ghost — drawEmphasisBright handles both bright
+            // and dim regions via gradient mask (converges to uniform dimAlpha at fade=0).
+            if postLineFade <= 0 && !attr.isEmphasis { continue }
 
             let floatY = baseFloat(for: attr)
 
@@ -649,7 +703,10 @@ private struct LyricsTextRenderer: TextRenderer {
         let runRect = run.typographicBounds.rect
         let sweepX = runRect.minX + runRect.width * progress
         let glyphCount = max(1, run.count)
-        let bright = Color.white.opacity(Double(brightAlpha * fade))
+        // Bright floor = dimAlpha: when fade→0, bright converges to dim → uniform dimAlpha.
+        // No Pass 1 ghost needed — single layer handles the full lifecycle.
+        let effectiveBright = max(brightAlpha * fade, dimAlpha)
+        let bright = Color.white.opacity(Double(effectiveBright))
         let dim = Color.white.opacity(Double(dimAlpha))
 
         context.drawLayer { layerCtx in
