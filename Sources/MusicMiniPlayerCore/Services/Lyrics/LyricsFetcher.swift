@@ -57,14 +57,11 @@ public final class LyricsFetcher {
     // syllable sync, translations, and better matching.
     private let earlyReturnThreshold: Double = 70.0
     private let earlyReturnSources: Set<String> = ["AMLL", "NetEase", "QQ"]
-    // Phase 2 skip: if Phase 1 already found decent lyrics, retrying with resolved metadata
-    // yields marginal improvement at ~3-6s cost. Threshold 50 = decent synced lyrics.
-    private let phase2SkipThreshold: Double = 50.0
-
     /// 并行获取所有歌词源（含早期返回优化）
-    /// Overlapping two-phase pipeline: Phase 1 starts all sources with original params,
-    /// Phase 2 launches as soon as MetadataResolver resolves (during Phase 1), so both
-    /// phases run concurrently. Phase 2 is skipped if Phase 1 already has good results.
+    /// Simple sources (AMLL/LRCLIB/lyrics.ovh/Genius) start immediately with original params.
+    /// High-tier sources (NetEase/QQ) wait for MetadataResolver — they need resolved CJK params
+    /// for correct matching (original params can match wrong songs by the same artist).
+    /// MetadataResolver runs concurrently with simple sources, not blocking them.
     public func fetchAllSources(
         title: String,
         artist: String,
@@ -78,52 +75,35 @@ public final class LyricsFetcher {
         let ot = cleanTitle, oa = cleanArtist
         let d = duration, te = translationEnabled
 
-        // 🔑 MetadataResolver runs concurrently — does NOT block fetchers
+        // 🔑 MetadataResolver starts immediately, shared between NetEase and QQ
         let resolveTask = Task {
             await self.metadataResolver.resolveSearchMetadata(
                 title: cleanTitle, artist: cleanArtist, duration: duration
             )
         }
 
-        // 🔑 Phase 2 launches as soon as MetadataResolver resolves — overlaps with Phase 1.
-        // If resolver returns same params, Phase 2 produces no results (zero cost).
-        // If Phase 1 finds good results, Phase 2 is cancelled before completion.
-        let phase2Task = Task<[LyricsFetchResult], Never> { [self] in
-            let (st, sa) = await resolveTask.value
-            guard st != ot || sa != oa else { return [] }
-            guard !Task.isCancelled else { return [] }
-            DebugLogger.log("🔄 Phase 2 开始: '\(st)' by '\(sa)'")
-            return await withTaskGroup(of: LyricsFetchResult?.self) { group in
-                group.addTask { await self.fetchFromAMLL(title: st, artist: sa, duration: d, translationEnabled: te) }
-                group.addTask { await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
-                group.addTask { await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
-                group.addTask { await self.fetchFromLRCLIB(title: st, artist: sa, duration: d, translationEnabled: te) }
-                group.addTask { await self.fetchFromLRCLIBSearch(title: st, artist: sa, duration: d, translationEnabled: te) }
-                group.addTask { await self.fetchFromLyricsOVH(title: st, artist: sa, duration: d, translationEnabled: te) }
-                group.addTask { await self.fetchFromGenius(title: st, artist: sa, duration: d, translationEnabled: te) }
-                var p2: [LyricsFetchResult] = []
-                for await result in group {
-                    if let r = result {
-                        p2.append(r)
-                        DebugLogger.log("✅ [P2] \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count)")
-                    }
-                }
-                return p2
-            }
-        }
-
-        // Phase 1: All 7 sources start immediately with original params
         var results: [LyricsFetchResult] = []
-        var earlyReturned = false
 
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            // Simple sources: start immediately with original params
             group.addTask { await self.fetchFromAMLL(title: ot, artist: oa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLRCLIB(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLRCLIBSearch(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
+
+            // High-tier sources: wait for MetadataResolver, then fetch with resolved params
+            group.addTask {
+                let (st, sa) = await resolveTask.value
+                if st != ot || sa != oa {
+                    DebugLogger.log("🔄 元信息解析: '\(st)' by '\(sa)'")
+                }
+                return await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+            }
+            group.addTask {
+                let (st, sa) = await resolveTask.value
+                return await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+            }
 
             for await result in group {
                 if let r = result {
@@ -132,7 +112,6 @@ public final class LyricsFetcher {
 
                     if r.score >= self.earlyReturnThreshold && self.earlyReturnSources.contains(r.source) {
                         DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold))")
-                        earlyReturned = true
                         group.cancelAll()
                         break
                     }
@@ -140,21 +119,6 @@ public final class LyricsFetcher {
             }
         }
 
-        // 🔑 Phase 1 done. Skip Phase 2 if Phase 1 already has decent lyrics —
-        // retrying with resolved metadata yields marginal improvement at ~3s cost.
-        let bestPhase1Score = results.max(by: { $0.score < $1.score })?.score ?? 0
-        if earlyReturned || bestPhase1Score >= phase2SkipThreshold {
-            if !earlyReturned {
-                DebugLogger.log("⏩ Phase 2 跳过: Phase 1 最佳 \(String(format: "%.1f", bestPhase1Score)) >= \(Int(phase2SkipThreshold))")
-            }
-            phase2Task.cancel()
-            resolveTask.cancel()
-            return results.sorted { $0.score > $1.score }
-        }
-
-        // Phase 2 already running — just await its results
-        let phase2Results = await phase2Task.value
-        results.append(contentsOf: phase2Results)
         return results.sorted { $0.score > $1.score }
     }
 
@@ -183,8 +147,11 @@ public final class LyricsFetcher {
     public func rescaleTimestamps(_ lyrics: [LyricLine], duration: TimeInterval) -> [LyricLine] {
         guard lyrics.count >= 2, duration > 0 else { return lyrics }
 
+        // Trigger on startTime OR endTime overshoot — version mismatches cause
+        // proportional drift that may only show in endTime (e.g., 眷戀: lastStart 233 < 238, lastEnd 242.9 > 238)
         let lastStart = lyrics.last!.startTime
-        guard lastStart > duration else { return lyrics }
+        let lastEnd = lyrics.last!.endTime
+        guard lastStart > duration || lastEnd > duration + 1.0 else { return lyrics }
 
         let firstStart = lyrics.first!.startTime
         let lyricsSpan = lastStart - firstStart

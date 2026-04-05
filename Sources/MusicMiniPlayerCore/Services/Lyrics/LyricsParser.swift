@@ -743,11 +743,12 @@ public final class LyricsParser {
             guard let range = trimmed.range(of: sep) else { continue }
             let label = String(trimmed[trimmed.startIndex..<range.lowerBound])
             let value = String(trimmed[range.upperBound...])
-            // 标签短（≤15字符）+ 值非空 + 值像信用（含分隔符 或 短标签是 CJK）
-            guard label.count <= 15, !value.isEmpty else { continue }
+            // 标签 ≤30字符（覆盖双语如 "弦乐编写 Strings Arrangement"）+ 值非空
+            guard label.count <= 30, !value.isEmpty else { continue }
             let labelTrimmed = label.trimmingCharacters(in: .whitespaces)
-            let hasSeparators = value.contains("/") || value.contains(";") || value.contains("；")
-            let isCJKLabel = LanguageUtils.containsCJK(labelTrimmed) && labelTrimmed.count <= 4
+            // "、" covers CJK name lists (Michelle Kim、Virginia Frazier)
+            let hasSeparators = value.contains("/") || value.contains(";") || value.contains("；") || value.contains("、")
+            let isCJKLabel = LanguageUtils.containsCJK(labelTrimmed) && labelTrimmed.count <= 8
             if hasSeparators || isCJKLabel || value.count <= 20 {
                 return true
             }
