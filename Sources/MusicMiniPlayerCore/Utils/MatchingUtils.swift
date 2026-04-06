@@ -173,8 +173,12 @@ public enum MatchingUtils {
         public let artistMatch: Bool
 
         /// 是否通过最低质量阈值
+        /// When title AND artist both match, allow larger duration tolerance (15s)
+        /// for same-song-different-version scenarios. rescaleTimestamps handles the rest.
         public var isAcceptable: Bool {
-            score >= 50 && durationDiff < 5
+            guard score >= 50 else { return false }
+            if titleMatch && artistMatch { return durationDiff < 15 }
+            return durationDiff < 5
         }
     }
 
