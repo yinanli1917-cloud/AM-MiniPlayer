@@ -5,7 +5,7 @@
  *
  * 用法:
  *   swift run LyricsVerifier run [--case ID]
- *   swift run LyricsVerifier check "歌名" "艺术家" 秒数
+ *   swift run LyricsVerifier check "歌名" "艺术家" [秒数]  (秒数省略自动查询)
  *   swift run LyricsVerifier library [--recent N]
  *   swift run LyricsVerifier benchmark [--region CODE] [--no-local-translation]
  */
@@ -89,12 +89,26 @@ private func runPredefined(args: [String]) async {
 private func runAdHoc(args: [String]) async {
     let dumpMode = args.contains("--dump")
     let filtered = args.filter { $0 != "--dump" }
-    guard filtered.count >= 3, let dur = Double(filtered[2]) else {
-        log("用法: LyricsVerifier check \"歌名\" \"艺术家\" 秒数 [--dump]")
+    guard filtered.count >= 2 else {
+        log("用法: LyricsVerifier check \"歌名\" \"艺术家\" [秒数] [--dump]")
+        log("  秒数省略时自动从 iTunes API 查询")
         exit(1)
     }
 
     let title = filtered[0], artist = filtered[1]
+    let dur: Double
+    if filtered.count >= 3, let explicit = Double(filtered[2]) {
+        dur = explicit
+    } else {
+        log("⏳ 未指定时长，从 iTunes API 自动查询...")
+        dur = await lookupDuration(title: title, artist: artist)
+        guard dur > 0 else {
+            log("❌ iTunes API 未找到 \"\(title)\" - \(artist)，请手动指定秒数")
+            exit(1)
+        }
+        log("✅ 自动检测时长: \(Int(dur))s")
+    }
+
     log("=== check \"\(title)\" - \(artist) (\(Int(dur))s) ===\n")
 
     let (r, lyrics) = await testSongWithLyrics(
@@ -263,13 +277,54 @@ private func emitBenchmarkJSON(_ result: BenchmarkResult) {
     print(json)
 }
 
+// =========================================================================
+// MARK: - iTunes API Duration Lookup
+// =========================================================================
+
+/// Query iTunes Search API to find the correct duration for a song.
+/// Returns the best-matching track's duration in seconds, or 0 if not found.
+private func lookupDuration(title: String, artist: String) async -> Double {
+    let query = "\(title) \(artist)"
+    guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+          let url = URL(string: "https://itunes.apple.com/search?term=\(encoded)&entity=song&limit=10") else { return 0 }
+
+    do {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [[String: Any]] else { return 0 }
+
+        let titleLower = title.lowercased()
+        let artistLower = artist.lowercased()
+
+        // Find best match: exact title + artist match, closest to first result
+        for result in results {
+            guard let trackName = result["trackName"] as? String,
+                  let artistName = result["artistName"] as? String,
+                  let millis = result["trackTimeMillis"] as? Int else { continue }
+            if trackName.lowercased() == titleLower &&
+               artistName.lowercased().contains(artistLower) {
+                return Double(millis) / 1000.0
+            }
+        }
+        // Fallback: first result with matching artist
+        for result in results {
+            guard let artistName = result["artistName"] as? String,
+                  let millis = result["trackTimeMillis"] as? Int else { continue }
+            if artistName.lowercased().contains(artistLower) {
+                return Double(millis) / 1000.0
+            }
+        }
+    } catch {}
+    return 0
+}
+
 private func printUsage() {
     log("""
     LyricsVerifier - nanoPod 歌词管线测试工具
 
     用法:
       swift run LyricsVerifier run [--case ID]                           跑预定义测试用例
-      swift run LyricsVerifier check "歌名" "艺术家" N                    临时测试单首歌
+      swift run LyricsVerifier check "歌名" "艺术家" [秒数]               临时测试（秒数可省略，自动查询）
       swift run LyricsVerifier library [--recent N]                      从 AM 资料库取歌测试
       swift run LyricsVerifier benchmark [--region CODE] [--no-local-translation]  全球基准测试
     """)
