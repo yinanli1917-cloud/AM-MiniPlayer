@@ -279,4 +279,56 @@ final class LyricsScorerTests: XCTestCase {
         XCTAssertLessThan(score, 15,
             "22 fabricated lines scored \(score), should be < 15 with duration/coverage gated")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Massive timestamp overshoot (wrong song match)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Build lyrics with non-uniform (authentic) timestamps to bypass fabrication gate
+    private func makeAuthenticLyrics(
+        count: Int,
+        duration: TimeInterval,
+        withWords: Bool = false,
+        withTranslation: Bool = false
+    ) -> [LyricLine] {
+        // Non-uniform spacing: vary ±30% per line so CV >> 0.15
+        var time: Double = 0
+        let baseInterval = duration / Double(count)
+        return (0..<count).map { i in
+            let jitter = baseInterval * (0.7 + Double(i % 5) * 0.15) // 0.7x..1.3x
+            let start = time
+            let end = start + jitter
+            time = end
+            let text = "歌詞第\(i)行、内容十分に長い"
+            let words = withWords
+                ? [LyricWord(word: text, startTime: start, endTime: end)]
+                : []
+            return LyricLine(
+                text: text, startTime: start, endTime: end,
+                words: words, translation: withTranslation ? "翻訳\(i)" : nil
+            )
+        }
+    }
+
+    /// AMLL matched "If" (184s) to a 70-min Japanese song (4200s timestamps).
+    /// Syllable sync + translation bonus inflated score to 73 despite 23x overshoot.
+    /// The scorer must reject lyrics whose timestamps massively exceed song duration.
+    func testMassiveOvershoot_rejectsWrongSong() {
+        let songDuration: TimeInterval = 184
+        let wrongDuration: TimeInterval = 4200
+        let lines = makeAuthenticLyrics(count: 50, duration: wrongDuration, withWords: true, withTranslation: true)
+        let score = scorer.calculateScore(lines, source: "AMLL", duration: songDuration, translationEnabled: true)
+        XCTAssertLessThan(score, 0,
+            "50 syllable-synced lines at 23x overshoot scored \(score), must be negative to prevent selection")
+    }
+
+    /// Moderate overshoot (live version 15% longer) should be penalized but not obliterated.
+    func testModerateOvershoot_penalizedNotRejected() {
+        let songDuration: TimeInterval = 240
+        let liveVersionDuration: TimeInterval = 276  // 15% longer
+        let lines = makeAuthenticLyrics(count: 30, duration: liveVersionDuration, withWords: true)
+        let score = scorer.calculateScore(lines, source: "NetEase", duration: songDuration, translationEnabled: false)
+        XCTAssertGreaterThan(score, 20,
+            "30 syllable-synced lines at 15% overshoot scored \(score), should still be viable")
+    }
 }

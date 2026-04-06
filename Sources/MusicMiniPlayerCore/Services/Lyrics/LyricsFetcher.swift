@@ -575,7 +575,12 @@ public final class LyricsFetcher {
             let inputArtistIsCJK = params.artistPairs.contains { LanguageUtils.containsCJK($0.0) }
             let isCrossScriptArtist = (inputArtistIsASCII && resultArtistIsCJK) || (inputArtistIsCJK && resultArtistIsASCII)
 
-            if !artistMatch && titleMatch && isCrossScriptArtist {
+            // 🔑 Only apply cross-script tolerance when input has ONE script variant.
+            // When MetadataResolver already resolved both scripts (Perry Como + 派瑞柯莫),
+            // normal matching covers all cases. Without this guard, ANY ASCII result artist
+            // gets a free pass because inputArtistIsCJK=true matches resultArtistIsASCII=true.
+            let inputHasBothScripts = inputArtistIsASCII && inputArtistIsCJK
+            if !artistMatch && titleMatch && isCrossScriptArtist && !inputHasBothScripts {
                 artistMatch = true
             }
 

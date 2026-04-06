@@ -79,8 +79,10 @@ public final class LyricsScorer {
         if duration > 0 && authenticity != .fabricated {
             let lastStart = lyrics.last?.startTime ?? 0
             if lastStart > duration {
+                // Uncapped: a 23x overshoot (wrong song) yields -2183, effectively rejected.
+                // A 10% overshoot (live version) yields -10, still viable.
                 let overshootRatio = (lastStart - duration) / duration
-                score -= min(15, overshootRatio * 100)
+                score -= overshootRatio * 100
             } else {
                 let lyricsDuration = (lyrics.last?.endTime ?? 0) - (lyrics.first?.startTime ?? 0)
                 let durationDiff = abs(lyricsDuration - duration)
