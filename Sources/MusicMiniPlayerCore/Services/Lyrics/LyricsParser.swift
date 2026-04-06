@@ -377,12 +377,18 @@ public final class LyricsParser {
 
         guard !textLines.isEmpty else { return [] }
 
-        let timePerLine = duration / Double(textLines.count)
+        // Most songs have an intro (5-15s) and outro. Distributing from 0→duration
+        // makes lyrics appear ahead during the intro. Reserve 8% intro + 5% outro
+        // so fabricated timestamps approximate real song structure.
+        let introMargin = duration * 0.08
+        let outroMargin = duration * 0.05
+        let activeSpan = duration - introMargin - outroMargin
+        let timePerLine = activeSpan / Double(textLines.count)
         return textLines.enumerated().map { index, text in
             LyricLine(
                 text: text,
-                startTime: Double(index) * timePerLine,
-                endTime: Double(index + 1) * timePerLine
+                startTime: introMargin + Double(index) * timePerLine,
+                endTime: introMargin + Double(index + 1) * timePerLine
             )
         }
     }

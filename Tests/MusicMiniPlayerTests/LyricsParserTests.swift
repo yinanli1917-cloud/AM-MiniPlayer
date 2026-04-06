@@ -244,12 +244,17 @@ final class LyricsParserTests: XCTestCase {
         let lines = parser.createUnsyncedLyrics(text, duration: 90)
 
         XCTAssertEqual(lines.count, 3)
-        // 每行 30 秒
-        XCTAssertEqual(lines[0].startTime, 0, accuracy: 0.01)
-        XCTAssertEqual(lines[0].endTime, 30, accuracy: 0.01)
-        XCTAssertEqual(lines[1].startTime, 30, accuracy: 0.01)
-        XCTAssertEqual(lines[2].startTime, 60, accuracy: 0.01)
-        XCTAssertEqual(lines[2].endTime, 90, accuracy: 0.01)
+        // 8% intro margin (7.2s) + 5% outro margin (4.5s) → active span 78.3s → 26.1s/line
+        let intro = 90 * 0.08  // 7.2
+        let active = 90 * 0.87 // 78.3
+        let perLine = active / 3 // 26.1
+        XCTAssertEqual(lines[0].startTime, intro, accuracy: 0.01)
+        XCTAssertEqual(lines[0].endTime, intro + perLine, accuracy: 0.01)
+        XCTAssertEqual(lines[1].startTime, intro + perLine, accuracy: 0.01)
+        XCTAssertEqual(lines[2].startTime, intro + 2 * perLine, accuracy: 0.01)
+        XCTAssertEqual(lines[2].endTime, intro + 3 * perLine, accuracy: 0.01)
+        // Last line ends before song end (outro margin preserved)
+        XCTAssertLessThan(lines[2].endTime, 90)
     }
 
     func testCreateUnsyncedLyrics_emptyInput() {
