@@ -156,10 +156,12 @@ public class LyricsService: ObservableObject {
 
         let songID = "\(title)-\(artist)"
 
-        // 🔑 允许用有效 duration 重试（解决 playerInfoChanged duration=0 竞态）
-        // 场景：通知先到（duration=0）→ 匹配失败 → 轮询后到（duration 正确）→ 重新获取
+        // 🔑 允许用更准确的 duration 重试（解决 notification 竞态）
+        // 场景 1：通知先到（duration=0）→ 匹配失败 → SB 轮询后到（duration 正确）→ 重新获取
+        // 场景 2：通知带的是上一首歌的 duration → 匹配错误歌词 → SB 返回正确 duration → 重新获取
         let canRetryWithBetterDuration = songID == currentSongID && !forceRefresh
-            && duration > 0 && currentSongDuration == 0
+            && duration > 0
+            && (currentSongDuration == 0 || abs(duration - currentSongDuration) > 1.0)
 
         // 避免重复获取
         guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration else {
@@ -186,6 +188,12 @@ public class LyricsService: ObservableObject {
         // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
         clearAllTranslations()
 
+        // 🔑 Cancel old fetch task early — before cache check.
+        // Even on cache hit, the old task should stop to avoid wasted network I/O.
+        // (performFetch still caches results if already past the network call.)
+        currentFetchTask?.cancel()
+        currentFetchTask = nil
+
         // 检查缓存（带过期检查）
         if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
             DebugLogger.log("LyricsService", "📦 缓存命中: '\(songID)' (isNoLyrics=\(cached.isNoLyrics), lines=\(cached.lyrics.count))")
@@ -210,12 +218,11 @@ public class LyricsService: ObservableObject {
             applyLyrics(cached.lyrics,
                         firstRealLyricIndex: cached.firstRealLyricIndex,
                         hasSourceTranslation: cachedHasActualTranslation,  // 🔑 使用实际翻译状态
-                        songID: songID)
+                        songID: songID,
+                        duration: duration)
             return
         }
 
-        // 取消旧任务
-        currentFetchTask?.cancel()
         currentSongID = songID
         currentSongDuration = duration
 
@@ -235,7 +242,7 @@ public class LyricsService: ObservableObject {
     }
 
     private func performFetch(title: String, artist: String, duration: TimeInterval, songID: String) async {
-        // 检查任务是否被取消
+        // 🔑 Early exit only if cancelled BEFORE network starts (no work wasted)
         guard !Task.isCancelled else { return }
 
         // 并行获取所有歌词源
@@ -246,18 +253,16 @@ public class LyricsService: ObservableObject {
             translationEnabled: showTranslation
         )
 
-        // 🔑 关键：验证 songID 仍然匹配（防止旧任务覆盖新结果）
-        let currentID = await MainActor.run { currentSongID }
-        guard currentID == songID else {
-            DebugLogger.log("LyricsService", "⚠️ Song changed during fetch, discarding: \(songID)")
-            return
-        }
-
-        // 🔑 取消检查：fetch 完成后再验证，防止已取消的 Task 设置 error
-        guard !Task.isCancelled else { return }
-
         // 选择最佳结果
         guard let bestLyrics = fetcher.selectBest(from: results), !bestLyrics.isEmpty else {
+            // 🔑 CRITICAL: Do NOT cache "No Lyrics" if the task was cancelled.
+            // Cancellation kills HTTP requests mid-flight → fetchAllSources returns [] →
+            // selectBest([]) returns nil. This is NOT "no lyrics exist" — it's
+            // "we didn't finish checking". Caching it poisons the cache.
+            if Task.isCancelled {
+                DebugLogger.log("LyricsService", "⏭️ Task cancelled, NOT caching empty results: '\(songID)'")
+                return
+            }
             DebugLogger.log("LyricsService", "❌ SEARCH NO RESULTS: '\(songID)' dur=\(duration) sources=\(results.count)")
             let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
             lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
@@ -279,25 +284,27 @@ public class LyricsService: ObservableObject {
         // 检查是否有歌词源翻译
         let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
 
-        // 缓存结果
+        // 🔑 Cache real lyrics even if song changed or task was cancelled — valid data.
+        // (Only "No Lyrics" is unsafe to cache on cancellation.)
         let cacheItem = CachedLyricsItem(
             lyrics: processed.lyrics,
             firstRealLyricIndex: processed.firstRealLyricIndex,
             hasSourceTranslation: hasSourceTranslation
         )
         lyricsCache.setObject(cacheItem, forKey: songID as NSString)
+        DebugLogger.log("LyricsService", "📦 Cached: '\(songID)' (\(processed.lyrics.count) lines)")
 
-        // 应用歌词
+        // 🔑 Only apply to UI if this is still the current song
         await MainActor.run {
-            // 🔑 再次验证 songID（MainActor.run 可能有延迟）
             guard self.currentSongID == songID else {
-                DebugLogger.log("LyricsService", "⚠️ Song changed before apply, discarding: \(songID)")
+                DebugLogger.log("LyricsService", "⏭️ Cached but not current song, skipping apply: \(songID)")
                 return
             }
             applyLyrics(processed.lyrics,
                         firstRealLyricIndex: processed.firstRealLyricIndex,
                         hasSourceTranslation: hasSourceTranslation,
-                        songID: songID)
+                        songID: songID,
+                        duration: duration)
         }
     }
 
@@ -305,7 +312,8 @@ public class LyricsService: ObservableObject {
     private func applyLyrics(_ newLyrics: [LyricLine],
                              firstRealLyricIndex: Int,
                              hasSourceTranslation: Bool,
-                             songID: String) {
+                             songID: String,
+                             duration: TimeInterval) {
         self.lyrics = newLyrics
         self.firstRealLyricIndex = firstRealLyricIndex
         self.translationsAreFromLyricsSource = hasSourceTranslation
@@ -313,6 +321,7 @@ public class LyricsService: ObservableObject {
         self.error = nil  // 🔑 歌词成功加载，清除旧 error（防止 duration 竞态导致 retry 残留）
         self.currentLineIndex = nil
         self.currentSongID = songID
+        self.currentSongDuration = duration
 
         // 🔑 延迟触发翻译，避免与 lyrics 更新同时发生导致 SwiftUI AttributeGraph 递归
         if showTranslation {
@@ -431,7 +440,11 @@ public class LyricsService: ObservableObject {
         isTranslating = true
         translationFailed = false
         defer { isTranslating = false }
-        debugLogPublic("🔄 开始翻译: \(lyrics.count) 行")
+
+        // 🔑 Snapshot song identity + lyrics count BEFORE await suspension point
+        let songIDBeforeAwait = currentSongID
+        let lyricsCountBeforeAwait = lyrics.count
+        debugLogPublic("🔄 开始翻译: \(lyricsCountBeforeAwait) 行")
 
         // 🔑 Filter out vocable lines BEFORE sending to translation API
         // Vocables (woo, la la, oh oh) cause hallucinated translations
@@ -447,6 +460,12 @@ public class LyricsService: ObservableObject {
             debugLogPublic("❌ 翻译失败")
             translationFailed = true
             currentSongTranslationID = translationID  // Prevent retry for same song
+            return
+        }
+
+        // 🔑 After await: song may have changed — verify before writing back
+        guard currentSongID == songIDBeforeAwait, lyrics.count == lyricsCountBeforeAwait else {
+            debugLogPublic("⚠️ Song changed during translation, discarding results")
             return
         }
 

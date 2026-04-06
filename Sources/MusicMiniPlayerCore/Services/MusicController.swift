@@ -624,8 +624,12 @@ public class MusicController: ObservableObject {
         // fetchArtwork uses artworkQueue (separate SB instance) + API in parallel.
         // Empty persistentID = title-based dedup; cache backfill happens when SB returns ID.
         fetchArtwork(for: name, artist: artist, album: album, persistentID: "", generation: generation)
+        // 🔑 Capture duration NOW — Task { @MainActor } defers execution.
+        // During rapid switching, later notifications' GCD blocks run before earlier Tasks,
+        // so self.duration may already reflect a different song by execution time.
+        let capturedDuration = self.duration
         Task { @MainActor in
-            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: self.duration)
+            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: capturedDuration)
         }
 
         // ━━━ PARALLEL: persistentID + duration + queue refresh on SB queue ━━━
@@ -635,13 +639,26 @@ public class MusicController: ObservableObject {
 
             var persistentID = ""
             var sbDuration: Double = 0
+            var sbTrackName: String?
             if let currentTrack = app.value(forKey: "currentTrack") as? NSObject {
                 persistentID = currentTrack.value(forKey: "persistentID") as? String ?? ""
-                if let sbName = currentTrack.value(forKey: "name") as? String,
+                sbTrackName = currentTrack.value(forKey: "name") as? String
+                if let sbName = sbTrackName,
                    sbName == name,
                    let dur = currentTrack.value(forKey: "duration") as? Double, dur > 0 {
                     sbDuration = dur
                 }
+            }
+
+            // 🔑 SB reports a DIFFERENT track than the notification said — Music.app
+            // moved faster than the notification (common during rapid switching).
+            // Trigger a full state refresh to pick up the actual current track.
+            if let sbName = sbTrackName, sbName != name, !sbName.isEmpty {
+                DebugLogger.log("TrackChange", "⚠️ SB track mismatch: notification='\(name)' actual='\(sbName)' → forcing full refresh")
+                DispatchQueue.main.async {
+                    self.updatePlayerState()
+                }
+                return
             }
 
             DispatchQueue.main.async {
@@ -655,9 +672,12 @@ public class MusicController: ObservableObject {
                 }
 
                 if sbDuration > 0 {
+                    // 🔑 Save old duration BEFORE overwriting — comparing after
+                    // overwrite was a no-op bug (always 0, re-fetch never fired)
+                    let oldDuration = self.duration
                     self.duration = sbDuration
                     // Re-fetch lyrics if SB duration differs significantly from notification
-                    if abs(sbDuration - self.duration) > 1.0 {
+                    if abs(sbDuration - oldDuration) > 1.0 {
                         Task { @MainActor in
                             self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration)
                         }
@@ -688,7 +708,15 @@ public class MusicController: ObservableObject {
                sbName == name,
                let dur = currentTrack.value(forKey: "duration") as? Double, dur > 0 {
                 DispatchQueue.main.async {
+                    let oldDuration = self.duration
                     self.duration = dur
+                    // 🔑 Duration recovered from 0 — re-fetch lyrics with correct duration.
+                    // Without this, lyrics stay at "No Lyrics" even though duration is now valid.
+                    if abs(dur - oldDuration) > 1.0 {
+                        Task { @MainActor in
+                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur)
+                        }
+                    }
                 }
             }
         }
