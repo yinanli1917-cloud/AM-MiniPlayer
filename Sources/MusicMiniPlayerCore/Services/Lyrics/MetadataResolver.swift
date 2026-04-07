@@ -208,13 +208,31 @@ public final class MetadataResolver {
         let inputTitleLower = title.lowercased()
         let cleanedInputTitle = cleanTrackTitle(inputTitleLower)
 
-        for searchTerm in searchTerms {
-            guard let results = await searchITunes(term: searchTerm, region: "CN") else {
-                DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(searchTerm)' 无结果")
-                continue
+        // 🔑 Parallel fetch — fire all 3 search terms simultaneously.
+        // Was sequential: 3 × 1-2s = 3-6s. Now: max(latencies) ≈ 1-2s.
+        var fetchedResults: [(String, [[String: Any]])] = []
+        await withTaskGroup(of: (Int, String, [[String: Any]]?).self) { group in
+            for (i, searchTerm) in searchTerms.enumerated() {
+                group.addTask {
+                    let results = await self.searchITunes(term: searchTerm, region: "CN")
+                    return (i, searchTerm, results)
+                }
             }
-            DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(searchTerm)' 返回 \(results.count) 条")
+            var indexed: [(Int, String, [[String: Any]])] = []
+            for await (i, term, results) in group {
+                if let r = results {
+                    DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(term)' 返回 \(r.count) 条")
+                    indexed.append((i, term, r))
+                } else {
+                    DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(term)' 无结果")
+                }
+            }
+            // Preserve original processing order for promoteSafeTranslatedCandidates semantics
+            fetchedResults = indexed.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
+        }
 
+        // Sequential candidate processing (fast CPU-only, preserves original semantics)
+        for (searchTerm, results) in fetchedResults {
             // 翻译候选按搜索轮次独立追踪（避免 artist-only 搜索的多结果污染）
             var roundTranslated: [CNCandidate] = []
 
@@ -427,13 +445,28 @@ public final class MetadataResolver {
     ) async -> (String, String, String, Double)? {
         let searchTerms = ["\(title) \(artist)", artist, title]
 
-        for searchTerm in searchTerms {
-            guard let results = await searchITunes(term: searchTerm, region: region) else {
-                DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(searchTerm)' 无结果")
-                continue
+        // 🔑 Parallel fetch — fire all search terms simultaneously.
+        // Was sequential: 3 × 1-2s. Now: max(latencies) ≈ 1-2s.
+        var fetchedResults: [(Int, [[String: Any]])] = []
+        await withTaskGroup(of: (Int, String, [[String: Any]]?).self) { group in
+            for (i, searchTerm) in searchTerms.enumerated() {
+                group.addTask {
+                    let results = await self.searchITunes(term: searchTerm, region: region)
+                    return (i, searchTerm, results)
+                }
             }
-            DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(searchTerm)' 返回 \(results.count) 条")
+            for await (i, term, results) in group {
+                if let r = results {
+                    DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(term)' 返回 \(r.count) 条")
+                    fetchedResults.append((i, r))
+                } else {
+                    DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(term)' 无结果")
+                }
+            }
+        }
 
+        // Process in priority order (combined > artist > title)
+        for (_, results) in fetchedResults.sorted(by: { $0.0 < $1.0 }) {
             let tiers = classifyRegionResults(
                 results, title: title, artist: artist, duration: duration, region: region
             )

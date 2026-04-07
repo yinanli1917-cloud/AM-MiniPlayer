@@ -163,6 +163,20 @@ public class LyricsService: ObservableObject {
             && duration > 0
             && (currentSongDuration == 0 || abs(duration - currentSongDuration) > 1.0)
 
+        // 🔑 CRITICAL: Do NOT re-fetch if we already have good lyrics loaded.
+        // Duration corrections (e.g. 354s→355s) don't change which lyrics match.
+        // Re-fetching triggers the full 7-source pipeline + MetadataResolver (up to 20s),
+        // causing the "lyrics refresh 20-30s later with different version" bug.
+        // Only re-fetch on duration correction when: lyrics failed (error/empty) OR duration was 0.
+        if canRetryWithBetterDuration {
+            let hasGoodLyrics = !lyrics.isEmpty && !isLoading && error == nil
+            if hasGoodLyrics && currentSongDuration > 0 {
+                DebugLogger.log("LyricsService", "⏭️ 跳过 duration 重试（已有歌词）: dur \(currentSongDuration) → \(duration)")
+                currentSongDuration = duration  // Update stored duration silently
+                return
+            }
+        }
+
         // 避免重复获取
         guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration else {
             DebugLogger.log("LyricsService", "⏭️ 跳过重复获取: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
@@ -170,7 +184,7 @@ public class LyricsService: ObservableObject {
         }
 
         if canRetryWithBetterDuration {
-            DebugLogger.log("LyricsService", "🔄 duration 改善重试: 0 → \(duration)")
+            DebugLogger.log("LyricsService", "🔄 duration 改善重试: \(currentSongDuration) → \(duration)")
         }
 
         DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' dur=\(duration) (forceRefresh=\(forceRefresh), curSongID='\(currentSongID ?? "nil")', curDur=\(currentSongDuration))")

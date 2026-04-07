@@ -75,7 +75,7 @@ public final class LyricsFetcher {
         let ot = cleanTitle, oa = cleanArtist
         let d = duration, te = translationEnabled
 
-        // 🔑 MetadataResolver starts immediately, shared between NetEase and QQ
+        // 🔑 MetadataResolver starts immediately, shared between resolved-params tasks
         let resolveTask = Task {
             await self.metadataResolver.resolveSearchMetadata(
                 title: cleanTitle, artist: cleanArtist, duration: duration
@@ -83,6 +83,7 @@ public final class LyricsFetcher {
         }
 
         var results: [LyricsFetchResult] = []
+        let fetchStart = Date()
 
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
             // Simple sources: start immediately with original params
@@ -92,17 +93,31 @@ public final class LyricsFetcher {
             group.addTask { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
 
-            // High-tier sources: wait for MetadataResolver, then fetch with resolved params
+            // 🔑 High-tier sources: fire IMMEDIATELY with original params (no MetadataResolver wait).
+            // For English/CJK songs, original params match directly. For romanized→CJK songs,
+            // this fails fast (parallel keywords find no match in ~1s) — harmless.
+            group.addTask { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
+
+            // 🔑 High-tier with RESOLVED params — covers romanized→CJK (e.g., "Plastic Love" → "プラスティック・ラヴ").
+            // Only fires if MetadataResolver actually changes something; otherwise skips (no duplicate work).
             group.addTask {
                 let (st, sa) = await resolveTask.value
-                if st != ot || sa != oa {
-                    DebugLogger.log("🔄 元信息解析: '\(st)' by '\(sa)'")
-                }
+                guard st != ot || sa != oa else { return nil }
+                DebugLogger.log("🔄 元信息解析(NetEase): '\(st)' by '\(sa)'")
                 return await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
             }
             group.addTask {
                 let (st, sa) = await resolveTask.value
+                guard st != ot || sa != oa else { return nil }
+                DebugLogger.log("🔄 元信息解析(QQ): '\(st)' by '\(sa)'")
                 return await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+            }
+
+            // 🔑 Time budget sentinel — wakes collection loop at 3s mark
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return nil
             }
 
             for await result in group {
@@ -116,9 +131,21 @@ public final class LyricsFetcher {
                         break
                     }
                 }
+
+                // 🔑 Time budget: good result + 3s → stop; any result + 5s → stop.
+                // Prevents MetadataResolver + slow sources from blocking the pipeline.
+                let elapsed = Date().timeIntervalSince(fetchStart)
+                let hasGoodResult = results.contains { $0.score >= 40 }
+                if (hasGoodResult && elapsed >= 3.0) || (!results.isEmpty && elapsed >= 5.0) {
+                    DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
+                    group.cancelAll()
+                    break
+                }
             }
         }
 
+        let elapsed = Date().timeIntervalSince(fetchStart)
+        DebugLogger.log("🏁 fetchAllSources: \(results.count) results in \(String(format: "%.1f", elapsed))s")
         return results.sorted { $0.score > $1.score }
     }
 
@@ -507,8 +534,8 @@ public final class LyricsFetcher {
         params: SearchParams,
         source: String,
         extraKeywords: [(String, String)] = [],
-        fetchSongs: (String) async throws -> [[String: Any]]?,
-        extractSong: ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double)?
+        fetchSongs: @escaping (String) async throws -> [[String: Any]]?,
+        extractSong: @escaping ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double)?
     ) async -> ID? {
         // 多关键词策略（按优先级排列）
         var keywords: [(String, String)] = [
@@ -534,19 +561,35 @@ public final class LyricsFetcher {
         keywords.append(contentsOf: extraKeywords)
         DebugLogger.log(source, "🔑 关键词: \(keywords.map(\.0))")
 
-        for (keyword, desc) in keywords {
-            DebugLogger.log(source, "🔎 尝试 \(desc): '\(keyword)'")
-            do {
-                guard let songs = try await fetchSongs(keyword) else { continue }
-                DebugLogger.log(source, "📦 收到 \(songs.count) 个候选")
-
-                let candidates = buildCandidates(
-                    songs: songs, params: params, extractSong: extractSong
-                )
-                if let id = selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle) { return id }
-            } catch { continue }
+        // 🔑 Parallel keyword search — fire ALL rounds simultaneously.
+        // Sequential was the primary latency bottleneck: 5 rounds × 1-2s each = 5-10s.
+        // Parallel reduces to max(round latencies) ≈ 1-2s. First match wins.
+        return await withTaskGroup(of: (ID, String)?.self) { group in
+            for (keyword, desc) in keywords {
+                group.addTask {
+                    DebugLogger.log(source, "🔎 \(desc): '\(keyword)'")
+                    do {
+                        guard let songs = try await fetchSongs(keyword) else { return nil }
+                        DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
+                        let candidates = self.buildCandidates(
+                            songs: songs, params: params, extractSong: extractSong
+                        )
+                        if let id = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle) {
+                            return (id, desc)
+                        }
+                    } catch {}
+                    return nil
+                }
+            }
+            for await result in group {
+                if let (id, desc) = result {
+                    DebugLogger.log(source, "⚡ Parallel match via '\(desc)'")
+                    group.cancelAll()
+                    return id
+                }
+            }
+            return nil
         }
-        return nil
     }
 
     /// 统一候选构建（消除 NetEase/QQ 各自的 buildXxxCandidates）
