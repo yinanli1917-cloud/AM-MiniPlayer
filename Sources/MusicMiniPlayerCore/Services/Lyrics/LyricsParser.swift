@@ -723,6 +723,8 @@ public final class LyricsParser {
     private static let htmlEntityMap: [(String, String)] = [
         ("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&"),
         ("&quot;", "\""), ("&apos;", "'"), ("&#39;", "'"),
+        ("\\'", "'"),   // JS/PHP-escaped apostrophe from some lyrics sources (e.g. LRCLIB)
+        ("\\\"", "\""), // JS-escaped double quote
     ]
 
     private func decodeHTMLEntities(_ text: String) -> String {

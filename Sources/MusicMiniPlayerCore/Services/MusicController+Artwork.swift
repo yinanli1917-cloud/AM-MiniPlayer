@@ -85,7 +85,9 @@ extension MusicController {
 
         // ━━━ Path 1: API fetch — starts immediately, no SB queue dependency ━━━
         // API is provisional — if SB already applied for this generation, API result is discarded.
-        Task { [weak self] in
+        // 🔑 Cancel previous API task to prevent pileup during rapid switching.
+        artworkAPITask?.cancel()
+        artworkAPITask = Task { [weak self] in
             guard let self else { return }
             if let image = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
                 self.logToFile("🎨 [API] SUCCESS! Got image \(image.size)")
@@ -94,6 +96,7 @@ extension MusicController {
                     self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, generation: generation, source: .api)
                 }
             } else {
+                guard !Task.isCancelled else { return }
                 self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
@@ -103,6 +106,7 @@ extension MusicController {
                     }
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
                 await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
             }
         }

@@ -114,6 +114,9 @@ public class MusicController: ObservableObject {
 
     /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
     var artworkFetchingForKey: String?
+    /// 🔑 Current artwork API Task — cancelled on each new track change to prevent
+    /// pileup (rapid switching spawns N concurrent API fetches + 1s retry sleeps).
+    var artworkAPITask: Task<Void, Never>?
 
     /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
     var sbAppliedForGeneration: Int = -1

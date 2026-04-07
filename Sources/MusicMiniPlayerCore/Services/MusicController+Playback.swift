@@ -39,8 +39,10 @@ extension MusicController {
         self.lastUserActionTime = Date()
         self.isPlaying.toggle()
 
-        // 🔑 用户交互操作使用高优先级队列，保证即时响应
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+        // 🔑 ALL SB operations must go through scriptingBridgeQueue — SBApplication
+        // is not thread-safe. Calling from global/main thread causes EXC_BAD_ACCESS
+        // when concurrent with SB polls (postmortem 003).
+        scriptingBridgeQueue.async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] togglePlayPause: app not available\n")
                 return
@@ -55,19 +57,18 @@ extension MusicController {
             logger.info("Preview: nextTrack")
             return
         }
-        // 🔑 控制操作直接执行，不阻塞 UI
-        // ScriptingBridge 的 perform 是异步的，几乎瞬间返回
-        guard let app = self.musicApp, app.isRunning else {
-            debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
-            return
-        }
-        debugPrint("⏭️ [MusicController] nextTrack() executing\n")
-        app.perform(Selector(("nextTrack")))
-
-        // 🔑 异步获取新曲目信息（不阻塞控制操作）
-        scriptingBridgeQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else { return }
-            self.fetchCurrentTrackInfo(app: app)
+        // 🔑 SB perform is synchronous (blocks until Apple Event reply) — dispatching
+        // to scriptingBridgeQueue prevents main thread blocking AND ensures thread safety.
+        // Notification path (playerInfoChanged → handleTrackChange) handles UI updates;
+        // no need for separate fetchCurrentTrackInfo which was unreliable (50ms often
+        // too early, persistentID check returns before Music.app switches).
+        scriptingBridgeQueue.async { [weak self] in
+            guard let app = self?.musicApp, app.isRunning else {
+                debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
+                return
+            }
+            debugPrint("⏭️ [MusicController] nextTrack() executing\n")
+            app.perform(Selector(("nextTrack")))
         }
     }
 
@@ -80,58 +81,15 @@ extension MusicController {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
-            // 🔑 控制操作直接执行，不阻塞 UI
-            guard let app = self.musicApp, app.isRunning else {
-                debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
-                return
+            // 🔑 Same thread safety pattern as nextTrack — see comment there.
+            scriptingBridgeQueue.async { [weak self] in
+                guard let app = self?.musicApp, app.isRunning else {
+                    debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
+                    return
+                }
+                debugPrint("⏮️ [MusicController] previousTrack() executing\n")
+                app.perform(Selector(("backTrack")))
             }
-            debugPrint("⏮️ [MusicController] previousTrack() executing\n")
-            app.perform(Selector(("backTrack")))
-
-            // 🔑 异步获取新曲目信息（不阻塞控制操作）
-            scriptingBridgeQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                guard let self = self, let app = self.musicApp, app.isRunning else { return }
-                self.fetchCurrentTrackInfo(app: app)
-            }
-        }
-    }
-
-    /// 🔑 获取当前曲目信息和封面（在 scriptingBridgeQueue 上调用）
-    private func fetchCurrentTrackInfo(app: SBApplication) {
-        // 获取曲目信息
-        guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject else {
-            debugPrint("⚠️ [fetchCurrentTrackInfo] No current track\n")
-            return
-        }
-
-        let trackName = currentTrack.value(forKey: "name") as? String ?? ""
-        let trackArtist = currentTrack.value(forKey: "artist") as? String ?? ""
-        let trackAlbum = currentTrack.value(forKey: "album") as? String ?? ""
-        let persistentID = currentTrack.value(forKey: "persistentID") as? String ?? ""
-        let duration = currentTrack.value(forKey: "duration") as? Double ?? 0
-
-        // 检查是否真的切换了歌曲
-        if persistentID == self.currentPersistentID {
-            return
-        }
-
-        // 🔑 先更新基本信息（立即响应）
-        DispatchQueue.main.async {
-            self.currentTrackTitle = trackName
-            self.currentArtist = trackArtist
-            self.currentAlbum = trackAlbum
-            self.duration = duration
-            self.currentPersistentID = persistentID
-            self.currentTime = 0
-            self.internalCurrentTime = 0
-            // 重置用户手动打开歌词标记
-            self.userManuallyOpenedLyrics = false
-        }
-
-        // 🔑 复用 fetchArtwork 统一路径（缓存 → SB → API → 重试）
-        DispatchQueue.main.async {
-            let generation = self.incrementGeneration()
-            self.fetchArtwork(for: trackName, artist: trackArtist, album: trackAlbum, persistentID: persistentID, generation: generation)
         }
     }
 
@@ -155,8 +113,8 @@ extension MusicController {
         // — which lets wave animation trigger and blank the screen.
         lyricsService.updateCurrentTime(position)
 
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+        // 🔑 ALL SB operations through scriptingBridgeQueue for thread safety
+        scriptingBridgeQueue.async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] seek: app not available\n")
                 return
@@ -177,8 +135,8 @@ extension MusicController {
         // Optimistic UI update
         self.shuffleEnabled = newShuffleState
 
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+        // 🔑 ALL SB operations through scriptingBridgeQueue for thread safety
+        scriptingBridgeQueue.async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] toggleShuffle: app not available\n")
                 return
@@ -201,7 +159,7 @@ extension MusicController {
 
         debugPrint("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n")
 
-        // 🔑 用户交互操作使用高优先级队列
+        // 🔑 AppleScript execution — not SBApplication, so global queue is safe
         DispatchQueue.global(qos: .userInteractive).async {
             let script = """
             tell application "Music"
@@ -240,8 +198,8 @@ extension MusicController {
         // Optimistic UI update
         self.repeatMode = newMode
 
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+        // 🔑 ALL SB operations through scriptingBridgeQueue for thread safety
+        scriptingBridgeQueue.async { [weak self] in
             guard let app = self?.musicApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] cycleRepeatMode: app not available\n")
                 return
@@ -419,8 +377,7 @@ extension MusicController {
             return
         }
         let clamped = max(0, min(100, level))
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+        scriptingBridgeQueue.async { [weak self] in
             guard let app = self?.musicApp else { return }
             app.setValue(clamped, forKey: "soundVolume")
         }
@@ -431,8 +388,7 @@ extension MusicController {
             logger.info("Preview: toggleMute")
             return
         }
-        // 🔑 用户交互操作使用高优先级队列
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+        scriptingBridgeQueue.async { [weak self] in
             guard let app = self?.musicApp else { return }
             let currentMute = app.value(forKey: "mute") as? Bool ?? false
             app.setValue(!currentMute, forKey: "mute")
