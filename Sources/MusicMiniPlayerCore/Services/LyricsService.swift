@@ -81,6 +81,13 @@ public class LyricsService: ObservableObject {
     private var currentFetchTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
 
+    /// Timestamp when good lyrics were last applied — used for stability guard
+    private var lastGoodLyricsTime: Date?
+    /// The artist from the last successful lyrics fetch — for same-song detection
+    private var lastGoodArtist: String?
+    /// Cooldown: refuse re-fetches within this window unless forceRefresh
+    private let stabilityGuardCooldown: TimeInterval = 3.0
+
     /// 清除所有歌词行的翻译数据
     private func clearAllTranslations() {
         for i in lyrics.indices { lyrics[i].translation = nil }
@@ -156,28 +163,37 @@ public class LyricsService: ObservableObject {
 
         let songID = "\(title)-\(artist)"
 
-        // 🔑 允许用更准确的 duration 重试（解决 notification 竞态）
-        // 场景 1：通知先到（duration=0）→ 匹配失败 → SB 轮询后到（duration 正确）→ 重新获取
-        // 场景 2：通知带的是上一首歌的 duration → 匹配错误歌词 → SB 返回正确 duration → 重新获取
-        let canRetryWithBetterDuration = songID == currentSongID && !forceRefresh
-            && duration > 0
-            && (currentSongDuration == 0 || abs(duration - currentSongDuration) > 1.0)
-
-        // 🔑 CRITICAL: Do NOT re-fetch if we already have good lyrics loaded.
-        // Duration corrections (e.g. 354s→355s) don't change which lyrics match.
-        // Re-fetching triggers the full 7-source pipeline + MetadataResolver (up to 20s),
-        // causing the "lyrics refresh 20-30s later with different version" bug.
-        // Only re-fetch on duration correction when: lyrics failed (error/empty) OR duration was 0.
-        if canRetryWithBetterDuration {
-            let hasGoodLyrics = !lyrics.isEmpty && !isLoading && error == nil
-            if hasGoodLyrics && currentSongDuration > 0 {
-                DebugLogger.log("LyricsService", "⏭️ 跳过 duration 重试（已有歌词）: dur \(currentSongDuration) → \(duration)")
-                currentSongDuration = duration  // Update stored duration silently
+        // 🔑 STABILITY GUARD: Once good lyrics are loaded, block ALL re-fetches
+        // for the same song within a cooldown window. This prevents:
+        // - Duration-correction re-fetches (SB returns corrected duration 5-30s later)
+        // - onChange(currentTrackTitle) firing with a variant title (CJK ↔ romanized)
+        // - updatePlayerState 30s full-sync creating a subtly different songID
+        // - Any other path that creates a new songID for the same song
+        //
+        // The guard is artist-based: if good lyrics exist, artist matches, and we're
+        // within the cooldown window → same song, skip. This catches variant titles
+        // like "Cloudy na Gogo" vs "くもりのちゴーゴー" that create different songIDs.
+        // Only forceRefresh (user-initiated retry button) bypasses this guard.
+        if !forceRefresh,
+           let lastGoodTime = lastGoodLyricsTime,
+           Date().timeIntervalSince(lastGoodTime) < stabilityGuardCooldown,
+           !lyrics.isEmpty, error == nil {
+            // Same-song detection: exact songID match OR same artist within cooldown
+            let isSameSong = songID == currentSongID
+                || (lastGoodArtist != nil && lastGoodArtist!.lowercased() == artist.lowercased())
+            if isSameSong {
+                DebugLogger.log("LyricsService", "⏭️ Stability guard: '\(songID)' blocked (\(String(format: "%.1f", Date().timeIntervalSince(lastGoodTime)))s since good lyrics)")
+                // Silently update stored duration/songID to prevent future mismatches
+                currentSongDuration = duration
                 return
             }
         }
 
-        // 避免重复获取
+        // 避免重复获取（exact songID match — fast path for identical calls）
+        let canRetryWithBetterDuration = songID == currentSongID && !forceRefresh
+            && duration > 0
+            && (currentSongDuration == 0 || abs(duration - currentSongDuration) > 1.0)
+
         guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration else {
             DebugLogger.log("LyricsService", "⏭️ 跳过重复获取: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
             return
@@ -188,6 +204,10 @@ public class LyricsService: ObservableObject {
         }
 
         DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' dur=\(duration) (forceRefresh=\(forceRefresh), curSongID='\(currentSongID ?? "nil")', curDur=\(currentSongDuration))")
+
+        // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
+        lastGoodLyricsTime = nil
+        lastGoodArtist = artist
 
         // 🔑 立即清除 error + loading（防止切歌时 retry UI 残留）
         error = nil
@@ -336,6 +356,11 @@ public class LyricsService: ObservableObject {
         self.currentLineIndex = nil
         self.currentSongID = songID
         self.currentSongDuration = duration
+
+        // 🔑 Stability guard: record when good lyrics were applied.
+        // This blocks re-fetches from variant titles, duration corrections,
+        // and other paths that create a different songID for the same song.
+        self.lastGoodLyricsTime = Date()
 
         // 🔑 延迟触发翻译，避免与 lyrics 更新同时发生导致 SwiftUI AttributeGraph 递归
         if showTranslation {

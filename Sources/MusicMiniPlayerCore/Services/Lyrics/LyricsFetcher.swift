@@ -149,18 +149,40 @@ public final class LyricsFetcher {
         return results.sorted { $0.score > $1.score }
     }
 
-    /// Select best lyrics result — unified single-pass, no source-type overrides.
-    /// Unified single-pass selection — no source-type branching.
-    /// Timestamp authenticity and syllable sync are already in the score via CV detection + step 1.
+    /// Select best lyrics result — unified single-pass with CJK preference.
+    /// When both CJK and romanized results exist, CJK is preferred unless romaji
+    /// wins by a significant margin (>15 points). This prevents syllable-sync bonus
+    /// (+30) from overriding script correctness for CJK-language songs.
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
         let reliable = results.filter { $0.score > 0 }
-        // Single pass: highest score with quality validation. No source-type preferences.
-        if let best = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) {
-            DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)))")
-            return best.lyrics
+        guard !reliable.isEmpty else { return nil }
+
+        // Partition into CJK and romaji results
+        let cjk = reliable.filter { !scorer.isLikelyRomaji($0.lyrics) }
+        let romaji = reliable.filter { scorer.isLikelyRomaji($0.lyrics) }
+
+        // If both CJK and romaji exist, CJK gets preference — romaji must beat
+        // best CJK by >15 points to win (compensates for sync bonus asymmetry)
+        let bestCJK = cjk.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) ?? cjk.first
+        let bestRomaji = romaji.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) ?? romaji.first
+
+        let chosen: LyricsFetchResult?
+        if let cjkResult = bestCJK, let romajiResult = bestRomaji {
+            // CJK preferred: romaji only wins with decisive margin
+            if romajiResult.score > cjkResult.score + 15 {
+                DebugLogger.log("🏆 Romaji wins decisively: \(romajiResult.source) (\(String(format: "%.1f", romajiResult.score))) > CJK \(cjkResult.source) (\(String(format: "%.1f", cjkResult.score))) + 15")
+                chosen = romajiResult
+            } else {
+                DebugLogger.log("🏆 CJK preferred: \(cjkResult.source) (\(String(format: "%.1f", cjkResult.score))) over romaji \(romajiResult.source) (\(String(format: "%.1f", romajiResult.score)))")
+                chosen = cjkResult
+            }
+        } else {
+            // Only one type available — pick highest scoring valid result
+            chosen = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) ?? reliable.first
         }
-        if let best = reliable.first {
-            DebugLogger.log("⚠️ 降级使用: \(best.source) (score=\(String(format: "%.1f", best.score)))")
+
+        if let best = chosen {
+            DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)))")
             return best.lyrics
         }
         return nil

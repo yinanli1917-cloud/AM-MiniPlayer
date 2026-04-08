@@ -111,6 +111,11 @@ public class MusicController: ObservableObject {
     // blocks position polls, causing the serial-queue starvation that made osascript faster.
     var artworkApp: SBApplication?
     var artworkQueue = DispatchQueue(label: "com.nanoPod.artwork", qos: .utility)
+    // 🔑 Dedicated SB instance for user-initiated playback controls (play/pause/next/prev/seek/volume).
+    // Without this, user taps queue behind heavyweight scriptingBridgeQueue work (position polls,
+    // 30s full sync, 1000+ track queue scans) causing 5-10s delays. Same dual-instance pattern as artworkApp.
+    var controlApp: SBApplication?
+    let controlQueue = DispatchQueue(label: "com.nanoPod.control", qos: .userInteractive)
 
     /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
     var artworkFetchingForKey: String?
@@ -240,6 +245,7 @@ public class MusicController: ObservableObject {
 
         self.musicApp = app
         self.artworkApp = SBApplication(bundleIdentifier: "com.apple.Music")
+        self.controlApp = SBApplication(bundleIdentifier: "com.apple.Music")
         debugPrint("✅ [MusicController] SBApplication created successfully\n")
         logger.info("✅ Successfully created and stored SBApplication for Music.app")
 
@@ -687,10 +693,14 @@ public class MusicController: ObservableObject {
                     }
                 }
 
-                // Debounced queue refresh
+                // 🔑 Debounced queue refresh — 2s to survive rapid switching bursts.
+                // 1s was too short: user pressing next every 0.5s would fire queue refresh
+                // mid-burst, causing SBElementArray iteration on a mutating playlist → crash.
                 self.queueRefreshTimer?.invalidate()
-                self.queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
-                    self?.fetchUpNextQueue()
+                let refreshGen = generation
+                self.queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                    guard let self = self, self.artworkFetchGeneration == refreshGen else { return }
+                    self.fetchUpNextQueue()
                 }
 
                 if sbDuration == 0 {

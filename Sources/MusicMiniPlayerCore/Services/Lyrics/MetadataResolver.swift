@@ -130,7 +130,7 @@ public final class MetadataResolver {
         // 例外：艺术家名精确匹配 或 时长极精确（<1s）时可信
         // 时长精确: 不同语言的不同歌恰好同时长 + 同 romanized 关键词的概率极低
         // 典型场景: JP/KR 艺术家不在 CN 目录（菊池桃子、EPO），CN 搜索为空属正常
-        var localized: (title: String, artist: String)?
+        var localized: (title: String, artist: String, region: String)?
         if let loc = localizedResult {
             let resultTitleHasCJK = LanguageUtils.containsCJK(loc.title)
             let artistMatchesExactly = LanguageUtils.normalizeArtistName(loc.artist).lowercased() ==
@@ -140,7 +140,7 @@ public final class MetadataResolver {
                 DebugLogger.log("MetadataResolver", "⚠️ 拒绝孤立 CJK 结果（CN 无匹配 + 艺术家不匹配 + 时长不精确）: '\(loc.title)' by '\(loc.artist)' Δ\(String(format: "%.1f", loc.durationDiff))s")
             } else {
                 DebugLogger.log("MetadataResolver", "🌏 多区域解析: '\(loc.title)' by '\(loc.artist)' (region: \(loc.region), Δ\(String(format: "%.2f", loc.durationDiff))s)")
-                localized = (loc.title, loc.artist)
+                localized = (loc.title, loc.artist, loc.region)
             }
         }
 
@@ -151,6 +151,16 @@ public final class MetadataResolver {
         let locHasCJKTitle = localized.map { !LanguageUtils.isPureASCII($0.title) } ?? false
 
         if cnHasCJKTitle {
+            // 🔑 When localized also has CJK title from JP/KR region, prefer localized.
+            // CN iTunes transliterates Japanese names to Chinese character forms
+            // (e.g., 村下孝蔵→村下孝藏, all-kanji so script detection can't distinguish).
+            // JP/KR regions are authoritative for their languages' character forms.
+            // NetEase/QQ store originals (蔵), not CN transliterations (藏).
+            let locFromOriginRegion = localized.map { $0.region == "JP" || $0.region == "KR" } ?? false
+            if locHasCJKTitle && locFromOriginRegion {
+                DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先多区域(\(localized!.region)原名): '\(localized!.title)' by '\(localized!.artist)' over CN '\(cnResult!.artist)'")
+                return (localized!.title, localized!.artist)
+            }
             DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先 CN: '\(cnResult!.title)' by '\(cnResult!.artist)'")
             return (cnResult!.title, cnResult!.artist)
         }
@@ -164,7 +174,7 @@ public final class MetadataResolver {
                 DebugLogger.log("MetadataResolver", "⚠️ 拒绝多区域 CJK（CN 确认英文歌）: '\(localized!.title)' vs CN '\(cnResult!.title)'")
             } else {
                 DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先多区域: '\(localized!.title)' by '\(localized!.artist)'")
-                return localized!
+                return (localized!.title, localized!.artist)
             }
         }
 
@@ -175,14 +185,14 @@ public final class MetadataResolver {
         if let loc = localized, loc.title.lowercased() == title.lowercased(),
            LanguageUtils.containsJapanese(loc.artist) {
             DebugLogger.log("MetadataResolver", "✅ 罗马字→假名艺术家优先: '\(loc.title)' by '\(loc.artist)'")
-            return loc
+            return (loc.title, loc.artist)
         }
         if let cn = cnResult, cn.title.lowercased() == title.lowercased() || !LanguageUtils.isPureASCII(cn.title) {
             DebugLogger.log("MetadataResolver", "⚠️ 罗马字仅艺术家解析(CN): '\(cn.title)' by '\(cn.artist)'")
             return (cn.title, cn.artist)
         }
         if let loc = localized, loc.title.lowercased() == title.lowercased() || !LanguageUtils.isPureASCII(loc.title) {
-            return loc
+            return (loc.title, loc.artist)
         }
 
         return (title, artist)
@@ -402,20 +412,27 @@ public final class MetadataResolver {
             for await result in group {
                 if let r = result {
                     DebugLogger.log("MetadataResolver", "🔍 区域结果: '\(r.0)' by '\(r.1)' (region: \(r.2), Δ\(String(format: "%.2f", r.3))s)")
-                    // 🔑 Priority: titleMatch > titleCJK > hasCJK > closest duration
-                    // A correct-title result always beats a wrong-title CJK result.
-                    // e.g., JP "Street Dancer" by 岩崎宏美 beats KR "真夜中のドア" by Hiromi Iwasaki
+                    // 🔑 Priority: titleMatch > titleCJK > artistCJK > originRegion > hasCJK > closest duration
+                    // JP/KR regions are authoritative for their languages' character forms.
+                    // HK/TW transliterate Japanese names (蔵→藏) breaking lyrics database matching.
+                    // e.g., JP "初恋" by "村下孝蔵" beats HK "初恋" by "村下孝藏"
                     let rTitleMatch = LanguageUtils.normalizeTrackName(r.0).lowercased() == inputTitleNorm
                     let rTitleCJK = LanguageUtils.containsCJK(r.0)
-                    let rHasCJK = rTitleCJK || LanguageUtils.containsCJK(r.1)
+                    let rArtistCJK = LanguageUtils.containsCJK(r.1)
+                    let rHasCJK = rTitleCJK || rArtistCJK
+                    let rIsOriginRegion = r.2 == "JP" || r.2 == "KR"
                     let bestTitleMatch = bestMatch.map { LanguageUtils.normalizeTrackName($0.0).lowercased() == inputTitleNorm } ?? false
                     let bestTitleCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) } ?? false
+                    let bestArtistCJK = bestMatch.map { LanguageUtils.containsCJK($0.1) } ?? false
+                    let bestIsOriginRegion = bestMatch.map { $0.2 == "JP" || $0.2 == "KR" } ?? false
                     let bestHasCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) || LanguageUtils.containsCJK($0.1) } ?? false
                     if bestMatch == nil ||
                        (rTitleMatch && !bestTitleMatch) ||
                        (rTitleMatch == bestTitleMatch && rTitleCJK && !bestTitleCJK) ||
+                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rArtistCJK && !bestArtistCJK) ||
+                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rArtistCJK == bestArtistCJK && rIsOriginRegion && !bestIsOriginRegion) ||
                        (rTitleMatch == bestTitleMatch && rHasCJK && !bestHasCJK) ||
-                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
+                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rArtistCJK == bestArtistCJK && rIsOriginRegion == bestIsOriginRegion && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
                         bestMatch = r
                     }
                 }

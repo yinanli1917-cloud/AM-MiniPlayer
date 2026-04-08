@@ -394,8 +394,11 @@ extension MusicController {
     }
 
     /// 从 SBApplication 获取指定 persistentID 的封面
+    /// 🔑 Must be called on artworkQueue. Generation check prevents iterating stale
+    /// SBElementArray objects after track change — same pattern as getUpNextTracksFromApp.
     private func getArtworkImageByPersistentID(_ app: SBApplication, persistentID: String) -> NSImage? {
         let startTime = CFAbsoluteTimeGetCurrent()
+        let gen = artworkFetchGeneration  // Snapshot generation at start
 
         // 1. 先在 currentPlaylist 中查找（限制搜索范围为前 100 首，因为 Up Next 只显示 10 首）
         if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
@@ -404,6 +407,12 @@ extension MusicController {
             // 🔑 只遍历前 100 首（Up Next 只显示当前歌曲后的 10 首）
             let searchLimit = min(tracks.count, 100)
             for i in 0..<searchLimit {
+                // 🔑 Generation check: bail if track changed — stale SBElementArray
+                // iteration causes EXC_BAD_ACCESS (pointer authentication failure).
+                guard artworkFetchGeneration == gen else {
+                    debugPrint("⚠️ [getArtworkByPersistentID] Generation changed (\(gen) → \(artworkFetchGeneration)), aborting\n")
+                    return nil
+                }
                 if let track = tracks.object(at: i) as? NSObject,
                    let trackID = track.value(forKey: "persistentID") as? String,
                    trackID == persistentID {

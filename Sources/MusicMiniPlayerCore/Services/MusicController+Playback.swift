@@ -39,11 +39,11 @@ extension MusicController {
         self.lastUserActionTime = Date()
         self.isPlaying.toggle()
 
-        // 🔑 ALL SB operations must go through scriptingBridgeQueue — SBApplication
-        // is not thread-safe. Calling from global/main thread causes EXC_BAD_ACCESS
-        // when concurrent with SB polls (postmortem 003).
-        scriptingBridgeQueue.async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
+        // 🔑 User controls use dedicated controlApp/controlQueue — never blocked by
+        // heavyweight scriptingBridgeQueue work (polls, queue scans, state syncs).
+        // Each SBApplication is an independent Apple Event proxy, safe on its own serial queue.
+        controlQueue.async { [weak self] in
+            guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] togglePlayPause: app not available\n")
                 return
             }
@@ -57,13 +57,11 @@ extension MusicController {
             logger.info("Preview: nextTrack")
             return
         }
-        // 🔑 SB perform is synchronous (blocks until Apple Event reply) — dispatching
-        // to scriptingBridgeQueue prevents main thread blocking AND ensures thread safety.
-        // Notification path (playerInfoChanged → handleTrackChange) handles UI updates;
-        // no need for separate fetchCurrentTrackInfo which was unreliable (50ms often
-        // too early, persistentID check returns before Music.app switches).
-        scriptingBridgeQueue.async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
+        // 🔑 User controls use dedicated controlApp/controlQueue — instant response,
+        // never blocked by heavyweight scriptingBridgeQueue work.
+        // Notification path (playerInfoChanged → handleTrackChange) handles UI updates.
+        controlQueue.async { [weak self] in
+            guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
                 return
             }
@@ -81,9 +79,9 @@ extension MusicController {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
-            // 🔑 Same thread safety pattern as nextTrack — see comment there.
-            scriptingBridgeQueue.async { [weak self] in
-                guard let app = self?.musicApp, app.isRunning else {
+            // 🔑 Same controlQueue pattern as nextTrack — see comment there.
+            controlQueue.async { [weak self] in
+                guard let app = self?.controlApp, app.isRunning else {
                     debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
                     return
                 }
@@ -113,9 +111,9 @@ extension MusicController {
         // — which lets wave animation trigger and blank the screen.
         lyricsService.updateCurrentTime(position)
 
-        // 🔑 ALL SB operations through scriptingBridgeQueue for thread safety
-        scriptingBridgeQueue.async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
+        // 🔑 User-initiated seek uses dedicated controlQueue for instant response
+        controlQueue.async { [weak self] in
+            guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] seek: app not available\n")
                 return
             }
@@ -135,13 +133,13 @@ extension MusicController {
         // Optimistic UI update
         self.shuffleEnabled = newShuffleState
 
-        // 🔑 ALL SB operations through scriptingBridgeQueue for thread safety
-        scriptingBridgeQueue.async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
+        // 🔑 User-initiated control uses dedicated controlQueue
+        controlQueue.async { [weak self] in
+            guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] toggleShuffle: app not available\n")
                 return
             }
-            debugPrint("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on scriptingBridgeQueue\n")
+            debugPrint("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on controlQueue\n")
             app.setValue(newShuffleState, forKey: "shuffleEnabled")
         }
 
@@ -198,9 +196,9 @@ extension MusicController {
         // Optimistic UI update
         self.repeatMode = newMode
 
-        // 🔑 ALL SB operations through scriptingBridgeQueue for thread safety
-        scriptingBridgeQueue.async { [weak self] in
-            guard let app = self?.musicApp, app.isRunning else {
+        // 🔑 User-initiated control uses dedicated controlQueue
+        controlQueue.async { [weak self] in
+            guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] cycleRepeatMode: app not available\n")
                 return
             }
@@ -273,7 +271,13 @@ extension MusicController {
     }
 
     /// 从 SBApplication 获取 Up Next tracks
+    /// 🔑 Must be called on scriptingBridgeQueue. Each SBElementArray access fires an
+    /// Apple Event — during rapid switching, the playlist/track objects become stale and
+    /// cause EXC_BAD_ACCESS (pointer authentication failure). The generation check bails
+    /// early when a new track change has been detected, preventing iteration on stale objects.
     private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+        let gen = artworkFetchGeneration  // Snapshot generation at start
+
         guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
               let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
               let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
@@ -283,13 +287,22 @@ extension MusicController {
         }
 
         let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
-        debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(tracks.count) tracks\n")
+        let trackCount = tracks.count
+        debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks\n")
 
         var result: [(String, String, String, String, Double)] = []
         var foundCurrent = false
         var currentIndex = -1
 
-        for i in 0..<tracks.count {
+        for i in 0..<trackCount {
+            // 🔑 Generation check: bail if a new track change invalidated our objects.
+            // Without this, rapid switching causes SBElementArray iteration on stale
+            // playlist objects → EXC_BAD_ACCESS (pointer authentication failure).
+            guard artworkFetchGeneration == gen else {
+                debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(artworkFetchGeneration)), aborting\n")
+                return result
+            }
+
             guard let track = tracks.object(at: i) as? NSObject,
                   let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
@@ -377,8 +390,8 @@ extension MusicController {
             return
         }
         let clamped = max(0, min(100, level))
-        scriptingBridgeQueue.async { [weak self] in
-            guard let app = self?.musicApp else { return }
+        controlQueue.async { [weak self] in
+            guard let app = self?.controlApp else { return }
             app.setValue(clamped, forKey: "soundVolume")
         }
     }
@@ -388,8 +401,8 @@ extension MusicController {
             logger.info("Preview: toggleMute")
             return
         }
-        scriptingBridgeQueue.async { [weak self] in
-            guard let app = self?.musicApp else { return }
+        controlQueue.async { [weak self] in
+            guard let app = self?.controlApp else { return }
             let currentMute = app.value(forKey: "mute") as? Bool ?? false
             app.setValue(!currentMute, forKey: "mute")
         }
@@ -424,10 +437,12 @@ extension MusicController {
             return
         }
 
-        guard let app = musicApp, app.isRunning,
-              let track = app.value(forKey: "currentTrack") as? NSObject else { return }
-        track.perform(Selector(("duplicateTo:")), with: app.value(forKey: "sources"))
-        logger.info("✅ Added current track to library")
+        controlQueue.async { [weak self] in
+            guard let self = self, let app = self.controlApp, app.isRunning,
+                  let track = app.value(forKey: "currentTrack") as? NSObject else { return }
+            track.perform(Selector(("duplicateTo:")), with: app.value(forKey: "sources"))
+            self.logger.info("✅ Added current track to library")
+        }
     }
 
     public func toggleStar() {
@@ -436,11 +451,13 @@ extension MusicController {
             return
         }
 
-        guard let app = musicApp, app.isRunning,
-              let track = app.value(forKey: "currentTrack") as? NSObject else { return }
-        let currentLoved = track.value(forKey: "loved") as? Bool ?? false
-        track.setValue(!currentLoved, forKey: "loved")
-        logger.info("✅ Toggled loved status of current track")
+        controlQueue.async { [weak self] in
+            guard let self = self, let app = self.controlApp, app.isRunning,
+                  let track = app.value(forKey: "currentTrack") as? NSObject else { return }
+            let currentLoved = track.value(forKey: "loved") as? Bool ?? false
+            track.setValue(!currentLoved, forKey: "loved")
+            self.logger.info("✅ Toggled loved status of current track")
+        }
     }
 
     /// 歌曲名有效性验证（过滤空名、纯数字ID、与 persistentID 相同的异常数据）

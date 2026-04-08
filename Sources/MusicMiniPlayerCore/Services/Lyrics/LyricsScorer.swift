@@ -292,7 +292,7 @@ public final class LyricsScorer {
 
     /// 检测是否可能是罗马音歌词
     /// 忽略 Genius 风格的段落标记（[Chorus], [副歌: 林二汶] 等）只检查实际歌词行
-    private func isLikelyRomaji(_ lyrics: [LyricLine]) -> Bool {
+    public func isLikelyRomaji(_ lyrics: [LyricLine]) -> Bool {
         let lyricsLines = lyrics.filter { line in
             let t = line.text.trimmingCharacters(in: .whitespaces)
             return !t.isEmpty && !(t.hasPrefix("[") && t.hasSuffix("]"))
