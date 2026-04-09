@@ -385,8 +385,8 @@ public class LyricsService: ObservableObject {
     // ========================================================================
 
     /// Detect fabricated (uniform-spacing) timestamps from createUnsyncedLyrics.
-    /// Uses median-based outlier rejection: strip metadata lines create large gaps,
-    /// but the majority of gaps are perfectly uniform (CV ≈ 0).
+    /// Fabricated lyrics have perfectly uniform gaps (CV ≈ 0) among the majority of lines.
+    /// Outliers (⋯ placeholder, stripped metadata gaps) are removed via IQR before CV check.
     private static func hasFabricatedTimestamps(_ lyrics: [LyricLine]) -> Bool {
         var gaps: [Double] = []
         for i in 1..<lyrics.count {
@@ -394,10 +394,14 @@ public class LyricsService: ObservableObject {
             if gap > 0 { gaps.append(gap) }
         }
         guard gaps.count >= 4 else { return false }
-        // Use median to find the "typical" gap, then keep only gaps within 2x of median
+        // IQR-based outlier rejection: Q1 - 1.5*IQR to Q3 + 1.5*IQR
         let sorted = gaps.sorted()
-        let median = sorted[sorted.count / 2]
-        let core = gaps.filter { $0 > median * 0.5 && $0 < median * 2.0 }
+        let q1 = sorted[sorted.count / 4]
+        let q3 = sorted[sorted.count * 3 / 4]
+        let iqr = q3 - q1
+        let lowerBound = q1 - 1.5 * max(iqr, 0.1)
+        let upperBound = q3 + 1.5 * max(iqr, 0.1)
+        let core = gaps.filter { $0 >= lowerBound && $0 <= upperBound }
         guard core.count >= 3 else { return false }
         let mean = core.reduce(0, +) / Double(core.count)
         guard mean > 0 else { return false }

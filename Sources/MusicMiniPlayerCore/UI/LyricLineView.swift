@@ -1046,7 +1046,9 @@ struct InterludeDotsView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, visible ? 8 : 0)
+        .frame(height: visible ? nil : 0)
+        .clipped()
         .opacity(overallOpacity)
         .blur(radius: fadeOutProgress * 8)
         .animation(.easeOut(duration: 0.2), value: visible)
@@ -1058,13 +1060,14 @@ struct PreludeDotsView: View {
     let startTime: TimeInterval
     let endTime: TimeInterval
     @ObservedObject var timePublisher: TimePublisher
+    var gateByTimeRange: Bool = false
 
     var body: some View {
         InterludeDotsView(
             startTime: startTime,
             endTime: endTime,
             currentTime: timePublisher.currentTime,
-            gateByTimeRange: false
+            gateByTimeRange: gateByTimeRange
         )
     }
 }

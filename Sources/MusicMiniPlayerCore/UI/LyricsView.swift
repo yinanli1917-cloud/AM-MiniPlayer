@@ -393,10 +393,9 @@ public struct LyricsView: View {
                         PreludeDotsView(
                             startTime: interludeInfo.startTime,
                             endTime: interludeInfo.endTime,
-                            timePublisher: musicController.timePublisher
+                            timePublisher: musicController.timePublisher,
+                            gateByTimeRange: true
                         )
-                        .frame(height: 30)
-                        .padding(.top, 8)
                         .padding(.horizontal, 32)
                     }
                 }

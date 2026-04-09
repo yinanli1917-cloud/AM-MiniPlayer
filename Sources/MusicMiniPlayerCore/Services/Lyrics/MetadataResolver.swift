@@ -450,6 +450,12 @@ public final class MetadataResolver {
                        (primary == bestPrimary && secondary == bestSecondary && rArtistCJK == bestArtistCJK && rIsOriginRegion == bestIsOriginRegion && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
                         bestMatch = r
                     }
+
+                    // 🔑 Early return: CJK title + origin region + precise duration = best possible
+                    if rTitleCJK && rIsOriginRegion && r.3 < 1.0 {
+                        group.cancelAll()
+                        break
+                    }
                 }
             }
 
