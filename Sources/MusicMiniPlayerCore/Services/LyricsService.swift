@@ -23,6 +23,8 @@ public class LyricsService: ObservableObject {
 
     @Published public var lyrics: [LyricLine] = []
     @Published public var currentLineIndex: Int? = nil
+    /// True when lyrics have fabricated timestamps (unsynced source) — UI should disable auto-scroll
+    @Published public var isUnsyncedLyrics: Bool = false
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
 
@@ -354,6 +356,9 @@ public class LyricsService: ObservableObject {
         self.isLoading = false
         self.error = nil  // 🔑 歌词成功加载，清除旧 error（防止 duration 竞态导致 retry 残留）
         self.currentLineIndex = nil
+        // 🔑 Detect fabricated timestamps: uniform spacing (CV ≈ 0) from createUnsyncedLyrics.
+        // UI should show static list instead of auto-scrolling.
+        self.isUnsyncedLyrics = Self.hasFabricatedTimestamps(newLyrics)
         self.currentSongID = songID
         self.currentSongDuration = duration
 
@@ -375,6 +380,25 @@ public class LyricsService: ObservableObject {
     // MARK: - Public API: Update Time
     // ========================================================================
 
+    /// Detect fabricated (uniform-spacing) timestamps using coefficient of variation.
+    /// Same logic as LyricsScorer.timestampAuthenticity — CV < 0.05 = fabricated.
+    /// Skips the first gap (interlude→first lyric) which is always an outlier
+    /// due to processLyrics inserting a ⋯ placeholder at 0.0s.
+    private static func hasFabricatedTimestamps(_ lyrics: [LyricLine]) -> Bool {
+        var gaps: [Double] = []
+        for i in 1..<lyrics.count {
+            let gap = lyrics[i].startTime - lyrics[i - 1].startTime
+            if gap > 0 { gaps.append(gap) }
+        }
+        // Drop the first gap (⋯ placeholder → first real lyric) — always outlier
+        if gaps.count > 1 { gaps.removeFirst() }
+        guard gaps.count >= 3 else { return false }
+        let mean = gaps.reduce(0, +) / Double(gaps.count)
+        guard mean > 0 else { return false }
+        let variance = gaps.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(gaps.count)
+        return sqrt(variance) / mean < 0.05
+    }
+
     func updateCurrentTime(_ time: TimeInterval) {
         let scrollAnimationLeadTime: TimeInterval = 0.05
 
@@ -382,6 +406,9 @@ public class LyricsService: ObservableObject {
             currentLineIndex = nil
             return
         }
+
+        // 🔑 Unsynced lyrics: no auto-scroll, user scrolls manually
+        guard !isUnsyncedLyrics else { return }
 
         // 前奏处理
         if lyrics.count > firstRealLyricIndex {

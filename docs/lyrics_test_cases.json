@@ -394,5 +394,82 @@
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": null
     }
+  },
+  {
+    "id": "H18",
+    "title": "We've Only Just Begun",
+    "artist": "Carpenters",
+    "duration": 184,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "Begun"
+    }
+  },
+  {
+    "id": "H19",
+    "title": "Namidanokatachino Earring",
+    "artist": "Akina Nakamori",
+    "duration": 268,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H20",
+    "title": "Cloudy na Gogo",
+    "artist": "中原明子",
+    "duration": 277,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H21",
+    "title": "Dinner",
+    "artist": "Kay Huang",
+    "duration": 259,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H22",
+    "title": "我的寶貝",
+    "artist": "Lee Chih Ching",
+    "duration": 257,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H23",
+    "title": "As Time Goes By",
+    "artist": "Dooley Wilson",
+    "duration": 165,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "remember"
+    }
+  },
+  {
+    "id": "H24",
+    "title": "Deep",
+    "artist": "Tanya Chua",
+    "duration": 243,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
   }
 ]

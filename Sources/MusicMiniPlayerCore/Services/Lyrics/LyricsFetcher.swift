@@ -268,7 +268,9 @@ public final class LyricsFetcher {
                 let resultTokens = LanguageUtils.normalizeTrackName(candidate.name).lowercased()
                     .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
                 let hasTokenOverlap = inputTokens.contains { t in
-                    t.count >= 3 && resultTokens.contains(where: { $0.contains(t) || t.contains($0) })
+                    t.count >= 3 && resultTokens.contains(where: { r in
+                        r.count >= 3 && (r.contains(t) || t.contains(r))
+                    })
                 }
                 // CJK 标题允许无 token 重叠（罗马字 vs 汉字/假名）
                 let resultHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
@@ -325,6 +327,15 @@ public final class LyricsFetcher {
         let resultNoSpace = resultLower.replacingOccurrences(of: " ", with: "")
         if inputNoSpace == resultNoSpace { return true }
         if inputNoSpace.contains(resultNoSpace) || resultNoSpace.contains(inputNoSpace) { return true }
+
+        // 🔑 CJK surname match: 中原明子 vs 中原めいこ (kanji→hiragana given name)
+        // When both names share a CJK prefix of ≥2 chars and total length ≥3, likely same person
+        let inputCJK = inputNoSpace.filter { $0.unicodeScalars.allSatisfy { LanguageUtils.isCJKScalar($0) } }
+        let resultCJK = resultNoSpace.filter { $0.unicodeScalars.allSatisfy { LanguageUtils.isCJKScalar($0) } }
+        if inputCJK.count >= 2 && resultCJK.count >= 2 {
+            let prefix = inputCJK.commonPrefix(with: resultCJK)
+            if prefix.count >= 2 { return true }
+        }
 
         return false
     }
@@ -647,8 +658,15 @@ public final class LyricsFetcher {
             // normal matching covers all cases. Without this guard, ANY ASCII result artist
             // gets a free pass because inputArtistIsCJK=true matches resultArtistIsASCII=true.
             let inputHasBothScripts = inputArtistIsASCII && inputArtistIsCJK
-            if !artistMatch && titleMatch && isCrossScriptArtist && !inputHasBothScripts {
-                artistMatch = true
+            // 🔑 Cross-script tolerance: same person, different script names.
+            // Two tiers to balance precision vs recall:
+            // - Title matches + dur<1s: confident (翻風 + Cass Phang → 彭羚)
+            // - No title match + dur<0.5s: search engine confirmed artist mapping
+            //   (Kay Huang → 黄韵玲: "三个人的晚餐" Δ0.0s from artist-name search)
+            if !artistMatch && isCrossScriptArtist && !inputHasBothScripts {
+                if (titleMatch && durationDiff < 1.0) || durationDiff < 0.5 {
+                    artistMatch = true
+                }
             }
 
             return SearchCandidate(
