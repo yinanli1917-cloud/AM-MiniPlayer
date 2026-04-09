@@ -362,6 +362,10 @@ public class LyricsService: ObservableObject {
         self.currentSongID = songID
         self.currentSongDuration = duration
 
+        // 🔑 Diagnostic: log first real lyric line so we can verify content correctness
+        let firstReal = newLyrics.dropFirst(firstRealLyricIndex).first { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty && $0.text != "⋯" }
+        DebugLogger.log("LyricsService", "📋 Applied: '\(songID)' \(newLyrics.count)L, firstReal=\"\(firstReal?.text.prefix(40) ?? "nil")\", unsynced=\(isUnsyncedLyrics)")
+
         // 🔑 Stability guard: record when good lyrics were applied.
         // This blocks re-fetches from variant titles, duration corrections,
         // and other paths that create a different songID for the same song.
@@ -380,22 +384,24 @@ public class LyricsService: ObservableObject {
     // MARK: - Public API: Update Time
     // ========================================================================
 
-    /// Detect fabricated (uniform-spacing) timestamps using coefficient of variation.
-    /// Same logic as LyricsScorer.timestampAuthenticity — CV < 0.05 = fabricated.
-    /// Skips the first gap (interlude→first lyric) which is always an outlier
-    /// due to processLyrics inserting a ⋯ placeholder at 0.0s.
+    /// Detect fabricated (uniform-spacing) timestamps from createUnsyncedLyrics.
+    /// Uses median-based outlier rejection: strip metadata lines create large gaps,
+    /// but the majority of gaps are perfectly uniform (CV ≈ 0).
     private static func hasFabricatedTimestamps(_ lyrics: [LyricLine]) -> Bool {
         var gaps: [Double] = []
         for i in 1..<lyrics.count {
             let gap = lyrics[i].startTime - lyrics[i - 1].startTime
             if gap > 0 { gaps.append(gap) }
         }
-        // Drop the first gap (⋯ placeholder → first real lyric) — always outlier
-        if gaps.count > 1 { gaps.removeFirst() }
-        guard gaps.count >= 3 else { return false }
-        let mean = gaps.reduce(0, +) / Double(gaps.count)
+        guard gaps.count >= 4 else { return false }
+        // Use median to find the "typical" gap, then keep only gaps within 2x of median
+        let sorted = gaps.sorted()
+        let median = sorted[sorted.count / 2]
+        let core = gaps.filter { $0 > median * 0.5 && $0 < median * 2.0 }
+        guard core.count >= 3 else { return false }
+        let mean = core.reduce(0, +) / Double(core.count)
         guard mean > 0 else { return false }
-        let variance = gaps.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(gaps.count)
+        let variance = core.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(core.count)
         return sqrt(variance) / mean < 0.05
     }
 

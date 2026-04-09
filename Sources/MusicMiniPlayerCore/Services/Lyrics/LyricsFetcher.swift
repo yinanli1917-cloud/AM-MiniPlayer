@@ -677,6 +677,33 @@ public final class LyricsFetcher {
     }
 
     // MARK: - NetEase
+    /// Validate lyrics content against expected song — reject if metadata lines
+    /// indicate a completely different song (NetEase data quality issue).
+    /// e.g., "Hier encore" entry containing "孙燕姿 - Hey Jude" lyrics.
+    private func validateLyricsContent(_ rawText: String, expectedTitle: String, expectedArtist: String) -> Bool {
+        // Check first 5 lines for "artist - title" metadata pattern
+        let lines = rawText.components(separatedBy: .newlines).prefix(8)
+        let expectedTitleLower = expectedTitle.lowercased()
+        let expectedArtistLower = expectedArtist.lowercased()
+        for line in lines {
+            // Strip LRC timestamp prefix
+            let text = line.replacingOccurrences(of: "\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+            guard text.contains(" - ") else { continue }
+            let parts = text.components(separatedBy: " - ")
+            guard parts.count >= 2 else { continue }
+            let lineArtist = parts[0].trimmingCharacters(in: .whitespaces).lowercased()
+            let lineTitle = parts[1].trimmingCharacters(in: .whitespaces).lowercased()
+            // If metadata artist AND title are both present but neither matches expected → wrong song
+            if !lineArtist.isEmpty && !lineTitle.isEmpty
+                && !lineArtist.contains(expectedArtistLower) && !expectedArtistLower.contains(lineArtist)
+                && !lineTitle.contains(expectedTitleLower) && !expectedTitleLower.contains(lineTitle) {
+                DebugLogger.log("NetEase", "⚠️ Content mismatch: lyrics say '\(lineArtist) - \(lineTitle)' but expected '\(expectedTitle)' by '\(expectedArtist)'")
+                return false
+            }
+        }
+        return true
+    }
+
     private func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("NetEase", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
         let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration)
@@ -709,7 +736,7 @@ public final class LyricsFetcher {
         }
 
         DebugLogger.log("NetEase", "✅ 找到 songId=\(songId)")
-        guard let lyrics = await fetchNetEaseLyrics(songId: songId, duration: duration) else {
+        guard let lyrics = await fetchNetEaseLyrics(songId: songId, duration: duration, expectedTitle: originalTitle, expectedArtist: originalArtist) else {
             DebugLogger.log("NetEase", "❌ 获取歌词失败")
             return nil
         }
@@ -718,7 +745,7 @@ public final class LyricsFetcher {
         return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score)
     }
 
-    private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval) async -> [LyricLine]? {
+    private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> [LyricLine]? {
         // 🔑 yv=1 requests YRC (word-level) lyrics alongside LRC/tlyric
         guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1&yv=1") else { return nil }
 
@@ -727,6 +754,16 @@ public final class LyricsFetcher {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                 "Referer": "https://music.163.com"
             ], timeout: 6.0)
+
+            // 🔑 Content validation: reject lyrics whose metadata says a different song
+            // (NetEase data quality issue: "Hier encore" entry containing Hey Jude lyrics)
+            // Always check LRC — metadata lines ("artist - title") only appear in LRC, not YRC.
+            if !expectedTitle.isEmpty {
+                let rawLRC = (json["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
+                if !rawLRC.isEmpty && !validateLyricsContent(rawLRC, expectedTitle: expectedTitle, expectedArtist: expectedArtist) {
+                    return nil
+                }
+            }
 
             // 🔑 Prefer YRC (word-level) over LRC — skip LRC parse entirely when YRC available
             var lyrics: [LyricLine]
