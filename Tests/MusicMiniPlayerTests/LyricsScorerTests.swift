@@ -331,4 +331,74 @@ final class LyricsScorerTests: XCTestCase {
         XCTAssertGreaterThan(score, 20,
             "30 syllable-synced lines at 15% overshoot scored \(score), should still be viable")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Version mismatch overshoot (17% — A-Tisket regression)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// A-Tisket, A-Tasket: QQ returns 132s lyrics for 113s song (17% overshoot).
+    /// Wrong-version lyrics must score BELOW correct-version LRCLIB (score ~20).
+    func testVersionMismatchOvershoot_losesToCorrectVersion() {
+        let songDuration: TimeInterval = 113
+        let wrongVersionDuration: TimeInterval = 132  // 17% overshoot
+        let wrongLines = makeAuthenticLyrics(count: 43, duration: wrongVersionDuration)
+        let wrongScore = scorer.calculateScore(wrongLines, source: "QQ", duration: songDuration, translationEnabled: false)
+
+        let correctLines = makeAuthenticLyrics(count: 31, duration: songDuration)
+        let correctScore = scorer.calculateScore(correctLines, source: "LRCLIB", duration: songDuration, translationEnabled: false)
+
+        XCTAssertLessThan(wrongScore, correctScore,
+            "Wrong version (17% overshoot, QQ score=\(wrongScore)) must lose to correct version (LRCLIB score=\(correctScore))")
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - isLikelyRomaji false positive on Western languages
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// French lyrics (Hier encore) contain accented characters (é, è, ê, etc.)
+    /// and must NOT be classified as romaji. Romaji is pure ASCII transliteration.
+    func testIsLikelyRomaji_frenchIsNotRomaji() {
+        let frenchLines = [
+            LyricLine(text: "Hier encore j'avais vingt ans", startTime: 0, endTime: 5),
+            LyricLine(text: "Je caressais le temps et jouais de la vie", startTime: 5, endTime: 10),
+            LyricLine(text: "Comme on joue de l'amour et je vivais la nuit", startTime: 10, endTime: 15),
+            LyricLine(text: "Les yeux cherchant le ciel mais le cœur mis en terre", startTime: 15, endTime: 20),
+            LyricLine(text: "J'ai fondé tant d'espoirs qui se sont envolés", startTime: 20, endTime: 25),
+        ]
+        XCTAssertFalse(scorer.isLikelyRomaji(frenchLines),
+            "French lyrics with accented characters must not be classified as romaji")
+    }
+
+    /// Pure ASCII lyrics (actual romaji) should still be detected as romaji.
+    func testIsLikelyRomaji_pureASCIIStillDetected() {
+        let romajiLines = [
+            LyricLine(text: "Watashi no koto wo kesshite honki de aisanaide", startTime: 0, endTime: 5),
+            LyricLine(text: "Koi nante tada no game tanoshimeba sore de ii no", startTime: 5, endTime: 10),
+            LyricLine(text: "Tozashita kokoro wo kazaru hade na dress mo kutsu mo", startTime: 10, endTime: 15),
+            LyricLine(text: "Kodoku na tomodachi", startTime: 15, endTime: 20),
+        ]
+        XCTAssertTrue(scorer.isLikelyRomaji(romajiLines),
+            "Pure ASCII romaji lyrics must still be detected")
+    }
+
+    /// Spanish/German lyrics with non-ASCII Latin chars must not be romaji.
+    func testIsLikelyRomaji_spanishGermanNotRomaji() {
+        let spanishLines = [
+            LyricLine(text: "Tú me prometías que todo cambiaría", startTime: 0, endTime: 5),
+            LyricLine(text: "Pero la vida pasó y nada más quedó", startTime: 5, endTime: 10),
+            LyricLine(text: "Así es como el corazón se rompió", startTime: 10, endTime: 15),
+            LyricLine(text: "Y no pude más con esta ilusión", startTime: 15, endTime: 20),
+        ]
+        XCTAssertFalse(scorer.isLikelyRomaji(spanishLines),
+            "Spanish lyrics with ú/í/ó must not be classified as romaji")
+
+        let germanLines = [
+            LyricLine(text: "Über den Wolken muss die Freiheit wohl grenzenlos sein", startTime: 0, endTime: 5),
+            LyricLine(text: "Alle Ängste alle Sorgen sagt man", startTime: 5, endTime: 10),
+            LyricLine(text: "Blieben darunter verborgen und dann", startTime: 10, endTime: 15),
+            LyricLine(text: "Würde was uns groß und wichtig erscheint", startTime: 15, endTime: 20),
+        ]
+        XCTAssertFalse(scorer.isLikelyRomaji(germanLines),
+            "German lyrics with ü/ä must not be classified as romaji")
+    }
 }

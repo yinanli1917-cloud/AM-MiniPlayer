@@ -133,10 +133,12 @@ public final class LyricsFetcher {
                 }
 
                 // 🔑 Time budget: good result + 3s → stop; any result + 5s → stop.
-                // Prevents MetadataResolver + slow sources from blocking the pipeline.
+                // Never cut off when zero results — resolved-params tasks need time for
+                // romanized→CJK songs where only MetadataResolver-resolved params match.
                 let elapsed = Date().timeIntervalSince(fetchStart)
+                guard !results.isEmpty else { continue }
                 let hasGoodResult = results.contains { $0.score >= 40 }
-                if (hasGoodResult && elapsed >= 3.0) || (!results.isEmpty && elapsed >= 5.0) {
+                if (hasGoodResult && elapsed >= 3.0) || elapsed >= 5.0 {
                     DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
                     group.cancelAll()
                     break
@@ -689,7 +691,7 @@ public final class LyricsFetcher {
         }
 
         DebugLogger.log("NetEase", "✅ 找到 songId=\(songId)")
-        guard let lyrics = await fetchNetEaseLyrics(songId: songId) else {
+        guard let lyrics = await fetchNetEaseLyrics(songId: songId, duration: duration) else {
             DebugLogger.log("NetEase", "❌ 获取歌词失败")
             return nil
         }
@@ -698,7 +700,7 @@ public final class LyricsFetcher {
         return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score)
     }
 
-    private func fetchNetEaseLyrics(songId: Int) async -> [LyricLine]? {
+    private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval) async -> [LyricLine]? {
         // 🔑 yv=1 requests YRC (word-level) lyrics alongside LRC/tlyric
         guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1&yv=1") else { return nil }
 
@@ -720,7 +722,11 @@ public final class LyricsFetcher {
                 DebugLogger.log("NetEase", "🎯 YRC word-level: \(lyrics.count) lines, \(lyrics.filter { $0.hasSyllableSync }.count) synced")
             } else if let lrc = json["lrc"] as? [String: Any],
                       let lyricText = lrc["lyric"] as? String, !lyricText.isEmpty {
-                lyrics = parser.stripMetadataLines(parser.parseLRC(lyricText))
+                let parsed = parser.parseLRC(lyricText)
+                // 🔑 Fallback: source has lyrics text but no timestamps → create unsynced
+                lyrics = parsed.isEmpty
+                    ? parser.createUnsyncedLyrics(lyricText, duration: duration)
+                    : parser.stripMetadataLines(parsed)
             } else {
                 return nil
             }
@@ -803,7 +809,7 @@ public final class LyricsFetcher {
         }
 
         DebugLogger.log("QQMusic", "✅ 找到 songMid=\(songMid)")
-        guard let lyrics = await fetchQQMusicLyrics(songMid: songMid) else {
+        guard let lyrics = await fetchQQMusicLyrics(songMid: songMid, duration: duration) else {
             DebugLogger.log("QQMusic", "❌ 获取歌词失败")
             return nil
         }
@@ -812,7 +818,7 @@ public final class LyricsFetcher {
         return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score)
     }
 
-    private func fetchQQMusicLyrics(songMid: String) async -> [LyricLine]? {
+    private func fetchQQMusicLyrics(songMid: String, duration: TimeInterval) async -> [LyricLine]? {
         guard let url = HTTPClient.buildURL(base: "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg", queryItems: [
             "songmid": songMid, "format": "json", "nobase64": "1"
         ]) else { return nil }
@@ -826,7 +832,11 @@ public final class LyricsFetcher {
             guard let lyricText = json["lyric"] as? String, !lyricText.isEmpty else { return nil }
 
             // 🔑 先剥元信息再处理翻译
-            var lyrics = parser.stripMetadataLines(parser.parseLRC(lyricText))
+            let parsed = parser.parseLRC(lyricText)
+            // 🔑 Fallback: source has lyrics text but no timestamps → create unsynced
+            var lyrics = parsed.isEmpty
+                ? parser.createUnsyncedLyrics(lyricText, duration: duration)
+                : parser.stripMetadataLines(parsed)
 
             let (extracted, isInterleaved) = parser.extractInterleavedTranslations(lyrics)
             if isInterleaved {

@@ -163,5 +163,236 @@
       "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
       "firstLineContains": null
     }
+  },
+  {
+    "id": "R07",
+    "title": "Invisible",
+    "artist": "mei ehara",
+    "duration": 326,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "不確か"
+    }
+  },
+  {
+    "id": "R08",
+    "title": "Plastic Love",
+    "artist": "eill",
+    "duration": 262,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "F01",
+    "title": "Hier encore",
+    "artist": "Charles Aznavour",
+    "duration": 142,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
+      "firstLineContains": "Hier encore"
+    }
+  },
+  {
+    "id": "H01",
+    "title": "Hatsukoi",
+    "artist": "Kozo Murashita",
+    "duration": 225,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H02",
+    "title": "If",
+    "artist": "Perry Como",
+    "duration": 184,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "F02",
+    "title": "La valse à mille temps",
+    "artist": "Jacques Brel",
+    "duration": 232,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H03",
+    "title": "Such a Perfect Day",
+    "artist": "deca joins",
+    "duration": 318,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H04",
+    "title": "翻風",
+    "artist": "Cass Phang",
+    "duration": 213,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H05",
+    "title": "Once Upon a Time",
+    "artist": "Frank Sinatra",
+    "duration": 209,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H06",
+    "title": "Ditto",
+    "artist": "NewJeans",
+    "duration": 186,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H07",
+    "title": "How Sweet",
+    "artist": "NewJeans",
+    "duration": 219,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H08",
+    "title": "Good At Breaking Hearts",
+    "artist": "Jungle",
+    "duration": 214,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H09",
+    "title": "Twelfth Floor",
+    "artist": "Karen Mok",
+    "duration": 313,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H10",
+    "title": "Dream Boat ga Deru Yoru ni",
+    "artist": "Momoko Kikuchi",
+    "duration": 233,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H11",
+    "title": "Try to Say",
+    "artist": "Hitomi Tohyama",
+    "duration": 229,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H12",
+    "title": "Mayonaka No Shujinkou",
+    "artist": "Sudo Kaoru",
+    "duration": 243,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H13",
+    "title": "Hiroshima mon amour",
+    "artist": "Karen Mok",
+    "duration": 321,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H14",
+    "title": "Strange Weather",
+    "artist": "YELLOW & 9m88",
+    "duration": 259,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H15",
+    "title": "只有冰淇淋的烛光晚餐",
+    "artist": "Karen Mok",
+    "duration": 239,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H16",
+    "title": "仙乐飘飘处处闻",
+    "artist": "Eman Lam",
+    "duration": 301,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "H17",
+    "title": "Burgundy Red",
+    "artist": "Sunset Rollercoaster",
+    "duration": 378,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": null
+    }
   }
 ]

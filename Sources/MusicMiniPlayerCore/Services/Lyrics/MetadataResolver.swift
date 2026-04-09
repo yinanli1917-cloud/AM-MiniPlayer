@@ -408,14 +408,17 @@ public final class MetadataResolver {
             }
 
             let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
+            let inputIsASCII = LanguageUtils.isPureASCII(title)
             var bestMatch: (String, String, String, Double)? = nil
             for await result in group {
                 if let r = result {
                     DebugLogger.log("MetadataResolver", "🔍 区域结果: '\(r.0)' by '\(r.1)' (region: \(r.2), Δ\(String(format: "%.2f", r.3))s)")
-                    // 🔑 Priority: titleMatch > titleCJK > artistCJK > originRegion > hasCJK > closest duration
+                    // 🔑 Priority depends on input script:
+                    // Romanized input: titleCJK > titleMatch > artistCJK > originRegion > hasCJK > duration
+                    //   (CJK title is the whole point of resolving romanized input)
+                    // CJK input: titleMatch > titleCJK > artistCJK > originRegion > hasCJK > duration
+                    //   (exact title match means same song in same script)
                     // JP/KR regions are authoritative for their languages' character forms.
-                    // HK/TW transliterate Japanese names (蔵→藏) breaking lyrics database matching.
-                    // e.g., JP "初恋" by "村下孝蔵" beats HK "初恋" by "村下孝藏"
                     let rTitleMatch = LanguageUtils.normalizeTrackName(r.0).lowercased() == inputTitleNorm
                     let rTitleCJK = LanguageUtils.containsCJK(r.0)
                     let rArtistCJK = LanguageUtils.containsCJK(r.1)
@@ -426,13 +429,25 @@ public final class MetadataResolver {
                     let bestArtistCJK = bestMatch.map { LanguageUtils.containsCJK($0.1) } ?? false
                     let bestIsOriginRegion = bestMatch.map { $0.2 == "JP" || $0.2 == "KR" } ?? false
                     let bestHasCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) || LanguageUtils.containsCJK($0.1) } ?? false
+
+                    // 🔑 For romanized input, swap titleCJK above titleMatch:
+                    // "ドリーム・ボートが出る夜に" (CJK, JP) beats "Dream Boat Ga Deru Yoru Ni" (ASCII match, KR)
+                    let (primary, bestPrimary, secondary, bestSecondary): (Bool, Bool, Bool, Bool)
+                    if inputIsASCII {
+                        (primary, bestPrimary) = (rTitleCJK, bestTitleCJK)
+                        (secondary, bestSecondary) = (rTitleMatch, bestTitleMatch)
+                    } else {
+                        (primary, bestPrimary) = (rTitleMatch, bestTitleMatch)
+                        (secondary, bestSecondary) = (rTitleCJK, bestTitleCJK)
+                    }
+
                     if bestMatch == nil ||
-                       (rTitleMatch && !bestTitleMatch) ||
-                       (rTitleMatch == bestTitleMatch && rTitleCJK && !bestTitleCJK) ||
-                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rArtistCJK && !bestArtistCJK) ||
-                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rArtistCJK == bestArtistCJK && rIsOriginRegion && !bestIsOriginRegion) ||
-                       (rTitleMatch == bestTitleMatch && rHasCJK && !bestHasCJK) ||
-                       (rTitleMatch == bestTitleMatch && rTitleCJK == bestTitleCJK && rArtistCJK == bestArtistCJK && rIsOriginRegion == bestIsOriginRegion && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
+                       (primary && !bestPrimary) ||
+                       (primary == bestPrimary && secondary && !bestSecondary) ||
+                       (primary == bestPrimary && secondary == bestSecondary && rArtistCJK && !bestArtistCJK) ||
+                       (primary == bestPrimary && secondary == bestSecondary && rArtistCJK == bestArtistCJK && rIsOriginRegion && !bestIsOriginRegion) ||
+                       (primary == bestPrimary && secondary == bestSecondary && rHasCJK && !bestHasCJK) ||
+                       (primary == bestPrimary && secondary == bestSecondary && rArtistCJK == bestArtistCJK && rIsOriginRegion == bestIsOriginRegion && rHasCJK == bestHasCJK && r.3 < bestMatch!.3) {
                         bestMatch = r
                     }
                 }

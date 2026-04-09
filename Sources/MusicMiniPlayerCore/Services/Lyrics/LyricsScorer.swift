@@ -79,10 +79,16 @@ public final class LyricsScorer {
         if duration > 0 && authenticity != .fabricated {
             let lastStart = lyrics.last?.startTime ?? 0
             if lastStart > duration {
-                // Uncapped: a 23x overshoot (wrong song) yields -2183, effectively rejected.
-                // A 10% overshoot (live version) yields -10, still viable.
+                // Progressive penalty: small overshoot (live/remaster) is mild,
+                // extreme overshoot (completely wrong song) is harsh.
+                // ≤10%: -ratio*100 (different edit, same lyrics), >10%: quadratic
                 let overshootRatio = (lastStart - duration) / duration
-                score -= overshootRatio * 100
+                if overshootRatio <= 0.10 {
+                    score -= overshootRatio * 100
+                } else {
+                    // Quadratic: 15% → -22.5, 20% → -40, 38% → -144, 100% → -1000
+                    score -= overshootRatio * overshootRatio * 1000
+                }
             } else {
                 let lyricsDuration = (lyrics.last?.endTime ?? 0) - (lyrics.first?.startTime ?? 0)
                 let durationDiff = abs(lyricsDuration - duration)
@@ -292,6 +298,8 @@ public final class LyricsScorer {
 
     /// 检测是否可能是罗马音歌词
     /// 忽略 Genius 风格的段落标记（[Chorus], [副歌: 林二汶] 等）只检查实际歌词行
+    /// 🔑 Romaji is pure ASCII transliteration of Japanese — accented Latin chars
+    /// (é, ñ, ü, ç, etc.) indicate Western languages (French, Spanish, German), not romaji.
     public func isLikelyRomaji(_ lyrics: [LyricLine]) -> Bool {
         let lyricsLines = lyrics.filter { line in
             let t = line.text.trimmingCharacters(in: .whitespaces)
@@ -300,7 +308,12 @@ public final class LyricsScorer {
         let sample = lyricsLines.prefix(10).map { $0.text }
         guard !sample.isEmpty else { return false }
         return sample.allSatisfy { text in
-            !text.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
+            let scalars = text.unicodeScalars
+            let hasCJK = scalars.contains { LanguageUtils.isCJKScalar($0) }
+            if hasCJK { return false }
+            // Non-ASCII Latin chars (accents/diacritics) → Western language, not romaji
+            let hasAccentedLatin = scalars.contains { $0.value > 0x7F && CharacterSet.letters.contains($0) }
+            return !hasAccentedLatin
         }
     }
 
