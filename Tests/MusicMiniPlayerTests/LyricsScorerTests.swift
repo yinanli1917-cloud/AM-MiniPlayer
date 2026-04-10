@@ -75,9 +75,9 @@ final class LyricsScorerTests: XCTestCase {
     }
 
     func testCalculateScore_unsyncedLowQuality() {
-        // 无逐字、无翻译、来源 lyrics.ovh — fabricated timestamps
+        // 无逐字、无翻译、来源 lyrics.ovh — fabricated kind tagged at parse time
         let lyrics = makeLyrics(count: 10, duration: 240)
-        let score = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: 240, translationEnabled: false)
+        let score = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: 240, translationEnabled: false, kind: .unsynced)
 
         // Fabricated: duration/coverage gated → 质量30 + 行数5 - 伪造15 + ovh(-2) ≈ 18
         XCTAssertGreaterThan(score, 10)
@@ -85,11 +85,13 @@ final class LyricsScorerTests: XCTestCase {
     }
 
     func testCalculateScore_translationBonus() {
-        let withTrans = makeLyrics(count: 20, duration: 240, withTranslation: true)
-        let withoutTrans = makeLyrics(count: 20, duration: 240, withTranslation: false)
+        // Use LRCLIB-Search (+2) + fewer lines so we stay below the 100 cap.
+        // NetEase + .synced default + full bonuses was saturating at 100.
+        let withTrans = makeLyrics(count: 10, duration: 240, withTranslation: true)
+        let withoutTrans = makeLyrics(count: 10, duration: 240, withTranslation: false)
 
-        let scoreWith = scorer.calculateScore(withTrans, source: "NetEase", duration: 240, translationEnabled: true)
-        let scoreWithout = scorer.calculateScore(withoutTrans, source: "NetEase", duration: 240, translationEnabled: true)
+        let scoreWith = scorer.calculateScore(withTrans, source: "LRCLIB-Search", duration: 240, translationEnabled: true)
+        let scoreWithout = scorer.calculateScore(withoutTrans, source: "LRCLIB-Search", duration: 240, translationEnabled: true)
 
         // 有翻译应多 15 分
         XCTAssertEqual(scoreWith - scoreWithout, 15, accuracy: 0.1)
@@ -256,7 +258,7 @@ final class LyricsScorerTests: XCTestCase {
                 endTime: Double(i + 1) * timePerLine
             )
         }
-        let score = scorer.calculateScore(lines, source: "Genius", duration: 378, translationEnabled: false)
+        let score = scorer.calculateScore(lines, source: "Genius", duration: 378, translationEnabled: false, kind: .unsynced)
         XCTAssertLessThan(score, 30,
             "Fabricated 4-line English text for 378s song scored \(score), should be < 30")
     }
@@ -273,7 +275,7 @@ final class LyricsScorerTests: XCTestCase {
                 endTime: Double(i + 1) * (duration / Double(lineCount))
             )
         }
-        let score = scorer.calculateScore(lines, source: "lyrics.ovh", duration: duration, translationEnabled: false)
+        let score = scorer.calculateScore(lines, source: "lyrics.ovh", duration: duration, translationEnabled: false, kind: .unsynced)
         // Without gating: ~32 (duration +15, coverage +8 are free points from fabrication)
         // With gating: those bonuses should be zeroed → score drops significantly
         XCTAssertLessThan(score, 15,

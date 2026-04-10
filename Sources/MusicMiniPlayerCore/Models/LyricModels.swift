@@ -10,6 +10,24 @@
 import Foundation
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Lyrics Kind (synced vs unsynced)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Whether a lyrics payload has real per-line timestamps or fabricated ones.
+///
+/// This is tagged at parse time so consumers (auto-scroll, score gating,
+/// verifier JSON) never have to re-guess via statistical heuristics such
+/// as CV / IQR on line gaps. Those heuristics false-positive on real
+/// LRC/YRC data (QQ Music in particular) and caused regressions where
+/// real synced lyrics were silently treated as unsynced.
+public enum LyricsKind: String, Codable, Equatable, Sendable {
+    /// Real per-line timestamps from TTML / LRC / YRC.
+    case synced
+    /// Fabricated timestamps built from duration (lyrics.ovh, Genius, etc.).
+    case unsynced
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Lyric Word (逐字歌词)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

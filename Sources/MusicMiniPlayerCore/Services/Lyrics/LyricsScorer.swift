@@ -52,16 +52,20 @@ public final class LyricsScorer {
         _ lyrics: [LyricLine],
         source: String,
         duration: TimeInterval,
-        translationEnabled: Bool
+        translationEnabled: Bool,
+        kind: LyricsKind = .synced
     ) -> Double {
         guard !lyrics.isEmpty else { return 0 }
 
         var score: Double = 0
 
-        // 0. Timestamp authenticity — computed first because it gates steps 4 & 5
-        // Fabricated timestamps (uniform spacing, CV ≈ 0) should not earn duration/coverage bonuses
-        // because those metrics are circular: createUnsyncedLyrics constructs timestamps FROM duration
-        let authenticity = timestampAuthenticity(lyrics)
+        // 0. Authenticity is now declared explicitly at parse time via `kind`
+        // (LyricsKind.unsynced = parser.createUnsyncedLyrics). Previously this
+        // was inferred statistically from the gap coefficient of variation,
+        // which false-positived on real QQ Music LRC data and silently killed
+        // auto-scroll for every QQ-sourced song. Tagging at parse time is the
+        // single source of truth — see postmortem and banned-patterns.
+        let isFabricated = (kind == .unsynced)
 
         // 1. Syllable sync (word-level timestamps, max 30)
         let syllableSyncCount = lyrics.filter { $0.hasSyllableSync }.count
@@ -76,7 +80,7 @@ public final class LyricsScorer {
         score += min(Double(lyrics.count) * 0.5, 15)
 
         // 4. Duration match (max 15) — gated: only for authentic timestamps
-        if duration > 0 && authenticity != .fabricated {
+        if duration > 0 && !isFabricated {
             let lastStart = lyrics.last?.startTime ?? 0
             if lastStart > duration {
                 // Uncapped: a 23x overshoot (wrong song) yields -2183, effectively rejected.
@@ -96,7 +100,7 @@ public final class LyricsScorer {
         }
 
         // 5. Coverage (max 8) — gated: only for authentic timestamps
-        if duration > 0 && authenticity != .fabricated {
+        if duration > 0 && !isFabricated {
             let lastLyricEnd = lyrics.last?.endTime ?? 0
             let firstLyricStart = lyrics.first?.startTime ?? 0
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
@@ -128,11 +132,10 @@ public final class LyricsScorer {
         }
 
         // 10. Authenticity bonus/penalty (on top of gating)
-        switch authenticity {
-        case .fabricated: score -= 15
-        case .authentic: score += 15
-        case .unknown: break
-        }
+        // Synced sources earn +15, unsynced eat -15. This used to be a
+        // three-state switch fed by CV/IQR inference; kind is now declared
+        // at parse time so the mapping is trivial.
+        score += isFabricated ? -15 : 15
 
         // 11. Source bonus
         score += sourceBonus(for: source)
@@ -224,34 +227,6 @@ public final class LyricsScorer {
         case "lyrics.ovh": return -2
         default: return 0
         }
-    }
-
-    // MARK: - Timestamp Authenticity
-
-    private enum TimestampAuthenticity {
-        case fabricated  // Uniform spacing (CV ≈ 0) — constructed from duration
-        case authentic   // Natural variation (CV > 0.15) — real synced timestamps
-        case unknown     // Not enough data or ambiguous
-    }
-
-    /// Classify timestamps as fabricated vs authentic using coefficient of variation.
-    /// Fabricated (createUnsyncedLyrics): perfectly uniform spacing → CV ≈ 0
-    /// Authentic (synced sources): natural variation in line durations → CV > 0.15
-    /// Gates duration match and coverage scoring — fabricated timestamps earn 0 on both.
-    private func timestampAuthenticity(_ lyrics: [LyricLine]) -> TimestampAuthenticity {
-        var gaps: [Double] = []
-        for i in 1..<lyrics.count {
-            let gap = lyrics[i].startTime - lyrics[i - 1].startTime
-            if gap > 0 { gaps.append(gap) }
-        }
-        guard gaps.count >= 2 else { return .unknown }
-        let mean = gaps.reduce(0, +) / Double(gaps.count)
-        guard mean > 0 else { return .unknown }
-        let variance = gaps.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(gaps.count)
-        let cv = sqrt(variance) / mean
-        if cv < 0.05 { return .fabricated }
-        if cv > 0.15 { return .authentic }
-        return .unknown
     }
 
     // MARK: - 辅助函数

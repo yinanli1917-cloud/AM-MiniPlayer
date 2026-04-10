@@ -454,7 +454,9 @@ public final class MetadataResolver {
     private typealias RegionCandidate = (trackName: String, artistName: String, durationDiff: Double)
 
     /// 从指定区域获取元信息
-    private func fetchMetadataFromRegion(
+    /// Exposed so the LyricsFetcher speculative branch (GAMMA) can race
+    /// per-region searches without waiting for cross-region consensus.
+    public func fetchMetadataFromRegion(
         title: String,
         artist: String,
         duration: TimeInterval,
