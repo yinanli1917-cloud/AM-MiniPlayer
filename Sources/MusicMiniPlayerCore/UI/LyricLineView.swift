@@ -8,6 +8,54 @@ import SwiftUI
 import Translation
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - LyricMetrics — single source of truth for layout dimensions
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Apple Music reference (measured from iPhone screenshot, normalized to main font):
+//   • Translation font ratio:        ~0.59x main
+//   • Intra-pair gap (lyric→trans):  ~0.35x main  (clear breathing, still paired)
+//   • Inter-pair gap (trans→next):   ~0.88x main
+//   • Translation opacity (current): ~0.85 (nearly as bright as main lyric)
+//
+// Our deviations (deliberate, for 250pt window legibility):
+//   • Translation 0.67x not 0.59x — CJK characters need more pixels at small scale.
+//
+// 🔑 Responsive window prep:
+//   When the window becomes resizable, replace `mainFontSize` with a function
+//   `mainFontSize(for: windowWidth)` and ALL derived values scale automatically.
+//   Renderer-internal tuning (LyricsTextRenderer.fadeHalfPt = 12pt = font/2,
+//   glowRadius = 0.3 * font, etc.) must be updated together if mainFontSize changes.
+//
+fileprivate enum LyricMetrics {
+    /// Main lyric font size — current production value tuned for 250pt window.
+    static let mainFontSize: CGFloat = 24
+
+    /// Translation font: 0.67x main → 16pt at 24pt main.
+    /// Slightly larger than Apple Music's 0.59 for CJK legibility.
+    static var translationFontSize: CGFloat { mainFontSize * 0.67 }
+
+    /// Intra-pair gap (lyric → its translation): 0.33x main → 8pt at 24pt main.
+    /// Matches Apple Music's ~0.35 ratio: clear breathing room, pair stays paired.
+    static var intraPairSpacing: CGFloat { mainFontSize * 0.33 }
+
+    /// Outer vertical padding per LyricLineView — provides draw overflow for
+    /// emphasis float/lift/glow. NOT the inter-pair gap (that comes from
+    /// LyricsView.calculateAccumulatedHeight + line spacing 6pt).
+    static var outerVerticalPadding: CGFloat { 8 }
+
+    /// Translation line spacing within wrapped multi-line translations.
+    /// Apple Music uses tight wrapping for translations — 2pt is barely visible.
+    static var translationLineSpacing: CGFloat { 2 }
+
+    /// Translation opacity multiplier on the current line (matches main brightness).
+    /// Apple Music renders translation nearly as bright as the main lyric — ~0.85.
+    static let currentTranslationOpacityFactor: CGFloat = 0.85
+
+    /// "Translation unavailable" hint font.
+    static var hintFontSize: CGFloat { 14 }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - LyricLineView
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -74,7 +122,7 @@ struct LyricLineView: View {
 
         // Syllable-synced lines ALWAYS use WordByWordText (same FlowLayout in all states)
         // to prevent layout jumps when transitioning between current/non-current.
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: LyricMetrics.intraPairSpacing) {
             // Main lyrics line
             HStack(spacing: 0) {
                 if line.hasSyllableSync {
@@ -118,7 +166,7 @@ struct LyricLineView: View {
                     }
                 } else {
                     Text(cleanedText)
-                        .font(.system(size: 24, weight: .semibold))
+                        .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
                         .foregroundColor(.white.opacity(textOpacity))
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
@@ -149,17 +197,17 @@ struct LyricLineView: View {
                             lineStartTime: line.startTime,
                             lineEndTime: line.endTime,
                             currentTime: 0,
-                            staticOpacity: textOpacity * 0.75
+                            staticOpacity: textOpacity * LyricMetrics.currentTranslationOpacityFactor
                         )
                     }
                 } else {
                     HStack(spacing: 0) {
                         Text(translation)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white.opacity(textOpacity * 0.75))
+                            .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
+                            .foregroundColor(.white.opacity(textOpacity * LyricMetrics.currentTranslationOpacityFactor))
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
-                            .lineSpacing(4)
+                            .lineSpacing(LyricMetrics.translationLineSpacing)
 
                         Spacer(minLength: 0)
                     }
@@ -174,7 +222,7 @@ struct LyricLineView: View {
                 // 🔑 翻译失败提示（仅当前行显示）
                 HStack(spacing: 4) {
                     Text("Translation unavailable")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: LyricMetrics.hintFontSize, weight: .medium))
                         .foregroundColor(.white.opacity(0.3))
                     Spacer(minLength: 0)
                 }
@@ -198,7 +246,7 @@ struct LyricLineView: View {
             internalShowTranslation = showTranslation
         }
         // 🔑 不设固定高度，让内容自然决定高度
-        .padding(.vertical, 8)  // 🔑 每句歌词的内部 padding（hover 背景用）
+        .padding(.vertical, LyricMetrics.outerVerticalPadding)  // hover 背景 + 渲染溢出
         .padding(.horizontal, 8)
         .background(
             Group {
@@ -269,7 +317,7 @@ private struct TranslationSweepText: View {
         HStack(spacing: 0) {
             if #available(macOS 15.0, *) {
                 Text(text)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
                     .foregroundColor(.white)
                     .textRenderer(TranslationSweepRenderer(
                         progress: staticOpacity != nil ? 1.0 : lineProgress,
@@ -279,14 +327,14 @@ private struct TranslationSweepText: View {
                     ))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                    .lineSpacing(4)
+                    .lineSpacing(LyricMetrics.translationLineSpacing)
             } else {
                 Text(text)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white.opacity(staticOpacity ?? 0.75))
+                    .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
+                    .foregroundColor(.white.opacity(staticOpacity ?? LyricMetrics.currentTranslationOpacityFactor))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                    .lineSpacing(4)
+                    .lineSpacing(LyricMetrics.translationLineSpacing)
             }
             Spacer(minLength: 0)
         }
@@ -307,7 +355,11 @@ private struct TranslationSweepRenderer: TextRenderer {
     private let fadeHalfPt: CGFloat = 8
 
     var displayPadding: EdgeInsets {
-        EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
+        // 🔑 MUST stay zero vertical. Same reason as LyricsTextRenderer:
+        // displayPadding inflates per visual line, multiplying the gap on
+        // wrapped translations. Translation text has no transforms or glow,
+        // so zero is also semantically correct.
+        EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4)
     }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
@@ -416,7 +468,7 @@ private struct WordByWordText: View {
                 let isLast = (index == words.count - 1)
                 if let opacity = staticOpacity {
                     Text(word.word + suffix)
-                        .font(.system(size: 24, weight: .semibold))
+                        .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(opacity))
                 } else {
                     WordFillSpan(
@@ -539,7 +591,7 @@ private struct SyllableSyncedLine: View {
 
     var body: some View {
         buildText()
-            .font(.system(size: 24, weight: .semibold))
+            .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
             .foregroundColor(.white)
             .textRenderer(LyricsTextRenderer(
                 currentTime: currentTime,
@@ -584,12 +636,14 @@ private struct LyricsTextRenderer: TextRenderer {
     private let fadeHalfPt: CGFloat = 12
 
     var displayPadding: EdgeInsets {
-        // Top 10: emphasis float (-2pt), lift, charFloat, glow all extend upward.
-        // Bottom 4: only glow shadow extends down (max radius ~6pt, gaussian falloff;
-        // 4pt captures the visible portion). Emphasis float/lift/spread go UP not down.
-        // Keeping bottom tight prevents a disproportionate gap before translation
-        // on short multi-line lyrics (2-3 visual lines).
-        EdgeInsets(top: 10, leading: 10, bottom: 4, trailing: 10)
+        // 🔑 MUST stay zero. SwiftUI applies displayPadding per visual line of
+        // wrapped text, not per frame. Any non-zero value inflates the measured
+        // height of multi-line wrapped lyrics, creating a phantom gap between
+        // the lyric text and its translation that scales with line count.
+        // The emphasis float/lift/glow extend beyond text bounds visually but
+        // are NOT clipped here because the parent .padding(.vertical, 8) on
+        // LyricLineView provides the necessary draw overflow.
+        EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
     }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
