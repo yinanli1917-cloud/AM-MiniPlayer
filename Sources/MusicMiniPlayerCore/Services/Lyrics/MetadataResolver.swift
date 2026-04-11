@@ -19,6 +19,11 @@ public final class MetadataResolver {
 
     private init() {}
 
+    /// Disk-backed metadata cache. Shared across instances.
+    /// Persists resolved metadata AND preflight exact-match flags so warm
+    /// cold starts (second play of a known song) skip iTunes entirely.
+    public let diskCache = MetadataDiskCache(fileURL: MetadataDiskCache.defaultURL())
+
     // ────────────────────────────────────────────────────────────────
     // MARK: - Exact-match Preflight
     // ────────────────────────────────────────────────────────────────
@@ -51,6 +56,14 @@ public final class MetadataResolver {
         let key = "\(title.lowercased())|\(artist.lowercased())|\(Int(duration))"
         if let cached = await preflightCache.get(key) {
             return cached
+        }
+        // Disk cache check — warm cold starts skip iTunes entirely.
+        if let diskHit = diskCache.getPreflightExact(title: title, artist: artist, duration: duration) {
+            await preflightCache.set(key, diskHit)
+            if diskHit {
+                DebugLogger.log("MetadataResolver", "💾 Preflight disk hit (exact): '\(title)' by '\(artist)'")
+            }
+            return diskHit
         }
 
         // Reuse `fetchMetadataFromRegionWithExactFlag` (which the fetcher
@@ -85,6 +98,7 @@ public final class MetadataResolver {
         }
 
         await preflightCache.set(key, found)
+        diskCache.setPreflightExact(title: title, artist: artist, duration: duration, isExact: found)
         if found {
             DebugLogger.log("MetadataResolver", "🛑 hasOriginalExactMatch: '\(title)' by '\(artist)' — P3 CJK escape disabled")
         }
@@ -465,6 +479,12 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String, region: String, durationDiff: Double)? {
+        // Disk cache hit — skip iTunes entirely on warm cold starts.
+        if let cached = diskCache.get(title: title, artist: artist, duration: duration) {
+            DebugLogger.log("MetadataResolver", "💾 fetchLocalizedMetadata disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (region: \(cached.region))")
+            return (cached.resolvedTitle, cached.resolvedArtist, cached.region, 0)
+        }
+
         let regions = inferRegions(title: title, artist: artist)
         DebugLogger.log("MetadataResolver", "🌏 inferRegions: '\(title)' by '\(artist)' → \(regions)")
         guard !regions.isEmpty else {
@@ -557,6 +577,12 @@ public final class MetadataResolver {
 
         if bestMatch == nil {
             DebugLogger.log("MetadataResolver", "⚠️ 所有区域均无匹配结果")
+        } else if let m = bestMatch {
+            // Persist successful resolutions only — no negative caching.
+            diskCache.set(
+                title: title, artist: artist, duration: duration,
+                resolvedTitle: m.0, resolvedArtist: m.1, region: m.2
+            )
         }
         return bestMatch
     }
