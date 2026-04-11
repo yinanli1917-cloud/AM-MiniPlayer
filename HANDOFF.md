@@ -1,98 +1,137 @@
-# HANDOFF — 2026-03-28
+# HANDOFF — 2026-04-11
 
-## Current Tasks
+## Fixed: cross-region lyric aliasing (以小见大)
 
-### Task A: Freeze Fix + Artwork Delay Fix
-Progress bar / lyrics freeze fixed via frame-relative interpolation. Artwork delay fix applied but **NOT YET VERIFIED** — debug build launched but track-change timing test not completed.
+User reported a regression on **mei ehara — Invisible** (right panel
+showed correct content but wrong timestamps). They later clarified two
+more cases — **王菀之 — 忘记有时** (wrong-song match) and **Eman Lam —
+Xia Nie Piao Piao Chu Chu Wen** (no lyrics) — and made the broader
+point: this is a structural bug class, not three independent issues.
 
-### Task B: YRC Bilingual + Word Animation + YRC Timing
-From prior session. Animation rewritten from AMLL source. Needs visual QA.
+Investigation revealed the structural failure mode: Apple Music,
+NetEase, QQ, LRCLIB, and the iTunes regional catalogs label the SAME
+recording with DIFFERENT display titles depending on region/locale.
+mei ehara's "Invisible" is "不確か" on JP iTunes; Eman Lam's romanised
+"Xia Nie Piao Piao Chu Chu Wen" is "仙乐飘飘处处闻" on NetEase. Branch-1
+fetched community sources with the original title only and got 404s;
+Branch-2 only fed resolved CJK aliases into NetEase/QQ, never LRCLIB.
+And on top of that, NetEase/QQ tagged plain-text fallbacks as `.synced`,
+so the UI auto-scrolled against fabricated timestamps when no real
+data existed.
 
----
+Three structural fixes (commit `c8021a3`):
 
-## Task A: Freeze Fix — VERIFIED ✅
+### 1. Parse-time `LyricsKind` is the single source of truth
 
-### What was done
-- Frame-relative interpolation (`interpolateTime()` advances via per-frame `dt`, not `timeSincePoll`)
-- Dual SB instance (`artworkApp` on `artworkQueue`) — artwork fetch no longer blocks position polls
-- Debounced `fetchUpNextQueue` (1s timer) — reduces SB queue contention at track change
-- Diagnostic instrumentation (5s frame summaries, slow frame alerts, poll delay + drift logging, `#if DEBUG`-gated)
-- `diagLastLogTime` cosmetic fix (init to `Date()` instead of `.distantPast`)
+`LyricsParser.detectKind(_:)` is the new canonical detector — returns
+`.unsynced` when:
+- fewer than 3 lines, OR
+- all timestamps are 0, OR
+- distinct timestamp count is < `max(2, lines/2)`, OR
+- the total span is less than 30 s.
 
-### Verification evidence
-- `swift test`: 77/77 passed
-- `swift run LyricsVerifier run`: 14/15 passed (T02 pre-existing no-lyrics)
-- `./build_app.sh`: production build created and signed
-- Soak test (~3 min, 2 track changes): **no freezes**, position advanced 5.0s/5.0s through 5s SB queue starvation
-- Drift corrections: 4 total, max 1.2s (startup burst only)
-- Steady state: 312-313 frames/5s, avg 16.0ms
+`fetchNetEaseLyrics` and `fetchQQMusicLyrics` now return `(lyrics, kind)`.
+The `createUnsyncedLyrics` fallback flips kind to `.unsynced` AND skips
+`applyTimeOffset` (no real timestamps to align). The UI's existing
+`isUnsyncedLyrics` flag then suppresses auto-scroll.
 
----
+### 2. Branch-2 fans out to ALL title-keyed sources
 
-## Task A-2: Artwork Delay Fix — NEEDS VERIFICATION ⏳
+Previously Branch-2 only fed the resolved CJK alias into NetEase and
+QQ. Now it also fans out to **LRCLIB**, **LRCLIB-Search**, and **AMLL**.
+This is what makes Invisible find LRCLIB's real synced 不確か lyrics
+that Branch-1 (querying with the romanised title) couldn't reach.
 
-### Root cause (identified this session)
-`handleTrackChange` did a heavy SB artwork extraction on `scriptingBridgeQueue` via `fetchIDAndArtwork()`. This is the SAME queue as position polls (0.5s), queue hash checks, and duration retries. Diagnostic logs showed 1.8-5s queue waits — the artwork was delayed by queue contention, not by slow extraction itself.
+To prevent the new five-source fan-out from doing 5 × N regions = 20+
+duplicate iTunes round-trips, MetadataResolver gained a per-song actor
+cache (`RegionResolveCache`) that memoises
+`fetchMetadataFromRegionWithExactFlag`. Concurrent callers share a
+single in-flight Task per `(title, artist, ~duration, region)`.
 
-The parallel `fetchArtwork()` method (which uses `artworkQueue`) was NEVER reached on the notification path — `fetchIDAndArtwork` returned artwork directly when SB succeeded, bypassing the parallel path entirely.
+### 3. P3 CJK escape requires `isPureASCII(input)`
 
-### Fix applied
-1. **Removed `fetchIDAndArtwork()`** — was doing heavy SB artwork read on `scriptingBridgeQueue`
-2. **Removed `handleArtworkMiss()`** — placeholder + serial API fallback, replaced by `fetchArtwork()`
-3. **Rewrote `handleTrackChange`**: SB queue now only reads persistentID + duration (fast, ~8ms), then calls `fetchArtwork()` which runs SB on `artworkQueue` + API in parallel
-4. **Restored placeholder in `fetchArtwork`**: when API fails and no artwork yet, set placeholder before retry
+The romanised→CJK P3 escape was firing for CJK input too, picking
+same-artist different-song collisions like 忘记有时 → 原来如此 by 王菀之.
+The escape now requires the input title to be pure ASCII (a genuine
+romanisation that can't textually match a CJK candidate). The token-
+overlap path keeps the strict <0.5 s window; the CJK escape path is
+bumped to <1.0 s to absorb routine 0.3–0.8 s mastering differences
+between Apple Music and NetEase / QQ (Eman Lam — Xia Nie Piao Piao
+→ 仙乐飘飘处处闻 was Δ0.5 s, sitting on the old boundary).
 
-### What needs verification
-1. `swift build` — passes ✅
-2. `swift test` — **not yet run after artwork fix**
-3. Launch debug build, skip tracks, check `/tmp/nanopod_debug.log` for:
-   - `🎨 fetchArtwork:` should appear immediately after track change (not delayed by queue)
-   - `🎨 [SB] SUCCESS!` or `🎨 [API] SUCCESS!` should appear within 1-2s
-   - No 2-5s gap between track change and artwork display
-4. `./build_app.sh` for production binary
+Cross-script artist tolerance in `buildCandidates` got the matching
+treatment: the no-title-match tier now requires `resultTitleIsCJK`
+and uses the same <1.0 s window, so search-engine-confirmed cross-
+script artist mappings (Eman Lam → 林二汶, Kay Huang → 黄韵玲) survive
+slight master differences.
 
-### Debug command for verification
-```bash
-# Launch debug build
-pkill -9 MusicMiniPlayer; rm -f /tmp/nanopod_debug.log
-swift build && .build/arm64-apple-macosx/debug/MusicMiniPlayer > /dev/null 2>&1 &
+## Verifier (43-song set, --inter-song-delay 1.0)
 
-# Skip track and check artwork timing
-sleep 5 && osascript -e 'tell application "Music" to next track'
-sleep 5 && grep -E "🎨|Track changed" /tmp/nanopod_debug.log | tail -20
+```
+39/43 passed   0 warnings   4 no-lyrics
+total 71740 ms  avg 1668 ms (best yet)
 ```
 
+Remaining 4 "fails" are all genuine "no lyrics across all 7 sources":
+
+| ID  | Title                    | Artist         | Notes |
+|-----|--------------------------|----------------|-------|
+| H09 | Twelfth Floor            | Karen Mok      | Cantopop B-side |
+| H12 | Mayonaka No Shujinkou    | Sudo Kaoru     | Obscure 70s J-pop |
+| H13 | Hiroshima mon amour      | Karen Mok      | French cover |
+| H22 | 我的寶貝                 | Lee Chih Ching | Intermittent NetEase flake |
+
+R07 Invisible PASSES with LRCLIB synced lyrics. The first-line
+expectation in the test JSON was updated from the old (wrong) "不確か"
+title token to "幽霊", the first sung word.
+
+New regression anchors added:
+- **H25 忘记有时 — 王菀之** (CJK input, P3 ASCII guard)
+- **H26 Xia Nie Piao Piao Chu Chu Wen — Eman Lam** (cross-region alias,
+  Branch-2 fan-out + cross-script artist tolerance)
+
+## Live verification (signed app, screenshot-confirmed)
+
+| Track | Source | First line | Notes |
+|-------|--------|------------|-------|
+| mei ehara — Invisible | LRCLIB-Search | 幽霊 ほどけていたんだ @24.23 s | real synced 不確か |
+| 王菀之 — 忘记有时 | QQ | 有时无心的散聚 @16.32 s | P3 ASCII guard prevents 原来如此 collision |
+| Eman Lam — Xia Nie Piao Piao Chu Chu Wen | NetEase | 想 飞往东京 @28.67 s | cross-region 仙乐飘飘处处闻, syllable sync |
+
+## Unit tests
+
+`swift test` → 93 pass, 2 skipped, 0 failures.
+
+## Build
+
+```
+md5 nanoPod.app/Contents/MacOS/nanoPod = 7c85727162f4ea01a7a4a732842e01be
+size: 4393712 bytes
+DebugLogger: reverted to #if DEBUG (release-disabled)
+```
+
+App relaunched.
+
+## Commits this session
+
+```
+c8021a3 fix: cross-region lyric aliasing — Branch-2 fan-out + parse-time kind tagging
+00671ad feat: persistent metadata disk cache for warm cold-start latency
+508e546 fix: Invisible wrong-lyrics — iTunes exact-match preflight + particle-gated P3 escape (superseded)
+3a28ceb merge: GAMMA speculative branches + LyricsKind parse-time classification
+```
+
+(508e546's narrower preflight gate has been generalised by c8021a3.)
+
+## Open tasks
+
+1. Visual confirmation of the three fixed songs in the live app (done
+   via screenshots — please double-check during real listening).
+2. Merge `worktree-lyrics-pipeline-final` → `main` and delete the
+   three agent worktrees once you're satisfied.
+3. Consider adding a postmortem 009 documenting the
+   "cross-region recording aliasing" bug class so future sessions
+   don't reintroduce the per-song patches I tried first.
+
 ---
-
-## Task B: YRC + Animation — From Prior Session
-
-- ✅ YRC bilingual corruption fix (`isYRC` flag)
-- ✅ YRC token merge (`mergeYRCPunctuationTokens()`)
-- ✅ Scorer tests updated
-- 🔄 Word animation rewrite from AMLL source — needs visual QA
-- See prior HANDOFF for full details on AMLL source analysis
-
----
-
-## Known Issues / Caution
-
-- **Artwork delay fix NOT VERIFIED** — code compiles but hasn't been tested with track changes yet
-- `artworkApp` never invalidated on Music.app disconnect (minor — reconnect creates new instance)
-- 228ms main-thread stall at track changes (SwiftUI relayout) — known, brief hitch only
-- `handleTrackChange` generation check: `incrementGeneration()` is called in `handleTrackChange`, AND `fetchArtwork` also increments generation. Double increment is fine (monotonic), but verify no stale-gen false positives
-
-## Changed Files (This Session)
-- `MusicController.swift` — Frame-relative interpolation + dual SB + debounced queue + diagnostics + **artwork delay fix** (removed `fetchIDAndArtwork`/`handleArtworkMiss`, `handleTrackChange` now uses `fetchArtwork()`)
-- `MusicController+Artwork.swift` — Uses `artworkApp`/`artworkQueue` + restored placeholder in API failure path
-- `MusicController+Playback.swift` — `lastFrameTime` reset on seek
-
-## Files Changed by Prior Sessions (uncommitted)
-- `LyricsFetcher.swift` — `isYRC` flag + translation pipeline restructure
-- `LyricsParser.swift` — `mergeYRCPunctuationTokens()`
-- `LyricsService.swift` — Changes from prior sessions
-- `LyricsView.swift` — Changes from prior sessions
-- `LyricsScorerTests.swift` — Updated stale test expectations
-- `docs/lyrics_test_cases.json` — E01 added LRCLIB-Search
-
----
-*Created by Claude Code · 2026-03-28 00:15 PDT*
+*Session 2026-04-10 → 2026-04-11 · structural fix for cross-region lyric aliasing · 39/43 verifier · binary md5 verified*
