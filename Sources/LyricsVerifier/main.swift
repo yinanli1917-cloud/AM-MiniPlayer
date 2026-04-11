@@ -51,6 +51,18 @@ private func runPredefined(args: [String]) async {
     if let idx = args.firstIndex(of: "--case"), idx + 1 < args.count {
         filterID = args[idx + 1]
     }
+    // --json-out <path>: write a gamma-schema summary file after the run.
+    var jsonOutPath: String? = nil
+    if let idx = args.firstIndex(of: "--json-out"), idx + 1 < args.count {
+        jsonOutPath = args[idx + 1]
+    }
+    // --inter-song-delay <seconds>: sleep between songs to avoid rate-limit
+    // throttling. Defaults to 1.0s — matches the gamma acceptance spec.
+    var interSongDelay: Double = 1.0
+    if let idx = args.firstIndex(of: "--inter-song-delay"), idx + 1 < args.count,
+       let v = Double(args[idx + 1]) {
+        interSongDelay = v
+    }
 
     var cases = loadTestCases()
     guard !cases.isEmpty else {
@@ -66,10 +78,10 @@ private func runPredefined(args: [String]) async {
         }
     }
 
-    log("=== LyricsVerifier: \(cases.count) 个预定义用例 ===\n")
+    log("=== LyricsVerifier: \(cases.count) 个预定义用例 (delay=\(interSongDelay)s) ===\n")
 
     var results: [VerifyResult] = []
-    for tc in cases {
+    for (idx, tc) in cases.enumerated() {
         let r = await testSong(
             id: tc.id, title: tc.title,
             artist: tc.artist, duration: tc.duration,
@@ -78,8 +90,119 @@ private func runPredefined(args: [String]) async {
         results.append(r)
         printResultLine(r)
         emitJSON(r)
+
+        // Throttle guard between songs (skip after the last one).
+        if idx < cases.count - 1 && interSongDelay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(interSongDelay * 1_000_000_000))
+        }
     }
     printBatchSummary(results)
+
+    if let path = jsonOutPath {
+        writeGammaJSON(results: results, path: path, interSongDelay: interSongDelay)
+    }
+}
+
+// =========================================================================
+// MARK: - Gamma JSON output (exact schema per spec)
+// =========================================================================
+
+private func writeGammaJSON(results: [VerifyResult], path: String, interSongDelay: Double) {
+    // Branch name + short hash via shell — no parsing, just capture.
+    let branch = shellOutput("git rev-parse --abbrev-ref HEAD") ?? "unknown"
+    let commit = shellOutput("git rev-parse --short HEAD") ?? "unknown"
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+
+    var songsJSON: [[String: Any]] = []
+    for r in results {
+        let pass = r.elapsedMs <= 3000
+            && r.classification == "synced"
+            && r.lyricsLineCount >= 5
+            && (r.selectedSource ?? "none") != "none"
+        var failReasons: [String] = []
+        if r.elapsedMs > 3000 { failReasons.append("latency_\(r.elapsedMs)ms_over_3000") }
+        if r.classification != "synced" { failReasons.append("classification_\(r.classification ?? "nil")") }
+        if r.lyricsLineCount < 5 { failReasons.append("line_count_\(r.lyricsLineCount)_under_5") }
+        if r.selectedSource == nil { failReasons.append("no_source") }
+
+        songsJSON.append([
+            "title": r.title,
+            "artist": r.artist,
+            "duration_s": Double(r.duration),
+            "latency_ms": r.elapsedMs,
+            "fetched_source": r.selectedSource ?? "none",
+            "score": r.selectedScore ?? 0,
+            "line_count": r.lyricsLineCount,
+            "real_line_count": r.realLineCount,
+            "translation_count": r.translationCount,
+            "classification": r.classification ?? "none",
+            "first_real_line_text": r.firstRealLine ?? "",
+            "first_real_line_time_s": r.firstRealLineTimeS ?? 0,
+            "last_line_time_s": r.lastLineTimeS ?? 0,
+            "expected_synced": true,
+            "pass": pass,
+            "fail_reasons": failReasons
+        ])
+    }
+
+    let latencies = results.map { $0.elapsedMs }.sorted()
+    let median = latencies.isEmpty ? 0 : latencies[latencies.count / 2]
+    let p95Index = latencies.isEmpty ? 0 : Int(Double(latencies.count - 1) * 0.95)
+    let p95 = latencies.isEmpty ? 0 : latencies[p95Index]
+    let passCount = songsJSON.filter { ($0["pass"] as? Bool) == true }.count
+    let overBudget = results.filter { $0.elapsedMs > 3000 }.count
+    let syncedCount = results.filter { $0.classification == "synced" }.count
+    let unsyncedCount = results.filter { $0.classification == "unsynced" }.count
+
+    let summary: [String: Any] = [
+        "total": results.count,
+        "pass": passCount,
+        "fail": results.count - passCount,
+        "over_budget_3s": overBudget,
+        "median_latency_ms": median,
+        "p95_latency_ms": p95,
+        "synced_count": syncedCount,
+        "unsynced_count": unsyncedCount
+    ]
+
+    let root: [String: Any] = [
+        "approach": "gamma",
+        "branch": branch,
+        "commit": commit,
+        "timestamp": timestamp,
+        "config": ["inter_song_delay_s": interSongDelay],
+        "songs": songsJSON,
+        "summary": summary
+    ]
+
+    guard let data = try? JSONSerialization.data(
+        withJSONObject: root,
+        options: [.prettyPrinted, .sortedKeys]
+    ) else {
+        log("⚠️ Failed to encode gamma JSON")
+        return
+    }
+    try? data.write(to: URL(fileURLWithPath: path))
+    log("📝 Wrote gamma JSON → \(path)")
+}
+
+/// Run a shell command and capture trimmed stdout.
+private func shellOutput(_ cmd: String) -> String? {
+    let task = Process()
+    task.launchPath = "/bin/sh"
+    task.arguments = ["-c", cmd]
+    let pipe = Pipe()
+    task.standardOutput = pipe
+    task.standardError = Pipe()
+    do {
+        try task.run()
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (s?.isEmpty == false) ? s : nil
+    } catch {
+        return nil
+    }
 }
 
 // =========================================================================

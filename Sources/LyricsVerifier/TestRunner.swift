@@ -27,6 +27,13 @@ struct VerifyResult: Codable {
     let failures: [String]
     let warnings: [String]   // 内容验证警告（疑似错配、语言不一致等）
     let allSources: [SourceResult]
+    /// Gamma-schema fields: classification straight from the same
+    /// LyricsClassifier helper the live app uses. Never re-guessed here.
+    let classification: String?  // "synced" | "unsynced" | "none"
+    let realLineCount: Int
+    let translationCount: Int
+    let firstRealLineTimeS: Double?
+    let lastLineTimeS: Double?
 }
 
 struct SourceResult: Codable {
@@ -62,6 +69,15 @@ func testSongWithLyrics(
         guard let firstBest = bestLyrics?.first,
               let firstResult = result.lyrics.first else { return false }
         return firstBest.id == firstResult.id
+    }
+
+    // Shared classifier — same call both the app and the verifier use.
+    let classificationKind = LyricsFetcher.LyricsClassifier.classify(result: selectedResult)
+    let classificationString: String
+    switch classificationKind {
+    case .some(.synced):   classificationString = "synced"
+    case .some(.unsynced): classificationString = "unsynced"
+    case .none:            classificationString = "none"
     }
 
     let elapsed = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
@@ -100,6 +116,13 @@ func testSongWithLyrics(
         duration: duration
     )
 
+    // Gamma-schema fields
+    let realLines = lyrics.filter {
+        let t = $0.text.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
+    }
+    let translationCount = lyrics.filter { $0.hasTranslation }.count
+
     let result = VerifyResult(
         id: id, title: title, artist: artist,
         duration: Int(duration), passed: failures.isEmpty,
@@ -112,7 +135,12 @@ func testSongWithLyrics(
         elapsedMs: elapsed,
         failures: failures,
         warnings: warnings,
-        allSources: allSources
+        allSources: allSources,
+        classification: classificationString,
+        realLineCount: realLines.count,
+        translationCount: translationCount,
+        firstRealLineTimeS: firstReal?.startTime,
+        lastLineTimeS: lyrics.last?.startTime
     )
 
     return (result, lyrics)

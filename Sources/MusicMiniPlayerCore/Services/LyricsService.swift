@@ -115,13 +115,15 @@ public class LyricsService: ObservableObject {
         let firstRealLyricIndex: Int
         let hasSourceTranslation: Bool
         let isNoLyrics: Bool
+        let isUnsynced: Bool
         let timestamp: Date
 
-        init(lyrics: [LyricLine], firstRealLyricIndex: Int = 1, hasSourceTranslation: Bool = false, isNoLyrics: Bool = false) {
+        init(lyrics: [LyricLine], firstRealLyricIndex: Int = 1, hasSourceTranslation: Bool = false, isNoLyrics: Bool = false, isUnsynced: Bool = false) {
             self.lyrics = lyrics
             self.firstRealLyricIndex = firstRealLyricIndex
             self.hasSourceTranslation = hasSourceTranslation
             self.isNoLyrics = isNoLyrics
+            self.isUnsynced = isUnsynced
             self.timestamp = Date()
         }
 
@@ -254,6 +256,7 @@ public class LyricsService: ObservableObject {
             applyLyrics(cached.lyrics,
                         firstRealLyricIndex: cached.firstRealLyricIndex,
                         hasSourceTranslation: cachedHasActualTranslation,  // 🔑 使用实际翻译状态
+                        isUnsynced: cached.isUnsynced,
                         songID: songID,
                         duration: duration)
             return
@@ -289,8 +292,9 @@ public class LyricsService: ObservableObject {
             translationEnabled: showTranslation
         )
 
-        // 选择最佳结果
-        guard let bestLyrics = fetcher.selectBest(from: results), !bestLyrics.isEmpty else {
+        // 选择最佳结果 — 需要完整结果以读取 kind (synced/unsynced) 供自动滚动守卫使用
+        let bestResult = fetcher.selectBestResult(from: results)
+        guard let bestResult = bestResult, !bestResult.lyrics.isEmpty else {
             // 🔑 CRITICAL: Do NOT cache "No Lyrics" if the task was cancelled.
             // Cancellation kills HTTP requests mid-flight → fetchAllSources returns [] →
             // selectBest([]) returns nil. This is NOT "no lyrics exist" — it's
@@ -312,23 +316,26 @@ public class LyricsService: ObservableObject {
         }
 
         // Last-resort rescale: if best lyrics still overshoot, no source had the right version
-        let aligned = fetcher.rescaleTimestamps(bestLyrics, duration: duration)
+        let aligned = fetcher.rescaleTimestamps(bestResult.lyrics, duration: duration)
 
         // 处理歌词（修复 endTime、添加前奏占位符等）
         let processed = parser.processLyrics(aligned)
 
         // 检查是否有歌词源翻译
         let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
+        // Parse-time classification — no heuristic re-derivation.
+        let isUnsynced = bestResult.kind == .unsynced
 
         // 🔑 Cache real lyrics even if song changed or task was cancelled — valid data.
         // (Only "No Lyrics" is unsafe to cache on cancellation.)
         let cacheItem = CachedLyricsItem(
             lyrics: processed.lyrics,
             firstRealLyricIndex: processed.firstRealLyricIndex,
-            hasSourceTranslation: hasSourceTranslation
+            hasSourceTranslation: hasSourceTranslation,
+            isUnsynced: isUnsynced
         )
         lyricsCache.setObject(cacheItem, forKey: songID as NSString)
-        DebugLogger.log("LyricsService", "📦 Cached: '\(songID)' (\(processed.lyrics.count) lines)")
+        DebugLogger.log("LyricsService", "📦 Cached: '\(songID)' (\(processed.lyrics.count) lines, unsynced=\(isUnsynced))")
 
         // 🔑 Only apply to UI if this is still the current song
         await MainActor.run {
@@ -339,6 +346,7 @@ public class LyricsService: ObservableObject {
             applyLyrics(processed.lyrics,
                         firstRealLyricIndex: processed.firstRealLyricIndex,
                         hasSourceTranslation: hasSourceTranslation,
+                        isUnsynced: isUnsynced,
                         songID: songID,
                         duration: duration)
         }
@@ -348,6 +356,7 @@ public class LyricsService: ObservableObject {
     private func applyLyrics(_ newLyrics: [LyricLine],
                              firstRealLyricIndex: Int,
                              hasSourceTranslation: Bool,
+                             isUnsynced: Bool,
                              songID: String,
                              duration: TimeInterval) {
         self.lyrics = newLyrics
@@ -356,9 +365,9 @@ public class LyricsService: ObservableObject {
         self.isLoading = false
         self.error = nil  // 🔑 歌词成功加载，清除旧 error（防止 duration 竞态导致 retry 残留）
         self.currentLineIndex = nil
-        // 🔑 Detect fabricated timestamps: uniform spacing (CV ≈ 0) from createUnsyncedLyrics.
-        // UI should show static list instead of auto-scrolling.
-        self.isUnsyncedLyrics = Self.hasFabricatedTimestamps(newLyrics)
+        // Parse-time classification from LyricsKind — no IQR/CV guessing.
+        // Only lyrics.ovh / Genius (createUnsyncedLyrics) are tagged .unsynced.
+        self.isUnsyncedLyrics = isUnsynced
         self.currentSongID = songID
         self.currentSongDuration = duration
 
@@ -383,31 +392,6 @@ public class LyricsService: ObservableObject {
     // ========================================================================
     // MARK: - Public API: Update Time
     // ========================================================================
-
-    /// Detect fabricated (uniform-spacing) timestamps from createUnsyncedLyrics.
-    /// Fabricated lyrics have perfectly uniform gaps (CV ≈ 0) among the majority of lines.
-    /// Outliers (⋯ placeholder, stripped metadata gaps) are removed via IQR before CV check.
-    private static func hasFabricatedTimestamps(_ lyrics: [LyricLine]) -> Bool {
-        var gaps: [Double] = []
-        for i in 1..<lyrics.count {
-            let gap = lyrics[i].startTime - lyrics[i - 1].startTime
-            if gap > 0 { gaps.append(gap) }
-        }
-        guard gaps.count >= 4 else { return false }
-        // IQR-based outlier rejection: Q1 - 1.5*IQR to Q3 + 1.5*IQR
-        let sorted = gaps.sorted()
-        let q1 = sorted[sorted.count / 4]
-        let q3 = sorted[sorted.count * 3 / 4]
-        let iqr = q3 - q1
-        let lowerBound = q1 - 1.5 * max(iqr, 0.1)
-        let upperBound = q3 + 1.5 * max(iqr, 0.1)
-        let core = gaps.filter { $0 >= lowerBound && $0 <= upperBound }
-        guard core.count >= 3 else { return false }
-        let mean = core.reduce(0, +) / Double(core.count)
-        guard mean > 0 else { return false }
-        let variance = core.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(core.count)
-        return sqrt(variance) / mean < 0.05
-    }
 
     func updateCurrentTime(_ time: TimeInterval) {
         let scrollAnimationLeadTime: TimeInterval = 0.05
@@ -603,16 +587,17 @@ public class LyricsService: ObservableObject {
                     translationEnabled: false
                 )
 
-                guard let bestLyrics = self.fetcher.selectBest(from: results), !bestLyrics.isEmpty else { return }
+                guard let bestResult = self.fetcher.selectBestResult(from: results), !bestResult.lyrics.isEmpty else { return }
 
-                let aligned = self.fetcher.rescaleTimestamps(bestLyrics, duration: track.duration)
+                let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
                 let processed = self.parser.processLyrics(aligned)
                 let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
 
                 let cacheItem = CachedLyricsItem(
                     lyrics: processed.lyrics,
                     firstRealLyricIndex: processed.firstRealLyricIndex,
-                    hasSourceTranslation: hasSourceTranslation
+                    hasSourceTranslation: hasSourceTranslation,
+                    isUnsynced: bestResult.kind == .unsynced
                 )
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
             }

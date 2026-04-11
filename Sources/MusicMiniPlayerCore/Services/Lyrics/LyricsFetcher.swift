@@ -49,19 +49,71 @@ public final class LyricsFetcher {
         public let lyrics: [LyricLine]
         public let source: String
         public let score: Double
+        /// Synced vs unsynced — tagged at parse time, never re-derived via CV/IQR.
+        public let kind: LyricsKind
+
+        public init(lyrics: [LyricLine], source: String, score: Double, kind: LyricsKind) {
+            self.lyrics = lyrics
+            self.source = source
+            self.score = score
+            self.kind = kind
+        }
     }
 
-    // MARK: - 并行获取
+    // ┌──────────────────────────────────────────────────────────────────────┐
+    // │ LyricsClassifier — shared helper used by both the live app and the  │
+    // │ LyricsVerifier JSON dump. Centralising classification here means    │
+    // │ the two code paths can never disagree on what "synced" means.       │
+    // └──────────────────────────────────────────────────────────────────────┘
+    public enum LyricsClassifier {
+        /// Classify a fetch result as "synced" / "unsynced" / "none".
+        /// Result is `nil` if there are no lyrics at all.
+        public static func classify(result: LyricsFetchResult?) -> LyricsKind? {
+            guard let result, !result.lyrics.isEmpty else { return nil }
+            return result.kind
+        }
+
+        /// Overload for callers that only have a line array + source.
+        /// The parser already tags kind on the result; this helper is only
+        /// used by the verifier when it needs to re-classify a re-processed
+        /// line array whose original `LyricsFetchResult` is still available.
+        public static func classify(kind: LyricsKind?, lines: [LyricLine]) -> LyricsKind? {
+            guard !lines.isEmpty else { return nil }
+            return kind ?? .synced
+        }
+    }
+
+    // MARK: - 并行获取 (GAMMA — speculative parallel branches)
+    //
     // Only high-tier sources can trigger early return — prevents fast low-tier sources
     // (LRCLIB) from cancelling slower high-quality sources (AMLL/NetEase/QQ) that provide
     // syllable sync, translations, and better matching.
     private let earlyReturnThreshold: Double = 70.0
     private let earlyReturnSources: Set<String> = ["AMLL", "NetEase", "QQ"]
-    /// 并行获取所有歌词源（含早期返回优化）
-    /// Simple sources (AMLL/LRCLIB/lyrics.ovh/Genius) start immediately with original params.
-    /// High-tier sources (NetEase/QQ) wait for MetadataResolver — they need resolved CJK params
-    /// for correct matching (original params can match wrong songs by the same artist).
-    /// MetadataResolver runs concurrently with simple sources, not blocking them.
+
+    // Branch-3 safety-net delay. Speculative branches (1 + 2) get 1.5s to
+    // produce a score≥60 synced result; if they don't, the full resolver
+    // path fires and can rescue edge cases where per-region candidates
+    // miss (e.g., iTunes JP returns the wrong title for the input).
+    private let branch3SafetyNetDelay: UInt64 = 1_500_000_000 // 1.5s
+
+    /// Fetch lyrics from all sources using the GAMMA speculative pipeline.
+    ///
+    /// Three parallel branches race. The first high-score synced result wins;
+    /// losers are cancelled. The resolver is OFF the critical path by default.
+    ///
+    /// - Branch 1 (always): NetEase/QQ + simple sources with original params.
+    ///   Wins for English and native-CJK songs.
+    /// - Branch 2 (ASCII input): per-region speculative searches. For each
+    ///   inferred region, fire `fetchMetadataFromRegion` directly and pipe
+    ///   each CJK candidate into NetEase/QQ. Bypasses cross-region consensus.
+    ///   Wins for romaji→CJK songs without blocking on the resolver.
+    /// - Branch 3 (delayed 1.5s): full `resolveSearchMetadata` path as the
+    ///   safety net for songs where branch 2 cannot find the right candidate.
+    ///
+    /// The bet: cast a wider net at the input, validate harder at the output.
+    /// Output-side validators (`LyricsScorer.analyzeQuality`, content-validation
+    /// in `fetchFromNetEase`, `selectBest` CJK preference) are unchanged.
     public func fetchAllSources(
         title: String,
         artist: String,
@@ -75,48 +127,105 @@ public final class LyricsFetcher {
         let ot = cleanTitle, oa = cleanArtist
         let d = duration, te = translationEnabled
 
-        // 🔑 MetadataResolver starts immediately, shared between resolved-params tasks
-        let resolveTask = Task {
-            await self.metadataResolver.resolveSearchMetadata(
-                title: cleanTitle, artist: cleanArtist, duration: duration
-            )
-        }
+        // Branch 2 gate — only speculate when the title looks ASCII/romaji.
+        // Pure-CJK input doesn't need iTunes region candidates; branch 1
+        // already matches directly. Decision is shape-driven, not list-driven
+        // (no artist whitelists).
+        let titleIsASCII = LanguageUtils.isPureASCII(ot)
 
         var results: [LyricsFetchResult] = []
         let fetchStart = Date()
+        // Track whether branch 3 (safety net) actually contributed a result.
+        // Exposed via DebugLogger so the verifier / postmortem can count how
+        // often the safety net matters. One Box<Bool> shared via reference.
+        let branch3Fired = Box(false)
 
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
-            // Simple sources: start immediately with original params
+            // ───────────────────────────────────────────────────────────────
+            // Branch 1 — unconditional, original params
+            // ───────────────────────────────────────────────────────────────
             group.addTask { await self.fetchFromAMLL(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLRCLIB(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLRCLIBSearch(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
-
-            // 🔑 High-tier sources: fire IMMEDIATELY with original params (no MetadataResolver wait).
-            // For English/CJK songs, original params match directly. For romanized→CJK songs,
-            // this fails fast (parallel keywords find no match in ~1s) — harmless.
             group.addTask { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
 
-            // 🔑 High-tier with RESOLVED params — covers romanized→CJK (e.g., "Plastic Love" → "プラスティック・ラヴ").
-            // Only fires if MetadataResolver actually changes something; otherwise skips (no duplicate work).
+            // ───────────────────────────────────────────────────────────────
+            // Branch 2 — speculative per-region (ASCII input only)
+            // ───────────────────────────────────────────────────────────────
+            // For each inferred region, fire fetchMetadataFromRegion in parallel
+            // and pipe the first CJK candidate straight into NetEase/QQ.
+            // This is speculative: we don't wait for CN cross-validation.
+            // Output-side validators still protect us from bad candidates.
+            if titleIsASCII {
+                let regions = self.metadataResolver.inferRegions(title: ot, artist: oa)
+                for region in regions {
+                    group.addTask {
+                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
+                            title: ot, artist: oa, duration: d, region: region
+                        ) else { return nil }
+                        let (rt, ra, _, _) = localized
+                        // Only speculate when the candidate actually contains CJK —
+                        // an ASCII→ASCII "localization" is not useful and risks
+                        // mismatches (ref: "Moon Style Love" → "milk tea").
+                        guard LanguageUtils.containsCJK(rt) else { return nil }
+                        // Skip no-op — if it equals the original we'd duplicate branch 1.
+                        guard rt != ot || ra != oa else { return nil }
+                        DebugLogger.log("⚡ Branch-2 speculative(\(region)): '\(rt)' by '\(ra)'")
+                        return await self.fetchFromNetEase(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+                    }
+                    group.addTask {
+                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
+                            title: ot, artist: oa, duration: d, region: region
+                        ) else { return nil }
+                        let (rt, ra, _, _) = localized
+                        guard LanguageUtils.containsCJK(rt) else { return nil }
+                        guard rt != ot || ra != oa else { return nil }
+                        return await self.fetchFromQQMusic(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+                    }
+                }
+            }
+
+            // ───────────────────────────────────────────────────────────────
+            // Branch 3 — delayed safety-net (full consensus resolver)
+            // ───────────────────────────────────────────────────────────────
+            // Fires at 1.5s unless branches 1+2 already produced a
+            // score≥60 synced result. Covers edge cases where per-region
+            // speculation misses and the CN consensus path is the only
+            // way to get the right tuple (e.g., CN-only artists, dual-title
+            // splits that need cross-validation, etc.).
             group.addTask {
-                let (st, sa) = await resolveTask.value
+                // Delay: abort early if cancelled.
+                try? await Task.sleep(nanoseconds: self.branch3SafetyNetDelay)
+                if Task.isCancelled { return nil }
+                let (st, sa) = await self.metadataResolver.resolveSearchMetadata(
+                    title: ot, artist: oa, duration: d
+                )
                 guard st != ot || sa != oa else { return nil }
-                DebugLogger.log("🔄 元信息解析(NetEase): '\(st)' by '\(sa)'")
+                branch3Fired.value = true
+                DebugLogger.log("🛟 Branch-3 safety net (NetEase): '\(st)' by '\(sa)'")
                 return await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
             }
             group.addTask {
-                let (st, sa) = await resolveTask.value
+                try? await Task.sleep(nanoseconds: self.branch3SafetyNetDelay)
+                if Task.isCancelled { return nil }
+                let (st, sa) = await self.metadataResolver.resolveSearchMetadata(
+                    title: ot, artist: oa, duration: d
+                )
                 guard st != ot || sa != oa else { return nil }
-                DebugLogger.log("🔄 元信息解析(QQ): '\(st)' by '\(sa)'")
+                branch3Fired.value = true
+                DebugLogger.log("🛟 Branch-3 safety net (QQ): '\(st)' by '\(sa)'")
                 return await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
             }
 
-            // 🔑 Time budget sentinel — wakes collection loop at 3s mark
+            // Time budget sentinel — wakes the collection loop at 2.8s.
+            // Leaves ~200ms headroom for task cancellation overhead so the
+            // observed latency stays under the 3000ms budget even when the
+            // sentinel fires last (measured: sentinel→return is ~20-100ms).
             group.addTask {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: 2_800_000_000)
                 return nil
             }
 
@@ -132,13 +241,15 @@ public final class LyricsFetcher {
                     }
                 }
 
-                // 🔑 Time budget: good result + 3s → stop; any result + 5s → stop.
-                // Never cut off when zero results — resolved-params tasks need time for
-                // romanized→CJK songs where only MetadataResolver-resolved params match.
+                // 🔑 Time budget: good result + 2.8s → stop; any result + 4.5s → stop.
+                // Never cut off when zero results — romanized→CJK songs need time for
+                // MetadataResolver-resolved params to produce matches. The `guard` above
+                // already protects the empty case. 2.8s leaves ~200ms headroom under the
+                // user-facing 3s budget so observed end-to-end latency stays sub-3000ms.
                 let elapsed = Date().timeIntervalSince(fetchStart)
                 guard !results.isEmpty else { continue }
                 let hasGoodResult = results.contains { $0.score >= 40 }
-                if (hasGoodResult && elapsed >= 3.0) || elapsed >= 5.0 {
+                if (hasGoodResult && elapsed >= 2.8) || elapsed >= 4.5 {
                     DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
                     group.cancelAll()
                     break
@@ -147,7 +258,7 @@ public final class LyricsFetcher {
         }
 
         let elapsed = Date().timeIntervalSince(fetchStart)
-        DebugLogger.log("🏁 fetchAllSources: \(results.count) results in \(String(format: "%.1f", elapsed))s")
+        DebugLogger.log("🏁 fetchAllSources: \(results.count) results in \(String(format: "%.1f", elapsed))s (branch3=\(branch3Fired.value))")
         return results.sorted { $0.score > $1.score }
     }
 
@@ -156,6 +267,12 @@ public final class LyricsFetcher {
     /// wins by a significant margin (>15 points). This prevents syllable-sync bonus
     /// (+30) from overriding script correctness for CJK-language songs.
     public func selectBest(from results: [LyricsFetchResult]) -> [LyricLine]? {
+        return selectBestResult(from: results)?.lyrics
+    }
+
+    /// Same as `selectBest` but returns the full `LyricsFetchResult` so callers
+    /// can read `.kind` (synced / unsynced) without re-deriving via heuristics.
+    public func selectBestResult(from results: [LyricsFetchResult]) -> LyricsFetchResult? {
         let reliable = results.filter { $0.score > 0 }
         guard !reliable.isEmpty else { return nil }
 
@@ -184,8 +301,8 @@ public final class LyricsFetcher {
         }
 
         if let best = chosen {
-            DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)))")
-            return best.lyrics
+            DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)), kind=\(best.kind.rawValue))")
+            return best
         }
         return nil
     }
@@ -346,7 +463,7 @@ public final class LyricsFetcher {
         if let trackId = await getAppleMusicTrackId(title: title, artist: artist, duration: duration),
            let lyrics = await fetchAMLLTTML(platform: "am-lyrics", filename: "\(trackId).ttml") {
             let score = scorer.calculateScore(lyrics, source: "AMLL", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score)
+            return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score, kind: .synced)
         }
 
         // 🔑 检查是否在冷却期内
@@ -389,7 +506,7 @@ public final class LyricsFetcher {
 
         if let lyrics = await fetchAMLLTTML(platform: match.entry.platform, filename: "\(match.entry.id).ttml") {
             let score = scorer.calculateScore(lyrics, source: "AMLL", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score)
+            return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score, kind: .synced)
         }
 
         return nil
@@ -742,7 +859,7 @@ public final class LyricsFetcher {
         }
 
         let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled)
-        return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score)
+        return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: .synced)
     }
 
     private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> [LyricLine]? {
@@ -870,7 +987,7 @@ public final class LyricsFetcher {
         }
 
         let score = scorer.calculateScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled)
-        return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score)
+        return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score, kind: .synced)
     }
 
     private func fetchQQMusicLyrics(songMid: String, duration: TimeInterval) async -> [LyricLine]? {
@@ -930,7 +1047,7 @@ public final class LyricsFetcher {
 
             let lyrics = parser.parseLRC(syncedLyrics)
             let score = scorer.calculateScore(lyrics, source: "LRCLIB", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "LRCLIB", score: score)
+            return LyricsFetchResult(lyrics: lyrics, source: "LRCLIB", score: score, kind: .synced)
         } catch {
             return nil
         }
@@ -967,7 +1084,7 @@ public final class LyricsFetcher {
 
             let lyrics = parser.parseLRC(match.lyrics)
             let score = scorer.calculateScore(lyrics, source: "LRCLIB-Search", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "LRCLIB-Search", score: score)
+            return LyricsFetchResult(lyrics: lyrics, source: "LRCLIB-Search", score: score, kind: .synced)
         } catch {
             return nil
         }
@@ -988,8 +1105,8 @@ public final class LyricsFetcher {
             guard let lyricsText = json["lyrics"] as? String, !lyricsText.isEmpty else { return nil }
 
             let lyrics = parser.createUnsyncedLyrics(lyricsText, duration: duration)
-            let score = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "lyrics.ovh", score: score)
+            let score = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
+            return LyricsFetchResult(lyrics: lyrics, source: "lyrics.ovh", score: score, kind: .unsynced)
         } catch {
             return nil
         }
@@ -1030,8 +1147,8 @@ public final class LyricsFetcher {
             guard !lyricsText.isEmpty else { return nil }
 
             let lyrics = parser.createUnsyncedLyrics(lyricsText, duration: duration)
-            let score = scorer.calculateScore(lyrics, source: "Genius", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "Genius", score: score)
+            let score = scorer.calculateScore(lyrics, source: "Genius", duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
+            return LyricsFetchResult(lyrics: lyrics, source: "Genius", score: score, kind: .unsynced)
         } catch { return nil }
     }
 
@@ -1055,6 +1172,14 @@ public final class LyricsFetcher {
         }
         return lines.joined(separator: "\n")
     }
+}
+
+// MARK: - Box (reference wrapper for cross-task mutation)
+// Used by fetchAllSources to share a Bool flag across concurrent TaskGroup
+// children without needing inout (TaskGroup closures can't capture inout).
+private final class Box<T> {
+    var value: T
+    init(_ value: T) { self.value = value }
 }
 
 // MARK: - AMLL 索引条目
