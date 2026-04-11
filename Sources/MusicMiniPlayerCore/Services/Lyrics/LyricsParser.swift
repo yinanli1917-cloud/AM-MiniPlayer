@@ -393,6 +393,41 @@ public final class LyricsParser {
         }
     }
 
+    // MARK: - Lyrics Kind Detection
+    //
+    // Single source of truth for determining whether a parsed lyric array
+    // carries REAL per-line timestamps (`.synced`) or fabricated/uniform
+    // timestamps that should not drive auto-scroll (`.unsynced`).
+    //
+    // The "as-the-grain-of-sand-reflects-the-world" rule: any lyric line
+    // produced by `createUnsyncedLyrics` is uniform-spacing fabrication,
+    // and any source whose raw text had no `[mm:ss.xx]` markers also ends
+    // up with degenerate timestamps. Both must NOT auto-scroll, otherwise
+    // the lyrics drift relative to playback (the bug the user reported on
+    // mei ehara — Invisible / 不確か, where QQ returns plain text and we
+    // synthesised fake timing).
+    //
+    // Heuristic — a result is `.synced` only when ALL of:
+    //   1. ≥ 3 lines (otherwise nothing meaningful to scroll)
+    //   2. At least one line has startTime > 0
+    //   3. The number of distinct timestamps is at least
+    //      max(2, lines.count / 2) — guards against degenerate "all 0",
+    //      "all 1", or repeating-block dumps
+    //   4. The last timestamp is at least 30s past the first — distinguishes
+    //      "real song timing" from "uniform partition over duration with
+    //      stride < 1s" or "first 5s only"
+    public func detectKind(_ lines: [LyricLine]) -> LyricsKind {
+        guard lines.count >= 3 else { return .unsynced }
+        let times = lines.map { $0.startTime }
+        let hasNonZero = times.contains { $0 > 0 }
+        guard hasNonZero else { return .unsynced }
+        let distinctCount = Set(times).count
+        guard distinctCount >= max(2, lines.count / 2) else { return .unsynced }
+        let span = (times.max() ?? 0) - (times.min() ?? 0)
+        guard span >= 30 else { return .unsynced }
+        return .synced
+    }
+
     // MARK: - 后处理
 
     /// 处理原始歌词：移除元信息、修复 endTime、添加前奏占位符

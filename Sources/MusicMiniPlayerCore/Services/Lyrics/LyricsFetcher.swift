@@ -7,6 +7,7 @@
  */
 
 import Foundation
+import MusicKit
 import os
 
 // ============================================================
@@ -149,6 +150,7 @@ public final class LyricsFetcher {
             group.addTask { await self.fetchFromLRCLIBSearch(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromAppleMusic(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
 
@@ -161,15 +163,16 @@ public final class LyricsFetcher {
             // Output-side validators still protect us from bad candidates.
             if titleIsASCII {
                 let regions = self.metadataResolver.inferRegions(title: ot, artist: oa)
-                // 🔑 Romanized-Japanese heuristic: the input title contains at
-                // least one Japanese particle as a standalone word (no/ga/wo/
-                // ni/to/wa/de/mo) OR the artist is already CJK. This is strong
-                // evidence the title is a romanization, so per-region CJK
-                // candidates are legitimate aliases. Without these signals AND
-                // with an exact-original confirmed by iTunes, CJK candidates
-                // are same-artist collisions (Invisible → 不確か) and rejected.
-                let inputLooksRomanized = LanguageUtils.isLikelyRomanizedJapanese(ot) ||
-                                          LanguageUtils.containsCJK(oa)
+                // 🔑 Branch 2 fans out to ALL title-keyed sources, not just
+                // NetEase/QQ. The user-reported regression on mei ehara —
+                // "Invisible" / 不確か exposed this: LRCLIB IS the only source
+                // that has REAL synced lyrics for that track, but it indexes
+                // by the Japanese title only. Branch-1 fetched LRCLIB with
+                // the romanized "Invisible" → 404, while Branch-2 only fed
+                // resolved CJK candidates into NetEase/QQ. Generalising the
+                // fan-out fixes the same bug class for any track whose
+                // catalogs use a different display title across regions
+                // (Apple Music JP shows the kanji, others show romaji).
                 for region in regions {
                     group.addTask {
                         guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
@@ -178,15 +181,6 @@ public final class LyricsFetcher {
                         let (rt, ra, _, _) = localized
                         guard LanguageUtils.containsCJK(rt) else { return nil }
                         guard rt != ot || ra != oa else { return nil }
-                        if !inputLooksRomanized {
-                            let originalIsExact = await self.metadataResolver.hasOriginalExactMatch(
-                                title: ot, artist: oa, duration: d
-                            )
-                            if originalIsExact {
-                                DebugLogger.log("⚡ Branch-2(\(region)) rejected: '\(rt)' by '\(ra)' — input looks English + original confirmed exact")
-                                return nil
-                            }
-                        }
                         DebugLogger.log("⚡ Branch-2 speculative(\(region)): '\(rt)' by '\(ra)'")
                         return await self.fetchFromNetEase(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
                     }
@@ -197,13 +191,38 @@ public final class LyricsFetcher {
                         let (rt, ra, _, _) = localized
                         guard LanguageUtils.containsCJK(rt) else { return nil }
                         guard rt != ot || ra != oa else { return nil }
-                        if !inputLooksRomanized {
-                            let originalIsExact = await self.metadataResolver.hasOriginalExactMatch(
-                                title: ot, artist: oa, duration: d
-                            )
-                            if originalIsExact { return nil }
-                        }
                         return await self.fetchFromQQMusic(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+                    }
+                    // LRCLIB exact-match by resolved CJK title.
+                    group.addTask {
+                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
+                            title: ot, artist: oa, duration: d, region: region
+                        ) else { return nil }
+                        let (rt, ra, _, _) = localized
+                        guard LanguageUtils.containsCJK(rt) else { return nil }
+                        guard rt != ot || ra != oa else { return nil }
+                        return await self.fetchFromLRCLIB(title: rt, artist: ra, duration: d, translationEnabled: te)
+                    }
+                    // LRCLIB-Search fuzzy fallback by resolved CJK title.
+                    group.addTask {
+                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
+                            title: ot, artist: oa, duration: d, region: region
+                        ) else { return nil }
+                        let (rt, ra, _, _) = localized
+                        guard LanguageUtils.containsCJK(rt) else { return nil }
+                        guard rt != ot || ra != oa else { return nil }
+                        return await self.fetchFromLRCLIBSearch(title: rt, artist: ra, duration: d, translationEnabled: te)
+                    }
+                    // AMLL TTML by resolved CJK title (if AMLL has the entry
+                    // under the kanji title — it usually does for the JP catalog).
+                    group.addTask {
+                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
+                            title: ot, artist: oa, duration: d, region: region
+                        ) else { return nil }
+                        let (rt, ra, _, _) = localized
+                        guard LanguageUtils.containsCJK(rt) else { return nil }
+                        guard rt != ot || ra != oa else { return nil }
+                        return await self.fetchFromAMLL(title: rt, artist: ra, duration: d, translationEnabled: te)
                     }
                 }
             }
@@ -397,9 +416,8 @@ public final class LyricsFetcher {
             // 例如: "Try to Say" → "言い出しかねて -TRY TO SAY-" (Δ0.4s, 同歌手)
             // 限制: 结果标题不能和输入完全无关（至少分享一个 3+ 字符 token）
             ("P3", { candidate in
-                guard candidate.artistMatch && candidate.durationDiff < 0.5 else { return false }
+                guard candidate.artistMatch else { return false }
                 guard !inputTitle.isEmpty else { return false }
-                // 防止同歌手不同歌碰巧时长一致的误匹配
                 let inputTokens = inputTitle.lowercased()
                     .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
                 let resultTokens = LanguageUtils.normalizeTrackName(candidate.name).lowercased()
@@ -409,13 +427,31 @@ public final class LyricsFetcher {
                         r.count >= 3 && (r.contains(t) || t.contains(r))
                     })
                 }
-                // CJK 标题允许无 token 重叠（罗马字 vs 汉字/假名）
-                // 🔑 Gated by disableCjkEscape: when iTunes confirms the title as
-                // an exact original match, we know it's NOT a romanization and
-                // must reject this escape to prevent same-artist collisions.
-                if disableCjkEscape { return hasTokenOverlap }
+                // 🔑 Token-overlap path: same 3+ char token survives in
+                // both titles (e.g., "Try to Say" → "言い出しかねて -TRY
+                // TO SAY-"). Tight duration window — same-artist same-
+                // duration collisions are common, token overlap is the
+                // only protection.
+                if hasTokenOverlap && candidate.durationDiff < 0.5 { return true }
+                if disableCjkEscape { return false }
+                // 🔑 Romanized→CJK escape: input must be PURE ASCII (a
+                // genuine romanization that can't be matched against a
+                // CJK title textually) and the candidate must carry CJK.
+                // Without the input-is-ASCII guard, this clause fires for
+                // CJK input too and picks any same-artist same-duration
+                // CJK track — e.g., 忘记有时 by 王菀之 → 原来如此 by 王菀之
+                // (both CJK, both Δ<1s). The whole point of the escape is
+                // bridging romanized input to its CJK alias; for CJK input
+                // there's nothing to bridge.
+                guard LanguageUtils.isPureASCII(inputTitle) else { return false }
                 let resultHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
-                return hasTokenOverlap || resultHasCJK
+                // Mastering differences between Apple Music and NetEase /
+                // QQ are routinely 0.3–0.8s, so we accept up to 1.0s here
+                // to catch Eman Lam — Xia Nie Piao Piao → 仙乐飘飘处处闻
+                // (Δ0.5s). The pure-ASCII guard above prevents same-artist
+                // CJK collisions from leaking through.
+                if resultHasCJK && candidate.durationDiff < 1.0 { return true }
+                return false
             }),
         ]
 
@@ -809,10 +845,17 @@ public final class LyricsFetcher {
             // 🔑 Cross-script tolerance: same person, different script names.
             // Two tiers to balance precision vs recall:
             // - Title matches + dur<1s: confident (翻風 + Cass Phang → 彭羚)
-            // - No title match + dur<0.5s: search engine confirmed artist mapping
-            //   (Kay Huang → 黄韵玲: "三个人的晚餐" Δ0.0s from artist-name search)
+            // - No title match + dur<1.0s + result is CJK title: search engine
+            //   confirmed artist mapping (Eman Lam → 林二汶 / Xia Nie Piao Piao
+            //   Chu Chu Wen → 仙乐飘飘处处闻; the romanized input is unrecognisable
+            //   to NetEase but the artist-only search returns the right CJK
+            //   track, and a 0.5s mastering difference between Apple Music and
+            //   NetEase is normal). Requiring `resultTitleIsCJK` keeps this from
+            //   greenlighting unrelated same-artist English-titled tracks.
+            let resultTitleIsCJK = LanguageUtils.containsCJK(s.name)
             if !artistMatch && isCrossScriptArtist && !inputHasBothScripts {
-                if (titleMatch && durationDiff < 1.0) || durationDiff < 0.5 {
+                if (titleMatch && durationDiff < 1.0) ||
+                   (!titleMatch && resultTitleIsCJK && durationDiff < 1.0) {
                     artistMatch = true
                 }
             }
@@ -854,23 +897,14 @@ public final class LyricsFetcher {
 
     private func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("NetEase", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
-        // Preflight: disable P3's CJK escape only when BOTH:
-        //   1. iTunes confirms the ORIGINAL title exists as an exact match.
-        //   2. The input does NOT look like romanized Japanese (no particles
-        //      like no/ga/ni etc.).
-        // This lets genuine English titles (Invisible) avoid same-artist
-        // collisions while romanized Japanese titles (Dream Boat ga Deru Yoru
-        // ni) retain their only path to match via NetEase's CJK escape.
-        let disableCjkEscape: Bool
-        if LanguageUtils.isPureASCII(originalTitle) && LanguageUtils.isPureASCII(originalArtist)
-            && !LanguageUtils.isLikelyRomanizedJapanese(originalTitle) {
-            disableCjkEscape = await metadataResolver.hasOriginalExactMatch(
-                title: originalTitle, artist: originalArtist, duration: duration
-            )
-        } else {
-            disableCjkEscape = false
-        }
-        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: disableCjkEscape)
+        // Note: P3's CJK-title escape was previously gated here by an
+        // exact-original preflight, on the assumption that an iTunes exact
+        // match meant the title wasn't a romanization. That assumption is
+        // wrong — Apple's catalogs label the same recording differently
+        // across regions (e.g., mei ehara — "Invisible" on KR/HK/TW is the
+        // same recording as "不確か" on JP). Rejecting CJK candidates in that
+        // case throws away the only available lyrics.
+        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: false)
         let headers = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                        "Referer": "https://music.163.com"]
 
@@ -900,16 +934,17 @@ public final class LyricsFetcher {
         }
 
         DebugLogger.log("NetEase", "✅ 找到 songId=\(songId)")
-        guard let lyrics = await fetchNetEaseLyrics(songId: songId, duration: duration, expectedTitle: originalTitle, expectedArtist: originalArtist) else {
+        guard let result = await fetchNetEaseLyrics(songId: songId, duration: duration, expectedTitle: originalTitle, expectedArtist: originalArtist) else {
             DebugLogger.log("NetEase", "❌ 获取歌词失败")
             return nil
         }
-
-        let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled)
-        return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: .synced)
+        let lyrics = result.lyrics
+        let kind = result.kind
+        let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
+        return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind)
     }
 
-    private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> [LyricLine]? {
+    private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> (lyrics: [LyricLine], kind: LyricsKind)? {
         // 🔑 yv=1 requests YRC (word-level) lyrics alongside LRC/tlyric
         guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1&yv=1") else { return nil }
 
@@ -932,6 +967,7 @@ public final class LyricsFetcher {
             // 🔑 Prefer YRC (word-level) over LRC — skip LRC parse entirely when YRC available
             var lyrics: [LyricLine]
             var isYRC = false
+            var resultKind: LyricsKind = .synced
 
             if let yrc = json["yrc"] as? [String: Any],
                let yrcText = yrc["lyric"] as? String, !yrcText.isEmpty,
@@ -942,10 +978,24 @@ public final class LyricsFetcher {
             } else if let lrc = json["lrc"] as? [String: Any],
                       let lyricText = lrc["lyric"] as? String, !lyricText.isEmpty {
                 let parsed = parser.parseLRC(lyricText)
-                // 🔑 Fallback: source has lyrics text but no timestamps → create unsynced
-                lyrics = parsed.isEmpty
-                    ? parser.createUnsyncedLyrics(lyricText, duration: duration)
-                    : parser.stripMetadataLines(parsed)
+                // 🔑 Fallback path: source returned text without parseable
+                // timestamps. Synthesize lines AND tag .unsynced so the UI
+                // shows a static list (no auto-scroll against fake timing).
+                if parsed.isEmpty {
+                    lyrics = parser.createUnsyncedLyrics(lyricText, duration: duration)
+                    resultKind = .unsynced
+                    DebugLogger.log("NetEase", "🚫 LRC has no timestamps — using unsynced fallback (\(lyrics.count) lines)")
+                } else {
+                    lyrics = parser.stripMetadataLines(parsed)
+                    // Even when parseLRC succeeded, the result may be
+                    // degenerate (all zero, all identical, span < 30s).
+                    // detectKind catches these so they don't masquerade
+                    // as synced and trigger auto-scroll.
+                    resultKind = parser.detectKind(lyrics)
+                    if resultKind == .unsynced {
+                        DebugLogger.log("NetEase", "🚫 detectKind = .unsynced (degenerate timestamps) (\(lyrics.count) lines)")
+                    }
+                }
             } else {
                 return nil
             }
@@ -984,7 +1034,13 @@ public final class LyricsFetcher {
                 lyrics = parser.stripChineseTranslations(lyrics)
             }
 
-            return parser.applyTimeOffset(to: lyrics, offset: netEaseTimeOffset)
+            // Only shift fetched timestamps when they are real. Fabricated
+            // timestamps (unsynced fallback) get no offset — there's nothing
+            // to align.
+            let final = resultKind == .synced
+                ? parser.applyTimeOffset(to: lyrics, offset: netEaseTimeOffset)
+                : lyrics
+            return (final, resultKind)
         } catch {
             return nil
         }
@@ -993,17 +1049,9 @@ public final class LyricsFetcher {
     // MARK: - QQ Music
     private func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
-        // Preflight (see fetchFromNetEase for rationale). Memoized across fetches.
-        let disableCjkEscape: Bool
-        if LanguageUtils.isPureASCII(originalTitle) && LanguageUtils.isPureASCII(originalArtist)
-            && !LanguageUtils.isLikelyRomanizedJapanese(originalTitle) {
-            disableCjkEscape = await metadataResolver.hasOriginalExactMatch(
-                title: originalTitle, artist: originalArtist, duration: duration
-            )
-        } else {
-            disableCjkEscape = false
-        }
-        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: disableCjkEscape)
+        // (See fetchFromNetEase note: cross-region same-recording aliases
+        // are real, so we don't gate the P3 CJK escape on exact-match.)
+        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: false)
         guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
 
         guard let songMid: String = await searchAndSelectCandidate(
@@ -1038,16 +1086,17 @@ public final class LyricsFetcher {
         }
 
         DebugLogger.log("QQMusic", "✅ 找到 songMid=\(songMid)")
-        guard let lyrics = await fetchQQMusicLyrics(songMid: songMid, duration: duration) else {
+        guard let result = await fetchQQMusicLyrics(songMid: songMid, duration: duration) else {
             DebugLogger.log("QQMusic", "❌ 获取歌词失败")
             return nil
         }
-
-        let score = scorer.calculateScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled)
-        return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score, kind: .synced)
+        let lyrics = result.lyrics
+        let kind = result.kind
+        let score = scorer.calculateScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled, kind: kind)
+        return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score, kind: kind)
     }
 
-    private func fetchQQMusicLyrics(songMid: String, duration: TimeInterval) async -> [LyricLine]? {
+    private func fetchQQMusicLyrics(songMid: String, duration: TimeInterval) async -> (lyrics: [LyricLine], kind: LyricsKind)? {
         guard let url = HTTPClient.buildURL(base: "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg", queryItems: [
             "songmid": songMid, "format": "json", "nobase64": "1"
         ]) else { return nil }
@@ -1062,10 +1111,20 @@ public final class LyricsFetcher {
 
             // 🔑 先剥元信息再处理翻译
             let parsed = parser.parseLRC(lyricText)
-            // 🔑 Fallback: source has lyrics text but no timestamps → create unsynced
-            var lyrics = parsed.isEmpty
-                ? parser.createUnsyncedLyrics(lyricText, duration: duration)
-                : parser.stripMetadataLines(parsed)
+            var lyrics: [LyricLine]
+            var resultKind: LyricsKind = .synced
+            // 🔑 Fallback path: source returned text without timestamps.
+            if parsed.isEmpty {
+                lyrics = parser.createUnsyncedLyrics(lyricText, duration: duration)
+                resultKind = .unsynced
+                DebugLogger.log("QQMusic", "🚫 lyric has no timestamps — using unsynced fallback (\(lyrics.count) lines)")
+            } else {
+                lyrics = parser.stripMetadataLines(parsed)
+                resultKind = parser.detectKind(lyrics)
+                if resultKind == .unsynced {
+                    DebugLogger.log("QQMusic", "🚫 detectKind = .unsynced (degenerate timestamps) (\(lyrics.count) lines)")
+                }
+            }
 
             let (extracted, isInterleaved) = parser.extractInterleavedTranslations(lyrics)
             if isInterleaved {
@@ -1080,7 +1139,11 @@ public final class LyricsFetcher {
             // 🔑 最后一道防线：剥离非中文歌曲中的中文翻译
             lyrics = parser.stripChineseTranslations(lyrics)
 
-            return parser.applyTimeOffset(to: lyrics, offset: qqTimeOffset)
+            // Only shift fetched timestamps when they are real.
+            let final = resultKind == .synced
+                ? parser.applyTimeOffset(to: lyrics, offset: qqTimeOffset)
+                : lyrics
+            return (final, resultKind)
         } catch {
             return nil
         }
@@ -1207,6 +1270,91 @@ public final class LyricsFetcher {
             let score = scorer.calculateScore(lyrics, source: "Genius", duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
             return LyricsFetchResult(lyrics: lyrics, source: "Genius", score: score, kind: .unsynced)
         } catch { return nil }
+    }
+
+    // MARK: - Apple Music Catalog (MusicKit / MusicDataRequest)
+    //
+    // Authoritative source for tracks that the community lyric databases
+    // (NetEase / QQ / LRCLIB / AMLL / Genius / lyrics.ovh) don't have —
+    // notably long-tail Japanese / indie / rare catalog entries like
+    // mei ehara — Invisible.
+    //
+    // macOS MusicKit doesn't expose `Song.lyrics` as a Swift property; the
+    // documented path is the public Apple Music REST endpoint
+    //   GET /v1/catalog/{storefront}/songs/{id}/lyrics
+    // wrapped through `MusicDataRequest`, which automatically attaches the
+    // user's Music User Token (requires an active Apple Music subscription).
+    // The response body is `{ data: [{ attributes: { ttml: "<tt>...</tt>" } }] }`
+    // and the TTML uses the same Apple-flavored format as AMLL-TTML-DB, so
+    // the existing `parser.parseTTML(...)` already handles it — including
+    // word-level (syllable-synced) timing when present.
+    private func fetchFromAppleMusic(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        do {
+            // Step 1: locate the song in Apple's catalog to obtain its ID.
+            var request = MusicCatalogSearchRequest(term: "\(title) \(artist)", types: [Song.self])
+            request.limit = 8
+            let response = try await request.response()
+            guard !response.songs.isEmpty else {
+                DebugLogger.log("AppleMusic", "❌ catalog search empty for '\(title)' by '\(artist)'")
+                return nil
+            }
+
+            // Step 2: pick the song whose title + artist + duration align.
+            let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
+            let inputArtistNorm = LanguageUtils.normalizeArtistName(artist).lowercased()
+            let matched: Song? = response.songs.first { s in
+                let songDuration = s.duration ?? 0
+                guard abs(songDuration - duration) < 3.0 else { return false }
+                let sTitle = LanguageUtils.normalizeTrackName(s.title).lowercased()
+                let sArtist = LanguageUtils.normalizeArtistName(s.artistName).lowercased()
+                let titleOK = sTitle == inputTitleNorm
+                    || sTitle.contains(inputTitleNorm) || inputTitleNorm.contains(sTitle)
+                let artistOK = sArtist == inputArtistNorm
+                    || sArtist.contains(inputArtistNorm) || inputArtistNorm.contains(sArtist)
+                return titleOK && artistOK
+            }
+            guard let song = matched else {
+                DebugLogger.log("AppleMusic", "❌ no catalog match for '\(title)' by '\(artist)'")
+                return nil
+            }
+            // Optional optimisation: skip the lyrics call entirely if Apple
+            // already tells us this catalog item has no lyrics.
+            guard song.hasLyrics else {
+                DebugLogger.log("AppleMusic", "❌ song.hasLyrics=false for '\(song.title)' by '\(song.artistName)'")
+                return nil
+            }
+
+            // Step 3: fetch the lyrics endpoint via MusicDataRequest.
+            // MusicDataRequest signs the request with the user's Music User
+            // Token automatically — no manual JWT plumbing needed.
+            let storefront = try await MusicDataRequest.currentCountryCode
+            guard let url = URL(string: "https://api.music.apple.com/v1/catalog/\(storefront)/songs/\(song.id.rawValue)/lyrics") else { return nil }
+            let dataRequest = MusicDataRequest(urlRequest: URLRequest(url: url))
+            let dataResponse = try await dataRequest.response()
+            // Parse the JSON envelope to pull out the TTML attribute.
+            guard let json = try JSONSerialization.jsonObject(with: dataResponse.data) as? [String: Any],
+                  let dataArr = json["data"] as? [[String: Any]],
+                  let first = dataArr.first,
+                  let attrs = first["attributes"] as? [String: Any],
+                  let ttml = attrs["ttml"] as? String,
+                  !ttml.isEmpty else {
+                DebugLogger.log("AppleMusic", "❌ lyrics response had no TTML")
+                return nil
+            }
+
+            // Parse Apple's TTML through the existing AMLL parser.
+            guard let parsed = parser.parseTTML(ttml), !parsed.isEmpty else {
+                DebugLogger.log("AppleMusic", "❌ parseTTML returned 0 lines")
+                return nil
+            }
+            let kind: LyricsKind = .synced  // Apple TTML always carries timestamps
+            let score = scorer.calculateScore(parsed, source: "AppleMusic", duration: duration, translationEnabled: translationEnabled, kind: kind)
+            DebugLogger.log("AppleMusic", "✅ '\(title)' by '\(artist)' — \(parsed.count) lines (TTML)")
+            return LyricsFetchResult(lyrics: parsed, source: "AppleMusic", score: score, kind: kind)
+        } catch {
+            DebugLogger.log("AppleMusic", "❌ MusicDataRequest error: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// 从 Genius HTML 提取 data-lyrics-container 中的歌词纯文本

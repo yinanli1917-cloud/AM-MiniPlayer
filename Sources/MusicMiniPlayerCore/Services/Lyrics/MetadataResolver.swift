@@ -38,6 +38,45 @@ public final class MetadataResolver {
     }
     private let preflightCache = PreflightCache()
 
+    // ────────────────────────────────────────────────────────────────
+    // MARK: - Per-region Resolution Cache (in-process)
+    // ────────────────────────────────────────────────────────────────
+    //
+    // Branch 2 in the fetcher fans the resolved CJK alias out to FIVE
+    // sources per inferred region. Without caching, each fan-out arm
+    // would trigger its own iTunes round-trip — 5 × N regions = 20+
+    // duplicate calls per song fetch, hammering the API and pushing
+    // total latency past the 3 s budget. This actor caches the result
+    // of `fetchMetadataFromRegionWithExactFlag` per `(title, artist,
+    // ~duration, region)` so concurrent callers share a single round
+    // trip even when fired before the first one returns.
+    private actor RegionResolveCache {
+        struct Value {
+            let resolved: (String, String, String, Double)?
+            let hasExact: Bool
+        }
+        private var cache: [String: Value] = [:]
+        private var inflight: [String: Task<Value, Never>] = [:]
+        func taskFor(_ key: String, build: @Sendable @escaping () async -> Value) -> Task<Value, Never> {
+            if let cached = cache[key] {
+                return Task { cached }
+            }
+            if let existing = inflight[key] { return existing }
+            let t = Task<Value, Never> { [weak self] in
+                let v = await build()
+                if let self = self { await self.store(key, v) }
+                return v
+            }
+            inflight[key] = t
+            return t
+        }
+        private func store(_ key: String, _ v: Value) {
+            cache[key] = v
+            inflight.removeValue(forKey: key)
+        }
+    }
+    private let regionResolveCache = RegionResolveCache()
+
     /// Returns true if iTunes confirms `(title, artist, ~duration)` exists
     /// as an exact match in any inferred JP/KR/HK/TW region. This is the
     /// signal that the input title is NOT a romanization — it's the real
@@ -492,12 +531,15 @@ public final class MetadataResolver {
             return nil
         }
 
-        // Collect all regions' resolved candidates, filtering out candidates
-        // whose artist is ASCII (same script as input) when the original title
-        // is confirmed exact somewhere — these are same-artist-different-song
-        // collisions (e.g., Invisible → 不確か by mei ehara). CJK-artist
-        // candidates are real aliases (e.g., Koibitotachi → 恋人たちの地平線
-        // by 菊池桃子) and always pass through.
+        // Collect all regions' resolved candidates. We previously filtered
+        // out same-script-artist (ASCII==ASCII) candidates here as
+        // "same-artist-different-song collisions", but that filter was
+        // wrong: Apple's catalogs label the SAME recording differently
+        // across regions (e.g., mei ehara — "Invisible" on KR/HK/TW IS
+        // the same audio as "不確か" on JP, just with the JP storefront
+        // showing the original Japanese title). The filter discarded the
+        // only available lyrics for those tracks. Allow all resolved
+        // candidates; downstream selectBest already vets them.
         var regionOutputs: [(region: String, resolved: (String, String, String, Double)?, hasExact: Bool)] = []
         await withTaskGroup(of: (String, (String, String, String, Double)?, Bool).self) { group in
             for region in regions {
@@ -513,16 +555,7 @@ public final class MetadataResolver {
             }
         }
 
-        let anyRegionHasExact = regionOutputs.contains { $0.hasExact }
-        let trustedOutputs: [(region: String, resolved: (String, String, String, Double)?, hasExact: Bool)] = regionOutputs.map { output in
-            guard anyRegionHasExact, let r = output.resolved else { return output }
-            // Drop same-script-artist candidates (same-artist collision).
-            if !LanguageUtils.containsCJK(r.1) {
-                DebugLogger.log("MetadataResolver", "⚠️ 拒绝 [\(output.region)] 候选 '\(r.0)' by '\(r.1)' — 原标题已确认 + 同语言艺术家")
-                return (output.region, nil, output.hasExact)
-            }
-            return output
-        }
+        let trustedOutputs = regionOutputs
 
         let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
         let inputIsASCII = LanguageUtils.isPureASCII(title)
@@ -618,6 +651,32 @@ public final class MetadataResolver {
     /// running a separate preflight iTunes call because it piggybacks on
     /// the fetches the fetcher already needs to do.
     public func fetchMetadataFromRegionWithExactFlag(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        region: String
+    ) async -> (resolved: (String, String, String, Double)?, hasExactMatch: Bool) {
+        let cacheKey = "\(title.lowercased())|\(artist.lowercased())|\(Int(duration))|\(region)"
+        let titleCopy = title
+        let artistCopy = artist
+        let durationCopy = duration
+        let regionCopy = region
+        let task = await regionResolveCache.taskFor(cacheKey) { [weak self] in
+            guard let self = self else {
+                return RegionResolveCache.Value(resolved: nil, hasExact: false)
+            }
+            let v = await self.fetchMetadataFromRegionUncached(
+                title: titleCopy, artist: artistCopy, duration: durationCopy, region: regionCopy
+            )
+            return RegionResolveCache.Value(resolved: v.resolved, hasExact: v.hasExactMatch)
+        }
+        let v = await task.value
+        return (resolved: v.resolved, hasExactMatch: v.hasExact)
+    }
+
+    /// Internal uncached impl — see `fetchMetadataFromRegionWithExactFlag`
+    /// for the public entry point that wraps this with `RegionResolveCache`.
+    private func fetchMetadataFromRegionUncached(
         title: String,
         artist: String,
         duration: TimeInterval,

@@ -171,8 +171,8 @@
     "duration": 326,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "不確か"
+      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
+      "firstLineContains": "幽霊"
     }
   },
   {
@@ -470,6 +470,28 @@
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": null
+    }
+  },
+  {
+    "id": "H25",
+    "title": "忘记有时",
+    "artist": "王菀之",
+    "duration": 239,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "有时无心的散聚"
+    }
+  },
+  {
+    "id": "H26",
+    "title": "Xia Nie Piao Piao Chu Chu Wen",
+    "artist": "Eman Lam",
+    "duration": 300,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "想"
     }
   }
 ]
