@@ -113,6 +113,28 @@ public enum LanguageUtils {
         text.unicodeScalars.allSatisfy { $0.isASCII }
     }
 
+    // MARK: - Romaji Heuristic
+
+    /// Detect whether an ASCII title is likely Japanese romaji (and therefore
+    /// needs romanized→CJK resolution). Signal: contains at least one common
+    /// Japanese particle as a standalone word. This distinguishes real
+    /// romanized Japanese titles (e.g., "Dream Boat ga Deru Yoru ni",
+    /// "Koibitotachi no Chiheisen", "Mayonaka No Shujinkou") from ordinary
+    /// English titles (e.g., "Invisible", "Deep", "Dinner") so the Branch-2
+    /// speculative resolver can safely accept CJK aliases for the former
+    /// while rejecting same-artist collisions for the latter.
+    public static func isLikelyRomanizedJapanese(_ text: String) -> Bool {
+        guard isPureASCII(text) else { return false }
+        let lowered = text.lowercased()
+        let words = lowered.split(whereSeparator: { !$0.isLetter }).map(String.init)
+        guard !words.isEmpty else { return false }
+        let particles: Set<String> = [
+            "no", "ga", "wo", "ni", "to", "wa", "mo", "de",
+            "kara", "made", "nara", "deshita", "desu", "masu"
+        ]
+        return words.contains { particles.contains($0) }
+    }
+
     // MARK: - Region Inference
 
     /// 根据文本内容推断可能的 iTunes 区域代码

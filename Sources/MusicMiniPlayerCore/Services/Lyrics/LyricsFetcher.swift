@@ -161,18 +161,32 @@ public final class LyricsFetcher {
             // Output-side validators still protect us from bad candidates.
             if titleIsASCII {
                 let regions = self.metadataResolver.inferRegions(title: ot, artist: oa)
+                // 🔑 Romanized-Japanese heuristic: the input title contains at
+                // least one Japanese particle as a standalone word (no/ga/wo/
+                // ni/to/wa/de/mo) OR the artist is already CJK. This is strong
+                // evidence the title is a romanization, so per-region CJK
+                // candidates are legitimate aliases. Without these signals AND
+                // with an exact-original confirmed by iTunes, CJK candidates
+                // are same-artist collisions (Invisible → 不確か) and rejected.
+                let inputLooksRomanized = LanguageUtils.isLikelyRomanizedJapanese(ot) ||
+                                          LanguageUtils.containsCJK(oa)
                 for region in regions {
                     group.addTask {
                         guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
                             title: ot, artist: oa, duration: d, region: region
                         ) else { return nil }
                         let (rt, ra, _, _) = localized
-                        // Only speculate when the candidate actually contains CJK —
-                        // an ASCII→ASCII "localization" is not useful and risks
-                        // mismatches (ref: "Moon Style Love" → "milk tea").
                         guard LanguageUtils.containsCJK(rt) else { return nil }
-                        // Skip no-op — if it equals the original we'd duplicate branch 1.
                         guard rt != ot || ra != oa else { return nil }
+                        if !inputLooksRomanized {
+                            let originalIsExact = await self.metadataResolver.hasOriginalExactMatch(
+                                title: ot, artist: oa, duration: d
+                            )
+                            if originalIsExact {
+                                DebugLogger.log("⚡ Branch-2(\(region)) rejected: '\(rt)' by '\(ra)' — input looks English + original confirmed exact")
+                                return nil
+                            }
+                        }
                         DebugLogger.log("⚡ Branch-2 speculative(\(region)): '\(rt)' by '\(ra)'")
                         return await self.fetchFromNetEase(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
                     }
@@ -183,6 +197,12 @@ public final class LyricsFetcher {
                         let (rt, ra, _, _) = localized
                         guard LanguageUtils.containsCJK(rt) else { return nil }
                         guard rt != ot || ra != oa else { return nil }
+                        if !inputLooksRomanized {
+                            let originalIsExact = await self.metadataResolver.hasOriginalExactMatch(
+                                title: ot, artist: oa, duration: d
+                            )
+                            if originalIsExact { return nil }
+                        }
                         return await self.fetchFromQQMusic(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
                     }
                 }
@@ -364,7 +384,7 @@ public final class LyricsFetcher {
     /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s
     /// P3: 仅艺术家+时长极精确(<0.5s) — 用于罗马字/翻译标题 vs CJK 标题的场景
     /// 🔑 No title-only tier: all matches require artist verification (three-rule principle)
-    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "") -> ID? {
+    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false) -> ID? {
         let sorted = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sorted.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }
         DebugLogger.log(source, "🎯 候选: \(desc.joined(separator: ", "))")
@@ -390,6 +410,10 @@ public final class LyricsFetcher {
                     })
                 }
                 // CJK 标题允许无 token 重叠（罗马字 vs 汉字/假名）
+                // 🔑 Gated by disableCjkEscape: when iTunes confirms the title as
+                // an exact original match, we know it's NOT a romanization and
+                // must reject this escape to prevent same-artist collisions.
+                if disableCjkEscape { return hasTokenOverlap }
                 let resultHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
                 return hasTokenOverlap || resultHasCJK
             }),
@@ -646,6 +670,12 @@ public final class LyricsFetcher {
         let rawOriginalTitle: String
         let rawOriginalArtist: String
         let duration: TimeInterval
+        /// True when iTunes confirms the original `(title, artist, duration)` as
+        /// an exact match in some region. When true, downstream matchers MUST
+        /// NOT apply the romanized→CJK P3 escape — the title is already the
+        /// real title, not a romanization. Prevents same-artist duration
+        /// collisions (e.g., "Invisible" → "不確か" by mei ehara).
+        let disableCjkEscapeInP3: Bool
 
         /// resolved + original + dual-title halves 的标题/艺术家对（供 buildCandidates 匹配）
         var titlePairs: [(String, String)] {
@@ -665,7 +695,7 @@ public final class LyricsFetcher {
             [(rawArtist, simplifiedArtist), (rawOriginalArtist, simplifiedOriginalArtist)]
         }
 
-        init(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval) {
+        init(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, disableCjkEscapeInP3: Bool = false) {
             let ct = LanguageUtils.normalizeTrackName(title)
             let cot = LanguageUtils.normalizeTrackName(originalTitle)
             self.simplifiedTitle = LanguageUtils.toSimplifiedChinese(ct)
@@ -675,6 +705,7 @@ public final class LyricsFetcher {
             self.rawTitle = title; self.rawArtist = artist
             self.rawOriginalTitle = originalTitle; self.rawOriginalArtist = originalArtist
             self.duration = duration
+            self.disableCjkEscapeInP3 = disableCjkEscapeInP3
         }
     }
 
@@ -726,7 +757,7 @@ public final class LyricsFetcher {
                         let candidates = self.buildCandidates(
                             songs: songs, params: params, extractSong: extractSong
                         )
-                        if let id = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle) {
+                        if let id = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
                             return (id, desc)
                         }
                     } catch {}
@@ -823,7 +854,23 @@ public final class LyricsFetcher {
 
     private func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("NetEase", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
-        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration)
+        // Preflight: disable P3's CJK escape only when BOTH:
+        //   1. iTunes confirms the ORIGINAL title exists as an exact match.
+        //   2. The input does NOT look like romanized Japanese (no particles
+        //      like no/ga/ni etc.).
+        // This lets genuine English titles (Invisible) avoid same-artist
+        // collisions while romanized Japanese titles (Dream Boat ga Deru Yoru
+        // ni) retain their only path to match via NetEase's CJK escape.
+        let disableCjkEscape: Bool
+        if LanguageUtils.isPureASCII(originalTitle) && LanguageUtils.isPureASCII(originalArtist)
+            && !LanguageUtils.isLikelyRomanizedJapanese(originalTitle) {
+            disableCjkEscape = await metadataResolver.hasOriginalExactMatch(
+                title: originalTitle, artist: originalArtist, duration: duration
+            )
+        } else {
+            disableCjkEscape = false
+        }
+        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: disableCjkEscape)
         let headers = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                        "Referer": "https://music.163.com"]
 
@@ -946,7 +993,17 @@ public final class LyricsFetcher {
     // MARK: - QQ Music
     private func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
-        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration)
+        // Preflight (see fetchFromNetEase for rationale). Memoized across fetches.
+        let disableCjkEscape: Bool
+        if LanguageUtils.isPureASCII(originalTitle) && LanguageUtils.isPureASCII(originalArtist)
+            && !LanguageUtils.isLikelyRomanizedJapanese(originalTitle) {
+            disableCjkEscape = await metadataResolver.hasOriginalExactMatch(
+                title: originalTitle, artist: originalArtist, duration: duration
+            )
+        } else {
+            disableCjkEscape = false
+        }
+        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: disableCjkEscape)
         guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
 
         guard let songMid: String = await searchAndSelectCandidate(

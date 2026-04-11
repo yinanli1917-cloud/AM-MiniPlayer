@@ -19,6 +19,78 @@ public final class MetadataResolver {
 
     private init() {}
 
+    // ────────────────────────────────────────────────────────────────
+    // MARK: - Exact-match Preflight
+    // ────────────────────────────────────────────────────────────────
+
+    /// In-process memoization for preflight exact-match checks.
+    /// Stores resolved values by key; concurrent parallel callers may each
+    /// fire once on a cache miss, but subsequent reads are instant.
+    private actor PreflightCache {
+        private var cache: [String: Bool] = [:]
+        func get(_ key: String) -> Bool? { cache[key] }
+        func set(_ key: String, _ value: Bool) { cache[key] = value }
+    }
+    private let preflightCache = PreflightCache()
+
+    /// Returns true if iTunes confirms `(title, artist, ~duration)` exists
+    /// as an exact match in any inferred JP/KR/HK/TW region. This is the
+    /// signal that the input title is NOT a romanization — it's the real
+    /// title — so downstream matchers MUST NOT apply romanized→CJK escapes
+    /// (e.g., NetEase P3 CJK-title rule) that would pick same-artist
+    /// duration collisions like "Invisible"→"不確か" by mei ehara.
+    ///
+    /// - Only called for pure-ASCII input (CJK input is already original).
+    /// - Memoized per-song for the process lifetime.
+    /// - Parallelizes region queries and short-circuits on first hit.
+    public func hasOriginalExactMatch(
+        title: String,
+        artist: String,
+        duration: TimeInterval
+    ) async -> Bool {
+        let key = "\(title.lowercased())|\(artist.lowercased())|\(Int(duration))"
+        if let cached = await preflightCache.get(key) {
+            return cached
+        }
+
+        // Reuse `fetchMetadataFromRegionWithExactFlag` (which the fetcher
+        // already calls for Branch-2 speculative resolution). Piggybacking
+        // on that path uses the same searchITunes calls, the same results,
+        // and inherits its reliability — avoids the race conditions a
+        // separate iTunes probe had.
+        let regions = inferRegions(title: title, artist: artist)
+        guard !regions.isEmpty else {
+            await preflightCache.set(key, false)
+            return false
+        }
+
+        let found = await withTaskGroup(of: Bool.self) { group in
+            for region in regions {
+                group.addTask {
+                    let (_, hasExact) = await self.fetchMetadataFromRegionWithExactFlag(
+                        title: title, artist: artist, duration: duration, region: region
+                    )
+                    return hasExact
+                }
+            }
+            var hit = false
+            for await regionHasExact in group {
+                if regionHasExact {
+                    hit = true
+                    group.cancelAll()
+                    break
+                }
+            }
+            return hit
+        }
+
+        await preflightCache.set(key, found)
+        if found {
+            DebugLogger.log("MetadataResolver", "🛑 hasOriginalExactMatch: '\(title)' by '\(artist)' — P3 CJK escape disabled")
+        }
+        return found
+    }
+
     // MARK: - 统一解析
 
     /// 获取统一的搜索元信息（优先本地化）
@@ -400,18 +472,43 @@ public final class MetadataResolver {
             return nil
         }
 
-        return await withTaskGroup(of: (String, String, String, Double)?.self) { group in
+        // Collect all regions' resolved candidates, filtering out candidates
+        // whose artist is ASCII (same script as input) when the original title
+        // is confirmed exact somewhere — these are same-artist-different-song
+        // collisions (e.g., Invisible → 不確か by mei ehara). CJK-artist
+        // candidates are real aliases (e.g., Koibitotachi → 恋人たちの地平線
+        // by 菊池桃子) and always pass through.
+        var regionOutputs: [(region: String, resolved: (String, String, String, Double)?, hasExact: Bool)] = []
+        await withTaskGroup(of: (String, (String, String, String, Double)?, Bool).self) { group in
             for region in regions {
                 group.addTask {
-                    await self.fetchMetadataFromRegion(title: title, artist: artist, duration: duration, region: region)
+                    let (resolved, hasExact) = await self.fetchMetadataFromRegionWithExactFlag(
+                        title: title, artist: artist, duration: duration, region: region
+                    )
+                    return (region, resolved, hasExact)
                 }
             }
+            for await (region, resolved, hasExact) in group {
+                regionOutputs.append((region, resolved, hasExact))
+            }
+        }
 
-            let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
-            let inputIsASCII = LanguageUtils.isPureASCII(title)
-            var bestMatch: (String, String, String, Double)? = nil
-            for await result in group {
-                if let r = result {
+        let anyRegionHasExact = regionOutputs.contains { $0.hasExact }
+        let trustedOutputs: [(region: String, resolved: (String, String, String, Double)?, hasExact: Bool)] = regionOutputs.map { output in
+            guard anyRegionHasExact, let r = output.resolved else { return output }
+            // Drop same-script-artist candidates (same-artist collision).
+            if !LanguageUtils.containsCJK(r.1) {
+                DebugLogger.log("MetadataResolver", "⚠️ 拒绝 [\(output.region)] 候选 '\(r.0)' by '\(r.1)' — 原标题已确认 + 同语言艺术家")
+                return (output.region, nil, output.hasExact)
+            }
+            return output
+        }
+
+        let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
+        let inputIsASCII = LanguageUtils.isPureASCII(title)
+        var bestMatch: (String, String, String, Double)? = nil
+        for output in trustedOutputs {
+            if let r = output.resolved {
                     DebugLogger.log("MetadataResolver", "🔍 区域结果: '\(r.0)' by '\(r.1)' (region: \(r.2), Δ\(String(format: "%.2f", r.3))s)")
                     // 🔑 Priority depends on input script:
                     // Romanized input: titleCJK > titleMatch > artistCJK > originRegion > hasCJK > duration
@@ -451,19 +548,17 @@ public final class MetadataResolver {
                         bestMatch = r
                     }
 
-                    // 🔑 Early return: CJK title + origin region + precise duration = best possible
-                    if rTitleCJK && rIsOriginRegion && r.3 < 1.0 {
-                        group.cancelAll()
-                        break
-                    }
+                // 🔑 Early return: CJK title + origin region + precise duration = best possible
+                if rTitleCJK && rIsOriginRegion && r.3 < 1.0 {
+                    break
                 }
             }
-
-            if bestMatch == nil {
-                DebugLogger.log("MetadataResolver", "⚠️ 所有区域均无匹配结果")
-            }
-            return bestMatch
         }
+
+        if bestMatch == nil {
+            DebugLogger.log("MetadataResolver", "⚠️ 所有区域均无匹配结果")
+        }
+        return bestMatch
     }
 
     /// 推断可能的区域（委托给 LanguageUtils 统一实现）
@@ -483,10 +578,28 @@ public final class MetadataResolver {
         duration: TimeInterval,
         region: String
     ) async -> (String, String, String, Double)? {
+        let (result, _) = await fetchMetadataFromRegionWithExactFlag(
+            title: title, artist: artist, duration: duration, region: region
+        )
+        return result
+    }
+
+    /// Same as `fetchMetadataFromRegion` but also reports whether this
+    /// region contained an exact original match of `(title, artist, ~duration)`.
+    /// When `hasExactMatch == true`, the caller KNOWS the input title is the
+    /// real title (not a romanization) and should disable any romanized→CJK
+    /// escapes in downstream matchers. This signal is more reliable than
+    /// running a separate preflight iTunes call because it piggybacks on
+    /// the fetches the fetcher already needs to do.
+    public func fetchMetadataFromRegionWithExactFlag(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        region: String
+    ) async -> (resolved: (String, String, String, Double)?, hasExactMatch: Bool) {
         let searchTerms = ["\(title) \(artist)", artist, title]
 
         // 🔑 Parallel fetch — fire all search terms simultaneously.
-        // Was sequential: 3 × 1-2s. Now: max(latencies) ≈ 1-2s.
         var fetchedResults: [(Int, [[String: Any]])] = []
         await withTaskGroup(of: (Int, String, [[String: Any]]?).self) { group in
             for (i, searchTerm) in searchTerms.enumerated() {
@@ -505,16 +618,48 @@ public final class MetadataResolver {
             }
         }
 
-        // Process in priority order (combined > artist > title)
+        // 🔑 Detect exact-original match across all collected results (per region).
+        // This region's `hasExact` flag is returned separately from `resolved`.
+        // The caller (fetchLocalizedMetadata) does the cross-region decision:
+        //   - If SOME region has exact: only accept resolved candidates from
+        //     regions that ALSO have exact (alias case — e.g., JP has both
+        //     "Koibitotachi no Chiheisen" and "恋人たちの地平線")
+        //   - If NO region has exact: accept any resolved candidate
+        // This distinguishes "romanized→CJK alias" (both in same region) from
+        // "unrelated same-artist same-duration CJK track in another region"
+        // (e.g., Invisible→不確か where exact is in KR/HK/TW but 不確か is only in JP).
+        let inputTitleLower = title.lowercased()
+        let inputArtistLower = artist.lowercased()
+        var hasExact = false
+        for (_, results) in fetchedResults {
+            for result in results {
+                guard let trackName = result["trackName"] as? String,
+                      let artistName = result["artistName"] as? String,
+                      let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
+                let trackDuration = Double(trackTimeMillis) / 1000.0
+                if abs(trackDuration - duration) < 1.0
+                    && trackName.lowercased() == inputTitleLower
+                    && artistName.lowercased() == inputArtistLower {
+                    DebugLogger.log("MetadataResolver", "🛑 [\(region)] exact original match found: '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", abs(trackDuration - duration)))s")
+                    hasExact = true
+                    break
+                }
+            }
+            if hasExact { break }
+        }
+
+        // Also compute resolved candidate regardless — caller decides whether to use it.
+        var resolved: (String, String, String, Double)? = nil
         for (_, results) in fetchedResults.sorted(by: { $0.0 < $1.0 }) {
             let tiers = classifyRegionResults(
                 results, title: title, artist: artist, duration: duration, region: region
             )
             if let best = selectBestRegionCandidate(tiers, region: region) {
-                return best
+                resolved = best
+                break
             }
         }
-        return nil
+        return (resolved, hasExact)
     }
 
     /// 区域结果三层分类：titleMatch > artist+CJK > romanized→CJK
