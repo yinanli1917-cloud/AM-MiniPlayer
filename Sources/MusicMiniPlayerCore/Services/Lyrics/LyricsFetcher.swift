@@ -1037,7 +1037,7 @@ public final class LyricsFetcher {
             // Only shift fetched timestamps when they are real. Fabricated
             // timestamps (unsynced fallback) get no offset — there's nothing
             // to align.
-            let final = resultKind == .synced
+            let final = resultKind == .synced && !isYRC
                 ? parser.applyTimeOffset(to: lyrics, offset: netEaseTimeOffset)
                 : lyrics
             return (final, resultKind)
