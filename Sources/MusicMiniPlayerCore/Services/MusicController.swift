@@ -105,7 +105,8 @@ public class MusicController: ObservableObject {
 
     // ScriptingBridge queues — separate instances for parallelism.
     // Each SBApplication is an independent Apple Event proxy, safe on its own serial queue.
-    let scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
+    // 🔑 var — recreated on hang recovery (same pattern as artworkQueue).
+    var scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
     // 🔑 Dedicated SB instance for artwork extraction — runs in parallel with
     // position polling and metadata reads. Without this, artwork extraction (1-3s)
     // blocks position polls, causing the serial-queue starvation that made osascript faster.
@@ -127,6 +128,9 @@ public class MusicController: ObservableObject {
     var sbAppliedForGeneration: Int = -1
     /// artworkQueue 最近一次响应时间 — 超过 5s 未响应视为卡死，需重建
     var lastArtworkQueueHeartbeat = Date()
+    /// scriptingBridgeQueue 最近一次响应时间 — 同样的心跳保护
+    /// Radio URL track 对象的 SB IPC 可能无限挂起，阻塞所有后续 poll
+    var lastSBQueueHeartbeat = Date()
 
     /// 封面获取代数：线程安全，用 os_unfair_lock 保护
     /// 每次切歌递增，旧代任务在 SB 队列排到时直接跳过
@@ -178,6 +182,11 @@ public class MusicController: ObservableObject {
 
     // 窗口移动期间暂停 interpolation（避免 60Hz Timer 和 DisplayLink 争帧预算）
     private var windowMovementPaused = false
+
+    // Position-jump track change detection (radio stations)
+    // Radio tracks don't reliably fire playerInfo notifications.
+    // A backward position jump (e.g. 180s→2s while playing) signals a new track.
+    private var lastPolledPosition: Double = 0
 
     // Queue sync state
     private var lastQueueHash: String = ""
@@ -461,6 +470,7 @@ public class MusicController: ObservableObject {
 
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard let hash = self.getQueueHashFromApp(app) else { return }
 
             DispatchQueue.main.async {
@@ -627,6 +637,7 @@ public class MusicController: ObservableObject {
         logger.info("🎵 Track changed (notification): \(name) - \(artist)")
         logToFile("🎵 Track changed: \(name) - \(artist)")
 
+        lastPolledPosition = 0  // Reset so position-jump detection doesn't false-trigger
         let generation = incrementGeneration()
 
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
@@ -644,6 +655,7 @@ public class MusicController: ObservableObject {
         // ━━━ PARALLEL: persistentID + duration + queue refresh on SB queue ━━━
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard self.artworkFetchGeneration == generation else { return }
 
             var persistentID = ""
@@ -715,6 +727,7 @@ public class MusicController: ObservableObject {
     private func retryDurationFetch(name: String, generation: Int) {
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard self.artworkFetchGeneration == generation else { return }
             if let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
                let sbName = currentTrack.value(forKey: "name") as? String,
@@ -742,11 +755,23 @@ public class MusicController: ObservableObject {
     /// Reads only playerPosition + playerState via ScriptingBridge (no process spawn).
     /// ~0.1ms vs ~15-25ms for osascript. Called at 2Hz for lyrics sync.
     private func pollPositionViaSB() {
-        guard !isPreview, let app = musicApp, app.isRunning else { return }
+        guard !isPreview else { return }
+
+        // 🔑 SB queue health check — radio URL track objects can hang SB IPC indefinitely,
+        // blocking all queued polls. Same recovery pattern as artworkQueue (line 118).
+        if Date().timeIntervalSince(lastSBQueueHeartbeat) > 5.0 {
+            DebugLogger.log("Poll", "💀 scriptingBridgeQueue stuck (no heartbeat >5s), recreating...")
+            musicApp = SBApplication(bundleIdentifier: "com.apple.Music")
+            scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge.\(Date().timeIntervalSince1970)", qos: .userInitiated)
+            lastSBQueueHeartbeat = Date()
+        }
+
+        guard let app = musicApp, app.isRunning else { return }
 
         let pollEnqueueTime = Date()
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self else { return }
+            defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             let queueWait = Date().timeIntervalSince(pollEnqueueTime)
             let measurementTime = Date()
 
@@ -759,6 +784,35 @@ public class MusicController: ObservableObject {
             // 🔬 Log poll timing: queue wait + SB read latency
             if queueWait > 0.1 || sbReadTime > 0.05 {
                 DebugLogger.log("Timing", "🔴 POLL DELAY: queueWait=\(String(format: "%.0f", queueWait * 1000))ms sbRead=\(String(format: "%.1f", sbReadTime * 1000))ms pos=\(String(format: "%.2f", position))")
+            }
+
+            // 🔑 Position-jump track change detection for radio stations.
+            // Radio URL tracks often skip the playerInfo notification. A large backward
+            // position jump while playing (e.g. 180s→2s) signals a new track started.
+            // We use AppleScript (separate process, 0.5s kill timeout) to read metadata
+            // instead of SB currentTrack — which can hang indefinitely on URL tracks.
+            let prevPosition = self.lastPolledPosition
+            let positionJumpedBack = playing && !self.seekPending
+                && prevPosition > 30 && position < 5
+            self.lastPolledPosition = position
+
+            if positionJumpedBack {
+                DebugLogger.log("Poll", "🔄 Position jump detected: \(String(format: "%.1f", prevPosition))s → \(String(format: "%.1f", position))s — checking track via AppleScript")
+                // AppleScript runs as separate process with timeout — safe even if
+                // Music.app metadata IPC is slow for radio URL tracks.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    if let snapshot = AppleScriptRunner.fetchPlayerState(timeout: 0.5) {
+                        DispatchQueue.main.async {
+                            let trackChanged = !snapshot.trackName.isEmpty
+                                && snapshot.trackName != "NOT_PLAYING"
+                                && snapshot.trackName != self.currentTrackTitle
+                            if trackChanged {
+                                DebugLogger.log("Poll", "🎵 Radio track change confirmed: '\(self.currentTrackTitle)' → '\(snapshot.trackName)'")
+                                self.processPlayerState(snapshot)
+                            }
+                        }
+                    }
+                }
             }
 
             DispatchQueue.main.async {
@@ -805,7 +859,17 @@ public class MusicController: ObservableObject {
     private static let sbRepeatAll: Int = 0x6B416C6C  // 'kAll'
 
     func updatePlayerState() {
-        guard !isPreview, let app = musicApp, app.isRunning else { return }
+        guard !isPreview else { return }
+
+        // 🔑 SB queue health check before dispatching heavy work
+        if Date().timeIntervalSince(lastSBQueueHeartbeat) > 5.0 {
+            DebugLogger.log("FullSync", "💀 scriptingBridgeQueue stuck (no heartbeat >5s), recreating...")
+            musicApp = SBApplication(bundleIdentifier: "com.apple.Music")
+            scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge.\(Date().timeIntervalSince1970)", qos: .userInitiated)
+            lastSBQueueHeartbeat = Date()
+        }
+
+        guard let app = musicApp, app.isRunning else { return }
 
         // 超时节流
         let now = Date()
@@ -814,6 +878,7 @@ public class MusicController: ObservableObject {
 
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self else { return }
+            defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             let measurementTime = Date()
 
             // Read all state via SB (in-process Mach IPC, no osascript spawn)
@@ -926,6 +991,7 @@ public class MusicController: ObservableObject {
             debugPrint("🎵 [updatePlayerState] Track changed: \(s.trackName) by \(s.trackArtist)\n")
             logger.info("🎵 Track changed: \(s.trackName) by \(s.trackArtist)")
 
+            lastPolledPosition = 0  // Reset position-jump detection
             let generation = incrementGeneration()
             currentPersistentID = s.persistentID
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID, generation: generation)

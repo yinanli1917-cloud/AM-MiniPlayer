@@ -253,6 +253,7 @@ extension MusicController {
                     continuation.resume(returning: [])
                     return
                 }
+                defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
                 let result = self.getUpNextTracksFromApp(app, limit: 10)
                 continuation.resume(returning: result)
             }
@@ -335,6 +336,7 @@ extension MusicController {
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         scriptingBridgeQueue.async { [weak self, app] in
             guard let self = self else { return }
+            defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
 
             let tracks = self.getRecentTracksFromApp(app, limit: 10)
 
