@@ -113,6 +113,48 @@ public enum LanguageUtils {
         text.unicodeScalars.allSatisfy { $0.isASCII }
     }
 
+    // MARK: - English Title Detection
+
+    /// English function words that NEVER appear as standalone tokens in
+    /// pinyin, romaji, or jyutping romanization systems. Used to distinguish
+    /// genuine English titles ("While My Guitar Gently Weeps") from CJK
+    /// romanizations ("Zui Hou Yi Sheng Wan An"). Min 3 chars to avoid
+    /// collisions with short romanization syllables.
+    private static let englishFunctionWords: Set<String> = [
+        // Determiners / possessives
+        "the", "this", "that", "these", "those",
+        "my", "your", "our", "their", "its",
+        // Prepositions (3+ chars)
+        "with", "from", "into", "upon", "about", "through",
+        "between", "against", "without", "within", "during",
+        "before", "after", "under", "over", "behind", "beyond",
+        // Conjunctions / relative
+        "while", "when", "where", "what", "which", "whose",
+        "because", "although", "whether", "until",
+        // Auxiliaries / modals (3+ chars)
+        "have", "has", "had", "does", "did", "will", "would",
+        "could", "should", "might", "must", "shall",
+        "been", "being", "were", "was", "are",
+        // Adverbs commonly in titles
+        "just", "only", "ever", "never", "still", "very",
+        "every", "always", "already",
+        // Pronouns (3+ chars)
+        "you", "she", "her", "him", "his", "they", "them",
+        "who", "whom",
+    ]
+
+    /// Detect whether a pure-ASCII title is likely a genuine English title
+    /// (not a CJK romanization). Returns true when ≥1 English function word
+    /// is found as a standalone token. These words are structurally impossible
+    /// in pinyin/romaji/jyutping, so false positives are near-zero.
+    public static func isLikelyEnglishTitle(_ text: String) -> Bool {
+        guard isPureASCII(text) else { return false }
+        let words = text.lowercased()
+            .split(whereSeparator: { !$0.isLetter })
+            .map(String.init)
+        return words.contains { englishFunctionWords.contains($0) }
+    }
+
     // MARK: - Romaji Heuristic
 
     /// Detect whether an ASCII title is likely Japanese romaji (and therefore

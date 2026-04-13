@@ -234,4 +234,41 @@ final class MatchingUtilsTests: XCTestCase {
         )
         XCTAssertFalse(result.isAcceptable) // durationDiff = 10 >= 5
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - isLikelyEnglishTitle
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func testEnglishTitle_withFunctionWords() {
+        // English titles with function words → must be detected
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("While My Guitar Gently Weeps"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Saving All My Love For You"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("The Way You Look Tonight"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Bridge Over Troubled Water"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("What A Wonderful World"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Have You Ever Seen the Rain"))
+    }
+
+    func testEnglishTitle_romanizationMustNotMatch() {
+        // Pinyin / romaji / jyutping → must NOT be detected as English
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Zui Hou Yi Sheng Wan An"))
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Xia Nie Piao Piao Chu Chu Wen"))
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Kage Ni Natte"))
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Koibitotachi No Chiheisen"))
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Mei Tian Ai Ni Duo Yi Xie"))
+    }
+
+    func testEnglishTitle_ambiguousSingleWords() {
+        // Single-word English titles without function words → NOT detected
+        // (could be romanization or English — safer to allow CJK escape)
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Escape"))
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Deep"))
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Invisible"))
+    }
+
+    func testEnglishTitle_cjkInputRejects() {
+        // CJK input → always false (not pure ASCII)
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("每天愛你多一些"))
+        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("最後一聲晚安"))
+    }
 }

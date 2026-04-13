@@ -444,6 +444,13 @@ public final class LyricsFetcher {
                 // bridging romanized input to its CJK alias; for CJK input
                 // there's nothing to bridge.
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
+                // 🔑 English title guard: titles containing English function
+                // words ("my", "the", "with", "while", etc.) are genuine
+                // English, not CJK romanizations. Without this guard,
+                // "While My Guitar Gently Weeps" by Karen Mok → random
+                // Chinese Karen Mok song via CJK escape + cross-script
+                // artist tolerance stacking.
+                guard !LanguageUtils.isLikelyEnglishTitle(inputTitle) else { return false }
                 let resultHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
                 // Mastering differences between Apple Music and NetEase /
                 // QQ are routinely 0.3–0.8s, so we accept up to 1.0s here
@@ -775,6 +782,16 @@ public final class LyricsFetcher {
                     }
                 }
             }
+        }
+        // 🔑 Title-only keyword: when the title is CJK but the artist is
+        // pure ASCII (e.g., "每天愛你多一些" by "Jacky Cheung"), the combined
+        // "title+artist" query fails because NetEase/QQ don't recognize the
+        // English artist name. Searching by CJK title alone returns all
+        // versions; cross-script artist tolerance handles the matching.
+        let titleHasCJK = LanguageUtils.containsCJK(params.rawTitle)
+        let artistIsASCII = LanguageUtils.isPureASCII(params.rawArtist)
+        if titleHasCJK && artistIsASCII {
+            keywords.append((params.simplifiedTitle, "title only"))
         }
         keywords.append((params.simplifiedArtist, "artist only"))
         keywords.append(contentsOf: extraKeywords)
