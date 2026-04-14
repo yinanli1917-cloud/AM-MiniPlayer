@@ -892,29 +892,28 @@ public final class LyricsFetcher {
         // Sequential was the primary latency bottleneck: 5 rounds × 1-2s each = 5-10s.
         // Parallel reduces to max(round latencies) ≈ 1-2s. First match wins.
         return await withTaskGroup(of: (ID, Bool, String)?.self) { group in
-            // 🔑 Alias-resolved keyword: for ASCII artist + CJK title (or pure
-            // ASCII input), query NetEase's artist-search endpoint for the
-            // canonical CJK name, then re-search title+CJK. Fires in parallel
-            // with other keyword rounds — if alias resolves fast it hits first;
-            // if not, normal rounds still cover the lookup.
+            // 🔑 Alias-resolved keyword: for ASCII artist, query NetEase's
+            // artist-search endpoint via Wade-Giles/Jyutping/Pinyin probes,
+            // collect CJK candidates, and fire "title+candidate" for each.
+            // Downstream title+duration verification filters wrong matches,
+            // so trying multiple aliases is safe. This is the generalised
+            // bridge when the input romanization doesn't match any alias
+            // NetEase has indexed (e.g. 李之勤 has no alias list, but the
+            // Pinyin probe "Li Zhi Qin" derived from "Lee Chih Ching" still
+            // surfaces it as the top artist).
             if enableAliasResolve && artistIsASCII {
                 group.addTask {
-                    guard let cjkArtist = await self.resolveArtistCJKAlias(asciiArtist: params.rawArtist) else { return nil }
-                    // Prefer the resolved CJK artist combined with the title.
-                    // Fall back to CJK artist alone if title might not match
-                    // NetEase's stored title form.
-                    for (kw, desc) in [
-                        ("\(params.simplifiedTitle) \(cjkArtist)", "alias+title"),
-                        (cjkArtist, "alias only")
-                    ] {
+                    let aliases = await self.resolveArtistCJKAliases(asciiArtist: params.rawArtist)
+                    for cjkArtist in aliases.prefix(5) {
+                        let kw = "\(params.simplifiedTitle) \(cjkArtist)"
+                        let desc = "alias+title:\(cjkArtist)"
                         DebugLogger.log(source, "🔎 \(desc): '\(kw)'")
                         do {
                             guard let songs = try await fetchSongs(kw) else { continue }
                             DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
-                            // Patch the params to treat the CJK alias as the
-                            // expected artist so cross-script tolerance grants
-                            // artistMatch without running into the ASCII input
-                            // vs CJK result mismatch branch.
+                            // Patch params: use CJK alias as expected artist so
+                            // buildCandidates matches without the ASCII-vs-CJK
+                            // cross-script detour.
                             let aliasParams = SearchParams(
                                 title: params.rawTitle, artist: cjkArtist,
                                 originalTitle: params.rawOriginalTitle,
@@ -1070,52 +1069,98 @@ public final class LyricsFetcher {
     //
     // Cached per-ASCII-name so a single session doesn't hammer the endpoint.
     private actor ArtistAliasCache {
-        private var cache: [String: String?] = [:]
-        func get(_ key: String) -> String?? { cache[key] }
-        func set(_ key: String, _ value: String?) { cache[key] = value }
+        private var cache: [String: [String]] = [:]
+        func get(_ key: String) -> [String]? { cache[key] }
+        func set(_ key: String, _ value: [String]) { cache[key] = value }
     }
     private let artistAliasCache = ArtistAliasCache()
 
-    /// Resolve an ASCII artist name to its CJK catalog alias via NetEase's
-    /// artist-search endpoint. Returns nil if the input isn't ASCII, or if no
-    /// CJK-named artist surfaces as a direct alias match. Result cached.
-    private func resolveArtistCJKAlias(asciiArtist: String) async -> String? {
+    /// Generate plausible Pinyin-style probe strings from an ASCII artist
+    /// name. NetEase indexes artists by Pinyin; Apple Music often uses
+    /// Wade-Giles, Jyutping, or regional HK/TW romanizations that NetEase's
+    /// search can't match directly. The probes bridge common transformations
+    /// (Wade-Giles → Pinyin, Jyutping → Pinyin) so NetEase's own fuzzy
+    /// matcher can take us the rest of the way. Downstream song-level
+    /// verification (title + duration) filters out wrong-artist hits.
+    private func artistProbeVariants(_ input: String) -> [String] {
+        var probes: [String] = [input]
+        let lower = " " + input.lowercased() + " "
+        // Ordered: most-transformative first so output lists the widest net
+        // when callers only use the first few probes.
+        let rules: [(String, String)] = [
+            // HK/TW surname variants
+            (" lee ", " li "),
+            // Wade-Giles → Pinyin syllable bodies
+            ("chih", "zhi"), ("chieh", "jie"), ("chien", "jian"),
+            ("ching", "qin"), ("chung", "zhong"), ("chiang", "jiang"),
+            ("chou", "zhou"), ("chun", "zhun"), ("chuan", "zhuan"),
+            ("tsung", "zong"), ("tse", "ze"), ("tsao", "cao"),
+            ("hsieh", "xie"), ("hsi", "xi"), ("hsin", "xin"), ("hsu", "xu"),
+            ("kuo", "guo"), ("keng", "geng"), ("kang", "gang"),
+            // Jyutping → Pinyin (Cantonese romanization)
+            ("eung", "iang"), ("oeng", "iang"), ("yuen", "yuan"),
+            ("cheung", "zhang"), ("leung", "liang"), ("wong", "wang"),
+        ]
+        var variant = lower
+        for (a, b) in rules { variant = variant.replacingOccurrences(of: a, with: b) }
+        variant = variant.trimmingCharacters(in: .whitespaces)
+        if variant != input.lowercased() { probes.append(variant) }
+        // Also try a no-space compact form (NetEase accepts both)
+        let compact = variant.replacingOccurrences(of: " ", with: "")
+        if compact != variant && !compact.isEmpty { probes.append(compact) }
+        return probes
+    }
+
+    /// Resolve an ASCII artist name to ALL plausible CJK catalog names via
+    /// NetEase's artist-search endpoint. Returns multiple candidates so
+    /// downstream song-level verification (title + duration match) can
+    /// pick the right one even when an individual probe returns a wrong but
+    /// similarly-named artist (e.g. 李之勤 vs 李志清 vs 李之卿). Cached per
+    /// lowercased ASCII name.
+    private func resolveArtistCJKAliases(asciiArtist: String) async -> [String] {
         let key = asciiArtist.lowercased()
         if let cached = await artistAliasCache.get(key) { return cached }
         guard LanguageUtils.isPureASCII(asciiArtist) else {
-            await artistAliasCache.set(key, nil); return nil
+            await artistAliasCache.set(key, []); return []
         }
-        guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
-            "s": asciiArtist, "type": "100", "limit": "5"
-        ]) else { return nil }
         let headers = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                        "Referer": "https://music.163.com"]
-        do {
-            let (data, _) = try await HTTPClient.getData(url: url, headers: headers, timeout: 4.0)
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let result = json["result"] as? [String: Any],
-                  let artists = result["artists"] as? [[String: Any]] else {
-                await artistAliasCache.set(key, nil); return nil
-            }
-            // 🔑 Only accept the FIRST result and only if either its alias list
-            // contains the input name (confirmed mapping) or the input exactly
-            // equals the artist name. Without this guard, bare ASCII input
-            // like "EPO" could match random popular CJK artists.
-            let inputLower = asciiArtist.lowercased()
-            for artist in artists.prefix(3) {
-                guard let cjkName = artist["name"] as? String,
-                      LanguageUtils.containsCJK(cjkName) else { continue }
-                let aliases = (artist["alias"] as? [String] ?? []).map { $0.lowercased() }
-                if aliases.contains(inputLower) ||
-                   aliases.contains(where: { $0 == inputLower }) {
-                    DebugLogger.log("NetEase", "🔗 alias resolve: '\(asciiArtist)' → '\(cjkName)' (via alias)")
-                    await artistAliasCache.set(key, cjkName); return cjkName
+        let inputLower = asciiArtist.lowercased()
+        var seen: Set<String> = []
+        var aliases: [String] = []
+        for probe in artistProbeVariants(asciiArtist) {
+            guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+                "s": probe, "type": "100", "limit": "5"
+            ]) else { continue }
+            do {
+                let (data, _) = try await HTTPClient.getData(url: url, headers: headers, timeout: 4.0)
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let result = json["result"] as? [String: Any],
+                      let artists = result["artists"] as? [[String: Any]] else { continue }
+                for artist in artists.prefix(3) {
+                    guard let cjkName = artist["name"] as? String,
+                          LanguageUtils.containsCJK(cjkName),
+                          !seen.contains(cjkName) else { continue }
+                    let aliasList = (artist["alias"] as? [String] ?? []).map { $0.lowercased() }
+                    // Confident match: alias list confirms mapping (e.g.
+                    // 莫文蔚.alias includes "Karen Mok"). Insert at HEAD so it
+                    // beats fuzzy-probe matches in downstream ordering.
+                    let isConfirmed = aliasList.contains(inputLower)
+                    if isConfirmed {
+                        aliases.insert(cjkName, at: 0)
+                    } else {
+                        aliases.append(cjkName)
+                    }
+                    seen.insert(cjkName)
                 }
-            }
-            await artistAliasCache.set(key, nil); return nil
-        } catch {
-            return nil
+            } catch { continue }
+            if aliases.contains(where: { _ in true }) && probe == asciiArtist { break }
         }
+        if !aliases.isEmpty {
+            DebugLogger.log("NetEase", "🔗 alias resolve: '\(asciiArtist)' → \(aliases.prefix(5))")
+        }
+        await artistAliasCache.set(key, aliases)
+        return aliases
     }
 
     // MARK: - NetEase
