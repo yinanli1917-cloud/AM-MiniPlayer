@@ -52,12 +52,19 @@ public final class LyricsFetcher {
         public let score: Double
         /// Synced vs unsynced — tagged at parse time, never re-derived via CV/IQR.
         public let kind: LyricsKind
+        /// True when the matched search candidate's album fuzzy-matched the
+        /// input album hint. Used by `selectBestResult` as a version tie-break:
+        /// an album-matched result with a lower score beats a non-matched one
+        /// when a NetEase/QQ entry shares title/artist/duration across
+        /// Mandarin/Cantonese covers or across remaster compilations.
+        public let albumMatched: Bool
 
-        public init(lyrics: [LyricLine], source: String, score: Double, kind: LyricsKind) {
+        public init(lyrics: [LyricLine], source: String, score: Double, kind: LyricsKind, albumMatched: Bool = false) {
             self.lyrics = lyrics
             self.source = source
             self.score = score
             self.kind = kind
+            self.albumMatched = albumMatched
         }
     }
 
@@ -271,13 +278,22 @@ public final class LyricsFetcher {
                 return nil
             }
 
+            // 🔑 When the caller provides an album hint, high-score results
+            // from entries WITHOUT album match no longer trigger early return.
+            // Otherwise NetEase's 100-point "good cover on compilation" cancels
+            // QQ's still-in-flight request for the 原 album entry with CORRECT
+            // lyrics (e.g. Jacky Cheung 每天愛你多一些: NetEase compilation has
+            // Mandarin text in a Cantonese-titled entry; QQ has 情不禁 album
+            // match with correct Cantonese lyrics).
+            let hasAlbumHint = !alb.isEmpty
             for await result in group {
                 if let r = result {
                     results.append(r)
-                    DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count)")
+                    DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
 
-                    if r.score >= self.earlyReturnThreshold && self.earlyReturnSources.contains(r.source) {
-                        DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold))")
+                    let albumGate = !hasAlbumHint || r.albumMatched
+                    if r.score >= self.earlyReturnThreshold && self.earlyReturnSources.contains(r.source) && albumGate {
+                        DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold)) albumMatch=\(r.albumMatched)")
                         group.cancelAll()
                         break
                     }
@@ -322,10 +338,29 @@ public final class LyricsFetcher {
         let cjk = reliable.filter { !scorer.isLikelyRomaji($0.lyrics) }
         let romaji = reliable.filter { scorer.isLikelyRomaji($0.lyrics) }
 
-        // If both CJK and romaji exist, CJK gets preference — romaji must beat
-        // best CJK by >15 points to win (compensates for sync bonus asymmetry)
-        let bestCJK = cjk.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) ?? cjk.first
-        let bestRomaji = romaji.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) ?? romaji.first
+        // 🔑 Album match is the strongest cross-source version signal.
+        // When identical title/artist/duration can point at wrong content
+        // (Cantonese vs Mandarin cover, compilation w/ mislabeled lyrics),
+        // the source whose album matches the input wins unconditionally,
+        // provided it passes quality validation. Score-based ranking is
+        // unreliable here: a wrong version can score 100 (syllable bonus)
+        // while the correct version scores 73 (plain LRC).
+        func pickWithAlbumPreference(_ pool: [LyricsFetchResult]) -> LyricsFetchResult? {
+            let valid = pool.filter { scorer.analyzeQuality($0.lyrics).isValid }
+            let workingPool = valid.isEmpty ? pool : valid
+            guard let top = workingPool.first else { return nil }
+            if top.albumMatched { return top }
+            // Only consider album-matched candidates that ALSO passed validity.
+            // An invalid album-matched result (parsed garbage) would otherwise
+            // beat a valid unmatched one.
+            if let albumMatched = valid.first(where: { $0.albumMatched }) {
+                DebugLogger.log("🏆 Album-match preferred: \(albumMatched.source) (\(String(format: "%.1f", albumMatched.score))) over \(top.source) (\(String(format: "%.1f", top.score)))")
+                return albumMatched
+            }
+            return top
+        }
+        let bestCJK = pickWithAlbumPreference(cjk)
+        let bestRomaji = pickWithAlbumPreference(romaji)
 
         let chosen: LyricsFetchResult?
         if let cjkResult = bestCJK, let romajiResult = bestRomaji {
@@ -338,8 +373,9 @@ public final class LyricsFetcher {
                 chosen = cjkResult
             }
         } else {
-            // Only one type available — pick highest scoring valid result
-            chosen = reliable.first(where: { scorer.analyzeQuality($0.lyrics).isValid }) ?? reliable.first
+            // Only one partition has results — pickWithAlbumPreference already
+            // applied, so bestCJK or bestRomaji holds the album-preferred winner.
+            chosen = bestCJK ?? bestRomaji
         }
 
         if let best = chosen {
@@ -425,7 +461,7 @@ public final class LyricsFetcher {
     ///        "(Live)" (e.g. Jacky Cheung Cantonese "每天爱你多一些" over
     ///        Mandarin "每天爱你多一些(国)").
     ///    (3) durationDiff — closest duration as final tiebreaker.
-    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false) -> ID? {
+    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false) -> (id: ID, albumMatched: Bool)? {
         // Debug view: sorted purely by durationDiff so the log reads naturally.
         let sortedByDelta = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sortedByDelta.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' T=\($0.titleMatch) A=\($0.artistMatch) AL=\($0.albumMatch) L=\($0.normalizedNameLength) Δ\(String(format: "%.1f", $0.durationDiff))s" }
@@ -501,7 +537,7 @@ public final class LyricsFetcher {
             let tierMatches = sorted.filter(predicate)
             guard let best = tierMatches.sorted(by: compositeRank).first else { continue }
             DebugLogger.log(source, "✅ \(label): '\(best.name)' by '\(best.artist)' alb='\(best.album)' AL=\(best.albumMatch) L=\(best.normalizedNameLength) Δ\(String(format: "%.1f", best.durationDiff))s")
-            return best.id
+            return (best.id, best.albumMatch)
         }
 
         if !sorted.isEmpty { DebugLogger.log(source, "❌ 无匹配") }
@@ -804,7 +840,7 @@ public final class LyricsFetcher {
         extraKeywords: [(String, String)] = [],
         fetchSongs: @escaping (String) async throws -> [[String: Any]]?,
         extractSong: @escaping ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double, album: String)?
-    ) async -> ID? {
+    ) async -> (id: ID, albumMatched: Bool)? {
         // 多关键词策略（按优先级排列）
         var keywords: [(String, String)] = [
             ("\(params.simplifiedTitle) \(params.simplifiedArtist)", "title+artist")
@@ -842,29 +878,47 @@ public final class LyricsFetcher {
         // 🔑 Parallel keyword search — fire ALL rounds simultaneously.
         // Sequential was the primary latency bottleneck: 5 rounds × 1-2s each = 5-10s.
         // Parallel reduces to max(round latencies) ≈ 1-2s. First match wins.
-        return await withTaskGroup(of: (ID, String)?.self) { group in
+        return await withTaskGroup(of: (ID, Bool, String)?.self) { group in
             for (keyword, desc) in keywords {
                 group.addTask {
                     DebugLogger.log(source, "🔎 \(desc): '\(keyword)'")
                     do {
-                        guard let songs = try await fetchSongs(keyword) else { return nil }
+                        guard let songs = try await fetchSongs(keyword) else {
+                            DebugLogger.log(source, "⚠️ \(desc): fetchSongs returned nil (parse failure)")
+                            return nil
+                        }
                         DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
                         let candidates = self.buildCandidates(
                             songs: songs, params: params, extractSong: extractSong
                         )
-                        if let id = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
-                            return (id, desc)
+                        if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
+                            return (match.id, match.albumMatched, desc)
                         }
-                    } catch {}
+                    } catch {
+                        DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
+                    }
                     return nil
                 }
             }
+            // When an album hint is present, wait for an album-matched result
+            // before returning — a non-matched early winner would mask the
+            // correct version living on another keyword's result set. Give up
+            // and accept the first non-matched hit only after every keyword
+            // round has reported back.
+            var fallback: (ID, Bool, String)? = nil
+            let preferAlbumMatch = !params.normalizedAlbum.isEmpty
             for await result in group {
-                if let (id, desc) = result {
-                    DebugLogger.log(source, "⚡ Parallel match via '\(desc)'")
+                guard let r = result else { continue }
+                if r.1 || !preferAlbumMatch {
+                    DebugLogger.log(source, "⚡ Parallel match via '\(r.2)' (albumMatch=\(r.1))")
                     group.cancelAll()
-                    return id
+                    return (r.0, r.1)
                 }
+                if fallback == nil { fallback = r }
+            }
+            if let f = fallback {
+                DebugLogger.log(source, "⚡ Parallel fallback via '\(f.2)' (no album match)")
+                return (f.0, f.1)
             }
             return nil
         }
@@ -987,7 +1041,7 @@ public final class LyricsFetcher {
         let headers = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                        "Referer": "https://music.163.com"]
 
-        guard let songId: Int = await searchAndSelectCandidate(
+        guard let match: (id: Int, albumMatched: Bool) = await searchAndSelectCandidate(
             params: params, source: "NetEase",
             fetchSongs: { keyword in
                 guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
@@ -1013,8 +1067,9 @@ public final class LyricsFetcher {
             DebugLogger.log("NetEase", "❌ 未找到歌曲")
             return nil
         }
+        let songId = match.id
 
-        DebugLogger.log("NetEase", "✅ 找到 songId=\(songId)")
+        DebugLogger.log("NetEase", "✅ 找到 songId=\(songId) albumMatch=\(match.albumMatched)")
         guard let result = await fetchNetEaseLyrics(songId: songId, duration: duration, expectedTitle: originalTitle, expectedArtist: originalArtist) else {
             DebugLogger.log("NetEase", "❌ 获取歌词失败")
             return nil
@@ -1022,7 +1077,7 @@ public final class LyricsFetcher {
         let lyrics = result.lyrics
         let kind = result.kind
         let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
-        return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind)
+        return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind, albumMatched: match.albumMatched)
     }
 
     private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> (lyrics: [LyricLine], kind: LyricsKind)? {
@@ -1135,7 +1190,7 @@ public final class LyricsFetcher {
         let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, album: album, disableCjkEscapeInP3: false)
         guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
 
-        guard let songMid: String = await searchAndSelectCandidate(
+        guard let qqMatch: (id: String, albumMatched: Bool) = await searchAndSelectCandidate(
             params: params, source: "QQMusic",
             extraKeywords: [(params.simplifiedTitle, "title only")],
             fetchSongs: { keyword in
@@ -1166,8 +1221,9 @@ public final class LyricsFetcher {
             DebugLogger.log("QQMusic", "❌ 未找到歌曲")
             return nil
         }
+        let songMid = qqMatch.id
 
-        DebugLogger.log("QQMusic", "✅ 找到 songMid=\(songMid)")
+        DebugLogger.log("QQMusic", "✅ 找到 songMid=\(songMid) albumMatch=\(qqMatch.albumMatched)")
         guard let result = await fetchQQMusicLyrics(songMid: songMid, duration: duration) else {
             DebugLogger.log("QQMusic", "❌ 获取歌词失败")
             return nil
@@ -1175,7 +1231,7 @@ public final class LyricsFetcher {
         let lyrics = result.lyrics
         let kind = result.kind
         let score = scorer.calculateScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled, kind: kind)
-        return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score, kind: kind)
+        return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score, kind: kind, albumMatched: qqMatch.albumMatched)
     }
 
     private func fetchQQMusicLyrics(songMid: String, duration: TimeInterval) async -> (lyrics: [LyricLine], kind: LyricsKind)? {
