@@ -871,6 +871,18 @@ public final class LyricsFetcher {
         if titleHasCJK && artistIsASCII {
             keywords.append((params.simplifiedTitle, "title only"))
         }
+        // 🔑 Title+album keyword: album is the strongest narrowing signal when
+        // the canonical entry is buried in 20+ same-titled covers (e.g.
+        // 李之勤 我的寶貝 on album 飲食男女 — artist-only+title-only miss it, but
+        // "我的宝贝 饮食男女" surfaces it as #1). Only fires when the input
+        // album is CJK — English album names produce garbage on NetEase.
+        if !params.normalizedAlbum.isEmpty &&
+           LanguageUtils.containsCJK(params.normalizedAlbum) {
+            let kw = "\(params.simplifiedTitle) \(params.normalizedAlbum)"
+            if !keywords.contains(where: { $0.0 == kw }) {
+                keywords.append((kw, "title+album"))
+            }
+        }
         keywords.append((params.simplifiedArtist, "artist only"))
         keywords.append(contentsOf: extraKeywords)
         DebugLogger.log(source, "🔑 关键词: \(keywords.map(\.0))")

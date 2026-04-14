@@ -219,6 +219,14 @@ public enum LanguageUtils {
             regions.append("JP")
         }
 
+        // 🔑 CJK 标题 + 英文艺术家 → 同一字形既可能是日文 kanji 也可能是 TW/HK
+        // 的传统汉字（李之勤 / 張學友 / 彭羚 的英文译名）。只查 JP 会漏掉这批歌手。
+        // 叠加 TW + HK 保证 iTunes 能按英文艺术家名拉到正确的 CJK 别名。
+        if containsChinese(combined) && !containsKorean(combined) && isPureASCII(artist) {
+            if !regions.contains("TW") { regions.append("TW") }
+            if !regions.contains("HK") { regions.append("HK") }
+        }
+
         // 🔑 纯 ASCII → 搜索所有 CJK 相关区域（不猜输入国籍）
         // 覆盖：日文罗马字(JP)、韩文罗马化(KR)、粤语英文名(HK)、台湾华语(TW)
         // 宽进严出：MetadataResolver 靠匹配逻辑过滤误配
