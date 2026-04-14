@@ -566,6 +566,13 @@ private struct WordTimingAttribute: TextAttribute {
     let blurLevel: CGFloat
     let du: TimeInterval       // emphasis duration (max(1s, wordDuration) * lastBoost)
     let lineEndTime: TimeInterval  // last word's endTime — for post-line fade-out
+    // ── CJK uniform-fill flag ──
+    // YRC/TTML parsers emit one LyricWord per CJK character. A horizontal sweep
+    // across a single glyph looks fragmented (the shine traverses ~24pt in one
+    // word's duration, essentially invisible). AMLL handles this by filling the
+    // entire character uniformly — alpha lerps dim→bright over the word window.
+    // English words keep the sweep because letters form a meaningful horizontal run.
+    let isCJK: Bool
 }
 
 @available(macOS 15.0, *)
@@ -609,15 +616,22 @@ private struct SyllableSyncedLine: View {
             let text = word.word + suffix
             let duration = word.endTime - word.startTime
             let isLast = (index == words.count - 1)
+            let isCJK = LanguageUtils.containsCJK(word.word)
+            // CJK: suppress per-glyph emphasis scale/lift/glow even for long-held
+            // characters. A single 1.5s+ character ballooning up while its
+            // neighbors stay put reads as jarring, not expressive — breaks the
+            // line's visual unity. Uniform color fill alone carries the rhythm.
+            let emphasize = !isCJK && shouldEmphasize(text, duration: duration)
             result = result + Text(text)
                 .customAttribute(WordTimingAttribute(
                     startTime: word.startTime,
                     endTime: word.endTime,
-                    isEmphasis: shouldEmphasize(text, duration: duration),
+                    isEmphasis: emphasize,
                     amount: emphasisAmount(duration: duration, isLast: isLast),
                     blurLevel: emphasisBlurLevel(duration: duration, isLast: isLast),
                     du: max(1.0, duration) * (isLast ? 1.2 : 1.0),
-                    lineEndTime: lineEnd
+                    lineEndTime: lineEnd,
+                    isCJK: isCJK
                 ))
         }
         return result
@@ -700,7 +714,7 @@ private struct LyricsTextRenderer: TextRenderer {
                 drawEmphasisBright(run: run, attr: attr, progress: progress,
                                    floatY: floatY, fade: postLineFade, lineRect: lineRect, in: context)
             } else {
-                drawSweepBright(run: run, progress: progress, floatY: floatY,
+                drawSweepBright(run: run, attr: attr, progress: progress, floatY: floatY,
                                 fade: postLineFade, lineRect: lineRect, in: context)
             }
         }
@@ -708,11 +722,23 @@ private struct LyricsTextRenderer: TextRenderer {
 
     // ── Normal words: gradient-masked bright overlay (sub-pixel smooth) ──
     private func drawSweepBright(
-        run: Text.Layout.Run, progress: CGFloat, floatY: CGFloat,
+        run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat, floatY: CGFloat,
         fade: CGFloat, lineRect: CGRect, in context: GraphicsContext
     ) {
-        let runRect = run.typographicBounds.rect
         let brightBoost = brightAlpha - dimAlpha
+
+        // CJK: uniform per-character fill (Pass 1 dim base + this bright overlay
+        // ramped by progress). No horizontal sweep — the whole glyph brightens
+        // together over the word window.
+        if attr.isCJK {
+            var textCtx = context
+            textCtx.opacity = Double(brightBoost * fade * progress)
+            textCtx.translateBy(x: 0, y: floatY)
+            textCtx.draw(run, options: .disablesSubpixelQuantization)
+            return
+        }
+
+        let runRect = run.typographicBounds.rect
         let sweepX = runRect.minX + runRect.width * progress
 
         context.drawLayer { layerCtx in
@@ -803,28 +829,36 @@ private struct LyricsTextRenderer: TextRenderer {
                 ctx.draw(glyph, options: .disablesSubpixelQuantization)
             }
 
-            // Gradient mask: bright→dim (not opaque→clear)
-            // This is the AMLL approach — single layer, mask controls alpha directly.
-            // Use line-level rect for unified sweep across all emphasis glyphs.
             let padded = lineRect.insetBy(dx: -40, dy: -40)
-            let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
-            let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
 
             var maskCtx = layerCtx
             maskCtx.blendMode = .destinationIn
-            maskCtx.fill(
-                Path(padded),
-                with: .linearGradient(
-                    Gradient(stops: [
-                        .init(color: bright, location: 0),
-                        .init(color: bright, location: max(0, leftEdge)),
-                        .init(color: dim, location: min(1, rightEdge)),
-                        .init(color: dim, location: 1),
-                    ]),
-                    startPoint: CGPoint(x: padded.minX, y: 0),
-                    endPoint: CGPoint(x: padded.maxX, y: 0)
+
+            if attr.isCJK {
+                // CJK uniform fill: alpha lerps dim→bright across the word window.
+                // No horizontal sweep — whole character brightens together.
+                let alpha = max(dimAlpha, dimAlpha + (effectiveBright - dimAlpha) * progress)
+                maskCtx.fill(Path(padded), with: .color(.white.opacity(Double(alpha))))
+            } else {
+                // Gradient mask: bright→dim (not opaque→clear)
+                // AMLL approach — single layer, mask controls alpha directly.
+                // Line-level rect for unified sweep across all emphasis glyphs.
+                let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
+                let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+                maskCtx.fill(
+                    Path(padded),
+                    with: .linearGradient(
+                        Gradient(stops: [
+                            .init(color: bright, location: 0),
+                            .init(color: bright, location: max(0, leftEdge)),
+                            .init(color: dim, location: min(1, rightEdge)),
+                            .init(color: dim, location: 1),
+                        ]),
+                        startPoint: CGPoint(x: padded.minX, y: 0),
+                        endPoint: CGPoint(x: padded.maxX, y: 0)
+                    )
                 )
-            )
+            }
         }
     }
 
@@ -891,15 +925,21 @@ private struct WordFillSpan: View {
     private let dimOpacity: CGFloat = 0.4
 
     // ── Emphasis parameters ──
-    // AMLL empEasing curve for timing, but ALL active words get a minimum scale/glow
-    private var isEmphasis: Bool { shouldEmphasize(text, duration: wordDuration) }
+    // AMLL empEasing curve for timing, but ALL active words get a minimum scale/glow.
+    // CJK: suppress emphasis entirely — per-glyph scale/lift on a single character
+    // while its neighbors sit still breaks line unity. Uniform color fill handles it.
+    private var isEmphasis: Bool {
+        !LanguageUtils.containsCJK(text) && shouldEmphasize(text, duration: wordDuration)
+    }
     private var du: TimeInterval {
         var d = max(1.0, wordDuration)
         if isLastWordOfLine { d *= 1.2 }
         return d
     }
-    // amount: emphasis words use AMLL formula; non-emphasis get base=0.3 for subtle life
+    // amount: emphasis words use AMLL formula; non-emphasis get base=0.3 for subtle life.
+    // CJK: zero — any per-glyph scaling breaks the line's visual unity.
     private var amount: CGFloat {
+        if LanguageUtils.containsCJK(text) { return 0 }
         if isEmphasis {
             return emphasisAmount(duration: wordDuration, isLast: isLastWordOfLine)
         }
@@ -907,6 +947,7 @@ private struct WordFillSpan: View {
     }
     // blurLevel: emphasis words use AMLL formula; non-emphasis get base=0.3
     private var blurLevel: CGFloat {
+        if LanguageUtils.containsCJK(text) { return 0 }
         if isEmphasis {
             return emphasisBlurLevel(duration: wordDuration, isLast: isLastWordOfLine)
         }
@@ -925,10 +966,20 @@ private struct WordFillSpan: View {
         return 0
     }
 
+    // CJK characters: each LyricWord is one glyph. A horizontal sweep across a
+    // single character looks fragmented (~24pt of travel in one word window).
+    // Use uniform fill instead — alpha lerps dim→bright as progress advances.
+    private var isCJK: Bool { LanguageUtils.containsCJK(text) }
+
     // ── System 2: Sweep gradient (ALL words) ──
     private var sweepGradient: LinearGradient {
         let dim = Color.white.opacity(dimOpacity)
         let bright = Color.white.opacity(brightOpacity)
+        if isCJK {
+            let alpha = dimOpacity + (brightOpacity - dimOpacity) * progress
+            let solid = Color.white.opacity(alpha)
+            return LinearGradient(colors: [solid], startPoint: .leading, endPoint: .trailing)
+        }
         guard progress > 0 && progress < 1 else {
             return LinearGradient(
                 colors: [progress >= 1 ? bright : dim],
