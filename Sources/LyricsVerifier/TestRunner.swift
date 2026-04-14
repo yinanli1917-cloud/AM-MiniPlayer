@@ -54,14 +54,16 @@ func testSongWithLyrics(
     artist: String,
     duration: TimeInterval,
     expectation: TestExpectation?,
-    translationEnabled: Bool = false
+    translationEnabled: Bool = false,
+    album: String = ""
 ) async -> (result: VerifyResult, lyrics: [LyricLine]) {
     let start = CFAbsoluteTimeGetCurrent()
     let fetcher = LyricsFetcher.shared
 
     let fetchResults = await fetcher.fetchAllSources(
         title: title, artist: artist,
-        duration: duration, translationEnabled: translationEnabled
+        duration: duration, translationEnabled: translationEnabled,
+        album: album
     )
 
     let bestLyrics = fetcher.selectBest(from: fetchResults)

@@ -648,8 +648,9 @@ public class MusicController: ObservableObject {
         // During rapid switching, later notifications' GCD blocks run before earlier Tasks,
         // so self.duration may already reflect a different song by execution time.
         let capturedDuration = self.duration
+        let capturedAlbum = album
         Task { @MainActor in
-            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: capturedDuration)
+            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: capturedDuration, album: capturedAlbum)
         }
 
         // ━━━ PARALLEL: persistentID + duration + queue refresh on SB queue ━━━
@@ -700,7 +701,7 @@ public class MusicController: ObservableObject {
                     // Re-fetch lyrics if SB duration differs significantly from notification
                     if abs(sbDuration - oldDuration) > 1.0 {
                         Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration)
+                            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: self.currentAlbum)
                         }
                     }
                 }
@@ -740,7 +741,7 @@ public class MusicController: ObservableObject {
                     // Without this, lyrics stay at "No Lyrics" even though duration is now valid.
                     if abs(dur - oldDuration) > 1.0 {
                         Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur)
+                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum)
                         }
                     }
                 }
@@ -997,7 +998,7 @@ public class MusicController: ObservableObject {
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID, generation: generation)
             // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
             Task { @MainActor in
-                self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration)
+                self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum)
             }
             debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(userManuallyOpenedLyrics))\n")
             userManuallyOpenedLyrics = false

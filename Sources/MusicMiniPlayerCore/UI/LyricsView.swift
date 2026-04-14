@@ -118,7 +118,8 @@ public struct LyricsView: View {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
-                                      duration: musicController.duration)
+                                      duration: musicController.duration,
+                                      album: musicController.currentAlbum)
             if #available(macOS 15.0, *) { updateTranslationSessionConfig() }
         }
         .onChange(of: musicController.currentTrackTitle) {
@@ -141,7 +142,8 @@ public struct LyricsView: View {
             scroll.lockedLineIndex = nil
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
-                                      duration: musicController.duration)
+                                      duration: musicController.duration,
+                                      album: musicController.currentAlbum)
         }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
@@ -249,6 +251,7 @@ public struct LyricsView: View {
                     for: musicController.currentTrackTitle,
                     artist: musicController.currentArtist,
                     duration: musicController.duration,
+                    album: musicController.currentAlbum,
                     forceRefresh: true
                 )
             }) {

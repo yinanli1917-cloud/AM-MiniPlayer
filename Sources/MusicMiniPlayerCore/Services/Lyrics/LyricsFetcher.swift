@@ -119,14 +119,17 @@ public final class LyricsFetcher {
         title: String,
         artist: String,
         duration: TimeInterval,
-        translationEnabled: Bool
+        translationEnabled: Bool,
+        album: String = ""
     ) async -> [LyricsFetchResult] {
         let cleanTitle = title.replacingOccurrences(of: "\"", with: "")
         let cleanArtist = artist.replacingOccurrences(of: "\"", with: "")
-        DebugLogger.log("🚀 fetchAllSources START: '\(cleanTitle)' by '\(cleanArtist)' (\(Int(duration))s)")
+        let cleanAlbum = album.replacingOccurrences(of: "\"", with: "")
+        DebugLogger.log("🚀 fetchAllSources START: '\(cleanTitle)' by '\(cleanArtist)' (\(Int(duration))s) album='\(cleanAlbum)'")
 
         let ot = cleanTitle, oa = cleanArtist
         let d = duration, te = translationEnabled
+        let alb = cleanAlbum
 
         // Branch 2 gate — only speculate when the title looks ASCII/romaji.
         // Pure-CJK input doesn't need iTunes region candidates; branch 1
@@ -151,8 +154,8 @@ public final class LyricsFetcher {
             group.addTask { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
             group.addTask { await self.fetchFromAppleMusic(title: ot, artist: oa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
-            group.addTask { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te) }
+            group.addTask { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) }
+            group.addTask { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) }
 
             // ───────────────────────────────────────────────────────────────
             // Branch 2 — speculative per-region (ASCII input only)
@@ -182,7 +185,7 @@ public final class LyricsFetcher {
                         guard LanguageUtils.containsCJK(rt) else { return nil }
                         guard rt != ot || ra != oa else { return nil }
                         DebugLogger.log("⚡ Branch-2 speculative(\(region)): '\(rt)' by '\(ra)'")
-                        return await self.fetchFromNetEase(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+                        return await self.fetchFromNetEase(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
                     }
                     group.addTask {
                         guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
@@ -191,7 +194,7 @@ public final class LyricsFetcher {
                         let (rt, ra, _, _) = localized
                         guard LanguageUtils.containsCJK(rt) else { return nil }
                         guard rt != ot || ra != oa else { return nil }
-                        return await self.fetchFromQQMusic(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+                        return await self.fetchFromQQMusic(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
                     }
                     // LRCLIB exact-match by resolved CJK title.
                     group.addTask {
@@ -245,7 +248,7 @@ public final class LyricsFetcher {
                 guard st != ot || sa != oa else { return nil }
                 branch3Fired.value = true
                 DebugLogger.log("🛟 Branch-3 safety net (NetEase): '\(st)' by '\(sa)'")
-                return await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+                return await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: self.branch3SafetyNetDelay)
@@ -256,7 +259,7 @@ public final class LyricsFetcher {
                 guard st != ot || sa != oa else { return nil }
                 branch3Fired.value = true
                 DebugLogger.log("🛟 Branch-3 safety net (QQ): '\(st)' by '\(sa)'")
-                return await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te)
+                return await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
             }
 
             // Time budget sentinel — wakes the collection loop at 2.8s.
@@ -394,19 +397,51 @@ public final class LyricsFetcher {
         let id: ID
         let name: String
         let artist: String
+        let album: String
         let durationDiff: Double
         let titleMatch: Bool
         let artistMatch: Bool
+        /// True when candidate album matches input album (normalized + simplified,
+        /// contains-either-way). Used as a version disambiguator when multiple
+        /// entries share title/artist/duration (e.g. compilations, remasters,
+        /// Cantonese vs Mandarin versions).
+        let albumMatch: Bool
+        /// Length of candidate name after normalization. Used as a tiebreaker
+        /// to prefer candidates WITHOUT extra suffixes like "(国)", "(粤)",
+        /// "(Live)" — a shorter normalized name means fewer version markers.
+        let normalizedNameLength: Int
     }
 
     /// 统一优先级选择（消除 NetEase/QQ 的重复匹配逻辑）
     /// P1: 标题+艺术家+时长<3s → P2: 标题+艺术家+时长<20s
     /// P3: 仅艺术家+时长极精确(<0.5s) — 用于罗马字/翻译标题 vs CJK 标题的场景
     /// 🔑 No title-only tier: all matches require artist verification (three-rule principle)
+    /// 🔑 Within each tier, candidates are ranked by:
+    ///    (1) albumMatch — strongest version disambiguator when multiple entries
+    ///        share title/artist/duration (e.g. Jo Stafford "The Ultimate" vs
+    ///        "L'essentiel"). Album name is fuzzy-matched against input album.
+    ///    (2) normalizedNameLength — shorter normalized names win, preferring
+    ///        entries WITHOUT version-marker suffixes like "(国)", "(粤)",
+    ///        "(Live)" (e.g. Jacky Cheung Cantonese "每天爱你多一些" over
+    ///        Mandarin "每天爱你多一些(国)").
+    ///    (3) durationDiff — closest duration as final tiebreaker.
     private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false) -> ID? {
-        let sorted = candidates.sorted { $0.durationDiff < $1.durationDiff }
-        let desc = sorted.prefix(5).map { "'\($0.name)' by '\($0.artist)' T=\($0.titleMatch) A=\($0.artistMatch) Δ\(String(format: "%.1f", $0.durationDiff))s" }
+        // Debug view: sorted purely by durationDiff so the log reads naturally.
+        let sortedByDelta = candidates.sorted { $0.durationDiff < $1.durationDiff }
+        let desc = sortedByDelta.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' T=\($0.titleMatch) A=\($0.artistMatch) AL=\($0.albumMatch) L=\($0.normalizedNameLength) Δ\(String(format: "%.1f", $0.durationDiff))s" }
         DebugLogger.log(source, "🎯 候选: \(desc.joined(separator: ", "))")
+        // Composite rank applied WITHIN each priority tier below:
+        //   (1) albumMatch desc  — strongest version disambiguator
+        //   (2) nameLength asc   — prefer titles without "(国)"/"(粤)"/"(Live)"
+        //   (3) durationDiff asc — closest duration as final tiebreaker
+        let compositeRank: (SearchCandidate<ID>, SearchCandidate<ID>) -> Bool = { a, b in
+            if a.albumMatch != b.albumMatch { return a.albumMatch && !b.albumMatch }
+            if a.normalizedNameLength != b.normalizedNameLength {
+                return a.normalizedNameLength < b.normalizedNameLength
+            }
+            return a.durationDiff < b.durationDiff
+        }
+        let sorted = sortedByDelta  // P3 predicates still read `sorted` as the Δ-ordered pool
 
         // 按优先级递减尝试
         let priorities: [(String, (SearchCandidate<ID>) -> Bool)] = [
@@ -463,10 +498,10 @@ public final class LyricsFetcher {
         ]
 
         for (label, predicate) in priorities {
-            if let match = sorted.first(where: predicate) {
-                DebugLogger.log(source, "✅ \(label): '\(match.name)' by '\(match.artist)' Δ\(String(format: "%.1f", match.durationDiff))s")
-                return match.id
-            }
+            let tierMatches = sorted.filter(predicate)
+            guard let best = tierMatches.sorted(by: compositeRank).first else { continue }
+            DebugLogger.log(source, "✅ \(label): '\(best.name)' by '\(best.artist)' alb='\(best.album)' AL=\(best.albumMatch) L=\(best.normalizedNameLength) Δ\(String(format: "%.1f", best.durationDiff))s")
+            return best.id
         }
 
         if !sorted.isEmpty { DebugLogger.log(source, "❌ 无匹配") }
@@ -713,6 +748,10 @@ public final class LyricsFetcher {
         let rawOriginalTitle: String
         let rawOriginalArtist: String
         let duration: TimeInterval
+        /// Normalized album name for fuzzy matching against result albums.
+        /// Empty string means no album hint — candidate selection falls back
+        /// to pure duration/title priority.
+        let normalizedAlbum: String
         /// True when iTunes confirms the original `(title, artist, duration)` as
         /// an exact match in some region. When true, downstream matchers MUST
         /// NOT apply the romanized→CJK P3 escape — the title is already the
@@ -738,7 +777,7 @@ public final class LyricsFetcher {
             [(rawArtist, simplifiedArtist), (rawOriginalArtist, simplifiedOriginalArtist)]
         }
 
-        init(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, disableCjkEscapeInP3: Bool = false) {
+        init(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, album: String = "", disableCjkEscapeInP3: Bool = false) {
             let ct = LanguageUtils.normalizeTrackName(title)
             let cot = LanguageUtils.normalizeTrackName(originalTitle)
             self.simplifiedTitle = LanguageUtils.toSimplifiedChinese(ct)
@@ -748,6 +787,9 @@ public final class LyricsFetcher {
             self.rawTitle = title; self.rawArtist = artist
             self.rawOriginalTitle = originalTitle; self.rawOriginalArtist = originalArtist
             self.duration = duration
+            self.normalizedAlbum = LanguageUtils.toSimplifiedChinese(
+                LanguageUtils.normalizeTrackName(album)
+            ).lowercased()
             self.disableCjkEscapeInP3 = disableCjkEscapeInP3
         }
     }
@@ -761,7 +803,7 @@ public final class LyricsFetcher {
         source: String,
         extraKeywords: [(String, String)] = [],
         fetchSongs: @escaping (String) async throws -> [[String: Any]]?,
-        extractSong: @escaping ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double)?
+        extractSong: @escaping ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double, album: String)?
     ) async -> ID? {
         // 多关键词策略（按优先级排列）
         var keywords: [(String, String)] = [
@@ -832,7 +874,7 @@ public final class LyricsFetcher {
     private func buildCandidates<ID>(
         songs: [[String: Any]],
         params: SearchParams,
-        extractSong: ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double)?
+        extractSong: ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double, album: String)?
     ) -> [SearchCandidate<ID>] {
         songs.compactMap { song in
             guard let s = extractSong(song) else { return nil }
@@ -877,9 +919,29 @@ public final class LyricsFetcher {
                 }
             }
 
+            // 🔑 Album match (fuzzy, contains-either-way) — strongest signal
+            // when multiple entries share title/artist/duration. Apple Music
+            // and NetEase often use slightly different album names (e.g.
+            // "The Ultimate" vs "The Ultimate Collection"), so we use
+            // contains after normalization + simplified conversion.
+            let normalizedAlbum = LanguageUtils.toSimplifiedChinese(
+                LanguageUtils.normalizeTrackName(s.album)
+            ).lowercased()
+            let albumMatch: Bool = {
+                guard !params.normalizedAlbum.isEmpty, !normalizedAlbum.isEmpty else { return false }
+                if params.normalizedAlbum == normalizedAlbum { return true }
+                if params.normalizedAlbum.contains(normalizedAlbum) { return true }
+                if normalizedAlbum.contains(params.normalizedAlbum) { return true }
+                return false
+            }()
+            let normalizedNameLength = LanguageUtils.normalizeTrackName(s.name).count
+
             return SearchCandidate(
-                id: s.id, name: s.name, artist: s.artist,
-                durationDiff: durationDiff, titleMatch: titleMatch, artistMatch: artistMatch
+                id: s.id, name: s.name, artist: s.artist, album: s.album,
+                durationDiff: durationDiff,
+                titleMatch: titleMatch, artistMatch: artistMatch,
+                albumMatch: albumMatch,
+                normalizedNameLength: normalizedNameLength
             )
         }
     }
@@ -912,8 +974,8 @@ public final class LyricsFetcher {
         return true
     }
 
-    private func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
-        DebugLogger.log("NetEase", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
+    private func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
+        DebugLogger.log("NetEase", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s) album='\(album)'")
         // Note: P3's CJK-title escape was previously gated here by an
         // exact-original preflight, on the assumption that an iTunes exact
         // match meant the title wasn't a romanization. That assumption is
@@ -921,7 +983,7 @@ public final class LyricsFetcher {
         // across regions (e.g., mei ehara — "Invisible" on KR/HK/TW is the
         // same recording as "不確か" on JP). Rejecting CJK candidates in that
         // case throws away the only available lyrics.
-        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: false)
+        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, album: album, disableCjkEscapeInP3: false)
         let headers = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                        "Referer": "https://music.163.com"]
 
@@ -943,7 +1005,9 @@ public final class LyricsFetcher {
                 if let artists = song["artists"] as? [[String: Any]],
                    let first = artists.first, let n = first["name"] as? String { artist = n }
                 let dur = (song["duration"] as? Double ?? 0) / 1000.0
-                return (id, name, artist, dur)
+                var albumName = ""
+                if let album = song["album"] as? [String: Any], let n = album["name"] as? String { albumName = n }
+                return (id, name, artist, dur, albumName)
             }
         ) else {
             DebugLogger.log("NetEase", "❌ 未找到歌曲")
@@ -1064,11 +1128,11 @@ public final class LyricsFetcher {
     }
 
     // MARK: - QQ Music
-    private func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
-        DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s)")
+    private func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
+        DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s) album='\(album)'")
         // (See fetchFromNetEase note: cross-region same-recording aliases
         // are real, so we don't gate the P3 CJK escape on exact-match.)
-        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, disableCjkEscapeInP3: false)
+        let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, album: album, disableCjkEscapeInP3: false)
         guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
 
         guard let songMid: String = await searchAndSelectCandidate(
@@ -1095,7 +1159,8 @@ public final class LyricsFetcher {
                 if let singers = song["singer"] as? [[String: Any]],
                    let first = singers.first, let n = first["name"] as? String { artist = n }
                 let dur = Double(song["interval"] as? Int ?? 0)
-                return (mid, name, artist, dur)
+                let albumName = (song["album"] as? [String: Any])?["name"] as? String ?? ""
+                return (mid, name, artist, dur, albumName)
             }
         ) else {
             DebugLogger.log("QQMusic", "❌ 未找到歌曲")

@@ -211,9 +211,16 @@ private func shellOutput(_ cmd: String) -> String? {
 
 private func runAdHoc(args: [String]) async {
     let dumpMode = args.contains("--dump")
-    let filtered = args.filter { $0 != "--dump" }
+    // --album "专辑" 供候选选择时匹配版本 (可选, 用于多版本歧义消解)
+    var albumArg = ""
+    var filtered = args.filter { $0 != "--dump" }
+    if let idx = filtered.firstIndex(of: "--album"), idx + 1 < filtered.count {
+        albumArg = filtered[idx + 1]
+        filtered.remove(at: idx + 1)
+        filtered.remove(at: idx)
+    }
     guard filtered.count >= 2 else {
-        log("用法: LyricsVerifier check \"歌名\" \"艺术家\" [秒数] [--dump]")
+        log("用法: LyricsVerifier check \"歌名\" \"艺术家\" [秒数] [--album \"专辑\"] [--dump]")
         log("  秒数省略时自动从 iTunes API 查询")
         exit(1)
     }
@@ -238,7 +245,8 @@ private func runAdHoc(args: [String]) async {
         id: "AD-HOC", title: title,
         artist: artist, duration: dur,
         expectation: nil,
-        translationEnabled: true
+        translationEnabled: true,
+        album: albumArg
     )
     printResultLine(r)
     emitJSON(r)

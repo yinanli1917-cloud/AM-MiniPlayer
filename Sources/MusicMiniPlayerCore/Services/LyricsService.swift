@@ -158,7 +158,7 @@ public class LyricsService: ObservableObject {
     // ========================================================================
 
     @MainActor
-    func fetchLyrics(for title: String, artist: String, duration: TimeInterval, forceRefresh: Bool = false) {
+    func fetchLyrics(for title: String, artist: String, duration: TimeInterval, album: String = "", forceRefresh: Bool = false) {
         // 🔑 忽略无效曲目（未连接/未播放时的默认值）
         guard !title.isEmpty, title != kNotPlayingSentinel else {
             DebugLogger.log("LyricsService", "⏭️ 忽略无效曲目: '\(title)'")
@@ -276,11 +276,11 @@ public class LyricsService: ObservableObject {
         // 异步获取歌词
         currentFetchTask = Task { [weak self] in
             guard let self = self else { return }
-            await self.performFetch(title: title, artist: artist, duration: duration, songID: songID)
+            await self.performFetch(title: title, artist: artist, duration: duration, album: album, songID: songID)
         }
     }
 
-    private func performFetch(title: String, artist: String, duration: TimeInterval, songID: String) async {
+    private func performFetch(title: String, artist: String, duration: TimeInterval, album: String, songID: String) async {
         // 🔑 Early exit only if cancelled BEFORE network starts (no work wasted)
         guard !Task.isCancelled else { return }
 
@@ -289,7 +289,8 @@ public class LyricsService: ObservableObject {
             title: title,
             artist: artist,
             duration: duration,
-            translationEnabled: showTranslation
+            translationEnabled: showTranslation,
+            album: album
         )
 
         // 选择最佳结果 — 需要完整结果以读取 kind (synced/unsynced) 供自动滚动守卫使用
