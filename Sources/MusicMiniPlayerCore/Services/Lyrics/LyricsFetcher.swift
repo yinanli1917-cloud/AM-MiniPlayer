@@ -1068,6 +1068,12 @@ public final class LyricsFetcher {
     // sparse, but NetEase maintains the mapping as native metadata.
     //
     // Cached per-ASCII-name so a single session doesn't hammer the endpoint.
+    /// Split a name string into a token set for order-insensitive comparison.
+    /// "Sudo Kaoru" → {"sudo", "kaoru"} matches "Kaoru Sudo" under Set equality.
+    fileprivate static func nameTokens(_ s: String) -> Set<String> {
+        Set(s.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+    }
+
     private actor ArtistAliasCache {
         private var cache: [String: [String]] = [:]
         func get(_ key: String) -> [String]? { cache[key] }
@@ -1142,10 +1148,16 @@ public final class LyricsFetcher {
                           LanguageUtils.containsCJK(cjkName),
                           !seen.contains(cjkName) else { continue }
                     let aliasList = (artist["alias"] as? [String] ?? []).map { $0.lowercased() }
-                    // Confident match: alias list confirms mapping (e.g.
-                    // 莫文蔚.alias includes "Karen Mok"). Insert at HEAD so it
-                    // beats fuzzy-probe matches in downstream ordering.
-                    let isConfirmed = aliasList.contains(inputLower)
+                    // Confident match: alias confirms mapping (莫文蔚.alias
+                    // contains "Karen Mok"; 須藤薫.alias contains "Kaoru Sudo").
+                    // Token-set equality absorbs name-order swaps — Japanese
+                    // surname-given "Sudo Kaoru" vs Western given-surname
+                    // "Kaoru Sudo" resolve to the same set. Confirmed matches
+                    // insert at head so they beat fuzzy-probe hits.
+                    let inputTokens = Self.nameTokens(inputLower)
+                    let isConfirmed = !inputTokens.isEmpty && aliasList.contains {
+                        Self.nameTokens($0) == inputTokens
+                    }
                     if isConfirmed {
                         aliases.insert(cjkName, at: 0)
                     } else {
