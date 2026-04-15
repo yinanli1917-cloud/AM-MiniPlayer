@@ -493,5 +493,38 @@
       "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "想"
     }
+  },
+  {
+    "id": "X01_same_artist_cjk_collision",
+    "title": "SUNDAY BRUNCH",
+    "artist": "Kanako Wada",
+    "duration": 236,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "電話"
+    }
+  },
+  {
+    "id": "X02_romaji_alias_regression",
+    "title": "Koibitotachi no Chiheisen",
+    "artist": "Momoko Kikuchi",
+    "duration": 229,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": null
+    }
+  },
+  {
+    "id": "X03_unconditional_cantopop",
+    "title": "Unconditional",
+    "artist": "Eason Chan",
+    "duration": 230,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "firstLineContains": null
+    }
   }
 ]

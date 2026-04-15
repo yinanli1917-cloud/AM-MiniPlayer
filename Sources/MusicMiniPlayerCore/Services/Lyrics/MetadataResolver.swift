@@ -366,6 +366,32 @@ public final class MetadataResolver {
             fetchedResults = indexed.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
         }
 
+        // 🔑 CN-side exact-vs-translated collision guard (mirrors the per-region
+        // fix in fetchMetadataFromRegionUncached). When CN's catalog already
+        // carries the input title exactly, any "translated candidate" — a
+        // different CJK-titled track by the same artist with a close
+        // duration — is a same-artist coincidental collision, not a real
+        // translation alias. Dropping those candidates blocks cases like
+        // SUNDAY BRUNCH → 不確かなI LOVE YOU (TW/CN catalog quirk where
+        // Kanako Wada's different songs have identical 236s duration).
+        var cnHasExact = false
+        for (_, results) in fetchedResults {
+            for result in results {
+                guard let trackName = result["trackName"] as? String,
+                      let artistName = result["artistName"] as? String,
+                      let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
+                let trackDuration = Double(trackTimeMillis) / 1000.0
+                if abs(trackDuration - duration) < 1.0
+                    && trackName.lowercased() == inputTitleLower
+                    && artistName.lowercased() == inputArtistLower {
+                    DebugLogger.log("MetadataResolver", "🛑 🇨🇳 [CN] exact original match: '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", abs(trackDuration - duration)))s")
+                    cnHasExact = true
+                    break
+                }
+            }
+            if cnHasExact { break }
+        }
+
         // Sequential candidate processing (fast CPU-only, preserves original semantics)
         for (searchTerm, results) in fetchedResults {
             // 翻译候选按搜索轮次独立追踪（避免 artist-only 搜索的多结果污染）
@@ -379,7 +405,12 @@ public final class MetadataResolver {
                 )
                 switch matched {
                 case .direct(let c): candidates.append(c)
-                case .translated(let c): roundTranslated.append(c)
+                case .translated(let c):
+                    if cnHasExact {
+                        DebugLogger.log("MetadataResolver", "⏭️ 🇨🇳 [CN] 丢弃翻译候选 (hasExact): '\(c.title)' (input='\(title)')")
+                    } else {
+                        roundTranslated.append(c)
+                    }
                 case .none: break
                 }
             }
@@ -742,6 +773,30 @@ public final class MetadataResolver {
             if let best = selectBestRegionCandidate(tiers, region: region) {
                 resolved = best
                 break
+            }
+        }
+        // 🔑 Same-region exact-vs-resolved collision guard:
+        // When THIS region's catalog already contains the input title as an
+        // exact match AND the resolved candidate has a DIFFERENT title, the
+        // resolved one is a same-artist coincidental collision (another
+        // track by the same artist with a nearly identical duration),
+        // NOT an alias of the input. A genuine romaji→CJK alias pair
+        // (e.g., "Koibitotachi no Chiheisen" ↔ "恋人たちの地平線") lives in
+        // regions where only ONE of the two titles is present — the JP
+        // catalog carries the CJK form, the global catalog carries the
+        // romaji — so hasExact=true in the non-CJK region never coincides
+        // with a meaningful CJK resolved candidate in the same region.
+        //
+        // Blocks: SUNDAY BRUNCH (TW exact) → wrongly resolved to
+        //   "不確かなI LOVE YOU" (same artist, Δ0.00s, TW catalog).
+        // Preserves: Koibitotachi (JP hasExact=false) → 恋人たちの地平線 ✓
+        //            mei ehara "Invisible" (JP hasExact=false) → 不確か ✓
+        if hasExact, let r = resolved {
+            let rNorm = LanguageUtils.normalizeTrackName(r.0).lowercased()
+            let inputNorm = LanguageUtils.normalizeTrackName(title).lowercased()
+            if rNorm != inputNorm {
+                DebugLogger.log("MetadataResolver", "⏭️ [\(region)] 同区域异名候选 (hasExact): 丢弃 '\(r.0)' (input='\(title)')")
+                resolved = nil
             }
         }
         return (resolved, hasExact)
