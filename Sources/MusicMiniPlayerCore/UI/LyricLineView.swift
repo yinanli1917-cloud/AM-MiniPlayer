@@ -720,26 +720,44 @@ private struct LyricsTextRenderer: TextRenderer {
         }
     }
 
-    // ── Normal words: gradient-masked bright overlay (sub-pixel smooth) ──
+    /// AMLL base float: duration = max(1s, wordDuration), ease-out, fill:both.
+    /// The float is ALWAYS at least 1s long — short words still float slowly,
+    /// creating a gentle wave-like cascade across words in the line.
+    private func baseFloat(for attr: WordTimingAttribute) -> CGFloat {
+        let target: CGFloat = -2.0
+        guard currentTime >= attr.startTime else { return 0 }
+        let wordDuration = attr.endTime - attr.startTime
+        let floatDuration = max(1.0, wordDuration)
+        let elapsed = currentTime - attr.startTime
+        if elapsed >= floatDuration { return target }  // fill: both
+        let t = elapsed / floatDuration
+        let eased = 1.0 - pow(1.0 - t, 3)  // cubic ease-out
+        return target * eased
+    }
+
+    // ── Gradient-masked bright overlay (sub-pixel smooth) ──
+    // Single code path for all scripts. CJK uniform-fill branch (previously
+    // introduced to work around single-char words "never reaching bright")
+    // was removing the traveling fade band that AMLL/Apple Music use to make
+    // adjacent characters cohesive — each CJK glyph brightened as its own
+    // isolated opacity ramp, which reads as characters splitting instead of
+    // a continuous band flowing through the line. Fixed here by EXPANDING
+    // the sweepX range: the fade band starts fully off-left of the run at
+    // progress=0 and exits fully off-right at progress=1, so single-char
+    // CJK words reach 100% bright cleanly while neighboring chars show the
+    // adjacent phase of the same continuous fade band.
     private func drawSweepBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat, floatY: CGFloat,
         fade: CGFloat, lineRect: CGRect, in context: GraphicsContext
     ) {
         let brightBoost = brightAlpha - dimAlpha
 
-        // CJK: uniform per-character fill (Pass 1 dim base + this bright overlay
-        // ramped by progress). No horizontal sweep — the whole glyph brightens
-        // together over the word window.
-        if attr.isCJK {
-            var textCtx = context
-            textCtx.opacity = Double(brightBoost * fade * progress)
-            textCtx.translateBy(x: 0, y: floatY)
-            textCtx.draw(run, options: .disablesSubpixelQuantization)
-            return
-        }
-
         let runRect = run.typographicBounds.rect
-        let sweepX = runRect.minX + runRect.width * progress
+        // Extended sweep: spans [minX - fadeHalfPt, maxX + fadeHalfPt] over
+        // progress 0→1, so the fade band fully enters and exits the run.
+        let sweepStart = runRect.minX - fadeHalfPt
+        let sweepSpan = runRect.width + 2 * fadeHalfPt
+        let sweepX = sweepStart + sweepSpan * progress
 
         context.drawLayer { layerCtx in
             // Draw bright text into sublayer
@@ -781,7 +799,11 @@ private struct LyricsTextRenderer: TextRenderer {
         floatY: CGFloat, fade: CGFloat, lineRect: CGRect, in context: GraphicsContext
     ) {
         let runRect = run.typographicBounds.rect
-        let sweepX = runRect.minX + runRect.width * progress
+        // Extended sweep: fade band fully enters/exits the run (same as
+        // drawSweepBright). Keeps emphasis runs cohesive with neighbors.
+        let sweepStart = runRect.minX - fadeHalfPt
+        let sweepSpan = runRect.width + 2 * fadeHalfPt
+        let sweepX = sweepStart + sweepSpan * progress
         let glyphCount = max(1, run.count)
         // Bright floor = dimAlpha: when fade→0, bright converges to dim → uniform dimAlpha.
         // No Pass 1 ghost needed — single layer handles the full lifecycle.
@@ -834,31 +856,25 @@ private struct LyricsTextRenderer: TextRenderer {
             var maskCtx = layerCtx
             maskCtx.blendMode = .destinationIn
 
-            if attr.isCJK {
-                // CJK uniform fill: alpha lerps dim→bright across the word window.
-                // No horizontal sweep — whole character brightens together.
-                let alpha = max(dimAlpha, dimAlpha + (effectiveBright - dimAlpha) * progress)
-                maskCtx.fill(Path(padded), with: .color(.white.opacity(Double(alpha))))
-            } else {
-                // Gradient mask: bright→dim (not opaque→clear)
-                // AMLL approach — single layer, mask controls alpha directly.
-                // Line-level rect for unified sweep across all emphasis glyphs.
-                let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
-                let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
-                maskCtx.fill(
-                    Path(padded),
-                    with: .linearGradient(
-                        Gradient(stops: [
-                            .init(color: bright, location: 0),
-                            .init(color: bright, location: max(0, leftEdge)),
-                            .init(color: dim, location: min(1, rightEdge)),
-                            .init(color: dim, location: 1),
-                        ]),
-                        startPoint: CGPoint(x: padded.minX, y: 0),
-                        endPoint: CGPoint(x: padded.maxX, y: 0)
-                    )
+            // Gradient mask: bright→dim continuous across all chars. Same
+            // code path for CJK and non-CJK — the extended sweepX makes
+            // single-char runs traverse bright→dim cleanly and the line-
+            // level gradient keeps adjacent chars on a shared fade band.
+            let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
+            let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+            maskCtx.fill(
+                Path(padded),
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: bright, location: 0),
+                        .init(color: bright, location: max(0, leftEdge)),
+                        .init(color: dim, location: min(1, rightEdge)),
+                        .init(color: dim, location: 1),
+                    ]),
+                    startPoint: CGPoint(x: padded.minX, y: 0),
+                    endPoint: CGPoint(x: padded.maxX, y: 0)
                 )
-            }
+            )
         }
     }
 
@@ -883,19 +899,6 @@ private struct LyricsTextRenderer: TextRenderer {
     /// AMLL base float: duration = max(1s, wordDuration), ease-out, fill:both.
     /// The float is ALWAYS at least 1s long — short words still float slowly,
     /// creating a gentle wave-like cascade across words in the line.
-    private func baseFloat(for attr: WordTimingAttribute) -> CGFloat {
-        let target: CGFloat = -2.0
-        guard currentTime >= attr.startTime else { return 0 }
-        // Float duration: at least 1s, matching AMLL's max(1000, wordDuration)
-        let wordDuration = attr.endTime - attr.startTime
-        let floatDuration = max(1.0, wordDuration)
-        let elapsed = currentTime - attr.startTime
-        if elapsed >= floatDuration { return target }  // fill: both — stays forever
-        // ease-out: fast start, slow finish (cubic ease-out)
-        let t = elapsed / floatDuration
-        let eased = 1.0 - pow(1.0 - t, 3)
-        return target * eased
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -971,26 +974,24 @@ private struct WordFillSpan: View {
     // Use uniform fill instead — alpha lerps dim→bright as progress advances.
     private var isCJK: Bool { LanguageUtils.containsCJK(text) }
 
-    // ── System 2: Sweep gradient (ALL words) ──
+    // ── System 2: Sweep gradient (ALL words, incl. CJK) ──
+    // Single path. Extended fade band: progress 0→1 drives the gradient
+    // midpoint across [−fade, 1+fade] in normalized coords, so at progress=0
+    // the fade band is fully off-left (char is dim) and at progress=1 fully
+    // off-right (char is bright). Matches the TextRenderer path's expanded
+    // sweepX so single-char CJK words traverse dim→bright cleanly as part
+    // of a continuous band, not an isolated opacity ramp.
     private var sweepGradient: LinearGradient {
         let dim = Color.white.opacity(dimOpacity)
         let bright = Color.white.opacity(brightOpacity)
-        if isCJK {
-            let alpha = dimOpacity + (brightOpacity - dimOpacity) * progress
-            let solid = Color.white.opacity(alpha)
-            return LinearGradient(colors: [solid], startPoint: .leading, endPoint: .trailing)
-        }
-        guard progress > 0 && progress < 1 else {
-            return LinearGradient(
-                colors: [progress >= 1 ? bright : dim],
-                startPoint: .leading, endPoint: .trailing
-            )
-        }
-        let fade: CGFloat = 0.06
+        let fade: CGFloat = 0.25  // half-width in normalized run space
+        let mid = -fade + progress * (1 + 2 * fade)  // -fade → 1+fade
         return LinearGradient(
             stops: [
-                .init(color: bright, location: max(0, progress - fade)),
-                .init(color: dim, location: min(1, progress + fade))
+                .init(color: bright, location: 0),
+                .init(color: bright, location: max(0, mid - fade)),
+                .init(color: dim, location: min(1, mid + fade)),
+                .init(color: dim, location: 1),
             ],
             startPoint: .leading, endPoint: .trailing
         )
