@@ -500,13 +500,30 @@ public final class LyricsParser {
             if trimmed.isEmpty { return false }
             // 高置信度关键词匹配（任意位置生效）
             if isMetadataKeywordLine(trimmed) { return false }
-            // 标题分隔符行（"Song - Artist"，含 " - " 且出现在歌曲开头 ≤1s）
-            // QQ/NetEase 常在 0s 放 "Song Title (ver.) - Artist" 的元信息行
-            if trimmed.contains(" - ") && line.startTime <= 1.0 { return false }
+            // 标题/信用分隔符行（"Song - Artist" 或 "Song -Artist"）
+            // QQ/NetEase 常在开头放 "Song Title (ver.) - Artist" 元信息行
+            // 🔑 Widened: " -" without trailing space (e.g. "You Belong to Me -Norman Wisdom")
+            //    and startTime ≤ 5s (title cards can appear at 1-3s, not just ≤1s)
+            if isTitleSeparatorLine(trimmed) && line.startTime <= 5.0 { return false }
             // 纯符号行
             if isPureSymbols(trimmed) { return false }
             return true
         }
+    }
+
+    /// Detect title/credit separator lines: "Song - Artist", "Song -Artist", etc.
+    /// These appear at the start of YRC/LRC as title cards with performer names.
+    private func isTitleSeparatorLine(_ text: String) -> Bool {
+        // " - " (space-dash-space): most common, e.g. "Song Title - Artist Name"
+        if text.contains(" - ") { return true }
+        // " -" followed by an uppercase letter (space-dash-name): e.g. "You Belong to Me -Norman Wisdom"
+        // Guard: must have uppercase after dash to avoid matching lyrics like "hold on -"
+        if let range = text.range(of: " -") {
+            let afterDash = text[range.upperBound...]
+            let firstNonSpace = afterDash.drop(while: { $0 == " " })
+            if let firstChar = firstNonSpace.first, firstChar.isUppercase { return true }
+        }
+        return false
     }
 
     /// 检测并提取混排翻译（韩/英+中 交替出现在相邻时间戳）

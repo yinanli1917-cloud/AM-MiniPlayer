@@ -514,4 +514,49 @@ final class LyricsParserTests: XCTestCase {
             XCTAssertNotNil(line.translation, "Processed line \(i) lost translation")
         }
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Title Card Stripping
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// YRC with title/credits line at ~1.3s that survived old stripMetadataLines.
+    /// Real data: "You Belong To Me" by Jo Stafford (NetEase 22544885).
+    /// The title card "You Belong to Me -Norman Wisdom Jo Stafford..." at 1.35s
+    /// pushes all lyrics display one line late for the entire song.
+    func testStripMetadataLines_titleCardAtSongStart() {
+        let yrcText = """
+        [0,680](0,680,0) 作词 : KING/Price/Stewart
+        [680,670](680,670,0) 作曲 : KING/Price/Stewart
+        [1350,13230](1350,2900,0)You (4250,1230,0)Belong (5480,490,0)to (5970,680,0)Me (6650,160,0)-(6810,1250,0)Norman (8060,1650,0)Wisdom (9710,610,0)Jo  (10320,2640,0)Stafford (12960,1170,0)Stewart  (14130,450,0)King
+        [14580,6720](14580,560,0)See (15140,360,0)the (15500,1020,0)pyramids (16520,560,0)a(17080,290,0)long (17370,430,0)the (17800,1500,0)Nile
+        [21300,6980](21300,520,0)Watch (21820,340,0)the (22160,990,0)sunrise (23150,520,0)from (23670,200,0)a (23870,1020,0)tropic (24890,3390,0)isle
+        """
+
+        guard let yrcLines = parser.parseYRC(yrcText, timeOffset: 0) else {
+            XCTFail("YRC parse returned nil")
+            return
+        }
+        let stripped = parser.stripMetadataLines(yrcLines)
+
+        // Title card "You Belong to Me -Norman Wisdom..." must be stripped.
+        // First real lyric should be "See the pyramids along the Nile".
+        XCTAssertEqual(stripped.count, 2, "Expected 2 lines: title card + 2 metadata stripped")
+        XCTAssertTrue(stripped[0].text.contains("pyramids"),
+                      "First line after stripping should be 'pyramids', got '\(stripped[0].text)'")
+    }
+
+    /// Title card with different format: "Song Title / Artist" at 2s.
+    /// Must also be stripped — generalizes beyond " - " separator.
+    func testStripMetadataLines_titleCardDashNoTrailingSpace() {
+        let lines = [
+            LyricLine(text: "作词 : Test Writer", startTime: 0, endTime: 0.5),
+            LyricLine(text: "My Song Title -Artist Name Producer", startTime: 1.5, endTime: 15.0),
+            LyricLine(text: "First real lyric line here", startTime: 15.0, endTime: 22.0),
+            LyricLine(text: "Second real lyric line", startTime: 22.0, endTime: 28.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.count, 2, "Expected 2 lines after stripping metadata + title card")
+        XCTAssertEqual(stripped[0].text, "First real lyric line here")
+    }
 }
