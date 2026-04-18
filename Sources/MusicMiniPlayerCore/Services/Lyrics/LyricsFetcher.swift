@@ -354,6 +354,19 @@ public final class LyricsFetcher {
             // An invalid album-matched result (parsed garbage) would otherwise
             // beat a valid unmatched one.
             if let albumMatched = valid.first(where: { $0.albumMatched }) {
+                // 🔑 Timing sanity gate: album-matched lyrics with large timeline
+                // overshoot vs the other contender's score-based winner indicate
+                // wrong-master timing data (same album name, different recording).
+                // Example: Dionne Warwick "This Girl's In Love With You" — QQ tags
+                // the lyrics with "Promises, Promises" but the actual timestamps
+                // are for a 288s master while the AM version is 262s.
+                // When the score gap is large (≥20) AND the album-matched result
+                // is the one with worse score, defer to score — the scorer already
+                // penalized timeline overshoot.
+                if albumMatched.score + 20 < top.score {
+                    DebugLogger.log("🏆 Score gap too large — score wins: \(top.source) (\(String(format: "%.1f", top.score))) over album-matched \(albumMatched.source) (\(String(format: "%.1f", albumMatched.score)))")
+                    return top
+                }
                 DebugLogger.log("🏆 Album-match preferred: \(albumMatched.source) (\(String(format: "%.1f", albumMatched.score))) over \(top.source) (\(String(format: "%.1f", top.score)))")
                 return albumMatched
             }
@@ -956,43 +969,27 @@ public final class LyricsFetcher {
                     return nil
                 }
             }
-            // Collect results from all rounds, pick the best.
-            // Album-matched results beat non-matched; among album-matched,
-            // closest duration wins. All rounds are already in-flight so
-            // waiting for all adds minimal latency (~100ms).
-            var bestAlbumMatch: (ID, Bool, String, Double)? = nil
-            var fallback: (ID, Bool, String, Double)? = nil
-            let preferAlbumMatch = !params.normalizedAlbum.isEmpty
+            // Collect ALL results, pick the best deterministically.
+            // Ranking: (1) albumMatch desc  (2) durationDiff asc
+            // All rounds are already in-flight so waiting for all adds
+            // minimal latency (~100-300ms typical).
+            //
+            // 🔑 Deterministic: eliminates first-to-finish race condition
+            // where network timing decided which NE entry won. Same
+            // (title, artist, album, duration) input → same output every time.
+            var allResults: [(ID, Bool, String, Double)] = []
             for await result in group {
                 guard let r = result else { continue }
-                if r.1 {
-                    // Album-matched: keep the closest duration
-                    if let prev = bestAlbumMatch {
-                        if r.3 < prev.3 {
-                            DebugLogger.log(source, "⚡ Better album match via '\(r.2)' (Δ\(String(format: "%.1f", r.3))s < Δ\(String(format: "%.1f", prev.3))s)")
-                            bestAlbumMatch = r
-                        }
-                    } else {
-                        bestAlbumMatch = r
-                    }
-                } else if !preferAlbumMatch {
-                    // No album preference: first result wins
-                    DebugLogger.log(source, "⚡ Parallel match via '\(r.2)' (albumMatch=\(r.1))")
-                    group.cancelAll()
-                    return (r.0, r.1)
-                } else if fallback == nil {
-                    fallback = r
-                }
+                allResults.append(r)
             }
-            if let best = bestAlbumMatch {
-                DebugLogger.log(source, "⚡ Parallel match via '\(best.2)' (albumMatch=true, Δ\(String(format: "%.1f", best.3))s)")
-                return (best.0, best.1)
-            }
-            if let f = fallback {
-                DebugLogger.log(source, "⚡ Parallel fallback via '\(f.2)' (no album match)")
-                return (f.0, f.1)
-            }
-            return nil
+            guard !allResults.isEmpty else { return nil }
+            let best = allResults.min { a, b in
+                if a.1 != b.1 { return a.1 && !b.1 }  // albumMatch wins
+                return a.3 < b.3                       // closer duration wins
+            }!
+            let matchType = best.1 ? "albumMatch=true" : "no album match"
+            DebugLogger.log(source, "⚡ Best match via '\(best.2)' (\(matchType), Δ\(String(format: "%.1f", best.3))s) from \(allResults.count) rounds")
+            return (best.0, best.1)
         }
     }
 
