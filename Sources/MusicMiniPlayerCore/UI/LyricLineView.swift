@@ -646,7 +646,13 @@ private struct LyricsTextRenderer: TextRenderer {
     // AMLL values (from updateMaskAlphaTargets at scale=1.0)
     private let brightAlpha: CGFloat = 0.85
     private let dimAlpha: CGFloat = 0.25
-    // AMLL fade width: word.height / 2 = 12pt for 24pt font
+    // AMLL-exact fade band. wordFadeWidth=0.5 in base.ts → fadeWidth = 0.5 ×
+    // word.height = 12pt at 24pt font. The fade tail extends exactly
+    // `fadeHalfPt` past the wavefront, so this value directly controls how
+    // far the mask reads as "ahead of the sung character." With the line-
+    // level wavefrontX + overlapping clamp ranges (sweepStart = minX −
+    // fadeHalfPt unconditionally), even a 12pt halfwidth gives cross-char
+    // visibility because adjacent runs' ranges still overlap by 24pt.
     private let fadeHalfPt: CGFloat = 12
 
     var displayPadding: EdgeInsets {
@@ -685,44 +691,116 @@ private struct LyricsTextRenderer: TextRenderer {
             ctx.draw(run, options: .disablesSubpixelQuantization)
         }
 
-        // Compute full line bounding rect for unified gradient mask (unibody sweep)
+        // Compute line bounding rect + per-visual-line wavefrontX.
+        //
+        // For the fade band to be visibly spanning multiple characters, all
+        // runs on a visual line must sample the SAME wavefrontX, with their
+        // own mask clamped to their own [sweepStart, sweepEnd]. With tight-
+        // packed CJK runs, adjacent sweep ranges overlap by 2·fadeHalfPt =
+        // 48pt — so when the shared wavefront is inside one word, the
+        // previous word's mask ALSO draws with that same wavefront inside
+        // its own clamp range, rendering the band's tail across the prior
+        // glyph. Two adjacent chars simultaneously display the gradient.
+        //
+        // Per-word clipping + wider band (previous attempt) gave zero
+        // multi-char visibility because each word's mask was confined to
+        // its own run pixels via destinationIn — adjacent chars were
+        // already-bright or not-yet-reached at their own sweepX. Shared
+        // wavefront breaks that isolation.
+        //
+        // Visual-line reset (rect.minX < prevMaxX − 1) handles wrapped
+        // lyric lines without backward motion.
         var lineRect = CGRect.null
         for run in layout.flattenedRuns {
             lineRect = lineRect.union(run.typographicBounds.rect)
         }
 
-        // ── Pass 2: Bright overlay with gradient mask (sub-pixel sweep) ──
-        // AMLL uses CSS mask-image: linear-gradient sliding across each word.
-        // SwiftUI equivalent: drawLayer + destinationIn blend with gradient fill.
+        var runMeta: [(sweepStart: CGFloat, sweepEnd: CGFloat, lineIdx: Int)] = []
+        runMeta.reserveCapacity(8)
+        var lineWavefronts: [CGFloat] = []
+        do {
+            var prevSweepEnd: CGFloat = -.infinity
+            var prevMaxX: CGFloat = -.infinity
+            var lineIdx = -1
+            var currentLineWavefront: CGFloat = -.infinity
+            for run in layout.flattenedRuns {
+                guard let attr = run[WordTimingAttribute.self] else { continue }
+                let rect = run.typographicBounds.rect
+                let isNewVisualLine = (prevMaxX == -.infinity) || (rect.minX < prevMaxX - 1)
+
+                // Per-run clamp range — NOT constrained to prevSweepEnd.
+                // For tight CJK text, adjacent runs overlap by 2·fadeHalfPt
+                // (48pt), which is how multiple chars simultaneously render
+                // the fade band when the shared wavefrontX sits near their
+                // boundary.
+                let sweepStart = rect.minX - fadeHalfPt
+                let sweepEnd = rect.maxX + fadeHalfPt
+
+                if isNewVisualLine {
+                    if lineIdx >= 0 { lineWavefronts.append(currentLineWavefront) }
+                    lineIdx += 1
+                    currentLineWavefront = sweepStart
+                }
+
+                // Wavefront advancement: during this run's active time the
+                // shared wavefront moves from (prev run's sweepEnd) to
+                // (this run's sweepEnd). That's one word-width of travel
+                // per word duration for tight text — continuous across
+                // word boundaries, no reset.
+                let advanceFrom: CGFloat = isNewVisualLine ? sweepStart : prevSweepEnd
+
+                if currentTime >= attr.endTime {
+                    currentLineWavefront = sweepEnd
+                } else if currentTime > attr.startTime {
+                    let dur = attr.endTime - attr.startTime
+                    let p = dur > 0 ? CGFloat((currentTime - attr.startTime) / dur) : 0
+                    currentLineWavefront = advanceFrom + (sweepEnd - advanceFrom) * p
+                }
+
+                runMeta.append((sweepStart, sweepEnd, lineIdx))
+                prevSweepEnd = sweepEnd
+                prevMaxX = rect.maxX
+            }
+            if lineIdx >= 0 { lineWavefronts.append(currentLineWavefront) }
+        }
+
+        // ── Pass 2: Bright overlay with gradient mask ──
+        var metaIdx = 0
         for run in layout.flattenedRuns {
             guard let attr = run[WordTimingAttribute.self] else { continue }
+            defer { metaIdx += 1 }
+            let meta = runMeta[metaIdx]
+            let lineWave = meta.lineIdx < lineWavefronts.count
+                ? lineWavefronts[meta.lineIdx]
+                : meta.sweepStart
+
+            // Skip runs the wavefront hasn't reached.
+            let fullyAhead = lineWave <= meta.sweepStart
+            guard !fullyAhead || attr.isEmphasis else { continue }
+
             let duration = attr.endTime - attr.startTime
             let progress = wordProgress(attr, duration)
-            // Non-emphasis: Pass 1 provides dim base, skip when not yet started.
-            // Emphasis: no Pass 1 — must draw here at dimAlpha even before startTime.
-            guard progress > 0 || attr.isEmphasis else { continue }
-
             let postLineFade = postLineFadeOut(attr)
-            // Non-emphasis: Pass 1 provides dim base, so skip when fade is done.
-            // Emphasis: no Pass 1 ghost — drawEmphasisBright handles both bright
-            // and dim regions via gradient mask (converges to uniform dimAlpha at fade=0).
             if postLineFade <= 0 && !attr.isEmphasis { continue }
 
             let floatY = baseFloat(for: attr)
+            let sweepX = max(meta.sweepStart, min(lineWave, meta.sweepEnd))
 
             if attr.isEmphasis {
-                drawEmphasisBright(run: run, attr: attr, progress: progress,
-                                   floatY: floatY, fade: postLineFade, lineRect: lineRect, in: context)
+                drawEmphasisBright(run: run, attr: attr, progress: progress, floatY: floatY,
+                                   fade: postLineFade, lineRect: lineRect, sweepX: sweepX, in: context)
             } else {
                 drawSweepBright(run: run, attr: attr, progress: progress, floatY: floatY,
-                                fade: postLineFade, lineRect: lineRect, in: context)
+                                fade: postLineFade, lineRect: lineRect, sweepX: sweepX, in: context)
             }
         }
     }
 
-    /// AMLL base float: duration = max(1s, wordDuration), ease-out, fill:both.
-    /// The float is ALWAYS at least 1s long — short words still float slowly,
-    /// creating a gentle wave-like cascade across words in the line.
+    /// AMLL base float: duration = max(1s, wordDuration), CSS ease-out, fill:both.
+    /// AMLL uses the Web Animations `easing: "ease-out"` which CSS defines
+    /// as cubic-bezier(0, 0, 0.58, 1). Previously we used the cubic curve
+    /// `1 − (1−t)³` which rises ~8% faster at mid-window, making the float
+    /// feel shorter than AMLL's despite the identical 1s duration.
     private func baseFloat(for attr: WordTimingAttribute) -> CGFloat {
         let target: CGFloat = -2.0
         guard currentTime >= attr.startTime else { return 0 }
@@ -730,34 +808,23 @@ private struct LyricsTextRenderer: TextRenderer {
         let floatDuration = max(1.0, wordDuration)
         let elapsed = currentTime - attr.startTime
         if elapsed >= floatDuration { return target }  // fill: both
-        let t = elapsed / floatDuration
-        let eased = 1.0 - pow(1.0 - t, 3)  // cubic ease-out
+        let t = CGFloat(elapsed / floatDuration)
+        let eased = cubicBezier(x1: 0, y1: 0, x2: 0.58, y2: 1, x: t)
         return target * eased
     }
 
-    // ── Gradient-masked bright overlay (sub-pixel smooth) ──
-    // Single code path for all scripts. CJK uniform-fill branch (previously
-    // introduced to work around single-char words "never reaching bright")
-    // was removing the traveling fade band that AMLL/Apple Music use to make
-    // adjacent characters cohesive — each CJK glyph brightened as its own
-    // isolated opacity ramp, which reads as characters splitting instead of
-    // a continuous band flowing through the line. Fixed here by EXPANDING
-    // the sweepX range: the fade band starts fully off-left of the run at
-    // progress=0 and exits fully off-right at progress=1, so single-char
-    // CJK words reach 100% bright cleanly while neighboring chars show the
-    // adjacent phase of the same continuous fade band.
+    // ── Gradient-masked bright overlay ──
+    // sweepX is SHARED across all runs on the same visual line (computed
+    // in draw as per-visual-line wavefrontX, then clamped to each run's
+    // [sweepStart, sweepEnd]). With fadeHalfPt=24 the 48pt band spans two
+    // CJK glyphs; when the wavefront is inside one word, the previous
+    // word's mask also renders the band's tail using the same sweepX,
+    // producing cross-character visible gradient.
     private func drawSweepBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat, floatY: CGFloat,
-        fade: CGFloat, lineRect: CGRect, in context: GraphicsContext
+        fade: CGFloat, lineRect: CGRect, sweepX: CGFloat, in context: GraphicsContext
     ) {
         let brightBoost = brightAlpha - dimAlpha
-
-        let runRect = run.typographicBounds.rect
-        // Extended sweep: spans [minX - fadeHalfPt, maxX + fadeHalfPt] over
-        // progress 0→1, so the fade band fully enters and exits the run.
-        let sweepStart = runRect.minX - fadeHalfPt
-        let sweepSpan = runRect.width + 2 * fadeHalfPt
-        let sweepX = sweepStart + sweepSpan * progress
 
         context.drawLayer { layerCtx in
             // Draw bright text into sublayer
@@ -796,14 +863,9 @@ private struct LyricsTextRenderer: TextRenderer {
     // Glyphs drawn at full opacity, gradient mask controls bright/dim regions.
     private func drawEmphasisBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat,
-        floatY: CGFloat, fade: CGFloat, lineRect: CGRect, in context: GraphicsContext
+        floatY: CGFloat, fade: CGFloat, lineRect: CGRect, sweepX: CGFloat,
+        in context: GraphicsContext
     ) {
-        let runRect = run.typographicBounds.rect
-        // Extended sweep: fade band fully enters/exits the run (same as
-        // drawSweepBright). Keeps emphasis runs cohesive with neighbors.
-        let sweepStart = runRect.minX - fadeHalfPt
-        let sweepSpan = runRect.width + 2 * fadeHalfPt
-        let sweepX = sweepStart + sweepSpan * progress
         let glyphCount = max(1, run.count)
         // Bright floor = dimAlpha: when fade→0, bright converges to dim → uniform dimAlpha.
         // No Pass 1 ghost needed — single layer handles the full lifecycle.
@@ -974,18 +1036,15 @@ private struct WordFillSpan: View {
     // Use uniform fill instead — alpha lerps dim→bright as progress advances.
     private var isCJK: Bool { LanguageUtils.containsCJK(text) }
 
-    // ── System 2: Sweep gradient (ALL words, incl. CJK) ──
-    // Single path. Extended fade band: progress 0→1 drives the gradient
-    // midpoint across [−fade, 1+fade] in normalized coords, so at progress=0
-    // the fade band is fully off-left (char is dim) and at progress=1 fully
-    // off-right (char is bright). Matches the TextRenderer path's expanded
-    // sweepX so single-char CJK words traverse dim→bright cleanly as part
-    // of a continuous band, not an isolated opacity ramp.
+    // ── System 2: Sweep gradient (unified) ──
+    // Wider fade band (half-width 0.5 of run in normalized coords → full
+    // band spans from outside the run). Matches the TextRenderer path's
+    // multi-char wave approach for all scripts.
     private var sweepGradient: LinearGradient {
         let dim = Color.white.opacity(dimOpacity)
         let bright = Color.white.opacity(brightOpacity)
-        let fade: CGFloat = 0.25  // half-width in normalized run space
-        let mid = -fade + progress * (1 + 2 * fade)  // -fade → 1+fade
+        let fade: CGFloat = 0.5
+        let mid = -fade + progress * (1 + 2 * fade)
         return LinearGradient(
             stops: [
                 .init(color: bright, location: 0),
