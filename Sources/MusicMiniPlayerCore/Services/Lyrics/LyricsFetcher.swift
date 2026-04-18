@@ -940,9 +940,17 @@ public final class LyricsFetcher {
             // NetEase has indexed (e.g. 李之勤 has no alias list, but the
             // Pinyin probe "Li Zhi Qin" derived from "Lee Chih Ching" still
             // surfaces it as the top artist).
-            if enableAliasResolve && artistIsASCII {
+            // Alias resolve fires when either the current OR the original artist
+            // was ASCII. Branch 2's iTunes resolution may have already replaced
+            // the ASCII input with a non-Chinese CJK variant (e.g. Korean
+            // "막문위" for Karen Mok), but NE's alias index only recognises
+            // Chinese — so we still need to resolve via the original ASCII name
+            // to find the Chinese artist (莫文蔚) that NE's search understands.
+            let originalArtistIsASCII = LanguageUtils.isPureASCII(params.rawOriginalArtist)
+            if enableAliasResolve && (artistIsASCII || originalArtistIsASCII) {
                 group.addTask {
-                    let aliases = await self.resolveArtistCJKAliases(asciiArtist: params.rawArtist)
+                    let asciiProbe = artistIsASCII ? params.rawArtist : params.rawOriginalArtist
+                    let aliases = await self.resolveArtistCJKAliases(asciiArtist: asciiProbe)
                     for cjkArtist in aliases.prefix(5) {
                         let kw = "\(params.simplifiedTitle) \(cjkArtist)"
                         let desc = "alias+title:\(cjkArtist)"
