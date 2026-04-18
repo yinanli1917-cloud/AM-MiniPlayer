@@ -388,7 +388,8 @@ public struct LyricsView: View {
                         onTap: { handleLineTap(line: line) },
                         showTranslation: lyricsService.showTranslation,
                         isTranslating: lyricsService.isTranslating,
-                        translationFailed: lyricsService.translationFailed
+                        translationFailed: lyricsService.translationFailed,
+                        isPrecedingInterlude: lyricsService.interludeAfterIndex == index
                     )
                     .padding(.horizontal, 32)
 

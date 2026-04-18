@@ -23,6 +23,11 @@ public class LyricsService: ObservableObject {
 
     @Published public var lyrics: [LyricLine] = []
     @Published public var currentLineIndex: Int? = nil
+    /// When non-nil, playback is sitting in a ≥5s interlude gap AFTER the
+    /// line at this index. The UI treats that line as past (blur+dim+scale
+    /// via the normal past-line animation) and scrolls the three-dot
+    /// interlude indicator into the focal position instead.
+    @Published public var interludeAfterIndex: Int? = nil
     /// True when lyrics have fabricated timestamps (unsynced source) — UI should disable auto-scroll
     @Published public var isUnsyncedLyrics: Bool = false
     @Published var isLoading: Bool = false
@@ -442,6 +447,29 @@ public class LyricsService: ObservableObject {
         } else if bestMatch == nil {
             currentLineIndex = nil
         }
+
+        // Detect whether we're sitting in a ≥5s interlude gap AFTER the
+        // current line. When true, the view layer treats the current line
+        // as past (normal blur+dim+scale animation) and centers the
+        // three-dot indicator as the focal "current" element.
+        updateInterludeAfterIndex(at: time)
+    }
+
+    private func updateInterludeAfterIndex(at time: TimeInterval) {
+        guard let idx = currentLineIndex, idx + 1 < lyrics.count else {
+            if interludeAfterIndex != nil { interludeAfterIndex = nil }
+            return
+        }
+        let currentLine = lyrics[idx]
+        let nextLine = lyrics[idx + 1]
+        let gap = nextLine.startTime - currentLine.endTime
+        let new: Int?
+        if gap >= 5.0 && time > currentLine.endTime && time < nextLine.startTime {
+            new = idx
+        } else {
+            new = nil
+        }
+        if interludeAfterIndex != new { interludeAfterIndex = new }
     }
 
     // ========================================================================

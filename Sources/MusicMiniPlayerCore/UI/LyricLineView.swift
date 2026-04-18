@@ -69,12 +69,24 @@ struct LyricLineView: View {
     var showTranslation: Bool = false
     var isTranslating: Bool = false
     var translationFailed: Bool = false
+    /// True when the song is sitting in a ≥5s interlude gap AFTER this line.
+    /// LyricLineView treats itself as past (distance effectively -1) so the
+    /// normal past-line animation (blur + dim + scale) plays and the view's
+    /// three-dot interlude indicator below it becomes the visual focal point.
+    var isPrecedingInterlude: Bool = false
 
     @State private var isHovering: Bool = false
     // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
     @State private var internalShowTranslation: Bool = false
 
-    private var distance: Int { index - currentIndex }
+    // `distance` is computed against `effectiveCurrentIndex` which, during
+    // an interlude gap, shifts forward by 1 so the preceding line sees
+    // itself as distance=-1 (past). All downstream scale/blur/opacity
+    // calculations follow naturally — no special-case code elsewhere.
+    private var effectiveCurrentIndex: Int {
+        isPrecedingInterlude ? currentIndex + 1 : currentIndex
+    }
+    private var distance: Int { index - effectiveCurrentIndex }
     private var isCurrent: Bool { distance == 0 }
     private var isPast: Bool { distance < 0 }
     private var absDistance: Int { abs(distance) }
@@ -257,11 +269,6 @@ struct LyricLineView: View {
             }
         )
         .padding(.horizontal, -8)  // 🔑 抵消内部 padding，保持文字对齐
-        .modifier(InterludeFadeModifier(
-            isCurrent: isCurrent,
-            lineEndTime: line.endTime,
-            musicController: musicController
-        ))
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
@@ -1160,45 +1167,6 @@ private struct WordFlowLayout: Layout {
             maxX = max(maxX, x)
         }
         return (CGSize(width: maxX, height: y + rowH), positions)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - InterludeFadeModifier
-// ═══════════════════════════════════════════════════════════════════════════════
-/// Fades out the just-finished current line during an inter-line gap
-/// (interlude) — opacity only, NO blur. The blur stays off because the line
-/// is still `isCurrent`; past lines (`distance < 0`) pick up blur+dim as
-/// usual once `currentLineIndex` advances.
-///
-/// Uses a periodic TimelineView (10Hz) only while active; inactive lines
-/// pass the content through unchanged.
-private struct InterludeFadeModifier: ViewModifier {
-    let isCurrent: Bool
-    let lineEndTime: TimeInterval
-    let musicController: MusicController?
-
-    // Fade params: starts at line.endTime, eases from 1.0 down to 0.3 over 2s.
-    private let fadeDuration: TimeInterval = 2.0
-    private let fadeFloor: Double = 0.3
-
-    func body(content: Content) -> some View {
-        if isCurrent, let mc = musicController {
-            TimelineView(.periodic(from: .now, by: 0.1)) { _ in
-                content.opacity(opacity(for: mc.wordFillTime))
-            }
-        } else {
-            content
-        }
-    }
-
-    private func opacity(for currentTime: TimeInterval) -> Double {
-        let elapsed = currentTime - lineEndTime
-        guard elapsed > 0 else { return 1.0 }
-        if elapsed >= fadeDuration { return fadeFloor }
-        let p = elapsed / fadeDuration
-        let eased = 1 - pow(1 - p, 2)  // ease-out quadratic
-        return 1.0 - (1.0 - fadeFloor) * eased
     }
 }
 
