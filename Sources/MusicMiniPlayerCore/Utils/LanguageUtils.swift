@@ -143,16 +143,40 @@ public enum LanguageUtils {
         "who", "whom",
     ]
 
+    /// English morphology suffixes/prefixes rarely found in pinyin/romaji.
+    /// Used as a secondary signal to identify standalone English words like
+    /// "Unconditional", "Monologue", "Invisible" that carry no function-word
+    /// marker but are still clearly English.
+    private static let englishMorphologySuffixes: [String] = [
+        "tion", "sion", "ment", "ness", "able", "ible", "ance", "ence",
+        "ious", "eous", "tive", "sive", "less", "ful", "ity", "ous", "est",
+        "ing", "ise", "ize", "ify", "logy", "graphy", "phone", "tic",
+        "ology", "ical", "ique", "ogue"
+    ]
+    private static let englishMorphologyPrefixes: [String] = [
+        "un", "re", "pre", "dis", "mis", "over", "under", "anti", "inter",
+        "non", "sub", "super", "trans", "semi", "multi", "counter"
+    ]
+
     /// Detect whether a pure-ASCII title is likely a genuine English title
-    /// (not a CJK romanization). Returns true when ≥1 English function word
-    /// is found as a standalone token. These words are structurally impossible
+    /// (not a CJK romanization). Primary signal: English function word as
+    /// standalone token. Secondary signal: English morphology prefix/suffix
+    /// on any word (catches single-word titles like "Unconditional",
+    /// "Monologue", "Invisible"). Both signals are structurally impossible
     /// in pinyin/romaji/jyutping, so false positives are near-zero.
     public static func isLikelyEnglishTitle(_ text: String) -> Bool {
         guard isPureASCII(text) else { return false }
         let words = text.lowercased()
             .split(whereSeparator: { !$0.isLetter })
             .map(String.init)
-        return words.contains { englishFunctionWords.contains($0) }
+        // Primary: function word match
+        if words.contains(where: { englishFunctionWords.contains($0) }) { return true }
+        // Secondary: morphology — word ends with English suffix OR starts with prefix
+        for word in words where word.count >= 5 {
+            if englishMorphologySuffixes.contains(where: { word.hasSuffix($0) }) { return true }
+            if englishMorphologyPrefixes.contains(where: { word.hasPrefix($0) && word.count >= $0.count + 3 }) { return true }
+        }
+        return false
     }
 
     // MARK: - Romaji Heuristic
@@ -360,6 +384,54 @@ public extension LanguageUtils {
         return mutableString as String
     }
 
+    /// Detect if text contains Traditional-exclusive characters.
+    /// True = user is using Traditional (HK/TW context), display should match.
+    /// False alone doesn't mean Simplified — ASCII or ambiguous also returns false.
+    static func containsTraditionalOnlyChars(_ text: String) -> Bool {
+        // Sample of common Traditional-only characters not used in Simplified.
+        // These are characters whose Simplified form is different AND appears
+        // frequently in Traditional-only text.
+        let tradOnlyMarkers: Set<Character> = [
+            "妳", "啲", "佢", "嗰", "邊", "裡", "體", "國", "無", "開", "離",
+            "過", "還", "會", "學", "點", "實", "關", "發", "見", "説", "說",
+            "個", "們", "後", "來", "時", "這", "麼", "樣", "覺", "著", "對",
+            "從", "愛", "夢", "願", "聲", "響", "誰", "歡", "樂", "這", "裏",
+            "歷", "歸", "壞", "變", "舊", "際", "紅", "綠", "總", "經", "義",
+            "義", "義", "義", "義", "義", "義", "義", "義", "義", "義",
+            "羅", "齊", "媽", "爸", "嗎", "吧", "喇", "囉", "懶", "還", "萬",
+            "這", "當", "為", "甚", "誤", "麗"
+        ]
+        return text.contains(where: { tradOnlyMarkers.contains($0) })
+    }
+
+    /// Detect if text contains Cantonese-exclusive characters.
+    /// Used to identify HK/Cantopop content that should display in
+    /// Traditional even when the user's input/locale is neutral.
+    /// Examples: 嘅 (的), 喺 (在), 咗 (了), 畀 (给), 嘥 (waste), 嚟 (来),
+    /// 乜 (什麼), 嘢 (東西), 冇 (沒有), 啲 (一些), 嚿 (塊), 佢 (他),
+    /// 嗰 (那), 嗱 (看), 啱 (對), 唔 (不), 噉 (這樣), 仲 (還).
+    static func containsCantoneseMarkers(_ text: String) -> Bool {
+        let cantoMarkers: Set<Character> = [
+            "嘅", "喺", "咗", "畀", "嘥", "嚟", "乜", "嘢", "冇", "啲",
+            "嚿", "佢", "嗰", "啱", "唔", "噉", "揾", "搵", "咁",
+            "哋", "嘅", "嗎", "㗎", "嘞", "呃"
+        ]
+        return text.contains(where: { cantoMarkers.contains($0) })
+    }
+
+    /// Detect if text contains Simplified-exclusive characters.
+    /// Used to avoid converting genuine Simplified text to Traditional.
+    static func containsSimplifiedOnlyChars(_ text: String) -> Bool {
+        let simpOnlyMarkers: Set<Character> = [
+            "体", "国", "无", "开", "离", "过", "还", "会", "学", "点", "实",
+            "关", "发", "见", "说", "个", "们", "后", "来", "时", "这", "么",
+            "里", "样", "觉", "着", "对", "从", "爱", "梦", "愿", "声", "响",
+            "谁", "欢", "乐", "历", "归", "坏", "变", "旧", "际", "红", "绿",
+            "总", "经", "义", "罗", "齐", "妈", "爸", "吗", "吧", "喽", "啰",
+            "懒", "万", "当", "为", "甚", "误", "丽"
+        ]
+        return text.contains(where: { simpOnlyMarkers.contains($0) })
+    }
 
 }
 

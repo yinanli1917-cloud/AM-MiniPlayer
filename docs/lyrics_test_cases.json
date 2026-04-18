@@ -523,7 +523,7 @@
     "duration": 230,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": null
     }
   }

@@ -559,4 +559,57 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(stripped.count, 2, "Expected 2 lines after stripping metadata + title card")
         XCTAssertEqual(stripped[0].text, "First real lyric line here")
     }
+
+    /// Real data: 明明他已離開妳 by Hins Cheung — NE lyrics include credit
+    /// lines with long labels ("Background Vocals and arrangement"), values
+    /// with "@location" markers, and credit lines WITHOUT colons
+    /// ("Mastering by X @ Studio HK"). All three survived old stripping.
+    func testStripMetadataLines_longLabelsAndByCredits() {
+        let lines = [
+            LyricLine(text: "Background Vocals and arrangement : Cousin Fung", startTime: 12.3, endTime: 14.0),
+            LyricLine(text: "Recorded/Mixed by : 铭 @Avon Studio, Hong Kong", startTime: 14.2, endTime: 17.0),
+            LyricLine(text: "Mastering by Frankie Hung @ Air Studio HK", startTime: 17.4, endTime: 19.0),
+            LyricLine(text: "他都一走了之", startTime: 19.5, endTime: 22.0),
+            LyricLine(text: "妳会否哭诉后找我做靠倚", startTime: 22.0, endTime: 28.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.count, 2, "Expected 2 real lyric lines, got \(stripped.count): \(stripped.map(\.text))")
+        XCTAssertEqual(stripped[0].text, "他都一走了之")
+        XCTAssertEqual(stripped[1].text, "妳会否哭诉后找我做靠倚")
+    }
+
+    /// Real data: Not Worth by Dreamz FM — last "line" is a decorative
+    /// "——=END=——" marker that survived stripping.
+    /// Also covers variants: "=== END ===", "---END---", "***".
+    func testStripMetadataLines_decorativeMarkers() {
+        let lines = [
+            LyricLine(text: "first real lyric", startTime: 10, endTime: 15),
+            LyricLine(text: "second real lyric", startTime: 15, endTime: 20),
+            LyricLine(text: "——=END=——", startTime: 200, endTime: 210),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.count, 2, "Decorative END marker must be stripped, got: \(stripped.map(\.text))")
+        XCTAssertFalse(stripped.contains(where: { $0.text.contains("END") }))
+    }
+
+    /// Real data: Monologue From One Soul by Eason Chan — Genius returns
+    /// structural section markers like "[副歌]" that shouldn't render as
+    /// lyrics. Must strip "[Chorus]", "[Verse]", "[Bridge]", "[副歌]",
+    /// "[间奏]", etc.
+    func testStripMetadataLines_structuralSectionTags() {
+        let lines = [
+            LyricLine(text: "[副歌]", startTime: 24.5, endTime: 30),
+            LyricLine(text: "過去我對與不對 再要計較太瑣碎", startTime: 51.1, endTime: 55),
+            LyricLine(text: "[Chorus]", startTime: 60, endTime: 65),
+            LyricLine(text: "regular lyric line", startTime: 66, endTime: 70),
+            LyricLine(text: "[Verse 2]", startTime: 75, endTime: 80),
+            LyricLine(text: "另一句歌词", startTime: 81, endTime: 85),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.count, 3, "Section tags must be stripped, got: \(stripped.map(\.text))")
+        XCTAssertFalse(stripped.contains(where: { $0.text.contains("[") }))
+    }
 }

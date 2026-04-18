@@ -343,7 +343,61 @@ public final class LyricsFetcher {
 
         let elapsed = Date().timeIntervalSince(fetchStart)
         DebugLogger.log("🏁 fetchAllSources: \(results.count) results in \(String(format: "%.1f", elapsed))s (branch3=\(branch3Fired.value))")
-        return results.sorted { $0.score > $1.score }
+
+        // 🔑 Script normalization — convert Simplified lyrics to Traditional
+        // when the user's input signals a Traditional/HK/TW context. NetEase
+        // often stores Cantopop lyrics in Simplified even for HK artists;
+        // converting matches the user's display expectation.
+        //
+        // Signals (any positive → convert):
+        //   (a) input title/artist/album contains Traditional-only characters
+        //   (b) user's system locale is HK or TW (Traditional-default regions)
+        // Rejection: input contains Simplified-only chars → leave as-is
+        //            (user explicitly chose Simplified)
+        let inputWantsTraditional = LanguageUtils.containsTraditionalOnlyChars(ot)
+            || LanguageUtils.containsTraditionalOnlyChars(oa)
+            || LanguageUtils.containsTraditionalOnlyChars(alb)
+        let hasSimplifiedInput = LanguageUtils.containsSimplifiedOnlyChars(ot)
+            || LanguageUtils.containsSimplifiedOnlyChars(oa)
+            || LanguageUtils.containsSimplifiedOnlyChars(alb)
+        // Locale check: HK/TW users expect Traditional by default
+        let localeID = Locale.current.identifier.lowercased()
+        let localeRegion = Locale.current.language.region?.identifier ?? ""
+        let localePrefersTraditional = localeRegion == "HK" || localeRegion == "TW"
+            || localeID.contains("_hk") || localeID.contains("_tw")
+            || localeID.contains("-hk") || localeID.contains("-tw")
+            || localeID.contains("hant")  // zh-Hant
+        let inputSignalsTraditional = !hasSimplifiedInput
+            && (inputWantsTraditional || localePrefersTraditional)
+
+        // Per-result conversion: convert when (a) input signals Traditional
+        // OR (b) the LYRICS CONTENT contains Cantonese-only markers (嘅/喺/咗/
+        // 嘥/嚟/etc.). Cantonese markers are reliable HK indicators — they
+        // don't appear in Mandarin regardless of script. This catches
+        // Cantopop tracks with ASCII titles ("Unconditional" by Eason Chan)
+        // where no title/artist/album signal exists.
+        let finalResults = results.map { r -> LyricsFetchResult in
+            let contentHasCantonese = r.lyrics.contains { line in
+                LanguageUtils.containsCantoneseMarkers(line.text)
+            }
+            let shouldConvert = inputSignalsTraditional
+                || (contentHasCantonese && !hasSimplifiedInput)
+            guard shouldConvert else { return r }
+            let converted = r.lyrics.map { line -> LyricLine in
+                let tradText = LanguageUtils.toTraditionalChinese(line.text)
+                let tradTranslation = line.translation.map { LanguageUtils.toTraditionalChinese($0) }
+                let tradWords = line.words.map { w in
+                    LyricWord(word: LanguageUtils.toTraditionalChinese(w.word),
+                              startTime: w.startTime, endTime: w.endTime)
+                }
+                return LyricLine(text: tradText, startTime: line.startTime, endTime: line.endTime,
+                                 words: tradWords, translation: tradTranslation)
+            }
+            return LyricsFetchResult(lyrics: converted, source: r.source, score: r.score,
+                                     kind: r.kind, albumMatched: r.albumMatched)
+        }
+
+        return finalResults.sorted { $0.score > $1.score }
     }
 
     /// Select best lyrics result — unified single-pass with CJK preference.
@@ -1038,6 +1092,25 @@ public final class LyricsFetcher {
             let durationDiff = abs(s.duration - params.duration)
             guard durationDiff < 20 else { return nil }
 
+            // 🔑 Cover/Live rejection — result titles like "罗生门（Cover 麦浚龙 / 谢安琪）"
+            // admit they're covers of the original artist. If the input title
+            // does NOT carry the same marker, this is a different recording by
+            // a random artist, NOT the user's track. Reject such candidates
+            // entirely to prevent cross-script tolerance from accepting them.
+            let coverMarkers = ["cover", "翻唱", "翻奏", "demo", "demo版", "试唱"]
+            let liveMarkers = ["live", "現場", "现场", "live版", "演唱会"]
+            let resultNameLower = s.name.lowercased()
+            let inputHasCover = params.titlePairs.contains { pair in
+                coverMarkers.contains(where: { pair.0.lowercased().contains($0) })
+            }
+            let resultHasCover = coverMarkers.contains(where: { resultNameLower.contains($0) })
+            if resultHasCover && !inputHasCover { return nil }
+            let inputHasLive = params.titlePairs.contains { pair in
+                liveMarkers.contains(where: { pair.0.lowercased().contains($0) })
+            }
+            let resultHasLive = liveMarkers.contains(where: { resultNameLower.contains($0) })
+            if resultHasLive && !inputHasLive { return nil }
+
             var titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
             var artistMatch = params.artistPairs.contains { isArtistMatch(input: $0.0, result: s.artist, simplifiedInput: $0.1) }
 
@@ -1137,6 +1210,20 @@ public final class LyricsFetcher {
     /// verification (title + duration) filters out wrong-artist hits.
     private func artistProbeVariants(_ input: String) -> [String] {
         var probes: [String] = [input]
+        // 🔑 Multi-artist splitting: "Juno Mak & Kay Tse" → also probe each
+        // artist separately. NE's artist-search only knows individual names;
+        // the combined string returns 0 results. Same for featured artists.
+        let multiArtistSeparators = [" & ", ", ", " feat. ", " feat ", " featuring ", " Feat. ", " with ", " and ", " x ", " X "]
+        for sep in multiArtistSeparators {
+            if input.contains(sep) {
+                let parts = input.components(separatedBy: sep)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                for part in parts where part != input && !probes.contains(part) {
+                    probes.append(part)
+                }
+            }
+        }
         let lower = " " + input.lowercased() + " "
         // Ordered: most-transformative first so output lists the widest net
         // when callers only use the first few probes.

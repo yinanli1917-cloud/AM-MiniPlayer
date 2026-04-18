@@ -515,10 +515,81 @@ public final class LyricsParser {
             // 🔑 Widened: " -" without trailing space (e.g. "You Belong to Me -Norman Wisdom")
             //    and startTime ≤ 5s (title cards can appear at 1-3s, not just ≤1s)
             if isTitleSeparatorLine(trimmed) && line.startTime <= 5.0 { return false }
+            // 信用行（"Mastering by X @ Y"）无冒号但有明确 role keyword + @/by
+            if isByCreditLine(trimmed) { return false }
+            // 装饰标记（"——=END=——"、"==END=="、"---end---"）
+            if isDecorativeMarker(trimmed) { return false }
+            // 结构标签（"[副歌]"、"[Chorus]"、"[Verse]"、"[Bridge]"）
+            if isSectionTagLine(trimmed) { return false }
             // 纯符号行
             if isPureSymbols(trimmed) { return false }
             return true
         }
+    }
+
+    /// Match "X by Y @ Z" credit lines without colon.
+    /// Real examples: "Mastering by Frankie Hung @ Air Studio HK",
+    /// "Produced by John Doe", "Arranged by Jane Smith @ Studio X".
+    /// Pattern: optional role word + " by " + name(s), often ending "@location".
+    private func isByCreditLine(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        // Must contain " by " as a separator
+        guard let byRange = lower.range(of: " by ") else { return false }
+        // Role keywords that identify credit lines
+        let roleKeywords = [
+            "master", "mastering", "mix", "mixed", "mixing", "produc", "record",
+            "recorded", "arrang", "compos", "written", "perform", "engineer",
+            "vocal", "instrument"
+        ]
+        let beforeBy = String(lower[lower.startIndex..<byRange.lowerBound])
+        guard roleKeywords.contains(where: { beforeBy.contains($0) }) else { return false }
+        // Afterward must have a non-empty name — real names contain letters
+        let afterBy = String(lower[byRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        guard !afterBy.isEmpty else { return false }
+        // "@" often marks studio/location — strong credit signal
+        let hasLocationMarker = afterBy.contains("@")
+        // Or the value is short and name-like (≤40 chars, no end punctuation)
+        let isShortName = afterBy.count <= 40 && !afterBy.hasSuffix(".")
+        return hasLocationMarker || isShortName
+    }
+
+    /// Decorative markers: "——=END=——", "==END==", "---", "***", "=====".
+    /// These are not lyrics, just visual separators sources embed.
+    private func isDecorativeMarker(_ text: String) -> Bool {
+        // Lines containing only dashes, equals, dots, em-dashes, and optionally
+        // "END" / "FIN" / "完" / "结束" wording.
+        let decorChars = CharacterSet(charactersIn: "=-—–*._ \t")
+        let letterChars = text.unicodeScalars.filter {
+            !decorChars.contains($0) && !CharacterSet.whitespaces.contains($0)
+        }
+        if letterChars.isEmpty { return true }  // Pure decoration.
+        // Has both decoration AND a short end-marker keyword like END/FIN/完.
+        let stripped = String(String.UnicodeScalarView(letterChars)).lowercased()
+        let endMarkers = ["end", "fin", "完", "结束", "終", "终"]
+        if endMarkers.contains(where: { stripped == $0 }) {
+            // Check that decoration actually wraps the keyword (≥3 decorative chars)
+            let decorCount = text.unicodeScalars.filter { decorChars.contains($0) }.count
+            if decorCount >= 3 { return true }
+        }
+        return false
+    }
+
+    /// Section tag lines: "[Chorus]", "[副歌]", "[Verse 2]", "[Bridge]", etc.
+    /// Genius and some lyric sources include these as structural markers.
+    private func isSectionTagLine(_ text: String) -> Bool {
+        // Must start with "[" and end with "]"
+        guard text.hasPrefix("[") && text.hasSuffix("]") else { return false }
+        // Extract content between brackets
+        let inner = text.dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
+        guard !inner.isEmpty else { return false }
+        // Common section keywords (case-insensitive)
+        let sectionKeywords = [
+            "chorus", "verse", "bridge", "intro", "outro", "hook", "refrain",
+            "pre-chorus", "prechorus", "interlude", "breakdown", "drop", "post-chorus",
+            "副歌", "主歌", "桥段", "间奏", "前奏", "尾奏", "过门", "副歌 ", "副歌1", "副歌2"
+        ]
+        let innerLower = inner.lowercased()
+        return sectionKeywords.contains(where: { innerLower.contains($0) })
     }
 
     /// Detect title/credit separator lines: "Song - Artist", "Song -Artist", etc.
@@ -809,17 +880,25 @@ public final class LyricsParser {
 
         // 泛化检测：短标签 + 冒号 + 名字分隔符（/ ; ,）
         // 匹配 "Composed by：A/B/C"、"词：无"、"Producer: xxx" 等任意信用格式
+        // 🔑 Widened label limit to 60 chars to catch "Background Vocals and
+        //    arrangement" (32) and similar compound role labels.
         for sep in ["：", ": "] {
             guard let range = trimmed.range(of: sep) else { continue }
             let label = String(trimmed[trimmed.startIndex..<range.lowerBound])
             let value = String(trimmed[range.upperBound...])
-            // 标签 ≤30字符（覆盖双语如 "弦乐编写 Strings Arrangement"）+ 值非空
-            guard label.count <= 30, !value.isEmpty else { continue }
+            guard label.count <= 60, !value.isEmpty else { continue }
             let labelTrimmed = label.trimmingCharacters(in: .whitespaces)
             // "、" covers CJK name lists (Michelle Kim、Virginia Frazier)
             let hasSeparators = value.contains("/") || value.contains(";") || value.contains("；") || value.contains("、")
             let isCJKLabel = LanguageUtils.containsCJK(labelTrimmed) && labelTrimmed.count <= 8
-            if hasSeparators || isCJKLabel || value.count <= 20 {
+            // "@" in value is a strong credit marker (studio/location tags)
+            let hasLocationMarker = value.contains("@")
+            // Role-like label (contains common credit keywords) is also a credit line
+            let labelLower = labelTrimmed.lowercased()
+            let roleKeywords = ["vocal", "master", "mix", "record", "produc", "arrang",
+                                "compos", "writ", "lyric", "perform", "engineer", "instrument"]
+            let isRoleLabel = roleKeywords.contains(where: { labelLower.contains($0) })
+            if hasSeparators || isCJKLabel || hasLocationMarker || isRoleLabel || value.count <= 20 {
                 return true
             }
         }
