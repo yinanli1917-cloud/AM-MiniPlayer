@@ -78,15 +78,17 @@ struct LyricLineView: View {
     @State private var isHovering: Bool = false
     // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
     @State private var internalShowTranslation: Bool = false
+    // Interlude transition blend (0 = natural current, 1 = fully past).
+    // Mirrors `isPrecedingInterlude` but with an explicit slow ease-out
+    // animation (see onChange below). Only has visual effect on the
+    // line whose `index == currentIndex` — other lines already use the
+    // natural past/future branches. When the interlude ends (currentIndex
+    // advances), this line becomes naturally past and its values come
+    // from the past-line branch at the same destination, so the blend
+    // unwinding to 0 in the background produces no visible change.
+    @State private var interludeBlend: Double = 0
 
-    // `distance` is computed against `effectiveCurrentIndex` which, during
-    // an interlude gap, shifts forward by 1 so the preceding line sees
-    // itself as distance=-1 (past). All downstream scale/blur/opacity
-    // calculations follow naturally — no special-case code elsewhere.
-    private var effectiveCurrentIndex: Int {
-        isPrecedingInterlude ? currentIndex + 1 : currentIndex
-    }
-    private var distance: Int { index - effectiveCurrentIndex }
+    private var distance: Int { index - currentIndex }
     private var isCurrent: Bool { distance == 0 }
     private var isPast: Bool { distance < 0 }
     private var absDistance: Int { abs(distance) }
@@ -114,21 +116,28 @@ struct LyricLineView: View {
     }
 
     var body: some View {
+        // Interlude blend only affects the natural current line. At blend=1
+        // the line matches a past line at distance=1 exactly (scale 0.95,
+        // blur 1.5pt, textOpacity 0.35), so when currentIndex later
+        // advances the natural past branch continues from identical values
+        // — no visible step.
+        let b = isCurrent ? CGFloat(interludeBlend) : 0
+
         let scale: CGFloat = {
             if isScrolling { return 0.95 }
-            if isCurrent { return 1.0 }
+            if isCurrent { return 1.0 - b * 0.05 }
             return 0.95
         }()
 
         let blur: CGFloat = {
             if isScrolling { return 0 }
-            if isCurrent { return 0 }
+            if isCurrent { return b * 1.5 }
             return CGFloat(absDistance) * 1.5
         }()
 
         let textOpacity: CGFloat = {
             if isScrolling { return 0.6 }
-            if isCurrent { return 1.0 }
+            if isCurrent { return 1.0 - b * 0.65 }
             return 0.35
         }()
 
@@ -238,6 +247,18 @@ struct LyricLineView: View {
                         .foregroundColor(.white.opacity(0.3))
                     Spacer(minLength: 0)
                 }
+            }
+        }
+        // Drive the interlude blend: when the song enters a >=5s gap,
+        // hold the line at its current look for 0.5s so the three-dot
+        // indicator is established as the new focal, then over 2.5s
+        // ease out to match the past-line appearance (blur + dim +
+        // scale). When the gap ends, unwind; at that moment the line
+        // is also becoming naturally past so the visible values are
+        // continuous from either side.
+        .onChange(of: isPrecedingInterlude) { _, newValue in
+            withAnimation(.easeOut(duration: 2.5).delay(newValue ? 0.5 : 0)) {
+                interludeBlend = newValue ? 1 : 0
             }
         }
         // 🔑 监听 showTranslation 变化，触发内部状态更新
