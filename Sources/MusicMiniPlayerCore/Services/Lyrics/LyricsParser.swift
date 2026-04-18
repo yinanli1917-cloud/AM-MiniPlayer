@@ -121,7 +121,17 @@ public final class LyricsParser {
 
             if let wordStart = parseTTMLTime(String(content[spanBeginRange])),
                let wordEnd = parseTTMLTime(String(content[spanEndRange])) {
-                let spanText = decodeHTMLEntities(String(content[spanTextRange]))
+                // Some TTML authors put whitespace INSIDE <span>...</span>
+                // (e.g. "<span>hello </span>"). Keeping that whitespace on
+                // the word breaks word-level rendering: the built text
+                // concatenates `word + " "` and we end up with double
+                // spaces between English words, which widens the layout
+                // compared to the line-level Text("hello world") path.
+                // Trim each span's text so the word owns only its glyph
+                // content; spacing comes uniformly from the " " joiner.
+                let rawText = decodeHTMLEntities(String(content[spanTextRange]))
+                let spanText = rawText.trimmingCharacters(in: .whitespaces)
+                guard !spanText.isEmpty else { continue }
                 words.append(LyricWord(word: spanText, startTime: wordStart, endTime: wordEnd))
                 lineText += spanText + " "
             }

@@ -257,6 +257,11 @@ struct LyricLineView: View {
             }
         )
         .padding(.horizontal, -8)  // 🔑 抵消内部 padding，保持文字对齐
+        .modifier(InterludeFadeModifier(
+            isCurrent: isCurrent,
+            lineEndTime: line.endTime,
+            musicController: musicController
+        ))
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
@@ -464,15 +469,17 @@ private struct WordByWordText: View {
     var body: some View {
         WordFlowLayout {
             ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
+                let cleaned = word.word.trimmingCharacters(in: .whitespaces)
                 let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
+                let text = cleaned + suffix
                 let isLast = (index == words.count - 1)
                 if let opacity = staticOpacity {
-                    Text(word.word + suffix)
+                    Text(text)
                         .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(opacity))
                 } else {
                     WordFillSpan(
-                        text: word.word + suffix,
+                        text: text,
                         progress: CGFloat(word.progress(at: currentTime)),
                         wordDuration: word.endTime - word.startTime,
                         wordStartTime: word.startTime,
@@ -612,8 +619,13 @@ private struct SyllableSyncedLine: View {
         let lineEnd = words.last?.endTime ?? 0
         var result = Text("")
         for (index, word) in words.enumerated() {
+            // Trim any internal whitespace artifact from the word source so
+            // the " " joiner is the sole source of inter-word spacing. A
+            // trailing space on `word.word` would add to the suffix space
+            // and widen the line vs the line-level Text(...) rendering.
+            let cleaned = word.word.trimmingCharacters(in: .whitespaces)
             let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
-            let text = word.word + suffix
+            let text = cleaned + suffix
             let duration = word.endTime - word.startTime
             let isLast = (index == words.count - 1)
             let isCJK = LanguageUtils.containsCJK(word.word)
@@ -1148,6 +1160,45 @@ private struct WordFlowLayout: Layout {
             maxX = max(maxX, x)
         }
         return (CGSize(width: maxX, height: y + rowH), positions)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - InterludeFadeModifier
+// ═══════════════════════════════════════════════════════════════════════════════
+/// Fades out the just-finished current line during an inter-line gap
+/// (interlude) — opacity only, NO blur. The blur stays off because the line
+/// is still `isCurrent`; past lines (`distance < 0`) pick up blur+dim as
+/// usual once `currentLineIndex` advances.
+///
+/// Uses a periodic TimelineView (10Hz) only while active; inactive lines
+/// pass the content through unchanged.
+private struct InterludeFadeModifier: ViewModifier {
+    let isCurrent: Bool
+    let lineEndTime: TimeInterval
+    let musicController: MusicController?
+
+    // Fade params: starts at line.endTime, eases from 1.0 down to 0.3 over 2s.
+    private let fadeDuration: TimeInterval = 2.0
+    private let fadeFloor: Double = 0.3
+
+    func body(content: Content) -> some View {
+        if isCurrent, let mc = musicController {
+            TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+                content.opacity(opacity(for: mc.wordFillTime))
+            }
+        } else {
+            content
+        }
+    }
+
+    private func opacity(for currentTime: TimeInterval) -> Double {
+        let elapsed = currentTime - lineEndTime
+        guard elapsed > 0 else { return 1.0 }
+        if elapsed >= fadeDuration { return fadeFloor }
+        let p = elapsed / fadeDuration
+        let eased = 1 - pow(1 - p, 2)  // ease-out quadratic
+        return 1.0 - (1.0 - fadeFloor) * eased
     }
 }
 

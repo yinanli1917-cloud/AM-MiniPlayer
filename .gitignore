@@ -24,4 +24,8 @@ secrets/
 
 # Claude Code settings (contains personal paths & server IPs)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 .gstack/
+
+# Release artifacts (built on demand)
+releases/

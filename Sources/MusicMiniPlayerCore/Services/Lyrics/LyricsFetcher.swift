@@ -461,7 +461,7 @@ public final class LyricsFetcher {
     ///        "(Live)" (e.g. Jacky Cheung Cantonese "每天爱你多一些" over
     ///        Mandarin "每天爱你多一些(国)").
     ///    (3) durationDiff — closest duration as final tiebreaker.
-    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false) -> (id: ID, albumMatched: Bool)? {
+    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false) -> (id: ID, albumMatched: Bool, durationDiff: Double)? {
         // Debug view: sorted purely by durationDiff so the log reads naturally.
         let sortedByDelta = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sortedByDelta.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' T=\($0.titleMatch) A=\($0.artistMatch) AL=\($0.albumMatch) L=\($0.normalizedNameLength) Δ\(String(format: "%.1f", $0.durationDiff))s" }
@@ -537,7 +537,7 @@ public final class LyricsFetcher {
             let tierMatches = sorted.filter(predicate)
             guard let best = tierMatches.sorted(by: compositeRank).first else { continue }
             DebugLogger.log(source, "✅ \(label): '\(best.name)' by '\(best.artist)' alb='\(best.album)' AL=\(best.albumMatch) L=\(best.normalizedNameLength) Δ\(String(format: "%.1f", best.durationDiff))s")
-            return (best.id, best.albumMatch)
+            return (best.id, best.albumMatch, best.durationDiff)
         }
 
         if !sorted.isEmpty { DebugLogger.log(source, "❌ 无匹配") }
@@ -825,7 +825,7 @@ public final class LyricsFetcher {
             self.duration = duration
             self.normalizedAlbum = LanguageUtils.toSimplifiedChinese(
                 LanguageUtils.normalizeTrackName(album)
-            ).lowercased()
+            ).lowercased().replacingOccurrences(of: "-", with: " ")
             self.disableCjkEscapeInP3 = disableCjkEscapeInP3
         }
     }
@@ -891,7 +891,7 @@ public final class LyricsFetcher {
         // 🔑 Parallel keyword search — fire ALL rounds simultaneously.
         // Sequential was the primary latency bottleneck: 5 rounds × 1-2s each = 5-10s.
         // Parallel reduces to max(round latencies) ≈ 1-2s. First match wins.
-        return await withTaskGroup(of: (ID, Bool, String)?.self) { group in
+        return await withTaskGroup(of: (ID, Bool, String, Double)?.self) { group in
             // 🔑 Alias-resolved keyword: for ASCII artist, query NetEase's
             // artist-search endpoint via Wade-Giles/Jyutping/Pinyin probes,
             // collect CJK candidates, and fire "title+candidate" for each.
@@ -926,7 +926,7 @@ public final class LyricsFetcher {
                                 songs: songs, params: aliasParams, extractSong: extractSong
                             )
                             if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
-                                return (m.id, m.albumMatched, desc)
+                                return (m.id, m.albumMatched, desc, m.durationDiff)
                             }
                         } catch {
                             DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
@@ -948,7 +948,7 @@ public final class LyricsFetcher {
                             songs: songs, params: params, extractSong: extractSong
                         )
                         if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
-                            return (match.id, match.albumMatched, desc)
+                            return (match.id, match.albumMatched, desc, match.durationDiff)
                         }
                     } catch {
                         DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
@@ -956,21 +956,37 @@ public final class LyricsFetcher {
                     return nil
                 }
             }
-            // When an album hint is present, wait for an album-matched result
-            // before returning — a non-matched early winner would mask the
-            // correct version living on another keyword's result set. Give up
-            // and accept the first non-matched hit only after every keyword
-            // round has reported back.
-            var fallback: (ID, Bool, String)? = nil
+            // Collect results from all rounds, pick the best.
+            // Album-matched results beat non-matched; among album-matched,
+            // closest duration wins. All rounds are already in-flight so
+            // waiting for all adds minimal latency (~100ms).
+            var bestAlbumMatch: (ID, Bool, String, Double)? = nil
+            var fallback: (ID, Bool, String, Double)? = nil
             let preferAlbumMatch = !params.normalizedAlbum.isEmpty
             for await result in group {
                 guard let r = result else { continue }
-                if r.1 || !preferAlbumMatch {
+                if r.1 {
+                    // Album-matched: keep the closest duration
+                    if let prev = bestAlbumMatch {
+                        if r.3 < prev.3 {
+                            DebugLogger.log(source, "⚡ Better album match via '\(r.2)' (Δ\(String(format: "%.1f", r.3))s < Δ\(String(format: "%.1f", prev.3))s)")
+                            bestAlbumMatch = r
+                        }
+                    } else {
+                        bestAlbumMatch = r
+                    }
+                } else if !preferAlbumMatch {
+                    // No album preference: first result wins
                     DebugLogger.log(source, "⚡ Parallel match via '\(r.2)' (albumMatch=\(r.1))")
                     group.cancelAll()
                     return (r.0, r.1)
+                } else if fallback == nil {
+                    fallback = r
                 }
-                if fallback == nil { fallback = r }
+            }
+            if let best = bestAlbumMatch {
+                DebugLogger.log(source, "⚡ Parallel match via '\(best.2)' (albumMatch=true, Δ\(String(format: "%.1f", best.3))s)")
+                return (best.0, best.1)
             }
             if let f = fallback {
                 DebugLogger.log(source, "⚡ Parallel fallback via '\(f.2)' (no album match)")
@@ -1036,7 +1052,7 @@ public final class LyricsFetcher {
             // contains after normalization + simplified conversion.
             let normalizedAlbum = LanguageUtils.toSimplifiedChinese(
                 LanguageUtils.normalizeTrackName(s.album)
-            ).lowercased()
+            ).lowercased().replacingOccurrences(of: "-", with: " ")
             let albumMatch: Bool = {
                 guard !params.normalizedAlbum.isEmpty, !normalizedAlbum.isEmpty else { return false }
                 if params.normalizedAlbum == normalizedAlbum { return true }
