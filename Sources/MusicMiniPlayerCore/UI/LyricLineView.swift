@@ -73,11 +73,47 @@ struct LyricLineView: View {
     @State private var isHovering: Bool = false
     // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
     @State private var internalShowTranslation: Bool = false
+    // Interlude fade progress — 0 = active (no fade), 1 = fully transitioned
+    // to past-line look. Driven by a 10Hz timer during `isCurrent` +
+    // post-endTime. Scale, blur, and opacity are all interpolated from
+    // active values toward past values by this single progress, so when
+    // `isCurrent` eventually flips false the values at interlude-end
+    // EXACTLY match the past-line values → no visual jump at transition.
+    @State private var interludeProgress: Double = 0
+
+    private static let pastOpacityTarget: Double = 0.35
+    private static let pastBlurPerDistance: CGFloat = 1.5
+    private static let pastScale: CGFloat = 0.95
+    private static let interludeFadeSeconds: Double = 2.0
 
     private var distance: Int { index - currentIndex }
     private var isCurrent: Bool { distance == 0 }
     private var isPast: Bool { distance < 0 }
     private var absDistance: Int { abs(distance) }
+
+    // Shared low-rate tick for the interlude fade. One publisher per view,
+    // fires at 10Hz. `.onReceive` + `@State` updates let SwiftUI's implicit
+    // animation smooth the opacity transition without a TimelineView wrapper
+    // (the wrapper was causing tap-to-jump scroll disruption because it
+    // introduced a structural view change on every `isCurrent` flip).
+    private let interludeFadeTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+
+    private func updateInterludeProgress() {
+        guard isCurrent, let mc = musicController else { return }
+        let elapsed = mc.wordFillTime - line.endTime
+        let target: Double
+        if elapsed <= 0 {
+            target = 0
+        } else if elapsed >= Self.interludeFadeSeconds {
+            target = 1
+        } else {
+            let p = elapsed / Self.interludeFadeSeconds
+            target = 1 - pow(1 - p, 2)  // ease-out quadratic
+        }
+        if abs(interludeProgress - target) > 0.005 {
+            interludeProgress = target
+        }
+    }
 
     // 🔑 清理歌词文本 — strip timestamp tags + TTML-artifact CJK spaces
     private var cleanedText: String {
@@ -102,22 +138,31 @@ struct LyricLineView: View {
     }
 
     var body: some View {
+        // Scale, blur, and opacity ALL interpolate together by interludeProgress
+        // during the isCurrent phase — scale 1.0→0.95, blur 0→1.5pt, opacity
+        // 1.0→0.35. At interlude end the line visually matches a past line
+        // at distance=1 exactly. When isCurrent then flips false, every
+        // value is already at its past-line target → no discontinuous jump.
+        // That's what makes the interlude fade read as the line "becoming
+        // past" smoothly, not snapping.
+        let p = CGFloat(interludeProgress)
+
         let scale: CGFloat = {
-            if isScrolling { return 0.95 }
-            if isCurrent { return 1.0 }
-            return 0.95
+            if isScrolling { return Self.pastScale }
+            if isCurrent { return 1.0 - p * (1.0 - Self.pastScale) }
+            return Self.pastScale
         }()
 
         let blur: CGFloat = {
             if isScrolling { return 0 }
-            if isCurrent { return 0 }
-            return CGFloat(absDistance) * 1.5
+            if isCurrent { return p * Self.pastBlurPerDistance }
+            return CGFloat(absDistance) * Self.pastBlurPerDistance
         }()
 
-        let textOpacity: CGFloat = {
+        let outerOpacity: CGFloat = {
             if isScrolling { return 0.6 }
-            if isCurrent { return 1.0 }
-            return 0.35
+            if isCurrent { return 1.0 - p * CGFloat(1.0 - Self.pastOpacityTarget) }
+            return CGFloat(Self.pastOpacityTarget)
         }()
 
         // Syllable-synced lines ALWAYS use WordByWordText (same FlowLayout in all states)
@@ -141,7 +186,7 @@ struct LyricLineView: View {
                                 words: line.words,
                                 currentTime: 0,
                                 isAnimated: false,
-                                staticOpacity: textOpacity
+                                staticOpacity: 1.0  // outer .opacity handles dimming
                             )
                         }
                     } else {
@@ -160,14 +205,14 @@ struct LyricLineView: View {
                                 words: line.words,
                                 lineText: cleanedText,
                                 currentTime: 0,
-                                staticOpacity: textOpacity
+                                staticOpacity: 1.0  // outer .opacity handles dimming
                             )
                         }
                     }
                 } else {
                     Text(cleanedText)
                         .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
-                        .foregroundColor(.white.opacity(textOpacity))
+                        .foregroundColor(.white)  // outer .opacity handles dimming
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -197,14 +242,14 @@ struct LyricLineView: View {
                             lineStartTime: line.startTime,
                             lineEndTime: line.endTime,
                             currentTime: 0,
-                            staticOpacity: textOpacity * LyricMetrics.currentTranslationOpacityFactor
+                            staticOpacity: LyricMetrics.currentTranslationOpacityFactor  // outer .opacity handles line-level dimming
                         )
                     }
                 } else {
                     HStack(spacing: 0) {
                         Text(translation)
                             .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
-                            .foregroundColor(.white.opacity(textOpacity * LyricMetrics.currentTranslationOpacityFactor))
+                            .foregroundColor(.white.opacity(LyricMetrics.currentTranslationOpacityFactor))
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
                             .lineSpacing(LyricMetrics.translationLineSpacing)
@@ -257,16 +302,25 @@ struct LyricLineView: View {
             }
         )
         .padding(.horizontal, -8)  // 🔑 抵消内部 padding，保持文字对齐
-        .modifier(InterludeFadeModifier(
-            isCurrent: isCurrent,
-            lineEndTime: line.endTime,
-            musicController: musicController
-        ))
+        .opacity(outerOpacity)
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: textOpacity)
+        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: outerOpacity)
+        // Drive interlude fade from wordFillTime via a low-rate timer. 10Hz is
+        // enough for a 2s opacity transition; avoids the structural view change
+        // (TimelineView vs content branch) that was breaking scroll/tap-to-jump.
+        .onReceive(interludeFadeTimer) { _ in updateInterludeProgress() }
+        .onChange(of: isCurrent) { _, _ in
+            // Reset progress on either direction. At interlude end (progress=1)
+            // scale/blur/opacity already match past values, so resetting to 0
+            // when isCurrent→false produces no visible jump: the non-current
+            // branch of each computed property returns the same past-line
+            // value the interpolation had just reached. On current resume
+            // (tap/seek into a new line), the reset restores the active look.
+            interludeProgress = 0
+        }
         // 🔑 翻译动画已移至容器级别，此处不再单独设置（性能优化）
         // 🔑 无障碍
         .accessibilityElement(children: .ignore)
@@ -1160,45 +1214,6 @@ private struct WordFlowLayout: Layout {
             maxX = max(maxX, x)
         }
         return (CGSize(width: maxX, height: y + rowH), positions)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - InterludeFadeModifier
-// ═══════════════════════════════════════════════════════════════════════════════
-/// Fades out the just-finished current line during an inter-line gap
-/// (interlude) — opacity only, NO blur. The blur stays off because the line
-/// is still `isCurrent`; past lines (`distance < 0`) pick up blur+dim as
-/// usual once `currentLineIndex` advances.
-///
-/// Uses a periodic TimelineView (10Hz) only while active; inactive lines
-/// pass the content through unchanged.
-private struct InterludeFadeModifier: ViewModifier {
-    let isCurrent: Bool
-    let lineEndTime: TimeInterval
-    let musicController: MusicController?
-
-    // Fade params: starts at line.endTime, eases from 1.0 down to 0.3 over 2s.
-    private let fadeDuration: TimeInterval = 2.0
-    private let fadeFloor: Double = 0.3
-
-    func body(content: Content) -> some View {
-        if isCurrent, let mc = musicController {
-            TimelineView(.periodic(from: .now, by: 0.1)) { _ in
-                content.opacity(opacity(for: mc.wordFillTime))
-            }
-        } else {
-            content
-        }
-    }
-
-    private func opacity(for currentTime: TimeInterval) -> Double {
-        let elapsed = currentTime - lineEndTime
-        guard elapsed > 0 else { return 1.0 }
-        if elapsed >= fadeDuration { return fadeFloor }
-        let p = elapsed / fadeDuration
-        let eased = 1 - pow(1 - p, 2)  // ease-out quadratic
-        return 1.0 - (1.0 - fadeFloor) * eased
     }
 }
 
