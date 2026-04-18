@@ -269,6 +269,32 @@ public final class LyricsFetcher {
                 return await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
             }
 
+            // ───────────────────────────────────────────────────────────────
+            // Branch 4 — QQ-to-NE CJK artist bridge
+            // ───────────────────────────────────────────────────────────────
+            // When iTunes has no JP/KR/HK/TW result for an ASCII artist
+            // (e.g., "Kengo Kurozumi" → 黒住憲五 isn't in iTunes' index) AND
+            // NE's own artist-alias lookup fails (artist has no .alias list),
+            // QQ frequently still finds the song with the CJK artist name.
+            // Probe QQ for that CJK artist, then refetch NE with it.
+            // This unlocks NE's word-level YRC for such artists.
+            if titleIsASCII {
+                group.addTask {
+                    // Short delay so Branch 1 gets first shot; only bridge when needed.
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    if Task.isCancelled { return nil }
+                    guard let cjkArtist = await self.probeQQForCJKArtist(
+                        title: ot, artist: oa, duration: d
+                    ) else { return nil }
+                    DebugLogger.log("🌉 Branch-4 QQ→NE bridge: '\(oa)' → '\(cjkArtist)'")
+                    return await self.fetchFromNetEase(
+                        title: ot, artist: cjkArtist,
+                        originalTitle: ot, originalArtist: oa,
+                        duration: d, translationEnabled: te, album: alb
+                    )
+                }
+            }
+
             // Time budget sentinel — wakes the collection loop at 2.8s.
             // Leaves ~200ms headroom for task cancellation overhead so the
             // observed latency stays under the 3000ms budget even when the
@@ -1371,6 +1397,57 @@ public final class LyricsFetcher {
     }
 
     // MARK: - QQ Music
+    /// Probe QQ for the CJK artist name when given an ASCII artist.
+    /// Returns the CJK artist string if QQ's top title+artist match has one.
+    /// Used by Branch 4 to bridge ASCII → CJK artist names that iTunes/NE
+    /// artist-alias lookup can't resolve (e.g. "Kengo Kurozumi" → "黒住憲五",
+    /// where iTunes JP has no result and NE has no alias on the artist).
+    /// Lightweight: one QQ song search, no lyrics fetch.
+    private func probeQQForCJKArtist(title: String, artist: String, duration: TimeInterval) async -> String? {
+        guard LanguageUtils.isPureASCII(artist) else { return nil }
+        guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
+        let keyword = "\(title) \(artist)"
+        let body: [String: Any] = [
+            "comm": ["ct": 19, "cv": 1845],
+            "req": ["method": "DoSearchForQQMusicDesktop", "module": "music.search.SearchCgiService",
+                    "param": ["num_per_page": 5, "page_num": 1, "query": keyword, "search_type": 0] as [String: Any]
+            ] as [String: Any]
+        ]
+        do {
+            let json = try await HTTPClient.postJSON(url: apiURL, body: body, timeout: 4.0)
+            guard let reqDict = json["req"] as? [String: Any],
+                  let dataDict = reqDict["data"] as? [String: Any],
+                  let bodyDict = dataDict["body"] as? [String: Any],
+                  let songDict = bodyDict["song"] as? [String: Any],
+                  let songs = songDict["list"] as? [[String: Any]] else { return nil }
+            // Collect all title-matching CJK candidates, pick closest duration.
+            // QQ search can rank generic compilations ("日本群星" = Japanese
+            // Various Artists) above the actual artist — never trust order.
+            let simplifiedInputTitle = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(title))
+            var best: (artist: String, dur: Double)? = nil
+            for song in songs.prefix(10) {
+                guard let name = song["name"] as? String,
+                      let singers = song["singer"] as? [[String: Any]],
+                      let firstSinger = singers.first,
+                      let singerName = firstSinger["name"] as? String,
+                      let intervalInt = song["interval"] as? Int else { continue }
+                let dur = Double(intervalInt)
+                let titleOK = isTitleMatch(input: title, result: name, simplifiedInput: simplifiedInputTitle)
+                let durOK = abs(dur - duration) < 3.0
+                guard titleOK && durOK else { continue }
+                guard LanguageUtils.containsCJK(singerName) else { continue }
+                // Skip generic "various artists" compilation markers.
+                let genericMarkers = ["群星", "Various Artists", "合輯", "合辑"]
+                if genericMarkers.contains(where: { singerName.contains($0) }) { continue }
+                let thisDelta = abs(dur - duration)
+                if let b = best, abs(b.dur - duration) <= thisDelta { continue }
+                best = (singerName, dur)
+            }
+            return best?.artist
+        } catch { }
+        return nil
+    }
+
     private func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
         DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s) album='\(album)'")
         // (See fetchFromNetEase note: cross-region same-recording aliases
