@@ -133,7 +133,17 @@ public final class LyricsParser {
                 let spanText = rawText.trimmingCharacters(in: .whitespaces)
                 guard !spanText.isEmpty else { continue }
                 words.append(LyricWord(word: spanText, startTime: wordStart, endTime: wordEnd))
-                lineText += spanText + " "
+                // 🔑 Join without space when this OR previous token is CJK.
+                // AMLL TTML splits Chinese char-by-char; joining with " "
+                // produces "除 了 想 你" instead of "除了想你". English words
+                // still get space separation ("She said hello").
+                let thisIsCJK = spanText.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
+                let prevEndsCJK: Bool = {
+                    guard let last = lineText.last else { return false }
+                    return last.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
+                }()
+                let separator = (thisIsCJK || prevEndsCJK || lineText.isEmpty) ? "" : " "
+                lineText += separator + spanText
             }
         }
 
@@ -888,9 +898,25 @@ public final class LyricsParser {
             let value = String(trimmed[range.upperBound...])
             guard label.count <= 60, !value.isEmpty else { continue }
             let labelTrimmed = label.trimmingCharacters(in: .whitespaces)
+            // 🔑 Duet/speaker markers are NOT metadata — they prefix real
+            // lyric content (男：若果你 / 女：真心讲 / 合：...).
+            // Single or short CJK labels like 男/女/合/男和/女和/男女合 must pass.
+            let speakerMarkers: Set<String> = [
+                "男", "女", "合", "男和", "女和", "合唱", "男合", "女合", "男女合",
+                "M", "F", "MF", "A", "B", "C"
+            ]
+            if speakerMarkers.contains(labelTrimmed) { continue }
             // "、" covers CJK name lists (Michelle Kim、Virginia Frazier)
             let hasSeparators = value.contains("/") || value.contains(";") || value.contains("；") || value.contains("、")
-            let isCJKLabel = LanguageUtils.containsCJK(labelTrimmed) && labelTrimmed.count <= 8
+            // CJK label narrowed: must be known-metadata keyword (not speaker)
+            let cjkMetadataKeywords = [
+                "作词", "作曲", "编曲", "制作", "制作人", "混音", "录音", "演唱",
+                "演奏", "和声", "键盘", "吉他", "贝斯", "鼓手", "提琴", "弦乐",
+                "监制", "母带", "母帶", "編曲", "作詞", "作曲", "製作", "錄音",
+                "詞", "曲", "編", "唱", "演", "奏"
+            ]
+            let isCJKMetaLabel = cjkMetadataKeywords.contains(where: { labelTrimmed.contains($0) })
+                && labelTrimmed.count <= 12
             // "@" in value is a strong credit marker (studio/location tags)
             let hasLocationMarker = value.contains("@")
             // Role-like label (contains common credit keywords) is also a credit line
@@ -898,7 +924,11 @@ public final class LyricsParser {
             let roleKeywords = ["vocal", "master", "mix", "record", "produc", "arrang",
                                 "compos", "writ", "lyric", "perform", "engineer", "instrument"]
             let isRoleLabel = roleKeywords.contains(where: { labelLower.contains($0) })
-            if hasSeparators || isCJKLabel || hasLocationMarker || isRoleLabel || value.count <= 20 {
+            if hasSeparators || isCJKMetaLabel || hasLocationMarker || isRoleLabel {
+                return true
+            }
+            // Short-value fallback only when NOT a speaker marker
+            if value.count <= 20 && !speakerMarkers.contains(labelTrimmed) {
                 return true
             }
         }
