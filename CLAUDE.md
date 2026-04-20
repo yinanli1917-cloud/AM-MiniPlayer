@@ -20,6 +20,7 @@ Sources/
 │   │   ├── MusicController+Artwork.swift  - Artwork extraction/fetching/caching
 │   │   ├── MusicController+Playback.swift - Playback controls + volume + favorites + AppleEventCode
 │   │   ├── LyricsService.swift            - Lyrics facade + cache + translation
+│   │   ├── MenuBarHealer.swift            - Self-heal macOS 26 ControlCenter plist at launch
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift    - 7-source parallel fetch + unified matching
 │   │       ├── LyricsParser.swift     - TTML/LRC/YRC parsing

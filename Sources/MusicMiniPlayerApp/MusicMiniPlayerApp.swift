@@ -60,6 +60,13 @@ class AppMain: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugPrint("[AppMain] Application launched\n")
 
+        // ──────────────────────────────────────────────
+        // Heal macOS 26 ControlCenter database BEFORE registering NSStatusItem.
+        // Removes stale com.yinanli.MusicMiniPlayer entries that cause the menu
+        // bar icon to land at x=-1 (off-screen). Idempotent + best-effort.
+        // ──────────────────────────────────────────────
+        MenuBarHealer.healIfNeeded()
+
         updateDockVisibility()
         setupStatusItem()
         createFloatingWindow()
