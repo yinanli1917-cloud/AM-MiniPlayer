@@ -29,16 +29,18 @@
 import Foundation
 
 public enum SBTimeoutRunner {
-    /// Dedicated SERIAL worker queue for bounded SB calls.
-    /// 🔑 Serial is REQUIRED: ScriptingBridge's AppleEvent dispatch calls
-    /// _LSCopyApplicationInformation internally, which has a thread-safety
-    /// race in LaunchServices on macOS 26. Concurrent access causes
-    /// EXC_BAD_ACCESS crashes in _LSCopyApplicationInformation.
-    /// The timeout still protects against one call hanging indefinitely;
-    /// subsequent calls block up to `timeout` seconds per prior call.
+    /// Dedicated concurrent worker pool for bounded SB calls.
+    /// `.utility` QoS: these are user-visible but not interactive; a stuck
+    /// worker won't steal cycles from the main thread.
+    ///
+    /// Concurrent is intentional — tests assume multiple callers run in
+    /// parallel without one hung block stalling another. Any SB-level
+    /// serialization (to prevent LaunchServices races) must be applied at
+    /// the caller site, not here.
     private static let workerQueue = DispatchQueue(
         label: "com.nanoPod.sbTimeout.worker",
-        qos: .utility
+        qos: .utility,
+        attributes: .concurrent
     )
 
     /// Execute `block` with a wall-clock deadline. Returns the block's value

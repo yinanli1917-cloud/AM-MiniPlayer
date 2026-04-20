@@ -259,11 +259,17 @@ final class MatchingUtilsTests: XCTestCase {
     }
 
     func testEnglishTitle_ambiguousSingleWords() {
-        // Single-word English titles without function words → NOT detected
-        // (could be romanization or English — safer to allow CJK escape)
+        // Short ambiguous words (no morphology signal) → still not detected
+        // so CJK escape remains available for romanization lookups.
         XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Escape"))
         XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Deep"))
-        XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("Invisible"))
+        // Words with clear English morphology (-ible, -tion, -ous, un-, etc.)
+        // SHOULD be detected as English — they can't be romanized CJK.
+        // Without this, "Unconditional" (Eason Chan) was matched via P3 to a
+        // different Chinese song with coincidentally matching duration.
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Invisible"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Unconditional"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Monologue"))
     }
 
     func testEnglishTitle_cjkInputRejects() {

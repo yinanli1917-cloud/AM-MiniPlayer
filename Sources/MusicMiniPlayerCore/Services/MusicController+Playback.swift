@@ -8,6 +8,7 @@ import Foundation
 @preconcurrency import ScriptingBridge
 import SwiftUI
 import MusicKit
+import ObjCSupport
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Apple Event 常量（Music.app ScriptingBridge 返回值）
@@ -279,54 +280,68 @@ extension MusicController {
     private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
         let gen = artworkFetchGeneration  // Snapshot generation at start
 
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n")
-            return []
-        }
+        // 🔑 Hard timeout: prevents scriptingBridgeQueue from backing up when
+        // Music.app hangs the playlist IPC. Previously the heartbeat recovery
+        // recreated the SBApplication, which caused EXC_BAD_ACCESS in
+        // AEProcessMessage (ARC-freed app with pending AE replies).
+        return SBTimeoutRunner.run(timeout: 3.0) { [weak self] () -> [(String, String, String, String, Double)]? in
+            guard let self else { return nil }
+            var result: [(String, String, String, String, Double)] = []
 
-        let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
-        let trackCount = tracks.count
-        debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks\n")
+            // 🔑 ObjC shield: SBElementArray iteration can crash with NSException when
+            // Music.app mutates the playlist mid-loop (rapid switching, queue edit).
+            let ex = OBJCCatch {
 
-        var result: [(String, String, String, String, Double)] = []
-        var foundCurrent = false
-        var currentIndex = -1
-
-        for i in 0..<trackCount {
-            // 🔑 Generation check: bail if a new track change invalidated our objects.
-            // Without this, rapid switching causes SBElementArray iteration on stale
-            // playlist objects → EXC_BAD_ACCESS (pointer authentication failure).
-            guard artworkFetchGeneration == gen else {
-                debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(artworkFetchGeneration)), aborting\n")
-                return result
+            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+                  let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+                  let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+                debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n")
+                return
             }
 
-            guard let track = tracks.object(at: i) as? NSObject,
-                  let trackID = track.value(forKey: "persistentID") as? String else { continue }
+            let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
+            let trackCount = tracks.count
+            debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks\n")
 
-            if foundCurrent {
-                let name = track.value(forKey: "name") as? String ?? ""
-                let artist = track.value(forKey: "artist") as? String ?? ""
-                let album = track.value(forKey: "album") as? String ?? ""
-                let duration = track.value(forKey: "duration") as? Double ?? 0
+            var foundCurrent = false
+            var currentIndex = -1
 
-                if isValidTrackName(name, trackID: trackID) {
-                    result.append((name, artist, album, trackID, duration))
-                    if result.count >= limit { break }
-                } else if !name.isEmpty {
-                    debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+            for i in 0..<trackCount {
+                guard self.artworkFetchGeneration == gen else {
+                    debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                    return
                 }
-            } else if trackID == currentID {
-                foundCurrent = true
-                currentIndex = i
-            }
-        }
 
-        debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), fetched \(result.count) tracks\n")
-        return result
+                guard let track = tracks.object(at: i) as? NSObject,
+                      let trackID = track.value(forKey: "persistentID") as? String else { continue }
+
+                if foundCurrent {
+                    let name = track.value(forKey: "name") as? String ?? ""
+                    let artist = track.value(forKey: "artist") as? String ?? ""
+                    let album = track.value(forKey: "album") as? String ?? ""
+                    let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                    if self.isValidTrackName(name, trackID: trackID) {
+                        result.append((name, artist, album, trackID, duration))
+                        if result.count >= limit { break }
+                    } else if !name.isEmpty {
+                        debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                    }
+                } else if trackID == currentID {
+                    foundCurrent = true
+                    currentIndex = i
+                }
+            }
+
+            debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), fetched \(result.count) tracks\n")
+            }
+
+            if let ex {
+                DebugLogger.log("Playback", "⚠️ [getUpNextTracksFromApp] NSException swallowed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
+            }
+            return result
+        } ?? []
     }
 
     /// 使用 ScriptingBridge 获取播放历史（使用自己的 musicApp 实例）
@@ -348,38 +363,51 @@ extension MusicController {
     }
 
     /// 从 SBApplication 获取播放历史
+    /// 🔑 Hard 3s timeout prevents scriptingBridgeQueue from hanging indefinitely on
+    /// playlist IPC — which previously triggered the removed heartbeat-recreate path
+    /// and the EXC_BAD_ACCESS in AEProcessMessage.
     private func getRecentTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            return []
-        }
+        return SBTimeoutRunner.run(timeout: 3.0) { [weak self] () -> [(String, String, String, String, Double)]? in
+            guard let self else { return nil }
+            var recentList: [(String, String, String, String, Double)] = []
 
-        var recentList: [(String, String, String, String, Double)] = []
+            // 🔑 ObjC shield: SBElementArray iteration may crash on mid-loop mutation.
+            let ex = OBJCCatch {
+                guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+                      let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+                      let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+                      let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+                    return
+                }
 
-        for i in 0..<tracks.count {
-            guard let track = tracks.object(at: i) as? NSObject,
-                  let trackID = track.value(forKey: "persistentID") as? String else { continue }
+                for i in 0..<tracks.count {
+                    guard let track = tracks.object(at: i) as? NSObject,
+                          let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-            if trackID == currentID {
-                break  // 到达当前歌曲，停止
+                    if trackID == currentID {
+                        break
+                    }
+
+                    let name = track.value(forKey: "name") as? String ?? ""
+                    let artist = track.value(forKey: "artist") as? String ?? ""
+                    let album = track.value(forKey: "album") as? String ?? ""
+                    let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                    if self.isValidTrackName(name, trackID: trackID) {
+                        recentList.append((name, artist, album, trackID, duration))
+                    } else if !name.isEmpty {
+                        debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                    }
+                }
             }
 
-            let name = track.value(forKey: "name") as? String ?? ""
-            let artist = track.value(forKey: "artist") as? String ?? ""
-            let album = track.value(forKey: "album") as? String ?? ""
-            let duration = track.value(forKey: "duration") as? Double ?? 0
-
-            if isValidTrackName(name, trackID: trackID) {
-                recentList.append((name, artist, album, trackID, duration))
-            } else if !name.isEmpty {
-                debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+            if let ex {
+                DebugLogger.log("Playback", "⚠️ [getRecentTracksFromApp] NSException swallowed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
             }
-        }
 
-        // 返回最后 limit 个，倒序（最近播放的在前）
-        return Array(recentList.suffix(limit).reversed())
+            // 返回最后 limit 个，倒序（最近播放的在前）
+            return Array(recentList.suffix(limit).reversed())
+        } ?? []
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

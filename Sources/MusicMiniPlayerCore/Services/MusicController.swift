@@ -118,10 +118,10 @@ public class MusicController: ObservableObject {
     var controlApp: SBApplication?
     let controlQueue = DispatchQueue(label: "com.nanoPod.control", qos: .userInteractive)
 
-    /// 封面获取去重：防止通知路径 + 轮询路径同时触发 fetchArtwork
-    var artworkFetchingForKey: String?
     /// 🔑 Current artwork API Task — cancelled on each new track change to prevent
     /// pileup (rapid switching spawns N concurrent API fetches + 1s retry sleeps).
+    /// Generation-based gates inside the task body + `applyArtworkIfCurrent` are the
+    /// single source of truth for staleness — no separate dedup key needed.
     var artworkAPITask: Task<Void, Never>?
 
     /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
@@ -187,6 +187,13 @@ public class MusicController: ObservableObject {
     // Radio tracks don't reliably fire playerInfo notifications.
     // A backward position jump (e.g. 180s→2s while playing) signals a new track.
     private var lastPolledPosition: Double = 0
+
+    // 🔑 Radio track-change backstop: when persistentID is empty (radio/URL track),
+    // position-jump detection can miss changes if the user skips before accumulating
+    // enough dwell, or if SB IPC is intermittently slow. Every 2s, re-query track
+    // metadata via AppleScriptRunner (subprocess, 0.5s kill) — cheap and reliable.
+    private var lastRadioTrackCheckTime: Date = .distantPast
+    private var radioTrackCheckInFlight: Bool = false
 
     // Queue sync state
     private var lastQueueHash: String = ""
@@ -484,14 +491,18 @@ public class MusicController: ObservableObject {
     }
 
     private func getQueueHashFromApp(_ app: SBApplication) -> String? {
-        guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-              let playlistName = playlist.value(forKey: "name") as? String,
-              let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-              let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-              let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-            return nil
+        // 🔑 Hard 1.5s timeout — SB queue hash reads can hang alongside playlist
+        // transitions. Timeout → nil → caller silently skips this hash check tick.
+        return SBTimeoutRunner.run(timeout: 1.5) { () -> String? in
+            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+                  let playlistName = playlist.value(forKey: "name") as? String,
+                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
+                  let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+                  let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+                return nil
+            }
+            return "\(playlistName):\(tracks.count):\(currentID)"
         }
-        return "\(playlistName):\(tracks.count):\(currentID)"
     }
 
     private func setupMusicKitQueueObserver() {
@@ -659,18 +670,28 @@ public class MusicController: ObservableObject {
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard self.artworkFetchGeneration == generation else { return }
 
-            var persistentID = ""
-            var sbDuration: Double = 0
-            var sbTrackName: String?
-            if let currentTrack = app.value(forKey: "currentTrack") as? NSObject {
-                persistentID = currentTrack.value(forKey: "persistentID") as? String ?? ""
-                sbTrackName = currentTrack.value(forKey: "name") as? String
-                if let sbName = sbTrackName,
-                   sbName == name,
-                   let dur = currentTrack.value(forKey: "duration") as? Double, dur > 0 {
-                    sbDuration = dur
+            // 🔑 Hard 1.5s timeout: radio URL tracks can make currentTrack IPC hang.
+            // On timeout, leave fields at defaults — subsequent polls / retries will
+            // backfill once Music.app responds. Without this, scriptingBridgeQueue
+            // stalls for every downstream block until 5s heartbeat recovery kicks in.
+            typealias SBFields = (persistentID: String, duration: Double, trackName: String?)
+            let fields: SBFields = SBTimeoutRunner.run(timeout: 1.5) { () -> SBFields? in
+                guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject else {
+                    return (persistentID: "", duration: 0, trackName: nil)
                 }
-            }
+                let pid = currentTrack.value(forKey: "persistentID") as? String ?? ""
+                let sbName = currentTrack.value(forKey: "name") as? String
+                var dur: Double = 0
+                if let n = sbName, n == name,
+                   let d = currentTrack.value(forKey: "duration") as? Double, d > 0 {
+                    dur = d
+                }
+                return (persistentID: pid, duration: dur, trackName: sbName)
+            } ?? (persistentID: "", duration: 0, trackName: nil)
+
+            let persistentID = fields.persistentID
+            let sbDuration = fields.duration
+            let sbTrackName = fields.trackName
 
             // 🔑 SB reports a DIFFERENT track than the notification said — Music.app
             // moved faster than the notification (common during rapid switching).
@@ -730,10 +751,17 @@ public class MusicController: ObservableObject {
             guard let self = self, let app = self.musicApp, app.isRunning else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard self.artworkFetchGeneration == generation else { return }
-            if let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-               let sbName = currentTrack.value(forKey: "name") as? String,
-               sbName == name,
-               let dur = currentTrack.value(forKey: "duration") as? Double, dur > 0 {
+            // 🔑 Hard 1.5s timeout on currentTrack metadata IPC (radio URL tracks hang).
+            let dur: Double? = SBTimeoutRunner.run(timeout: 1.5) { () -> Double? in
+                guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+                      let sbName = currentTrack.value(forKey: "name") as? String,
+                      sbName == name,
+                      let d = currentTrack.value(forKey: "duration") as? Double, d > 0 else {
+                    return nil
+                }
+                return d
+            }
+            if let dur = dur {
                 DispatchQueue.main.async {
                     let oldDuration = self.duration
                     self.duration = dur
@@ -758,14 +786,10 @@ public class MusicController: ObservableObject {
     private func pollPositionViaSB() {
         guard !isPreview else { return }
 
-        // 🔑 SB queue health check — radio URL track objects can hang SB IPC indefinitely,
-        // blocking all queued polls. Same recovery pattern as artworkQueue (line 118).
-        if Date().timeIntervalSince(lastSBQueueHeartbeat) > 5.0 {
-            DebugLogger.log("Poll", "💀 scriptingBridgeQueue stuck (no heartbeat >5s), recreating...")
-            musicApp = SBApplication(bundleIdentifier: "com.apple.Music")
-            scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge.\(Date().timeIntervalSince1970)", qos: .userInitiated)
-            lastSBQueueHeartbeat = Date()
-        }
+        // 🔑 Do NOT recreate musicApp/scriptingBridgeQueue on hang — that triggers
+        // ARC dealloc of SBApplication while Apple Event replies are still pending,
+        // causing EXC_BAD_ACCESS in AEProcessMessage. SBTimeoutRunner wraps the
+        // currentTrack reads below; stuck AE calls leak a thread but do not crash.
 
         guard let app = musicApp, app.isRunning else { return }
 
@@ -776,10 +800,25 @@ public class MusicController: ObservableObject {
             let queueWait = Date().timeIntervalSince(pollEnqueueTime)
             let measurementTime = Date()
 
-            // SB direct property reads — in-process Mach port IPC, no osascript spawn
-            let position = app.value(forKey: "playerPosition") as? Double ?? 0
+            // 🔑 Hard 1.5s timeout on the two property reads.
+            // Replaces the removed heartbeat-recreate recovery: if Music.app's IPC
+            // hangs, the caller releases without blocking this serial queue.
+            // On timeout: SKIP this cycle entirely — do NOT substitute zeros, because
+            // zeros falsely imply "paused at position 0", which breaks position-jump
+            // detection for radio tracks (the ONLY way we catch radio song changes
+            // when playerInfo notifications are skipped).
+            typealias PollSnap = (position: Double, stateRaw: Int)
+            guard let snap: PollSnap = SBTimeoutRunner.run(timeout: 1.5, { () -> PollSnap? in
+                let p = app.value(forKey: "playerPosition") as? Double ?? 0
+                let s = app.value(forKey: "playerState") as? Int ?? 0
+                return (p, s)
+            }) else {
+                DebugLogger.log("Poll", "⏳ pollPositionViaSB timed out — skipping cycle, preserving state")
+                return
+            }
+            let position = snap.position
             let sbReadTime = Date().timeIntervalSince(measurementTime)
-            let stateRaw = app.value(forKey: "playerState") as? Int ?? 0
+            let stateRaw = snap.stateRaw
             let playing = (stateRaw == Self.sbPlaying)
 
             // 🔬 Log poll timing: queue wait + SB read latency
@@ -787,30 +826,52 @@ public class MusicController: ObservableObject {
                 DebugLogger.log("Timing", "🔴 POLL DELAY: queueWait=\(String(format: "%.0f", queueWait * 1000))ms sbRead=\(String(format: "%.1f", sbReadTime * 1000))ms pos=\(String(format: "%.2f", position))")
             }
 
-            // 🔑 Position-jump track change detection for radio stations.
-            // Radio URL tracks often skip the playerInfo notification. A large backward
-            // position jump while playing (e.g. 180s→2s) signals a new track started.
-            // We use AppleScript (separate process, 0.5s kill timeout) to read metadata
-            // instead of SB currentTrack — which can hang indefinitely on URL tracks.
+            // 🔑 Position-jump track change detection.
+            // Radio URL tracks often skip the playerInfo notification, so this is the
+            // primary detector for radio song changes.
+            // Threshold: ANY backward jump ≥3s while playing & not seeking.
+            // Previous threshold (`prev>30 && pos<5`) missed rapid skips on short
+            // radio tracks — user pressing skip before 30s elapsed went undetected,
+            // and artwork never updated. `seekPending` flag protects against false
+            // positives from manual seek-back.
             let prevPosition = self.lastPolledPosition
             let positionJumpedBack = playing && !self.seekPending
-                && prevPosition > 30 && position < 5
+                && prevPosition > 3 && position < prevPosition - 3
             self.lastPolledPosition = position
 
-            if positionJumpedBack {
-                DebugLogger.log("Poll", "🔄 Position jump detected: \(String(format: "%.1f", prevPosition))s → \(String(format: "%.1f", position))s — checking track via AppleScript")
-                // AppleScript runs as separate process with timeout — safe even if
-                // Music.app metadata IPC is slow for radio URL tracks.
+            // Trigger an AppleScript-backed metadata check when:
+            //   (a) position jumped back (library or radio), OR
+            //   (b) the current track has no persistentID (radio/URL) and ≥2s passed
+            //       since the last check — the "radio backstop" that guarantees we
+            //       detect song changes even when playerInfo notifications are
+            //       skipped and position-jump conditions don't fire.
+            let radioBackstopDue: Bool = {
+                guard playing, !self.seekPending,
+                      (self.currentPersistentID ?? "").isEmpty,
+                      !self.radioTrackCheckInFlight,
+                      Date().timeIntervalSince(self.lastRadioTrackCheckTime) >= 2.0 else { return false }
+                return true
+            }()
+
+            if positionJumpedBack || radioBackstopDue {
+                let reason = positionJumpedBack
+                    ? "position jump \(String(format: "%.1f", prevPosition))s→\(String(format: "%.1f", position))s"
+                    : "radio backstop (2s)"
+                DebugLogger.log("Poll", "🔄 Track check via AppleScript — reason: \(reason)")
+                DispatchQueue.main.async { self.radioTrackCheckInFlight = true }
                 DispatchQueue.global(qos: .userInitiated).async {
-                    if let snapshot = AppleScriptRunner.fetchPlayerState(timeout: 0.5) {
-                        DispatchQueue.main.async {
-                            let trackChanged = !snapshot.trackName.isEmpty
-                                && snapshot.trackName != "NOT_PLAYING"
-                                && snapshot.trackName != self.currentTrackTitle
-                            if trackChanged {
-                                DebugLogger.log("Poll", "🎵 Radio track change confirmed: '\(self.currentTrackTitle)' → '\(snapshot.trackName)'")
-                                self.processPlayerState(snapshot)
-                            }
+                    let snapshot = AppleScriptRunner.fetchPlayerState(timeout: 0.5)
+                    DispatchQueue.main.async {
+                        self.radioTrackCheckInFlight = false
+                        self.lastRadioTrackCheckTime = Date()
+                        guard let snapshot else { return }
+                        let trackChanged = !snapshot.trackName.isEmpty
+                            && snapshot.trackName != "NOT_PLAYING"
+                            && (snapshot.trackName != self.currentTrackTitle
+                                || snapshot.trackArtist != self.currentArtist)
+                        if trackChanged {
+                            DebugLogger.log("Poll", "🎵 Track change confirmed: '\(self.currentTrackTitle)' → '\(snapshot.trackName)' (reason: \(reason))")
+                            self.processPlayerState(snapshot)
                         }
                     }
                 }
@@ -882,11 +943,29 @@ public class MusicController: ObservableObject {
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             let measurementTime = Date()
 
-            // Read all state via SB (in-process Mach IPC, no osascript spawn)
-            let position = app.value(forKey: "playerPosition") as? Double ?? 0
-            let stateRaw = app.value(forKey: "playerState") as? Int ?? 0
-            let shuffle = app.value(forKey: "shuffleEnabled") as? Bool ?? false
-            let repeatRaw = app.value(forKey: "songRepeat") as? Int ?? 0
+            // 🔑 Hard 2s timeout on the full-sync property bundle.
+            // Previously, if Music.app hung these reads, scriptingBridgeQueue would
+            // stall until the (removed, crash-prone) heartbeat-recreate kicked in.
+            // Now the block returns nil on timeout → we just skip this update cycle;
+            // the next 30s tick (or poll) tries again.
+            let bundle = SBTimeoutRunner.run(timeout: 2.0) { () -> (position: Double, stateRaw: Int, shuffle: Bool, repeatRaw: Int, track: NSObject?)? in
+                let p = app.value(forKey: "playerPosition") as? Double ?? 0
+                let s = app.value(forKey: "playerState") as? Int ?? 0
+                let sh = app.value(forKey: "shuffleEnabled") as? Bool ?? false
+                let r = app.value(forKey: "songRepeat") as? Int ?? 0
+                let t = app.value(forKey: "currentTrack") as? NSObject
+                return (p, s, sh, r, t)
+            }
+
+            guard let bundle else {
+                DebugLogger.log("PlayerState", "⏳ updatePlayerState SB read timed out, skipping cycle")
+                return
+            }
+
+            let position = bundle.position
+            let stateRaw = bundle.stateRaw
+            let shuffle = bundle.shuffle
+            let repeatRaw = bundle.repeatRaw
 
             let repeatMode: Int = {
                 if repeatRaw == Self.sbRepeatOne { return 1 }
@@ -894,7 +973,7 @@ public class MusicController: ObservableObject {
                 return 0
             }()
 
-            guard let track = app.value(forKey: "currentTrack") as? NSObject else {
+            guard let track = bundle.track else {
                 DispatchQueue.main.async {
                     self.applyNoTrack()
                     self.updateTimerState()
@@ -902,13 +981,24 @@ public class MusicController: ObservableObject {
                 return
             }
 
-            let trackName = track.value(forKey: "name") as? String ?? ""
-            let trackArtist = track.value(forKey: "artist") as? String ?? ""
-            let trackAlbum = track.value(forKey: "album") as? String ?? ""
-            let trackDuration = track.value(forKey: "duration") as? Double ?? 0
-            let persistentID = track.value(forKey: "persistentID") as? String ?? ""
-            let bitRate = track.value(forKey: "bitRate") as? Int ?? 0
-            let sampleRate = track.value(forKey: "sampleRate") as? Int ?? 0
+            let trackFields = SBTimeoutRunner.run(timeout: 1.5) { () -> (name: String, artist: String, album: String, duration: Double, pid: String, bitRate: Int, sampleRate: Int)? in
+                let n = track.value(forKey: "name") as? String ?? ""
+                let a = track.value(forKey: "artist") as? String ?? ""
+                let al = track.value(forKey: "album") as? String ?? ""
+                let d = track.value(forKey: "duration") as? Double ?? 0
+                let pid = track.value(forKey: "persistentID") as? String ?? ""
+                let br = track.value(forKey: "bitRate") as? Int ?? 0
+                let sr = track.value(forKey: "sampleRate") as? Int ?? 0
+                return (n, a, al, d, pid, br, sr)
+            } ?? (name: "", artist: "", album: "", duration: 0, pid: "", bitRate: 0, sampleRate: 0)
+
+            let trackName = trackFields.name
+            let trackArtist = trackFields.artist
+            let trackAlbum = trackFields.album
+            let trackDuration = trackFields.duration
+            let persistentID = trackFields.pid
+            let bitRate = trackFields.bitRate
+            let sampleRate = trackFields.sampleRate
 
             let snapshot = PlayerStateSnapshot(
                 isPlaying: stateRaw == Self.sbPlaying,

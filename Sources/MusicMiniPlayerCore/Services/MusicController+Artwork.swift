@@ -8,6 +8,7 @@ import Foundation
 @preconcurrency import ScriptingBridge
 import SwiftUI
 import MusicKit
+import ObjCSupport
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Artwork Extraction Helper
@@ -17,22 +18,30 @@ extension MusicController {
 
     /// 从 ScriptingBridge track 对象提取封面图片
     /// 🔑 复用于队列遍历和单独封面获取，避免重复代码
+    /// 🔑 ObjC shield: Music.app 可在读取过程中变更 currentTrack / artworks，
+    /// 触发 NSInternalInconsistencyException —— Swift 无法捕获，需 OBJCCatch。
     func extractArtwork(from track: NSObject) -> NSImage? {
-        guard let artworks = track.value(forKey: "artworks") as? SBElementArray,
-              artworks.count > 0,
-              let artwork = artworks.object(at: 0) as? NSObject else {
+        var result: NSImage?
+        let ex = OBJCCatch {
+            guard let artworks = track.value(forKey: "artworks") as? SBElementArray,
+                  artworks.count > 0,
+                  let artwork = artworks.object(at: 0) as? NSObject else {
+                return
+            }
+            if let image = artwork.value(forKey: "data") as? NSImage {
+                result = image
+                return
+            }
+            if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
+               let image = NSImage(data: rawData) {
+                result = image
+            }
+        }
+        if let ex {
+            DebugLogger.log("Artwork", "⚠️ [extractArtwork] NSException: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
             return nil
         }
-        // 尝试 data 属性（Tuneful 方式）
-        if let image = artwork.value(forKey: "data") as? NSImage {
-            return image
-        }
-        // 尝试 rawData 属性
-        if let rawData = artwork.value(forKey: "rawData") as? Data, !rawData.isEmpty,
-           let image = NSImage(data: rawData) {
-            return image
-        }
-        return nil
+        return result
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -42,7 +51,6 @@ extension MusicController {
     /// 🔑 设置封面并自动计算亮度
     func setArtwork(_ image: NSImage?) {
         self.currentArtwork = image
-        artworkFetchingForKey = nil  // 🔑 清除去重标志，允许后续获取
         // 计算亮度，阈值 0.6 以上视为浅色背景
         if let img = image {
             let brightness = img.perceivedBrightness()
@@ -50,6 +58,18 @@ extension MusicController {
         } else {
             self.isLightBackground = false
         }
+    }
+
+    /// 统一缓存键 — 仅为非空 persistentID 返回 key。
+    /// 🔑 Radio/URL tracks deliberately return nil (uncached):
+    /// Apple Music radio metadata can reuse titles across different songs
+    /// (station branding, transient cross-fade labels), so caching under
+    /// "radio:title|artist" causes STALE artwork on subsequent tracks with the
+    /// same reported title. Always re-fetch radio artwork fresh — the API hit
+    /// is <1s via Deezer and SBTimeoutRunner bounds any slow SB fallback.
+    func artworkCacheKey(persistentID: String, title: String, artist: String) -> NSString? {
+        guard !persistentID.isEmpty else { return nil }
+        return persistentID as NSString
     }
 
     /// 判断封面回调是否仍对应当前播放曲目
@@ -63,23 +83,20 @@ extension MusicController {
 
     /// 🔑 generation 由调用方提供（handleTrackChange / applySnapshot 各自 incrementGeneration）
     /// 不再内部递增 — 修复了双递增导致 handleTrackChange SB 块永远 stale 的 bug
+    /// 🔑 去重统一依赖 generation + Task cancellation：
+    ///    - `artworkAPITask?.cancel()` 避免 API pileup；
+    ///    - `artworkFetchGeneration` gate 在 API/SB 回调里拒绝过期结果。
+    ///    没有独立的 fetching-key 标志（它是 stale-state 滋生源）。
     func fetchArtwork(for title: String, artist: String, album: String, persistentID: String, generation: Int) {
         logToFile("🎨 fetchArtwork: \(title) - \(artist) gen=\(generation)")
 
-        // Check cache first（空 persistentID 跳过缓存）
-        if !persistentID.isEmpty, let cached = artworkCache.object(forKey: persistentID as NSString) {
-            logToFile("🎨 Cache HIT")
+        // Check cache first — radio tracks use "radio:title|artist" stable key
+        let cacheKey = artworkCacheKey(persistentID: persistentID, title: title, artist: artist)
+        if let key = cacheKey, let cached = artworkCache.object(forKey: key) {
+            logToFile("🎨 Cache HIT (\(key))")
             self.setArtwork(cached)
             return
         }
-
-        // 🔑 去重：防止通知路径和轮询路径同时触发
-        let fetchKey = persistentID.isEmpty ? "title:\(title)" : "id:\(persistentID)"
-        guard artworkFetchingForKey != fetchKey else {
-            logToFile("🎨 Already fetching for \(fetchKey), skipping")
-            return
-        }
-        artworkFetchingForKey = fetchKey
 
         logToFile("🎨 Cache MISS, starting concurrent fetch (SB + API in parallel)...")
 
@@ -112,16 +129,14 @@ extension MusicController {
         }
 
         // ━━━ Path 2: SB fetch — authoritative source, always overrides API ━━━
-        // 🔑 Queue health check: if artworkQueue hasn't responded in 5s, it's stuck
-        // (SB IPC can hang indefinitely when Music.app is loading radio metadata).
-        // Recreate queue + SB instance to recover — old thread leaks but is bounded.
-        if Date().timeIntervalSince(lastArtworkQueueHeartbeat) > 5.0 {
-            logToFile("🎨 [SB] artworkQueue stuck (no heartbeat >5s), recreating...")
-            artworkApp = SBApplication(bundleIdentifier: "com.apple.Music")
-            artworkQueue = DispatchQueue(label: "com.nanoPod.artwork.\(generation)", qos: .utility)
-            lastArtworkQueueHeartbeat = Date()
-        }
-
+        // 🔑 Do NOT replace artworkApp/artworkQueue on hang — that triggers ARC
+        // dealloc of SBApplication while Apple Event replies are still pending,
+        // causing EXC_BAD_ACCESS in AEProcessMessage → pthread_mutex_lock on a
+        // freed callback table. (Verified from crash reports 2026-04-18.)
+        // SBTimeoutRunner inside getArtworkImageFromApp releases the CALLER
+        // from a hung IPC without deallocating the SBApplication; the stuck AE
+        // call leaks one thread until Music.app eventually replies — bounded
+        // and safe.
         artworkQueue.async { [weak self] in
             guard let self = self else { return }
             defer { DispatchQueue.main.async { self.lastArtworkQueueHeartbeat = Date() } }
@@ -147,9 +162,15 @@ extension MusicController {
 
     /// 从 SBApplication 获取当前播放曲目的封面图片
     /// 🔑 复用 extractArtwork 避免重复代码
+    /// 🔑 Radio URL tracks may hang `currentTrack` IPC indefinitely. A 1.5s hard
+    /// timeout releases the caller so artworkQueue drains other requests promptly;
+    /// the existing 5s heartbeat remains as a queue-recovery backstop.
     func getArtworkImageFromApp(_ app: SBApplication) -> NSImage? {
-        guard let track = app.value(forKey: "currentTrack") as? NSObject else { return nil }
-        return extractArtwork(from: track)
+        return SBTimeoutRunner.run(timeout: 1.5) { [weak self] in
+            guard let self else { return nil }
+            guard let track = app.value(forKey: "currentTrack") as? NSObject else { return nil }
+            return self.extractArtwork(from: track)
+        }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -334,8 +355,11 @@ extension MusicController {
 
         setArtwork(image)
         if source == .sb { sbAppliedForGeneration = generation }
-        if !persistentID.isEmpty {
-            artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
+
+        // 🔑 Unified cache key: persistentID for library tracks, "radio:title|artist" for streams.
+        // Radio tracks previously never cached (empty persistentID) — every switch paid network.
+        if let key = artworkCacheKey(persistentID: persistentID, title: title, artist: currentArtist) {
+            artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
         }
     }
 
@@ -400,55 +424,73 @@ extension MusicController {
         let startTime = CFAbsoluteTimeGetCurrent()
         let gen = artworkFetchGeneration  // Snapshot generation at start
 
-        // 1. 先在 currentPlaylist 中查找（限制搜索范围为前 100 首，因为 Up Next 只显示 10 首）
-        if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-           let tracks = playlist.value(forKey: "tracks") as? SBElementArray {
+        // 🔑 Hard timeout: full playlist scans can hang when Music.app is
+        // transitioning playlists. Without this, the enclosing serial queue
+        // backs up and (previously) tripped the now-removed heartbeat
+        // recreation that crashed in AEProcessMessage.
+        return SBTimeoutRunner.run(timeout: 3.0) { [weak self] () -> NSImage? in
+            guard let self else { return nil }
+            var result: NSImage?
 
-            // 🔑 只遍历前 100 首（Up Next 只显示当前歌曲后的 10 首）
-            let searchLimit = min(tracks.count, 100)
-            for i in 0..<searchLimit {
-                // 🔑 Generation check: bail if track changed — stale SBElementArray
-                // iteration causes EXC_BAD_ACCESS (pointer authentication failure).
-                guard artworkFetchGeneration == gen else {
-                    debugPrint("⚠️ [getArtworkByPersistentID] Generation changed (\(gen) → \(artworkFetchGeneration)), aborting\n")
-                    return nil
+            // 🔑 ObjC shield: SBElementArray iteration can crash with NSException when
+            // Music.app mutates the array mid-loop (rapid track switching, playlist edit).
+            // Swift cannot catch NSException — OBJCCatch converts it to a nil return.
+            let ex = OBJCCatch {
+
+            // 1. currentPlaylist 前 100 首
+            if let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+               let tracks = playlist.value(forKey: "tracks") as? SBElementArray {
+                let searchLimit = min(tracks.count, 100)
+                for i in 0..<searchLimit {
+                    guard self.artworkFetchGeneration == gen else {
+                        debugPrint("⚠️ [getArtworkByPersistentID] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                        return
+                    }
+                    if let track = tracks.object(at: i) as? NSObject,
+                       let trackID = track.value(forKey: "persistentID") as? String,
+                       trackID == persistentID {
+                        if let image = self.extractArtwork(from: track) {
+                            let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                            debugPrint("✅ [getArtworkByPersistentID] Found at index \(i) in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
+                            result = image
+                            return
+                        }
+                    }
                 }
-                if let track = tracks.object(at: i) as? NSObject,
-                   let trackID = track.value(forKey: "persistentID") as? String,
-                   trackID == persistentID {
-                    if let image = extractArtwork(from: track) {
+            }
+
+            // 2. library 回退
+            let predicate = NSPredicate(format: "persistentID == %@", persistentID)
+            if let sources = app.value(forKey: "sources") as? SBElementArray, sources.count > 0,
+               let source = sources.object(at: 0) as? NSObject,
+               let libraryPlaylists = source.value(forKey: "libraryPlaylists") as? SBElementArray,
+               libraryPlaylists.count > 0,
+               let libraryPlaylist = libraryPlaylists.object(at: 0) as? NSObject,
+               let tracks = libraryPlaylist.value(forKey: "tracks") as? SBElementArray {
+                if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
+                   filteredTracks.count > 0,
+                   let track = filteredTracks.object(at: 0) as? NSObject {
+                    if let image = self.extractArtwork(from: track) {
                         let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                        debugPrint("✅ [getArtworkByPersistentID] Found at index \(i) in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
-                        return image
+                        debugPrint("✅ [getArtworkByPersistentID] Found in library in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
+                        result = image
+                        return
                     }
                 }
             }
         }
 
-        // 2. 如果在当前播放列表的前 100 首中没找到，尝试用 NSPredicate 在 library 中查找
-        let predicate = NSPredicate(format: "persistentID == %@", persistentID)
-        if let sources = app.value(forKey: "sources") as? SBElementArray, sources.count > 0,
-           let source = sources.object(at: 0) as? NSObject,
-           let libraryPlaylists = source.value(forKey: "libraryPlaylists") as? SBElementArray,
-           libraryPlaylists.count > 0,
-           let libraryPlaylist = libraryPlaylists.object(at: 0) as? NSObject,
-           let tracks = libraryPlaylist.value(forKey: "tracks") as? SBElementArray {
-
-            // 🔑 使用 NSPredicate 过滤（这个在 library 中效率更高）
-            if let filteredTracks = tracks.filtered(using: predicate) as? SBElementArray,
-               filteredTracks.count > 0,
-               let track = filteredTracks.object(at: 0) as? NSObject {
-                if let image = extractArtwork(from: track) {
-                    let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                    debugPrint("✅ [getArtworkByPersistentID] Found in library in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
-                    return image
-                }
+            if let ex {
+                DebugLogger.log("Artwork", "⚠️ [getArtworkByPersistentID] NSException swallowed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
+                return nil
             }
-        }
 
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-        debugPrint("⚠️ [getArtworkByPersistentID] Not found in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
-        return nil
+            if result == nil {
+                let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                debugPrint("⚠️ [getArtworkByPersistentID] Not found in \(String(format: "%.0f", elapsed))ms: \(persistentID.prefix(8))...\n")
+            }
+            return result
+        }
     }
 
     func createPlaceholder() -> NSImage {

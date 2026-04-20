@@ -19,8 +19,13 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(
+            name: "ObjCSupport",
+            path: "Sources/ObjCSupport",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "MusicMiniPlayerCore",
-            dependencies: [],
+            dependencies: ["ObjCSupport"],
             path: "Sources/MusicMiniPlayerCore",
             resources: [
                 .process("Resources"),
