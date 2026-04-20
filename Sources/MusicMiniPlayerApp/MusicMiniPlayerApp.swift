@@ -75,11 +75,24 @@ class AppMain: NSObject, NSApplicationDelegate {
         setupMainMenu()
         showFloatingWindow()
 
+        // ──────────────────────────────────────────────
+        // Seamless auto-update: silent background check 5s after launch.
+        // Any newer release is downloaded + SHA256-verified + staged; the
+        // actual bundle swap happens on applicationWillTerminate.
+        // ──────────────────────────────────────────────
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            UpdateService.shared.checkInBackground()
+        }
+
         debugPrint("[AppMain] Setup complete\n")
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        UpdateApplier.applyIfStaged()
     }
 
     // MARK: - Dock Visibility
