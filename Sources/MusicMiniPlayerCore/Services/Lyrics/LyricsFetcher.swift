@@ -1535,19 +1535,33 @@ public final class LyricsFetcher {
     /// indicate a completely different song (NetEase data quality issue).
     /// e.g., "Hier encore" entry containing "孙燕姿 - Hey Jude" lyrics.
     private func validateLyricsContent(_ rawText: String, expectedTitle: String, expectedArtist: String) -> Bool {
-        // Check first 5 lines for "artist - title" metadata pattern
+        // Structural rule — no whitelist, no keyword list:
+        //
+        // A "wrong song" header line has the shape   ARTIST - TITLE
+        // (exactly two parts, no colon, each part non-empty).
+        //
+        // Credit lines (作词 : X / 作曲 : X / Composer: X / Written by X) always
+        // carry a colon before the " - " list. Multi-author credits like
+        // "作词 : Franne Golde - Roger Bruno - Ellen Schwartz" have 3+
+        // parts. Either structural signal rules them out of the validator.
+        //
+        // This keeps the validator effective at its original job (catching
+        // NetEase entries whose content is a different song) while no
+        // longer false-rejecting songs whose header is just songwriters.
         let lines = rawText.components(separatedBy: .newlines).prefix(8)
         let expectedTitleLower = expectedTitle.lowercased()
         let expectedArtistLower = expectedArtist.lowercased()
         for line in lines {
-            // Strip LRC timestamp prefix
             let text = line.replacingOccurrences(of: "\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
             guard text.contains(" - ") else { continue }
+            // Colon anywhere → "Label: value - value" credit line. Skip.
+            if text.contains(":") || text.contains("：") { continue }
             let parts = text.components(separatedBy: " - ")
-            guard parts.count >= 2 else { continue }
+            // More than 2 parts → not a simple ARTIST-TITLE; likely
+            // co-author list. Skip.
+            guard parts.count == 2 else { continue }
             let lineArtist = parts[0].trimmingCharacters(in: .whitespaces).lowercased()
             let lineTitle = parts[1].trimmingCharacters(in: .whitespaces).lowercased()
-            // If metadata artist AND title are both present but neither matches expected → wrong song
             if !lineArtist.isEmpty && !lineTitle.isEmpty
                 && !lineArtist.contains(expectedArtistLower) && !expectedArtistLower.contains(lineArtist)
                 && !lineTitle.contains(expectedTitleLower) && !expectedTitleLower.contains(lineTitle) {
@@ -1600,14 +1614,59 @@ public final class LyricsFetcher {
         let songId = match.id
 
         DebugLogger.log("NetEase", "✅ 找到 songId=\(songId) albumMatch=\(match.albumMatched)")
-        guard let result = await fetchNetEaseLyrics(songId: songId, duration: duration, expectedTitle: originalTitle, expectedArtist: originalArtist) else {
-            DebugLogger.log("NetEase", "❌ 获取歌词失败")
-            return nil
+        if let result = await fetchNetEaseLyrics(songId: songId, duration: duration, expectedTitle: originalTitle, expectedArtist: originalArtist) {
+            let lyrics = result.lyrics
+            let kind = result.kind
+            let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
+            return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind, albumMatched: match.albumMatched)
         }
-        let lyrics = result.lyrics
-        let kind = result.kind
-        let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
-        return LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind, albumMatched: match.albumMatched)
+        DebugLogger.log("NetEase", "❌ 获取歌词失败 — trying artist-discography fallback")
+        // 🔑 Empty-lyrics fallback: the top-matched NE entry sometimes carries
+        // only songwriter credits (id=1406491345 for Yasuko Agawa "Never Wanna
+        // Say Goodnight" has LRC=124 chars, pure credits, no actual lyrics).
+        // When this happens, search the CJK artist's whole discography and
+        // try nearby-duration alternates until one has real lyrics — another
+        // release of the same song often does. For Yasuko Agawa, id=559143
+        // (Δ7.5s) carries YRC word-level lyrics.
+        let cjkArtistForFallback = await resolveArtistCJKAliases(asciiArtist: params.rawArtist).first
+            ?? (LanguageUtils.containsCJK(params.rawArtist) ? params.rawArtist : params.rawOriginalArtist)
+        guard !cjkArtistForFallback.isEmpty else { return nil }
+        let altURL = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+            "s": cjkArtistForFallback, "type": "1", "limit": "50"
+        ])
+        guard let url2 = altURL,
+              let (data, _) = try? await HTTPClient.getData(url: url2, headers: headers, timeout: 6.0),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result2 = json["result"] as? [String: Any],
+              let songs = result2["songs"] as? [[String: Any]] else { return nil }
+        let simplifiedInputTitle = params.simplifiedTitle
+        struct Cand { let id: Int; let name: String; let dur: Double; let delta: Double }
+        let cands: [Cand] = songs.compactMap { s in
+            guard let id = s["id"] as? Int, id != songId,
+                  let name = s["name"] as? String,
+                  let dur = (s["duration"] as? Double).map({ $0 / 1000.0 }) else { return nil }
+            let delta = abs(dur - duration)
+            guard delta < 15.0 else { return nil }
+            return Cand(id: id, name: name, dur: dur, delta: delta)
+        }
+        .filter { c in
+            // Title must match (avoid swapping into unrelated songs).
+            // Accept either textual match OR pinyin-pinyin overlap.
+            let titleOK = isTitleMatch(input: params.rawTitle, result: c.name, simplifiedInput: simplifiedInputTitle)
+                || isTitleMatch(input: params.rawOriginalTitle, result: c.name, simplifiedInput: params.simplifiedOriginalTitle)
+            return titleOK
+        }
+        .sorted { $0.delta < $1.delta }
+        DebugLogger.log("NetEase", "🔁 artist-disco fallback: \(cands.count) candidates within ±15s (by title match)")
+        for c in cands.prefix(3) {
+            if let r = await fetchNetEaseLyrics(songId: c.id, duration: duration, expectedTitle: originalTitle, expectedArtist: originalArtist),
+               !r.lyrics.isEmpty, r.lyrics.count >= 5 {
+                let score = scorer.calculateScore(r.lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: r.kind)
+                DebugLogger.log("NetEase", "✅ fallback hit: id=\(c.id) '\(c.name)' Δ\(String(format: "%.1f", c.delta))s \(r.lyrics.count)L")
+                return LyricsFetchResult(lyrics: r.lyrics, source: "NetEase", score: score, kind: r.kind, albumMatched: false)
+            }
+        }
+        return nil
     }
 
     private func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> (lyrics: [LyricLine], kind: LyricsKind)? {
