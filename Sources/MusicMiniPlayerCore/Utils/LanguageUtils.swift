@@ -384,6 +384,23 @@ public extension LanguageUtils {
         return mutableString as String
     }
 
+    /// CJK → Latin (Pinyin for Hanzi, Romaji for Kana) via CFStringTransform.
+    /// Strips tone marks and joins syllables so "平凡" → "pingfan",
+    /// "黃韻玲" → "huangyunling", "ミドリ" → "midori".
+    /// Used for cross-script album/title matching when Apple Music shows a
+    /// pinyin/romanized variant while NE/QQ indexes the original CJK.
+    static func toLatinLower(_ text: String) -> String {
+        let mutableString = NSMutableString(string: text)
+        CFStringTransform(mutableString, nil, "Any-Latin" as CFString, false)
+        CFStringTransform(mutableString, nil, "Latin-ASCII" as CFString, false)  // strips tone marks
+        let asString = (mutableString as String).lowercased()
+        // Drop non-alphanumeric so "ping fan" and "pingfan" compare equal.
+        return asString.unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+    }
+
     /// Detect if text contains Traditional-exclusive characters.
     /// True = user is using Traditional (HK/TW context), display should match.
     /// False alone doesn't mean Simplified — ASCII or ambiguous also returns false.
