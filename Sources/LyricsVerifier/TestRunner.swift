@@ -66,7 +66,7 @@ func testSongWithLyrics(
         album: album
     )
 
-    let bestLyrics = fetcher.selectBest(from: fetchResults)
+    let bestLyrics = fetcher.selectBest(from: fetchResults, songDuration: duration)
     let selectedResult = fetchResults.first { result in
         guard let firstBest = bestLyrics?.first,
               let firstResult = result.lyrics.first else { return false }

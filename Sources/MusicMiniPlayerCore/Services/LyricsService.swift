@@ -299,7 +299,7 @@ public class LyricsService: ObservableObject {
         )
 
         // 选择最佳结果 — 需要完整结果以读取 kind (synced/unsynced) 供自动滚动守卫使用
-        let bestResult = fetcher.selectBestResult(from: results)
+        let bestResult = fetcher.selectBestResult(from: results, songDuration: duration)
         guard let bestResult = bestResult, !bestResult.lyrics.isEmpty else {
             // 🔑 CRITICAL: Do NOT cache "No Lyrics" if the task was cancelled.
             // Cancellation kills HTTP requests mid-flight → fetchAllSources returns [] →
@@ -616,7 +616,7 @@ public class LyricsService: ObservableObject {
                     translationEnabled: false
                 )
 
-                guard let bestResult = self.fetcher.selectBestResult(from: results), !bestResult.lyrics.isEmpty else { return }
+                guard let bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration), !bestResult.lyrics.isEmpty else { return }
 
                 let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
                 let processed = self.parser.processLyrics(aligned)

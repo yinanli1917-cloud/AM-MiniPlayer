@@ -408,9 +408,22 @@ public final class LyricsFetcher {
         return selectBestResult(from: results)?.lyrics
     }
 
+    public func selectBest(from results: [LyricsFetchResult], songDuration: TimeInterval) -> [LyricLine]? {
+        return selectBestResult(from: results, songDuration: songDuration)?.lyrics
+    }
+
     /// Same as `selectBest` but returns the full `LyricsFetchResult` so callers
     /// can read `.kind` (synced / unsynced) without re-deriving via heuristics.
     public func selectBestResult(from results: [LyricsFetchResult]) -> LyricsFetchResult? {
+        return selectBestResult(from: results, songDuration: 0)
+    }
+
+    /// Select best result with song duration for coverage analysis.
+    /// Coverage = (lastLineEnd - firstLineStart) / songDuration.
+    /// When an album-matched source has drastically lower coverage than a
+    /// non-matched one, its content is likely mistimed (same recording
+    /// tagged under different albums → metadata match, not timing match).
+    public func selectBestResult(from results: [LyricsFetchResult], songDuration: TimeInterval) -> LyricsFetchResult? {
         // 🔑 Reject unsynced-only low-score results.
         // Unsynced lyrics (lyrics.ovh plain text, Genius HTML) don't support
         // auto-scroll or tap-to-jump in the UI — LyricsService.updateCurrentTime
@@ -428,13 +441,23 @@ public final class LyricsFetcher {
                 DebugLogger.log("🏆 Rejecting unsynced low-score results: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
                 return nil
             }
-            let reliable = usable
-            return selectReliable(reliable)
+            return selectReliable(usable, songDuration: songDuration)
         }
-        return selectReliable(syncedResults)
+        return selectReliable(syncedResults, songDuration: songDuration)
     }
 
-    private func selectReliable(_ reliable: [LyricsFetchResult]) -> LyricsFetchResult? {
+    /// Coverage ratio: what fraction of the song's duration the lyrics span.
+    /// 91% = lyrics cover nearly the whole song (proper master match).
+    /// 13% = lyrics cover a tiny fraction (likely wrong edit's timings).
+    private func lyricCoverage(_ r: LyricsFetchResult, songDuration: TimeInterval) -> Double {
+        guard songDuration > 0, !r.lyrics.isEmpty else { return 0 }
+        let firstStart = r.lyrics.first?.startTime ?? 0
+        let lastEnd = r.lyrics.last?.endTime ?? (r.lyrics.last?.startTime ?? 0)
+        let span = max(0, lastEnd - firstStart)
+        return min(span / songDuration, 1.0)
+    }
+
+    private func selectReliable(_ reliable: [LyricsFetchResult], songDuration: TimeInterval = 0) -> LyricsFetchResult? {
         guard !reliable.isEmpty else { return nil }
 
         // Partition into CJK and romaji results
@@ -452,7 +475,23 @@ public final class LyricsFetcher {
             let valid = pool.filter { scorer.analyzeQuality($0.lyrics).isValid }
             let workingPool = valid.isEmpty ? pool : valid
             guard let top = workingPool.first else { return nil }
-            if top.albumMatched { return top }
+
+            // If top (score winner) is album-matched, it USUALLY wins — but
+            // first check if a non-album-matched source has decisively better
+            // lyric coverage (covers much more of the song). That signals
+            // metadata-only album match on the top, not timing-aligned content.
+            if top.albumMatched {
+                if songDuration >= 120,
+                   let alt = workingPool.first(where: { !$0.albumMatched }) {
+                    let topCoverage = lyricCoverage(top, songDuration: songDuration)
+                    let altCoverage = lyricCoverage(alt, songDuration: songDuration)
+                    if altCoverage - topCoverage >= 0.40 {
+                        DebugLogger.log("🏆 Coverage gap decisive — non-album-matched wins: \(alt.source) cov=\(Int(altCoverage * 100))% over album-matched \(top.source) cov=\(Int(topCoverage * 100))%")
+                        return alt
+                    }
+                }
+                return top
+            }
             // Only consider album-matched candidates that ALSO passed validity.
             // An invalid album-matched result (parsed garbage) would otherwise
             // beat a valid unmatched one.
@@ -469,6 +508,29 @@ public final class LyricsFetcher {
                 if albumMatched.score + 20 < top.score {
                     DebugLogger.log("🏆 Score gap too large — score wins: \(top.source) (\(String(format: "%.1f", top.score))) over album-matched \(albumMatched.source) (\(String(format: "%.1f", albumMatched.score)))")
                     return top
+                }
+                // 🔑 Coverage gap gate: if the non-album-matched alternate has
+                // substantially better lyric→song coverage AND the song is long
+                // enough for coverage to be meaningful, the album-matched source
+                // has likely metadata-only match (same recording on different
+                // compilation), not timing-aligned content.
+                //
+                // Example: MFSB "Love Is the Message" (689s, Deep Grooves) —
+                //   QQ tags id=002B89rw1Bv8HR as album='Deep Grooves' but its
+                //     lyrics span only 2.3s–93s (13% coverage).
+                //   LRCLIB id=26099289 is album='The Legacy of Disco' (no match)
+                //     but its lyrics span 14.4s–638s (91% coverage) — properly
+                //     timed for this 689s master.
+                // The 78-point coverage gap is a decisive correctness signal
+                // even though QQ's album label superficially "matches".
+                if songDuration >= 120 {
+                    let amCoverage = lyricCoverage(albumMatched, songDuration: songDuration)
+                    let topCoverage = lyricCoverage(top, songDuration: songDuration)
+                    DebugLogger.log("📊 Coverage: \(top.source)=\(Int(topCoverage*100))% vs \(albumMatched.source)=\(Int(amCoverage*100))% (dur=\(Int(songDuration))s)")
+                    if topCoverage - amCoverage >= 0.40 {
+                        DebugLogger.log("🏆 Coverage gap decisive — non-album-matched wins: \(top.source) cov=\(Int(topCoverage * 100))% over \(albumMatched.source) cov=\(Int(amCoverage * 100))%")
+                        return top
+                    }
                 }
                 DebugLogger.log("🏆 Album-match preferred: \(albumMatched.source) (\(String(format: "%.1f", albumMatched.score))) over \(top.source) (\(String(format: "%.1f", top.score)))")
                 return albumMatched
