@@ -524,13 +524,16 @@ public final class LyricsFetcher {
         }
 
         if usableSynced.isEmpty {
-            // All we have is unsynced / fabricated. Only keep if confident.
-            let usable = results.filter { $0.score >= 30 }
-            guard !usable.isEmpty else {
-                DebugLogger.log("🏆 Rejecting unsynced low-score results: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
+            // No synced source available. Reject unsynced — user preference:
+            // synced lyrics only, clean empty state over static text that
+            // can't scroll/tap-to-jump. The answer to "no synced found" is
+            // to add more synced sources, not compromise the UX.
+            let syncedOnly = results.filter { $0.kind == .synced && $0.score > 0 }
+            guard !syncedOnly.isEmpty else {
+                DebugLogger.log("🏆 No synced results available: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
                 return nil
             }
-            return selectReliable(usable, songDuration: songDuration)
+            return selectReliable(syncedOnly, songDuration: songDuration)
         }
         return selectReliable(usableSynced, songDuration: songDuration)
     }
