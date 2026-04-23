@@ -411,7 +411,30 @@ public final class LyricsFetcher {
     /// Same as `selectBest` but returns the full `LyricsFetchResult` so callers
     /// can read `.kind` (synced / unsynced) without re-deriving via heuristics.
     public func selectBestResult(from results: [LyricsFetchResult]) -> LyricsFetchResult? {
-        let reliable = results.filter { $0.score > 0 }
+        // 🔑 Reject unsynced-only low-score results.
+        // Unsynced lyrics (lyrics.ovh plain text, Genius HTML) don't support
+        // auto-scroll or tap-to-jump in the UI — LyricsService.updateCurrentTime
+        // short-circuits on isUnsyncedLyrics. Displaying them creates a
+        // broken-feeling UX (static text pane, nothing responds).
+        //
+        // Policy: prefer synced at any score over unsynced, and if we only
+        // have unsynced, require score ≥ 30 — otherwise return nil so the
+        // user sees a clean "no lyrics" state instead of broken UX.
+        let syncedResults = results.filter { $0.kind == .synced && $0.score > 0 }
+        if syncedResults.isEmpty {
+            // All we have is unsynced / fabricated. Only keep if confident.
+            let usable = results.filter { $0.score >= 30 }
+            guard !usable.isEmpty else {
+                DebugLogger.log("🏆 Rejecting unsynced low-score results: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
+                return nil
+            }
+            let reliable = usable
+            return selectReliable(reliable)
+        }
+        return selectReliable(syncedResults)
+    }
+
+    private func selectReliable(_ reliable: [LyricsFetchResult]) -> LyricsFetchResult? {
         guard !reliable.isEmpty else { return nil }
 
         // Partition into CJK and romaji results

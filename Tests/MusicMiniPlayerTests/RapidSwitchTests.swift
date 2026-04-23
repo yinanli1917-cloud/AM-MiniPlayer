@@ -33,7 +33,14 @@ final class RapidSwitchTests: XCTestCase {
     }
 
     /// 超时的 block 必须在 timeout 窗口内返回 nil，不能无限阻塞调用方。
-    func testTimeoutRunnerReturnsNilOnHangingBlock() {
+    ///
+    /// 🔑 `ZZZ` prefix forces this test to run LAST alphabetically within
+    /// this class. The queue is now SERIAL (to prevent concurrent AE crash),
+    /// so a 5-second hung block would otherwise block tests that come after
+    /// it alphabetically (see rapid-switch SBTimeoutRunner.swift comment).
+    /// Running this test last means its hung background block can drain
+    /// without delaying other assertions.
+    func testTimeoutRunnerZZZReturnsNilOnHangingBlock() {
         let start = Date()
         let result = SBTimeoutRunner.run(timeout: 0.3) { () -> Int? in
             Thread.sleep(forTimeInterval: 5.0)  // 模拟卡死的 SB IPC

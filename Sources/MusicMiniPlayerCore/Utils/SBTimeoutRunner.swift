@@ -29,18 +29,30 @@
 import Foundation
 
 public enum SBTimeoutRunner {
-    /// Dedicated concurrent worker pool for bounded SB calls.
-    /// `.utility` QoS: these are user-visible but not interactive; a stuck
-    /// worker won't steal cycles from the main thread.
+    /// Dedicated SERIAL worker queue for bounded SB calls.
     ///
-    /// Concurrent is intentional — tests assume multiple callers run in
-    /// parallel without one hung block stalling another. Any SB-level
-    /// serialization (to prevent LaunchServices races) must be applied at
-    /// the caller site, not here.
+    /// ⚠️ Must be SERIAL, not concurrent:
+    /// ScriptingBridge's AppleEvent dispatch (AECreateAppleEvent /
+    /// AEProcessMessage / AESendMessage) is NOT thread-safe when multiple
+    /// threads call into the same SBApplication instance. Concurrent calls
+    /// corrupt internal AE state and crash with EXC_BAD_ACCESS /
+    /// "possible pointer authentication failure" — confirmed in two
+    /// production crash logs on 2026-04-23 (both faulting on this queue).
+    ///
+    /// The timeout semantic still protects callers: `run()` returns `nil`
+    /// after its deadline even if the block is still executing. The block
+    /// keeps running on this queue and completes later (or gets killed by
+    /// the 5s heartbeat-recovery in MusicController), but NEW callers
+    /// submitted during that hang get queued — they do NOT race into
+    /// concurrent AE dispatch.
+    ///
+    /// Trade-off: when one block is hung, subsequent calls wait behind it
+    /// on this queue. Each caller's own timeout limits its wait. The
+    /// queue-heartbeat backstop in MusicController recreates the queue
+    /// (and the shared SBApplication) after 5 s of silence.
     private static let workerQueue = DispatchQueue(
         label: "com.nanoPod.sbTimeout.worker",
-        qos: .utility,
-        attributes: .concurrent
+        qos: .utility
     )
 
     /// Execute `block` with a wall-clock deadline. Returns the block's value
