@@ -434,7 +434,96 @@ public final class LyricsFetcher {
         // have unsynced, require score ≥ 30 — otherwise return nil so the
         // user sees a clean "no lyrics" state instead of broken UX.
         let syncedResults = results.filter { $0.kind == .synced && $0.score > 0 }
-        if syncedResults.isEmpty {
+        DebugLogger.log("🔬 selectBestResult: \(results.count) results, \(syncedResults.count) synced (\(results.map { "\($0.source):\($0.kind.rawValue)/\(Int($0.score))" }.joined(separator: ",")))")
+
+        // 🔑 Cross-source timing disagreement gate.
+        // If multiple synced sources disagree on the first-vocal timestamp
+        // by more than 10 seconds, they cannot both be correctly timed for
+        // the same master. One (or both) is applying timings from a
+        // different edit — e.g., MFSB "Love Is the Message" (Tom Moulton
+        // 11:29 mix with ~3-minute instrumental intro): QQ timestamps
+        // vocals at 2.3s, LRCLIB at 14.4s — both WAY earlier than the
+        // real ~180s vocal entry. Neither is right. Returning nothing is
+        // better than picking wrong lyrics that fire many lines ahead.
+        //
+        // Only triggers when we have ≥2 synced sources — single-source
+        // results have no cross-check and must be trusted.
+        // 🔑 Cross-source timing consensus.
+        // When multiple sources disagree on first-vocal timestamp, prefer
+        // the MAJORITY cluster. A single outlier (e.g., one source timed
+        // for a different edit) is filtered out. If no majority cluster
+        // exists (all sources spread apart), every source is suspect →
+        // reject (better than guessing).
+        //
+        // Example — MFSB "Love Is the Message" (11:29 Tom Moulton mix, actual
+        // vocal @ ~3:00): QQ@2.3s and LRCLIB@13.7s are BOTH wrong (their
+        // timings are for the shorter 3:54 edit mislabeled to this 689s
+        // master). They don't cluster → reject entirely.
+        //
+        // Example — 起风了: 3 sources cluster at 24-26s, QQ is outlier @ 9s.
+        // Majority wins: QQ gets filtered out of the usable pool.
+        // 🔑 Long-song timing sanity gate (generalized fix for extended
+        // DJ remixes / 12-inch mixes with multi-minute instrumental intros).
+        //
+        // Lyric databases almost always carry the SINGLE-EDIT timings
+        // (3-4 min cut where vocals start early) even when tagged against
+        // longer cuts. On an extended remix the misalignment can be
+        // minutes, showing lyrics many lines ahead of the real vocals.
+        //
+        // Rule: for songs ≥ 8 minutes, require ≥2 synced sources agreeing
+        // (within 5s) on first-vocal timing. If they disagree drastically,
+        // no source is trustworthy for this master — reject.
+        //
+        // Short songs fall through to the existing coverage / score-gap /
+        // album-match gates. Those handle shorter wrong-master drift
+        // (typically ≤ few seconds) without this strict consensus check.
+        //
+        // Example — MFSB "Love Is the Message" 11:29 Tom Moulton mix
+        // (actual vocal @ ~3:00): QQ@2.3s vs LRCLIB@13.7s → no consensus.
+        // Both WAY off. Correct answer: NO LYRICS.
+        var usableSynced = syncedResults
+        // Long-song single-source quality floor: for songs ≥ 8 min, a single
+        // synced source scoring < 50 is unreliable (likely the single-edit
+        // lyrics mislabeled to the extended master). Require consensus OR
+        // high confidence.
+        if songDuration >= 480, syncedResults.count == 1, let only = syncedResults.first, only.score < 50 {
+            DebugLogger.log("🏆 Long-song single-source too low-score: \(only.source)=\(Int(only.score)) < 50")
+            return nil
+        }
+        if syncedResults.count >= 2 && songDuration >= 480 {
+            var seenSources = Set<String>()
+            let sourceTimes: [(src: String, t: Double)] = syncedResults.compactMap { r in
+                guard !seenSources.contains(r.source) else { return nil }
+                guard let t = r.lyrics.first(where: { $0.startTime > 0 })?.startTime else { return nil }
+                seenSources.insert(r.source)
+                return (r.source, t)
+            }
+            DebugLogger.log("📊 Long-song timing check (dur=\(Int(songDuration))s): \(sourceTimes.map { "\($0.src)@\(String(format: "%.1f", $0.t))" })")
+
+            if sourceTimes.count >= 2 {
+                let tolerance: Double = 5.0
+                var bestCluster: [(src: String, t: Double)] = []
+                for anchor in sourceTimes {
+                    let cluster = sourceTimes.filter { abs($0.t - anchor.t) <= tolerance }
+                    if cluster.count > bestCluster.count { bestCluster = cluster }
+                }
+                if bestCluster.count >= 2 {
+                    // ≥2 sources cluster — keep those, drop outliers.
+                    let clusterSources = Set(bestCluster.map { $0.src })
+                    let filtered = syncedResults.filter { clusterSources.contains($0.source) }
+                    if filtered.count < syncedResults.count {
+                        DebugLogger.log("📊 Long-song outlier filter: kept \(clusterSources.sorted()), dropped \(syncedResults.filter { !clusterSources.contains($0.source) }.map(\.source))")
+                        usableSynced = filtered
+                    }
+                } else {
+                    // No ≥2 consensus. Every source is isolated → reject.
+                    DebugLogger.log("🏆 Long-song rejection (no consensus): \(sourceTimes.map { "\($0.src)@\(String(format: "%.1f", $0.t))" })")
+                    return nil
+                }
+            }
+        }
+
+        if usableSynced.isEmpty {
             // All we have is unsynced / fabricated. Only keep if confident.
             let usable = results.filter { $0.score >= 30 }
             guard !usable.isEmpty else {
@@ -443,7 +532,7 @@ public final class LyricsFetcher {
             }
             return selectReliable(usable, songDuration: songDuration)
         }
-        return selectReliable(syncedResults, songDuration: songDuration)
+        return selectReliable(usableSynced, songDuration: songDuration)
     }
 
     /// Coverage ratio: what fraction of the song's duration the lyrics span.
