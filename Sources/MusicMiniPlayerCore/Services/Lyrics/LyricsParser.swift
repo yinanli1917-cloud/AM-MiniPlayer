@@ -602,18 +602,30 @@ public final class LyricsParser {
         return sectionKeywords.contains(where: { innerLower.contains($0) })
     }
 
-    /// Detect title/credit separator lines: "Song - Artist", "Song -Artist", etc.
-    /// These appear at the start of YRC/LRC as title cards with performer names.
+    /// Detect title/credit separator lines: "Song - Artist", "Song -Artist",
+    /// CJK "歌名-歌手", "歌名（電影主題曲）", etc.
+    /// These appear at the start of YRC/LRC as title cards with performer/annotation.
     private func isTitleSeparatorLine(_ text: String) -> Bool {
         // " - " (space-dash-space): most common, e.g. "Song Title - Artist Name"
         if text.contains(" - ") { return true }
-        // " -" followed by an uppercase letter (space-dash-name): e.g. "You Belong to Me -Norman Wisdom"
-        // Guard: must have uppercase after dash to avoid matching lyrics like "hold on -"
-        if let range = text.range(of: " -") {
-            let afterDash = text[range.upperBound...]
-            let firstNonSpace = afterDash.drop(while: { $0 == " " })
-            if let firstChar = firstNonSpace.first, firstChar.isUppercase { return true }
+        // " -" or "-" followed by a CAPITAL LETTER OR CJK character:
+        // e.g. "You Belong to Me -Norman Wisdom" or CJK "戀愛預告-林姍姍".
+        // Guard on uppercase/CJK to avoid matching lyrics like "hold on - baby".
+        for sep in [" -", "-"] {
+            if let range = text.range(of: sep) {
+                let afterDash = text[range.upperBound...]
+                let firstNonSpace = afterDash.drop(while: { $0 == " " })
+                if let firstChar = firstNonSpace.first {
+                    if firstChar.isUppercase { return true }
+                    if firstChar.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) { return true }
+                }
+            }
         }
+        // CJK fullwidth open brackets indicate annotated title cards like
+        // "戀愛預告（《開心鬼》電影插曲)" or "歌名（電影主題曲)".
+        // Real lyrics rarely contain these brackets (they'd be spelled out).
+        let cjkTitleBrackets = ["（", "《", "【", "〈"]
+        if cjkTitleBrackets.contains(where: { text.contains($0) }) { return true }
         return false
     }
 

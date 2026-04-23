@@ -277,4 +277,42 @@ final class MatchingUtilsTests: XCTestCase {
         XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("每天愛你多一些"))
         XCTAssertFalse(LanguageUtils.isLikelyEnglishTitle("最後一聲晚安"))
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - isTitleMatch: reject sequel/version markers
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Real data: "Leon" (155s) by KIRBY was matched against LRCLIB's
+    /// "Leon Pt. 2" (151s) via contains()+Δ4s — but Pt.2 is a DIFFERENT song.
+    /// User got wrong timestamps because the Pt.2 lyrics were applied to the
+    /// Pt.1 track.
+    func testIsTitleMatch_rejectsPartMarker() {
+        // contains() base case — short contained in long → "different song"
+        // only when the difference is a sequel/version marker
+        XCTAssertFalse(MatchingUtils.isTitleMatch(target: "Leon", actual: "Leon Pt. 2"))
+        XCTAssertFalse(MatchingUtils.isTitleMatch(target: "Leon", actual: "Leon, Pt. 2"))
+        XCTAssertFalse(MatchingUtils.isTitleMatch(target: "Leon", actual: "Leon Part 2"))
+        XCTAssertFalse(MatchingUtils.isTitleMatch(target: "Leon", actual: "Leon Pt II"))
+        XCTAssertFalse(MatchingUtils.isTitleMatch(target: "Leon Pt. 2", actual: "Leon"))
+    }
+
+    /// Remix/Live/Acoustic variants share the same sung lyrics in most cases,
+    /// so normalizeTrackName already strips those parentheticals and they
+    /// resolve to the same normalized title. Only instrumental indicates a
+    /// song without sung lyrics — but since it's stripped too, we rely on
+    /// downstream "pure music" detection rather than rejecting here.
+    func testIsTitleMatch_remixLiveVariantsAreSameSong() {
+        XCTAssertTrue(MatchingUtils.isTitleMatch(target: "Hello", actual: "Hello (Remix)"))
+        XCTAssertTrue(MatchingUtils.isTitleMatch(target: "Hello", actual: "Hello (Live)"))
+        XCTAssertTrue(MatchingUtils.isTitleMatch(target: "Hello", actual: "Hello (Acoustic)"))
+    }
+
+    /// Legit contains matches must still pass. Input usually has parenthetical
+    /// annotations that result doesn't, not the other way around.
+    func testIsTitleMatch_allowsNormalContains() {
+        // Input has annotation, result doesn't → legit match
+        XCTAssertTrue(MatchingUtils.isTitleMatch(target: "Hello (feat. Adele)", actual: "Hello"))
+        // Pure contains with no sequel suffix → legit
+        XCTAssertTrue(MatchingUtils.isTitleMatch(target: "Hello World", actual: "Hello World Song"))
+    }
 }

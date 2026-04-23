@@ -68,9 +68,23 @@ public enum MatchingUtils {
             return titleWeight
         }
 
-        // 包含匹配
-        if targetNormalized.contains(actualNormalized) || actualNormalized.contains(targetNormalized) {
-            return titleWeight * 0.8  // 28分
+        // 包含匹配 — 但若较长一侧的多出部分是续集/版本标记（如 "Pt. 2"），
+        // 说明这是不同的歌，不应按包含算高分（降为纯相似度）。
+        let tContainsA = targetNormalized.contains(actualNormalized)
+        let aContainsT = actualNormalized.contains(targetNormalized)
+        if tContainsA || aContainsT {
+            let longer = tContainsA ? targetNormalized : actualNormalized
+            let shorter = tContainsA ? actualNormalized : targetNormalized
+            let remainder = longer
+                .replacingOccurrences(of: shorter, with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ",;:()[]{}-·."))
+                .lowercased()
+            if !hasSequelOrVersionMarker(remainder) {
+                return titleWeight * 0.8  // 28分
+            }
+            // Sequel marker detected — fall through to similarity,
+            // which will correctly score "Leon" vs "Leon Pt. 2" low.
         }
 
         // 相似度匹配
@@ -79,13 +93,74 @@ public enum MatchingUtils {
     }
 
     /// 检查标题是否匹配
+    /// - When one title is a strict substring of the other, check if the
+    ///   *remainder* (the part the longer one has extra) is a known sequel /
+    ///   version marker — "Pt. 2", "Part II", "(Remix)", "(Live)", etc.
+    ///   Those markers indicate a DIFFERENT song (e.g. LRCLIB matching
+    ///   "Leon" to "Leon Pt. 2"), so the contains-match is rejected.
     public static func isTitleMatch(target: String, actual: String) -> Bool {
         let targetNormalized = normalizedTitle(target)
         let actualNormalized = normalizedTitle(actual)
 
-        return targetNormalized == actualNormalized ||
-               targetNormalized.contains(actualNormalized) ||
-               actualNormalized.contains(targetNormalized)
+        if targetNormalized == actualNormalized { return true }
+
+        let tContainsA = targetNormalized.contains(actualNormalized)
+        let aContainsT = actualNormalized.contains(targetNormalized)
+        guard tContainsA || aContainsT else { return false }
+
+        // Compute the remainder — what the longer title has beyond the shorter.
+        let longer = tContainsA ? targetNormalized : actualNormalized
+        let shorter = tContainsA ? actualNormalized : targetNormalized
+        let remainder = longer
+            .replacingOccurrences(of: shorter, with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ",;:()[]{}-·."))
+            .lowercased()
+
+        // If the remainder looks like a "different song" marker, reject.
+        if hasSequelOrVersionMarker(remainder) { return false }
+        return true
+    }
+
+    /// Common markers that indicate the longer title is a different recording
+    /// (sequel, remix, live, instrumental, acoustic, etc.) — not the same song.
+    private static func hasSequelOrVersionMarker(_ remainder: String) -> Bool {
+        // Strip all interior punctuation so "pt. 2" → "pt 2", "pt.2" → "pt2".
+        let cleaned = remainder
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: ",", with: " ")
+            .replacingOccurrences(of: "(", with: " ")
+            .replacingOccurrences(of: ")", with: " ")
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !cleaned.isEmpty else { return false }
+
+        // Sequel markers: "pt 2", "part 2", "part ii"
+        let first = cleaned[0].lowercased()
+        let romanNumerals: Set<String> = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"]
+        if first == "pt" || first == "part" {
+            if cleaned.count >= 2 {
+                let second = cleaned[1].lowercased()
+                if Int(second) != nil || romanNumerals.contains(second) {
+                    return true
+                }
+            }
+        }
+        // Compact form: "pt2", "pt.2" already has dot stripped
+        if first.hasPrefix("pt") && first.count > 2 {
+            let tail = String(first.dropFirst(2))
+            if Int(tail) != nil || romanNumerals.contains(tail) { return true }
+        }
+
+        // Version markers as sole token remainder: remix, live, instrumental, etc.
+        let versionMarkers: Set<String> = [
+            "remix", "live", "instrumental", "acoustic", "demo", "unplugged",
+            "karaoke", "mix", "edit", "mono", "stereo",
+            "remastered", "remaster",
+        ]
+        let rejoined = cleaned.joined(separator: " ").lowercased()
+        if versionMarkers.contains(rejoined) { return true }
+        return false
     }
 
     // ── 艺术家匹配 ──

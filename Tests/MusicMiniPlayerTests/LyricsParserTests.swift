@@ -612,4 +612,46 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(stripped.count, 3, "Section tags must be stripped, got: \(stripped.map(\.text))")
         XCTAssertFalse(stripped.contains(where: { $0.text.contains("[") }))
     }
+
+    /// Real data: 戀愛預告 by Sandy Lamb (NetEase id=5258725) — the title card
+    /// at 0s is `戀愛預告（《開心鬼》電影插曲-林姍姍（SandyLim` which uses:
+    /// - CJK fullwidth open paren `（` inside
+    /// - CJK guillemets `《》`
+    /// - Dash followed DIRECTLY by CJK characters `-林`
+    /// None of these match the old " - " / " -[A-Z]" rules.
+    /// User symptom: "one line ahead" — title card occupies intro window,
+    /// making every later line feel off even though timestamps are correct.
+    func testStripMetadataLines_cjkTitleCardAtSongStart() {
+        let lines = [
+            LyricLine(text: "戀愛預告（《開心鬼》電影插曲-林姍姍（SandyLim", startTime: 0.0, endTime: 18.9),
+            LyricLine(text: "愛神也有苦惱", startTime: 18.9, endTime: 24.6),
+            LyricLine(text: "問他可知道", startTime: 24.6, endTime: 30.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+        XCTAssertEqual(stripped.count, 2, "CJK title card must be stripped, got: \(stripped.map(\.text))")
+        XCTAssertEqual(stripped[0].text, "愛神也有苦惱")
+    }
+
+    /// Simpler CJK title card: `歌名-歌手` (dash directly followed by CJK).
+    func testStripMetadataLines_dashFollowedByCJK() {
+        let lines = [
+            LyricLine(text: "戀愛預告-林姍姍", startTime: 0.5, endTime: 10.0),
+            LyricLine(text: "愛神也有苦惱", startTime: 10.0, endTime: 16.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+        XCTAssertEqual(stripped.count, 1)
+        XCTAssertEqual(stripped[0].text, "愛神也有苦惱")
+    }
+
+    /// Title card marker: line in first 5s containing CJK fullwidth open paren
+    /// `（` indicates a title card with annotations (movie/show reference).
+    func testStripMetadataLines_cjkFullwidthParenthesisTitleCard() {
+        let lines = [
+            LyricLine(text: "愛神也有苦惱", startTime: 18.9, endTime: 24.6),
+            LyricLine(text: "某歌名（電影主題曲）", startTime: 1.0, endTime: 18.9),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+        XCTAssertEqual(stripped.count, 1)
+        XCTAssertEqual(stripped[0].text, "愛神也有苦惱")
+    }
 }

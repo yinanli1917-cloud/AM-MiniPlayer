@@ -626,11 +626,34 @@ public final class LyricsFetcher {
             }),
         ]
 
+        // 🔑 Cross-tier albumMatch priority: when P1 has only non-album-matched
+        // candidates but a LATER tier (P2) has an album-matched one, the album
+        // match is a STRONGER correctness signal than the tighter duration.
+        // Example: 皇后餐廳 — P1 has cover '胡斯默' Δ0.9s (AL=false), P2 has
+        // real '王菀之 Atmosphere' Δ4.5s (AL=true). Album-matched wins because
+        // a 4.5s duration delta is routine for mastering differences, while
+        // an album mismatch means different recording entirely.
+        var tierWinners: [(label: String, candidate: SearchCandidate<ID>)] = []
         for (label, predicate) in priorities {
             let tierMatches = sorted.filter(predicate)
-            guard let best = tierMatches.sorted(by: compositeRank).first else { continue }
-            DebugLogger.log(source, "✅ \(label): '\(best.name)' by '\(best.artist)' alb='\(best.album)' AL=\(best.albumMatch) L=\(best.normalizedNameLength) Δ\(String(format: "%.1f", best.durationDiff))s")
-            return (best.id, best.albumMatch, best.durationDiff)
+            if let best = tierMatches.sorted(by: compositeRank).first {
+                tierWinners.append((label, best))
+            }
+        }
+
+        // If any tier produced an album-matched winner, prefer the album-matched
+        // one with smallest durationDiff. Otherwise fall back to P1→P2→P3 order.
+        let albumMatched = tierWinners.filter { $0.candidate.albumMatch }
+        let chosen: (label: String, candidate: SearchCandidate<ID>)?
+        if !albumMatched.isEmpty {
+            chosen = albumMatched.min(by: { $0.candidate.durationDiff < $1.candidate.durationDiff })
+        } else {
+            chosen = tierWinners.first
+        }
+
+        if let winner = chosen {
+            DebugLogger.log(source, "✅ \(winner.label): '\(winner.candidate.name)' by '\(winner.candidate.artist)' alb='\(winner.candidate.album)' AL=\(winner.candidate.albumMatch) L=\(winner.candidate.normalizedNameLength) Δ\(String(format: "%.1f", winner.candidate.durationDiff))s")
+            return (winner.candidate.id, winner.candidate.albumMatch, winner.candidate.durationDiff)
         }
 
         if !sorted.isEmpty { DebugLogger.log(source, "❌ 无匹配") }
@@ -1131,24 +1154,6 @@ public final class LyricsFetcher {
             // normal matching covers all cases. Without this guard, ANY ASCII result artist
             // gets a free pass because inputArtistIsCJK=true matches resultArtistIsASCII=true.
             let inputHasBothScripts = inputArtistIsASCII && inputArtistIsCJK
-            // 🔑 Cross-script tolerance: same person, different script names.
-            // Two tiers to balance precision vs recall:
-            // - Title matches + dur<1s: confident (翻風 + Cass Phang → 彭羚)
-            // - No title match + dur<1.0s + result is CJK title: search engine
-            //   confirmed artist mapping (Eman Lam → 林二汶 / Xia Nie Piao Piao
-            //   Chu Chu Wen → 仙乐飘飘处处闻; the romanized input is unrecognisable
-            //   to NetEase but the artist-only search returns the right CJK
-            //   track, and a 0.5s mastering difference between Apple Music and
-            //   NetEase is normal). Requiring `resultTitleIsCJK` keeps this from
-            //   greenlighting unrelated same-artist English-titled tracks.
-            let resultTitleIsCJK = LanguageUtils.containsCJK(s.name)
-            if !artistMatch && isCrossScriptArtist && !inputHasBothScripts {
-                if (titleMatch && durationDiff < 1.0) ||
-                   (!titleMatch && resultTitleIsCJK && durationDiff < 1.0) {
-                    artistMatch = true
-                }
-            }
-
             // 🔑 Album match (fuzzy, contains-either-way) — strongest signal
             // when multiple entries share title/artist/duration. Apple Music
             // and NetEase often use slightly different album names (e.g.
@@ -1164,6 +1169,29 @@ public final class LyricsFetcher {
                 if normalizedAlbum.contains(params.normalizedAlbum) { return true }
                 return false
             }()
+
+            // 🔑 Cross-script tolerance: same person, different script names.
+            // Tiers (in order of confidence):
+            // - albumMatch + titleMatch + cross-script: same recording on the
+            //   same album → artist IS the same even with large dur delta.
+            //   Catches 皇后餐廳 by Ivana Wong (Atmosphere, Δ4.5s) vs cover
+            //   '胡斯默 (mo'de, Δ0.9s) — album wins over duration.
+            // - Title matches + dur<1s: confident (翻風 + Cass Phang → 彭羚)
+            // - No title match + dur<1.0s + result is CJK title: search engine
+            //   confirmed artist mapping (Eman Lam → 林二汶 / Xia Nie Piao Piao
+            //   Chu Chu Wen → 仙乐飘飘处处闻; the romanized input is unrecognisable
+            //   to NetEase but the artist-only search returns the right CJK
+            //   track, and a 0.5s mastering difference between Apple Music and
+            //   NetEase is normal). Requiring `resultTitleIsCJK` keeps this from
+            //   greenlighting unrelated same-artist English-titled tracks.
+            let resultTitleIsCJK = LanguageUtils.containsCJK(s.name)
+            if !artistMatch && isCrossScriptArtist && !inputHasBothScripts {
+                if (albumMatch && titleMatch) ||
+                   (titleMatch && durationDiff < 1.0) ||
+                   (!titleMatch && resultTitleIsCJK && durationDiff < 1.0) {
+                    artistMatch = true
+                }
+            }
             let normalizedNameLength = LanguageUtils.normalizeTrackName(s.name).count
 
             return SearchCandidate(
