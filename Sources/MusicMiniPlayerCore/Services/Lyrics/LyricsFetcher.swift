@@ -1796,8 +1796,13 @@ public final class LyricsFetcher {
                   let songDict = bodyDict["song"] as? [String: Any],
                   let songs = songDict["list"] as? [[String: Any]] else { return nil }
             // Collect all title-matching CJK candidates, pick closest duration.
-            // QQ search can rank generic compilations ("日本群星" = Japanese
-            // Various Artists) above the actual artist — never trust order.
+            // QQ search can rank compilation entries above the real artist —
+            // never trust order. Duration-closeness is the structural winner
+            // (a compilation's cover of the song will rarely match the exact
+            // AM duration as closely as the original artist's own release).
+            // No whitelist — if a compilation happens to be the exact-
+            // duration match, downstream NE search + title/artist/album/
+            // duration validation still filters wrong results.
             let simplifiedInputTitle = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(title))
             var best: (artist: String, dur: Double)? = nil
             for song in songs.prefix(10) {
@@ -1811,9 +1816,6 @@ public final class LyricsFetcher {
                 let durOK = abs(dur - duration) < 3.0
                 guard titleOK && durOK else { continue }
                 guard LanguageUtils.containsCJK(singerName) else { continue }
-                // Skip generic "various artists" compilation markers.
-                let genericMarkers = ["群星", "Various Artists", "合輯", "合辑"]
-                if genericMarkers.contains(where: { singerName.contains($0) }) { continue }
                 let thisDelta = abs(dur - duration)
                 if let b = best, abs(b.dur - duration) <= thisDelta { continue }
                 best = (singerName, dur)
