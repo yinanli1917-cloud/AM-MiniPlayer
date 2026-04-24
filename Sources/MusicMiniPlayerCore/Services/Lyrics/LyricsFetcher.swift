@@ -535,6 +535,33 @@ public final class LyricsFetcher {
             }
             return selectReliable(syncedOnly, songDuration: songDuration)
         }
+        // 🔑 Hard word-level priority.
+        // If any candidate carries word-level (syllable) sync, collapse the
+        // pool to word-level only BEFORE the album/score selection runs.
+        // Rationale: word-level timestamps provide karaoke-style sweep that
+        // line-level cannot, and are strictly more informative for the user
+        // who wants "word-level prioritized". The scorer's +30 word-level
+        // bonus isn't enough on its own when the album-match override kicks
+        // in with a <20-pt score gap — this pre-filter makes the priority
+        // unconditional.
+        //
+        // Structural check only (hasSyllableSync on ≥30% of lines — ignores
+        // the occasional YRC entry that has word-level on only metadata
+        // lines and falls back to line-level for real lyrics). No source
+        // allowlist — any source that produces word-level qualifies.
+        //
+        // A word-level candidate that's already been rejected by the
+        // upstream timing-consensus gate won't be in usableSynced here,
+        // so this pre-filter can't resurrect a known-wrong master.
+        let wordLevelPool = usableSynced.filter { r in
+            guard !r.lyrics.isEmpty else { return false }
+            let syllableCount = r.lyrics.filter { $0.hasSyllableSync }.count
+            return Double(syllableCount) / Double(r.lyrics.count) >= 0.3
+        }
+        if !wordLevelPool.isEmpty {
+            DebugLogger.log("🎯 Word-level pre-filter: keeping \(wordLevelPool.map(\.source)), dropping \(usableSynced.filter { r in !wordLevelPool.contains(where: { $0.source == r.source && $0.score == r.score }) }.map(\.source))")
+            return selectReliable(wordLevelPool, songDuration: songDuration)
+        }
         return selectReliable(usableSynced, songDuration: songDuration)
     }
 
