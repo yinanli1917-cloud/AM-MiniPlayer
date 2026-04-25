@@ -18,11 +18,10 @@ public enum DebugLogger {
 
     private static let logPath = "/tmp/nanopod_debug.log"
 
-    #if DEBUG
+    // 🔑 Always-on logging (release + debug). The log lives in /tmp and is bounded
+    // by disk pressure; cost is negligible compared to the diagnostic value when
+    // a user reports artwork/lyrics misbehavior.
     private static var enabled = true
-    #else
-    private static var enabled = false
-    #endif
 
     // ── 公共接口 ──
 

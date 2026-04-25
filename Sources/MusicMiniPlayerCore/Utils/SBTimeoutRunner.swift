@@ -58,17 +58,31 @@ public enum SBTimeoutRunner {
     /// Execute `block` with a wall-clock deadline. Returns the block's value
     /// on success, or nil on timeout.
     ///
-    /// Important: the block keeps running in the background if it exceeds
-    /// `timeout`. Any side effects it performs AFTER the timeout are silently
-    /// discarded from the caller's perspective, but caller must tolerate
-    /// those side effects happening late (e.g., a later log line).
+    /// 🔑 Drop-on-timeout: when the caller times out, the queued block is
+    /// flagged canceled. Once the workerQueue eventually picks the block up,
+    /// it skips the SB call entirely and signals immediately. This is what
+    /// keeps the serial workerQueue from spending many seconds draining
+    /// stale work after a single Music.app IPC hang resolves — without it,
+    /// every queued poll/artwork fetch behind the hang would still execute
+    /// its now-pointless AE round-trip, blocking real-time UI updates.
+    ///
+    /// Note: the FIRST hung block (the one currently mid-AE) cannot be
+    /// canceled — Apple Events have no abort. It keeps running until
+    /// Music.app responds. But every subsequent queued block exits cleanly.
     public static func run<T>(timeout: TimeInterval, _ block: @escaping () -> T?) -> T? {
         let sem = DispatchSemaphore(value: 0)
         var result: T?
         var signaled = false
+        var canceled = false
         let lock = NSLock()
 
         workerQueue.async {
+            // Skip the SB call entirely if the caller already gave up.
+            lock.lock()
+            let skip = canceled
+            lock.unlock()
+            if skip { return }
+
             let value = block()
             lock.lock()
             if !signaled {
@@ -82,9 +96,11 @@ public enum SBTimeoutRunner {
         let waitResult = sem.wait(timeout: .now() + timeout)
         if waitResult == .timedOut {
             lock.lock()
-            // Mark signaled so the late worker won't touch `result` (already nil).
+            // `signaled` flips true here so a late worker can't write `result`.
+            // `canceled` flips true so blocks still queued behind us skip outright.
             let late = signaled
             signaled = true
+            canceled = true
             lock.unlock()
             return late ? result : nil
         }

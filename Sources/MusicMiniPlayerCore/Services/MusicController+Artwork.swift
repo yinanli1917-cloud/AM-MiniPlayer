@@ -183,20 +183,101 @@ extension MusicController {
     public func fetchMusicKitArtwork(title: String, artist: String, album: String) async -> NSImage? {
         guard !isPreview else { return nil }
 
-        // Track 1: MusicKit (App Store 正式版)
+        // 🔑 The user's library is mostly Apple Music subscription tracks, which
+        // present as URL tracks via ScriptingBridge — `count of artworks` is 0,
+        // so SB-based artwork extraction structurally cannot work. We must use
+        // network APIs. Order is by hit-rate observed in the user's library:
+        //
+        //   1. MusicKit         — best when authorized (App Store builds only)
+        //   2. NetEase          — best CJK coverage by a wide margin, decent globally
+        //   3. Deezer           — strong global/Western, weak CJK
+        //   4. iTunes Search    — last resort, frequently 403s
+
         if MusicAuthorization.currentStatus == .authorized {
             if let image = await fetchArtworkViaMusicKit(title: title, artist: artist, album: album) {
                 return image
             }
         }
 
-        // Track 2: Deezer API (free, no auth, no 403 — iTunes Search API returns 403)
+        if let image = await fetchArtworkViaNetEase(title: title, artist: artist, album: album) {
+            return image
+        }
+
         if let image = await fetchArtworkViaDeezer(title: title, artist: artist) {
             return image
         }
 
-        // Track 3: iTunes Search API (last resort, may 403)
         return await fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
+    }
+
+    /// Normalize a string for cross-script artwork matching:
+    ///   - lowercased
+    ///   - whitespace trimmed
+    ///   - traditional → simplified (so 愛 ≡ 爱)
+    /// Cheap, allocation-light, and good enough for "did NetEase return our song?".
+    static func normalizeForArtworkMatching(_ s: String) -> String {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return LanguageUtils.toSimplifiedChinese(trimmed)
+    }
+
+    /// NetEase Cloud Music — single-call cloudsearch returns album picUrl. Best
+    /// CJK-track coverage available; also returns hits for many Western tracks.
+    /// Match priority: title+artist+album > title+artist > first result.
+    private func fetchArtworkViaNetEase(title: String, artist: String, album: String) async -> NSImage? {
+        let query = "\(title) \(artist)"
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let searchURL = URL(string: "https://music.163.com/api/cloudsearch/pc?s=\(encoded)&type=1&limit=10") else {
+            return nil
+        }
+
+        var req = URLRequest(url: searchURL, timeoutInterval: 4.0)
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let result = json["result"] as? [String: Any],
+                  let songs = result["songs"] as? [[String: Any]],
+                  !songs.isEmpty else {
+                return nil
+            }
+
+            // Match preference uses CJK-aware title comparison so 愛你不是兩三天 ↔ 爱你不是两三天
+            // resolve to the same song. Self.normalizeForArtworkMatching handles trad/simp.
+            let titleNorm = Self.normalizeForArtworkMatching(title)
+            let artistNorm = Self.normalizeForArtworkMatching(artist)
+            let albumNorm = Self.normalizeForArtworkMatching(album)
+
+            func score(_ s: [String: Any]) -> Int {
+                let sTitle = Self.normalizeForArtworkMatching((s["name"] as? String) ?? "")
+                let sArtist = Self.normalizeForArtworkMatching(((s["ar"] as? [[String: Any]])?.first?["name"] as? String) ?? "")
+                let sAlbum = Self.normalizeForArtworkMatching(((s["al"] as? [String: Any])?["name"] as? String) ?? "")
+                var p = 0
+                if !titleNorm.isEmpty, sTitle == titleNorm { p += 4 }
+                else if !titleNorm.isEmpty, sTitle.contains(titleNorm) || titleNorm.contains(sTitle) { p += 2 }
+                if !artistNorm.isEmpty, sArtist == artistNorm { p += 3 }
+                else if !artistNorm.isEmpty, sArtist.contains(artistNorm) || artistNorm.contains(sArtist) { p += 1 }
+                if !albumNorm.isEmpty, sAlbum == albumNorm { p += 2 }
+                return p
+            }
+
+            let best = songs.max(by: { score($0) < score($1) }) ?? songs[0]
+            guard let al = best["al"] as? [String: Any],
+                  let picStr = al["picUrl"] as? String,
+                  let picURL = URL(string: picStr.replacingOccurrences(of: "http://", with: "https://")) else {
+                return nil
+            }
+
+            // NetEase param `?param=300y300` requests a 300×300 crop — same size as our
+            // other API sources, keeps cache cost predictable.
+            let sizedURL = URL(string: picURL.absoluteString + "?param=300y300") ?? picURL
+            let (imageData, _) = try await URLSession.shared.data(from: sizedURL)
+            DebugLogger.log("Artwork", "🎨 [NetEase] 命中: '\(best["name"] ?? "?")' al='\((best["al"] as? [String: Any])?["name"] ?? "?")'")
+            return NSImage(data: imageData)
+        } catch {
+            return nil
+        }
     }
 
     /// Deezer API — free, no auth, reliable artwork source

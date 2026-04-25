@@ -29,3 +29,4 @@ secrets/
 
 # Release artifacts (built on demand)
 releases/
+.nightcrawl/

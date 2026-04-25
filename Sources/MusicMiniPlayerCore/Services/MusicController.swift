@@ -923,13 +923,14 @@ public class MusicController: ObservableObject {
     func updatePlayerState() {
         guard !isPreview else { return }
 
-        // 🔑 SB queue health check before dispatching heavy work
-        if Date().timeIntervalSince(lastSBQueueHeartbeat) > 5.0 {
-            DebugLogger.log("FullSync", "💀 scriptingBridgeQueue stuck (no heartbeat >5s), recreating...")
-            musicApp = SBApplication(bundleIdentifier: "com.apple.Music")
-            scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge.\(Date().timeIntervalSince1970)", qos: .userInitiated)
-            lastSBQueueHeartbeat = Date()
-        }
+        // 🔑 NO heartbeat-recreate. Replacing musicApp/scriptingBridgeQueue while
+        // an AE reply is still pending for the OLD SBApplication causes ARC to
+        // dealloc the SBApplication; when the reply later arrives, AEProcessMessage
+        // dereferences a freed callback table → EXC_BAD_ACCESS in pthread_mutex_lock.
+        // Verified crash class on 2026-04-18 (multiple reports).
+        // Recovery now comes from SBTimeoutRunner's drop-on-timeout: stale queued
+        // blocks skip their SB calls outright, so a single hang clears in O(timeout)
+        // instead of O(queue-depth × per-call-time). No app-level recreate needed.
 
         guard let app = musicApp, app.isRunning else { return }
 
