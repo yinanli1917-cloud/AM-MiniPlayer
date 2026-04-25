@@ -841,22 +841,25 @@ public class MusicController: ObservableObject {
 
             // Trigger an AppleScript-backed metadata check when:
             //   (a) position jumped back (library or radio), OR
-            //   (b) the current track has no persistentID (radio/URL) and ≥2s passed
+            //   (b) the current track has no persistentID (radio/URL) and ≥0.5s passed
             //       since the last check — the "radio backstop" that guarantees we
             //       detect song changes even when playerInfo notifications are
             //       skipped and position-jump conditions don't fire.
+            // 🔑 0.5s interval matches the SB poll cadence so radio rapid-skip
+            // catches every change within one poll cycle. `radioTrackCheckInFlight`
+            // still de-dupes overlapping subprocess spawns.
             let radioBackstopDue: Bool = {
                 guard playing, !self.seekPending,
                       (self.currentPersistentID ?? "").isEmpty,
                       !self.radioTrackCheckInFlight,
-                      Date().timeIntervalSince(self.lastRadioTrackCheckTime) >= 2.0 else { return false }
+                      Date().timeIntervalSince(self.lastRadioTrackCheckTime) >= 0.5 else { return false }
                 return true
             }()
 
             if positionJumpedBack || radioBackstopDue {
                 let reason = positionJumpedBack
                     ? "position jump \(String(format: "%.1f", prevPosition))s→\(String(format: "%.1f", position))s"
-                    : "radio backstop (2s)"
+                    : "radio backstop (0.5s)"
                 DebugLogger.log("Poll", "🔄 Track check via AppleScript — reason: \(reason)")
                 DispatchQueue.main.async { self.radioTrackCheckInFlight = true }
                 DispatchQueue.global(qos: .userInitiated).async {

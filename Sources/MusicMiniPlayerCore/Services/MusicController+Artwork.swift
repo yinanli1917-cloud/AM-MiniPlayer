@@ -114,7 +114,18 @@ extension MusicController {
                 }
             } else {
                 guard !Task.isCancelled else { return }
-                self.logToFile("🎨 [API] No artwork found, setting placeholder + scheduling retry")
+                self.logToFile("🎨 [API] No artwork found, scheduling retry (placeholder deferred)")
+                // 🔑 Placeholder deferred — during rapid switching, the API task for
+                // an in-between track gets cancelled before completing. We must NOT
+                // flash the music-note placeholder in those cases. The placeholder
+                // is only valid IF (a) we're still the current generation after the
+                // 1s wait AND (b) no other artwork has been applied since AND (c)
+                // there's no existing artwork to display. Drop on cancellation.
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
+                // After retry returns, if still nothing, fall back to placeholder.
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
                     if self.isStillCurrentTrack(persistentID: persistentID, title: title)
@@ -122,9 +133,6 @@ extension MusicController {
                         self.setArtwork(self.createPlaceholder())
                     }
                 }
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled else { return }
-                await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
             }
         }
 
@@ -185,29 +193,34 @@ extension MusicController {
 
         // 🔑 The user's library is mostly Apple Music subscription tracks, which
         // present as URL tracks via ScriptingBridge — `count of artworks` is 0,
-        // so SB-based artwork extraction structurally cannot work. We must use
-        // network APIs. Order is by hit-rate observed in the user's library:
+        // so SB-based extraction structurally cannot work. We must use network
+        // APIs. Race them in parallel — under rapid switching the LAST track's
+        // fetch must complete fast, and sequential chains (MusicKit→NetEase→
+        // Deezer→iTunes) accumulated up to ~2s before yielding. Parallel race
+        // returns within the FASTEST source's round-trip (~300-700ms typical).
         //
-        //   1. MusicKit         — best when authorized (App Store builds only)
-        //   2. NetEase          — best CJK coverage by a wide margin, decent globally
-        //   3. Deezer           — strong global/Western, weak CJK
-        //   4. iTunes Search    — last resort, frequently 403s
+        // Source priority on tie: NetEase first (best CJK coverage) > Deezer
+        // (strong Western) > iTunes (often 403, last resort). MusicKit only
+        // fires when authorized; Apple's catalog wins when available.
 
-        if MusicAuthorization.currentStatus == .authorized {
-            if let image = await fetchArtworkViaMusicKit(title: title, artist: artist, album: album) {
-                return image
+        return await withTaskGroup(of: NSImage?.self) { group in
+            if MusicAuthorization.currentStatus == .authorized {
+                group.addTask { await self.fetchArtworkViaMusicKit(title: title, artist: artist, album: album) }
             }
-        }
+            group.addTask { await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album) }
+            group.addTask { await self.fetchArtworkViaDeezer(title: title, artist: artist) }
+            group.addTask { await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album) }
 
-        if let image = await fetchArtworkViaNetEase(title: title, artist: artist, album: album) {
-            return image
+            // First non-nil wins. Cancel the rest so their HTTP traffic stops
+            // and we free the URLSession slots for the NEXT track's fetch.
+            for await result in group {
+                if let image = result {
+                    group.cancelAll()
+                    return image
+                }
+            }
+            return nil
         }
-
-        if let image = await fetchArtworkViaDeezer(title: title, artist: artist) {
-            return image
-        }
-
-        return await fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
     }
 
     /// Normalize a string for cross-script artwork matching:
@@ -230,7 +243,7 @@ extension MusicController {
             return nil
         }
 
-        var req = URLRequest(url: searchURL, timeoutInterval: 4.0)
+        var req = URLRequest(url: searchURL, timeoutInterval: 2.0)
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
         req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
 
