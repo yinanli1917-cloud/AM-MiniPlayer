@@ -44,7 +44,22 @@ struct GlassCapsule: ViewModifier {
         if #available(macOS 26.0, *) {
             content.glassEffect(.regular, in: .capsule)
         } else {
-            content.background(Capsule().fill(Color.white.opacity(fallbackOpacity)))
+            content.background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .opacity(fallbackOpacity > 0 ? 1 : 0)
+                    .overlay(
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [.white.opacity(0.2), .clear],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+            )
         }
     }
 }
@@ -234,7 +249,7 @@ struct TranslationButtonView: View {
         }) {
             Image(systemName: "translate")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
+                .foregroundStyle(.white)  // 🔑 icon 始终 100% opacity
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(
                     isEnabled: true,
@@ -287,7 +302,7 @@ struct PlaylistTabBarIntegrated: View {
                     Button(action: { selectedTab = 0 }) {
                         Text("History")
                             .font(.system(size: 13, weight: selectedTab == 0 ? .semibold : .medium))
-                            .foregroundColor(.white)
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .contentShape(Rectangle())
                     }
@@ -298,7 +313,7 @@ struct PlaylistTabBarIntegrated: View {
                     Button(action: { selectedTab = 1 }) {
                         Text("Up Next")
                             .font(.system(size: 13, weight: selectedTab == 1 ? .semibold : .medium))
-                            .foregroundColor(.white)
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .contentShape(Rectangle())
                     }

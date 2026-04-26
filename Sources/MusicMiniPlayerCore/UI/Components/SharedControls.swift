@@ -98,7 +98,7 @@ struct SharedBottomControls: View {
                     HStack {
                         Text(formatTime(timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.6))
                             .accessibilityHidden(true)
 
                         Spacer()
@@ -112,7 +112,7 @@ struct SharedBottomControls: View {
 
                         Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.6))
                             .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
@@ -128,26 +128,8 @@ struct SharedBottomControls: View {
 
                 Spacer()
 
-                // Previous Track
-                HoverableControlButton(iconName: "backward.fill", size: 17) {
-                    musicController.previousTrack()
-                }
-                .frame(width: 30, height: 30)
-                .accessibilityLabel("上一首")
-
-                // Play/Pause
-                HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
-                    musicController.togglePlayPause()
-                }
-                .frame(width: 30, height: 30)
-                .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
-
-                // Next Track
-                HoverableControlButton(iconName: "forward.fill", size: 17) {
-                    musicController.nextTrack()
-                }
-                .frame(width: 30, height: 30)
-                .accessibilityLabel("下一首")
+                // Playback cluster — wrapped in GlassEffectContainer for shared sampling
+                playbackCluster
 
                 Spacer()
 
@@ -192,6 +174,37 @@ struct SharedBottomControls: View {
                     currentPage = .lyrics
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var playbackCluster: some View {
+        let buttons = HStack(spacing: 10) {
+            HoverableControlButton(iconName: "backward.fill", size: 17) {
+                musicController.previousTrack()
+            }
+            .frame(width: 30, height: 30)
+            .accessibilityLabel("上一首")
+
+            HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
+                musicController.togglePlayPause()
+            }
+            .frame(width: 30, height: 30)
+            .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
+
+            HoverableControlButton(iconName: "forward.fill", size: 17) {
+                musicController.nextTrack()
+            }
+            .frame(width: 30, height: 30)
+            .accessibilityLabel("下一首")
+        }
+
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer {
+                buttons
+            }
+        } else {
+            buttons
         }
     }
 
@@ -294,7 +307,7 @@ struct SharedBottomControls: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .modifier(GlassCapsule(fallbackOpacity: 0.15))
-        .foregroundColor(.white.opacity(0.9))
+        .foregroundStyle(.white.opacity(0.9))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("音频质量：\(quality)")
     }
@@ -320,7 +333,7 @@ struct HoverableControlButton: View {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: size))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }
@@ -346,7 +359,7 @@ struct NavigationIconButton: View {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: 15))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
                 .modifier(GlassCircle(isEnabled: isActive || isHovering, fallbackOpacity: 0.25))
         }

@@ -136,7 +136,7 @@ struct SettingsWindowView: View {
                         Text(L10n.localized("musicKit"))
                         Text(L10n.localized("musicKitDesc"))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
 
                     Spacer()
@@ -148,7 +148,7 @@ struct SettingsWindowView: View {
 
                         Text(musicController.musicKitAuthStatus)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
 
                         if !musicController.musicKitAuthorized {
                             Button(L10n.localized("musicKitRequest")) {
@@ -178,7 +178,7 @@ struct SettingsWindowView: View {
                         Text(L10n.localized("showInDock"))
                         Text(L10n.localized("showInDockDesc"))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -196,7 +196,7 @@ struct SettingsWindowView: View {
                         Text(L10n.localized("fullscreenCover"))
                         Text(L10n.localized("fullscreenCoverDesc"))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -221,7 +221,7 @@ struct SettingsWindowView: View {
                             Text(L10n.localized("translationLang"))
                             Text(L10n.localized("translationLangDesc"))
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -250,7 +250,7 @@ struct SettingsWindowView: View {
 
             Text("\(L10n.localized("version")) \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
                 .font(.system(size: 13, design: .rounded))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
 
             Spacer()
 
@@ -284,19 +284,19 @@ struct SettingsRow: View {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 13))
-                    .foregroundColor(isDestructive ? .red : .secondary)
+                    .foregroundStyle(isDestructive ? .red : .secondary)
                     .frame(width: 16, height: 16)
 
                 Text(title)
                     .font(.system(size: 13))
-                    .foregroundColor(isDestructive ? .red : .primary)
+                    .foregroundStyle(isDestructive ? .red : .primary)
 
                 Spacer()
 
                 if let shortcut = shortcut {
                     Text(shortcut)
                         .font(.system(size: 11))
-                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                        .foregroundStyle(Color(NSColor.tertiaryLabelColor))
                 }
             }
             .padding(.horizontal, 10)
@@ -325,12 +325,12 @@ struct SettingsToggleRow: View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.system(size: 13))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .frame(width: 16, height: 16)
 
             Text(title)
                 .font(.system(size: 13))
-                .foregroundColor(.primary)
+                .foregroundStyle(.primary)
 
             Spacer()
 
@@ -359,22 +359,22 @@ struct SettingsPickerRow: View {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .frame(width: 16, height: 16)
 
                 Text(title)
                     .font(.system(size: 13))
-                    .foregroundColor(.primary)
+                    .foregroundStyle(.primary)
 
                 Spacer()
 
                 Text(currentValue)
                     .font(.system(size: 12))
-                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    .foregroundStyle(Color(NSColor.tertiaryLabelColor))
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    .foregroundStyle(Color(NSColor.tertiaryLabelColor))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -404,7 +404,7 @@ struct SettingsPickerRow: View {
                             if currentValue == option.name {
                                 Image(systemName: "checkmark")
                                     .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(.accentColor)
+                                    .foregroundStyle(Color.accentColor)
                             }
                         }
                         .padding(.horizontal, 12)

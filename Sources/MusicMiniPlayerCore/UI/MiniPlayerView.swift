@@ -298,51 +298,7 @@ extension MiniPlayerView {
                     HStack {
                         Spacer()
 
-                        HStack(spacing: 4) {
-                            let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                            let isLightBg = artworkBrightness > 0.6
-                            let normalFillOpacity = isLightBg ? 0.5 : 0.20
-                            let shadowOp = isLightBg ? 0.6 : 0.3
-                            let shadowRad: CGFloat = isLightBg ? 15 : 8
-
-                            Button(action: { musicController.toggleShuffle() }) {
-                                Image(systemName: "shuffle")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .symbolEffect(.bounce, value: musicController.shuffleEnabled)
-                                    .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
-                                    .frame(width: 24, height: 24)
-                                    .modifier(GlassCircle(
-                                        isEnabled: true,
-                                        tintColor: musicController.shuffleEnabled ? themeColor : nil,
-                                        fallbackFill: musicController.shuffleEnabled ? themeColor : .white,
-                                        fallbackOpacity: musicController.shuffleEnabled ? 0.25 : normalFillOpacity,
-                                        fallbackShadowOpacity: shadowOp,
-                                        fallbackShadowRadius: shadowRad
-                                    ))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("随机播放")
-                            .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
-
-                            Button(action: { musicController.cycleRepeatMode() }) {
-                                Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                    .contentTransition(.symbolEffect(.replace))
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .symbolEffect(.bounce, value: musicController.repeatMode)
-                                    .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
-                                    .frame(width: 24, height: 24)
-                                    .modifier(GlassCircle(
-                                        isEnabled: true,
-                                        tintColor: musicController.repeatMode > 0 ? themeColor : nil,
-                                        fallbackFill: musicController.repeatMode > 0 ? themeColor : .white,
-                                        fallbackOpacity: musicController.repeatMode > 0 ? 0.25 : normalFillOpacity,
-                                        fallbackShadowOpacity: shadowOp,
-                                        fallbackShadowRadius: shadowRad
-                                    ))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
-                        }
+                        shuffleRepeatCluster
                     }
                     .padding(.horizontal, 32)
                     .padding(.bottom, 4)
@@ -367,6 +323,64 @@ extension MiniPlayerView {
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
             .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
             .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: showOverlayContent)
+        }
+    }
+
+    // MARK: - Shuffle/Repeat Cluster (GlassEffectContainer on macOS 26+)
+    @ViewBuilder
+    private var shuffleRepeatCluster: some View {
+        let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+        let isLightBg = artworkBrightness > 0.6
+        let normalFillOpacity = isLightBg ? 0.5 : 0.20
+        let shadowOp = isLightBg ? 0.6 : 0.3
+        let shadowRad: CGFloat = isLightBg ? 15 : 8
+
+        let buttons = HStack(spacing: 4) {
+            Button(action: { musicController.toggleShuffle() }) {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .symbolEffect(.bounce, value: musicController.shuffleEnabled)
+                    .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
+                    .frame(width: 24, height: 24)
+                    .modifier(GlassCircle(
+                        isEnabled: true,
+                        tintColor: musicController.shuffleEnabled ? themeColor : nil,
+                        fallbackFill: musicController.shuffleEnabled ? themeColor : .white,
+                        fallbackOpacity: musicController.shuffleEnabled ? 0.25 : normalFillOpacity,
+                        fallbackShadowOpacity: shadowOp,
+                        fallbackShadowRadius: shadowRad
+                    ))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("随机播放")
+            .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
+
+            Button(action: { musicController.cycleRepeatMode() }) {
+                Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                    .contentTransition(.symbolEffect(.replace))
+                    .font(.system(size: 11, weight: .semibold))
+                    .symbolEffect(.bounce, value: musicController.repeatMode)
+                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
+                    .frame(width: 24, height: 24)
+                    .modifier(GlassCircle(
+                        isEnabled: true,
+                        tintColor: musicController.repeatMode > 0 ? themeColor : nil,
+                        fallbackFill: musicController.repeatMode > 0 ? themeColor : .white,
+                        fallbackOpacity: musicController.repeatMode > 0 ? 0.25 : normalFillOpacity,
+                        fallbackShadowOpacity: shadowOp,
+                        fallbackShadowRadius: shadowRad
+                    ))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
+        }
+
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 8) {
+                buttons
+            }
+        } else {
+            buttons
         }
     }
 
