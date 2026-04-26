@@ -138,19 +138,14 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        .onHover { hovering in
-            // 🔑 如果 hover 状态被锁定（页面切换后短暂期间），忽略 onHover(false)
-            if hoverLocked && !hovering { return }
-
-            // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
-            let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
-            let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
-            let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
-            withAnimation(hoverAnim) {
-                isHovering = hovering
-            }
-            if hovering {
-                // 🔑 进入时重置模糊和位移状态
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard !isHovering else { return }
+                let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+                let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
+                let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
+                withAnimation(hoverAnim) { isHovering = true }
                 controlsBlurAmount = 10
                 controlsOffsetY = 30
                 withAnimation(controlsAnim) {
@@ -159,8 +154,12 @@ public struct MiniPlayerView: View {
                     controlsBlurAmount = 0
                     controlsOffsetY = 0
                 }
-            } else {
-                // 🔑 离开时动画
+            case .ended:
+                if hoverLocked { return }
+                let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+                let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
+                let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
+                withAnimation(hoverAnim) { isHovering = false }
                 withAnimation(controlsAnim) {
                     showOverlayContent = false
                     controlsBlurAmount = 10
