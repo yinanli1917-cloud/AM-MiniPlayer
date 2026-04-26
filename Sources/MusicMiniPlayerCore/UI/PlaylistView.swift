@@ -354,7 +354,7 @@ public struct PlaylistView: View {
                         HStack(spacing: 5) {
                             Image(systemName: "shuffle")
                                 .font(.system(size: 11))
-                                .symbolEffect(.bounce, value: musicController.shuffleEnabled)
+                                .symbolEffect(.bounce.up.byLayer, value: musicController.shuffleEnabled)
                             Text("Shuffle")
                                 .font(.system(size: 10, weight: .medium))
                         }
@@ -371,7 +371,7 @@ public struct PlaylistView: View {
                             Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                                 .contentTransition(.symbolEffect(.replace))
                                 .font(.system(size: 11))
-                                .symbolEffect(.bounce, value: musicController.repeatMode)
+                                .symbolEffect(.bounce.up.byLayer, value: musicController.repeatMode)
                             Text("Repeat")
                                 .font(.system(size: 10, weight: .medium))
                         }
@@ -637,7 +637,7 @@ struct PlaylistItemRowCompact: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             guard !isScrolling else { return }
-            withAnimation(.bouncy(duration: 0.25)) {
+            withAnimation(.bouncy(duration: 0.2)) {
                 isHovering = hovering
             }
         }

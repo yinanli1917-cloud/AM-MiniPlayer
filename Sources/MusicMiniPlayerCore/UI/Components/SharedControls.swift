@@ -260,7 +260,7 @@ struct SharedBottomControls: View {
             .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
-                let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.3)
+                let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.25)
                 withAnimation(animation) {
                     isProgressBarHovering = hovering
                 }
@@ -326,12 +326,17 @@ struct HoverableControlButton: View {
     let size: CGFloat
     let action: () -> Void
     @State private var isHovering = false
+    @State private var tapCount = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            tapCount += 1
+            action()
+        } label: {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, options: .speed(1.5), value: tapCount)
                 .font(.system(size: size))
                 .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
@@ -339,7 +344,7 @@ struct HoverableControlButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.3)
+            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.25)
             withAnimation(animation) {
                 isHovering = hovering
             }
@@ -365,7 +370,7 @@ struct NavigationIconButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.3)
+            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.25)
             withAnimation(animation) {
                 isHovering = hovering
             }

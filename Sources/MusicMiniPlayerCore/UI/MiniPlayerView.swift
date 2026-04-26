@@ -339,12 +339,11 @@ extension MiniPlayerView {
             Button(action: { musicController.toggleShuffle() }) {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
-                    .symbolEffect(.bounce, value: musicController.shuffleEnabled)
+                    .symbolEffect(.bounce.up.byLayer, value: musicController.shuffleEnabled)
                     .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
-                        tintColor: musicController.shuffleEnabled ? themeColor : nil,
                         fallbackFill: musicController.shuffleEnabled ? themeColor : .white,
                         fallbackOpacity: musicController.shuffleEnabled ? 0.25 : normalFillOpacity,
                         fallbackShadowOpacity: shadowOp,
@@ -359,12 +358,11 @@ extension MiniPlayerView {
                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
-                    .symbolEffect(.bounce, value: musicController.repeatMode)
+                    .symbolEffect(.bounce.up.byLayer, value: musicController.repeatMode)
                     .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
-                        tintColor: musicController.repeatMode > 0 ? themeColor : nil,
                         fallbackFill: musicController.repeatMode > 0 ? themeColor : .white,
                         fallbackOpacity: musicController.repeatMode > 0 ? 0.25 : normalFillOpacity,
                         fallbackShadowOpacity: shadowOp,
