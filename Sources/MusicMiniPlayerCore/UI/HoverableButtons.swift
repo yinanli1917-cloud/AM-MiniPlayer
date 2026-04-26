@@ -22,7 +22,7 @@ struct GlassButtonBackground: ViewModifier {
         if #available(macOS 26.0, *) {
             content
                 .foregroundStyle(.primary)
-                .glassEffect(.regular, in: .capsule)
+                .glassEffect(.clear, in: .capsule)
         } else {
             content
                 .foregroundStyle(isLightBackground ? Color.black : Color.white)
@@ -129,6 +129,7 @@ struct HoverableActionButton: View {
             label
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
+                .contentShape(Capsule())
                 .modifier(GlassButtonBackground(
                     fillOpacity: hoverableButtonFillOpacity(isLightBackground: isLightBackground, isHovering: isHovering),
                     shadowOpacity: hoverableButtonShadowOpacity(isLightBackground: isLightBackground),
