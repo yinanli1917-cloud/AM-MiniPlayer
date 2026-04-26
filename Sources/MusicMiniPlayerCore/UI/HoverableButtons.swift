@@ -20,17 +20,56 @@ struct GlassButtonBackground: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            // 🔑 Liquid Glass: 使用 .clear 材质，亮色背景用黑字
             content
-                .foregroundStyle(isLightBackground ? Color.black : Color.white)
-                .glassEffect(.clear.tint(Color.black.opacity(0.1)), in: .capsule)
-                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+                .foregroundStyle(.primary)
+                .glassEffect(.regular, in: .capsule)
         } else {
             content
                 .foregroundStyle(isLightBackground ? Color.black : Color.white)
                 .background(Color.white.opacity(fillOpacity))
                 .clipShape(Capsule())
                 .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - Conditional Glass Modifiers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct GlassCapsule: ViewModifier {
+    var fallbackOpacity: Double = 0.1
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: .capsule)
+        } else {
+            content.background(Capsule().fill(Color.white.opacity(fallbackOpacity)))
+        }
+    }
+}
+
+struct GlassCircle: ViewModifier {
+    var isEnabled: Bool = true
+    var tintColor: Color? = nil
+    var fallbackFill: Color = .white
+    var fallbackOpacity: Double = 0.2
+    var fallbackShadowOpacity: Double = 0
+    var fallbackShadowRadius: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            if let tint = tintColor, isEnabled {
+                content.glassEffect(.regular.tint(tint), in: .circle)
+            } else {
+                content.glassEffect(isEnabled ? .regular : .identity, in: .circle)
+            }
+        } else {
+            content.background(
+                Circle()
+                    .fill(fallbackFill.opacity(isEnabled ? fallbackOpacity : 0))
+                    .shadow(color: .black.opacity(fallbackShadowOpacity), radius: fallbackShadowRadius, x: 0, y: 3)
+            )
         }
     }
 }
@@ -87,7 +126,7 @@ struct HoverableActionButton: View {
             if reduceMotion {
                 isHovering = hovering
             } else {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(.bouncy(duration: 0.3)) {
                     isHovering = hovering
                 }
             }
@@ -169,7 +208,7 @@ struct TranslationButtonView: View {
 
     var body: some View {
         Button(action: {
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(.bouncy(duration: 0.3)) {
                 // 🔑 智能翻译逻辑：
                 // 1. 如果翻译开关关闭 → 打开翻译
                 // 2. 如果翻译开关已开启但没有翻译结果，且未尝试过强制重试 → 强制重试翻译
@@ -197,17 +236,18 @@ struct TranslationButtonView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
                 .frame(width: 32, height: 32)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(lyricsService.showTranslation ? 0.3 : (isHovering ? 0.2 : 0.12)))  // 🔑 切换状态 0.3，hover 0.2，常驻 0.12
-                )
+                .modifier(GlassCircle(
+                    isEnabled: true,
+                    tintColor: lyricsService.showTranslation ? .accentColor : nil,
+                    fallbackOpacity: lyricsService.showTranslation ? 0.3 : (isHovering ? 0.2 : 0.12)
+                ))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
             if reduceMotion {
                 isHovering = hovering
             } else {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(.bouncy(duration: 0.3)) {
                     isHovering = hovering
                 }
             }
@@ -232,19 +272,13 @@ struct PlaylistTabBarIntegrated: View {
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
-                // Background Capsule - 恢复原来的透明设计（装饰性）
-                Capsule()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(height: 32)
-                    .accessibilityHidden(true)
-
-                // Selection Capsule（装饰性）
+                // Selection Capsule
                 GeometryReader { geo in
                     Capsule()
-                        .fill(Color.white.opacity(0.25))
+                        .fill(Color.white.opacity(0.15))
                         .frame(width: geo.size.width / 2 - 4, height: 28)
                         .offset(x: selectedTab == 0 ? 2 : geo.size.width / 2 + 2, y: 2)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
+                        .animation(.bouncy(duration: 0.35), value: selectedTab)
                 }
                 .accessibilityHidden(true)
 
@@ -274,6 +308,7 @@ struct PlaylistTabBarIntegrated: View {
                 }
             }
             .frame(height: 32)
+            .modifier(GlassCapsule())
             .accessibilityElement(children: .contain)
             .accessibilityLabel("播放列表标签栏")
         }

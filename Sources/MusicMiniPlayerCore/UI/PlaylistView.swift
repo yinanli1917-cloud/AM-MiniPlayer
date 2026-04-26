@@ -336,7 +336,7 @@ public struct PlaylistView: View {
                     }
                     .padding(12)
                     .background(Color.white.opacity(0.08))
-                    .cornerRadius(10)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -354,14 +354,14 @@ public struct PlaylistView: View {
                         HStack(spacing: 5) {
                             Image(systemName: "shuffle")
                                 .font(.system(size: 11))
+                                .symbolEffect(.bounce, value: musicController.shuffleEnabled)
                             Text("Shuffle")
                                 .font(.system(size: 10, weight: .medium))
                         }
                         .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
-                        .cornerRadius(14)
+                        .modifier(GlassCapsule(fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1))
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -369,15 +369,16 @@ public struct PlaylistView: View {
                     Button(action: { musicController.cycleRepeatMode() }) {
                         HStack(spacing: 5) {
                             Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                .contentTransition(.symbolEffect(.replace))
                                 .font(.system(size: 11))
+                                .symbolEffect(.bounce, value: musicController.repeatMode)
                             Text("Repeat")
                                 .font(.system(size: 10, weight: .medium))
                         }
                         .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
-                        .cornerRadius(14)
+                        .modifier(GlassCapsule(fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1))
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -619,6 +620,7 @@ struct PlaylistItemRowCompact: View {
                     Image(systemName: "waveform")
                         .font(.system(size: 11))
                         .foregroundColor(Color(red: 0.99, green: 0.24, blue: 0.27))
+                        .symbolEffect(.variableColor.iterative, isActive: musicController.isPlaying)
                         .padding(.trailing, 8)
                 } else if isHovering {
                     Image(systemName: "play.fill")
@@ -635,7 +637,7 @@ struct PlaylistItemRowCompact: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             guard !isScrolling else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(.bouncy(duration: 0.25)) {
                 isHovering = hovering
             }
         }

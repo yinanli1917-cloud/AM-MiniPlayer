@@ -103,7 +103,7 @@ public struct MiniPlayerView: View {
         }
         // 移除固定尺寸，让视图自动填充窗口以支持缩放
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
@@ -308,13 +308,17 @@ extension MiniPlayerView {
                             Button(action: { musicController.toggleShuffle() }) {
                                 Image(systemName: "shuffle")
                                     .font(.system(size: 11, weight: .semibold))
+                                    .symbolEffect(.bounce, value: musicController.shuffleEnabled)
                                     .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
                                     .frame(width: 24, height: 24)
-                                    .background(
-                                        Circle()
-                                            .fill(musicController.shuffleEnabled ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
-                                            .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
-                                    )
+                                    .modifier(GlassCircle(
+                                        isEnabled: true,
+                                        tintColor: musicController.shuffleEnabled ? themeColor : nil,
+                                        fallbackFill: musicController.shuffleEnabled ? themeColor : .white,
+                                        fallbackOpacity: musicController.shuffleEnabled ? 0.25 : normalFillOpacity,
+                                        fallbackShadowOpacity: shadowOp,
+                                        fallbackShadowRadius: shadowRad
+                                    ))
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("随机播放")
@@ -322,14 +326,19 @@ extension MiniPlayerView {
 
                             Button(action: { musicController.cycleRepeatMode() }) {
                                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                    .contentTransition(.symbolEffect(.replace))
                                     .font(.system(size: 11, weight: .semibold))
+                                    .symbolEffect(.bounce, value: musicController.repeatMode)
                                     .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
                                     .frame(width: 24, height: 24)
-                                    .background(
-                                        Circle()
-                                            .fill(musicController.repeatMode > 0 ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
-                                            .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
-                                    )
+                                    .modifier(GlassCircle(
+                                        isEnabled: true,
+                                        tintColor: musicController.repeatMode > 0 ? themeColor : nil,
+                                        fallbackFill: musicController.repeatMode > 0 ? themeColor : .white,
+                                        fallbackOpacity: musicController.repeatMode > 0 ? 0.25 : normalFillOpacity,
+                                        fallbackShadowOpacity: shadowOp,
+                                        fallbackShadowRadius: shadowRad
+                                    ))
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")

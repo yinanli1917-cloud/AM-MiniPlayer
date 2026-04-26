@@ -233,29 +233,32 @@ struct SettingsWindowView: View {
     // MARK: - About Tab
 
     private var aboutTab: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Spacer()
 
             Image(systemName: "music.note")
-                .font(.system(size: 64))
-                .foregroundColor(.accentColor)
+                .font(.system(size: 56, weight: .light))
+                .foregroundStyle(.linearGradient(
+                    colors: [.accentColor, .accentColor.opacity(0.6)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+                .symbolEffect(.pulse, options: .repeating.speed(0.3))
 
-            Text("Music Mini Player")
-                .font(.title)
-                .fontWeight(.semibold)
+            Text("nanoPod")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
 
-            Text("\(L10n.localized("version")) 1.0")
-                .font(.subheadline)
+            Text("\(L10n.localized("version")) \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                .font(.system(size: 13, design: .rounded))
                 .foregroundColor(.secondary)
 
             Spacer()
 
-            HStack(spacing: 20) {
-                Link(destination: URL(string: "https://github.com/YinanLi/MusicMiniPlayer")!) {
-                    Label("GitHub", systemImage: "link")
-                }
-                .buttonStyle(.link)
+            Link(destination: URL(string: "https://github.com/yinanli1917-cloud/AM-MiniPlayer")!) {
+                Label("GitHub", systemImage: "link")
+                    .font(.system(size: 13))
             }
+            .buttonStyle(.link)
 
             Spacer()
         }
@@ -299,12 +302,16 @@ struct SettingsRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(isHovering ? Color.accentColor.opacity(0.12) : Color.clear)
             )
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            withAnimation(.bouncy(duration: 0.25)) {
+                isHovering = hovering
+            }
+        }
         .padding(.horizontal, 6)
     }
 }
@@ -372,12 +379,16 @@ struct SettingsPickerRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(isHovering ? Color.accentColor.opacity(0.12) : Color.clear)
             )
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            withAnimation(.bouncy(duration: 0.25)) {
+                isHovering = hovering
+            }
+        }
         .padding(.horizontal, 6)
         .popover(isPresented: $showPicker, arrowEdge: .trailing) {
             VStack(spacing: 2) {

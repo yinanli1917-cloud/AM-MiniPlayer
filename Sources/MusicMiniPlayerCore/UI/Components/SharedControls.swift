@@ -247,7 +247,7 @@ struct SharedBottomControls: View {
             .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
-                let animation: Animation? = reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)
+                let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.3)
                 withAnimation(animation) {
                     isProgressBarHovering = hovering
                 }
@@ -293,8 +293,7 @@ struct SharedBottomControls: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(.ultraThinMaterial)
-        .cornerRadius(4)
+        .modifier(GlassCapsule(fallbackOpacity: 0.15))
         .foregroundColor(.white.opacity(0.9))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("音频质量：\(quality)")
@@ -319,17 +318,15 @@ struct HoverableControlButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: iconName)
+                .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: size))
                 .foregroundColor(.white)
                 .frame(width: 32, height: 32)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(isHovering ? 0.25 : 0))
-                )
+                .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .easeInOut(duration: 0.2)
+            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.3)
             withAnimation(animation) {
                 isHovering = hovering
             }
@@ -347,17 +344,15 @@ struct NavigationIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: iconName)
+                .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: 15))
                 .foregroundColor(.white)
                 .frame(width: 26, height: 26)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity((isActive || isHovering) ? 0.25 : 0))
-                )
+                .modifier(GlassCircle(isEnabled: isActive || isHovering, fallbackOpacity: 0.25))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .easeInOut(duration: 0.2)
+            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.3)
             withAnimation(animation) {
                 isHovering = hovering
             }

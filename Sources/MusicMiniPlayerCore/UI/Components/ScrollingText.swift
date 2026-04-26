@@ -13,10 +13,11 @@ struct ScrollingText: View {
     @State private var offset: CGFloat = 0
     @State private var shouldScroll = false
     @State private var hasScrolled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
-            if shouldScroll && !hasScrolled {
+            if shouldScroll && !hasScrolled && !reduceMotion {
                 // Scrolling animation for long text - scroll once then stop
                 HStack(spacing: 0) {
                     Text(text)
