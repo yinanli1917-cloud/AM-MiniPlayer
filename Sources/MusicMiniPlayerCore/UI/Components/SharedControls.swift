@@ -76,10 +76,6 @@ struct SharedBottomControls: View {
     @State private var isControlAreaHovering: Bool = false  // 🔑 整个控件区域的hover状态
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var adaptiveForeground: Color {
-        musicController.isLightBackground ? .black : .white
-    }
-
     var body: some View {
         VStack(spacing: 0) {  // 🔑 spacing=0 让翻译按钮紧贴进度条
             // 🔑 翻译按钮 - 进度条上方（如果有）
@@ -102,7 +98,7 @@ struct SharedBottomControls: View {
                     HStack {
                         Text(formatTime(timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(adaptiveForeground.opacity(0.6))
+                            .foregroundStyle(Color.white.opacity(0.6))
                             .accessibilityHidden(true)
 
                         Spacer()
@@ -116,7 +112,7 @@ struct SharedBottomControls: View {
 
                         Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(adaptiveForeground.opacity(0.6))
+                            .foregroundStyle(Color.white.opacity(0.6))
                             .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
@@ -246,12 +242,12 @@ struct SharedBottomControls: View {
             ZStack {
                 // Background Track
                 Capsule()
-                    .fill(adaptiveForeground.opacity(0.2))
+                    .fill(Color.white.opacity(0.2))
                     .frame(height: barHeight)
 
                 // Active Progress
                 Capsule()
-                    .fill(adaptiveForeground)
+                    .fill(Color.white)
                     .frame(height: barHeight)
                     .mask(
                         HStack(spacing: 0) {
@@ -311,7 +307,7 @@ struct SharedBottomControls: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .modifier(GlassCapsule(fallbackOpacity: 0.15))
-        .foregroundStyle(adaptiveForeground.opacity(0.9))
+        .foregroundStyle(Color.white.opacity(0.9))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("音频质量：\(quality)")
     }
@@ -331,7 +327,6 @@ struct HoverableControlButton: View {
     let action: () -> Void
     @State private var isHovering = false
     @State private var tapCount = 0
-    @EnvironmentObject var musicController: MusicController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -343,7 +338,7 @@ struct HoverableControlButton: View {
                 .contentTransition(.symbolEffect(.replace))
                 .symbolEffect(.bounce, options: .speed(1.5), value: tapCount)
                 .font(.system(size: size))
-                .foregroundStyle(musicController.isLightBackground ? Color.black : Color.white)
+                .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }
@@ -362,7 +357,6 @@ struct NavigationIconButton: View {
     let isActive: Bool
     let action: () -> Void
     @State private var isHovering = false
-    @EnvironmentObject var musicController: MusicController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -370,7 +364,7 @@ struct NavigationIconButton: View {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: 15))
-                .foregroundStyle(musicController.isLightBackground ? Color.black : Color.white)
+                .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
                 .modifier(GlassCircle(isEnabled: isActive || isHovering, fallbackOpacity: 0.25))
         }

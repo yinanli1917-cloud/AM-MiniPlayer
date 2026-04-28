@@ -50,6 +50,8 @@ public struct MiniPlayerView: View {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                     .accessibilityHidden(true)
+                    .brightness(musicController.isLightBackground ? -0.12 : 0)
+                    .animation(.easeInOut(duration: 0.5), value: musicController.isLightBackground)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
                 WindowDraggableView()
@@ -244,12 +246,9 @@ extension MiniPlayerView {
                 // 🔑 标题 - matchedGeometryEffect
                 Text(musicController.currentTrackTitle)
                     .font(.system(size: isHovering ? 12 : 16, weight: .bold))
-                    .foregroundStyle(musicController.isLightBackground ? Color.black : Color.white)
+                    .foregroundStyle(.white)
                     .lineLimit(1)
-                    .shadow(
-                        color: musicController.isLightBackground ? .white.opacity(0.5) : .black.opacity(isHovering ? 0.6 : 0.7),
-                        radius: isHovering ? 8 : 10, x: 0, y: 2
-                    )
+                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
                     .matchedGeometryEffect(id: "trackTitle", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -271,12 +270,9 @@ extension MiniPlayerView {
                 // 🔑 艺术家 - matchedGeometryEffect
                 Text(musicController.currentArtist)
                     .font(.system(size: isHovering ? 10 : 13, weight: .medium))
-                    .foregroundStyle((musicController.isLightBackground ? Color.black : Color.white).opacity(isHovering ? 0.7 : 0.9))
+                    .foregroundStyle(.white.opacity(isHovering ? 0.7 : 0.9))
                     .lineLimit(1)
-                    .shadow(
-                        color: musicController.isLightBackground ? .white.opacity(0.5) : .black.opacity(isHovering ? 0.6 : 0.7),
-                        radius: isHovering ? 8 : 10, x: 0, y: 2
-                    )
+                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
                     .matchedGeometryEffect(id: "artistName", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -346,11 +342,11 @@ extension MiniPlayerView {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
                     .symbolEffect(.bounce.up.byLayer, value: musicController.shuffleEnabled)
-                    .foregroundStyle(musicController.shuffleEnabled ? themeColor : (isLightBg ? Color.black : Color.white))
+                    .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
-                        fallbackFill: musicController.shuffleEnabled ? themeColor : (isLightBg ? .black : .white),
+                        fallbackFill: musicController.shuffleEnabled ? themeColor : .white,
                         fallbackOpacity: musicController.shuffleEnabled ? 0.25 : normalFillOpacity,
                         fallbackShadowOpacity: shadowOp,
                         fallbackShadowRadius: shadowRad
@@ -365,11 +361,11 @@ extension MiniPlayerView {
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
                     .symbolEffect(.bounce.up.byLayer, value: musicController.repeatMode)
-                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : (isLightBg ? Color.black : Color.white))
+                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
-                        fallbackFill: musicController.repeatMode > 0 ? themeColor : (isLightBg ? .black : .white),
+                        fallbackFill: musicController.repeatMode > 0 ? themeColor : .white,
                         fallbackOpacity: musicController.repeatMode > 0 ? 0.25 : normalFillOpacity,
                         fallbackShadowOpacity: shadowOp,
                         fallbackShadowRadius: shadowRad
