@@ -180,21 +180,21 @@ struct SharedBottomControls: View {
     @ViewBuilder
     private var playbackCluster: some View {
         let buttons = HStack(spacing: 10) {
-            HoverableControlButton(iconName: "backward.fill", size: 17) {
+            HoverableControlButton(iconName: "backward.fill", size: 17, action: {
                 musicController.previousTrack()
-            }
+            }, direction: -1)
             .frame(width: 30, height: 30)
             .accessibilityLabel("上一首")
 
-            HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
+            HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21, action: {
                 musicController.togglePlayPause()
-            }
+            })
             .frame(width: 30, height: 30)
             .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
 
-            HoverableControlButton(iconName: "forward.fill", size: 17) {
+            HoverableControlButton(iconName: "forward.fill", size: 17, action: {
                 musicController.nextTrack()
-            }
+            }, direction: 1)
             .frame(width: 30, height: 30)
             .accessibilityLabel("下一首")
         }
@@ -321,26 +321,42 @@ struct SharedBottomControls: View {
 
 // MARK: - Hoverable Button Components
 
+enum ControlPhase: CaseIterable {
+    case idle, press, overshoot, settle
+}
+
 struct HoverableControlButton: View {
     let iconName: String
     let size: CGFloat
     let action: () -> Void
+    var direction: CGFloat = 0
     @State private var isHovering = false
-    @State private var tapCount = 0
+    @State private var tapTrigger = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button {
-            tapCount += 1
+            tapTrigger += 1
             action()
         } label: {
             Image(systemName: iconName)
-                .contentTransition(.symbolEffect(.replace))
-                .symbolEffect(.bounce, options: .speed(1.5), value: tapCount)
+                .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
                 .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
+                .phaseAnimator(ControlPhase.allCases, trigger: tapTrigger) { content, phase in
+                    content
+                        .scaleEffect(phase == .press ? 0.82 : phase == .overshoot ? 1.06 : 1.0)
+                        .offset(x: phase == .press ? direction * 3 : phase == .overshoot ? direction * -1.5 : 0)
+                } animation: { phase in
+                    switch phase {
+                    case .idle: .spring(response: 0.25, dampingFraction: 0.8)
+                    case .press: .easeIn(duration: 0.07)
+                    case .overshoot: .spring(response: 0.18, dampingFraction: 0.55)
+                    case .settle: .spring(response: 0.25, dampingFraction: 0.8)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .onHover { hovering in

@@ -354,7 +354,6 @@ public struct PlaylistView: View {
                         HStack(spacing: 5) {
                             Image(systemName: "shuffle")
                                 .font(.system(size: 11))
-                                .symbolEffect(.bounce.up.byLayer, value: musicController.shuffleEnabled)
                             Text("Shuffle")
                                 .font(.system(size: 10, weight: .medium))
                         }
@@ -363,6 +362,18 @@ public struct PlaylistView: View {
                         .padding(.vertical, 6)
                         .modifier(GlassCapsule(fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1))
                         .contentShape(Capsule())
+                        .phaseAnimator(ControlPhase.allCases, trigger: musicController.shuffleEnabled) { content, phase in
+                            content
+                                .scaleEffect(phase == .press ? 0.9 : phase == .overshoot ? 1.05 : 1.0)
+                                .rotationEffect(.degrees(phase == .press ? -8 : phase == .overshoot ? 4 : 0))
+                        } animation: { phase in
+                            switch phase {
+                            case .idle: .spring(response: 0.3, dampingFraction: 0.75)
+                            case .press: .easeIn(duration: 0.08)
+                            case .overshoot: .spring(response: 0.2, dampingFraction: 0.5)
+                            case .settle: .spring(response: 0.3, dampingFraction: 0.8)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
 
@@ -371,7 +382,6 @@ public struct PlaylistView: View {
                             Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                                 .contentTransition(.symbolEffect(.replace))
                                 .font(.system(size: 11))
-                                .symbolEffect(.bounce.up.byLayer, value: musicController.repeatMode)
                             Text("Repeat")
                                 .font(.system(size: 10, weight: .medium))
                         }
@@ -380,6 +390,18 @@ public struct PlaylistView: View {
                         .padding(.vertical, 6)
                         .modifier(GlassCapsule(fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1))
                         .contentShape(Capsule())
+                        .phaseAnimator(ControlPhase.allCases, trigger: musicController.repeatMode) { content, phase in
+                            content
+                                .scaleEffect(phase == .press ? 0.9 : phase == .overshoot ? 1.05 : 1.0)
+                                .rotationEffect(.degrees(phase == .overshoot ? 8 : 0))
+                        } animation: { phase in
+                            switch phase {
+                            case .idle: .spring(response: 0.3, dampingFraction: 0.75)
+                            case .press: .easeIn(duration: 0.08)
+                            case .overshoot: .spring(response: 0.2, dampingFraction: 0.5)
+                            case .settle: .spring(response: 0.3, dampingFraction: 0.8)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
 

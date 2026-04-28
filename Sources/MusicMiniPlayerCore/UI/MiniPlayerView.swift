@@ -341,7 +341,6 @@ extension MiniPlayerView {
             Button(action: { musicController.toggleShuffle() }) {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
-                    .symbolEffect(.bounce.up.byLayer, value: musicController.shuffleEnabled)
                     .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
@@ -351,6 +350,18 @@ extension MiniPlayerView {
                         fallbackShadowOpacity: shadowOp,
                         fallbackShadowRadius: shadowRad
                     ))
+                    .phaseAnimator(ControlPhase.allCases, trigger: musicController.shuffleEnabled) { content, phase in
+                        content
+                            .scaleEffect(phase == .press ? 0.8 : phase == .overshoot ? 1.1 : 1.0)
+                            .rotationEffect(.degrees(phase == .press ? -15 : phase == .overshoot ? 8 : 0))
+                    } animation: { phase in
+                        switch phase {
+                        case .idle: .spring(response: 0.3, dampingFraction: 0.75)
+                        case .press: .easeIn(duration: 0.08)
+                        case .overshoot: .spring(response: 0.2, dampingFraction: 0.5)
+                        case .settle: .spring(response: 0.3, dampingFraction: 0.8)
+                        }
+                    }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("随机播放")
@@ -360,7 +371,6 @@ extension MiniPlayerView {
                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
-                    .symbolEffect(.bounce.up.byLayer, value: musicController.repeatMode)
                     .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
@@ -370,6 +380,18 @@ extension MiniPlayerView {
                         fallbackShadowOpacity: shadowOp,
                         fallbackShadowRadius: shadowRad
                     ))
+                    .phaseAnimator(ControlPhase.allCases, trigger: musicController.repeatMode) { content, phase in
+                        content
+                            .scaleEffect(phase == .press ? 0.82 : phase == .overshoot ? 1.08 : 1.0)
+                            .rotationEffect(.degrees(phase == .overshoot ? 12 : 0))
+                    } animation: { phase in
+                        switch phase {
+                        case .idle: .spring(response: 0.3, dampingFraction: 0.75)
+                        case .press: .easeIn(duration: 0.08)
+                        case .overshoot: .spring(response: 0.2, dampingFraction: 0.5)
+                        case .settle: .spring(response: 0.3, dampingFraction: 0.8)
+                        }
+                    }
             }
             .buttonStyle(.plain)
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
