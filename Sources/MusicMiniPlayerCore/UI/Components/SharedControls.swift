@@ -262,7 +262,7 @@ struct SharedBottomControls: View {
             .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
-                let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.25)
+                let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
                 withAnimation(animation) {
                     isProgressBarHovering = hovering
                 }
@@ -337,7 +337,7 @@ struct HoverableControlButton: View {
             action()
             guard !reduceMotion else { return }
             withAnimation(.interpolatingSpring(mass: 1, stiffness: 170, damping: 18)) { flow = 1 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                 withAnimation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20)) { flow = 0 }
             }
         } label: {
@@ -346,12 +346,13 @@ struct HoverableControlButton: View {
                 .font(.system(size: size))
                 .foregroundStyle(.white)
                 .offset(x: flow * direction * 2.5)
+                .scaleEffect(1 - flow * 0.05)
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .bouncy(duration: 0.25)) {
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
                 isHovering = hovering
             }
         }
@@ -376,7 +377,7 @@ struct NavigationIconButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.25)
+            let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
             withAnimation(animation) {
                 isHovering = hovering
             }

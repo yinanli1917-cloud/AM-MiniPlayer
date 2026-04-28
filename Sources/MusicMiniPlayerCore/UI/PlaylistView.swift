@@ -635,7 +635,7 @@ struct PlaylistItemRowCompact: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             guard !isScrolling else { return }
-            withAnimation(.bouncy(duration: 0.2)) {
+            withAnimation(.smooth(duration: 0.2)) {
                 isHovering = hovering
             }
         }

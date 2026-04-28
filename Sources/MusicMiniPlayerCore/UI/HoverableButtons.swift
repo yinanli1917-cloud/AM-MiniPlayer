@@ -141,7 +141,7 @@ struct HoverableActionButton: View {
             if reduceMotion {
                 isHovering = hovering
             } else {
-                withAnimation(.bouncy(duration: 0.25)) {
+                withAnimation(.smooth(duration: 0.25)) {
                     isHovering = hovering
                 }
             }
@@ -223,7 +223,7 @@ struct TranslationButtonView: View {
 
     var body: some View {
         Button(action: {
-            withAnimation(.bouncy(duration: 0.25)) {
+            withAnimation(.smooth(duration: 0.25)) {
                 // 🔑 智能翻译逻辑：
                 // 1. 如果翻译开关关闭 → 打开翻译
                 // 2. 如果翻译开关已开启但没有翻译结果，且未尝试过强制重试 → 强制重试翻译
@@ -261,7 +261,7 @@ struct TranslationButtonView: View {
             if reduceMotion {
                 isHovering = hovering
             } else {
-                withAnimation(.bouncy(duration: 0.25)) {
+                withAnimation(.smooth(duration: 0.25)) {
                     isHovering = hovering
                 }
             }
