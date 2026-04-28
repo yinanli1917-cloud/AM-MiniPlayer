@@ -343,20 +343,24 @@ struct HoverableControlButton: View {
                 .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
                 .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
                 .phaseAnimator(ControlPhase.allCases, trigger: tapTrigger) { content, phase in
                     content
-                        .scaleEffect(phase == .press ? 0.82 : phase == .overshoot ? 1.06 : 1.0)
-                        .offset(x: phase == .press ? direction * 3 : phase == .overshoot ? direction * -1.5 : 0)
+                        .scaleEffect(
+                            x: phase == .press ? 0.7 : phase == .overshoot ? 1.15 : 1.0,
+                            y: phase == .press ? 0.85 : phase == .overshoot ? 0.92 : 1.0
+                        )
+                        .offset(x: phase == .press ? direction * 4 : phase == .overshoot ? direction * -1.5 : 0)
+                        .opacity(phase == .press ? 0.6 : 1.0)
                 } animation: { phase in
                     switch phase {
                     case .idle: .spring(response: 0.25, dampingFraction: 0.8)
-                    case .press: .easeIn(duration: 0.07)
-                    case .overshoot: .spring(response: 0.18, dampingFraction: 0.55)
-                    case .settle: .spring(response: 0.25, dampingFraction: 0.8)
+                    case .press: .easeOut(duration: 0.06)
+                    case .overshoot: .spring(response: 0.2, dampingFraction: 0.45)
+                    case .settle: .spring(response: 0.28, dampingFraction: 0.75)
                     }
                 }
+                .frame(width: 32, height: 32)
+                .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }
         .buttonStyle(.plain)
         .onHover { hovering in

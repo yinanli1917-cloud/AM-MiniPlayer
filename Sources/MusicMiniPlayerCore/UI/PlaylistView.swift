@@ -358,22 +358,22 @@ public struct PlaylistView: View {
                                 .font(.system(size: 10, weight: .medium))
                         }
                         .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
+                        .phaseAnimator(ControlPhase.allCases, trigger: musicController.shuffleEnabled) { content, phase in
+                            content
+                                .scaleEffect(phase == .press ? 0.85 : phase == .overshoot ? 1.08 : 1.0)
+                                .opacity(phase == .press ? 0.5 : 1.0)
+                        } animation: { phase in
+                            switch phase {
+                            case .idle: .spring(response: 0.3, dampingFraction: 0.75)
+                            case .press: .easeOut(duration: 0.06)
+                            case .overshoot: .spring(response: 0.22, dampingFraction: 0.45)
+                            case .settle: .spring(response: 0.3, dampingFraction: 0.8)
+                            }
+                        }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .modifier(GlassCapsule(fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1))
                         .contentShape(Capsule())
-                        .phaseAnimator(ControlPhase.allCases, trigger: musicController.shuffleEnabled) { content, phase in
-                            content
-                                .scaleEffect(phase == .press ? 0.9 : phase == .overshoot ? 1.05 : 1.0)
-                                .rotationEffect(.degrees(phase == .press ? -8 : phase == .overshoot ? 4 : 0))
-                        } animation: { phase in
-                            switch phase {
-                            case .idle: .spring(response: 0.3, dampingFraction: 0.75)
-                            case .press: .easeIn(duration: 0.08)
-                            case .overshoot: .spring(response: 0.2, dampingFraction: 0.5)
-                            case .settle: .spring(response: 0.3, dampingFraction: 0.8)
-                            }
-                        }
                     }
                     .buttonStyle(.plain)
 
@@ -386,22 +386,22 @@ public struct PlaylistView: View {
                                 .font(.system(size: 10, weight: .medium))
                         }
                         .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
+                        .phaseAnimator(ControlPhase.allCases, trigger: musicController.repeatMode) { content, phase in
+                            content
+                                .scaleEffect(phase == .press ? 0.85 : phase == .overshoot ? 1.08 : 1.0)
+                                .opacity(phase == .press ? 0.5 : 1.0)
+                        } animation: { phase in
+                            switch phase {
+                            case .idle: .spring(response: 0.3, dampingFraction: 0.75)
+                            case .press: .easeOut(duration: 0.06)
+                            case .overshoot: .spring(response: 0.22, dampingFraction: 0.45)
+                            case .settle: .spring(response: 0.3, dampingFraction: 0.8)
+                            }
+                        }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .modifier(GlassCapsule(fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1))
                         .contentShape(Capsule())
-                        .phaseAnimator(ControlPhase.allCases, trigger: musicController.repeatMode) { content, phase in
-                            content
-                                .scaleEffect(phase == .press ? 0.9 : phase == .overshoot ? 1.05 : 1.0)
-                                .rotationEffect(.degrees(phase == .overshoot ? 8 : 0))
-                        } animation: { phase in
-                            switch phase {
-                            case .idle: .spring(response: 0.3, dampingFraction: 0.75)
-                            case .press: .easeIn(duration: 0.08)
-                            case .overshoot: .spring(response: 0.2, dampingFraction: 0.5)
-                            case .settle: .spring(response: 0.3, dampingFraction: 0.8)
-                            }
-                        }
                     }
                     .buttonStyle(.plain)
 
