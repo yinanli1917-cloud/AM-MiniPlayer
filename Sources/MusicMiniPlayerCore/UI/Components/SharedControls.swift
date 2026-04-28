@@ -329,24 +329,26 @@ struct HoverableControlButton: View {
     let action: () -> Void
     var direction: CGFloat = 0
     @State private var isHovering = false
-    @State private var flow: Double = 0
+    @State private var isPressed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button {
             action()
             guard !reduceMotion else { return }
-            withAnimation(.interpolatingSpring(mass: 1, stiffness: 170, damping: 18)) { flow = 1 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                withAnimation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20)) { flow = 0 }
+            // Phase 1: fast press-in (80ms feel — spring snaps down)
+            withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { isPressed = true }
+            // Phase 2: slow overshoot release (300ms feel — spring bounces back)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { isPressed = false }
             }
         } label: {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
                 .foregroundStyle(.white)
-                .offset(x: flow * direction * 2.5)
-                .scaleEffect(1 - flow * 0.05)
+                .scaleEffect(isPressed ? 0.82 : 1.0)
+                .offset(x: isPressed ? direction * 3.5 : 0)
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }

@@ -354,8 +354,8 @@ extension MiniPlayerView {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
-                    .offset(x: shuffleFlow * 1.5, y: shuffleFlow * -1.5)
-                    .scaleEffect(1 - shuffleFlow * 0.1)
+                    .rotationEffect(.degrees(shuffleFlow * 12))
+                    .scaleEffect(1 - shuffleFlow * 0.12)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
@@ -370,9 +370,10 @@ extension MiniPlayerView {
             .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
             .onChange(of: musicController.shuffleEnabled) { _, _ in
                 guard !reduceMotion else { return }
-                withAnimation(.smooth(duration: 0.15)) { shuffleFlow = 1 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    withAnimation(.smooth(duration: 0.25)) { shuffleFlow = 0 }
+                // Rotation wiggle: fast press, slow spring-back with overshoot
+                withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { shuffleFlow = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.interpolatingSpring(stiffness: 300, damping: 8)) { shuffleFlow = 0 }
                 }
             }
 
@@ -396,9 +397,9 @@ extension MiniPlayerView {
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
             .onChange(of: musicController.repeatMode) { _, _ in
                 guard !reduceMotion else { return }
-                withAnimation(.smooth(duration: 0.12)) { repeatFlow = 1 }
+                withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { repeatFlow = 1 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    withAnimation(.smooth(duration: 0.2)) { repeatFlow = 0 }
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { repeatFlow = 0 }
                 }
             }
         }
