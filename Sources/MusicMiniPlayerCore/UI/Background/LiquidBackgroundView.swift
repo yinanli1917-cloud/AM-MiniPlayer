@@ -44,7 +44,7 @@ public struct LiquidBackgroundView: View {
         ZStack {
             // 第一层：macOS Liquid Glass - NSVisualEffectView with behindWindow blending
             LiquidGlassEffectView(
-                material: .hudWindow,
+                material: .underWindowBackground,
                 blendingMode: .behindWindow
             )
             .ignoresSafeArea()
@@ -59,7 +59,7 @@ public struct LiquidBackgroundView: View {
 
             // 第三层：额外的半透明材质层增强玻璃效果
             LiquidGlassEffectView(
-                material: .hudWindow,
+                material: .underWindowBackground,
                 blendingMode: .withinWindow
             )
             .ignoresSafeArea()
