@@ -222,6 +222,9 @@ class AppMain: NSObject, NSApplicationDelegate {
 
         let hostingView = NSHostingView(rootView: contentView)
         hostingView.autoresizingMask = [.width, .height]
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = 16
+        hostingView.layer?.masksToBounds = true
         snappableWindow.contentView = hostingView
 
         debugPrint("[AppMain] Floating window created\n")
