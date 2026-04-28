@@ -182,9 +182,9 @@ struct SharedBottomControls: View {
     @ViewBuilder
     private var playbackCluster: some View {
         let buttons = HStack(spacing: 10) {
-            DirectionalFlowButton(isForward: false, size: 17) {
+            HoverableControlButton(iconName: "backward.fill", size: 17, action: {
                 musicController.previousTrack()
-            }
+            }, direction: -1)
             .frame(width: 30, height: 30)
             .accessibilityLabel("上一首")
 
@@ -194,9 +194,9 @@ struct SharedBottomControls: View {
             .frame(width: 30, height: 30)
             .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
 
-            DirectionalFlowButton(isForward: true, size: 17) {
+            HoverableControlButton(iconName: "forward.fill", size: 17, action: {
                 musicController.nextTrack()
-            }
+            }, direction: 1)
             .frame(width: 30, height: 30)
             .accessibilityLabel("下一首")
         }
@@ -323,102 +323,30 @@ struct SharedBottomControls: View {
 
 // MARK: - Hoverable Button Components
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - Custom Animated Icons
-// ═══════════════════════════════════════════════════════════════════════════════
-
-struct PlayTriangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.closeSubpath()
-        return path
-    }
-}
-
-struct DirectionalFlowIcon: View {
-    let iconSize: CGFloat
-    let isForward: Bool
-    var color: Color = .white
-    @Binding var trigger: Int
-
-    @State private var flow: Double = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var triW: CGFloat { iconSize * 0.38 }
-    private var triH: CGFloat { iconSize * 0.62 }
-
-    var body: some View {
-        HStack(spacing: triW * -0.08) {
-            PlayTriangle().fill(color)
-                .frame(width: triW, height: triH)
-                .opacity(1 - flow * 0.85)
-                .offset(x: -flow * triW * 0.4)
-
-            PlayTriangle().fill(color)
-                .frame(width: triW, height: triH)
-
-            PlayTriangle().fill(color)
-                .frame(width: triW, height: triH)
-                .opacity(flow)
-                .scaleEffect(0.6 + flow * 0.4)
-                .offset(x: (1 - flow) * triW * 0.4)
-        }
-        .scaleEffect(x: isForward ? 1 : -1, y: 1)
-        .onChange(of: trigger) { _, _ in
-            guard !reduceMotion else { return }
-            withAnimation(.easeIn(duration: 0.12)) { flow = 1 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                withAnimation(.easeOut(duration: 0.22)) { flow = 0 }
-            }
-        }
-    }
-}
-
-struct DirectionalFlowButton: View {
-    let isForward: Bool
-    let size: CGFloat
-    let action: () -> Void
-    @State private var isHovering = false
-    @State private var tapTrigger = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Button {
-            tapTrigger += 1
-            action()
-        } label: {
-            DirectionalFlowIcon(
-                iconSize: size, isForward: isForward,
-                trigger: $tapTrigger
-            )
-            .frame(width: 32, height: 32)
-            .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .bouncy(duration: 0.25)) {
-                isHovering = hovering
-            }
-        }
-    }
-}
-
 struct HoverableControlButton: View {
     let iconName: String
     let size: CGFloat
     let action: () -> Void
+    var direction: CGFloat = 0
     @State private var isHovering = false
+    @State private var flow: Double = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            action()
+            guard !reduceMotion else { return }
+            withAnimation(.easeIn(duration: 0.1)) { flow = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.easeOut(duration: 0.22)) { flow = 0 }
+            }
+        } label: {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
                 .foregroundStyle(.white)
+                .offset(x: flow * direction * 3)
+                .opacity(1 - flow * 0.25)
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }

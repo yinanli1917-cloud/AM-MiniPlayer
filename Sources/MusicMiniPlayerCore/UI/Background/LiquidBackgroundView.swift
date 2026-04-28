@@ -78,10 +78,11 @@ public struct LiquidBackgroundView: View {
             .ignoresSafeArea()
             .blendMode(.overlay)
 
-            // 第五层：亮度钳制遮罩 — 数学保证输出亮度 ≤ 0.45
-            // α = max(0, 1 - targetLuminance / artworkLuminance)
+            // 第五层：亮度钳制遮罩 — 数学保证输出亮度 ≤ 0.33
+            // α = max(0, 1 - target / luminance)
+            // target 0.33 accounts for glass layers amplifying artwork brightness
             Color.black
-                .opacity(max(0, 1 - 0.45 / max(luminance, 0.01)))
+                .opacity(max(0, 1 - 0.33 / max(luminance, 0.01)))
                 .ignoresSafeArea()
                 .animation(.easeInOut(duration: 0.5), value: luminance)
 
