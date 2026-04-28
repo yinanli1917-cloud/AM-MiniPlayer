@@ -73,7 +73,7 @@ public class MusicController: ObservableObject {
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var currentPage: PlayerPage = .album
     @Published public var userManuallyOpenedLyrics: Bool = false
-    @Published public var isLightBackground: Bool = false
+    @Published public var artworkLuminance: CGFloat = 0.5
     @Published public var currentPersistentID: String?
     @Published public var musicKitAuthorized: Bool = false
 

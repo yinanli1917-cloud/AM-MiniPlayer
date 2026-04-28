@@ -99,6 +99,7 @@ struct SharedBottomControls: View {
                         Text(formatTime(timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.6))
+                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.artworkLuminance), radius: 2 + 6 * musicController.artworkLuminance)
                             .accessibilityHidden(true)
 
                         Spacer()
@@ -113,6 +114,7 @@ struct SharedBottomControls: View {
                         Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.6))
+                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.artworkLuminance), radius: 2 + 6 * musicController.artworkLuminance)
                             .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点

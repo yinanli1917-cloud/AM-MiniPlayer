@@ -23,9 +23,11 @@ struct LiquidGlassEffectView: NSViewRepresentable {
 
 public struct LiquidBackgroundView: View {
     var artwork: NSImage?
+    @EnvironmentObject var musicController: MusicController
     @State private var dominantColor: Color = .clear
-    @State private var lastArtworkHash: Int = 0  // 🔑 缓存上次的 artwork hash
+    @State private var lastArtworkHash: Int = 0
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LiquidBackground")
+    private var luminance: CGFloat { musicController.artworkLuminance }
 
     // 🔑 静态颜色缓存，避免重复计算
     private static var colorCache: NSCache<NSNumber, NSColor> = {
@@ -75,6 +77,18 @@ public struct LiquidBackgroundView: View {
             )
             .ignoresSafeArea()
             .blendMode(.overlay)
+
+            // 第五层：动态对比度遮罩 — 亮度越高越暗，保证白色文字可读
+            LinearGradient(
+                colors: [
+                    .black.opacity(max(0, luminance - 0.3) * 0.2),
+                    .black.opacity(max(0, luminance - 0.2) * 0.35)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .animation(.easeInOut(duration: 0.5), value: luminance)
 
             // 第五层：深度渐变（已禁用 - 会导致底部出现额外黑色层）
             // LinearGradient(

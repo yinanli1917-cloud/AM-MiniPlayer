@@ -54,8 +54,8 @@ public struct MiniPlayerView: View {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                     .accessibilityHidden(true)
-                    .brightness(musicController.isLightBackground ? -0.12 : 0)
-                    .animation(.easeInOut(duration: 0.5), value: musicController.isLightBackground)
+                    .brightness(-0.15 * musicController.artworkLuminance)
+                    .animation(.easeInOut(duration: 0.5), value: musicController.artworkLuminance)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
                 WindowDraggableView()
@@ -187,13 +187,13 @@ public struct MiniPlayerView: View {
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
-                musicController.isLightBackground = artworkBrightness > 0.6
+                musicController.artworkLuminance = artworkBrightness
             }
         }
         .onAppear {
             if let artwork = musicController.currentArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
-                musicController.isLightBackground = artworkBrightness > 0.6
+                musicController.artworkLuminance = artworkBrightness
             }
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
@@ -252,7 +252,8 @@ extension MiniPlayerView {
                     .font(.system(size: isHovering ? 12 : 16, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .shadow(color: .black.opacity(0.3 + 0.5 * artworkBrightness), radius: 4 + 12 * artworkBrightness, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.15 + 0.25 * artworkBrightness), radius: 2 + 4 * artworkBrightness, x: 0, y: 0)
                     .matchedGeometryEffect(id: "trackTitle", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -276,7 +277,8 @@ extension MiniPlayerView {
                     .font(.system(size: isHovering ? 10 : 13, weight: .medium))
                     .foregroundStyle(.white.opacity(isHovering ? 0.7 : 0.9))
                     .lineLimit(1)
-                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .shadow(color: .black.opacity(0.3 + 0.5 * artworkBrightness), radius: 4 + 12 * artworkBrightness, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.15 + 0.25 * artworkBrightness), radius: 2 + 4 * artworkBrightness, x: 0, y: 0)
                     .matchedGeometryEffect(id: "artistName", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(

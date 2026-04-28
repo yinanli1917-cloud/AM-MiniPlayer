@@ -16,7 +16,7 @@ struct GlassButtonBackground: ViewModifier {
     var fillOpacity: Double
     var shadowOpacity: Double
     var shadowRadius: CGFloat
-    var isLightBackground: Bool = false  // 🔑 背景亮度信息，用于文字颜色适配
+    var luminance: CGFloat = 0.5
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
@@ -25,7 +25,7 @@ struct GlassButtonBackground: ViewModifier {
                 .glassEffect(.clear, in: .capsule)
         } else {
             content
-                .foregroundStyle(isLightBackground ? Color.black : Color.white)
+                .foregroundStyle(luminance > 0.6 ? Color.black : Color.white)
                 .background(Color.white.opacity(fillOpacity))
                 .clipShape(Capsule())
                 .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
@@ -94,18 +94,17 @@ struct GlassCircle: ViewModifier {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🔑 共享的亮度/透明度计算，消除 MusicButtonView/HideButtonView/ExpandButtonView 的重复代码
 
-private func hoverableButtonFillOpacity(isLightBackground: Bool, isHovering: Bool) -> Double {
-    isLightBackground
-        ? (isHovering ? 0.55 : 0.45)
-        : (isHovering ? 0.20 : 0.10)
+private func hoverableButtonFillOpacity(luminance: CGFloat, isHovering: Bool) -> Double {
+    let base = 0.10 + 0.35 * luminance
+    return isHovering ? base + 0.10 : base
 }
 
-private func hoverableButtonShadowOpacity(isLightBackground: Bool) -> Double {
-    isLightBackground ? 0.5 : 0.0
+private func hoverableButtonShadowOpacity(luminance: CGFloat) -> Double {
+    luminance * 0.5
 }
 
-private func hoverableButtonShadowRadius(isLightBackground: Bool) -> CGFloat {
-    isLightBackground ? 10 : 0
+private func hoverableButtonShadowRadius(luminance: CGFloat) -> CGFloat {
+    luminance * 10
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -122,7 +121,7 @@ struct HoverableActionButton: View {
 
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
+    private var effectiveLuminance: CGFloat { isAlbumPage ? artworkBrightness : 0 }
 
     var body: some View {
         Button(action: action) {
@@ -131,10 +130,10 @@ struct HoverableActionButton: View {
                 .padding(.vertical, 6)
                 .contentShape(Capsule())
                 .modifier(GlassButtonBackground(
-                    fillOpacity: hoverableButtonFillOpacity(isLightBackground: isLightBackground, isHovering: isHovering),
-                    shadowOpacity: hoverableButtonShadowOpacity(isLightBackground: isLightBackground),
-                    shadowRadius: hoverableButtonShadowRadius(isLightBackground: isLightBackground),
-                    isLightBackground: isLightBackground
+                    fillOpacity: hoverableButtonFillOpacity(luminance: effectiveLuminance, isHovering: isHovering),
+                    shadowOpacity: hoverableButtonShadowOpacity(luminance: effectiveLuminance),
+                    shadowRadius: hoverableButtonShadowRadius(luminance: effectiveLuminance),
+                    luminance: effectiveLuminance
                 ))
         }
         .buttonStyle(.plain)
