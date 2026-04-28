@@ -65,10 +65,10 @@ public struct LiquidBackgroundView: View {
             .ignoresSafeArea()
             .opacity(0.5)
 
-            // 第四层：高光渐变层
+            // 第四层：高光渐变层 — 亮度越高越弱，避免在亮色封面上雪上加霜
             LinearGradient(
                 gradient: Gradient(colors: [
-                    Color.white.opacity(0.25),
+                    Color.white.opacity(0.25 * max(0.0, 1.0 - Double(luminance) * 1.5)),
                     Color.clear,
                     Color.clear
                 ]),
@@ -78,17 +78,12 @@ public struct LiquidBackgroundView: View {
             .ignoresSafeArea()
             .blendMode(.overlay)
 
-            // 第五层：动态对比度遮罩 — 亮度越高越暗，保证白色文字可读
-            LinearGradient(
-                colors: [
-                    .black.opacity(max(0, luminance - 0.3) * 0.2),
-                    .black.opacity(max(0, luminance - 0.2) * 0.35)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            .animation(.easeInOut(duration: 0.5), value: luminance)
+            // 第五层：亮度钳制遮罩 — 数学保证输出亮度 ≤ 0.45
+            // α = max(0, 1 - targetLuminance / artworkLuminance)
+            Color.black
+                .opacity(max(0, 1 - 0.45 / max(luminance, 0.01)))
+                .ignoresSafeArea()
+                .animation(.easeInOut(duration: 0.5), value: luminance)
 
             // 第五层：深度渐变（已禁用 - 会导致底部出现额外黑色层）
             // LinearGradient(

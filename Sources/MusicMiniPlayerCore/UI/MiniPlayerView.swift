@@ -54,8 +54,6 @@ public struct MiniPlayerView: View {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                     .accessibilityHidden(true)
-                    .brightness(-0.15 * musicController.artworkLuminance)
-                    .animation(.easeInOut(duration: 0.5), value: musicController.artworkLuminance)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
                 WindowDraggableView()
