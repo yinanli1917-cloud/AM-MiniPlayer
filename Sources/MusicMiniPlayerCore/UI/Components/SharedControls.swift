@@ -180,21 +180,21 @@ struct SharedBottomControls: View {
     @ViewBuilder
     private var playbackCluster: some View {
         let buttons = HStack(spacing: 10) {
-            HoverableControlButton(iconName: "backward.fill", size: 17, action: {
+            DirectionalFlowButton(isForward: false, size: 17) {
                 musicController.previousTrack()
-            }, direction: -1)
+            }
             .frame(width: 30, height: 30)
             .accessibilityLabel("上一首")
 
-            HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21, action: {
+            HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
                 musicController.togglePlayPause()
-            })
+            }
             .frame(width: 30, height: 30)
             .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
 
-            HoverableControlButton(iconName: "forward.fill", size: 17, action: {
+            DirectionalFlowButton(isForward: true, size: 17) {
                 musicController.nextTrack()
-            }, direction: 1)
+            }
             .frame(width: 30, height: 30)
             .accessibilityLabel("下一首")
         }
@@ -321,15 +321,64 @@ struct SharedBottomControls: View {
 
 // MARK: - Hoverable Button Components
 
-enum ControlPhase: CaseIterable {
-    case idle, press, overshoot, settle
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - Custom Animated Icons
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct PlayTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
 }
 
-struct HoverableControlButton: View {
-    let iconName: String
+struct DirectionalFlowIcon: View {
+    let iconSize: CGFloat
+    let isForward: Bool
+    var color: Color = .white
+    @Binding var trigger: Int
+
+    @State private var flow: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var triW: CGFloat { iconSize * 0.38 }
+    private var triH: CGFloat { iconSize * 0.62 }
+
+    var body: some View {
+        HStack(spacing: triW * -0.08) {
+            PlayTriangle().fill(color)
+                .frame(width: triW, height: triH)
+                .opacity(1 - flow * 0.85)
+                .offset(x: -flow * triW * 0.4)
+
+            PlayTriangle().fill(color)
+                .frame(width: triW, height: triH)
+
+            PlayTriangle().fill(color)
+                .frame(width: triW, height: triH)
+                .opacity(flow)
+                .scaleEffect(0.6 + flow * 0.4)
+                .offset(x: (1 - flow) * triW * 0.4)
+        }
+        .scaleEffect(x: isForward ? 1 : -1, y: 1)
+        .onChange(of: trigger) { _, _ in
+            guard !reduceMotion else { return }
+            withAnimation(.easeIn(duration: 0.12)) { flow = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                withAnimation(.easeOut(duration: 0.22)) { flow = 0 }
+            }
+        }
+    }
+}
+
+struct DirectionalFlowButton: View {
+    let isForward: Bool
     let size: CGFloat
     let action: () -> Void
-    var direction: CGFloat = 0
     @State private var isHovering = false
     @State private var tapTrigger = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -339,33 +388,41 @@ struct HoverableControlButton: View {
             tapTrigger += 1
             action()
         } label: {
+            DirectionalFlowIcon(
+                iconSize: size, isForward: isForward,
+                trigger: $tapTrigger
+            )
+            .frame(width: 32, height: 32)
+            .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(reduceMotion ? nil : .bouncy(duration: 0.25)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
+struct HoverableControlButton: View {
+    let iconName: String
+    let size: CGFloat
+    let action: () -> Void
+    @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button(action: action) {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
                 .foregroundStyle(.white)
-                .phaseAnimator(ControlPhase.allCases, trigger: tapTrigger) { content, phase in
-                    content
-                        .scaleEffect(
-                            x: phase == .press ? 0.7 : phase == .overshoot ? 1.15 : 1.0,
-                            y: phase == .press ? 0.85 : phase == .overshoot ? 0.92 : 1.0
-                        )
-                        .offset(x: phase == .press ? direction * 4 : phase == .overshoot ? direction * -1.5 : 0)
-                        .opacity(phase == .press ? 0.6 : 1.0)
-                } animation: { phase in
-                    switch phase {
-                    case .idle: .spring(response: 0.25, dampingFraction: 0.8)
-                    case .press: .easeOut(duration: 0.06)
-                    case .overshoot: .spring(response: 0.2, dampingFraction: 0.45)
-                    case .settle: .spring(response: 0.28, dampingFraction: 0.75)
-                    }
-                }
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .bouncy(duration: 0.25)
-            withAnimation(animation) {
+            withAnimation(reduceMotion ? nil : .bouncy(duration: 0.25)) {
                 isHovering = hovering
             }
         }

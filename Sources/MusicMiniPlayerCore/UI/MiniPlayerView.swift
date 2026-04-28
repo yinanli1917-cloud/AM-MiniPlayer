@@ -31,6 +31,10 @@ public struct MiniPlayerView: View {
     // 🔑 封面亮度（用于动态调整按钮样式）
     @State private var artworkBrightness: CGFloat = 0.5
 
+    // 🔑 Shuffle/Repeat 流动动画进度
+    @State private var shuffleFlow: Double = 0
+    @State private var repeatFlow: Double = 0
+
     // 🔑 页面切换后短暂锁定 hover 状态，防止 onHover(false) 覆盖
     @State private var hoverLocked: Bool = false
 
@@ -342,19 +346,8 @@ extension MiniPlayerView {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
-                    .phaseAnimator(ControlPhase.allCases, trigger: musicController.shuffleEnabled) { content, phase in
-                        content
-                            .rotationEffect(.degrees(phase == .press ? -20 : phase == .overshoot ? 10 : 0))
-                            .scaleEffect(phase == .press ? 0.75 : phase == .overshoot ? 1.12 : 1.0)
-                            .opacity(phase == .press ? 0.5 : 1.0)
-                    } animation: { phase in
-                        switch phase {
-                        case .idle: .spring(response: 0.3, dampingFraction: 0.75)
-                        case .press: .easeOut(duration: 0.06)
-                        case .overshoot: .spring(response: 0.22, dampingFraction: 0.4)
-                        case .settle: .spring(response: 0.3, dampingFraction: 0.8)
-                        }
-                    }
+                    .offset(x: shuffleFlow * 2.5, y: shuffleFlow * -2)
+                    .opacity(1 - shuffleFlow * 0.3)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
@@ -367,25 +360,21 @@ extension MiniPlayerView {
             .buttonStyle(.plain)
             .accessibilityLabel("随机播放")
             .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
+            .onChange(of: musicController.shuffleEnabled) { _, _ in
+                guard !reduceMotion else { return }
+                withAnimation(.easeIn(duration: 0.1)) { shuffleFlow = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.easeOut(duration: 0.25)) { shuffleFlow = 0 }
+                }
+            }
 
             Button(action: { musicController.cycleRepeatMode() }) {
                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
-                    .phaseAnimator(ControlPhase.allCases, trigger: musicController.repeatMode) { content, phase in
-                        content
-                            .rotationEffect(.degrees(phase == .overshoot ? 15 : 0))
-                            .scaleEffect(phase == .press ? 0.78 : phase == .overshoot ? 1.1 : 1.0)
-                            .opacity(phase == .press ? 0.5 : 1.0)
-                    } animation: { phase in
-                        switch phase {
-                        case .idle: .spring(response: 0.3, dampingFraction: 0.75)
-                        case .press: .easeOut(duration: 0.06)
-                        case .overshoot: .spring(response: 0.22, dampingFraction: 0.4)
-                        case .settle: .spring(response: 0.3, dampingFraction: 0.8)
-                        }
-                    }
+                    .rotationEffect(.degrees(repeatFlow * 20))
+                    .opacity(1 - repeatFlow * 0.25)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
@@ -397,6 +386,13 @@ extension MiniPlayerView {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
+            .onChange(of: musicController.repeatMode) { _, _ in
+                guard !reduceMotion else { return }
+                withAnimation(.easeIn(duration: 0.1)) { repeatFlow = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.easeOut(duration: 0.3)) { repeatFlow = 0 }
+                }
+            }
         }
 
         if #available(macOS 26.0, *) {
