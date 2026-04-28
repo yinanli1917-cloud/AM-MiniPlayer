@@ -78,13 +78,7 @@ public struct LiquidBackgroundView: View {
             .ignoresSafeArea()
             .blendMode(.overlay)
 
-            // 第五层：亮度钳制遮罩 — 数学保证输出亮度 ≤ 0.33
-            // α = max(0, 1 - target / luminance)
-            // target 0.33 accounts for glass layers amplifying artwork brightness
-            Color.black
-                .opacity(max(0, 1 - 0.33 / max(luminance, 0.01)))
-                .ignoresSafeArea()
-                .animation(.easeInOut(duration: 0.5), value: luminance)
+            // 第五层：亮度钳制遮罩 — 移至 MiniPlayerView overlay 确保在 NSVisualEffectView 之上
 
             // 第五层：深度渐变（已禁用 - 会导致底部出现额外黑色层）
             // LinearGradient(

@@ -53,6 +53,12 @@ public struct MiniPlayerView: View {
             ZStack {
                 // Background (Liquid Glass)
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
+                    .overlay(
+                        Color.black
+                            .opacity(max(0, 1 - 0.35 / max(Double(musicController.artworkLuminance), 0.01)))
+                            .allowsHitTesting(false)
+                    )
+                    .animation(.easeInOut(duration: 0.5), value: musicController.artworkLuminance)
                     .accessibilityHidden(true)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
@@ -346,8 +352,8 @@ extension MiniPlayerView {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
-                    .offset(x: shuffleFlow * 2.5, y: shuffleFlow * -2)
-                    .opacity(1 - shuffleFlow * 0.3)
+                    .offset(x: shuffleFlow * 1.5, y: shuffleFlow * -1.5)
+                    .scaleEffect(1 - shuffleFlow * 0.08)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
@@ -362,9 +368,9 @@ extension MiniPlayerView {
             .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
             .onChange(of: musicController.shuffleEnabled) { _, _ in
                 guard !reduceMotion else { return }
-                withAnimation(.easeIn(duration: 0.1)) { shuffleFlow = 1 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    withAnimation(.easeOut(duration: 0.25)) { shuffleFlow = 0 }
+                withAnimation(.interpolatingSpring(mass: 1, stiffness: 170, damping: 18)) { shuffleFlow = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    withAnimation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20)) { shuffleFlow = 0 }
                 }
             }
 
@@ -373,8 +379,8 @@ extension MiniPlayerView {
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
-                    .rotationEffect(.degrees(repeatFlow * 20))
-                    .opacity(1 - repeatFlow * 0.25)
+                    .rotationEffect(.degrees(repeatFlow * 12))
+                    .scaleEffect(1 - repeatFlow * 0.06)
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
@@ -388,9 +394,9 @@ extension MiniPlayerView {
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
             .onChange(of: musicController.repeatMode) { _, _ in
                 guard !reduceMotion else { return }
-                withAnimation(.easeIn(duration: 0.1)) { repeatFlow = 1 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    withAnimation(.easeOut(duration: 0.3)) { repeatFlow = 0 }
+                withAnimation(.interpolatingSpring(mass: 1, stiffness: 200, damping: 18)) { repeatFlow = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                    withAnimation(.interpolatingSpring(mass: 1, stiffness: 120, damping: 20)) { repeatFlow = 0 }
                 }
             }
         }

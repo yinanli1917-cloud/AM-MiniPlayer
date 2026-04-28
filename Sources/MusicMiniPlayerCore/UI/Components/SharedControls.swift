@@ -336,17 +336,16 @@ struct HoverableControlButton: View {
         Button {
             action()
             guard !reduceMotion else { return }
-            withAnimation(.easeIn(duration: 0.1)) { flow = 1 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                withAnimation(.easeOut(duration: 0.22)) { flow = 0 }
+            withAnimation(.interpolatingSpring(mass: 1, stiffness: 170, damping: 18)) { flow = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                withAnimation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20)) { flow = 0 }
             }
         } label: {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
                 .foregroundStyle(.white)
-                .offset(x: flow * direction * 3)
-                .opacity(1 - flow * 0.25)
+                .offset(x: flow * direction * 2.5)
                 .frame(width: 32, height: 32)
                 .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
         }
