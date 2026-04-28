@@ -55,10 +55,10 @@ public struct MiniPlayerView: View {
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                     .overlay(
                         Color.black
-                            .opacity(max(0, 1 - 0.35 / max(Double(musicController.artworkLuminance), 0.01)))
+                            .opacity(max(0, 1 - 0.35 / max(Double(musicController.controlAreaLuminance), 0.01)))
                             .allowsHitTesting(false)
                     )
-                    .animation(.easeInOut(duration: 0.5), value: musicController.artworkLuminance)
+                    .animation(.easeInOut(duration: 0.5), value: musicController.controlAreaLuminance)
                     .accessibilityHidden(true)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
@@ -187,17 +187,19 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 监听封面变化，计算整图平均亮度（因为背景是全图模糊后的混合色）
+        // 🔑 监听封面变化，计算整图 + 底部区域亮度
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
                 musicController.artworkLuminance = artworkBrightness
+                musicController.controlAreaLuminance = artwork.bottomBrightness(fraction: 0.3)
             }
         }
         .onAppear {
             if let artwork = musicController.currentArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
                 musicController.artworkLuminance = artworkBrightness
+                musicController.controlAreaLuminance = artwork.bottomBrightness(fraction: 0.3)
             }
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态

@@ -74,6 +74,7 @@ public class MusicController: ObservableObject {
     @Published public var currentPage: PlayerPage = .album
     @Published public var userManuallyOpenedLyrics: Bool = false
     @Published public var artworkLuminance: CGFloat = 0.5
+    @Published public var controlAreaLuminance: CGFloat = 0.5
     @Published public var currentPersistentID: String?
     @Published public var musicKitAuthorized: Bool = false
 

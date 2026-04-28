@@ -316,6 +316,43 @@ extension NSImage {
         return perceivedBrightness
     }
 
+    /// 计算图片底部区域的感知亮度（用于控件区域 scrim）
+    /// - Parameter fraction: 底部采样比例（0-1），默认 0.3 = 底部 30%
+    func bottomBrightness(fraction: CGFloat = 0.3) -> CGFloat {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0.5 }
+
+        let inputImage = CIImage(cgImage: cgImage)
+        let height = inputImage.extent.size.height
+        let sampleHeight = height * fraction
+
+        // CIImage Y=0 is bottom, so sample from origin.y
+        let extentVector = CIVector(x: inputImage.extent.origin.x,
+                                    y: inputImage.extent.origin.y,
+                                    z: inputImage.extent.size.width,
+                                    w: sampleHeight)
+
+        guard let filter = CIFilter(name: "CIAreaAverage",
+                                    parameters: [kCIInputImageKey: inputImage,
+                                                 kCIInputExtentKey: extentVector]) else { return 0.5 }
+        guard let outputImage = filter.outputImage else { return 0.5 }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        let context = Self.sharedCIContext
+
+        context.render(outputImage,
+                       toBitmap: &bitmap,
+                       rowBytes: 4,
+                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8,
+                       colorSpace: nil)
+
+        let r = CGFloat(bitmap[0]) / 255.0
+        let g = CGFloat(bitmap[1]) / 255.0
+        let b = CGFloat(bitmap[2]) / 255.0
+
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    }
+
     /// 计算图片左上角区域的感知亮度（用于判断按钮背景色）
     /// 取左上角 25% 区域的平均亮度
     func topLeftBrightness() -> CGFloat {
