@@ -181,12 +181,13 @@ public struct MiniPlayerView: View {
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
+                musicController.isLightBackground = artworkBrightness > 0.6
             }
         }
         .onAppear {
-            // 初始化亮度（整图平均）
             if let artwork = musicController.currentArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
+                musicController.isLightBackground = artworkBrightness > 0.6
             }
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
@@ -243,9 +244,12 @@ extension MiniPlayerView {
                 // 🔑 标题 - matchedGeometryEffect
                 Text(musicController.currentTrackTitle)
                     .font(.system(size: isHovering ? 12 : 16, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundStyle(musicController.isLightBackground ? Color.black : Color.white)
                     .lineLimit(1)
-                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .shadow(
+                        color: musicController.isLightBackground ? .white.opacity(0.5) : .black.opacity(isHovering ? 0.6 : 0.7),
+                        radius: isHovering ? 8 : 10, x: 0, y: 2
+                    )
                     .matchedGeometryEffect(id: "trackTitle", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -267,9 +271,12 @@ extension MiniPlayerView {
                 // 🔑 艺术家 - matchedGeometryEffect
                 Text(musicController.currentArtist)
                     .font(.system(size: isHovering ? 10 : 13, weight: .medium))
-                    .foregroundColor(.white.opacity(isHovering ? 0.7 : 0.9))
+                    .foregroundStyle((musicController.isLightBackground ? Color.black : Color.white).opacity(isHovering ? 0.7 : 0.9))
                     .lineLimit(1)
-                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .shadow(
+                        color: musicController.isLightBackground ? .white.opacity(0.5) : .black.opacity(isHovering ? 0.6 : 0.7),
+                        radius: isHovering ? 8 : 10, x: 0, y: 2
+                    )
                     .matchedGeometryEffect(id: "artistName", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -339,11 +346,11 @@ extension MiniPlayerView {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
                     .symbolEffect(.bounce.up.byLayer, value: musicController.shuffleEnabled)
-                    .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
+                    .foregroundStyle(musicController.shuffleEnabled ? themeColor : (isLightBg ? Color.black : Color.white))
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
-                        fallbackFill: musicController.shuffleEnabled ? themeColor : .white,
+                        fallbackFill: musicController.shuffleEnabled ? themeColor : (isLightBg ? .black : .white),
                         fallbackOpacity: musicController.shuffleEnabled ? 0.25 : normalFillOpacity,
                         fallbackShadowOpacity: shadowOp,
                         fallbackShadowRadius: shadowRad
@@ -358,11 +365,11 @@ extension MiniPlayerView {
                     .contentTransition(.symbolEffect(.replace))
                     .font(.system(size: 11, weight: .semibold))
                     .symbolEffect(.bounce.up.byLayer, value: musicController.repeatMode)
-                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
+                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : (isLightBg ? Color.black : Color.white))
                     .frame(width: 24, height: 24)
                     .modifier(GlassCircle(
                         isEnabled: true,
-                        fallbackFill: musicController.repeatMode > 0 ? themeColor : .white,
+                        fallbackFill: musicController.repeatMode > 0 ? themeColor : (isLightBg ? .black : .white),
                         fallbackOpacity: musicController.repeatMode > 0 ? 0.25 : normalFillOpacity,
                         fallbackShadowOpacity: shadowOp,
                         fallbackShadowRadius: shadowRad
