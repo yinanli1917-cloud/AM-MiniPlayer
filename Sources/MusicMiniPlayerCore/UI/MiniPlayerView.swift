@@ -30,6 +30,8 @@ public struct MiniPlayerView: View {
 
     // 🔑 封面亮度（用于动态调整按钮样式）
     @State private var artworkBrightness: CGFloat = 0.5
+    @State private var topLeftLuminance: CGFloat = 0.5
+    @State private var topRightLuminance: CGFloat = 0.5
 
     // 🔑 Shuffle/Repeat 流动动画进度
     @State private var shuffleFlow: Double = 0
@@ -122,7 +124,8 @@ public struct MiniPlayerView: View {
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
-                MusicButtonView(artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                let lum = musicController.currentPage == .album ? topLeftLuminance : artworkBrightness
+                MusicButtonView(artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                     .padding(12)
                     .transition(.opacity)
             }
@@ -130,24 +133,22 @@ public struct MiniPlayerView: View {
         .overlay(alignment: .topTrailing) {
             // Hide/Expand 按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
+                let lum = musicController.currentPage == .album ? topRightLuminance : artworkBrightness
                 // 根据模式显示不同按钮
                 if onExpand != nil {
-                    // 菜单栏模式：显示展开按钮
-                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                         .padding(12)
                         .transition(.opacity)
                 } else if onHide != nil {
-                    // 浮窗模式：显示收起按钮
-                    HideButtonView(onHide: onHide!, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                    HideButtonView(onHide: onHide!, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                         .padding(12)
                         .transition(.opacity)
                 } else {
-                    // 无回调时的默认行为
                     HideButtonView(onHide: {
                         if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
                             window.orderOut(nil)
                         }
-                    }, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                    }, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                     .padding(12)
                     .transition(.opacity)
                 }
@@ -196,15 +197,19 @@ public struct MiniPlayerView: View {
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
+                topLeftLuminance = artwork.topLeftBrightness()
+                topRightLuminance = artwork.topRightBrightness()
                 musicController.artworkLuminance = artworkBrightness
-                musicController.controlAreaLuminance = artwork.bottomBrightness(fraction: 0.3)
+                musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
         }
         .onAppear {
             if let artwork = musicController.currentArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
+                topLeftLuminance = artwork.topLeftBrightness()
+                topRightLuminance = artwork.topRightBrightness()
                 musicController.artworkLuminance = artworkBrightness
-                musicController.controlAreaLuminance = artwork.bottomBrightness(fraction: 0.3)
+                musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
@@ -345,16 +350,12 @@ extension MiniPlayerView {
         }
     }
 
-    // MARK: - Shuffle/Repeat Cluster (GlassEffectContainer on macOS 26+)
+    // MARK: - Shuffle/Repeat Cluster (round circles on album page)
     @ViewBuilder
     private var shuffleRepeatCluster: some View {
         let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-        let isLightBg = artworkBrightness > 0.6
-        let normalFillOpacity = isLightBg ? 0.5 : 0.20
-        let shadowOp = isLightBg ? 0.6 : 0.3
-        let shadowRad: CGFloat = isLightBg ? 15 : 8
 
-        let buttons = HStack(spacing: 4) {
+        HStack(spacing: 4) {
             Button(action: { musicController.toggleShuffle() }) {
                 Image(systemName: "shuffle")
                     .font(.system(size: 11, weight: .semibold))
@@ -362,20 +363,16 @@ extension MiniPlayerView {
                     .rotationEffect(.degrees(shuffleFlow * 12))
                     .scaleEffect(1 - shuffleFlow * 0.12)
                     .frame(width: 24, height: 24)
-                    .modifier(GlassCircle(
-                        isEnabled: true,
-                        fallbackFill: musicController.shuffleEnabled ? themeColor : .white,
-                        fallbackOpacity: musicController.shuffleEnabled ? 0.25 : normalFillOpacity,
-                        fallbackShadowOpacity: shadowOp,
-                        fallbackShadowRadius: shadowRad
-                    ))
+                    .background(
+                        Circle().fill(.ultraThinMaterial)
+                            .overlay(musicController.shuffleEnabled ? Circle().fill(themeColor.opacity(0.2)) : nil)
+                    )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("随机播放")
             .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
             .onChange(of: musicController.shuffleEnabled) { _, _ in
                 guard !reduceMotion else { return }
-                // Rotation wiggle: fast press, slow spring-back with overshoot
                 withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { shuffleFlow = 1 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     withAnimation(.interpolatingSpring(stiffness: 300, damping: 8)) { shuffleFlow = 0 }
@@ -390,13 +387,10 @@ extension MiniPlayerView {
                     .rotationEffect(.degrees(repeatFlow * 10))
                     .scaleEffect(1 - repeatFlow * 0.1)
                     .frame(width: 24, height: 24)
-                    .modifier(GlassCircle(
-                        isEnabled: true,
-                        fallbackFill: musicController.repeatMode > 0 ? themeColor : .white,
-                        fallbackOpacity: musicController.repeatMode > 0 ? 0.25 : normalFillOpacity,
-                        fallbackShadowOpacity: shadowOp,
-                        fallbackShadowRadius: shadowRad
-                    ))
+                    .background(
+                        Circle().fill(.ultraThinMaterial)
+                            .overlay(musicController.repeatMode > 0 ? Circle().fill(themeColor.opacity(0.2)) : nil)
+                    )
             }
             .buttonStyle(.plain)
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
@@ -407,14 +401,6 @@ extension MiniPlayerView {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { repeatFlow = 0 }
                 }
             }
-        }
-
-        if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) {
-                buttons
-            }
-        } else {
-            buttons
         }
     }
 

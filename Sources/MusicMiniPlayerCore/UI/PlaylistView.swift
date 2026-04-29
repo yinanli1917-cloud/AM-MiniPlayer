@@ -360,7 +360,12 @@ public struct PlaylistView: View {
                         .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .modifier(GlassCapsule(fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1))
+                        .modifier(GlassCapsule(
+                            level: musicController.shuffleEnabled ? .regular : .clear,
+                            fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1
+                        ))
+                        .background(musicController.shuffleEnabled ? themeBackground : Color.clear)
+                        .clipShape(Capsule())
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -376,7 +381,12 @@ public struct PlaylistView: View {
                         .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .modifier(GlassCapsule(fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1))
+                        .modifier(GlassCapsule(
+                            level: musicController.repeatMode > 0 ? .regular : .clear,
+                            fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1
+                        ))
+                        .background(musicController.repeatMode > 0 ? themeBackground : Color.clear)
+                        .clipShape(Capsule())
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
