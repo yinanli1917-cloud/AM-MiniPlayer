@@ -316,20 +316,60 @@ extension NSImage {
         return perceivedBrightness
     }
 
-    /// 计算图片底部区域的感知亮度（用于控件区域 scrim）
-    /// - Parameter fraction: 底部采样比例（0-1），默认 0.3 = 底部 30%
-    func bottomBrightness(fraction: CGFloat = 0.3) -> CGFloat {
+    /// Samples the bottom strip in multiple columns and returns the MAX luminance.
+    /// Catches the brightest spot behind any control element, not just the average.
+    func controlAreaMaxLuminance(bottomFraction: CGFloat = 0.25, columns: Int = 5) -> CGFloat {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0.5 }
 
         let inputImage = CIImage(cgImage: cgImage)
+        let width = inputImage.extent.size.width
         let height = inputImage.extent.size.height
-        let sampleHeight = height * fraction
+        let sampleHeight = height * bottomFraction
+        let columnWidth = width / CGFloat(columns)
+        let context = Self.sharedCIContext
 
-        // CIImage Y=0 is bottom, so sample from origin.y
-        let extentVector = CIVector(x: inputImage.extent.origin.x,
-                                    y: inputImage.extent.origin.y,
-                                    z: inputImage.extent.size.width,
-                                    w: sampleHeight)
+        var maxLuminance: CGFloat = 0
+        var bitmap = [UInt8](repeating: 0, count: 4)
+
+        for col in 0..<columns {
+            let x = inputImage.extent.origin.x + CGFloat(col) * columnWidth
+            let extentVector = CIVector(x: x, y: inputImage.extent.origin.y,
+                                        z: columnWidth, w: sampleHeight)
+
+            guard let filter = CIFilter(name: "CIAreaAverage",
+                                        parameters: [kCIInputImageKey: inputImage,
+                                                     kCIInputExtentKey: extentVector]),
+                  let outputImage = filter.outputImage else { continue }
+
+            context.render(outputImage, toBitmap: &bitmap, rowBytes: 4,
+                          bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                          format: .RGBA8, colorSpace: nil)
+
+            let r = CGFloat(bitmap[0]) / 255.0
+            let g = CGFloat(bitmap[1]) / 255.0
+            let b = CGFloat(bitmap[2]) / 255.0
+            maxLuminance = max(maxLuminance, 0.299 * r + 0.587 * g + 0.114 * b)
+        }
+
+        return maxLuminance
+    }
+
+    /// 计算图片左上角区域的感知亮度（用于判断按钮背景色）
+    /// 取左上角 25% 区域的平均亮度
+    func topLeftBrightness() -> CGFloat {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0.5 }
+
+        let inputImage = CIImage(cgImage: cgImage)
+        let width = inputImage.extent.size.width
+        let height = inputImage.extent.size.height
+
+        // 🔑 左上角 25% 区域（CIImage 坐标系 Y 轴向上，所以 "top" 是 maxY 附近）
+        let regionWidth = width * 0.35
+        let regionHeight = height * 0.25
+        let extentVector = CIVector(x: 0,
+                                    y: height - regionHeight,  // 顶部
+                                    z: regionWidth,
+                                    w: regionHeight)
 
         guard let filter = CIFilter(name: "CIAreaAverage",
                                     parameters: [kCIInputImageKey: inputImage,
@@ -353,20 +393,17 @@ extension NSImage {
         return 0.299 * r + 0.587 * g + 0.114 * b
     }
 
-    /// 计算图片左上角区域的感知亮度（用于判断按钮背景色）
-    /// 取左上角 25% 区域的平均亮度
-    func topLeftBrightness() -> CGFloat {
+    func topRightBrightness() -> CGFloat {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0.5 }
 
         let inputImage = CIImage(cgImage: cgImage)
         let width = inputImage.extent.size.width
         let height = inputImage.extent.size.height
 
-        // 🔑 左上角 25% 区域（CIImage 坐标系 Y 轴向上，所以 "top" 是 maxY 附近）
         let regionWidth = width * 0.35
         let regionHeight = height * 0.25
-        let extentVector = CIVector(x: 0,
-                                    y: height - regionHeight,  // 顶部
+        let extentVector = CIVector(x: width - regionWidth,
+                                    y: height - regionHeight,
                                     z: regionWidth,
                                     w: regionHeight)
 
