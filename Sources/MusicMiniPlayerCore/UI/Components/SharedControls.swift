@@ -119,7 +119,6 @@ struct SharedBottomControls: View {
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
                 }
-                .background(NonDraggableView())
 
                 // Playback Controls
                 HStack(spacing: 10) {
@@ -144,6 +143,8 @@ struct SharedBottomControls: View {
             }
             .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
             .padding(.bottom, 16)
+            .contentShape(Rectangle())
+            .background(NonDraggableView())
         }
         .frame(maxWidth: .infinity, alignment: .bottom)
         // 🔑 跟踪整个控件区域的hover状态
@@ -336,9 +337,7 @@ struct HoverableControlButton: View {
         Button {
             action()
             guard !reduceMotion else { return }
-            // Phase 1: fast press-in (80ms feel — spring snaps down)
             withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { isPressed = true }
-            // Phase 2: slow overshoot release (300ms feel — spring bounces back)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { isPressed = false }
             }
@@ -346,15 +345,18 @@ struct HoverableControlButton: View {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
-                .foregroundStyle(.white)
+                .foregroundColor(.white)
                 .scaleEffect(isPressed ? 0.82 : 1.0)
                 .offset(x: isPressed ? direction * 3.5 : 0)
                 .frame(width: 32, height: 32)
-                .modifier(GlassCircle(isEnabled: isHovering, fallbackOpacity: 0.25))
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(isHovering ? 0.25 : 0))
+                )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
         }
@@ -373,14 +375,16 @@ struct NavigationIconButton: View {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: 15))
-                .foregroundStyle(.white)
+                .foregroundColor(.white)
                 .frame(width: 26, height: 26)
-                .modifier(GlassCircle(isEnabled: isActive || isHovering, fallbackOpacity: 0.25))
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity((isActive || isHovering) ? 0.25 : 0))
+                )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
-            withAnimation(animation) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
         }
