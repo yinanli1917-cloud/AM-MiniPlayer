@@ -13,22 +13,18 @@ import AppKit
 // 🔑 macOS 26+ Liquid Glass 按钮背景适配
 
 struct GlassButtonBackground: ViewModifier {
-    var fillOpacity: Double
-    var shadowOpacity: Double
-    var shadowRadius: CGFloat
     var luminance: CGFloat = 0.5
 
     func body(content: Content) -> some View {
+        let adaptiveColor: Color = luminance > 0.55 ? .black : .white
         if #available(macOS 26.0, *) {
             content
-                .foregroundStyle(.primary)
+                .foregroundStyle(adaptiveColor)
                 .glassEffect(.clear, in: .capsule)
         } else {
             content
-                .foregroundStyle(luminance > 0.6 ? Color.black : Color.white)
-                .background(Color.white.opacity(fillOpacity))
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+                .foregroundStyle(adaptiveColor)
+                .background(Capsule().fill(.ultraThinMaterial))
         }
     }
 }
@@ -38,11 +34,16 @@ struct GlassButtonBackground: ViewModifier {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 struct GlassCapsule: ViewModifier {
+    var level: GlassCapsuleLevel = .regular
     var fallbackOpacity: Double = 0.1
+
+    enum GlassCapsuleLevel {
+        case clear, regular
+    }
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            content.glassEffect(.regular, in: .capsule)
+            content.glassEffect(level == .regular ? .regular : .clear, in: .capsule)
         } else {
             content.background(
                 Capsule()
@@ -94,18 +95,7 @@ struct GlassCircle: ViewModifier {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🔑 共享的亮度/透明度计算，消除 MusicButtonView/HideButtonView/ExpandButtonView 的重复代码
 
-private func hoverableButtonFillOpacity(luminance: CGFloat, isHovering: Bool) -> Double {
-    let base = 0.10 + 0.35 * luminance
-    return isHovering ? base + 0.10 : base
-}
-
-private func hoverableButtonShadowOpacity(luminance: CGFloat) -> Double {
-    luminance * 0.5
-}
-
-private func hoverableButtonShadowRadius(luminance: CGFloat) -> CGFloat {
-    luminance * 10
-}
+// Helpers removed — GlassButtonBackground now only needs luminance
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - HoverableActionButton（统一的 Glass 按钮）
@@ -121,7 +111,7 @@ struct HoverableActionButton: View {
 
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var effectiveLuminance: CGFloat { isAlbumPage ? artworkBrightness : 0 }
+    private var effectiveLuminance: CGFloat { artworkBrightness }
 
     var body: some View {
         Button(action: action) {
@@ -129,12 +119,7 @@ struct HoverableActionButton: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .contentShape(Capsule())
-                .modifier(GlassButtonBackground(
-                    fillOpacity: hoverableButtonFillOpacity(luminance: effectiveLuminance, isHovering: isHovering),
-                    shadowOpacity: hoverableButtonShadowOpacity(luminance: effectiveLuminance),
-                    shadowRadius: hoverableButtonShadowRadius(luminance: effectiveLuminance),
-                    luminance: effectiveLuminance
-                ))
+                .modifier(GlassButtonBackground(luminance: effectiveLuminance))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -217,53 +202,57 @@ struct ExpandButtonView: View {
 struct TranslationButtonView: View {
     @ObservedObject var lyricsService: LyricsService
     @State private var isHovering = false
+    @State private var isPressed = false
+    @State private var toggleBounce: Double = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    // 🔑 记录是否已经尝试过强制重试（防止无限重试）
     @State private var hasTriedForceRetry = false
 
     var body: some View {
-        Button(action: {
-            withAnimation(.smooth(duration: 0.25)) {
-                // 🔑 智能翻译逻辑：
-                // 1. 如果翻译开关关闭 → 打开翻译
-                // 2. 如果翻译开关已开启但没有翻译结果，且未尝试过强制重试 → 强制重试翻译
-                // 3. 其他情况 → 关闭翻译
-
-                if !lyricsService.showTranslation {
-                    // 情况1：打开翻译
-                    lyricsService.showTranslation = true
-                    hasTriedForceRetry = false  // 重置重试标记
-                    lyricsService.debugLogPublic("🔘 翻译按钮：打开翻译")
-                } else if !lyricsService.hasTranslation && !lyricsService.isTranslating && !hasTriedForceRetry {
-                    // 情况2：翻译开关已开启但没有翻译结果，强制重试一次
-                    lyricsService.debugLogPublic("🔘 翻译按钮：强制重试翻译（当前无翻译结果）")
-                    hasTriedForceRetry = true  // 标记已尝试过
-                    lyricsService.forceRetryTranslation()
-                } else {
-                    // 情况3：关闭翻译
-                    lyricsService.showTranslation = false
-                    hasTriedForceRetry = false  // 重置重试标记
-                    lyricsService.debugLogPublic("🔘 翻译按钮：关闭翻译")
-                }
+        Button {
+            if !lyricsService.showTranslation {
+                lyricsService.showTranslation = true
+                hasTriedForceRetry = false
+                lyricsService.debugLogPublic("🔘 翻译按钮：打开翻译")
+            } else if !lyricsService.hasTranslation && !lyricsService.isTranslating && !hasTriedForceRetry {
+                lyricsService.debugLogPublic("🔘 翻译按钮：强制重试翻译（当前无翻译结果）")
+                hasTriedForceRetry = true
+                lyricsService.forceRetryTranslation()
+            } else {
+                lyricsService.showTranslation = false
+                hasTriedForceRetry = false
+                lyricsService.debugLogPublic("🔘 翻译按钮：关闭翻译")
             }
-        }) {
+            guard !reduceMotion else { return }
+            withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { isPressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { isPressed = false }
+            }
+        } label: {
+            let isOn = lyricsService.showTranslation
             Image(systemName: "translate")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white)  // 🔑 icon 始终 100% opacity
+                .font(.system(size: isOn ? 14 : 12, weight: .medium))
+                .foregroundColor(isOn ? Color(white: 0.35) : .white)
                 .frame(width: 32, height: 32)
-                .modifier(GlassCircle(
-                    isEnabled: true,
-                    fallbackOpacity: lyricsService.showTranslation ? 0.3 : (isHovering ? 0.2 : 0.12)
-                ))
+                .scaleEffect(isPressed ? 0.82 : (isHovering ? 1.08 : 1.0))
+                .scaleEffect(1 + toggleBounce * 0.15)
+                .background(
+                    Circle()
+                        .fill(isOn ? Color.white.opacity(0.85) : Color.white.opacity(isHovering ? 0.2 : 0.12))
+                        .scaleEffect(isPressed ? 0.82 : (isHovering ? 1.08 : 1.0))
+                        .scaleEffect(1 + toggleBounce * 0.15)
+                )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            if reduceMotion {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 isHovering = hovering
-            } else {
-                withAnimation(.smooth(duration: 0.25)) {
-                    isHovering = hovering
-                }
+            }
+        }
+        .onChange(of: lyricsService.showTranslation) { _, newValue in
+            guard !reduceMotion, newValue else { return }
+            withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { toggleBounce = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.interpolatingSpring(stiffness: 300, damping: 8)) { toggleBounce = 0 }
             }
         }
         // 🔑 歌曲切换时重置重试标记
