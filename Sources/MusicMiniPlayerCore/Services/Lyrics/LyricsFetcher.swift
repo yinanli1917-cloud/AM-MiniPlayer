@@ -1152,6 +1152,17 @@ public final class LyricsFetcher {
 
     /// 统一搜索模板：构建关键词 → 逐轮调 API → 构建候选 → 选择最佳
     /// - `extraKeywords`: 源专属的额外搜索轮次
+    private static func keywordPriority(_ desc: String) -> Int {
+        if desc.hasPrefix("title+artist") { return 0 }
+        if desc.hasPrefix("original") { return 1 }
+        if desc.hasPrefix("dual-") { return 2 }
+        if desc == "title only" { return 3 }
+        if desc.hasPrefix("title+album") { return 4 }
+        if desc.hasPrefix("alias+title") { return 5 }
+        if desc == "artist only" { return 6 }
+        return 7
+    }
+
     /// - `fetchSongs`: 调 API 返回歌曲 JSON 列表
     /// - `extractSong`: 从单条 JSON 提取 (id, name, artist, durationSeconds)
     private func searchAndSelectCandidate<ID>(
@@ -1211,7 +1222,7 @@ public final class LyricsFetcher {
         // 🔑 Parallel keyword search — fire ALL rounds simultaneously.
         // Sequential was the primary latency bottleneck: 5 rounds × 1-2s each = 5-10s.
         // Parallel reduces to max(round latencies) ≈ 1-2s. First match wins.
-        return await withTaskGroup(of: (ID, Bool, String, Double)?.self) { group in
+        return await withTaskGroup(of: (ID, Bool, String, Double, Int)?.self) { group in
             // 🔑 Alias-resolved keyword: for ASCII artist, query NetEase's
             // artist-search endpoint via Wade-Giles/Jyutping/Pinyin probes,
             // collect CJK candidates, and fire "title+candidate" for each.
@@ -1254,7 +1265,7 @@ public final class LyricsFetcher {
                                 songs: songs, params: aliasParams, extractSong: extractSong
                             )
                             if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
-                                return (m.id, m.albumMatched, desc, m.durationDiff)
+                                return (m.id, m.albumMatched, desc, m.durationDiff, Self.keywordPriority(desc))
                             }
                         } catch {
                             DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
@@ -1276,7 +1287,7 @@ public final class LyricsFetcher {
                             songs: songs, params: params, extractSong: extractSong
                         )
                         if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
-                            return (match.id, match.albumMatched, desc, match.durationDiff)
+                            return (match.id, match.albumMatched, desc, match.durationDiff, Self.keywordPriority(desc))
                         }
                     } catch {
                         DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
@@ -1285,22 +1296,20 @@ public final class LyricsFetcher {
                 }
             }
             // Collect ALL results, pick the best deterministically.
-            // Ranking: (1) albumMatch desc  (2) durationDiff asc
-            // All rounds are already in-flight so waiting for all adds
-            // minimal latency (~100-300ms typical).
-            //
-            // 🔑 Deterministic: eliminates first-to-finish race condition
-            // where network timing decided which NE entry won. Same
-            // (title, artist, album, duration) input → same output every time.
-            var allResults: [(ID, Bool, String, Double)] = []
+            // Ranking: (1) albumMatch desc  (2) durationDiff asc  (3) keyword priority asc
+            // The priority tiebreaker ensures identical albumMatch+durationDiff results
+            // are resolved by keyword specificity (title+artist > alias > artist-only),
+            // eliminating non-determinism from task completion ordering.
+            var allResults: [(ID, Bool, String, Double, Int)] = []
             for await result in group {
                 guard let r = result else { continue }
                 allResults.append(r)
             }
             guard !allResults.isEmpty else { return nil }
             let best = allResults.min { a, b in
-                if a.1 != b.1 { return a.1 && !b.1 }  // albumMatch wins
-                return a.3 < b.3                       // closer duration wins
+                if a.1 != b.1 { return a.1 && !b.1 }
+                if a.3 != b.3 { return a.3 < b.3 }
+                return a.4 < b.4
             }!
             let matchType = best.1 ? "albumMatch=true" : "no album match"
             DebugLogger.log(source, "⚡ Best match via '\(best.2)' (\(matchType), Δ\(String(format: "%.1f", best.3))s) from \(allResults.count) rounds")
