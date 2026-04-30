@@ -240,13 +240,7 @@ struct LyricLineView: View {
                     Spacer(minLength: 0)
                 }
             } else if showTranslation && translationFailed && isCurrent {
-                // 🔑 翻译失败提示（仅当前行显示）
-                HStack(spacing: 4) {
-                    Text("Translation unavailable")
-                        .font(.system(size: LyricMetrics.hintFontSize, weight: .medium))
-                        .foregroundColor(.white.opacity(0.3))
-                    Spacer(minLength: 0)
-                }
+                EmptyView()
             }
         }
         // Drive the interlude blend: when the song enters a >=5s gap,

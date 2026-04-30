@@ -36,6 +36,10 @@ public class LyricsService: ObservableObject {
     // 🔑 翻译状态
     @Published public var showTranslation: Bool = false {
         didSet {
+            if showTranslation && !canTranslate {
+                showTranslation = false
+                return
+            }
             UserDefaults.standard.set(showTranslation, forKey: showTranslationKey)
             if showTranslation {
                 translationRequestTrigger += 1
@@ -70,6 +74,14 @@ public class LyricsService: ObservableObject {
 
     public var hasTranslation: Bool {
         lyrics.contains { $0.hasTranslation }
+    }
+
+    public var canTranslate: Bool {
+        guard !lyrics.isEmpty else { return false }
+        if translationsAreFromLyricsSource { return true }
+        let isTargetChinese = translationLanguage.hasPrefix("zh")
+        if isTargetChinese && lyricsArePredominantlyChinese() { return false }
+        return !lyricsAreInTargetLanguage()
     }
 
     // ========================================================================
@@ -377,6 +389,8 @@ public class LyricsService: ObservableObject {
         self.currentSongID = songID
         self.currentSongDuration = duration
 
+        if showTranslation && !canTranslate { showTranslation = false }
+
         // 🔑 Diagnostic: log first real lyric line so we can verify content correctness
         let firstReal = newLyrics.dropFirst(firstRealLyricIndex).first { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty && $0.text != "⋯" }
         DebugLogger.log("LyricsService", "📋 Applied: '\(songID)' \(newLyrics.count)L, firstReal=\"\(firstReal?.text.prefix(40) ?? "nil")\", unsynced=\(isUnsyncedLyrics)")
@@ -508,8 +522,12 @@ public class LyricsService: ObservableObject {
         // 歌词源已有中文翻译且目标也是中文，跳过
         if translationsAreFromLyricsSource && isTargetChinese { return }
 
-        // 🔑 歌词内容已经是目标语言 → 跳过（避免中文歌词翻译成中文）
+        // 🔑 歌词内容已经是目标语言 → 跳过
         if isTargetChinese && lyricsArePredominantlyChinese() { return }
+        if lyricsAreInTargetLanguage() {
+            showTranslation = false
+            return
+        }
 
         // 检查是否已翻译过（相同歌曲+相同语言）
         let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
@@ -546,9 +564,9 @@ public class LyricsService: ObservableObject {
 
         let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
-            debugLogPublic("❌ 翻译失败")
-            translationFailed = true
-            currentSongTranslationID = translationID  // Prevent retry for same song
+            debugLogPublic("❌ 翻译失败 — 静默关闭翻译")
+            showTranslation = false
+            currentSongTranslationID = translationID
             return
         }
 
@@ -573,8 +591,19 @@ public class LyricsService: ObservableObject {
     // MARK: - 语言检测
     // ========================================================================
 
-    /// 歌词内容是否以中文为主（超过 40% 的有效行含中文字符，且非日文）
-    /// 🔑 CJK 汉字范围包含日文 kanji，必须排除含假名的行
+    private func lyricsAreInTargetLanguage() -> Bool {
+        guard #available(macOS 15.0, *) else { return false }
+        let validTexts = lyrics.compactMap { line -> String? in
+            let t = line.text.trimmingCharacters(in: .whitespaces)
+            return (!t.isEmpty && t != "..." && t != "…" && t != "⋯") ? t : nil
+        }
+        guard validTexts.count >= 3 else { return false }
+        guard let detected = TranslationService.detectLanguage(for: validTexts),
+              let detectedCode = detected.languageCode?.identifier else { return false }
+        let targetPrefix = String(translationLanguage.prefix(2))
+        return detectedCode.hasPrefix(targetPrefix)
+    }
+
     private func lyricsArePredominantlyChinese() -> Bool {
         let validLines = lyrics.filter {
             let t = $0.text.trimmingCharacters(in: .whitespaces)

@@ -452,7 +452,7 @@ public struct LyricsView: View {
                     showControls: $showControls,
                     isProgressBarHovering: $isProgressBarHovering,
                     dragPosition: $dragPosition,
-                    translationButton: !lyricsService.lyrics.isEmpty
+                    translationButton: lyricsService.canTranslate
                         ? AnyView(TranslationButtonView(lyricsService: lyricsService)) : nil
                 )
             }
