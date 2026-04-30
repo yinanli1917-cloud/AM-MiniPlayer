@@ -77,15 +77,14 @@ struct SharedBottomControls: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {  // 🔑 spacing=0 让翻译按钮紧贴进度条
-            // 🔑 翻译按钮 - 进度条上方（如果有）
+        VStack(spacing: 0) {
             if let translationButton = translationButton {
                 HStack {
                     Spacer()
                     translationButton
                 }
                 .padding(.trailing, 12)
-                .padding(.bottom, 10)  // 从进度条往上 10px
+                .padding(.bottom, 10)
             }
 
             VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
@@ -245,7 +244,8 @@ struct SharedBottomControls: View {
             ZStack {
                 // Background Track
                 Capsule()
-                    .fill(Color.white.opacity(0.2))
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .light)
                     .frame(height: barHeight)
 
                 // Active Progress

@@ -57,7 +57,7 @@ public struct MiniPlayerView: View {
                 LiquidBackgroundView(artwork: musicController.currentArtwork)
                     .overlay(
                         Color.black
-                            .opacity(max(0, 1 - 0.35 / max(Double(musicController.controlAreaLuminance), 0.01)))
+                            .opacity(max(0, 1 - 0.25 / max(Double(musicController.controlAreaLuminance), 0.01)))
                             .allowsHitTesting(false)
                     )
                     .animation(.easeInOut(duration: 0.5), value: musicController.controlAreaLuminance)
@@ -364,7 +364,7 @@ extension MiniPlayerView {
                     .scaleEffect(1 - shuffleFlow * 0.12)
                     .frame(width: 24, height: 24)
                     .background(
-                        Circle().fill(.ultraThinMaterial)
+                        Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
                             .overlay(musicController.shuffleEnabled ? Circle().fill(themeColor.opacity(0.2)) : nil)
                     )
             }
@@ -388,7 +388,7 @@ extension MiniPlayerView {
                     .scaleEffect(1 - repeatFlow * 0.1)
                     .frame(width: 24, height: 24)
                     .background(
-                        Circle().fill(.ultraThinMaterial)
+                        Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
                             .overlay(musicController.repeatMode > 0 ? Circle().fill(themeColor.opacity(0.2)) : nil)
                     )
             }
