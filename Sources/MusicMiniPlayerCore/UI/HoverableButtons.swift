@@ -230,14 +230,14 @@ struct TranslationButtonView: View {
         } label: {
             let isOn = lyricsService.showTranslation
             Image(systemName: "translate")
-                .font(.system(size: isOn ? 14 : 12, weight: .medium))
-                .foregroundColor(isOn ? Color(white: 0.35) : .white)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white)
                 .frame(width: 32, height: 32)
                 .scaleEffect(isPressed ? 0.82 : (isHovering ? 1.08 : 1.0))
                 .scaleEffect(1 + toggleBounce * 0.15)
                 .background(
                     Circle()
-                        .fill(isOn ? Color.white.opacity(0.85) : Color.white.opacity(isHovering ? 0.2 : 0.12))
+                        .fill(Color.white.opacity((isOn || isHovering) ? 0.25 : 0.12))
                         .scaleEffect(isPressed ? 0.82 : (isHovering ? 1.08 : 1.0))
                         .scaleEffect(1 + toggleBounce * 0.15)
                 )
