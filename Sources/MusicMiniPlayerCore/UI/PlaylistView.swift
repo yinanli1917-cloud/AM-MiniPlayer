@@ -712,8 +712,8 @@ struct BottomFadeMask: ViewModifier {
                         LinearGradient(
                             gradient: Gradient(stops: [
                                 .init(color: .black, location: 0),
-                                .init(color: .black.opacity(0.4), location: 0.35),
-                                .init(color: .clear, location: 0.75)
+                                .init(color: .black.opacity(0.15), location: 0.3),
+                                .init(color: .clear, location: 0.5)
                             ]),
                             startPoint: .top,
                             endPoint: .bottom
