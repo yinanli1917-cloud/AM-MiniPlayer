@@ -33,9 +33,20 @@ struct GlassButtonBackground: ViewModifier {
 // MARK: - Conditional Glass Modifiers
 // ═══════════════════════════════════════════════════════════════════════════════
 
+struct ConditionalGlassContainer: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer { content }
+        } else {
+            content
+        }
+    }
+}
+
 struct GlassCapsule: ViewModifier {
     var level: GlassCapsuleLevel = .regular
     var fallbackOpacity: Double = 0.1
+    var isEnabled: Bool = true
 
     enum GlassCapsuleLevel {
         case clear, regular
@@ -43,7 +54,7 @@ struct GlassCapsule: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            content.glassEffect(level == .regular ? .regular : .clear, in: .capsule)
+            content.glassEffect(isEnabled ? (level == .regular ? .regular : .clear) : .identity, in: .capsule)
         } else {
             content.background(
                 Capsule()

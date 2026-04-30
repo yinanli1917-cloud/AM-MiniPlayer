@@ -102,13 +102,8 @@ public struct PlaylistView: View {
                 // ═══════════════════════════════════════════
                 // MARK: - Background
                 // ═══════════════════════════════════════════
-                if fullscreenAlbumCover {
-                    AdaptiveFluidBackground(artwork: musicController.currentArtwork)
-                        .ignoresSafeArea()
-                } else {
-                    LiquidBackgroundView(artwork: musicController.currentArtwork)
-                        .ignoresSafeArea()
-                }
+                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                    .ignoresSafeArea()
 
                 // ═══════════════════════════════════════════
                 // MARK: - Main ScrollView with Sections
@@ -343,7 +338,8 @@ public struct PlaylistView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
 
-                // Shuffle & Repeat buttons
+                // Shuffle & Repeat buttons — only on playlist page
+                if currentPage == .playlist {
                 HStack(spacing: 16) {
                     let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
                     let themeBackground = themeColor.opacity(0.20)
@@ -362,7 +358,8 @@ public struct PlaylistView: View {
                         .padding(.vertical, 6)
                         .modifier(GlassCapsule(
                             level: musicController.shuffleEnabled ? .regular : .clear,
-                            fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1
+                            fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1,
+                            isEnabled: currentPage == .playlist
                         ))
                         .background(musicController.shuffleEnabled ? themeBackground : Color.clear)
                         .clipShape(Capsule())
@@ -383,7 +380,8 @@ public struct PlaylistView: View {
                         .padding(.vertical, 6)
                         .modifier(GlassCapsule(
                             level: musicController.repeatMode > 0 ? .regular : .clear,
-                            fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1
+                            fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1,
+                            isEnabled: currentPage == .playlist
                         ))
                         .background(musicController.repeatMode > 0 ? themeBackground : Color.clear)
                         .clipShape(Capsule())
@@ -396,6 +394,7 @@ public struct PlaylistView: View {
                 .padding(.top, 10)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 16)
+                }
             }
         }
     }

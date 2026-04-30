@@ -51,16 +51,16 @@ public struct MiniPlayerView: View {
     }
 
     public var body: some View {
+        mainBody.modifier(ConditionalGlassContainer())
+    }
+
+    @ViewBuilder
+    var mainBody: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background (Liquid Glass)
-                LiquidBackgroundView(artwork: musicController.currentArtwork)
-                    .overlay(
-                        Color.black
-                            .opacity(max(0, 1 - 0.25 / max(Double(musicController.controlAreaLuminance), 0.01)))
-                            .allowsHitTesting(false)
-                    )
-                    .animation(.easeInOut(duration: 0.5), value: musicController.controlAreaLuminance)
+                // Background (Artwork-derived fluid gradient — no system glass)
+                FluidGradientBackground(artwork: musicController.currentArtwork)
+                    .ignoresSafeArea()
                     .accessibilityHidden(true)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
@@ -313,7 +313,7 @@ extension MiniPlayerView {
                     .allowsHitTesting(false)
 
                 // ═══════════════════════════════════════════
-                // 🎨 hover 状态：Shuffle/Repeat + 控件（blur+move-in 动画）
+                // 🎨 hover 状态：底部控件（blur+move-in 动画）
                 // ═══════════════════════════════════════════
                 VStack(spacing: 0) {
                     Spacer()
@@ -321,7 +321,6 @@ extension MiniPlayerView {
                     // 🔑 Shuffle/Repeat 按钮行
                     HStack {
                         Spacer()
-
                         shuffleRepeatCluster
                     }
                     .padding(.horizontal, 32)

@@ -217,17 +217,10 @@ public struct LyricsView: View {
     // MARK: - Sub-views
 
     private var backgroundLayer: some View {
-        Group {
-            if fullscreenAlbumCover {
-                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
-                    .id(musicController.currentTrackTitle)
-                    .ignoresSafeArea()
-            } else {
-                LiquidBackgroundView(artwork: musicController.currentArtwork)
-                    .ignoresSafeArea()
-            }
-        }
-        .accessibilityHidden(true)
+        AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+            .id(musicController.currentTrackTitle)
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
     }
 
     private var loadingView: some View {

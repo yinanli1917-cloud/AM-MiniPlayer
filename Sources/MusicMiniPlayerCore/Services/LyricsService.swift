@@ -36,14 +36,10 @@ public class LyricsService: ObservableObject {
     // 🔑 翻译状态
     @Published public var showTranslation: Bool = false {
         didSet {
-            if showTranslation && !canTranslate {
-                showTranslation = false
-                return
-            }
             UserDefaults.standard.set(showTranslation, forKey: showTranslationKey)
-            if showTranslation {
+            if showTranslation && canTranslate {
                 translationRequestTrigger += 1
-            } else if !translationsAreFromLyricsSource {
+            } else if !showTranslation && !translationsAreFromLyricsSource {
                 lastSystemTranslationLanguage = nil
             }
         }
@@ -389,7 +385,8 @@ public class LyricsService: ObservableObject {
         self.currentSongID = songID
         self.currentSongDuration = duration
 
-        if showTranslation && !canTranslate { showTranslation = false }
+        // canTranslate guards translation attempts; don't reset showTranslation
+        // so the user's preference is preserved across same-language songs
 
         // 🔑 Diagnostic: log first real lyric line so we can verify content correctness
         let firstReal = newLyrics.dropFirst(firstRealLyricIndex).first { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty && $0.text != "⋯" }
@@ -524,10 +521,7 @@ public class LyricsService: ObservableObject {
 
         // 🔑 歌词内容已经是目标语言 → 跳过
         if isTargetChinese && lyricsArePredominantlyChinese() { return }
-        if lyricsAreInTargetLanguage() {
-            showTranslation = false
-            return
-        }
+        if lyricsAreInTargetLanguage() { return }
 
         // 检查是否已翻译过（相同歌曲+相同语言）
         let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
@@ -564,8 +558,7 @@ public class LyricsService: ObservableObject {
 
         let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
-            debugLogPublic("❌ 翻译失败 — 静默关闭翻译")
-            showTranslation = false
+            debugLogPublic("❌ 翻译失败 — 保留用户偏好，下首歌重试")
             currentSongTranslationID = translationID
             return
         }

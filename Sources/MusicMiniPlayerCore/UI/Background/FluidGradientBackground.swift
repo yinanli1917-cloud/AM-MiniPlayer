@@ -21,34 +21,26 @@ public struct FluidGradientBackground: View {
 
             ZStack {
                 if let artwork = artwork {
-                    // 🎨 5 层封面副本，模拟动画的"某一帧"静止状态
-                    // 通过更大的偏移和旋转差异，创造流体扭曲感
-
-                    // Layer 0: 超大底层，轻微偏移，确保填满角落
                     fluidLayer(artwork: artwork, containerSize: size,
                                size: diagonal * 1.5,
                                offsetX: size.width * 0.05, offsetY: -size.height * 0.03,
                                rotation: 0.12)
 
-                    // Layer 1: 偏左上，较大旋转
                     fluidLayer(artwork: artwork, containerSize: size,
                                size: diagonal * 0.95,
                                offsetX: -size.width * 0.22, offsetY: -size.height * 0.15,
                                rotation: 0.45)
 
-                    // Layer 2: 偏右下，反向旋转
                     fluidLayer(artwork: artwork, containerSize: size,
                                size: diagonal * 0.8,
                                offsetX: size.width * 0.25, offsetY: size.height * 0.2,
                                rotation: -0.35)
 
-                    // Layer 3: 偏左下，更大旋转
                     fluidLayer(artwork: artwork, containerSize: size,
                                size: diagonal * 0.65,
                                offsetX: -size.width * 0.18, offsetY: size.height * 0.22,
                                rotation: 0.7)
 
-                    // Layer 4: 偏右上，极端旋转
                     fluidLayer(artwork: artwork, containerSize: size,
                                size: diagonal * 0.5,
                                offsetX: size.width * 0.2, offsetY: -size.height * 0.18,
@@ -57,7 +49,7 @@ public struct FluidGradientBackground: View {
             }
             .blur(radius: 55)
             .saturation(1.2)
-            .brightness(-0.08)
+            .brightness(-0.15)
         }
     }
 
