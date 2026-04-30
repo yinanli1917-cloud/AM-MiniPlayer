@@ -51,12 +51,10 @@ extension MusicController {
     /// 🔑 设置封面并自动计算亮度
     func setArtwork(_ image: NSImage?) {
         self.currentArtwork = image
-        // 计算亮度，阈值 0.6 以上视为浅色背景
         if let img = image {
-            let brightness = img.perceivedBrightness()
-            self.isLightBackground = brightness > 0.6
+            self.artworkLuminance = img.perceivedBrightness()
         } else {
-            self.isLightBackground = false
+            self.artworkLuminance = 0.5
         }
     }
 

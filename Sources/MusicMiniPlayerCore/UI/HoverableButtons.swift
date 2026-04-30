@@ -13,24 +13,90 @@ import AppKit
 // 🔑 macOS 26+ Liquid Glass 按钮背景适配
 
 struct GlassButtonBackground: ViewModifier {
-    var fillOpacity: Double
-    var shadowOpacity: Double
-    var shadowRadius: CGFloat
-    var isLightBackground: Bool = false  // 🔑 背景亮度信息，用于文字颜色适配
+    var luminance: CGFloat = 0.5
+
+    func body(content: Content) -> some View {
+        let adaptiveColor: Color = luminance > 0.55 ? .black : .white
+        if #available(macOS 26.0, *) {
+            content
+                .foregroundStyle(adaptiveColor)
+                .glassEffect(.clear, in: .capsule)
+        } else {
+            content
+                .foregroundStyle(adaptiveColor)
+                .background(Capsule().fill(.ultraThinMaterial))
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - Conditional Glass Modifiers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct ConditionalGlassContainer: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer { content }
+        } else {
+            content
+        }
+    }
+}
+
+struct GlassCapsule: ViewModifier {
+    var level: GlassCapsuleLevel = .regular
+    var fallbackOpacity: Double = 0.1
+    var isEnabled: Bool = true
+
+    enum GlassCapsuleLevel {
+        case clear, regular
+    }
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            // 🔑 Liquid Glass: 使用 .clear 材质，亮色背景用黑字
-            content
-                .foregroundStyle(isLightBackground ? Color.black : Color.white)
-                .glassEffect(.clear.tint(Color.black.opacity(0.1)), in: .capsule)
-                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+            content.glassEffect(isEnabled ? (level == .regular ? .regular : .clear) : .identity, in: .capsule)
         } else {
-            content
-                .foregroundStyle(isLightBackground ? Color.black : Color.white)
-                .background(Color.white.opacity(fillOpacity))
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 3)
+            content.background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .opacity(fallbackOpacity > 0 ? 1 : 0)
+                    .overlay(
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [.white.opacity(0.2), .clear],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+            )
+        }
+    }
+}
+
+struct GlassCircle: ViewModifier {
+    var isEnabled: Bool = true
+    var tintColor: Color? = nil
+    var fallbackFill: Color = .white
+    var fallbackOpacity: Double = 0.2
+    var fallbackShadowOpacity: Double = 0
+    var fallbackShadowRadius: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            if let tint = tintColor, isEnabled {
+                content.glassEffect(.regular.tint(tint), in: .circle)
+            } else {
+                content.glassEffect(isEnabled ? .regular : .identity, in: .circle)
+            }
+        } else {
+            content.background(
+                Circle()
+                    .fill(fallbackFill.opacity(isEnabled ? fallbackOpacity : 0))
+                    .shadow(color: .black.opacity(fallbackShadowOpacity), radius: fallbackShadowRadius, x: 0, y: 3)
+            )
         }
     }
 }
@@ -40,19 +106,7 @@ struct GlassButtonBackground: ViewModifier {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🔑 共享的亮度/透明度计算，消除 MusicButtonView/HideButtonView/ExpandButtonView 的重复代码
 
-private func hoverableButtonFillOpacity(isLightBackground: Bool, isHovering: Bool) -> Double {
-    isLightBackground
-        ? (isHovering ? 0.55 : 0.45)
-        : (isHovering ? 0.20 : 0.10)
-}
-
-private func hoverableButtonShadowOpacity(isLightBackground: Bool) -> Double {
-    isLightBackground ? 0.5 : 0.0
-}
-
-private func hoverableButtonShadowRadius(isLightBackground: Bool) -> CGFloat {
-    isLightBackground ? 10 : 0
-}
+// Helpers removed — GlassButtonBackground now only needs luminance
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - HoverableActionButton（统一的 Glass 按钮）
@@ -68,26 +122,22 @@ struct HoverableActionButton: View {
 
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var isLightBackground: Bool { isAlbumPage && artworkBrightness > 0.5 }
+    private var effectiveLuminance: CGFloat { artworkBrightness }
 
     var body: some View {
         Button(action: action) {
             label
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .modifier(GlassButtonBackground(
-                    fillOpacity: hoverableButtonFillOpacity(isLightBackground: isLightBackground, isHovering: isHovering),
-                    shadowOpacity: hoverableButtonShadowOpacity(isLightBackground: isLightBackground),
-                    shadowRadius: hoverableButtonShadowRadius(isLightBackground: isLightBackground),
-                    isLightBackground: isLightBackground
-                ))
+                .contentShape(Capsule())
+                .modifier(GlassButtonBackground(luminance: effectiveLuminance))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
             if reduceMotion {
                 isHovering = hovering
             } else {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(.smooth(duration: 0.25)) {
                     isHovering = hovering
                 }
             }
@@ -163,53 +213,57 @@ struct ExpandButtonView: View {
 struct TranslationButtonView: View {
     @ObservedObject var lyricsService: LyricsService
     @State private var isHovering = false
+    @State private var isPressed = false
+    @State private var toggleBounce: Double = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    // 🔑 记录是否已经尝试过强制重试（防止无限重试）
     @State private var hasTriedForceRetry = false
 
     var body: some View {
-        Button(action: {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                // 🔑 智能翻译逻辑：
-                // 1. 如果翻译开关关闭 → 打开翻译
-                // 2. 如果翻译开关已开启但没有翻译结果，且未尝试过强制重试 → 强制重试翻译
-                // 3. 其他情况 → 关闭翻译
-
-                if !lyricsService.showTranslation {
-                    // 情况1：打开翻译
-                    lyricsService.showTranslation = true
-                    hasTriedForceRetry = false  // 重置重试标记
-                    lyricsService.debugLogPublic("🔘 翻译按钮：打开翻译")
-                } else if !lyricsService.hasTranslation && !lyricsService.isTranslating && !hasTriedForceRetry {
-                    // 情况2：翻译开关已开启但没有翻译结果，强制重试一次
-                    lyricsService.debugLogPublic("🔘 翻译按钮：强制重试翻译（当前无翻译结果）")
-                    hasTriedForceRetry = true  // 标记已尝试过
-                    lyricsService.forceRetryTranslation()
-                } else {
-                    // 情况3：关闭翻译
-                    lyricsService.showTranslation = false
-                    hasTriedForceRetry = false  // 重置重试标记
-                    lyricsService.debugLogPublic("🔘 翻译按钮：关闭翻译")
-                }
+        Button {
+            if !lyricsService.showTranslation {
+                lyricsService.showTranslation = true
+                hasTriedForceRetry = false
+                lyricsService.debugLogPublic("🔘 翻译按钮：打开翻译")
+            } else if !lyricsService.hasTranslation && !lyricsService.isTranslating && !hasTriedForceRetry {
+                lyricsService.debugLogPublic("🔘 翻译按钮：强制重试翻译（当前无翻译结果）")
+                hasTriedForceRetry = true
+                lyricsService.forceRetryTranslation()
+            } else {
+                lyricsService.showTranslation = false
+                hasTriedForceRetry = false
+                lyricsService.debugLogPublic("🔘 翻译按钮：关闭翻译")
             }
-        }) {
+            guard !reduceMotion else { return }
+            withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { isPressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { isPressed = false }
+            }
+        } label: {
+            let isOn = lyricsService.showTranslation
             Image(systemName: "translate")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)  // 🔑 icon 始终 100% opacity
+                .foregroundColor(.white)
                 .frame(width: 32, height: 32)
+                .scaleEffect(isPressed ? 0.82 : (isHovering ? 1.08 : 1.0))
+                .scaleEffect(1 + toggleBounce * 0.15)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity(lyricsService.showTranslation ? 0.3 : (isHovering ? 0.2 : 0.12)))  // 🔑 切换状态 0.3，hover 0.2，常驻 0.12
+                        .fill(Color.white.opacity((isOn || isHovering) ? 0.25 : 0.12))
+                        .scaleEffect(isPressed ? 0.82 : (isHovering ? 1.08 : 1.0))
+                        .scaleEffect(1 + toggleBounce * 0.15)
                 )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            if reduceMotion {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 isHovering = hovering
-            } else {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isHovering = hovering
-                }
+            }
+        }
+        .onChange(of: lyricsService.showTranslation) { _, newValue in
+            guard !reduceMotion, newValue else { return }
+            withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { toggleBounce = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.interpolatingSpring(stiffness: 300, damping: 8)) { toggleBounce = 0 }
             }
         }
         // 🔑 歌曲切换时重置重试标记
@@ -232,19 +286,13 @@ struct PlaylistTabBarIntegrated: View {
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
-                // Background Capsule - 恢复原来的透明设计（装饰性）
-                Capsule()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(height: 32)
-                    .accessibilityHidden(true)
-
-                // Selection Capsule（装饰性）
+                // Selection Capsule
                 GeometryReader { geo in
                     Capsule()
-                        .fill(Color.white.opacity(0.25))
+                        .fill(Color.white.opacity(0.15))
                         .frame(width: geo.size.width / 2 - 4, height: 28)
                         .offset(x: selectedTab == 0 ? 2 : geo.size.width / 2 + 2, y: 2)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
+                        .animation(.bouncy(duration: 0.35), value: selectedTab)
                 }
                 .accessibilityHidden(true)
 
@@ -253,7 +301,7 @@ struct PlaylistTabBarIntegrated: View {
                     Button(action: { selectedTab = 0 }) {
                         Text("History")
                             .font(.system(size: 13, weight: selectedTab == 0 ? .semibold : .medium))
-                            .foregroundColor(.white)
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .contentShape(Rectangle())
                     }
@@ -264,7 +312,7 @@ struct PlaylistTabBarIntegrated: View {
                     Button(action: { selectedTab = 1 }) {
                         Text("Up Next")
                             .font(.system(size: 13, weight: selectedTab == 1 ? .semibold : .medium))
-                            .foregroundColor(.white)
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .contentShape(Rectangle())
                     }
@@ -274,6 +322,7 @@ struct PlaylistTabBarIntegrated: View {
                 }
             }
             .frame(height: 32)
+            .modifier(GlassCapsule())
             .accessibilityElement(children: .contain)
             .accessibilityLabel("播放列表标签栏")
         }

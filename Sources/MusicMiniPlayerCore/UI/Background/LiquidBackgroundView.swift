@@ -23,9 +23,11 @@ struct LiquidGlassEffectView: NSViewRepresentable {
 
 public struct LiquidBackgroundView: View {
     var artwork: NSImage?
+    @EnvironmentObject var musicController: MusicController
     @State private var dominantColor: Color = .clear
-    @State private var lastArtworkHash: Int = 0  // 🔑 缓存上次的 artwork hash
+    @State private var lastArtworkHash: Int = 0
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LiquidBackground")
+    private var luminance: CGFloat { musicController.artworkLuminance }
 
     // 🔑 静态颜色缓存，避免重复计算
     private static var colorCache: NSCache<NSNumber, NSColor> = {
@@ -42,7 +44,7 @@ public struct LiquidBackgroundView: View {
         ZStack {
             // 第一层：macOS Liquid Glass - NSVisualEffectView with behindWindow blending
             LiquidGlassEffectView(
-                material: .hudWindow,
+                material: .underWindowBackground,
                 blendingMode: .behindWindow
             )
             .ignoresSafeArea()
@@ -57,16 +59,16 @@ public struct LiquidBackgroundView: View {
 
             // 第三层：额外的半透明材质层增强玻璃效果
             LiquidGlassEffectView(
-                material: .hudWindow,
+                material: .underWindowBackground,
                 blendingMode: .withinWindow
             )
             .ignoresSafeArea()
             .opacity(0.5)
 
-            // 第四层：高光渐变层
+            // 第四层：高光渐变层 — 亮度越高越弱，避免在亮色封面上雪上加霜
             LinearGradient(
                 gradient: Gradient(colors: [
-                    Color.white.opacity(0.25),
+                    Color.white.opacity(0.25 * max(0.0, 1.0 - Double(luminance) * 1.5)),
                     Color.clear,
                     Color.clear
                 ]),
@@ -75,6 +77,8 @@ public struct LiquidBackgroundView: View {
             )
             .ignoresSafeArea()
             .blendMode(.overlay)
+
+            // 第五层：亮度钳制遮罩 — 移至 MiniPlayerView overlay 确保在 NSVisualEffectView 之上
 
             // 第五层：深度渐变（已禁用 - 会导致底部出现额外黑色层）
             // LinearGradient(

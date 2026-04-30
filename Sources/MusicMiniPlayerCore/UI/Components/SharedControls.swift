@@ -77,15 +77,14 @@ struct SharedBottomControls: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {  // 🔑 spacing=0 让翻译按钮紧贴进度条
-            // 🔑 翻译按钮 - 进度条上方（如果有）
+        VStack(spacing: 0) {
             if let translationButton = translationButton {
                 HStack {
                     Spacer()
                     translationButton
                 }
                 .padding(.trailing, 12)
-                .padding(.bottom, 10)  // 从进度条往上 10px
+                .padding(.bottom, 10)
             }
 
             VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
@@ -98,7 +97,8 @@ struct SharedBottomControls: View {
                     HStack {
                         Text(formatTime(timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundStyle(Color.white.opacity(0.6))
+                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
                             .accessibilityHidden(true)
 
                         Spacer()
@@ -112,12 +112,12 @@ struct SharedBottomControls: View {
 
                         Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundStyle(Color.white.opacity(0.6))
+                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
                             .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
                 }
-                .background(NonDraggableView())
 
                 // Playback Controls
                 HStack(spacing: 10) {
@@ -128,26 +128,8 @@ struct SharedBottomControls: View {
 
                 Spacer()
 
-                // Previous Track
-                HoverableControlButton(iconName: "backward.fill", size: 17) {
-                    musicController.previousTrack()
-                }
-                .frame(width: 30, height: 30)
-                .accessibilityLabel("上一首")
-
-                // Play/Pause
-                HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
-                    musicController.togglePlayPause()
-                }
-                .frame(width: 30, height: 30)
-                .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
-
-                // Next Track
-                HoverableControlButton(iconName: "forward.fill", size: 17) {
-                    musicController.nextTrack()
-                }
-                .frame(width: 30, height: 30)
-                .accessibilityLabel("下一首")
+                // Playback cluster — wrapped in GlassEffectContainer for shared sampling
+                playbackCluster
 
                 Spacer()
 
@@ -160,6 +142,8 @@ struct SharedBottomControls: View {
             }
             .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
             .padding(.bottom, 16)
+            .contentShape(Rectangle())
+            .background(NonDraggableView())
         }
         .frame(maxWidth: .infinity, alignment: .bottom)
         // 🔑 跟踪整个控件区域的hover状态
@@ -195,6 +179,37 @@ struct SharedBottomControls: View {
         }
     }
 
+    @ViewBuilder
+    private var playbackCluster: some View {
+        let buttons = HStack(spacing: 10) {
+            HoverableControlButton(iconName: "backward.fill", size: 17, action: {
+                musicController.previousTrack()
+            }, direction: -1)
+            .frame(width: 30, height: 30)
+            .accessibilityLabel("上一首")
+
+            HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
+                musicController.togglePlayPause()
+            }
+            .frame(width: 30, height: 30)
+            .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
+
+            HoverableControlButton(iconName: "forward.fill", size: 17, action: {
+                musicController.nextTrack()
+            }, direction: 1)
+            .frame(width: 30, height: 30)
+            .accessibilityLabel("下一首")
+        }
+
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer {
+                buttons
+            }
+        } else {
+            buttons
+        }
+    }
+
     private var playlistNavigationButton: some View {
         NavigationIconButton(
             iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
@@ -227,12 +242,13 @@ struct SharedBottomControls: View {
 
             // 🔑 使用遮罩实现圆角不拉伸效果
             ZStack {
-                // Background Track - 从中心向上下扩展
+                // Background Track
                 Capsule()
-                    .fill(Color.white.opacity(0.2))
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .light)
                     .frame(height: barHeight)
 
-                // Active Progress - 使用遮罩保持圆角不变形
+                // Active Progress
                 Capsule()
                     .fill(Color.white)
                     .frame(height: barHeight)
@@ -247,7 +263,7 @@ struct SharedBottomControls: View {
             .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
             .contentShape(Capsule())
             .onHover { hovering in
-                let animation: Animation? = reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)
+                let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
                 withAnimation(animation) {
                     isProgressBarHovering = hovering
                 }
@@ -293,9 +309,8 @@ struct SharedBottomControls: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(.ultraThinMaterial)
-        .cornerRadius(4)
-        .foregroundColor(.white.opacity(0.9))
+        .modifier(GlassCapsule(fallbackOpacity: 0.15))
+        .foregroundStyle(Color.white.opacity(0.9))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("音频质量：\(quality)")
     }
@@ -313,14 +328,26 @@ struct HoverableControlButton: View {
     let iconName: String
     let size: CGFloat
     let action: () -> Void
+    var direction: CGFloat = 0
     @State private var isHovering = false
+    @State private var isPressed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            action()
+            guard !reduceMotion else { return }
+            withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { isPressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { isPressed = false }
+            }
+        } label: {
             Image(systemName: iconName)
+                .contentTransition(.symbolEffect(.replace.offUp))
                 .font(.system(size: size))
                 .foregroundColor(.white)
+                .scaleEffect(isPressed ? 0.82 : 1.0)
+                .offset(x: isPressed ? direction * 3.5 : 0)
                 .frame(width: 32, height: 32)
                 .background(
                     Circle()
@@ -329,8 +356,7 @@ struct HoverableControlButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .easeInOut(duration: 0.2)
-            withAnimation(animation) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
         }
@@ -347,6 +373,7 @@ struct NavigationIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: iconName)
+                .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: 15))
                 .foregroundColor(.white)
                 .frame(width: 26, height: 26)
@@ -357,8 +384,7 @@ struct NavigationIconButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            let animation: Animation? = reduceMotion ? nil : .easeInOut(duration: 0.2)
-            withAnimation(animation) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
         }

@@ -30,6 +30,12 @@ public struct MiniPlayerView: View {
 
     // 🔑 封面亮度（用于动态调整按钮样式）
     @State private var artworkBrightness: CGFloat = 0.5
+    @State private var topLeftLuminance: CGFloat = 0.5
+    @State private var topRightLuminance: CGFloat = 0.5
+
+    // 🔑 Shuffle/Repeat 流动动画进度
+    @State private var shuffleFlow: Double = 0
+    @State private var repeatFlow: Double = 0
 
     // 🔑 页面切换后短暂锁定 hover 状态，防止 onHover(false) 覆盖
     @State private var hoverLocked: Bool = false
@@ -45,10 +51,16 @@ public struct MiniPlayerView: View {
     }
 
     public var body: some View {
+        mainBody.modifier(ConditionalGlassContainer())
+    }
+
+    @ViewBuilder
+    var mainBody: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background (Liquid Glass)
-                LiquidBackgroundView(artwork: musicController.currentArtwork)
+                // Background (Artwork-derived fluid gradient — no system glass)
+                FluidGradientBackground(artwork: musicController.currentArtwork)
+                    .ignoresSafeArea()
                     .accessibilityHidden(true)
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
@@ -103,11 +115,17 @@ public struct MiniPlayerView: View {
         }
         // 移除固定尺寸，让视图自动填充窗口以支持缩放
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+                .allowsHitTesting(false)
+        )
         .overlay(alignment: .topLeading) {
             // Music按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
-                MusicButtonView(artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                let lum = musicController.currentPage == .album ? topLeftLuminance : artworkBrightness
+                MusicButtonView(artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                     .padding(12)
                     .transition(.opacity)
             }
@@ -115,42 +133,35 @@ public struct MiniPlayerView: View {
         .overlay(alignment: .topTrailing) {
             // Hide/Expand 按钮 - hover时显示，但歌单页面不显示
             if showControls && musicController.currentPage != .playlist {
+                let lum = musicController.currentPage == .album ? topRightLuminance : artworkBrightness
                 // 根据模式显示不同按钮
                 if onExpand != nil {
-                    // 菜单栏模式：显示展开按钮
-                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                         .padding(12)
                         .transition(.opacity)
                 } else if onHide != nil {
-                    // 浮窗模式：显示收起按钮
-                    HideButtonView(onHide: onHide!, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                    HideButtonView(onHide: onHide!, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                         .padding(12)
                         .transition(.opacity)
                 } else {
-                    // 无回调时的默认行为
                     HideButtonView(onHide: {
                         if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
                             window.orderOut(nil)
                         }
-                    }, artworkBrightness: artworkBrightness, isAlbumPage: musicController.currentPage == .album)
+                    }, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
                     .padding(12)
                     .transition(.opacity)
                 }
             }
         }
-        .onHover { hovering in
-            // 🔑 如果 hover 状态被锁定（页面切换后短暂期间），忽略 onHover(false)
-            if hoverLocked && !hovering { return }
-
-            // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
-            let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
-            let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
-            let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
-            withAnimation(hoverAnim) {
-                isHovering = hovering
-            }
-            if hovering {
-                // 🔑 进入时重置模糊和位移状态
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard !isHovering else { return }
+                let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+                let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
+                let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
+                withAnimation(hoverAnim) { isHovering = true }
                 controlsBlurAmount = 10
                 controlsOffsetY = 30
                 withAnimation(controlsAnim) {
@@ -159,8 +170,12 @@ public struct MiniPlayerView: View {
                     controlsBlurAmount = 0
                     controlsOffsetY = 0
                 }
-            } else {
-                // 🔑 离开时动画
+            case .ended:
+                if hoverLocked { return }
+                let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+                let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
+                let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
+                withAnimation(hoverAnim) { isHovering = false }
                 withAnimation(controlsAnim) {
                     showOverlayContent = false
                     controlsBlurAmount = 10
@@ -178,16 +193,23 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 监听封面变化，计算整图平均亮度（因为背景是全图模糊后的混合色）
+        // 🔑 监听封面变化，计算整图 + 底部区域亮度
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
+                topLeftLuminance = artwork.topLeftBrightness()
+                topRightLuminance = artwork.topRightBrightness()
+                musicController.artworkLuminance = artworkBrightness
+                musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
         }
         .onAppear {
-            // 初始化亮度（整图平均）
             if let artwork = musicController.currentArtwork {
                 artworkBrightness = artwork.perceivedBrightness()
+                topLeftLuminance = artwork.topLeftBrightness()
+                topRightLuminance = artwork.topRightBrightness()
+                musicController.artworkLuminance = artworkBrightness
+                musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
@@ -244,9 +266,10 @@ extension MiniPlayerView {
                 // 🔑 标题 - matchedGeometryEffect
                 Text(musicController.currentTrackTitle)
                     .font(.system(size: isHovering ? 12 : 16, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundStyle(.white)
                     .lineLimit(1)
-                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .shadow(color: .black.opacity(0.3 + 0.5 * artworkBrightness), radius: 4 + 12 * artworkBrightness, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.15 + 0.25 * artworkBrightness), radius: 2 + 4 * artworkBrightness, x: 0, y: 0)
                     .matchedGeometryEffect(id: "trackTitle", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -268,9 +291,10 @@ extension MiniPlayerView {
                 // 🔑 艺术家 - matchedGeometryEffect
                 Text(musicController.currentArtist)
                     .font(.system(size: isHovering ? 10 : 13, weight: .medium))
-                    .foregroundColor(.white.opacity(isHovering ? 0.7 : 0.9))
+                    .foregroundStyle(.white.opacity(isHovering ? 0.7 : 0.9))
                     .lineLimit(1)
-                    .shadow(color: .black.opacity(isHovering ? 0.6 : 0.7), radius: isHovering ? 8 : 10, x: 0, y: 2)
+                    .shadow(color: .black.opacity(0.3 + 0.5 * artworkBrightness), radius: 4 + 12 * artworkBrightness, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.15 + 0.25 * artworkBrightness), radius: 2 + 4 * artworkBrightness, x: 0, y: 0)
                     .matchedGeometryEffect(id: "artistName", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -289,7 +313,7 @@ extension MiniPlayerView {
                     .allowsHitTesting(false)
 
                 // ═══════════════════════════════════════════
-                // 🎨 hover 状态：Shuffle/Repeat + 控件（blur+move-in 动画）
+                // 🎨 hover 状态：底部控件（blur+move-in 动画）
                 // ═══════════════════════════════════════════
                 VStack(spacing: 0) {
                     Spacer()
@@ -297,43 +321,7 @@ extension MiniPlayerView {
                     // 🔑 Shuffle/Repeat 按钮行
                     HStack {
                         Spacer()
-
-                        HStack(spacing: 4) {
-                            let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                            let isLightBg = artworkBrightness > 0.6
-                            let normalFillOpacity = isLightBg ? 0.5 : 0.20
-                            let shadowOp = isLightBg ? 0.6 : 0.3
-                            let shadowRad: CGFloat = isLightBg ? 15 : 8
-
-                            Button(action: { musicController.toggleShuffle() }) {
-                                Image(systemName: "shuffle")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
-                                    .frame(width: 24, height: 24)
-                                    .background(
-                                        Circle()
-                                            .fill(musicController.shuffleEnabled ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
-                                            .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("随机播放")
-                            .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
-
-                            Button(action: { musicController.cycleRepeatMode() }) {
-                                Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
-                                    .frame(width: 24, height: 24)
-                                    .background(
-                                        Circle()
-                                            .fill(musicController.repeatMode > 0 ? themeColor.opacity(0.25) : Color.white.opacity(normalFillOpacity))
-                                            .shadow(color: .black.opacity(shadowOp), radius: shadowRad, x: 0, y: 3)
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
-                        }
+                        shuffleRepeatCluster
                     }
                     .padding(.horizontal, 32)
                     .padding(.bottom, 4)
@@ -358,6 +346,60 @@ extension MiniPlayerView {
             // 🔑 动画时长：全屏模式 0.5s，非全屏模式 0.4s
             .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
             .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: showOverlayContent)
+        }
+    }
+
+    // MARK: - Shuffle/Repeat Cluster (round circles on album page)
+    @ViewBuilder
+    private var shuffleRepeatCluster: some View {
+        let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+
+        HStack(spacing: 4) {
+            Button(action: { musicController.toggleShuffle() }) {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
+                    .rotationEffect(.degrees(shuffleFlow * 12))
+                    .scaleEffect(1 - shuffleFlow * 0.12)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
+                            .overlay(musicController.shuffleEnabled ? Circle().fill(themeColor.opacity(0.2)) : nil)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("随机播放")
+            .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
+            .onChange(of: musicController.shuffleEnabled) { _, _ in
+                guard !reduceMotion else { return }
+                withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { shuffleFlow = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.interpolatingSpring(stiffness: 300, damping: 8)) { shuffleFlow = 0 }
+                }
+            }
+
+            Button(action: { musicController.cycleRepeatMode() }) {
+                Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                    .contentTransition(.symbolEffect(.replace))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
+                    .rotationEffect(.degrees(repeatFlow * 10))
+                    .scaleEffect(1 - repeatFlow * 0.1)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
+                            .overlay(musicController.repeatMode > 0 ? Circle().fill(themeColor.opacity(0.2)) : nil)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
+            .onChange(of: musicController.repeatMode) { _, _ in
+                guard !reduceMotion else { return }
+                withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { repeatFlow = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { repeatFlow = 0 }
+                }
+            }
         }
     }
 

@@ -102,13 +102,8 @@ public struct PlaylistView: View {
                 // ═══════════════════════════════════════════
                 // MARK: - Background
                 // ═══════════════════════════════════════════
-                if fullscreenAlbumCover {
-                    AdaptiveFluidBackground(artwork: musicController.currentArtwork)
-                        .ignoresSafeArea()
-                } else {
-                    LiquidBackgroundView(artwork: musicController.currentArtwork)
-                        .ignoresSafeArea()
-                }
+                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                    .ignoresSafeArea()
 
                 // ═══════════════════════════════════════════
                 // MARK: - Main ScrollView with Sections
@@ -223,7 +218,7 @@ public struct PlaylistView: View {
                     if let stickyTitle = computeStickyHeader() {
                         Text(stickyTitle)
                             .font(.system(size: 13, weight: .bold))
-                            .foregroundColor(.white)
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 6)
@@ -286,7 +281,7 @@ public struct PlaylistView: View {
     private func emptyStateText(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 12))
-            .foregroundColor(.white.opacity(0.5))
+            .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 12)
             .padding(.vertical, 20)
     }
@@ -312,7 +307,7 @@ public struct PlaylistView: View {
                         if musicController.currentArtwork != nil {
                             Color.clear
                                 .frame(width: artSize, height: artSize)
-                                .cornerRadius(6)
+                                .clipShape(.rect(cornerRadius: 6))
                                 .matchedGeometryEffect(id: "playlist-placeholder", in: animationNamespace, isSource: true)
                         } else {
                             RoundedRectangle(cornerRadius: 6)
@@ -323,12 +318,12 @@ public struct PlaylistView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(musicController.currentTrackTitle)
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.white)
+                                .foregroundStyle(.white)
                                 .lineLimit(1)
 
                             Text(musicController.currentArtist)
                                 .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.7))
+                                .foregroundStyle(.white.opacity(0.7))
                                 .lineLimit(1)
                         }
 
@@ -336,14 +331,15 @@ public struct PlaylistView: View {
                     }
                     .padding(12)
                     .background(Color.white.opacity(0.08))
-                    .cornerRadius(10)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
 
-                // Shuffle & Repeat buttons
+                // Shuffle & Repeat buttons — only on playlist page
+                if currentPage == .playlist {
                 HStack(spacing: 16) {
                     let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
                     let themeBackground = themeColor.opacity(0.20)
@@ -357,11 +353,16 @@ public struct PlaylistView: View {
                             Text("Shuffle")
                                 .font(.system(size: 10, weight: .medium))
                         }
-                        .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
+                        .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(musicController.shuffleEnabled ? themeBackground : Color.white.opacity(0.1))
-                        .cornerRadius(14)
+                        .modifier(GlassCapsule(
+                            level: musicController.shuffleEnabled ? .regular : .clear,
+                            fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1,
+                            isEnabled: currentPage == .playlist
+                        ))
+                        .background(musicController.shuffleEnabled ? themeBackground : Color.clear)
+                        .clipShape(Capsule())
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -369,15 +370,21 @@ public struct PlaylistView: View {
                     Button(action: { musicController.cycleRepeatMode() }) {
                         HStack(spacing: 5) {
                             Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                .contentTransition(.symbolEffect(.replace))
                                 .font(.system(size: 11))
                             Text("Repeat")
                                 .font(.system(size: 10, weight: .medium))
                         }
-                        .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
+                        .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(musicController.repeatMode > 0 ? themeBackground : Color.white.opacity(0.1))
-                        .cornerRadius(14)
+                        .modifier(GlassCapsule(
+                            level: musicController.repeatMode > 0 ? .regular : .clear,
+                            fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1,
+                            isEnabled: currentPage == .playlist
+                        ))
+                        .background(musicController.repeatMode > 0 ? themeBackground : Color.clear)
+                        .clipShape(Capsule())
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -387,6 +394,7 @@ public struct PlaylistView: View {
                 .padding(.top, 10)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 16)
+                }
             }
         }
     }
@@ -503,7 +511,7 @@ struct PlaylistSection<Content: View>: View {
             // Header（在 section 内部，滚出视口后由全局 overlay 接管）
             Text(title)
                 .font(.system(size: 13, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
@@ -542,7 +550,7 @@ struct PlainHeaderSection<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .font(.system(size: 13, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
@@ -589,7 +597,7 @@ struct PlaylistItemRowCompact: View {
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: artSize, height: artSize)
-                        .cornerRadius(4)
+                        .clipShape(.rect(cornerRadius: 4))
                 } else {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.gray.opacity(0.2))
@@ -597,19 +605,19 @@ struct PlaylistItemRowCompact: View {
                         .overlay(
                             Image(systemName: "music.note")
                                 .font(.system(size: artSize * 0.35))
-                                .foregroundColor(.white.opacity(0.3))
+                                .foregroundStyle(.white.opacity(0.3))
                         )
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(track.title)
                         .font(.system(size: 11, weight: isCurrentTrack ? .bold : .medium))
-                        .foregroundColor(isCurrentTrack ? Color(red: 0.99, green: 0.24, blue: 0.27) : .white)
+                        .foregroundStyle(isCurrentTrack ? Color(red: 0.99, green: 0.24, blue: 0.27) : .white)
                         .lineLimit(1)
 
                     Text(track.artist)
                         .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
                 }
 
@@ -618,12 +626,13 @@ struct PlaylistItemRowCompact: View {
                 if isCurrentTrack {
                     Image(systemName: "waveform")
                         .font(.system(size: 11))
-                        .foregroundColor(Color(red: 0.99, green: 0.24, blue: 0.27))
+                        .foregroundStyle(Color(red: 0.99, green: 0.24, blue: 0.27))
+                        .symbolEffect(.variableColor.iterative, isActive: musicController.isPlaying)
                         .padding(.trailing, 8)
                 } else if isHovering {
                     Image(systemName: "play.fill")
                         .font(.system(size: 10))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
                         .padding(.trailing, 8)
                 }
             }
@@ -635,7 +644,7 @@ struct PlaylistItemRowCompact: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             guard !isScrolling else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(.smooth(duration: 0.2)) {
                 isHovering = hovering
             }
         }
@@ -703,8 +712,8 @@ struct BottomFadeMask: ViewModifier {
                         LinearGradient(
                             gradient: Gradient(stops: [
                                 .init(color: .black, location: 0),
-                                .init(color: .black.opacity(0.4), location: 0.35),
-                                .init(color: .clear, location: 0.75)
+                                .init(color: .black.opacity(0.15), location: 0.3),
+                                .init(color: .clear, location: 0.5)
                             ]),
                             startPoint: .top,
                             endPoint: .bottom

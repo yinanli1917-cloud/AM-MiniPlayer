@@ -158,23 +158,61 @@ public enum LanguageUtils {
         "non", "sub", "super", "trans", "semi", "multi", "counter"
     ]
 
+    private static let vowels: Set<Character> = ["a", "e", "i", "o", "u", "y"]
+
+    private static let validPinyinOnsets: Set<String> = [
+        "zh", "ch", "sh"
+    ]
+
     /// Detect whether a pure-ASCII title is likely a genuine English title
-    /// (not a CJK romanization). Primary signal: English function word as
-    /// standalone token. Secondary signal: English morphology prefix/suffix
-    /// on any word (catches single-word titles like "Unconditional",
-    /// "Monologue", "Invisible"). Both signals are structurally impossible
-    /// in pinyin/romaji/jyutping, so false positives are near-zero.
+    /// (not a CJK romanization). Three tiers of structural signals, each
+    /// impossible in pinyin/romaji/jyutping:
+    ///   1. Function word ("the", "my", "with", ...)
+    ///   2. Morphology suffix/prefix ("tion", "un-", ...)
+    ///   3. Consonant clusters — English allows multi-consonant codas
+    ///      ("tough" → -gh, "heart" → -rt, "world" → -rld) and onsets
+    ///      ("dream" → dr-, "break" → br-) that violate CJK phonotactics.
+    ///      Pinyin codas: -n, -ng only. Romaji codas: -n only.
+    ///      Jyutping codas: -m, -n, -ng, -p, -t, -k (all single).
+    ///      So any word with 2+ trailing consonants (excl. "ng") or 2+
+    ///      leading consonants (excl. zh/ch/sh) is English.
     public static func isLikelyEnglishTitle(_ text: String) -> Bool {
         guard isPureASCII(text) else { return false }
         let words = text.lowercased()
             .split(whereSeparator: { !$0.isLetter })
             .map(String.init)
-        // Primary: function word match
         if words.contains(where: { englishFunctionWords.contains($0) }) { return true }
-        // Secondary: morphology — word ends with English suffix OR starts with prefix
         for word in words where word.count >= 5 {
             if englishMorphologySuffixes.contains(where: { word.hasSuffix($0) }) { return true }
             if englishMorphologyPrefixes.contains(where: { word.hasPrefix($0) && word.count >= $0.count + 3 }) { return true }
+        }
+        for word in words where word.count >= 3 {
+            if hasEnglishConsonantCluster(word) { return true }
+        }
+        return false
+    }
+
+    private static func hasEnglishConsonantCluster(_ word: String) -> Bool {
+        let chars = Array(word)
+        // Trailing: 2+ consonants (excl. "ng")
+        var trailingConsonants = 0
+        for ch in chars.reversed() {
+            if vowels.contains(ch) { break }
+            trailingConsonants += 1
+        }
+        if trailingConsonants >= 2 {
+            let tail = String(chars.suffix(trailingConsonants))
+            if tail != "ng" { return true }
+        }
+        // Leading: 2+ consonants (excl. zh/ch/sh)
+        var leadingConsonants = 0
+        for ch in chars {
+            if vowels.contains(ch) { break }
+            leadingConsonants += 1
+        }
+        if leadingConsonants >= 2 {
+            let head = String(chars.prefix(leadingConsonants))
+            if !validPinyinOnsets.contains(head) { return true }
         }
         return false
     }
