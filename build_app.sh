@@ -1,6 +1,12 @@
 #!/bin/bash
 
+VERSION="2.2"
+
 echo "🔨 Building nanoPod..."
+/usr/libexec/PlistBuddy \
+    -c "Set :CFBundleVersion $VERSION" \
+    -c "Set :CFBundleShortVersionString $VERSION" \
+    Sources/MusicMiniPlayerApp/Info.plist
 swift build -c release
 
 echo "📦 Creating app bundle..."
@@ -13,7 +19,7 @@ cp .build/release/MusicMiniPlayer nanoPod.app/Contents/MacOS/nanoPod
 
 # Create Info.plist with ALL required permissions and icon configuration
 # 🔑 使用新的 Bundle Identifier (com.yinanli.nanoPod) 避免和旧版本冲突
-cat > nanoPod.app/Contents/Info.plist << 'PLIST'
+cat > nanoPod.app/Contents/Info.plist << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -27,9 +33,9 @@ cat > nanoPod.app/Contents/Info.plist << 'PLIST'
     <key>CFBundleDisplayName</key>
     <string>nanoPod</string>
     <key>CFBundleVersion</key>
-    <string>2.2</string>
+    <string>$VERSION</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.2</string>
+    <string>$VERSION</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>

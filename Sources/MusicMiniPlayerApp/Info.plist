@@ -2,27 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key>
-	<string>Music Mini Player</string>
-	<key>CFBundleIdentifier</key>
-	<string>com.yinanli.MusicMiniPlayer</string>
-	<key>CFBundleVersion</key>
-	<string>1.0</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
-	<key>LSUIElement</key>
-	<true/>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>Music Mini Player needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
-
-	<key>NSAppleMusicUsageDescription</key>
-	<string>Music Mini Player needs access to your Apple Music library to display album artwork, track information, and lyrics.</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.yinanli.nanoPod</string>
+	<key>CFBundleName</key>
+	<string>nanoPod</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2.2</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -34,5 +21,17 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleVersion</key>
+	<string>2.2</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Music Mini Player needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Music Mini Player needs access to your Apple Music library to display album artwork, track information, and lyrics.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>
