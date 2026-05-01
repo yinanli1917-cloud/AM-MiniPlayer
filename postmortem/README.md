@@ -48,6 +48,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 | POSTM-005 | MetadataResolver 多轮优化引发 9 首歌批量回归 | 2026-03-16 | Process | P1 | ✅ 已完成 |
 | POSTM-006 | romanized→CJK 路径 ASCII→ASCII 错配 | 2026-03-18 | Bug | P1 | ✅ 已完成 |
 | POSTM-007 | Chinese Translation Leak — Three Root Causes | 2026-03-22 | Bug | P1 | ✅ 已完成 |
+| POSTM-008 | Localized-title lyrics fallback missed synced sources | 2026-05-01 | Bug / Process | P1 | ✅ 已完成 |
 
 ---
 
@@ -62,6 +63,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 #### 🐛 Bug (代码缺陷)
 - [POSTM-006](./006-romanized-cjk-false-positive.md) - romanized→CJK ASCII→ASCII 错配
 - [POSTM-007](./007-chinese-translation-leak-trilogy.md) - Chinese Translation Leak (3 root causes)
+- [POSTM-008](./008-lyrics-resolver-localized-title-fallback.md) - localized-title lyrics fallback and artwork weak-match guards
 
 #### 📊 Scale (性能/资源问题)
 - 待填充
@@ -71,6 +73,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 
 #### 📋 Process (流程问题)
 - [POSTM-005](./005-metadata-resolver-regressions.md) - MetadataResolver 多轮优化引发批量回归
+- [POSTM-008](./008-lyrics-resolver-localized-title-fallback.md) - localized-title source fallback 未被 fixture 固化
 
 ---
 
@@ -89,6 +92,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - 无覆盖率简化（Simplification Without Coverage）- POSTM-005: 移除匹配优先级前没有大规模回归测试
 - 共享 Unicode 范围需要上下文 - POSTM-007: CJK Unified 不等于"中文"，日文汉字需假名上下文区分
 - 安全策略也有副作用 - POSTM-007: "不丢弃任何行"导致翻译泄漏持续存在
+- fallback 成功条件必须匹配 source 索引方式 - POSTM-008: localized title 需要 fan-out 到所有 title-keyed synced sources，而不是只补部分平台
 
 ---
 
