@@ -85,7 +85,8 @@ private func runPredefined(args: [String]) async {
         let r = await testSong(
             id: tc.id, title: tc.title,
             artist: tc.artist, duration: tc.duration,
-            expectation: tc.expectation
+            expectation: tc.expectation,
+            album: tc.album ?? ""
         )
         results.append(r)
         printResultLine(r)
@@ -119,11 +120,13 @@ private func writeGammaJSON(results: [VerifyResult], path: String, interSongDela
             && r.classification == "synced"
             && r.lyricsLineCount >= 5
             && (r.selectedSource ?? "none") != "none"
+            && r.passed
         var failReasons: [String] = []
         if r.elapsedMs > 3000 { failReasons.append("latency_\(r.elapsedMs)ms_over_3000") }
         if r.classification != "synced" { failReasons.append("classification_\(r.classification ?? "nil")") }
         if r.lyricsLineCount < 5 { failReasons.append("line_count_\(r.lyricsLineCount)_under_5") }
         if r.selectedSource == nil { failReasons.append("no_source") }
+        if !r.failures.isEmpty { failReasons.append(contentsOf: r.failures.map { "content_\($0)" }) }
 
         songsJSON.append([
             "title": r.title,

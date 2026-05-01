@@ -243,7 +243,7 @@
     "artist": "NewJeans",
     "duration": 186,
     "region": "ko",
-    "expectedLyricsLang": "Korean",
+    "expectedLyricsLang": "Japanese",
     "expectSourceTranslation": true,
     "expectation": {
       "shouldFindLyrics": true,
@@ -302,7 +302,7 @@
     "expectedLyricsLang": "Korean",
     "expectSourceTranslation": true,
     "expectation": {
-      "shouldFindLyrics": false,
+      "shouldFindLyrics": true,
       "acceptableSources": null,
       "firstLineContains": null
     }
@@ -1192,13 +1192,13 @@
   {
     "id": "BM-TH-02",
     "title": "คนมีเสน่ห์",
-    "artist": "Palmy",
+    "artist": "Pang Nakarin",
     "duration": 240,
     "region": "th",
     "expectedLyricsLang": "Thai",
     "expectSourceTranslation": false,
     "expectation": {
-      "shouldFindLyrics": false,
+      "shouldFindLyrics": true,
       "acceptableSources": null,
       "firstLineContains": null
     }

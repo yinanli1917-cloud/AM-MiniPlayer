@@ -15,11 +15,13 @@ struct TestCase: Codable {
     let title: String
     let artist: String
     let duration: Double
+    let album: String?
     let expectation: TestExpectation
 }
 
 struct TestExpectation: Codable {
     let shouldFindLyrics: Bool
+    let allowMissingLyrics: Bool?
     let acceptableSources: [String]?
     let firstLineContains: String?
 }

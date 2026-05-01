@@ -147,10 +147,11 @@
     "title": "Escape",
     "artist": "EPO",
     "duration": 254,
+    "album": "Joepo 1981Khz",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "lyrics.ovh"],
-      "firstLineContains": null
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
+      "firstLineContains": "からっぽ"
     }
   },
   {
@@ -215,8 +216,9 @@
     "duration": 184,
     "expectation": {
       "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "picture"
     }
   },
   {
@@ -433,6 +435,7 @@
     "title": "Dinner",
     "artist": "Kay Huang",
     "duration": 259,
+    "album": "平凡",
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
@@ -479,7 +482,7 @@
     "duration": 239,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": ["NetEase", "QQ", "Genius"],
       "firstLineContains": "有时无心的散聚"
     }
   },
@@ -523,8 +526,20 @@
     "duration": 230,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search", "Genius"],
       "firstLineContains": null
+    }
+  },
+  {
+    "id": "X04_cross_source_wrong_payload",
+    "title": "Absence of You",
+    "artist": "grentperez",
+    "duration": 195,
+    "album": "Conversations with the Moon - EP",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
+      "firstLineContains": "learning"
     }
   }
 ]

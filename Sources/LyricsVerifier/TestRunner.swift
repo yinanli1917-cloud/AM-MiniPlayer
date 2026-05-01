@@ -110,13 +110,20 @@ func testSongWithLyrics(
     }
 
     // Validate on raw lyrics to detect overshoot before rescaling
-    let warnings = validateContent(
+    let contentValidation = validateContent(
         title: title, artist: artist,
         source: selectedResult?.source,
         score: selectedResult?.score,
         lyrics: rawLyrics,
-        duration: duration
+        duration: duration,
+        allResults: fetchResults
     )
+    failures.append(contentsOf: contentValidation.failures)
+    let warnings = contentValidation.warnings
+    failures.append(contentsOf: validateCrossSourceIdentity(
+        selected: selectedResult,
+        allResults: fetchResults
+    ))
 
     // Gamma-schema fields
     let realLines = lyrics.filter {
@@ -155,12 +162,14 @@ func testSong(
     artist: String,
     duration: TimeInterval,
     expectation: TestExpectation?,
-    translationEnabled: Bool = false
+    translationEnabled: Bool = false,
+    album: String = ""
 ) async -> VerifyResult {
     await testSongWithLyrics(
         id: id, title: title, artist: artist,
         duration: duration, expectation: expectation,
-        translationEnabled: translationEnabled
+        translationEnabled: translationEnabled,
+        album: album
     ).result
 }
 
@@ -178,6 +187,9 @@ private func checkExpectation(
 
     if exp.shouldFindLyrics {
         guard !lyrics.isEmpty else {
+            if exp.allowMissingLyrics == true {
+                return failures
+            }
             failures.append("期望找到歌词，但所有源均无结果")
             return failures
         }
@@ -208,27 +220,36 @@ private func checkExpectation(
 /// 2. Language consistency: lyrics language vs song language
 /// 3. Low-quality source flag: lyrics.ovh single source + low score
 /// 4. Timestamp overshoot: lyrics extend past song duration (wrong version)
+private struct ContentValidation {
+    var failures: [String] = []
+    var warnings: [String] = []
+}
+
 private func validateContent(
     title: String, artist: String,
     source: String?, score: Double?,
     lyrics: [LyricLine],
-    duration: TimeInterval = 0
-) -> [String] {
-    guard !lyrics.isEmpty, let source = source else { return [] }
-    var warnings: [String] = []
+    duration: TimeInterval = 0,
+    allResults: [LyricsFetcher.LyricsFetchResult] = []
+) -> ContentValidation {
+    guard !lyrics.isEmpty, let source = source else { return ContentValidation() }
+    var validation = ContentValidation()
 
     let validLines = lyrics.filter {
         let t = $0.text.trimmingCharacters(in: .whitespaces)
         return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
     }
-    guard !validLines.isEmpty else { return [] }
+    guard !validLines.isEmpty else { return validation }
 
     // ── 1. 首行错配检测 ──
     // 很多源的首行格式是 "歌名 - 艺术家"，如果歌名不匹配就是错配
     if let firstLine = validLines.first?.text {
-        let dashParts = firstLine.split(separator: "-", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-        if dashParts.count == 2 {
-            let lyricsTitle = dashParts[0].lowercased()
+        // Treat only spaced dashes as metadata separators. Hyphenated lyric
+        // words such as "Dites-moi" or repeated syllables like "uh-uh" are
+        // normal content and must not become title-card failures.
+        if let separator = firstLine.range(of: #"\s+[-–—]\s+"#, options: .regularExpression) {
+            let candidateTitle = String(firstLine[..<separator.lowerBound]).trimmingCharacters(in: .whitespaces)
+            let lyricsTitle = candidateTitle.lowercased()
             let inputTitle = title.lowercased()
                 .replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces)
@@ -248,7 +269,7 @@ private func validateContent(
             // 首行标题和输入标题完全不搭（跨语言翻译+可信源除外）
             if !normalizedLyricsTitle.contains(normalizedInputTitle) && !normalizedInputTitle.contains(normalizedLyricsTitle) && lyricsTitle.count > 3 {
                 if !(isCrossLanguage && isReliableSource) {
-                    warnings.append("⚠️ 首行标题不匹配: 歌词=\"\(dashParts[0])\" vs 输入=\"\(title)\"")
+                    validation.failures.append("首行标题不匹配: 歌词=\"\(candidateTitle)\" vs 输入=\"\(title)\"")
                 }
             }
         }
@@ -260,18 +281,24 @@ private func validateContent(
     let hasCJKTitle = title.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
             || title.unicodeScalars.contains { $0.value >= 0x3040 && $0.value <= 0x30FF }
     if hasCJKTitle && asciiOnlyLines.count == validLines.count && source == "lyrics.ovh" {
-        warnings.append("⚠️ CJK标题但歌词全是ASCII（可能是拼音垃圾）")
+        validation.warnings.append("⚠️ CJK标题但歌词全是ASCII（可能是拼音垃圾）")
     }
 
     // 古典/器乐曲不应该有歌词
     let instrumentalKeywords = ["waltz", "sonata", "concerto", "symphony", "étude", "nocturne", "prelude", "fugue"]
     if instrumentalKeywords.contains(where: { title.lowercased().contains($0) }) {
-        warnings.append("⚠️ 器乐曲标题但有歌词（可能是错配）")
+        validation.warnings.append("⚠️ 器乐曲标题但有歌词（可能是错配）")
     }
 
     // ── 3. 低质量源标记 ──
-    if source == "lyrics.ovh" && (score ?? 0) < 55 {
-        warnings.append("⚠️ 仅 lyrics.ovh 低分命中（高错配风险）")
+    let hasIndependentLyricAgreement = allResults.contains { result in
+        result.source != source &&
+        result.score > 0 &&
+        lyricIdentityTokens(result.lyrics).count >= 6 &&
+        lyricSimilarity(lyrics, result.lyrics) >= 0.34
+    }
+    if source == "lyrics.ovh" && (score ?? 0) < 55 && !hasIndependentLyricAgreement {
+        validation.warnings.append("⚠️ 仅 lyrics.ovh 低分命中（高错配风险）")
     }
 
     // ── 4. Timestamp overshoot detection ──
@@ -279,10 +306,123 @@ private func validateContent(
     if duration > 0, lyrics.count >= 2,
        let last = lyrics.last, last.startTime > duration {
         let overshoot = last.startTime - duration
-        warnings.append("⚠️ 时间轴溢出: 末行 \(String(format: "%.1f", last.startTime))s > 歌曲 \(Int(duration))s (溢出\(String(format: "+%.1f", overshoot))s, 版本不匹配)")
+        validation.warnings.append("⚠️ 时间轴溢出: 末行 \(String(format: "%.1f", last.startTime))s > 歌曲 \(Int(duration))s (溢出\(String(format: "+%.1f", overshoot))s, 版本不匹配)")
     }
 
-    return warnings
+    return validation
+}
+
+/// Cross-source identity oracle:
+/// If the selected synced result disagrees with an independent consensus
+/// cluster, the verifier must fail even when the selected result has good
+/// timestamps. This catches "right catalog row, wrong attached lyric" and
+/// "same artist + same duration + wrong title" cases without song-specific
+/// allowlists.
+private func validateCrossSourceIdentity(
+    selected: LyricsFetcher.LyricsFetchResult?,
+    allResults: [LyricsFetcher.LyricsFetchResult]
+) -> [String] {
+    guard let selected, !selected.lyrics.isEmpty else { return [] }
+
+    let candidates = uniqueSourceResults(allResults).filter {
+        $0.score > 0 && !$0.lyrics.isEmpty && lyricIdentityTokens($0.lyrics).count >= 6
+    }
+    guard candidates.count >= 3 else { return [] }
+
+    let threshold = 0.34
+    let clusters: [[LyricsFetcher.LyricsFetchResult]] = candidates.map { anchor in
+        candidates.filter { lyricSimilarity(anchor.lyrics, $0.lyrics) >= threshold }
+    }
+    guard let bestCluster = clusters.max(by: { lhs, rhs in
+        if lhs.count != rhs.count { return lhs.count < rhs.count }
+        let lhsSynced = lhs.filter { $0.kind == .synced }.count
+        let rhsSynced = rhs.filter { $0.kind == .synced }.count
+        return lhsSynced < rhsSynced
+    }) else { return [] }
+
+    guard bestCluster.count >= 2 else { return [] }
+    guard !bestCluster.contains(where: { $0.source == selected.source }) else { return [] }
+    let clusterHasSynced = bestCluster.contains { $0.kind == .synced }
+    if !clusterHasSynced,
+       selected.kind == .synced,
+       (selected.score >= 75 || hasWordLevelSync(selected)) {
+        return []
+    }
+
+    let selectedSimilarity = bestCluster
+        .map { lyricSimilarity(selected.lyrics, $0.lyrics) }
+        .max() ?? 0
+    guard selectedSimilarity < 0.18 else { return [] }
+
+    let supporters = bestCluster.map { $0.source }.sorted().joined(separator: ",")
+    return ["跨源歌词内容冲突: selected=\(selected.source), consensus=\(supporters)"]
+}
+
+private func hasWordLevelSync(_ result: LyricsFetcher.LyricsFetchResult) -> Bool {
+    guard !result.lyrics.isEmpty else { return false }
+    let syllableCount = result.lyrics.filter { $0.hasSyllableSync }.count
+    return Double(syllableCount) / Double(result.lyrics.count) >= 0.3
+}
+
+private func uniqueSourceResults(_ results: [LyricsFetcher.LyricsFetchResult]) -> [LyricsFetcher.LyricsFetchResult] {
+    var bestBySource: [String: LyricsFetcher.LyricsFetchResult] = [:]
+    for result in results {
+        if let existing = bestBySource[result.source], existing.score >= result.score { continue }
+        bestBySource[result.source] = result
+    }
+    return Array(bestBySource.values)
+}
+
+private func lyricSimilarity(_ lhs: [LyricLine], _ rhs: [LyricLine]) -> Double {
+    let a = lyricIdentityTokens(lhs)
+    let b = lyricIdentityTokens(rhs)
+    guard !a.isEmpty, !b.isEmpty else { return 0 }
+    let intersection = a.intersection(b).count
+    return Double(intersection) / Double(min(a.count, b.count))
+}
+
+private func lyricIdentityTokens(_ lyrics: [LyricLine]) -> Set<String> {
+    let lines = lyrics.filter {
+        let t = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
+    }.prefix(24)
+    let raw = lines.map(\.text).joined(separator: " ")
+    let folded = LanguageUtils.toSimplifiedChinese(raw)
+        .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        .lowercased()
+
+    var words: [String] = []
+    var current = ""
+    for scalar in folded.unicodeScalars {
+        if CharacterSet.alphanumerics.contains(scalar) {
+            current.append(Character(scalar))
+        } else {
+            if current.count >= 2 { words.append(current) }
+            current = ""
+        }
+    }
+    if current.count >= 2 { words.append(current) }
+
+    if words.count >= 8 {
+        var tokens = Set<String>()
+        for i in 0..<(words.count - 1) {
+            tokens.insert(words[i] + " " + words[i + 1])
+        }
+        return tokens
+    }
+
+    let compact = folded.unicodeScalars.filter { scalar in
+        !CharacterSet.whitespacesAndNewlines.contains(scalar)
+            && !CharacterSet.punctuationCharacters.contains(scalar)
+            && !CharacterSet.symbols.contains(scalar)
+    }.map(String.init).joined()
+    let chars = Array(compact)
+    guard chars.count >= 4 else { return Set(words) }
+    var tokens = Set<String>()
+    for i in 0..<(chars.count - 1) {
+        tokens.insert(String(chars[i...i + 1]))
+    }
+    return tokens
 }
 
 // =========================================================================

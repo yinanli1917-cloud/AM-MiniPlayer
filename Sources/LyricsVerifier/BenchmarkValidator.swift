@@ -346,7 +346,7 @@ private func checkTimelineSanity(lyrics: [LyricLine]) -> [String] {
         warnings.append("⚠️ 时间轴乱序: \(outOfOrderCount) 处")
     }
 
-    return []
+    return warnings
 }
 
 // =========================================================================
