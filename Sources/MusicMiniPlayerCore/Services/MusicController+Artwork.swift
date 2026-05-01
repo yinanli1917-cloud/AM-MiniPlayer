@@ -201,23 +201,38 @@ extension MusicController {
         // (strong Western) > iTunes (often 403, last resort). MusicKit only
         // fires when authorized; Apple's catalog wins when available.
 
-        return await withTaskGroup(of: NSImage?.self) { group in
-            if MusicAuthorization.currentStatus == .authorized {
-                group.addTask { await self.fetchArtworkViaMusicKit(title: title, artist: artist, album: album) }
-            }
-            group.addTask { await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album) }
-            group.addTask { await self.fetchArtworkViaDeezer(title: title, artist: artist) }
-            group.addTask { await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album) }
+        enum ArtworkTrust: Int { case apple = 0, web = 1 }
 
-            // First non-nil wins. Cancel the rest so their HTTP traffic stops
-            // and we free the URLSession slots for the NEXT track's fetch.
-            for await result in group {
-                if let image = result {
-                    group.cancelAll()
-                    return image
+        return await withTaskGroup(of: (NSImage, ArtworkTrust)?.self) { group in
+            if MusicAuthorization.currentStatus == .authorized {
+                group.addTask {
+                    if let img = await self.fetchArtworkViaMusicKit(title: title, artist: artist, album: album) { return (img, .apple) }
+                    return nil
                 }
             }
-            return nil
+            group.addTask {
+                if let img = await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album) { return (img, .apple) }
+                return nil
+            }
+            group.addTask {
+                if let img = await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album) { return (img, .web) }
+                return nil
+            }
+            group.addTask {
+                if let img = await self.fetchArtworkViaDeezer(title: title, artist: artist) { return (img, .web) }
+                return nil
+            }
+
+            var bestResult: (NSImage, ArtworkTrust)?
+            for await result in group {
+                guard let r = result else { continue }
+                if r.1 == .apple {
+                    group.cancelAll()
+                    return r.0
+                }
+                if bestResult == nil { bestResult = r }
+            }
+            return bestResult?.0
         }
     }
 
@@ -227,8 +242,50 @@ extension MusicController {
     ///   - traditional → simplified (so 愛 ≡ 爱)
     /// Cheap, allocation-light, and good enough for "did NetEase return our song?".
     static func normalizeForArtworkMatching(_ s: String) -> String {
-        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmed = LanguageUtils.normalizeTrackName(LanguageUtils.normalizeUnicode(s))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         return LanguageUtils.toSimplifiedChinese(trimmed)
+    }
+
+    struct ArtworkMatchScore {
+        let title: Int
+        let artist: Int
+        let album: Int
+
+        var total: Int { title + artist + album }
+        var isReliable: Bool {
+            (title > 0 && (artist > 0 || album > 0)) || (artist > 0 && album > 0)
+        }
+    }
+
+    static func scoreArtworkCandidate(
+        title inputTitle: String,
+        artist inputArtist: String,
+        album inputAlbum: String,
+        candidateTitle: String,
+        candidateArtist: String,
+        candidateAlbum: String
+    ) -> ArtworkMatchScore {
+        let titleScore = artworkTextScore(inputTitle, candidateTitle, exact: 4, partial: 2)
+        let artistScore = artworkTextScore(inputArtist, candidateArtist, exact: 3, partial: 1)
+        let albumScore = artworkTextScore(inputAlbum, candidateAlbum, exact: 3, partial: 2)
+        return ArtworkMatchScore(title: titleScore, artist: artistScore, album: albumScore)
+    }
+
+    private static func artworkTextScore(_ input: String, _ result: String, exact: Int, partial: Int) -> Int {
+        let lhs = normalizeForArtworkMatching(input)
+        let rhs = normalizeForArtworkMatching(result)
+        guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
+        if lhs == rhs { return exact }
+        if lhs.contains(rhs) || rhs.contains(lhs) { return partial }
+
+        let lhsLatin = LanguageUtils.toLatinLower(lhs)
+        let rhsLatin = LanguageUtils.toLatinLower(rhs)
+        guard lhsLatin.count >= 3, rhsLatin.count >= 3 else { return 0 }
+        if lhsLatin == rhsLatin { return partial }
+        if lhsLatin.contains(rhsLatin) || rhsLatin.contains(lhsLatin) { return max(partial - 1, 0) }
+        return 0
     }
 
     /// NetEase Cloud Music — single-call cloudsearch returns album picUrl. Best
@@ -256,24 +313,19 @@ extension MusicController {
 
             // Match preference uses CJK-aware title comparison so 愛你不是兩三天 ↔ 爱你不是两三天
             // resolve to the same song. Self.normalizeForArtworkMatching handles trad/simp.
-            let titleNorm = Self.normalizeForArtworkMatching(title)
-            let artistNorm = Self.normalizeForArtworkMatching(artist)
-            let albumNorm = Self.normalizeForArtworkMatching(album)
-
-            func score(_ s: [String: Any]) -> Int {
-                let sTitle = Self.normalizeForArtworkMatching((s["name"] as? String) ?? "")
-                let sArtist = Self.normalizeForArtworkMatching(((s["ar"] as? [[String: Any]])?.first?["name"] as? String) ?? "")
-                let sAlbum = Self.normalizeForArtworkMatching(((s["al"] as? [String: Any])?["name"] as? String) ?? "")
-                var p = 0
-                if !titleNorm.isEmpty, sTitle == titleNorm { p += 4 }
-                else if !titleNorm.isEmpty, sTitle.contains(titleNorm) || titleNorm.contains(sTitle) { p += 2 }
-                if !artistNorm.isEmpty, sArtist == artistNorm { p += 3 }
-                else if !artistNorm.isEmpty, sArtist.contains(artistNorm) || artistNorm.contains(sArtist) { p += 1 }
-                if !albumNorm.isEmpty, sAlbum == albumNorm { p += 2 }
-                return p
+            let scored = songs.map { song -> (song: [String: Any], score: ArtworkMatchScore) in
+                let sTitle = (song["name"] as? String) ?? ""
+                let sArtist = ((song["ar"] as? [[String: Any]])?.first?["name"] as? String) ?? ""
+                let sAlbum = ((song["al"] as? [String: Any])?["name"] as? String) ?? ""
+                return (song, Self.scoreArtworkCandidate(
+                    title: title, artist: artist, album: album,
+                    candidateTitle: sTitle, candidateArtist: sArtist, candidateAlbum: sAlbum
+                ))
             }
-
-            let best = songs.max(by: { score($0) < score($1) }) ?? songs[0]
+            guard let best = scored.filter({ $0.score.isReliable })
+                .max(by: { $0.score.total < $1.score.total })?.song else {
+                return nil
+            }
             guard let al = best["al"] as? [String: Any],
                   let picStr = al["picUrl"] as? String,
                   let picURL = URL(string: picStr.replacingOccurrences(of: "http://", with: "https://")) else {
@@ -307,17 +359,17 @@ extension MusicController {
                 return nil
             }
 
-            // Match by artist name (case-insensitive contains)
-            let artistLower = artist.lowercased()
-            let titleLower = title.lowercased()
-            let best = results.first { r in
+            let scored = results.map { r -> (result: [String: Any], score: ArtworkMatchScore) in
                 let rArtist = (r["artist"] as? [String: Any])?["name"] as? String ?? ""
                 let rTitle = (r["title"] as? String) ?? ""
-                return rArtist.lowercased().contains(artistLower) || artistLower.contains(rArtist.lowercased())
-                    || rTitle.lowercased().contains(titleLower)
-            } ?? results.first
-
-            guard let match = best,
+                let rAlbum = (r["album"] as? [String: Any])?["title"] as? String ?? ""
+                return (r, Self.scoreArtworkCandidate(
+                    title: title, artist: artist, album: "",
+                    candidateTitle: rTitle, candidateArtist: rArtist, candidateAlbum: rAlbum
+                ))
+            }
+            guard let match = scored.filter({ $0.score.isReliable })
+                .max(by: { $0.score.total < $1.score.total })?.result,
                   let album = match["album"] as? [String: Any],
                   let coverUrl = album["cover_big"] as? String,  // 500x500
                   let imageUrl = URL(string: coverUrl) else {
@@ -341,11 +393,17 @@ extension MusicController {
             request.limit = 10
             let response = try await request.response()
 
-            // 优先选同专辑版本
-            let albumLower = album.lowercased()
-            let bestSong = response.songs.first { song in
-                song.albumTitle?.lowercased() == albumLower
-            } ?? response.songs.first
+            let bestSong = response.songs
+                .map { song -> (song: Song, score: ArtworkMatchScore) in
+                    (song, Self.scoreArtworkCandidate(
+                        title: title, artist: artist, album: album,
+                        candidateTitle: song.title,
+                        candidateArtist: song.artistName,
+                        candidateAlbum: song.albumTitle ?? ""
+                    ))
+                }
+                .filter { $0.score.isReliable }
+                .max(by: { $0.score.total < $1.score.total })?.song
 
             if let song = bestSong,
                let artwork = song.artwork,
@@ -370,10 +428,6 @@ extension MusicController {
             title                           // 3. 只用 title
         ]
 
-        let artistLower = artist.lowercased()
-        let titleLower = title.lowercased()
-        let albumLower = album.lowercased()
-
         for searchTerm in searchStrategies {
             let trimmed = searchTerm.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty,
@@ -389,18 +443,18 @@ extension MusicController {
                    let results = json["results"] as? [[String: Any]],
                    !results.isEmpty {
 
-                    // 🔑 三级优先匹配：album+artist > artist > 首条
-                    let bestMatch: [String: Any]? = results.first { r in
-                        let rArtist = (r["artistName"] as? String)?.lowercased() ?? ""
-                        let rAlbum = (r["collectionName"] as? String)?.lowercased() ?? ""
-                        return rAlbum == albumLower
-                            && (rArtist.contains(artistLower) || artistLower.contains(rArtist))
-                    } ?? results.first { r in
-                        let rArtist = (r["artistName"] as? String)?.lowercased() ?? ""
-                        let rTrack = (r["trackName"] as? String)?.lowercased() ?? ""
-                        return (rArtist.contains(artistLower) || artistLower.contains(rArtist))
-                            && (rTrack.contains(titleLower) || titleLower.contains(rTrack))
-                    } ?? results.first
+                    let bestMatch: [String: Any]? = results
+                        .map { r -> (result: [String: Any], score: ArtworkMatchScore) in
+                            let rArtist = r["artistName"] as? String ?? ""
+                            let rAlbum = r["collectionName"] as? String ?? ""
+                            let rTrack = r["trackName"] as? String ?? ""
+                            return (r, Self.scoreArtworkCandidate(
+                                title: title, artist: artist, album: album,
+                                candidateTitle: rTrack, candidateArtist: rArtist, candidateAlbum: rAlbum
+                            ))
+                        }
+                        .filter { $0.score.isReliable }
+                        .max(by: { $0.score.total < $1.score.total })?.result
 
                     if let match = bestMatch,
                        let artworkUrlString = match["artworkUrl100"] as? String {

@@ -128,4 +128,25 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertNil(c.artworkCacheKey(persistentID: "", title: "", artist: "A"))
         XCTAssertNil(c.artworkCacheKey(persistentID: "", title: "Song", artist: ""))
     }
+
+    // ------------------------------------------------------------------
+    // MARK: - artwork candidate matching
+    // ------------------------------------------------------------------
+
+    func testArtworkCandidateRejectsTitleOnlyWrongArtist() {
+        let score = MusicController.scoreArtworkCandidate(
+            title: "Invisible", artist: "mei ehara", album: "Ampersands",
+            candidateTitle: "Invisible", candidateArtist: "Uiro", candidateAlbum: "iro iro Case.2"
+        )
+        XCTAssertFalse(score.isReliable, "Title-only fallback must not accept artwork from a different artist/album")
+    }
+
+    func testArtworkCandidateAcceptsLocalizedAlbumMatch() {
+        let score = MusicController.scoreArtworkCandidate(
+            title: "我的寶貝", artist: "Lee Chih Ching", album: "Yin Shi Nan Nu",
+            candidateTitle: "我的宝贝", candidateArtist: "李之勤", candidateAlbum: "飲食男女"
+        )
+        XCTAssertTrue(score.isReliable)
+        XCTAssertGreaterThanOrEqual(score.total, 5)
+    }
 }
