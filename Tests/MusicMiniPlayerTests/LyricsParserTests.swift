@@ -579,6 +579,22 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(stripped[1].text, "妳会否哭诉后找我做靠倚")
     }
 
+    /// Real verifier data: 起风了 / Strange Weather exposed credits with
+    /// compact labels ("鼓：...", "SP: ...") as the rendered first lyric.
+    func testStripMetadataLines_instrumentAndPublisherCredits() {
+        let lines = [
+            LyricLine(text: "鼓：吉田佳史 (TRICERATOPS) (Yoshifumi Yoshida(TRICERATOPS))", startTime: 9.1, endTime: 12.0),
+            LyricLine(text: "SP: Warner Chappell Music, Hong Kong Limited Taiwan Branch", startTime: 8.0, endTime: 11.0),
+            LyricLine(text: "一路上走走停停", startTime: 24.0, endTime: 28.0),
+            LyricLine(text: "Good at breaking hearts", startTime: 5.2, endTime: 8.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.count, 2, "Expected only real lyrics, got: \(stripped.map(\.text))")
+        XCTAssertEqual(stripped[0].text, "一路上走走停停")
+        XCTAssertEqual(stripped[1].text, "Good at breaking hearts")
+    }
+
     /// Real data: Not Worth by Dreamz FM — last "line" is a decorative
     /// "——=END=——" marker that survived stripping.
     /// Also covers variants: "=== END ===", "---END---", "***".

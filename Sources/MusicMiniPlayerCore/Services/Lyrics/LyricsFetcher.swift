@@ -97,13 +97,13 @@ public final class LyricsFetcher {
     // (LRCLIB) from cancelling slower high-quality sources (AMLL/NetEase/QQ) that provide
     // syllable sync, translations, and better matching.
     private let earlyReturnThreshold: Double = 70.0
-    private let earlyReturnSources: Set<String> = ["AMLL", "NetEase", "QQ"]
+    private let earlyReturnSources: Set<String> = ["AppleMusic", "AMLL", "NetEase", "QQ"]
 
-    // Branch-3 safety-net delay. Speculative branches (1 + 2) get 1.5s to
+    // Branch-3 safety-net delay. Speculative branches (1 + 2) get 1.0s to
     // produce a score≥60 synced result; if they don't, the full resolver
     // path fires and can rescue edge cases where per-region candidates
     // miss (e.g., iTunes JP returns the wrong title for the input).
-    private let branch3SafetyNetDelay: UInt64 = 1_500_000_000 // 1.5s
+    private let branch3SafetyNetDelay: UInt64 = 1_000_000_000 // 1.0s
 
     /// Fetch lyrics from all sources using the GAMMA speculative pipeline.
     ///
@@ -114,9 +114,9 @@ public final class LyricsFetcher {
     ///   Wins for English and native-CJK songs.
     /// - Branch 2 (ASCII input): per-region speculative searches. For each
     ///   inferred region, fire `fetchMetadataFromRegion` directly and pipe
-    ///   each CJK candidate into NetEase/QQ. Bypasses cross-region consensus.
+    ///   each CJK candidate into every title-keyed synced source. Bypasses cross-region consensus.
     ///   Wins for romaji→CJK songs without blocking on the resolver.
-    /// - Branch 3 (delayed 1.5s): full `resolveSearchMetadata` path as the
+    /// - Branch 3 (delayed 1.0s): full `resolveSearchMetadata` path as the
     ///   safety net for songs where branch 2 cannot find the right candidate.
     ///
     /// The bet: cast a wider net at the input, validate harder at the output.
@@ -173,16 +173,10 @@ public final class LyricsFetcher {
             // Output-side validators still protect us from bad candidates.
             if titleIsASCII {
                 let regions = self.metadataResolver.inferRegions(title: ot, artist: oa)
-                // 🔑 Branch 2 fans out to ALL title-keyed sources, not just
-                // NetEase/QQ. The user-reported regression on mei ehara —
-                // "Invisible" / 不確か exposed this: LRCLIB IS the only source
-                // that has REAL synced lyrics for that track, but it indexes
-                // by the Japanese title only. Branch-1 fetched LRCLIB with
-                // the romanized "Invisible" → 404, while Branch-2 only fed
-                // resolved CJK candidates into NetEase/QQ. Generalising the
-                // fan-out fixes the same bug class for any track whose
-                // catalogs use a different display title across regions
-                // (Apple Music JP shows the kanji, others show romaji).
+                // Resolve once per region, then fan out to all title-keyed
+                // sources. This avoids duplicating iTunes regional lookups
+                // while still rescuing tracks whose lyric catalogs index by
+                // the localized title only (e.g. "Invisible" / 不確か).
                 for region in regions {
                     group.addTask {
                         guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
@@ -192,47 +186,11 @@ public final class LyricsFetcher {
                         guard LanguageUtils.containsCJK(rt) else { return nil }
                         guard rt != ot || ra != oa else { return nil }
                         DebugLogger.log("⚡ Branch-2 speculative(\(region)): '\(rt)' by '\(ra)'")
-                        return await self.fetchFromNetEase(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
-                    }
-                    group.addTask {
-                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
-                            title: ot, artist: oa, duration: d, region: region
-                        ) else { return nil }
-                        let (rt, ra, _, _) = localized
-                        guard LanguageUtils.containsCJK(rt) else { return nil }
-                        guard rt != ot || ra != oa else { return nil }
-                        return await self.fetchFromQQMusic(title: rt, artist: ra, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
-                    }
-                    // LRCLIB exact-match by resolved CJK title.
-                    group.addTask {
-                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
-                            title: ot, artist: oa, duration: d, region: region
-                        ) else { return nil }
-                        let (rt, ra, _, _) = localized
-                        guard LanguageUtils.containsCJK(rt) else { return nil }
-                        guard rt != ot || ra != oa else { return nil }
-                        return await self.fetchFromLRCLIB(title: rt, artist: ra, duration: d, translationEnabled: te)
-                    }
-                    // LRCLIB-Search fuzzy fallback by resolved CJK title.
-                    group.addTask {
-                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
-                            title: ot, artist: oa, duration: d, region: region
-                        ) else { return nil }
-                        let (rt, ra, _, _) = localized
-                        guard LanguageUtils.containsCJK(rt) else { return nil }
-                        guard rt != ot || ra != oa else { return nil }
-                        return await self.fetchFromLRCLIBSearch(title: rt, artist: ra, duration: d, translationEnabled: te)
-                    }
-                    // AMLL TTML by resolved CJK title (if AMLL has the entry
-                    // under the kanji title — it usually does for the JP catalog).
-                    group.addTask {
-                        guard let localized = await self.metadataResolver.fetchMetadataFromRegion(
-                            title: ot, artist: oa, duration: d, region: region
-                        ) else { return nil }
-                        let (rt, ra, _, _) = localized
-                        guard LanguageUtils.containsCJK(rt) else { return nil }
-                        guard rt != ot || ra != oa else { return nil }
-                        return await self.fetchFromAMLL(title: rt, artist: ra, duration: d, translationEnabled: te)
+                        return await self.fetchResolvedTitleKeyedSources(
+                            title: rt, artist: ra,
+                            originalTitle: ot, originalArtist: oa,
+                            duration: d, translationEnabled: te, album: alb
+                        )
                     }
                 }
             }
@@ -240,11 +198,13 @@ public final class LyricsFetcher {
             // ───────────────────────────────────────────────────────────────
             // Branch 3 — delayed safety-net (full consensus resolver)
             // ───────────────────────────────────────────────────────────────
-            // Fires at 1.5s unless branches 1+2 already produced a
+            // Fires at 1.0s unless branches 1+2 already produced a
             // score≥60 synced result. Covers edge cases where per-region
             // speculation misses and the CN consensus path is the only
             // way to get the right tuple (e.g., CN-only artists, dual-title
-            // splits that need cross-validation, etc.).
+            // splits that need cross-validation, etc.). Once resolved, the
+            // tuple fans out to every title-keyed synced source; LRCLIB often
+            // has the only real timeline for localized JP catalog titles.
             group.addTask {
                 // Delay: abort early if cancelled.
                 try? await Task.sleep(nanoseconds: self.branch3SafetyNetDelay)
@@ -254,19 +214,17 @@ public final class LyricsFetcher {
                 )
                 guard st != ot || sa != oa else { return nil }
                 branch3Fired.value = true
-                DebugLogger.log("🛟 Branch-3 safety net (NetEase): '\(st)' by '\(sa)'")
-                return await self.fetchFromNetEase(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: self.branch3SafetyNetDelay)
-                if Task.isCancelled { return nil }
-                let (st, sa) = await self.metadataResolver.resolveSearchMetadata(
-                    title: ot, artist: oa, duration: d
-                )
-                guard st != ot || sa != oa else { return nil }
-                branch3Fired.value = true
-                DebugLogger.log("🛟 Branch-3 safety net (QQ): '\(st)' by '\(sa)'")
-                return await self.fetchFromQQMusic(title: st, artist: sa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
+                DebugLogger.log("🛟 Branch-3 safety net: '\(st)' by '\(sa)'")
+
+                guard let best = await self.fetchResolvedTitleKeyedSources(
+                    title: st, artist: sa,
+                    originalTitle: ot, originalArtist: oa,
+                    duration: d, translationEnabled: te, album: alb
+                ) else {
+                    return nil
+                }
+                DebugLogger.log("🛟 Branch-3 best: \(best.source) score=\(String(format: "%.1f", best.score))")
+                return best
             }
 
             // ───────────────────────────────────────────────────────────────
@@ -398,6 +356,62 @@ public final class LyricsFetcher {
         }
 
         return finalResults.sorted { $0.score > $1.score }
+    }
+
+    private func fetchResolvedTitleKeyedSources(
+        title: String,
+        artist: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String
+    ) async -> LyricsFetchResult? {
+        let hasAlbumHint = !album.isEmpty
+        var resolvedResults: [LyricsFetchResult] = []
+
+        return await withTaskGroup(of: LyricsFetchResult?.self, returning: LyricsFetchResult?.self) { group in
+            group.addTask {
+                await self.fetchFromAppleMusic(title: title, artist: artist, duration: duration, translationEnabled: translationEnabled)
+            }
+            group.addTask {
+                await self.fetchFromAMLL(title: title, artist: artist, duration: duration, translationEnabled: translationEnabled)
+            }
+            group.addTask {
+                await self.fetchFromLRCLIB(title: title, artist: artist, duration: duration, translationEnabled: translationEnabled)
+            }
+            group.addTask {
+                await self.fetchFromLRCLIBSearch(title: title, artist: artist, duration: duration, translationEnabled: translationEnabled)
+            }
+            group.addTask {
+                await self.fetchFromNetEase(
+                    title: title, artist: artist,
+                    originalTitle: originalTitle, originalArtist: originalArtist,
+                    duration: duration, translationEnabled: translationEnabled, album: album
+                )
+            }
+            group.addTask {
+                await self.fetchFromQQMusic(
+                    title: title, artist: artist,
+                    originalTitle: originalTitle, originalArtist: originalArtist,
+                    duration: duration, translationEnabled: translationEnabled, album: album
+                )
+            }
+
+            for await result in group {
+                guard let result else { continue }
+                resolvedResults.append(result)
+                let albumGate = !hasAlbumHint || result.albumMatched
+                if result.score >= self.earlyReturnThreshold
+                    && self.earlyReturnSources.contains(result.source)
+                    && albumGate {
+                    group.cancelAll()
+                    return result
+                }
+            }
+
+            return self.selectBestResult(from: resolvedResults, songDuration: duration)
+        }
     }
 
     /// Select best lyrics result — unified single-pass with CJK preference.
@@ -758,7 +772,7 @@ public final class LyricsFetcher {
     ///        "(Live)" (e.g. Jacky Cheung Cantonese "每天爱你多一些" over
     ///        Mandarin "每天爱你多一些(国)").
     ///    (3) durationDiff — closest duration as final tiebreaker.
-    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false) -> (id: ID, albumMatched: Bool, durationDiff: Double)? {
+    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false, aliasConfirmedCJK: Bool = false) -> (id: ID, albumMatched: Bool, durationDiff: Double)? {
         // Debug view: sorted purely by durationDiff so the log reads naturally.
         let sortedByDelta = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sortedByDelta.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' T=\($0.titleMatch) A=\($0.artistMatch) AL=\($0.albumMatch) L=\($0.normalizedNameLength) Δ\(String(format: "%.1f", $0.durationDiff))s" }
@@ -818,14 +832,22 @@ public final class LyricsFetcher {
                 // "While My Guitar Gently Weeps" by Karen Mok → random
                 // Chinese Karen Mok song via CJK escape + cross-script
                 // artist tolerance stacking.
-                guard !LanguageUtils.isLikelyEnglishTitle(inputTitle) else { return false }
-                let resultHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
+                // Exception: when alias resolution confirmed the artist IS
+                // CJK AND the title is short (≤3 words), the English title
+                // is likely a localized display name ("My Baby" = 我的寶貝,
+                // "Deep" = 深深). Long titles (4+ words) are genuinely
+                // English even for CJK artists (Beatles covers, etc.).
+                if LanguageUtils.isLikelyEnglishTitle(inputTitle) {
+                    let wordCount = inputTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
+                    if !(aliasConfirmedCJK && wordCount <= 3) { return false }
+                }
+                let resultTitleHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
                 // Mastering differences between Apple Music and NetEase /
                 // QQ are routinely 0.3–0.8s, so we accept up to 1.0s here
                 // to catch Eman Lam — Xia Nie Piao Piao → 仙乐飘飘处处闻
                 // (Δ0.5s). The pure-ASCII guard above prevents same-artist
                 // CJK collisions from leaking through.
-                if resultHasCJK && candidate.durationDiff < 1.0 { return true }
+                if resultTitleHasCJK && candidate.durationDiff < 1.0 { return true }
                 return false
             }),
         ]
@@ -1264,7 +1286,7 @@ public final class LyricsFetcher {
                             let candidates = self.buildCandidates(
                                 songs: songs, params: aliasParams, extractSong: extractSong
                             )
-                            if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
+                            if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3, aliasConfirmedCJK: true) {
                                 return (m.id, m.albumMatched, desc, m.durationDiff, Self.keywordPriority(desc))
                             }
                         } catch {
@@ -1347,7 +1369,7 @@ public final class LyricsFetcher {
             let resultHasLive = liveMarkers.contains(where: { resultNameLower.contains($0) })
             if resultHasLive && !inputHasLive { return nil }
 
-            var titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
+            let titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
             var artistMatch = params.artistPairs.contains { isArtistMatch(input: $0.0, result: s.artist, simplifiedInput: $0.1) }
 
             // 🔑 Cross-script tolerance: CJK artists with English names (Cass Phang/彭羚,
@@ -1797,8 +1819,9 @@ public final class LyricsFetcher {
 
             // Only shift fetched timestamps when they are real. Fabricated
             // timestamps (unsynced fallback) get no offset — there's nothing
-            // to align.
-            let final = resultKind == .synced && !isYRC
+            // to align. YRC is word-level but still NetEase-timed, so it gets
+            // the same source offset as LRC after translations have merged.
+            let final = resultKind == .synced
                 ? parser.applyTimeOffset(to: lyrics, offset: netEaseTimeOffset)
                 : lyrics
             return (final, resultKind)

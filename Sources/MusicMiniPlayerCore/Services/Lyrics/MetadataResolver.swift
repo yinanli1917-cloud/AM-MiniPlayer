@@ -837,9 +837,12 @@ public final class MetadataResolver {
                               artistName.lowercased() != inputArtistLower
             guard isLocalized else { continue }
 
-            let resultHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) ||
-                               LanguageUtils.containsKorean(trackName) || LanguageUtils.containsChinese(artistName) ||
-                               LanguageUtils.containsJapanese(artistName) || LanguageUtils.containsKorean(artistName)
+            let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) ||
+                                    LanguageUtils.containsJapanese(trackName) ||
+                                    LanguageUtils.containsKorean(trackName)
+            let resultArtistHasCJK = LanguageUtils.containsChinese(artistName) ||
+                                     LanguageUtils.containsJapanese(artistName) ||
+                                     LanguageUtils.containsKorean(artistName)
 
             // 🔑 艺术家精确匹配（去空格后比较）
             let artistNoSpace = inputArtistLower.replacingOccurrences(of: " ", with: "")
@@ -849,17 +852,14 @@ public final class MetadataResolver {
                                        resultArtistNoSpace.contains(artistNoSpace)
 
             // 三层收集
-            if titleMatch && (artistMatch || resultHasCJK) {
+            if titleMatch && (artistMatch || resultTitleHasCJK || resultArtistHasCJK) {
                 DebugLogger.log("MetadataResolver", "[\(region)] 候选(titleMatch): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                 titleCandidates.append((trackName, artistName, durationDiff))
-            } else if isArtistPreciseMatch && resultHasCJK && durationDiff < 0.5 {
+            } else if isArtistPreciseMatch && resultTitleHasCJK && durationDiff < 0.5 {
                 DebugLogger.log("MetadataResolver", "[\(region)] 候选(artist+CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                 artistCJKCandidates.append((trackName, artistName, durationDiff))
             } else if LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist) && durationDiff < 1 {
                 // 🔑 romanized→CJK：结果标题必须是 CJK（不能 ASCII→ASCII 替换）
-                let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) ||
-                                       LanguageUtils.containsJapanese(trackName) ||
-                                       LanguageUtils.containsKorean(trackName)
                 // 🔑 艺术家校验：与 CN P3 同规则 — 同脚本（都是 ASCII）必须匹配
                 let resultArtistIsASCII = LanguageUtils.isPureASCII(artistName)
                 let artistBlocked = resultArtistIsASCII && !artistMatch

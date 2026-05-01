@@ -46,6 +46,7 @@ final class LyricsScorerTests: XCTestCase {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     func testSourceBonus_allSources() {
+        XCTAssertEqual(scorer.sourceBonus(for: "AppleMusic"), 12)
         XCTAssertEqual(scorer.sourceBonus(for: "AMLL"), 10)
         XCTAssertEqual(scorer.sourceBonus(for: "NetEase"), 8)
         XCTAssertEqual(scorer.sourceBonus(for: "QQ"), 6)

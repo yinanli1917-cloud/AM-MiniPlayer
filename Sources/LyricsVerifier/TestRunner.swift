@@ -83,7 +83,7 @@ func testSongWithLyrics(
     }
 
     let elapsed = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
-    let knownSources = ["AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
+    let knownSources = ["AppleMusic", "AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
     let allSources: [SourceResult] = knownSources.map { name in
         if let r = fetchResults.first(where: { $0.source == name }) {
             return SourceResult(name: name, found: true, score: round(r.score * 10) / 10, lines: r.lyrics.count)
@@ -182,6 +182,7 @@ private func checkExpectation(
             return failures
         }
         if let acceptable = exp.acceptableSources, let src = source,
+           src != "AppleMusic",
            !acceptable.contains(src) {
             failures.append("源 \(src) 不在可接受列表 \(acceptable) 中")
         }

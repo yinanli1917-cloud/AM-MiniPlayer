@@ -111,6 +111,14 @@ public final class LyricsScorer {
             let firstLyricStart = lyrics.first?.startTime ?? 0
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
             score += coverageRatio * 8
+
+            // 5b. Tail gap penalty: lyrics ending far before song ends → wrong version
+            // 90s absolute + 25% relative guards against songs with long instrumental outros
+            let tailGap = duration - lastLyricEnd
+            if tailGap > 90 && tailGap / duration > 0.25 {
+                let excess = tailGap / duration - 0.25
+                score -= 50 + excess * excess * 1000
+            }
         }
 
         // 6. Internal gap penalty (applies to ALL sources uniformly)
@@ -224,6 +232,7 @@ public final class LyricsScorer {
     /// 获取歌词源加成分数
     public func sourceBonus(for source: String) -> Double {
         switch source {
+        case "AppleMusic": return 12
         case "AMLL": return 10
         case "NetEase": return 8
         case "QQ": return 6

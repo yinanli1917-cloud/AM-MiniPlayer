@@ -925,7 +925,7 @@ public final class LyricsParser {
                 "作词", "作曲", "编曲", "制作", "制作人", "混音", "录音", "演唱",
                 "演奏", "和声", "键盘", "吉他", "贝斯", "鼓手", "提琴", "弦乐",
                 "监制", "母带", "母帶", "編曲", "作詞", "作曲", "製作", "錄音",
-                "詞", "曲", "編", "唱", "演", "奏"
+                "詞", "曲", "編", "唱", "演", "奏", "鼓", "鼓組", "鼓组"
             ]
             let isCJKMetaLabel = cjkMetadataKeywords.contains(where: { labelTrimmed.contains($0) })
                 && labelTrimmed.count <= 12
@@ -934,9 +934,14 @@ public final class LyricsParser {
             // Role-like label (contains common credit keywords) is also a credit line
             let labelLower = labelTrimmed.lowercased()
             let roleKeywords = ["vocal", "master", "mix", "record", "produc", "arrang",
-                                "compos", "writ", "lyric", "perform", "engineer", "instrument"]
+                                "compos", "writ", "lyric", "perform", "engineer", "instrument",
+                                "drum", "bass", "guitar", "keyboard", "publisher", "copyright"]
             let isRoleLabel = roleKeywords.contains(where: { labelLower.contains($0) })
+            let explicitCreditLabels: Set<String> = ["sp", "op", "isrc", "iswc", "版权", "發行", "发行"]
             if hasSeparators || isCJKMetaLabel || hasLocationMarker || isRoleLabel {
+                return true
+            }
+            if explicitCreditLabels.contains(labelLower) {
                 return true
             }
             // Short-value fallback only when NOT a speaker marker
