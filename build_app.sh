@@ -27,9 +27,9 @@ cat > nanoPod.app/Contents/Info.plist << 'PLIST'
     <key>CFBundleDisplayName</key>
     <string>nanoPod</string>
     <key>CFBundleVersion</key>
-    <string>2.1</string>
+    <string>2.2</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.1</string>
+    <string>2.2</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
