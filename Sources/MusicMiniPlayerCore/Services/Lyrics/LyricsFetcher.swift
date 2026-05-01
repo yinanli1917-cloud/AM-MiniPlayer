@@ -98,6 +98,9 @@ public final class LyricsFetcher {
     // syllable sync, translations, and better matching.
     private let earlyReturnThreshold: Double = 70.0
     private let earlyReturnSources: Set<String> = ["AppleMusic", "AMLL", "NetEase", "QQ"]
+    private let lyricIdentityValidationSources: Set<String> = [
+        "AMLL", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"
+    ]
 
     // Branch-3 safety-net delay. Speculative branches (1 + 2) get 1.0s to
     // produce a score≥60 synced result; if they don't, the full resolver
@@ -261,6 +264,10 @@ public final class LyricsFetcher {
                 try? await Task.sleep(nanoseconds: 2_800_000_000)
                 return nil
             }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                return nil
+            }
 
             // 🔑 When the caller provides an album hint, high-score results
             // from entries WITHOUT album match no longer trigger early return.
@@ -276,7 +283,21 @@ public final class LyricsFetcher {
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
 
                     let albumGate = !hasAlbumHint || r.albumMatched
-                    if r.score >= self.earlyReturnThreshold && self.earlyReturnSources.contains(r.source) && albumGate {
+                    let needsIdentityWitness = hasAlbumHint
+                        && ["NetEase", "QQ"].contains(r.source)
+                    let identityWitnesses = results.filter {
+                        $0.source != r.source && self.lyricIdentityValidationSources.contains($0.source)
+                    }
+                    let hasConflictingIdentityWitness = identityWitnesses.contains { witness in
+                        self.lyricIdentityTokens(r.lyrics).count >= 6
+                            && self.lyricIdentityTokens(witness.lyrics).count >= 6
+                            && self.lyricSimilarity(r.lyrics, witness.lyrics) < 0.18
+                    }
+                    let hasIdentityWitness = !identityWitnesses.isEmpty && !hasConflictingIdentityWitness
+                    if r.score >= self.earlyReturnThreshold
+                        && self.earlyReturnSources.contains(r.source)
+                        && albumGate
+                        && (!needsIdentityWitness || hasIdentityWitness) {
                         DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold)) albumMatch=\(r.albumMatched)")
                         group.cancelAll()
                         break
@@ -290,8 +311,11 @@ public final class LyricsFetcher {
                 // user-facing 3s budget so observed end-to-end latency stays sub-3000ms.
                 let elapsed = Date().timeIntervalSince(fetchStart)
                 guard !results.isEmpty else { continue }
-                let hasGoodResult = results.contains { $0.score >= 40 }
-                if (hasGoodResult && elapsed >= 2.8) || elapsed >= 4.5 {
+                let hasGoodSyncedResult = results.contains { $0.kind == .synced && $0.score >= 40 }
+                let hasAnySyncedResult = results.contains { $0.kind == .synced && $0.score > 0 }
+                if (hasGoodSyncedResult && elapsed >= 2.8)
+                    || (hasAnySyncedResult && elapsed >= 4.5)
+                    || elapsed >= 8.0 {
                     DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
                     group.cancelAll()
                     break
@@ -402,9 +426,21 @@ public final class LyricsFetcher {
                 guard let result else { continue }
                 resolvedResults.append(result)
                 let albumGate = !hasAlbumHint || result.albumMatched
+                let needsIdentityWitness = hasAlbumHint
+                    && ["NetEase", "QQ"].contains(result.source)
+                let identityWitnesses = resolvedResults.filter {
+                    $0.source != result.source && self.lyricIdentityValidationSources.contains($0.source)
+                }
+                let hasConflictingIdentityWitness = identityWitnesses.contains { witness in
+                    self.lyricIdentityTokens(result.lyrics).count >= 6
+                        && self.lyricIdentityTokens(witness.lyrics).count >= 6
+                        && self.lyricSimilarity(result.lyrics, witness.lyrics) < 0.18
+                }
+                let hasIdentityWitness = !identityWitnesses.isEmpty && !hasConflictingIdentityWitness
                 if result.score >= self.earlyReturnThreshold
                     && self.earlyReturnSources.contains(result.source)
-                    && albumGate {
+                    && albumGate
+                    && (!needsIdentityWitness || hasIdentityWitness) {
                     group.cancelAll()
                     return result
                 }
@@ -537,11 +573,23 @@ public final class LyricsFetcher {
             }
         }
 
+        let contentConsensus = filterSyncedByLyricIdentityConsensus(
+            syncedResults: usableSynced,
+            allResults: results
+        )
+        if contentConsensus.applied {
+            usableSynced = contentConsensus.syncedResults
+        }
+
         if usableSynced.isEmpty {
-            // No synced source available. Reject unsynced — user preference:
-            // synced lyrics only, clean empty state over static text that
-            // can't scroll/tap-to-jump. The answer to "no synced found" is
-            // to add more synced sources, not compromise the UX.
+            // No synced source available. Prefer a verified plain-text
+            // fallback over incorrectly saying "no lyrics", but only after
+            // the synced path is empty so static lyrics can never beat real
+            // timing.
+            if let unsyncedFallback = selectUnsyncedFallback(from: results) {
+                DebugLogger.log("🏆 Unsynced fallback: \(unsyncedFallback.source) score=\(String(format: "%.1f", unsyncedFallback.score))")
+                return unsyncedFallback
+            }
             let syncedOnly = results.filter { $0.kind == .synced && $0.score > 0 }
             guard !syncedOnly.isEmpty else {
                 DebugLogger.log("🏆 No synced results available: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
@@ -577,6 +625,174 @@ public final class LyricsFetcher {
             return selectReliable(wordLevelPool, songDuration: songDuration)
         }
         return selectReliable(usableSynced, songDuration: songDuration)
+    }
+
+    private func selectUnsyncedFallback(from results: [LyricsFetchResult]) -> LyricsFetchResult? {
+        let plainCandidates = uniqueSourceResults(results).filter {
+            $0.kind == .unsynced &&
+            $0.score > 0 &&
+            !$0.lyrics.isEmpty &&
+            lyricIdentityTokens($0.lyrics).count >= 6
+        }
+        guard !plainCandidates.isEmpty else { return nil }
+
+        if plainCandidates.count >= 2 {
+            let threshold = 0.34
+            let clusters: [[LyricsFetchResult]] = plainCandidates.map { anchor in
+                plainCandidates.filter { lyricSimilarity(anchor.lyrics, $0.lyrics) >= threshold }
+            }
+            if let bestCluster = clusters.max(by: { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count < rhs.count }
+                let lhsScore = lhs.map(\.score).max() ?? 0
+                let rhsScore = rhs.map(\.score).max() ?? 0
+                return lhsScore < rhsScore
+            }), bestCluster.count >= 2, (bestCluster.map(\.score).max() ?? 0) >= 12 {
+                return bestCluster.max(by: { $0.score < $1.score })
+            }
+        }
+
+        let candidates = plainCandidates.filter {
+            $0.score >= 28 ||
+            ($0.source == "Genius" && $0.score >= 24) ||
+            ($0.source == "Genius" && $0.score >= 20 && $0.lyrics.count >= 10 && lyricsContainCJK($0.lyrics))
+        }
+        return candidates.max(by: { $0.score < $1.score })
+    }
+
+    private func lyricsContainCJK(_ lyrics: [LyricLine]) -> Bool {
+        lyrics.contains { LanguageUtils.containsCJK($0.text) }
+    }
+
+    /// Use independent source agreement as an output-side identity oracle.
+    /// This is intentionally content-based rather than song-specific:
+    /// when two or more sources agree with each other and the selected
+    /// high-score synced source shares almost no lyric text with that cluster,
+    /// the high-score source is likely a wrong attached lyric or a same-artist
+    /// duration collision. Keep synced members of the consensus cluster and
+    /// drop outliers before word-level priority runs.
+    private func filterSyncedByLyricIdentityConsensus(
+        syncedResults: [LyricsFetchResult],
+        allResults: [LyricsFetchResult]
+    ) -> (applied: Bool, syncedResults: [LyricsFetchResult]) {
+        guard syncedResults.count >= 2 || allResults.count >= 3 else {
+            return (false, syncedResults)
+        }
+
+        let candidates = uniqueSourceResults(allResults).filter {
+            $0.score > 0 && !$0.lyrics.isEmpty && lyricIdentityTokens($0.lyrics).count >= 6
+        }
+        guard candidates.count >= 3 else { return (false, syncedResults) }
+
+        let threshold = 0.34
+        let clusters: [[LyricsFetchResult]] = candidates.map { anchor in
+            candidates.filter { lyricSimilarity(anchor.lyrics, $0.lyrics) >= threshold }
+        }
+        guard let bestCluster = clusters.max(by: { lhs, rhs in
+            if lhs.count != rhs.count { return lhs.count < rhs.count }
+            let lhsSynced = lhs.filter { $0.kind == .synced }.count
+            let rhsSynced = rhs.filter { $0.kind == .synced }.count
+            return lhsSynced < rhsSynced
+        }) else {
+            return (false, syncedResults)
+        }
+
+        guard bestCluster.count >= 2 else {
+            return (false, syncedResults)
+        }
+
+        let clusterSources = Set(bestCluster.map(\.source))
+        let filteredSynced = syncedResults.filter { clusterSources.contains($0.source) }
+        guard filteredSynced.count < syncedResults.count else {
+            return (false, syncedResults)
+        }
+
+        let rejected = syncedResults.filter { !clusterSources.contains($0.source) }
+        let clusterHasSynced = bestCluster.contains { $0.kind == .synced }
+        if !clusterHasSynced {
+            let strongSyncedRejected = rejected.contains { result in
+                result.score >= 75 || hasWordLevelSync(result)
+            }
+            if strongSyncedRejected {
+                return (false, syncedResults)
+            }
+        }
+        let rejectedAreOutliers = rejected.allSatisfy { rejectedResult in
+            let bestSimilarity = bestCluster
+                .map { lyricSimilarity(rejectedResult.lyrics, $0.lyrics) }
+                .max() ?? 0
+            return bestSimilarity < 0.18
+        }
+        guard rejectedAreOutliers else { return (false, syncedResults) }
+
+        DebugLogger.log("🏆 Lyric identity consensus: kept \(clusterSources.sorted()), dropped \(rejected.map(\.source))")
+        return (true, filteredSynced)
+    }
+
+    private func hasWordLevelSync(_ result: LyricsFetchResult) -> Bool {
+        guard !result.lyrics.isEmpty else { return false }
+        let syllableCount = result.lyrics.filter { $0.hasSyllableSync }.count
+        return Double(syllableCount) / Double(result.lyrics.count) >= 0.3
+    }
+
+    private func uniqueSourceResults(_ results: [LyricsFetchResult]) -> [LyricsFetchResult] {
+        var bestBySource: [String: LyricsFetchResult] = [:]
+        for result in results {
+            if let existing = bestBySource[result.source], existing.score >= result.score { continue }
+            bestBySource[result.source] = result
+        }
+        return Array(bestBySource.values)
+    }
+
+    private func lyricSimilarity(_ lhs: [LyricLine], _ rhs: [LyricLine]) -> Double {
+        let a = lyricIdentityTokens(lhs)
+        let b = lyricIdentityTokens(rhs)
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        let intersection = a.intersection(b).count
+        return Double(intersection) / Double(min(a.count, b.count))
+    }
+
+    private func lyricIdentityTokens(_ lyrics: [LyricLine]) -> Set<String> {
+        let lines = lyrics.filter {
+            let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+        }.prefix(24)
+        let raw = lines.map(\.text).joined(separator: " ")
+        let folded = LanguageUtils.toSimplifiedChinese(raw)
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+
+        var words: [String] = []
+        var current = ""
+        for scalar in folded.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                current.append(Character(scalar))
+            } else {
+                if current.count >= 2 { words.append(current) }
+                current = ""
+            }
+        }
+        if current.count >= 2 { words.append(current) }
+
+        if words.count >= 8 {
+            var tokens = Set<String>()
+            for i in 0..<(words.count - 1) {
+                tokens.insert(words[i] + " " + words[i + 1])
+            }
+            return tokens
+        }
+
+        let compact = folded.unicodeScalars.filter { scalar in
+            !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                && !CharacterSet.punctuationCharacters.contains(scalar)
+                && !CharacterSet.symbols.contains(scalar)
+        }.map(String.init).joined()
+        let chars = Array(compact)
+        guard chars.count >= 4 else { return Set(words) }
+        var tokens = Set<String>()
+        for i in 0..<(chars.count - 1) {
+            tokens.insert(String(chars[i...i + 1]))
+        }
+        return tokens
     }
 
     /// Coverage ratio: what fraction of the song's duration the lyrics span.
@@ -772,7 +988,7 @@ public final class LyricsFetcher {
     ///        "(Live)" (e.g. Jacky Cheung Cantonese "每天爱你多一些" over
     ///        Mandarin "每天爱你多一些(国)").
     ///    (3) durationDiff — closest duration as final tiebreaker.
-    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false, aliasConfirmedCJK: Bool = false) -> (id: ID, albumMatched: Bool, durationDiff: Double)? {
+    private func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", disableCjkEscape: Bool = false, aliasConfirmedCJK: Bool = false, hasAlbumHint: Bool = false) -> (id: ID, albumMatched: Bool, durationDiff: Double)? {
         // Debug view: sorted purely by durationDiff so the log reads naturally.
         let sortedByDelta = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sortedByDelta.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' T=\($0.titleMatch) A=\($0.artistMatch) AL=\($0.albumMatch) L=\($0.normalizedNameLength) Δ\(String(format: "%.1f", $0.durationDiff))s" }
@@ -837,17 +1053,28 @@ public final class LyricsFetcher {
                 // is likely a localized display name ("My Baby" = 我的寶貝,
                 // "Deep" = 深深). Long titles (4+ words) are genuinely
                 // English even for CJK artists (Beatles covers, etc.).
-                if LanguageUtils.isLikelyEnglishTitle(inputTitle) {
+                let likelyJapaneseRomaji = LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
+                if LanguageUtils.isLikelyEnglishTitle(inputTitle) && !likelyJapaneseRomaji {
                     let wordCount = inputTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
                     if !(aliasConfirmedCJK && wordCount <= 3) { return false }
                 }
                 let resultTitleHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
+                if resultTitleHasCJK && candidate.albumMatch && aliasConfirmedCJK && candidate.durationDiff < 5.0 {
+                    return true
+                }
                 // Mastering differences between Apple Music and NetEase /
                 // QQ are routinely 0.3–0.8s, so we accept up to 1.0s here
                 // to catch Eman Lam — Xia Nie Piao Piao → 仙乐飘飘处处闻
                 // (Δ0.5s). The pure-ASCII guard above prevents same-artist
                 // CJK collisions from leaking through.
-                if resultTitleHasCJK && candidate.durationDiff < 1.0 { return true }
+                if resultTitleHasCJK && candidate.durationDiff < 1.0 {
+                    if hasAlbumHint && !candidate.albumMatch {
+                        let wordCount = inputTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
+                        let looksRomanized = wordCount >= 2 || LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
+                        guard looksRomanized || aliasConfirmedCJK else { return false }
+                    }
+                    return true
+                }
                 return false
             }),
         ]
@@ -1177,11 +1404,12 @@ public final class LyricsFetcher {
     private static func keywordPriority(_ desc: String) -> Int {
         if desc.hasPrefix("title+artist") { return 0 }
         if desc.hasPrefix("original") { return 1 }
-        if desc.hasPrefix("dual-") { return 2 }
-        if desc == "title only" { return 3 }
-        if desc.hasPrefix("title+album") { return 4 }
-        if desc.hasPrefix("alias+title") { return 5 }
-        if desc == "artist only" { return 6 }
+        if desc.hasPrefix("traditional") { return 2 }
+        if desc.hasPrefix("dual-") { return 3 }
+        if desc == "title only" { return 4 }
+        if desc.hasPrefix("title+album") { return 5 }
+        if desc.hasPrefix("alias+title") { return 6 }
+        if desc == "artist only" { return 7 }
         return 7
     }
 
@@ -1203,6 +1431,34 @@ public final class LyricsFetcher {
            params.simplifiedOriginalArtist != params.simplifiedArtist {
             keywords.append(("\(params.simplifiedOriginalTitle) \(params.simplifiedOriginalArtist)", "original"))
         }
+        let traditionalPairs = [
+            (
+                LanguageUtils.toTraditionalChinese(LanguageUtils.normalizeTrackName(params.rawTitle)),
+                LanguageUtils.toTraditionalChinese(params.rawArtist),
+                "traditional"
+            ),
+            (
+                LanguageUtils.toTraditionalChinese(LanguageUtils.normalizeTrackName(params.rawOriginalTitle)),
+                LanguageUtils.toTraditionalChinese(params.rawOriginalArtist),
+                "traditional-original"
+            )
+        ]
+        for (title, artist, label) in traditionalPairs where LanguageUtils.containsCJK(title + artist) {
+            let kw = "\(title) \(artist)"
+            if !keywords.contains(where: { $0.0 == kw }) {
+                keywords.append((kw, label))
+            }
+        }
+        if params.artistPairs.contains(where: { LanguageUtils.containsCJK($0.0) }) {
+            for raw in [params.rawTitle, params.rawOriginalTitle] {
+                guard let stem = japaneseRomanizedParticleStem(raw) else { continue }
+                let simplified = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(stem))
+                let kw = "\(simplified) \(params.simplifiedArtist)"
+                if !keywords.contains(where: { $0.0 == kw }) {
+                    keywords.append((kw, "romaji-stem+artist"))
+                }
+            }
+        }
         // 🔑 双标题拆分：每一半 + artist 作为独立搜索轮次
         for raw in [params.rawTitle, params.rawOriginalTitle] {
             if let halves = MetadataResolver.shared.splitDualTitle(raw) {
@@ -1215,14 +1471,15 @@ public final class LyricsFetcher {
                 }
             }
         }
-        // 🔑 Title-only keyword: when the title is CJK but the artist is
-        // pure ASCII (e.g., "每天愛你多一些" by "Jacky Cheung"), the combined
-        // "title+artist" query fails because NetEase/QQ don't recognize the
-        // English artist name. Searching by CJK title alone returns all
-        // versions; cross-script artist tolerance handles the matching.
+        // 🔑 Title-only keyword: CJK artist aliases are inconsistent across
+        // Apple Music, NetEase, and QQ in both directions (English artist
+        // tags for CJK input, native artist tags for romanized input). The
+        // candidate gate still requires title+artist evidence or a tight
+        // cross-script title+duration match, so this broadens discovery
+        // without accepting arbitrary same-title covers.
         let titleHasCJK = LanguageUtils.containsCJK(params.rawTitle)
         let artistIsASCII = LanguageUtils.isPureASCII(params.rawArtist)
-        if titleHasCJK && artistIsASCII {
+        if titleHasCJK {
             keywords.append((params.simplifiedTitle, "title only"))
         }
         // 🔑 Title+album keyword: album is the strongest narrowing signal when
@@ -1286,7 +1543,7 @@ public final class LyricsFetcher {
                             let candidates = self.buildCandidates(
                                 songs: songs, params: aliasParams, extractSong: extractSong
                             )
-                            if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3, aliasConfirmedCJK: true) {
+                            if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3, aliasConfirmedCJK: true, hasAlbumHint: !params.normalizedAlbum.isEmpty) {
                                 return (m.id, m.albumMatched, desc, m.durationDiff, Self.keywordPriority(desc))
                             }
                         } catch {
@@ -1308,7 +1565,7 @@ public final class LyricsFetcher {
                         let candidates = self.buildCandidates(
                             songs: songs, params: params, extractSong: extractSong
                         )
-                        if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3) {
+                        if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, disableCjkEscape: params.disableCjkEscapeInP3, hasAlbumHint: !params.normalizedAlbum.isEmpty) {
                             return (match.id, match.albumMatched, desc, match.durationDiff, Self.keywordPriority(desc))
                         }
                     } catch {
@@ -1339,6 +1596,17 @@ public final class LyricsFetcher {
         }
     }
 
+    private func japaneseRomanizedParticleStem(_ title: String) -> String? {
+        guard LanguageUtils.isPureASCII(title) else { return nil }
+        let particles: Set<String> = ["ga", "no", "ni", "wo", "wa", "na", "de", "to"]
+        let words = title.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+        guard let particleIndex = words.firstIndex(where: { particles.contains($0) }),
+              particleIndex > 0 else { return nil }
+        let stem = words[..<particleIndex].joined(separator: " ")
+        guard stem.count >= 4 else { return nil }
+        return stem
+    }
+
     /// 统一候选构建（消除 NetEase/QQ 各自的 buildXxxCandidates）
     private func buildCandidates<ID>(
         songs: [[String: Any]],
@@ -1357,6 +1625,14 @@ public final class LyricsFetcher {
             // entirely to prevent cross-script tolerance from accepting them.
             let coverMarkers = ["cover", "翻唱", "翻奏", "demo", "demo版", "试唱"]
             let liveMarkers = ["live", "現場", "现场", "live版", "演唱会"]
+            let localizedVersionMarkers = [
+                "japanese version", "japanese ver", "korean version", "korean ver",
+                "english version", "english ver", "chinese version", "chinese ver",
+                "mandarin version", "cantonese version",
+                "日文版", "日语版", "日本語バージョン",
+                "韩文版", "韓文版", "韩国语版", "韓国語バージョン",
+                "英文版", "英语版", "中文版", "国语版", "國語版", "粤语版", "粵語版"
+            ]
             let resultNameLower = s.name.lowercased()
             let inputHasCover = params.titlePairs.contains { pair in
                 coverMarkers.contains(where: { pair.0.lowercased().contains($0) })
@@ -1368,6 +1644,11 @@ public final class LyricsFetcher {
             }
             let resultHasLive = liveMarkers.contains(where: { resultNameLower.contains($0) })
             if resultHasLive && !inputHasLive { return nil }
+            let inputHasLocalizedVersion = params.titlePairs.contains { pair in
+                localizedVersionMarkers.contains(where: { pair.0.lowercased().contains($0) })
+            }
+            let resultHasLocalizedVersion = localizedVersionMarkers.contains(where: { resultNameLower.contains($0) })
+            if resultHasLocalizedVersion && !inputHasLocalizedVersion { return nil }
 
             let titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
             var artistMatch = params.artistPairs.contains { isArtistMatch(input: $0.0, result: s.artist, simplifiedInput: $0.1) }
@@ -1712,7 +1993,19 @@ public final class LyricsFetcher {
             // Accept either textual match OR pinyin-pinyin overlap.
             let titleOK = isTitleMatch(input: params.rawTitle, result: c.name, simplifiedInput: simplifiedInputTitle)
                 || isTitleMatch(input: params.rawOriginalTitle, result: c.name, simplifiedInput: params.simplifiedOriginalTitle)
-            return titleOK
+            if titleOK { return true }
+
+            // If the originally selected same-title/same-artist entry has no
+            // usable lyrics, try a tight same-artist CJK alternate for
+            // romanized input. This is the fallback equivalent of P3: it
+            // only runs after the best candidate failed content fetch, and it
+            // requires a very close duration match to avoid same-artist
+            // collisions.
+            let inputLooksRomanized = LanguageUtils.isPureASCII(params.rawTitle)
+                && (params.rawTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count >= 4
+                    || LanguageUtils.isLikelyRomanizedJapanese(params.rawTitle))
+                && !LanguageUtils.isLikelyEnglishTitle(params.rawTitle)
+            return inputLooksRomanized && LanguageUtils.containsCJK(c.name) && c.delta < 1.0
         }
         .sorted { $0.delta < $1.delta }
         DebugLogger.log("NetEase", "🔁 artist-disco fallback: \(cands.count) candidates within ±15s (by title match)")
@@ -2000,7 +2293,7 @@ public final class LyricsFetcher {
         do {
             let json = try await HTTPClient.getJSON(url: url, headers: [
                 "Accept": "application/json"
-            ], timeout: 6.0)
+            ], timeout: 10.0)
 
             guard let syncedLyrics = json["syncedLyrics"] as? String, !syncedLyrics.isEmpty else { return nil }
 
@@ -2017,7 +2310,7 @@ public final class LyricsFetcher {
         guard let url = HTTPClient.buildURL(base: "https://lrclib.net/api/search", queryItems: ["q": searchQuery]) else { return nil }
 
         do {
-            let (data, _) = try await HTTPClient.getData(url: url, headers: ["Accept": "application/json"], timeout: 6.0)
+            let (data, _) = try await HTTPClient.getData(url: url, headers: ["Accept": "application/json"], timeout: 10.0)
             guard let results = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !results.isEmpty else { return nil }
 
             var bestMatch: (lyrics: String, score: Double)?
@@ -2095,7 +2388,8 @@ public final class LyricsFetcher {
                 let hitArtist = r["artist_names"] as? String ?? ""
                 let titleOK = isTitleMatch(input: title, result: hitTitle, simplifiedInput: simplifiedTitle)
                 let artistOK = isArtistMatch(input: artist, result: hitArtist, simplifiedInput: simplifiedArtist)
-                if titleOK && artistOK { matchedPath = p; break }
+                let aliasArtistOK = titleOK && hasDistinctiveArtistTokenOverlap(artist, hitArtist)
+                if titleOK && (artistOK || aliasArtistOK) { matchedPath = p; break }
             }
             guard let path = matchedPath, let pageURL = URL(string: "https://genius.com\(path)") else { return nil }
 
@@ -2109,6 +2403,20 @@ public final class LyricsFetcher {
             let score = scorer.calculateScore(lyrics, source: "Genius", duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
             return LyricsFetchResult(lyrics: lyrics, source: "Genius", score: score, kind: .unsynced)
         } catch { return nil }
+    }
+
+    private func hasDistinctiveArtistTokenOverlap(_ lhs: String, _ rhs: String) -> Bool {
+        let stopwords: Set<String> = ["the", "and", "feat", "ft", "with", "dj"]
+        func tokens(_ value: String) -> Set<String> {
+            let normalized = LanguageUtils.normalizeUnicode(value).lowercased()
+            return Set(normalized.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter {
+                $0.count >= 4 && !stopwords.contains($0)
+            })
+        }
+        let left = tokens(lhs)
+        let right = tokens(rhs)
+        guard !left.isEmpty, !right.isEmpty else { return false }
+        return !left.intersection(right).isEmpty
     }
 
     // MARK: - Apple Music Catalog (MusicKit / MusicDataRequest)

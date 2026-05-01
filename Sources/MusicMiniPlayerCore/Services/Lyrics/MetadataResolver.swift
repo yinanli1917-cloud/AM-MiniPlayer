@@ -858,12 +858,15 @@ public final class MetadataResolver {
             } else if isArtistPreciseMatch && resultTitleHasCJK && durationDiff < 0.5 {
                 DebugLogger.log("MetadataResolver", "[\(region)] 候选(artist+CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                 artistCJKCandidates.append((trackName, artistName, durationDiff))
-            } else if LanguageUtils.isPureASCII(title) && LanguageUtils.isPureASCII(artist) && durationDiff < 1 {
+            } else if LanguageUtils.isPureASCII(title) && durationDiff < 1 {
                 // 🔑 romanized→CJK：结果标题必须是 CJK（不能 ASCII→ASCII 替换）
                 // 🔑 艺术家校验：与 CN P3 同规则 — 同脚本（都是 ASCII）必须匹配
                 let resultArtistIsASCII = LanguageUtils.isPureASCII(artistName)
                 let artistBlocked = resultArtistIsASCII && !artistMatch
-                if resultTitleHasCJK && !artistBlocked {
+                let titleLooksJapanese = LanguageUtils.isPureASCII(artist)
+                    || LanguageUtils.isLikelyRomanizedJapanese(title)
+                    || (LanguageUtils.containsCJK(artist) && hasJapaneseRomanizationParticle(title))
+                if titleLooksJapanese && resultTitleHasCJK && !artistBlocked {
                     DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                     romanizedCandidates.append((trackName, artistName, durationDiff))
                 }
@@ -871,6 +874,12 @@ public final class MetadataResolver {
         }
 
         return (titleCandidates, artistCJKCandidates, romanizedCandidates)
+    }
+
+    private func hasJapaneseRomanizationParticle(_ title: String) -> Bool {
+        let particles: Set<String> = ["ga", "no", "ni", "wo", "wa", "na", "de", "to"]
+        let words = title.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+        return words.contains { particles.contains($0) }
     }
 
     /// 区域候选选择 — titleMatch > artist+CJK(唯一) > romanized→CJK(安全)

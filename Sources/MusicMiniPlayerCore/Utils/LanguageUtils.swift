@@ -220,23 +220,34 @@ public enum LanguageUtils {
     // MARK: - Romaji Heuristic
 
     /// Detect whether an ASCII title is likely Japanese romaji (and therefore
-    /// needs romanized→CJK resolution). Signal: contains at least one common
-    /// Japanese particle as a standalone word. This distinguishes real
-    /// romanized Japanese titles (e.g., "Dream Boat ga Deru Yoru ni",
-    /// "Koibitotachi no Chiheisen", "Mayonaka No Shujinkou") from ordinary
-    /// English titles (e.g., "Invisible", "Deep", "Dinner") so the Branch-2
-    /// speculative resolver can safely accept CJK aliases for the former
-    /// while rejecting same-artist collisions for the latter.
+    /// needs romanized→CJK resolution). Strong particles like "ga" / "ni"
+    /// are decisive; weak particles like "no" / "to" need another long,
+    /// non-English-looking romaji token so ordinary English titles do not
+    /// trigger the CJK escape.
     public static func isLikelyRomanizedJapanese(_ text: String) -> Bool {
         guard isPureASCII(text) else { return false }
         let lowered = text.lowercased()
         let words = lowered.split(whereSeparator: { !$0.isLetter }).map(String.init)
         guard !words.isEmpty else { return false }
-        let particles: Set<String> = [
-            "no", "ga", "wo", "ni", "to", "wa", "mo", "de",
-            "kara", "made", "nara", "deshita", "desu", "masu"
+        let strongParticles: Set<String> = [
+            "ga", "wo", "ni", "wa", "mo", "kara", "made",
+            "nara", "deshita", "desu", "masu"
         ]
-        return words.contains { particles.contains($0) }
+        if words.contains(where: { strongParticles.contains($0) }) { return true }
+
+        let weakParticles: Set<String> = ["no", "to", "de"]
+        guard words.contains(where: { weakParticles.contains($0) }) else { return false }
+
+        return words.contains { word in
+            guard word.count >= 5,
+                  !weakParticles.contains(word),
+                  !strongParticles.contains(word),
+                  !englishFunctionWords.contains(word),
+                  !englishMorphologySuffixes.contains(where: { word.hasSuffix($0) }),
+                  !englishMorphologyPrefixes.contains(where: { word.hasPrefix($0) && word.count >= $0.count + 3 })
+            else { return false }
+            return !hasEnglishConsonantCluster(word)
+        }
     }
 
     // MARK: - Region Inference
@@ -340,7 +351,7 @@ public extension LanguageUtils {
 
     /// 规范化歌曲标题（移除版本标注、feat 等）
     static func normalizeTrackName(_ name: String) -> String {
-        var normalized = name.lowercased()
+        var normalized = normalizeUnicode(name).lowercased()
         for regex in trackNameRegexes {
             normalized = regex.stringByReplacingMatches(
                 in: normalized,
