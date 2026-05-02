@@ -200,6 +200,10 @@ public class MusicController: ObservableObject {
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
     private let userActionLockDuration: TimeInterval = 1.5
+    private static var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.processName.contains("xctest")
+    }
 
     // 防止 AppleScript 轮询重叠
     private var lastUpdateTime: Date = .distantPast
@@ -212,7 +216,7 @@ public class MusicController: ObservableObject {
     public init(preview: Bool = false) {
         debugPrint("🎬 [MusicController] init() called with preview=\(preview)\n")
         self.isPreview = preview
-        if preview {
+        if preview || Self.isRunningUnitTests {
             setupPreviewData()
             return
         }

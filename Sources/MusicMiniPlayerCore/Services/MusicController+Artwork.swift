@@ -70,6 +70,17 @@ extension MusicController {
         return persistentID as NSString
     }
 
+    /// Secondary cache key for the notification path, before ScriptingBridge
+    /// backfills persistentID. This restores instant artwork on rapid switching
+    /// without weakening the persistentID cache used once Music.app responds.
+    func artworkMetadataCacheKey(title: String, artist: String, album: String) -> NSString? {
+        let t = Self.normalizeForArtworkMatching(title)
+        let a = Self.normalizeForArtworkMatching(artist)
+        let al = Self.normalizeForArtworkMatching(album)
+        guard !t.isEmpty, !a.isEmpty else { return nil }
+        return "meta:\(t)|\(a)|\(al)" as NSString
+    }
+
     /// 判断封面回调是否仍对应当前播放曲目
     /// persistentID 非空时用 ID 比对；电台等无 ID 场景用 title 比对
     func isStillCurrentTrack(persistentID: String, title: String) -> Bool {
@@ -95,6 +106,12 @@ extension MusicController {
             self.setArtwork(cached)
             return
         }
+        let metadataKey = artworkMetadataCacheKey(title: title, artist: artist, album: album)
+        if let key = metadataKey, let cached = artworkCache.object(forKey: key) {
+            logToFile("🎨 Metadata cache HIT (\(key))")
+            self.setArtwork(cached)
+            return
+        }
 
         logToFile("🎨 Cache MISS, starting concurrent fetch (SB + API in parallel)...")
 
@@ -108,7 +125,7 @@ extension MusicController {
                 self.logToFile("🎨 [API] SUCCESS! Got image \(image.size)")
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
-                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, generation: generation, source: .api)
+                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .api)
                 }
             } else {
                 guard !Task.isCancelled else { return }
@@ -159,7 +176,7 @@ extension MusicController {
                 self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
                 DispatchQueue.main.async {
                     guard self.artworkFetchGeneration == generation else { return }
-                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, generation: generation, source: .sb)
+                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .sb)
                 }
             }
         }
@@ -206,33 +223,56 @@ extension MusicController {
         return await withTaskGroup(of: (NSImage, ArtworkTrust)?.self) { group in
             if MusicAuthorization.currentStatus == .authorized {
                 group.addTask {
-                    if let img = await self.fetchArtworkViaMusicKit(title: title, artist: artist, album: album) { return (img, .apple) }
+                    if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
+                        await self.fetchArtworkViaMusicKit(title: title, artist: artist, album: album)
+                    }) { return (img, .apple) }
                     return nil
                 }
             }
             group.addTask {
-                if let img = await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album) { return (img, .apple) }
+                if let img = await self.withArtworkTimeout(seconds: 1.4, operation: {
+                    await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
+                }) { return (img, .apple) }
                 return nil
             }
             group.addTask {
-                if let img = await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album) { return (img, .web) }
+                if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
+                    await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album)
+                }) { return (img, .web) }
                 return nil
             }
             group.addTask {
-                if let img = await self.fetchArtworkViaDeezer(title: title, artist: artist) { return (img, .web) }
+                if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
+                    await self.fetchArtworkViaDeezer(title: title, artist: artist)
+                }) { return (img, .web) }
                 return nil
             }
 
-            var bestResult: (NSImage, ArtworkTrust)?
             for await result in group {
                 guard let r = result else { continue }
-                if r.1 == .apple {
-                    group.cancelAll()
-                    return r.0
-                }
-                if bestResult == nil { bestResult = r }
+                group.cancelAll()
+                return r.0
             }
-            return bestResult?.0
+            return nil
+        }
+    }
+
+    private func withArtworkTimeout(
+        seconds: TimeInterval,
+        operation: @escaping @Sendable () async -> NSImage?
+    ) async -> NSImage? {
+        await withCheckedContinuation { continuation in
+            let box = ArtworkContinuationBox(continuation)
+            let worker = Task { await operation() }
+            Task {
+                let value = await worker.value
+                box.resume(value)
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                worker.cancel()
+                box.resume(nil)
+            }
         }
     }
 
@@ -335,7 +375,7 @@ extension MusicController {
             // NetEase param `?param=300y300` requests a 300×300 crop — same size as our
             // other API sources, keeps cache cost predictable.
             let sizedURL = URL(string: picURL.absoluteString + "?param=300y300") ?? picURL
-            let (imageData, _) = try await URLSession.shared.data(from: sizedURL)
+            let (imageData, _) = try await HTTPClient.getData(url: sizedURL, timeout: 1.0, retry: false)
             DebugLogger.log("Artwork", "🎨 [NetEase] 命中: '\(best["name"] ?? "?")' al='\((best["al"] as? [String: Any])?["name"] ?? "?")'")
             return NSImage(data: imageData)
         } catch {
@@ -352,7 +392,7 @@ extension MusicController {
         }
 
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await HTTPClient.getData(url: url, timeout: 1.0, retry: false)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = json["data"] as? [[String: Any]],
                   !results.isEmpty else {
@@ -376,7 +416,7 @@ extension MusicController {
                 return nil
             }
 
-            let (imageData, _) = try await URLSession.shared.data(from: imageUrl)
+            let (imageData, _) = try await HTTPClient.getData(url: imageUrl, timeout: 1.0, retry: false)
             DebugLogger.log("Artwork", "🎨 [Deezer] 命中: '\(match["title"] ?? "?")' by '\((match["artist"] as? [String: Any])?["name"] ?? "?")'")
             return NSImage(data: imageData)
         } catch {
@@ -409,7 +449,7 @@ extension MusicController {
                let artwork = song.artwork,
                let url = artwork.url(width: 300, height: 300) {
                 DebugLogger.log("Artwork", "🎨 [MusicKit] 命中: '\(song.title)' album='\(song.albumTitle ?? "nil")' (目标album='\(album)')")
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await HTTPClient.getData(url: url, timeout: 1.0, retry: false)
                 return NSImage(data: data)
             }
         } catch {
@@ -437,7 +477,7 @@ extension MusicController {
             }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await HTTPClient.getData(url: url, headers: [:], timeout: 1.0, retry: false)
 
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let results = json["results"] as? [[String: Any]],
@@ -460,7 +500,7 @@ extension MusicController {
                        let artworkUrlString = match["artworkUrl100"] as? String {
                         let highResUrl = artworkUrlString.replacingOccurrences(of: "100x100", with: "300x300")
                         if let artworkUrl = URL(string: highResUrl),
-                           let (imageData, _) = try? await URLSession.shared.data(from: artworkUrl) {
+                           let (imageData, _) = try? await HTTPClient.getData(url: artworkUrl, timeout: 1.0, retry: false) {
                             let matchAlbum = (match["collectionName"] as? String) ?? "nil"
                             DebugLogger.log("Artwork", "🎨 [iTunes API] 命中: album='\(matchAlbum)' (目标='\(album)') via '\(searchTerm)'")
                             return NSImage(data: imageData)
@@ -489,7 +529,7 @@ extension MusicController {
     /// 🔑 SB 是权威源（与 Apple Music 显示一致）— 一旦 SB 应用，API 不可覆盖。
     /// API 仅在 SB 尚未返回时作为临时显示。SB 到达后自动覆盖 API 结果。
     @MainActor
-    func applyArtworkIfCurrent(_ image: NSImage, persistentID: String, title: String, generation: Int, source: ArtworkSource) {
+    func applyArtworkIfCurrent(_ image: NSImage, persistentID: String, title: String, artist: String, album: String, generation: Int, source: ArtworkSource) {
         guard isStillCurrentTrack(persistentID: persistentID, title: title) else { return }
         guard artworkFetchGeneration == generation else { return }
 
@@ -505,6 +545,9 @@ extension MusicController {
         // 🔑 Unified cache key: persistentID for library tracks, "radio:title|artist" for streams.
         // Radio tracks previously never cached (empty persistentID) — every switch paid network.
         if let key = artworkCacheKey(persistentID: persistentID, title: title, artist: currentArtist) {
+            artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
+        }
+        if let key = artworkMetadataCacheKey(title: title, artist: artist, album: album) {
             artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
         }
     }
@@ -525,7 +568,7 @@ extension MusicController {
         debugPrint("🔄 [retryArtworkFetch] Retrying API for \(title)...\n")
 
         if let image = await fetchMusicKitArtwork(title: title, artist: artist, album: album) {
-            await applyArtworkIfCurrent(image, persistentID: persistentID, title: title, generation: generation, source: .api)
+            await applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .api)
             debugPrint("✅ [retryArtworkFetch] API retry success\n")
         } else {
             debugPrint("⚠️ [retryArtworkFetch] API retry failed for \(title)\n")
@@ -650,5 +693,23 @@ extension MusicController {
         }
         image.unlockFocus()
         return image
+    }
+}
+
+private final class ArtworkContinuationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+    private let continuation: CheckedContinuation<NSImage?, Never>
+
+    init(_ continuation: CheckedContinuation<NSImage?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: NSImage?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didResume else { return }
+        didResume = true
+        continuation.resume(returning: value)
     }
 }
