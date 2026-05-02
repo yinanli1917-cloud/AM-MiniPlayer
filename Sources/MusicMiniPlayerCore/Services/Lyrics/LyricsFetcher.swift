@@ -515,7 +515,30 @@ public final class LyricsFetcher {
             }
         }
 
-        guard let selected = selectBestResult(from: results, songDuration: duration),
+        var selected = selectBestResult(from: results, songDuration: duration)
+
+        if selected == nil {
+            DebugLogger.log("🧭 Authoritative lyrics backfill secondary LRCLIB probe")
+            if let lrclibSearch = await fetchFromLRCLIBSearch(
+                title: cleanTitle,
+                artist: cleanArtist,
+                duration: duration,
+                translationEnabled: translationEnabled
+            ) {
+                results.append(lrclibSearch)
+            }
+            if let lrclibExact = await fetchFromLRCLIB(
+                title: cleanTitle,
+                artist: cleanArtist,
+                duration: duration,
+                translationEnabled: translationEnabled
+            ) {
+                results.append(lrclibExact)
+            }
+            selected = selectBestResult(from: results, songDuration: duration)
+        }
+
+        guard let selected,
               selected.kind == .synced,
               !selected.lyrics.isEmpty else {
             DebugLogger.log("🧭 Authoritative lyrics backfill MISS in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")

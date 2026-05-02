@@ -579,10 +579,12 @@ extension LyricsFetcher {
     // MARK: - LRCLIB
 
     func fetchFromLRCLIB(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        DebugLogger.log("LRCLIB", "🔍 /get '\(title)' by '\(artist)' (\(Int(duration))s)")
         let normalizedTitle = LanguageUtils.normalizeTrackName(title)
         let normalizedArtist = LanguageUtils.normalizeArtistName(artist)
 
         if let cached = lyricsDiskCache.get(title: title, artist: artist, duration: duration),
+           cached.source == "LRCLIB",
            let cachedLines = cached.lines {
             let lyrics = LyricsDiskCache.lyricLines(from: cachedLines)
             if !lyrics.isEmpty {
@@ -608,7 +610,10 @@ extension LyricsFetcher {
         do {
             let json = try await HTTPClient.getJSON(url: url, headers: headers, timeout: 5.0, retry: false)
 
-            guard let syncedLyrics = json["syncedLyrics"] as? String, !syncedLyrics.isEmpty else { return nil }
+            guard let syncedLyrics = json["syncedLyrics"] as? String, !syncedLyrics.isEmpty else {
+                DebugLogger.log("LRCLIB", "❌ /get no synced lyrics for '\(title)' by '\(artist)'")
+                return nil
+            }
             let resultTitle = json["trackName"] as? String ?? normalizedTitle
             let resultArtist = json["artistName"] as? String ?? normalizedArtist
             let resultDuration = Self.jsonDouble(json["duration"]) ?? duration
@@ -616,7 +621,10 @@ extension LyricsFetcher {
                 targetTitle: title, targetArtist: artist, targetDuration: duration,
                 actualTitle: resultTitle, actualArtist: resultArtist, actualDuration: resultDuration
             )
-            guard matchResult.isAcceptable else { return nil }
+            guard matchResult.isAcceptable else {
+                DebugLogger.log("LRCLIB", "❌ /get rejected '\(resultTitle)' by '\(resultArtist)' Δ\(String(format: "%.1f", matchResult.durationDiff)) score=\(String(format: "%.1f", matchResult.score))")
+                return nil
+            }
 
             let lyrics = parser.parseLRC(syncedLyrics)
             let score = scorer.calculateScore(lyrics, source: "LRCLIB", duration: duration, translationEnabled: translationEnabled)
@@ -629,12 +637,15 @@ extension LyricsFetcher {
                 matchedDurationDiff: matchResult.durationDiff
             )
         } catch {
+            DebugLogger.log("LRCLIB", "❌ /get error for '\(title)' by '\(artist)': \(error)")
             return nil
         }
     }
 
     func fetchFromLRCLIBSearch(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        DebugLogger.log("LRCLIB", "🔍 /search '\(title)' by '\(artist)' (\(Int(duration))s)")
         if let cached = lyricsDiskCache.get(title: title, artist: artist, duration: duration),
+           cached.source == "LRCLIB-Search",
            let cachedLines = cached.lines {
             let lyrics = LyricsDiskCache.lyricLines(from: cachedLines)
             if !lyrics.isEmpty {
@@ -672,7 +683,10 @@ extension LyricsFetcher {
                 }
             }
 
-            guard !results.isEmpty else { return nil }
+            guard !results.isEmpty else {
+                DebugLogger.log("LRCLIB", "❌ /search empty for '\(title)' by '\(artist)'")
+                return nil
+            }
 
             var bestMatch: (lyrics: String, score: Double, titleMatched: Bool, durationDiff: Double)?
 
@@ -693,7 +707,10 @@ extension LyricsFetcher {
                 }
             }
 
-            guard let match = bestMatch else { return nil }
+            guard let match = bestMatch else {
+                DebugLogger.log("LRCLIB", "❌ /search no acceptable synced match for '\(title)' by '\(artist)' (\(results.count) rows)")
+                return nil
+            }
 
             let lyrics = parser.parseLRC(match.lyrics)
             let score = scorer.calculateScore(lyrics, source: "LRCLIB-Search", duration: duration, translationEnabled: translationEnabled)
@@ -706,6 +723,7 @@ extension LyricsFetcher {
                 matchedDurationDiff: match.durationDiff
             )
         } catch {
+            DebugLogger.log("LRCLIB", "❌ /search error for '\(title)' by '\(artist)': \(error)")
             return nil
         }
     }

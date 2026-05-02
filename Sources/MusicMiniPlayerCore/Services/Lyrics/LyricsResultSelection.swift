@@ -58,11 +58,17 @@ extension LyricsFetcher {
             if hasWordLevelSync($0) && $0.score > 0 { return true }
             switch $0.source {
             case "LRCLIB-Search":
-                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 2.0 } ?? false) {
+                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
+                    return $0.score >= 20
+                }
+                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 3.0 } ?? false) {
                     return $0.score >= 45
                 }
                 return $0.score >= 50
             case "LRCLIB":
+                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
+                    return $0.score >= 20
+                }
                 return $0.score >= 45
             default:
                 if $0.titleMatched,
@@ -433,6 +439,17 @@ extension LyricsFetcher {
             let valid = pool.filter { scorer.analyzeQuality($0.lyrics).isValid }
             let workingPool = valid.isEmpty ? pool : valid
             guard let top = workingPool.first else { return nil }
+
+            if top.score < 30,
+               let exactLRCLIB = workingPool.first(where: {
+                   ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") &&
+                   $0.titleMatched &&
+                   ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) &&
+                   $0.score >= 20
+               }) {
+                DebugLogger.log("🏆 Exact LRCLIB preferred over low-score source: \(exactLRCLIB.source) (\(String(format: "%.1f", exactLRCLIB.score))) over \(top.source) (\(String(format: "%.1f", top.score)))")
+                return exactLRCLIB
+            }
 
             // Direct title evidence beats a small score lead from a loose
             // cross-script duration escape.
