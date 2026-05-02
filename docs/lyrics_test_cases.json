@@ -643,5 +643,96 @@
       "expectedClassification": "synced",
       "maxTailGapS": 55
     }
+  },
+  {
+    "id": "X10_no_static_love_is_free",
+    "title": "Love Is Free",
+    "artist": "Brenton Wood",
+    "duration": 153,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X11_no_static_fresh_trip",
+    "title": "Fresh Trip",
+    "artist": "CinCin Lee",
+    "duration": 178,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X12_no_static_oceanside_cafe",
+    "title": "Oceanside Café",
+    "artist": "CinCin Lee",
+    "duration": 212,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X13_no_static_tangerine_bossa",
+    "title": "Tangerine Bossa",
+    "artist": "Don Tung",
+    "duration": 180,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X14_no_static_yuen_waat",
+    "title": "圓滑",
+    "artist": "Ellen & The Ripples Band",
+    "duration": 254,
+    "album": "Riding On Faith",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X15_no_static_gentle_wave",
+    "title": "Gentle Wave",
+    "artist": "Jiro Inagaki and His Soul Media",
+    "duration": 220,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X16_no_static_invisible",
+    "title": "Invisible",
+    "artist": "mei ehara",
+    "duration": 250,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X17_no_static_lisbon_antigua",
+    "title": "Lisbon Antigua",
+    "artist": "Nelson Riddle",
+    "duration": 150,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X18_no_static_with_you",
+    "title": "With You",
+    "artist": "Tennyson",
+    "duration": 222,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
   }
 ]

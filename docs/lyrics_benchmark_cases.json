@@ -1128,9 +1128,10 @@
     "expectedLyricsLang": "Portuguese",
     "expectSourceTranslation": false,
     "expectation": {
-      "shouldFindLyrics": false,
-      "acceptableSources": null,
-      "firstLineContains": null
+      "shouldFindLyrics": true,
+      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
+      "firstLineContains": "Andar com fé",
+      "expectedClassification": "synced"
     }
   },
   {
