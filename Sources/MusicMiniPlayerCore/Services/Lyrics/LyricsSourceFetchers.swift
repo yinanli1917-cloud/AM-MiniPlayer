@@ -234,7 +234,7 @@ extension LyricsFetcher {
         let headers = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                        "Referer": "https://music.163.com"]
 
-        guard let match: SelectedSearchCandidate<Int> = await searchAndSelectCandidate(
+        let match: SelectedSearchCandidate<Int>? = await searchAndSelectCandidate(
             params: params, source: "NetEase",
             fetchSongs: { keyword in
                 guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
@@ -256,24 +256,24 @@ extension LyricsFetcher {
                 if let album = song["album"] as? [String: Any], let n = album["name"] as? String { albumName = n }
                 return (id, name, artist, dur, albumName)
             }
-        ) else {
-            DebugLogger.log("NetEase", "❌ 未找到歌曲")
-            return nil
-        }
-        let songId = match.id
+        )
 
-        DebugLogger.log("NetEase", "✅ 找到 songId=\(songId) albumMatch=\(match.albumMatched)")
         var primaryResult: LyricsFetchResult?
-        if let result = await fetchNetEaseLyrics(songId: songId, duration: duration, expectedTitle: match.title, expectedArtist: match.artist) {
-            let lyrics = result.lyrics
-            let kind = result.kind
-            let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
-            let fetched = LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind, albumMatched: match.albumMatched, titleMatched: match.titleMatched, matchedDurationDiff: match.durationDiff)
-            if score >= 35 || result.kind == .synced && result.lyrics.contains(where: { $0.hasSyllableSync }) {
-                return fetched
+        if let match {
+            DebugLogger.log("NetEase", "✅ 找到 songId=\(match.id) albumMatch=\(match.albumMatched)")
+            if let result = await fetchNetEaseLyrics(songId: match.id, duration: duration, expectedTitle: match.title, expectedArtist: match.artist) {
+                let lyrics = result.lyrics
+                let kind = result.kind
+                let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
+                let fetched = LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind, albumMatched: match.albumMatched, titleMatched: match.titleMatched, matchedDurationDiff: match.durationDiff)
+                if score >= 35 || result.kind == .synced && result.lyrics.contains(where: { $0.hasSyllableSync }) {
+                    return fetched
+                }
+                primaryResult = fetched
+                DebugLogger.log("NetEase", "⚠️ Primary lyrics low quality (score=\(String(format: "%.1f", score))) — probing sibling catalog rows")
             }
-            primaryResult = fetched
-            DebugLogger.log("NetEase", "⚠️ Primary lyrics low quality (score=\(String(format: "%.1f", score))) — probing sibling catalog rows")
+        } else {
+            DebugLogger.log("NetEase", "❌ 未找到歌曲 — trying artist-discography fallback")
         }
         DebugLogger.log("NetEase", "❌ 获取歌词失败/低质 — trying artist-discography fallback")
         // 🔑 Empty-lyrics fallback
@@ -291,9 +291,10 @@ extension LyricsFetcher {
         let simplifiedInputTitle = params.simplifiedTitle
         struct Cand { let id: Int; let name: String; let artist: String; let dur: Double; let delta: Double; let titleMatched: Bool; let sourceTitleAlias: Bool }
         let cands: [Cand] = songs.compactMap { s in
-            guard let id = s["id"] as? Int, id != songId,
+            guard let id = s["id"] as? Int,
                   let name = s["name"] as? String,
                   let dur = (s["duration"] as? Double).map({ $0 / 1000.0 }) else { return nil }
+            if let primaryId = match?.id, id == primaryId { return nil }
             let artistName = ((s["artists"] as? [[String: Any]])?.first?["name"] as? String) ?? cjkArtistForFallback
             let delta = abs(dur - duration)
             guard delta < 20.0 else { return nil }

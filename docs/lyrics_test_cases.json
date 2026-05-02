@@ -498,6 +498,22 @@
     }
   },
   {
+    "id": "H27",
+    "title": "Adolescence",
+    "artist": "Momoko Kikuchi",
+    "duration": 276,
+    "album": "Sotsugyoukinen, Vol. 2",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "Endless",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 5,
+      "firstLineStartMaxS": 15,
+      "maxTailGapS": 20
+    }
+  },
+  {
     "id": "X01_same_artist_cjk_collision",
     "title": "SUNDAY BRUNCH",
     "artist": "Kanako Wada",

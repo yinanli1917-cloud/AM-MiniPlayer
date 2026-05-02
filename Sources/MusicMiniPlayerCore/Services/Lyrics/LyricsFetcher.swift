@@ -476,17 +476,17 @@ public final class LyricsFetcher {
         var results: [LyricsFetchResult] = []
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 5.2) {
+                await self.withHardSourceTimeout(seconds: 3.2) {
                     await self.fetchFromLRCLIB(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
                 }
             }
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 5.2) {
+                await self.withHardSourceTimeout(seconds: 3.2) {
                     await self.fetchFromLRCLIBSearch(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
                 }
             }
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 4.0) {
+                await self.withHardSourceTimeout(seconds: 3.2) {
                     await self.fetchFromNetEase(title: cleanTitle, artist: cleanArtist,
                                                 originalTitle: cleanTitle, originalArtist: cleanArtist,
                                                 duration: duration, translationEnabled: translationEnabled,
@@ -494,7 +494,7 @@ public final class LyricsFetcher {
                 }
             }
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 4.0) {
+                await self.withHardSourceTimeout(seconds: 3.2) {
                     await self.fetchFromQQMusic(title: cleanTitle, artist: cleanArtist,
                                                 originalTitle: cleanTitle, originalArtist: cleanArtist,
                                                 duration: duration, translationEnabled: translationEnabled,
@@ -519,21 +519,32 @@ public final class LyricsFetcher {
 
         if selected == nil {
             DebugLogger.log("🧭 Authoritative lyrics backfill secondary LRCLIB probe")
-            if let lrclibSearch = await fetchFromLRCLIBSearch(
-                title: cleanTitle,
-                artist: cleanArtist,
-                duration: duration,
-                translationEnabled: translationEnabled
-            ) {
-                results.append(lrclibSearch)
-            }
-            if let lrclibExact = await fetchFromLRCLIB(
-                title: cleanTitle,
-                artist: cleanArtist,
-                duration: duration,
-                translationEnabled: translationEnabled
-            ) {
-                results.append(lrclibExact)
+            await withTaskGroup(of: LyricsFetchResult?.self) { group in
+                group.addTask {
+                    await self.withHardSourceTimeout(seconds: 2.0) {
+                        await self.fetchFromLRCLIBSearch(
+                            title: cleanTitle,
+                            artist: cleanArtist,
+                            duration: duration,
+                            translationEnabled: translationEnabled
+                        )
+                    }
+                }
+                group.addTask {
+                    await self.withHardSourceTimeout(seconds: 2.0) {
+                        await self.fetchFromLRCLIB(
+                            title: cleanTitle,
+                            artist: cleanArtist,
+                            duration: duration,
+                            translationEnabled: translationEnabled
+                        )
+                    }
+                }
+
+                for await result in group {
+                    guard let result else { continue }
+                    results.append(result)
+                }
             }
             selected = selectBestResult(from: results, songDuration: duration)
         }
