@@ -24,6 +24,7 @@ struct TestExpectation: Codable {
     let allowMissingLyrics: Bool?
     let acceptableSources: [String]?
     let firstLineContains: String?
+    let firstLineSHA256: String?
     let expectedClassification: String?
     let firstLineStartMinS: Double?
     let firstLineStartMaxS: Double?

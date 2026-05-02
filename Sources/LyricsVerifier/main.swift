@@ -349,7 +349,8 @@ private func runBenchmark(args: [String]) async {
             id: bc.id, title: bc.title,
             artist: bc.artist, duration: bc.duration,
             expectation: bc.expectation,
-            translationEnabled: true
+            translationEnabled: true,
+            enforceExpectationIdentityOracle: false
         )
 
         // 2. 增强验证

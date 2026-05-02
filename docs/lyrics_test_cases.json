@@ -95,7 +95,8 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ", "Genius"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "55a4360b4178239d71800a69a77d48edbd285a9214aa3a82fe9ae5df59a17d76"
     }
   },
   {
@@ -273,7 +274,8 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "dff78bf5b4f25fcf57a840c39dff83fe435e2d61ed4f8507d65bf5b30a160035"
     }
   },
   {
@@ -361,7 +363,8 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b"
     }
   },
   {
@@ -394,7 +397,11 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineSHA256": "98ca0a709ba49e04c44f02286157ac659690259a0323b44780d0117d3c173021",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 30,
+      "firstLineStartMaxS": 45,
+      "maxTailGapS": 65
     }
   },
   {
@@ -416,7 +423,8 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "f37c18927527486594fdf713158a159a024c69dce971c967c86310fe4c105a53"
     }
   },
   {
@@ -472,7 +480,8 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "bc63f148c829c85abf0ed7dba376623325abe58cc93c7411237b288a8097844e"
     }
   },
   {
@@ -615,7 +624,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": "Every time",
+      "firstLineSHA256": "7716b4658b3db6499bf2be1088a6de5a49132cc44cae3ae19a04715aa7e4f71d",
       "expectedClassification": "synced",
       "maxTailGapS": 225
     }

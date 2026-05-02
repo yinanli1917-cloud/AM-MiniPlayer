@@ -6,6 +6,7 @@
 
 import Foundation
 import MusicMiniPlayerCore
+import CryptoKit
 
 // =========================================================================
 // MARK: - 结果模型（Codable → JSONL 输出）
@@ -23,6 +24,7 @@ struct VerifyResult: Codable {
     let hasTranslation: Bool
     let hasSyllableSync: Bool
     let firstRealLine: String?
+    let firstRealLineSHA256: String?
     let elapsedMs: Int
     let failures: [String]
     let warnings: [String]   // 内容验证警告（疑似错配、语言不一致等）
@@ -55,7 +57,8 @@ func testSongWithLyrics(
     duration: TimeInterval,
     expectation: TestExpectation?,
     translationEnabled: Bool = false,
-    album: String = ""
+    album: String = "",
+    enforceExpectationIdentityOracle: Bool = true
 ) async -> (result: VerifyResult, lyrics: [LyricLine]) {
     let start = CFAbsoluteTimeGetCurrent()
     let fetcher = LyricsFetcher.shared
@@ -129,8 +132,10 @@ func testSongWithLyrics(
         lyrics: lyrics,
         classification: classificationString,
         elapsedMs: elapsed,
+        duration: duration,
         selectedResult: selectedResult,
-        allResults: fetchResults
+        allResults: fetchResults,
+        enforceExpectationIdentityOracle: enforceExpectationIdentityOracle
     ))
 
     // Validate on raw lyrics to detect overshoot before rescaling
@@ -181,6 +186,7 @@ func testSongWithLyrics(
         hasTranslation: lyrics.contains { $0.hasTranslation },
         hasSyllableSync: lyrics.contains { $0.hasSyllableSync },
         firstRealLine: firstReal?.text,
+        firstRealLineSHA256: firstReal.map { normalizedFirstLineSHA256($0.text) },
         elapsedMs: elapsed,
         failures: failures,
         warnings: warnings,
@@ -203,13 +209,15 @@ func testSong(
     duration: TimeInterval,
     expectation: TestExpectation?,
     translationEnabled: Bool = false,
-    album: String = ""
+    album: String = "",
+    enforceExpectationIdentityOracle: Bool = true
 ) async -> VerifyResult {
     await testSongWithLyrics(
         id: id, title: title, artist: artist,
         duration: duration, expectation: expectation,
         translationEnabled: translationEnabled,
-        album: album
+        album: album,
+        enforceExpectationIdentityOracle: enforceExpectationIdentityOracle
     ).result
 }
 
@@ -252,6 +260,16 @@ private func checkExpectation(
                 failures.append("首行 \"\(line.text)\" 不包含 \"\(keyword)\"")
             }
         }
+        if let expectedHash = exp.firstLineSHA256 {
+            guard let line = firstReal else {
+                failures.append("没有可验证的首行，无法匹配首行哈希")
+                return failures
+            }
+            let actualHash = normalizedFirstLineSHA256(line.text)
+            if actualHash != expectedHash.lowercased() {
+                failures.append("首行哈希不匹配: \(actualHash.prefix(12)) != \(expectedHash.prefix(12))")
+            }
+        }
         if let expected = exp.expectedClassification,
            classification != expected {
             failures.append("分类 \(classification) != 期望 \(expected)")
@@ -292,8 +310,10 @@ private func validateLiveLyricsContract(
     lyrics: [LyricLine],
     classification: String,
     elapsedMs: Int,
+    duration: TimeInterval,
     selectedResult: LyricsFetcher.LyricsFetchResult?,
-    allResults: [LyricsFetcher.LyricsFetchResult]
+    allResults: [LyricsFetcher.LyricsFetchResult],
+    enforceExpectationIdentityOracle: Bool
 ) -> [String] {
     var failures: [String] = []
 
@@ -337,10 +357,22 @@ private func validateLiveLyricsContract(
         failures.append("非 word-level 同步歌词置信度 \(String(format: "%.1f", selected.score)) 分低于 30")
     }
 
+    if let expectation,
+       expectation.shouldFindLyrics,
+       enforceExpectationIdentityOracle,
+       expectation.firstLineContains == nil,
+       expectation.firstLineSHA256 == nil,
+       let selected = selectedResult,
+       !hasIndependentLyricAgreement(for: selected, allResults: allResults) {
+        failures.append("用例缺少首行关键词/哈希，且没有跨源一致性证据；不能证明是正确歌曲")
+    }
+
     let inlineTimestampPattern = #"<\d{1,2}:\d{2}(?:\.\d{1,3})?>"#
     if realLines.contains(where: { $0.text.range(of: inlineTimestampPattern, options: .regularExpression) != nil }) {
         failures.append("可见歌词包含未解析的行内时间戳")
     }
+
+    failures.append(contentsOf: validateTimelineSanity(lines: realLines, duration: duration))
 
     return failures
 }
@@ -454,6 +486,45 @@ private func validateContent(
     }
 
     return validation
+}
+
+private func validateTimelineSanity(lines: [LyricLine], duration: TimeInterval) -> [String] {
+    guard duration > 0, lines.count >= 3 else { return [] }
+    var failures: [String] = []
+
+    if let negative = lines.first(where: { $0.startTime < -0.05 }) {
+        failures.append("负时间戳: \(String(format: "%.2f", negative.startTime))s")
+    }
+
+    var outOfOrderCount = 0
+    for pair in zip(lines, lines.dropFirst()) where pair.1.startTime + 0.05 < pair.0.startTime {
+        outOfOrderCount += 1
+    }
+    if outOfOrderCount > 0 {
+        failures.append("时间轴乱序: \(outOfOrderCount) 处")
+    }
+
+    let firstStart = lines[0].startTime
+    let firstStartLimit = min(90.0, max(45.0, duration * 0.30))
+    if firstStart > firstStartLimit {
+        failures.append("首行时间过晚: \(String(format: "%.1f", firstStart))s > \(String(format: "%.1f", firstStartLimit))s")
+    }
+
+    let lastStart = lines.last?.startTime ?? 0
+    if lastStart > duration + max(2.0, duration * 0.01) {
+        failures.append("时间轴溢出: 末行 \(String(format: "%.1f", lastStart))s > 歌曲 \(Int(duration))s")
+    }
+
+    return failures
+}
+
+private func normalizedFirstLineSHA256(_ line: String) -> String {
+    let normalized = LanguageUtils.toSimplifiedChinese(line)
+        .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        .lowercased()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let digest = SHA256.hash(data: Data(normalized.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
 }
 
 /// Cross-source identity oracle:

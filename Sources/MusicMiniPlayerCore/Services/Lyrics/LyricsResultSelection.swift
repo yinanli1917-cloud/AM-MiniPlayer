@@ -56,10 +56,11 @@ extension LyricsFetcher {
         var syncedResults = results.filter {
             guard $0.kind == .synced else { return false }
             if hasWordLevelSync($0) && $0.score > 0 { return true }
+            if hasIndependentLyricAgreement(for: $0, allResults: results) { return true }
             switch $0.source {
             case "LRCLIB-Search":
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 20
+                    return $0.score >= 10
                 }
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 3.0 } ?? false) {
                     return $0.score >= 45
@@ -67,14 +68,11 @@ extension LyricsFetcher {
                 return $0.score >= 50
             case "LRCLIB":
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 20
+                    return $0.score >= 10
                 }
                 return $0.score >= 45
             default:
-                if $0.titleMatched,
-                   ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false),
-                   $0.score >= 18,
-                   hasIndependentLyricAgreement(for: $0, allResults: results) {
+                if hasIndependentLyricAgreement(for: $0, allResults: results) {
                     return true
                 }
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
@@ -94,7 +92,7 @@ extension LyricsFetcher {
             syncedResults = []
         }
         let timelineSafeSynced = syncedResults.filter {
-            !hasSevereTimelineMismatch($0, songDuration: songDuration)
+            !hasSevereTimelineMismatch($0, songDuration: songDuration, allResults: results)
         }
         if !timelineSafeSynced.isEmpty && timelineSafeSynced.count < syncedResults.count {
             DebugLogger.log("🏆 Timeline filter: kept \(timelineSafeSynced.map(\.source)), dropped \(syncedResults.filter { r in !timelineSafeSynced.contains(where: { $0.source == r.source && $0.score == r.score }) }.map(\.source))")
@@ -227,8 +225,8 @@ extension LyricsFetcher {
     /// title/duration evidence plus an independent lyric-text witness.
     private func hasIndependentLyricAgreement(for result: LyricsFetchResult, allResults: [LyricsFetchResult]) -> Bool {
         guard result.kind == .synced,
-              result.titleMatched,
-              (result.matchedDurationDiff ?? .greatestFiniteMagnitude) < 1.0,
+              result.score >= 10,
+              result.lyrics.count >= 12,
               lyricIdentityTokens(result.lyrics).count >= 6 else { return false }
 
         return uniqueSourceResults(allResults).contains { witness in
@@ -236,7 +234,8 @@ extension LyricsFetcher {
                 && witness.score > 0
                 && !witness.lyrics.isEmpty
                 && lyricIdentityTokens(witness.lyrics).count >= 6
-                && lyricSimilarity(result.lyrics, witness.lyrics) >= 0.24
+                && (lyricSimilarity(result.lyrics, witness.lyrics) >= 0.18
+                    || firstComparableLyricLine(result.lyrics) == firstComparableLyricLine(witness.lyrics))
         }
     }
 
@@ -330,14 +329,25 @@ extension LyricsFetcher {
         return durationDiff > allowed && result.score < 65
     }
 
-    private func hasSevereTimelineMismatch(_ result: LyricsFetchResult, songDuration: TimeInterval) -> Bool {
+    private func hasSevereTimelineMismatch(_ result: LyricsFetchResult, songDuration: TimeInterval, allResults: [LyricsFetchResult]) -> Bool {
         guard songDuration >= 180,
               result.kind == .synced,
               let lastStart = result.lyrics.last?.startTime else { return false }
+        if hasIndependentLyricAgreement(for: result, allResults: allResults) {
+            return false
+        }
         if lastStart > songDuration {
             return (lastStart - songDuration) > max(10.0, songDuration * 0.05)
         }
         let tailGap = songDuration - lastStart
+        if result.score < 50,
+           tailGap > min(180.0, max(120.0, songDuration * 0.45)) {
+            return true
+        }
+        if result.score < 30,
+           maxInternalGap(result.lyrics) > min(120.0, max(90.0, songDuration * 0.30)) {
+            return true
+        }
         let instrumentalOutroRatio = songDuration >= 360 ? 0.55 : 0.40
         return tailGap > max(140.0, songDuration * instrumentalOutroRatio)
     }
@@ -405,6 +415,18 @@ extension LyricsFetcher {
             tokens.insert(String(chars[i...i + 1]))
         }
         return tokens
+    }
+
+    private func firstComparableLyricLine(_ lyrics: [LyricLine]) -> String? {
+        lyrics.lazy
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty && $0 != "..." && $0 != "…" && $0 != "⋯" }
+            .map {
+                LanguageUtils.toSimplifiedChinese($0)
+                    .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                    .lowercased()
+                    .filter { $0.isLetter || $0.isNumber }
+            }
     }
 
     private func maxInternalGap(_ lyrics: [LyricLine]) -> Double {
