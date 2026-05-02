@@ -38,6 +38,10 @@ public final class LyricsParser {
         pattern: "\\[(\\d{2}):(\\d{2})[:.](\\d{2,3})\\]",
         options: []
     )
+    private let lrcInlineTimestampRegex = try? NSRegularExpression(
+        pattern: "<\\d{1,2}:\\d{2}(?:[:.]\\d{1,3})?>",
+        options: []
+    )
     private let yrcLineRegex = try? NSRegularExpression(
         pattern: "\\[(\\d+),(\\d+)\\](.+)",
         options: []
@@ -239,7 +243,8 @@ public final class LyricsParser {
                 lastMatchEnd = fullRange.upperBound
             }
 
-            let text = decodeHTMLEntities(String(line[lastMatchEnd...]).trimmingCharacters(in: .whitespaces))
+            let rawText = decodeHTMLEntities(String(line[lastMatchEnd...]).trimmingCharacters(in: .whitespaces))
+            let text = stripLRCInlineTimestamps(rawText)
             guard !text.isEmpty else { continue }
 
             for startTime in timestamps {
@@ -254,6 +259,13 @@ public final class LyricsParser {
 
         lines.sort { $0.startTime < $1.startTime }
         return lines
+    }
+
+    private func stripLRCInlineTimestamps(_ text: String) -> String {
+        guard let regex = lrcInlineTimestampRegex else { return text }
+        let fullRange = NSRange(text.startIndex..., in: text)
+        let stripped = regex.stringByReplacingMatches(in: text, range: fullRange, withTemplate: "")
+        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - YRC 解析 (NetEase 逐字格式)
@@ -466,7 +478,13 @@ public final class LyricsParser {
             }
         }
 
-        // 🔑 统一元信息剥离（任意位置，不限开头）
+        // Encoding corruption gate: reject if >5% of lines contain U+FFFD
+        let corruptedCount = rawLyrics.filter { $0.text.contains("\u{FFFD}") }.count
+        if rawLyrics.count >= 5, Double(corruptedCount) / Double(rawLyrics.count) > 0.05 {
+            DebugLogger.log("⚠️ Encoding corruption: \(corruptedCount)/\(rawLyrics.count) lines contain U+FFFD")
+            return ([], 0)
+        }
+
         var filteredLyrics = stripMetadataLines(rawLyrics)
         let firstRealLyricStartTime = filteredLyrics.first?.startTime ?? rawLyrics.first?.startTime ?? 0
 

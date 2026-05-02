@@ -17,6 +17,7 @@ struct BenchmarkResult: Codable {
     let base: VerifyResult
     let region: String
     let expectedLyricsLang: String
+    let expectedShouldFindLyrics: Bool
 
     // 翻译验证
     let translationLeakCount: Int       // 泄漏行数
@@ -27,6 +28,8 @@ struct BenchmarkResult: Codable {
     let benchmarkFailures: [String]
     let benchmarkWarnings: [String]
 }
+
+private let benchmarkLatencyBudgetMs = 3000
 
 // =========================================================================
 // MARK: - 入口：综合验证
@@ -72,6 +75,50 @@ func validateBenchmark(
     warnings.append(contentsOf: timeWarnings)
 
     return (failures, warnings, leakResult.leakCount)
+}
+
+private func strictBenchmarkFailures(_ r: BenchmarkResult) -> [String] {
+    var failures: [String] = []
+    let base = r.base
+
+    if !base.passed {
+        failures.append(contentsOf: base.failures)
+    }
+    failures.append(contentsOf: r.benchmarkFailures)
+
+    let mustHaveSyncedLyrics = r.expectedShouldFindLyrics
+    if mustHaveSyncedLyrics, base.classification != "synced" {
+        failures.append("基准必须返回同步歌词，实际 \(base.classification ?? "none")")
+    }
+    if base.elapsedMs > benchmarkLatencyBudgetMs {
+        failures.append("基准耗时 \(base.elapsedMs)ms 超过 \(benchmarkLatencyBudgetMs)ms")
+    }
+    if mustHaveSyncedLyrics, base.realLineCount < 5 {
+        failures.append("有效歌词行数 \(base.realLineCount) 少于 5")
+    }
+    if mustHaveSyncedLyrics, base.selectedSource == nil {
+        failures.append("未选中可信歌词源")
+    }
+    if let score = base.selectedScore,
+       !base.hasSyllableSync,
+       score < 30 {
+        failures.append("低置信度同步歌词 \(String(format: "%.1f", score)) 分")
+    }
+    let hardWarningPrefixes = [
+        "⚠️ 负时间戳",
+        "⚠️ 异常间隔",
+        "⚠️ 时间轴乱序"
+    ]
+    for warning in base.warnings + r.benchmarkWarnings
+        where hardWarningPrefixes.contains(where: { warning.hasPrefix($0) }) {
+        failures.append(warning.replacingOccurrences(of: "⚠️ ", with: ""))
+    }
+
+    return Array(Set(failures)).sorted()
+}
+
+private func benchmarkPassed(_ r: BenchmarkResult) -> Bool {
+    strictBenchmarkFailures(r).isEmpty
 }
 
 // =========================================================================
@@ -355,8 +402,9 @@ private func checkTimelineSanity(lyrics: [LyricLine]) -> [String] {
 
 func printBenchmarkResultLine(_ r: BenchmarkResult) {
     let base = r.base
-    let icon = base.passed && r.benchmarkFailures.isEmpty ? "[+]" : "[x]"
-    let status = base.passed && r.benchmarkFailures.isEmpty ? "PASS" : "FAIL"
+    let strictFailures = strictBenchmarkFailures(r)
+    let icon = strictFailures.isEmpty ? "[+]" : "[x]"
+    let status = strictFailures.isEmpty ? "PASS" : "FAIL"
 
     var line = "\(icon) \(base.id) \(status) \"\(base.title)\" - \(base.artist)"
     if let src = base.selectedSource, let score = base.selectedScore {
@@ -371,7 +419,7 @@ func printBenchmarkResultLine(_ r: BenchmarkResult) {
     if let ok = r.localTranslationOK { line += ok ? " [ml:ok]" : " [ml:fail]" }
     log(line)
 
-    for f in base.failures + r.benchmarkFailures { log("      ! \(f)") }
+    for f in strictFailures { log("      ! \(f)") }
     for w in base.warnings + r.benchmarkWarnings { log("      \(w)") }
 }
 
@@ -381,7 +429,7 @@ func printBenchmarkSummary(_ results: [BenchmarkResult]) {
 
     for regionInfo in kSupportedRegions {
         guard let regionResults = grouped[regionInfo.code] else { continue }
-        let passed = regionResults.filter { $0.base.passed && $0.benchmarkFailures.isEmpty }.count
+        let passed = regionResults.filter { benchmarkPassed($0) }.count
         let warned = regionResults.filter { !$0.benchmarkWarnings.isEmpty }.count
         let noLyrics = regionResults.filter { $0.base.lyricsLineCount == 0 }.count
         let leaks = regionResults.filter { $0.translationLeakCount > 0 }.count
@@ -400,7 +448,7 @@ func printBenchmarkSummary(_ results: [BenchmarkResult]) {
     }
 
     // 总览
-    let totalPassed = results.filter { $0.base.passed && $0.benchmarkFailures.isEmpty }.count
+    let totalPassed = results.filter { benchmarkPassed($0) }.count
     let totalWarned = results.filter { !$0.benchmarkWarnings.isEmpty }.count
     let totalNoLyrics = results.filter { $0.base.lyricsLineCount == 0 }.count
     let totalLeaks = results.filter { $0.translationLeakCount > 0 }.count

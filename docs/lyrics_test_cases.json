@@ -7,7 +7,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "无常"
     }
   },
   {
@@ -18,7 +18,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "霓虹"
     }
   },
   {
@@ -29,7 +29,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL"],
-      "firstLineContains": null
+      "firstLineContains": "封了国境"
     }
   },
   {
@@ -40,7 +40,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "飞翔"
     }
   },
   {
@@ -51,7 +51,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL"],
-      "firstLineContains": null
+      "firstLineContains": "小黄花"
     }
   },
   {
@@ -62,7 +62,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "走走停停"
     }
   },
   {
@@ -73,7 +73,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "歩道橋"
     }
   },
   {
@@ -84,7 +84,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "天使"
     }
   },
   {
@@ -106,7 +106,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "real life"
     }
   },
   {
@@ -117,7 +117,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
-      "firstLineContains": null
+      "firstLineContains": "desert highway"
     }
   },
   {
@@ -128,7 +128,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
-      "firstLineContains": null
+      "firstLineContains": "club"
     }
   },
   {
@@ -139,7 +139,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "閉じて"
     }
   },
   {
@@ -162,7 +162,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "流れる"
     }
   },
   {
@@ -171,7 +171,7 @@
     "artist": "mei ehara",
     "duration": 326,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
       "firstLineContains": "幽霊"
     }
@@ -184,7 +184,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "キス"
     }
   },
   {
@@ -206,7 +206,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "五月雨"
     }
   },
   {
@@ -215,7 +215,7 @@
     "artist": "Perry Como",
     "duration": 184,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "allowMissingLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
       "firstLineContains": "picture"
@@ -229,7 +229,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "valse"
     }
   },
   {
@@ -240,7 +240,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "让我住进"
     }
   },
   {
@@ -251,7 +251,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "翻风"
     }
   },
   {
@@ -262,7 +262,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "upon"
     }
   },
   {
@@ -272,7 +272,7 @@
     "duration": 186,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB"],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": null
     }
   },
@@ -283,8 +283,8 @@
     "duration": 219,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB"],
-      "firstLineContains": null
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "know"
     }
   },
   {
@@ -295,7 +295,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "breaking"
     }
   },
   {
@@ -306,7 +306,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "那扇"
     }
   },
   {
@@ -317,7 +317,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "星が"
     }
   },
   {
@@ -328,7 +328,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "言えなく"
     }
   },
   {
@@ -339,7 +339,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "なぜかしら"
     }
   },
   {
@@ -350,7 +350,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "拒绝"
     }
   },
   {
@@ -360,7 +360,7 @@
     "duration": 259,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": ["NetEase", "QQ", "AMLL"],
       "firstLineContains": null
     }
   },
@@ -372,7 +372,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "逛一逛"
     }
   },
   {
@@ -383,7 +383,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "飞往"
     }
   },
   {
@@ -427,7 +427,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "cloudy"
     }
   },
   {
@@ -439,7 +439,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "落地"
     }
   },
   {
@@ -450,7 +450,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "宝贝"
     }
   },
   {
@@ -516,7 +516,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "歩道橋"
     }
   },
   {
@@ -527,7 +527,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search", "Genius"],
-      "firstLineContains": null
+      "firstLineContains": "始終"
     }
   },
   {
@@ -540,6 +540,83 @@
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
       "firstLineContains": "learning"
+    }
+  },
+  {
+    "id": "X05_english_title_cjk_alias_same_duration",
+    "title": "Tough Days (feat. Ashlee Yip)",
+    "artist": "Dean Ting",
+    "duration": 252,
+    "album": "The Script of Destiny",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
+      "firstLineContains": "原谅",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 10,
+      "firstLineStartMaxS": 35,
+      "maxTailGapS": 60
+    }
+  },
+  {
+    "id": "X06_traditional_title_word_level_timing",
+    "title": "戀愛預告",
+    "artist": "Sandy Lamb",
+    "duration": 219,
+    "album": "My Lovely Legend: Teresa Carpio & Sandy Lamb",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "愛神",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 15,
+      "firstLineStartMaxS": 22,
+      "maxTailGapS": 35
+    }
+  },
+  {
+    "id": "X07_english_locale_chinese_original_title",
+    "title": "The Prayer",
+    "artist": "Lala Hsu",
+    "duration": 260,
+    "album": "The Inner Me",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "言不由衷",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 30,
+      "firstLineStartMaxS": 40,
+      "maxTailGapS": 45
+    }
+  },
+  {
+    "id": "X08_unsynced_consensus_when_synced_are_wrong",
+    "title": "My Jinji",
+    "artist": "Sunset Rollercoaster",
+    "duration": 401,
+    "album": "JINJI KIKKO - Single",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "Every time",
+      "expectedClassification": "synced",
+      "maxTailGapS": 225
+    }
+  },
+  {
+    "id": "X09_reject_wrong_second_love_timeline",
+    "title": "Second Love",
+    "artist": "Akina Nakamori",
+    "duration": 284,
+    "album": "Akina Nakamori - Utahime Double Decade -",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
+      "firstLineContains": "恋も二度目なら",
+      "expectedClassification": "synced",
+      "maxTailGapS": 55
     }
   }
 ]

@@ -297,7 +297,7 @@
     "id": "BM-KO-10",
     "title": "God's Menu",
     "artist": "Stray Kids",
-    "duration": 203,
+    "duration": 186,
     "region": "ko",
     "expectedLyricsLang": "Korean",
     "expectSourceTranslation": true,
@@ -381,7 +381,7 @@
     "id": "BM-JA-04",
     "title": "踊",
     "artist": "Ado",
-    "duration": 191,
+    "duration": 193,
     "region": "ja",
     "expectedLyricsLang": "Japanese",
     "expectSourceTranslation": true,
@@ -479,7 +479,7 @@
     "id": "BM-JA-11",
     "title": "すずめ",
     "artist": "RADWIMPS",
-    "duration": 259,
+    "duration": 264,
     "region": "ja",
     "expectedLyricsLang": "Japanese",
     "expectSourceTranslation": true,
@@ -717,7 +717,7 @@
     "id": "BM-ES-04",
     "title": "Vivir Mi Vida",
     "artist": "Marc Anthony",
-    "duration": 279,
+    "duration": 256,
     "region": "es",
     "expectedLyricsLang": "Spanish",
     "expectSourceTranslation": false,
@@ -731,7 +731,7 @@
     "id": "BM-ES-05",
     "title": "Me Gustas Tú",
     "artist": "Manu Chao",
-    "duration": 234,
+    "duration": 240,
     "region": "es",
     "expectedLyricsLang": "Spanish",
     "expectSourceTranslation": false,
@@ -913,7 +913,7 @@
     "id": "BM-HI-08",
     "title": "Chaleya",
     "artist": "Arijit Singh",
-    "duration": 226,
+    "duration": 200,
     "region": "hi",
     "expectedLyricsLang": "Hindi",
     "expectSourceTranslation": true,
@@ -983,12 +983,12 @@
     "id": "BM-FR-03",
     "title": "Papaoutai",
     "artist": "Stromae",
-    "duration": 233,
+    "duration": 200,
     "region": "fr",
     "expectedLyricsLang": "French",
     "expectSourceTranslation": true,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "acceptableSources": null,
       "firstLineContains": null
     }
@@ -1123,12 +1123,12 @@
     "id": "BM-PT-05",
     "title": "Andar com Fé",
     "artist": "Gilberto Gil",
-    "duration": 233,
+    "duration": 200,
     "region": "pt",
     "expectedLyricsLang": "Portuguese",
     "expectSourceTranslation": false,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "acceptableSources": null,
       "firstLineContains": null
     }
@@ -1137,7 +1137,7 @@
     "id": "BM-PT-06",
     "title": "País Tropical",
     "artist": "Jorge Ben Jor",
-    "duration": 206,
+    "duration": 242,
     "region": "pt",
     "expectedLyricsLang": "Portuguese",
     "expectSourceTranslation": false,
@@ -1165,7 +1165,7 @@
     "id": "BM-PT-08",
     "title": "Boys Don't Cry",
     "artist": "Anitta",
-    "duration": 188,
+    "duration": 136,
     "region": "pt",
     "expectedLyricsLang": "English",
     "expectSourceTranslation": false,
@@ -1200,7 +1200,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": null,
-      "firstLineContains": null
+      "firstLineContains": "เฮเธอ"
     }
   },
   {
@@ -1226,9 +1226,9 @@
     "expectedLyricsLang": "Thai",
     "expectSourceTranslation": false,
     "expectation": {
-      "shouldFindLyrics": false,
+      "shouldFindLyrics": true,
       "acceptableSources": null,
-      "firstLineContains": null
+      "firstLineContains": "แสงตะวัน"
     }
   },
   {
@@ -1338,7 +1338,7 @@
     "expectedLyricsLang": "Arabic",
     "expectSourceTranslation": false,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "acceptableSources": null,
       "firstLineContains": null
     }

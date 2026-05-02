@@ -265,7 +265,9 @@ extension MusicController {
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
 
             // Trigger lyrics preloading for upcoming tracks
-            let tracksToPreload = Array(tracks.prefix(3)).map { (title: $0.title, artist: $0.artist, duration: $0.duration) }
+            let tracksToPreload = Array(tracks.prefix(3)).map {
+                (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+            }
             if !tracksToPreload.isEmpty {
                 LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
             }

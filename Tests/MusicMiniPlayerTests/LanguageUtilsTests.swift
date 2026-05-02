@@ -15,6 +15,12 @@ final class LanguageUtilsTests: XCTestCase {
         XCTAssertFalse(LanguageUtils.isLikelyRomanizedJapanese("While My Guitar Gently Weeps"))
     }
 
+    func testLikelyEnglishTitleDetectsShortCommonTitleWords() {
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Second Love"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Tough Days"))
+        XCTAssertFalse(LanguageUtils.isLikelyRomanizedJapanese("Second Love"))
+    }
+
     func testNormalizeTrackNameFoldsCurlyApostrophes() {
         XCTAssertEqual(
             LanguageUtils.normalizeTrackName("Boys Don’t Cry"),

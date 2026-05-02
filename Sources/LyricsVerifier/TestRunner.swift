@@ -60,18 +60,31 @@ func testSongWithLyrics(
     let start = CFAbsoluteTimeGetCurrent()
     let fetcher = LyricsFetcher.shared
 
-    let fetchResults = await fetcher.fetchAllSources(
+    var fetchResults = await fetcher.fetchAllSources(
         title: title, artist: artist,
         duration: duration, translationEnabled: translationEnabled,
         album: album
     )
 
-    let bestLyrics = fetcher.selectBest(from: fetchResults, songDuration: duration)
-    let selectedResult = fetchResults.first { result in
-        guard let firstBest = bestLyrics?.first,
-              let firstResult = result.lyrics.first else { return false }
-        return firstBest.id == firstResult.id
+    var selectedResult = fetcher.selectBestResult(from: fetchResults, songDuration: duration)
+    let foregroundElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+    var backfillElapsedMs: Int? = nil
+    if selectedResult == nil,
+       expectation?.shouldFindLyrics != false,
+       let backfilled = await fetcher.backfillAuthoritativeSyncedLyrics(
+            title: title,
+            artist: artist,
+            duration: duration,
+            translationEnabled: translationEnabled,
+            album: album
+       ) {
+        backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
+        fetchResults.append(backfilled)
+        selectedResult = fetcher.selectBestResult(from: fetchResults, songDuration: duration)
+    } else if selectedResult == nil, expectation?.shouldFindLyrics != false {
+        backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
     }
+    let bestLyrics = selectedResult?.lyrics
 
     // Shared classifier — same call both the app and the verifier use.
     let classificationKind = LyricsFetcher.LyricsClassifier.classify(result: selectedResult)
@@ -82,7 +95,7 @@ func testSongWithLyrics(
     case .none:            classificationString = "none"
     }
 
-    let elapsed = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+    let elapsed = foregroundElapsedMs
     let knownSources = ["AppleMusic", "AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
     let allSources: [SourceResult] = knownSources.map { name in
         if let r = fetchResults.first(where: { $0.source == name }) {
@@ -105,9 +118,20 @@ func testSongWithLyrics(
     if let exp = expectation {
         failures = checkExpectation(
             exp, source: selectedResult?.source,
-            lyrics: lyrics, firstReal: firstReal
+            lyrics: lyrics, firstReal: firstReal,
+            classification: classificationString,
+            duration: duration
         )
     }
+
+    failures.append(contentsOf: validateLiveLyricsContract(
+        expectation: expectation,
+        lyrics: lyrics,
+        classification: classificationString,
+        elapsedMs: elapsed,
+        selectedResult: selectedResult,
+        allResults: fetchResults
+    ))
 
     // Validate on raw lyrics to detect overshoot before rescaling
     let contentValidation = validateContent(
@@ -119,11 +143,27 @@ func testSongWithLyrics(
         allResults: fetchResults
     )
     failures.append(contentsOf: contentValidation.failures)
-    let warnings = contentValidation.warnings
+    var warnings = contentValidation.warnings
+    if let backfillElapsedMs, backfillElapsedMs > 3000 {
+        warnings.append("⚠️ 后台权威回填耗时 \(backfillElapsedMs)ms；不计入前台交互预算")
+    }
     failures.append(contentsOf: validateCrossSourceIdentity(
         selected: selectedResult,
         allResults: fetchResults
     ))
+    if expectation == nil && lyrics.isEmpty {
+        let candidates = fetchResults
+            .filter { !$0.lyrics.isEmpty }
+            .sorted { $0.score > $1.score }
+            .prefix(3)
+            .map { "\($0.source):\(String(format: "%.1f", $0.score))/\($0.lyrics.count)L" }
+            .joined(separator: ", ")
+        if candidates.isEmpty {
+            failures.append("无期望用例未找到歌词；不能视为验证通过")
+        } else {
+            failures.append("未选择可信歌词；候选源存在但被拒绝（\(candidates)）")
+        }
+    }
 
     // Gamma-schema fields
     let realLines = lyrics.filter {
@@ -181,15 +221,14 @@ private func checkExpectation(
     _ exp: TestExpectation,
     source: String?,
     lyrics: [LyricLine],
-    firstReal: LyricLine?
+    firstReal: LyricLine?,
+    classification: String,
+    duration: TimeInterval
 ) -> [String] {
     var failures: [String] = []
 
     if exp.shouldFindLyrics {
         guard !lyrics.isEmpty else {
-            if exp.allowMissingLyrics == true {
-                return failures
-            }
             failures.append("期望找到歌词，但所有源均无结果")
             return failures
         }
@@ -198,14 +237,109 @@ private func checkExpectation(
            !acceptable.contains(src) {
             failures.append("源 \(src) 不在可接受列表 \(acceptable) 中")
         }
-        if let keyword = exp.firstLineContains, let line = firstReal,
-           !line.text.contains(keyword) {
-            failures.append("首行 \"\(line.text)\" 不包含 \"\(keyword)\"")
+        if let keyword = exp.firstLineContains {
+            guard let line = firstReal else {
+                failures.append("没有可验证的首行，无法匹配 \"\(keyword)\"")
+                return failures
+            }
+            let normalizedLine = LanguageUtils.toSimplifiedChinese(line.text)
+                .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .lowercased()
+            let normalizedKeyword = LanguageUtils.toSimplifiedChinese(keyword)
+                .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .lowercased()
+            if !line.text.contains(keyword) && !normalizedLine.contains(normalizedKeyword) {
+                failures.append("首行 \"\(line.text)\" 不包含 \"\(keyword)\"")
+            }
+        }
+        if let expected = exp.expectedClassification,
+           classification != expected {
+            failures.append("分类 \(classification) != 期望 \(expected)")
+        }
+        if exp.firstLineStartMinS != nil || exp.firstLineStartMaxS != nil {
+            guard let line = firstReal else {
+                failures.append("没有可验证的首行时间")
+                return failures
+            }
+            if let minStart = exp.firstLineStartMinS,
+               line.startTime < minStart {
+                failures.append("首行时间 \(String(format: "%.1f", line.startTime))s 早于期望下限 \(String(format: "%.1f", minStart))s")
+            }
+            if let maxStart = exp.firstLineStartMaxS,
+               line.startTime > maxStart {
+                failures.append("首行时间 \(String(format: "%.1f", line.startTime))s 晚于期望上限 \(String(format: "%.1f", maxStart))s")
+            }
+        }
+        if let maxTailGap = exp.maxTailGapS,
+           classification == "synced",
+           let last = lyrics.last {
+            let tailGap = duration - last.startTime
+            if tailGap > maxTailGap {
+                failures.append("尾部时间缺口 \(String(format: "%.1f", tailGap))s 超过 \(String(format: "%.1f", maxTailGap))s")
+            }
         }
     } else {
         if !lyrics.isEmpty {
             failures.append("期望无歌词，但找到了 \(source ?? "unknown")")
         }
+    }
+
+    return failures
+}
+
+private func validateLiveLyricsContract(
+    expectation: TestExpectation?,
+    lyrics: [LyricLine],
+    classification: String,
+    elapsedMs: Int,
+    selectedResult: LyricsFetcher.LyricsFetchResult?,
+    allResults: [LyricsFetcher.LyricsFetchResult]
+) -> [String] {
+    var failures: [String] = []
+
+    if elapsedMs > 3000 {
+        failures.append("耗时 \(elapsedMs)ms 超过 3000ms 交互预算")
+    }
+
+    guard !lyrics.isEmpty else {
+        if expectation == nil || expectation?.shouldFindLyrics == true {
+            let candidates = allResults
+                .filter { !$0.lyrics.isEmpty }
+                .sorted { $0.score > $1.score }
+                .prefix(3)
+                .map { "\($0.source):\(String(format: "%.1f", $0.score))/\($0.lyrics.count)L" }
+                .joined(separator: ", ")
+            if candidates.isEmpty {
+                failures.append("没有返回同步歌词，不能视为通过")
+            } else {
+                failures.append("候选源存在但没有可信同步歌词（\(candidates)）")
+            }
+        }
+        return failures
+    }
+
+    if classification != "synced" {
+        failures.append("选中 \(classification) 歌词；产品只允许同步歌词")
+    }
+
+    let realLines = lyrics.filter {
+        let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+    }
+    if realLines.count < 5 {
+        failures.append("有效歌词行数不足 5 行")
+    }
+
+    if let selected = selectedResult,
+       !selected.lyrics.contains(where: { $0.hasSyllableSync }),
+       selected.score < 30,
+       !hasIndependentLyricAgreement(for: selected, allResults: allResults) {
+        failures.append("非 word-level 同步歌词置信度 \(String(format: "%.1f", selected.score)) 分低于 30")
+    }
+
+    let inlineTimestampPattern = #"<\d{1,2}:\d{2}(?:\.\d{1,3})?>"#
+    if realLines.contains(where: { $0.text.range(of: inlineTimestampPattern, options: .regularExpression) != nil }) {
+        failures.append("可见歌词包含未解析的行内时间戳")
     }
 
     return failures
@@ -303,10 +437,20 @@ private func validateContent(
 
     // ── 4. Timestamp overshoot detection ──
     // Lyrics extend past song duration = wrong version selected
-    if duration > 0, lyrics.count >= 2,
-       let last = lyrics.last, last.startTime > duration {
+    if duration > 0, validLines.count >= 2,
+       let last = validLines.last, last.startTime > duration {
         let overshoot = last.startTime - duration
-        validation.warnings.append("⚠️ 时间轴溢出: 末行 \(String(format: "%.1f", last.startTime))s > 歌曲 \(Int(duration))s (溢出\(String(format: "+%.1f", overshoot))s, 版本不匹配)")
+        let message = "时间轴溢出: 末行 \(String(format: "%.1f", last.startTime))s > 歌曲 \(Int(duration))s (溢出\(String(format: "+%.1f", overshoot))s, 版本不匹配)"
+        if overshoot > max(2.0, duration * 0.01) {
+            validation.failures.append(message)
+        } else {
+            validation.warnings.append("⚠️ \(message)")
+        }
+    }
+
+    let inlineTimestampPattern = #"<\d{1,2}:\d{2}(?:[:.]\d{1,3})?>"#
+    if validLines.contains(where: { $0.text.range(of: inlineTimestampPattern, options: .regularExpression) != nil }) {
+        validation.failures.append("歌词文本含未解析内联时间戳")
     }
 
     return validation
@@ -343,6 +487,18 @@ private func validateCrossSourceIdentity(
     guard bestCluster.count >= 2 else { return [] }
     guard !bestCluster.contains(where: { $0.source == selected.source }) else { return [] }
     let clusterHasSynced = bestCluster.contains { $0.kind == .synced }
+    let clusterHasStrongSynced = bestCluster.contains { result in
+        result.kind == .synced
+            && (result.score >= 65 || hasWordLevelSync(result))
+            && (result.albumMatched || (result.matchedDurationDiff ?? .greatestFiniteMagnitude) < 1.0 || result.titleMatched)
+    }
+    if selected.kind == .synced,
+       selected.score >= 70,
+       (selected.albumMatched || (selected.matchedDurationDiff ?? .greatestFiniteMagnitude) < 1.0),
+       (selected.titleMatched || hasWordLevelSync(selected)),
+       !clusterHasStrongSynced {
+        return []
+    }
     if !clusterHasSynced,
        selected.kind == .synced,
        (selected.score >= 75 || hasWordLevelSync(selected)) {
@@ -356,6 +512,24 @@ private func validateCrossSourceIdentity(
 
     let supporters = bestCluster.map { $0.source }.sorted().joined(separator: ",")
     return ["跨源歌词内容冲突: selected=\(selected.source), consensus=\(supporters)"]
+}
+
+private func hasIndependentLyricAgreement(
+    for selected: LyricsFetcher.LyricsFetchResult,
+    allResults: [LyricsFetcher.LyricsFetchResult]
+) -> Bool {
+    guard selected.kind == .synced,
+          selected.titleMatched,
+          (selected.matchedDurationDiff ?? .greatestFiniteMagnitude) < 1.0,
+          lyricIdentityTokens(selected.lyrics).count >= 6 else { return false }
+
+    return uniqueSourceResults(allResults).contains { witness in
+        witness.source != selected.source &&
+        witness.score > 0 &&
+        !witness.lyrics.isEmpty &&
+        lyricIdentityTokens(witness.lyrics).count >= 6 &&
+        lyricSimilarity(selected.lyrics, witness.lyrics) >= 0.24
+    }
 }
 
 private func hasWordLevelSync(_ result: LyricsFetcher.LyricsFetchResult) -> Bool {

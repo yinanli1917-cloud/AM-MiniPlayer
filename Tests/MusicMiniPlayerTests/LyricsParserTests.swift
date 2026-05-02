@@ -89,6 +89,15 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(lines[0].text, "Rock & Roll")
     }
 
+    func testParseLRC_stripsEnhancedInlineTimestamps() {
+        let lrc = "[00:10.00]<00:10.000>青<00:10.360>花<00:10.720>瓷"
+        let lines = parser.parseLRC(lrc)
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines[0].text, "青花瓷")
+        XCTAssertEqual(lines[0].startTime, 10.0, accuracy: 0.001)
+    }
+
     func testParseLRC_sortedByTime() {
         let lrc = """
         [00:30.00]第三行

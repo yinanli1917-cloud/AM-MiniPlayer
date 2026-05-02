@@ -19,12 +19,15 @@ public enum HTTPClient {
     private static let defaultUserAgent = "nanoPod/1.0"
     public static let defaultTimeout: TimeInterval = 6.0
 
-    // 🔑 共享 ephemeral session：复用 TLS 连接和 DNS 缓存，避免每次请求重建
+    private static let retryableStatusCodes: Set<Int> = [429, 502, 503, 504]
+
     private static let sharedSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
         config.urlCache = nil
         config.timeoutIntervalForResource = 30
+        config.httpMaximumConnectionsPerHost = 12
+        config.waitsForConnectivity = false
         return URLSession(configuration: config)
     }()
 
@@ -71,19 +74,41 @@ public enum HTTPClient {
     public static func getData(
         url: URL,
         headers: [String: String] = [:],
-        timeout: TimeInterval = defaultTimeout
+        timeout: TimeInterval = defaultTimeout,
+        retry: Bool = true
+    ) async throws -> (Data, HTTPURLResponse) {
+        do {
+            return try await _performGet(url: url, headers: headers, timeout: timeout)
+        } catch {
+            guard retry, !Task.isCancelled else { throw error }
+            let shouldRetry: Bool
+            if let httpErr = error as? HTTPError, case .httpError(let code) = httpErr {
+                shouldRetry = retryableStatusCodes.contains(code)
+            } else if (error as? URLError)?.code == .timedOut {
+                shouldRetry = true
+            } else {
+                shouldRetry = false
+            }
+            guard shouldRetry else { throw error }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { throw error }
+            return try await _performGet(url: url, headers: headers, timeout: timeout)
+        }
+    }
+
+    private static func _performGet(
+        url: URL,
+        headers: [String: String],
+        timeout: TimeInterval
     ) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = timeout
-        request.cachePolicy = .reloadIgnoringLocalCacheData  // 🔑 禁用缓存
+        request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        // 应用自定义 headers（覆盖默认 User-Agent）
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-
-        // 如果没有自定义 User-Agent，使用默认值
         if headers["User-Agent"] == nil {
             request.setValue(defaultUserAgent, forHTTPHeaderField: "User-Agent")
         }
@@ -93,11 +118,9 @@ public enum HTTPClient {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw HTTPError.invalidResponse
         }
-
         if httpResponse.statusCode == 404 {
             throw HTTPError.notFound
         }
-
         guard (200...299).contains(httpResponse.statusCode) else {
             throw HTTPError.httpError(statusCode: httpResponse.statusCode)
         }
@@ -109,9 +132,10 @@ public enum HTTPClient {
     public static func getString(
         url: URL,
         headers: [String: String] = [:],
-        timeout: TimeInterval = defaultTimeout
+        timeout: TimeInterval = defaultTimeout,
+        retry: Bool = true
     ) async throws -> String {
-        let (data, _) = try await getData(url: url, headers: headers, timeout: timeout)
+        let (data, _) = try await getData(url: url, headers: headers, timeout: timeout, retry: retry)
 
         guard let string = String(data: data, encoding: .utf8) else {
             throw HTTPError.decodingFailed
@@ -124,9 +148,10 @@ public enum HTTPClient {
     public static func getJSON(
         url: URL,
         headers: [String: String] = [:],
-        timeout: TimeInterval = defaultTimeout
+        timeout: TimeInterval = defaultTimeout,
+        retry: Bool = true
     ) async throws -> [String: Any] {
-        let (data, _) = try await getData(url: url, headers: headers, timeout: timeout)
+        let (data, _) = try await getData(url: url, headers: headers, timeout: timeout, retry: retry)
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw HTTPError.decodingFailed
@@ -172,6 +197,25 @@ public enum HTTPClient {
     }
 
     // ── 便捷方法 ──
+
+    /// Pre-warm TLS connections to critical lyrics hosts.
+    public static func warmup() {
+        let hosts = [
+            "https://music.163.com",
+            "https://lrclib.net",
+            "https://u.y.qq.com",
+            "https://cdn.jsdelivr.net"
+        ]
+        for urlString in hosts {
+            guard let url = URL(string: urlString) else { continue }
+            Task {
+                var request = URLRequest(url: url)
+                request.httpMethod = "HEAD"
+                request.timeoutInterval = 3.0
+                _ = try? await sharedSession.data(for: request)
+            }
+        }
+    }
 
     /// 构建带查询参数的 URL
     public static func buildURL(

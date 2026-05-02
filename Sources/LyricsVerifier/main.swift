@@ -294,7 +294,8 @@ private func runLibrary(args: [String]) async {
         let r = await testSong(
             id: "LIB-\(String(format: "%02d", i + 1))",
             title: track.title, artist: track.artist,
-            duration: track.duration, expectation: nil
+            duration: track.duration, expectation: nil,
+            album: track.album
         )
         results.append(r)
         printResultLine(r)
@@ -376,6 +377,7 @@ private func runBenchmark(args: [String]) async {
             base: baseResult,
             region: bc.region,
             expectedLyricsLang: bc.expectedLyricsLang,
+            expectedShouldFindLyrics: bc.expectation.shouldFindLyrics,
             translationLeakCount: leakCount,
             sourceTranslationFound: baseResult.hasTranslation,
             localTranslationOK: localOK,
