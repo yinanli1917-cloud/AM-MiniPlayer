@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import statistics
 import subprocess
 import time
@@ -77,6 +78,19 @@ def sample_process(pid: int) -> tuple[float, float] | None:
     return cpu, rss_mb
 
 
+def start_stack_sample(pid: int, duration: float, output_path: Path) -> subprocess.Popen[str] | None:
+    sample_tool = shutil.which("sample")
+    if sample_tool is None:
+        return None
+
+    return subprocess.Popen(
+        [sample_tool, str(pid), str(max(1, int(duration))), "-file", str(output_path)],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def percentile(values: list[float], pct: float) -> float:
     if not values:
         return 0.0
@@ -93,6 +107,7 @@ def main() -> None:
     parser.add_argument("--skip-count", type=int, default=0, help="number of next-track commands to send")
     parser.add_argument("--skip-interval", type=float, default=0.25, help="delay between next-track commands")
     parser.add_argument("--require-music-playing", action="store_true", help="fail if Music.app is not currently playing")
+    parser.add_argument("--stack-sample", action="store_true", help="also collect a macOS sample stack file for nanoPod")
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -107,6 +122,8 @@ def main() -> None:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     csv_path = OUT_DIR / f"perf-{stamp}.csv"
     summary_path = OUT_DIR / f"perf-{stamp}.json"
+    sample_path = OUT_DIR / f"sample-{stamp}.txt"
+    sample_proc = start_stack_sample(pid, args.duration, sample_path) if args.stack_sample else None
 
     samples: list[dict[str, float]] = []
     next_skip_at = time.time()
@@ -139,6 +156,13 @@ def main() -> None:
 
     cpus = [row["cpu_pct"] for row in samples]
     rss = [row["rss_mb"] for row in samples]
+    if sample_proc is not None:
+        try:
+            sample_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            sample_proc.terminate()
+            sample_proc.wait(timeout=2)
+
     summary = {
         "pid": pid,
         "music_state_at_start": state,
@@ -155,6 +179,8 @@ def main() -> None:
         "rss_max_mb": round(max(rss), 1) if rss else 0,
         "csv": str(csv_path),
     }
+    if args.stack_sample:
+        summary["sample"] = str(sample_path) if sample_path.exists() else None
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 

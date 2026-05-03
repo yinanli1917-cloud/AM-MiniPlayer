@@ -47,6 +47,8 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Lyrics-page rapid switch after user-action tracking + SB artwork debounce | `tmp/perf/perf-20260503-043849.csv` | avg 30.5%, p95 71.2%, max 79.5. This preserves the lyrics renderer/layout and drops stale Music.app artwork reads during rapid skips before they enter expensive ScriptingBridge extraction. |
 | Reverted offscreen wave-stagger cap experiment | `tmp/perf/perf-20260503-050230.csv` | avg 54.56%, p95 89.8%, max 98.0. Capping delayed lyric wave target updates to the visible window was not a solid improvement, so it was reverted. |
 | Reverted lyrics background drawing-group experiment | `tmp/perf/perf-20260503-050440.csv` | avg 47.42%, p95 102.3%, max 111.8. Compositing the multi-layer artwork background with `drawingGroup` improved average CPU but worsened spike behavior, so it was reverted. |
+| Stack-sampled lyrics rapid switch | `tmp/perf/perf-20260503-162320.csv`, `tmp/perf/sample-20260503-162320.txt` | avg 73.87%, p95 106.6%, max 113.0. The sample points at SwiftUI display-list/layout/layer churn (`DisplayList.ViewUpdater`, clip/filter/layer state), not NaturalLanguage or network fetch. |
+| Reverted progress-bar mask removal experiment | `tmp/perf/perf-20260503-162551.csv` | avg 63.68%, p95 117.4%, max 144.5. Replacing the progress fill mask with a leading capsule made spike behavior worse, so it was reverted. |
 
 ## Important Correction
 
@@ -79,6 +81,8 @@ Protected UX paths:
 - ScriptingBridge artwork extraction remains expensive during rapid skipping. A short generation re-check delay now lets transient skipped tracks fall out before `currentTrack.artworks` is read, while API artwork still starts immediately for responsiveness.
 - Capping offscreen lyric wave stagger scheduling did not materially improve rapid-switch CPU and should not be repeated without a more precise SwiftUI invalidation trace.
 - `drawingGroup` on the lyrics artwork background is not a safe optimization for rapid switching because it worsened p95/max CPU.
+- The new stack-sample evidence continues to point at SwiftUI display-list/layer churn. It did not show NaturalLanguage, translation, or network fetch dominating the captured rapid-switch window.
+- Removing the progress-bar mask is not a safe optimization; it worsened p95/max CPU.
 
 ## Safe Next Lanes
 
