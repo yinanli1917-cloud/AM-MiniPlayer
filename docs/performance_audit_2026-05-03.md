@@ -52,6 +52,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted conditional controls-blur experiment | `tmp/perf/perf-20260503-162903.csv` | avg 60.87%, p95 102.4%, max 107.3. Removing the zero-radius controls blur from the steady-state tree did not improve rapid-switch spikes, so it was reverted. |
 | Batched track metadata invalidation | `tmp/perf/perf-20260503-163614.csv`, `tmp/perf/perf-20260503-163645.csv` | Converts title/artist/album/duration/audio-quality/persistentID from independent `@Published` fields to one manual metadata change signal. Two stack-sampled lyrics rapid-switch runs: avg 70.78%, p95 102.9%, max 119.3; then avg 28.31%, p95 90.6%, max 112.8. This is an incremental service-layer reduction only; p95/max remain too high. |
 | Reverted lyrics background identity experiment | `tmp/perf/perf-20260503-164230.csv` | avg 73.13%, p95 115.2%, max 120.3. Removing `.id(currentTrackTitle)` from `AdaptiveFluidBackground` worsened spike behavior, so it was reverted. |
+| Reverted controls environment-object isolation experiment | `tmp/perf/perf-20260503-164828.csv` | avg 70.56%, p95 106.0%, max 109.1 with only 19/20 skips sent. Passing `MusicController` explicitly into shared controls instead of using `@EnvironmentObject` did not reduce the lyrics-page spike path, so it was reverted. |
 
 ## Important Correction
 
@@ -89,6 +90,7 @@ Protected UX paths:
 - Conditional removal of the lyrics controls blur filter did not reduce p95/max CPU and should not be repeated without more precise evidence.
 - Track metadata no longer emits separate broad SwiftUI invalidations for title, artist, album, duration, audio-quality, and persistentID changes. This preserves the visible lyric renderer but only reduces one invalidation source; the remaining spike path is still SwiftUI display-list/layout/layer work.
 - Removing the lyrics background's track identity is not a safe optimization; it worsened p95/max CPU and should not be repeated.
+- Removing shared controls' nested `@EnvironmentObject` subscription did not reduce rapid-switch spikes and should not be repeated as a standalone optimization.
 
 ## Safe Next Lanes
 
