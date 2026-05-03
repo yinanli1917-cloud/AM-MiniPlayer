@@ -49,6 +49,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted lyrics background drawing-group experiment | `tmp/perf/perf-20260503-050440.csv` | avg 47.42%, p95 102.3%, max 111.8. Compositing the multi-layer artwork background with `drawingGroup` improved average CPU but worsened spike behavior, so it was reverted. |
 | Stack-sampled lyrics rapid switch | `tmp/perf/perf-20260503-162320.csv`, `tmp/perf/sample-20260503-162320.txt` | avg 73.87%, p95 106.6%, max 113.0. The sample points at SwiftUI display-list/layout/layer churn (`DisplayList.ViewUpdater`, clip/filter/layer state), not NaturalLanguage or network fetch. |
 | Reverted progress-bar mask removal experiment | `tmp/perf/perf-20260503-162551.csv` | avg 63.68%, p95 117.4%, max 144.5. Replacing the progress fill mask with a leading capsule made spike behavior worse, so it was reverted. |
+| Reverted conditional controls-blur experiment | `tmp/perf/perf-20260503-162903.csv` | avg 60.87%, p95 102.4%, max 107.3. Removing the zero-radius controls blur from the steady-state tree did not improve rapid-switch spikes, so it was reverted. |
 
 ## Important Correction
 
@@ -83,6 +84,7 @@ Protected UX paths:
 - `drawingGroup` on the lyrics artwork background is not a safe optimization for rapid switching because it worsened p95/max CPU.
 - The new stack-sample evidence continues to point at SwiftUI display-list/layer churn. It did not show NaturalLanguage, translation, or network fetch dominating the captured rapid-switch window.
 - Removing the progress-bar mask is not a safe optimization; it worsened p95/max CPU.
+- Conditional removal of the lyrics controls blur filter did not reduce p95/max CPU and should not be repeated without more precise evidence.
 
 ## Safe Next Lanes
 
