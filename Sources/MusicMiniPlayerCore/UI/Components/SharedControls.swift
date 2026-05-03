@@ -182,7 +182,7 @@ struct SharedBottomControls: View {
     @ViewBuilder
     private var playbackCluster: some View {
         let buttons = HStack(spacing: 10) {
-            HoverableControlButton(iconName: "backward.fill", size: 17, action: {
+            SkipControlButton(action: {
                 musicController.previousTrack()
             }, direction: -1)
             .frame(width: 30, height: 30)
@@ -194,7 +194,7 @@ struct SharedBottomControls: View {
             .frame(width: 30, height: 30)
             .accessibilityLabel(musicController.isPlaying ? "暂停" : "播放")
 
-            HoverableControlButton(iconName: "forward.fill", size: 17, action: {
+            SkipControlButton(action: {
                 musicController.nextTrack()
             }, direction: 1)
             .frame(width: 30, height: 30)
@@ -360,6 +360,246 @@ struct HoverableControlButton: View {
                 isHovering = hovering
             }
         }
+    }
+}
+
+// MARK: - Skip Control Button (Replacement Flow Micro-Interaction)
+
+private struct TriangleAnimValues {
+    var offsetX: CGFloat = 0
+    var opacity: Double = 1.0
+    var scaleX: CGFloat = 1.0
+}
+
+struct SkipControlButton: View {
+    let action: () -> Void
+    let direction: CGFloat
+
+    @State private var isHovering = false
+    @State private var commitTrigger = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.white.opacity(isHovering ? 0.25 : 0))
+
+            Button {
+                action()
+                if !reduceMotion { commitTrigger += 1 }
+            } label: {
+                HStack(spacing: -4) {
+                    trailTriangle
+                    leadTriangle
+                }
+                .scaleEffect(x: direction, y: 1)
+                .frame(width: 32, height: 32)
+                .contentShape(Circle())
+            }
+            .buttonStyle(SkipPressStyle(reduceMotion: reduceMotion))
+        }
+        .frame(width: 32, height: 32)
+        .onHover { hovering in
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+    }
+
+    private var leadTriangle: some View {
+        Image(systemName: "play.fill")
+            .font(.system(size: 13.5))
+            .foregroundColor(.white)
+            .keyframeAnimator(
+                initialValue: TriangleAnimValues(),
+                trigger: commitTrigger
+            ) { content, value in
+                content
+                    .scaleEffect(x: value.scaleX, y: 1.0)
+                    .offset(x: value.offsetX)
+                    .opacity(value.opacity)
+            } keyframes: { _ in
+                KeyframeTrack(\.offsetX) {
+                    CubicKeyframe(18, duration: 0.28)
+                    MoveKeyframe(-14)
+                    SpringKeyframe(0, duration: 0.42, spring: .init(response: 0.38, dampingRatio: 0.88))
+                }
+                KeyframeTrack(\.opacity) {
+                    CubicKeyframe(0, duration: 0.22)
+                    MoveKeyframe(0)
+                    CubicKeyframe(1.0, duration: 0.34)
+                }
+                KeyframeTrack(\.scaleX) {
+                    CubicKeyframe(1.15, duration: 0.25)
+                    MoveKeyframe(0.88)
+                    SpringKeyframe(1.0, duration: 0.34, spring: .init(response: 0.30, dampingRatio: 0.85))
+                }
+            }
+    }
+
+    private var trailTriangle: some View {
+        Image(systemName: "play.fill")
+            .font(.system(size: 13.5))
+            .foregroundColor(.white)
+            .keyframeAnimator(
+                initialValue: TriangleAnimValues(),
+                trigger: commitTrigger
+            ) { content, value in
+                content
+                    .scaleEffect(x: value.scaleX, y: 1.0)
+                    .offset(x: value.offsetX)
+                    .opacity(value.opacity)
+            } keyframes: { _ in
+                KeyframeTrack(\.offsetX) {
+                    LinearKeyframe(0, duration: 0.06)
+                    CubicKeyframe(15, duration: 0.28)
+                    MoveKeyframe(-12)
+                    SpringKeyframe(0, duration: 0.40, spring: .init(response: 0.38, dampingRatio: 0.88))
+                }
+                KeyframeTrack(\.opacity) {
+                    LinearKeyframe(1.0, duration: 0.06)
+                    CubicKeyframe(0, duration: 0.22)
+                    MoveKeyframe(0)
+                    CubicKeyframe(1.0, duration: 0.32)
+                }
+                KeyframeTrack(\.scaleX) {
+                    LinearKeyframe(1.0, duration: 0.06)
+                    CubicKeyframe(1.12, duration: 0.25)
+                    MoveKeyframe(0.90)
+                    SpringKeyframe(1.0, duration: 0.32, spring: .init(response: 0.30, dampingRatio: 0.85))
+                }
+            }
+    }
+}
+
+private struct SkipPressStyle: ButtonStyle {
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.85 : 1.0)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.12, dampingFraction: 0.65),
+                value: configuration.isPressed
+            )
+    }
+}
+
+// MARK: - Skip Text Transition (entry-only, smooth spring)
+
+private struct MetadataTransitionValues {
+    var offsetX: CGFloat = 0
+    var blur: CGFloat = 0
+    var opacity: Double = 1.0
+}
+
+struct SkipTextTransition: ViewModifier {
+    let text: String
+    let direction: CGFloat
+    var offset: CGFloat = 30
+    var maxBlur: CGFloat = 8
+    @State private var trigger = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .keyframeAnimator(
+                initialValue: MetadataTransitionValues(),
+                trigger: trigger
+            ) { view, value in
+                view
+                    .offset(x: value.offsetX)
+                    .blur(radius: value.blur)
+                    .opacity(value.opacity)
+            } keyframes: { _ in
+                KeyframeTrack(\.offsetX) {
+                    MoveKeyframe(direction * offset)
+                    CubicKeyframe(direction * offset * 0.6, duration: 0.12)
+                    SpringKeyframe(0, duration: 0.65, spring: .init(response: 0.5, dampingRatio: 0.92))
+                }
+                KeyframeTrack(\.blur) {
+                    MoveKeyframe(maxBlur)
+                    CubicKeyframe(maxBlur * 0.5, duration: 0.15)
+                    CubicKeyframe(0, duration: 0.50)
+                }
+                KeyframeTrack(\.opacity) {
+                    MoveKeyframe(0.0)
+                    CubicKeyframe(0.3, duration: 0.12)
+                    CubicKeyframe(1.0, duration: 0.45)
+                }
+            }
+            .onChange(of: text) { oldValue, newValue in
+                guard !reduceMotion, oldValue != newValue else { return }
+                trigger += 1
+            }
+    }
+}
+
+// MARK: - Animated Shuffle Icon (Per-Arrow Swap Flow)
+
+private struct ShuffleArrowValues {
+    var offsetX: CGFloat = 0
+    var opacity: Double = 1.0
+    var scale: CGFloat = 1.0
+}
+
+struct AnimatedShuffleIcon: View {
+    let color: Color
+    let isEnabled: Bool
+    var size: CGFloat = 11
+    var weight: Font.Weight = .semibold
+
+    @State private var commitTrigger = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Image(systemName: "shuffle")
+            .font(.system(size: size, weight: weight))
+            .foregroundStyle(color)
+            .keyframeAnimator(
+                initialValue: ShuffleArrowValues(),
+                trigger: commitTrigger
+            ) { content, value in
+                content
+                    .scaleEffect(value.scale)
+                    .offset(x: value.offsetX)
+                    .opacity(value.opacity)
+            } keyframes: { _ in
+                KeyframeTrack(\.offsetX) {
+                    CubicKeyframe(12, duration: 0.25)
+                    MoveKeyframe(-10)
+                    SpringKeyframe(0, duration: 0.40, spring: .init(response: 0.38, dampingRatio: 0.88))
+                }
+                KeyframeTrack(\.scale) {
+                    CubicKeyframe(1.12, duration: 0.22)
+                    MoveKeyframe(0.88)
+                    SpringKeyframe(1.0, duration: 0.32, spring: .init(response: 0.30, dampingRatio: 0.85))
+                }
+                KeyframeTrack(\.opacity) {
+                    CubicKeyframe(0, duration: 0.20)
+                    MoveKeyframe(0)
+                    CubicKeyframe(1.0, duration: 0.32)
+                }
+            }
+            .onChange(of: isEnabled) { _, _ in
+                guard !reduceMotion else { return }
+                commitTrigger += 1
+            }
+    }
+}
+
+struct CapsulePressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.93 : 1.0)
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.1, dampingFraction: 0.7),
+                value: configuration.isPressed
+            )
     }
 }
 

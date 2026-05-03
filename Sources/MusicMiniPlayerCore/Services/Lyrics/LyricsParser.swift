@@ -533,7 +533,7 @@ public final class LyricsParser {
     /// 剥离任意位置的元信息行（作词/作曲/编曲/演唱等）
     /// 🔑 必须在 mergeLyricsWithTranslation 之前调用，否则元信息行会吃掉翻译时间戳
     public func stripMetadataLines(_ lines: [LyricLine]) -> [LyricLine] {
-        lines.filter { line in
+        let basicFiltered = lines.filter { line in
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { return false }
             // 高置信度关键词匹配（任意位置生效）
@@ -553,6 +553,31 @@ public final class LyricsParser {
             if isPureSymbols(trimmed) { return false }
             return true
         }
+        return stripOpeningTitleCardCluster(basicFiltered)
+    }
+
+    private func stripOpeningTitleCardCluster(_ lines: [LyricLine]) -> [LyricLine] {
+        guard lines.count >= 3 else { return lines }
+
+        var clusterEnd = 0
+        while clusterEnd < min(3, lines.count) {
+            let line = lines[clusterEnd]
+            let wordCount = line.text.split(whereSeparator: { $0.isWhitespace }).count
+            let duration = max(0, line.endTime - line.startTime)
+            guard line.startTime <= 5.0,
+                  duration <= 2.5,
+                  wordCount <= 6,
+                  !LanguageUtils.containsCJK(line.text) else { break }
+            clusterEnd += 1
+        }
+
+        guard clusterEnd > 0, clusterEnd < lines.count else { return lines }
+        let lastClusterLine = lines[clusterEnd - 1]
+        let nextLine = lines[clusterEnd]
+        let gapToLyrics = nextLine.startTime - lastClusterLine.endTime
+        guard nextLine.startTime >= 8.0 || gapToLyrics >= 4.0 else { return lines }
+
+        return Array(lines.dropFirst(clusterEnd))
     }
 
     /// Match "X by Y @ Z" credit lines without colon.

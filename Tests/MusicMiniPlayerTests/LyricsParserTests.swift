@@ -569,6 +569,20 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(stripped[0].text, "First real lyric line here")
     }
 
+    func testStripMetadataLines_openingTitleAndArtistCards() {
+        let lines = [
+            LyricLine(text: "We'Ve Only Just Begun", startTime: 2.4, endTime: 2.8),
+            LyricLine(text: "Carpenters", startTime: 2.9, endTime: 3.2),
+            LyricLine(text: "We've only just begun to live", startTime: 11.6, endTime: 15.0),
+            LyricLine(text: "White lace and promises", startTime: 15.2, endTime: 19.0),
+        ]
+
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.count, 2)
+        XCTAssertEqual(stripped[0].text, "We've only just begun to live")
+    }
+
     /// Real data: 明明他已離開妳 by Hins Cheung — NE lyrics include credit
     /// lines with long labels ("Background Vocals and arrangement"), values
     /// with "@location" markers, and credit lines WITHOUT colons

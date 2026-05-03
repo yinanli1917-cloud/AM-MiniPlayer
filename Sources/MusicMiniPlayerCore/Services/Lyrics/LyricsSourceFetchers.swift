@@ -318,12 +318,16 @@ extension LyricsFetcher {
         }
         .filter { c in
             if c.titleMatched { return true }
-            if c.sourceTitleAlias { return true }
+            // If the provider already found the requested catalog row but that
+            // row has no usable lyrics, do not jump to a different same-artist
+            // CJK title just because the duration is nearby. That turns
+            // instrumental/no-lyrics tracks into unrelated vocal lyrics.
+            if c.sourceTitleAlias { return match == nil && params.normalizedAlbum.isEmpty }
             let inputLooksRomanized = LanguageUtils.isPureASCII(params.rawTitle)
                 && (params.rawTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count >= 4
                     || LanguageUtils.isLikelyRomanizedJapanese(params.rawTitle))
                 && !LanguageUtils.isLikelyEnglishTitle(params.rawTitle)
-            return inputLooksRomanized && LanguageUtils.containsCJK(c.name) && c.delta < 1.0
+            return match == nil && inputLooksRomanized && LanguageUtils.containsCJK(c.name) && c.delta < 1.0
         }
         .sorted {
             if $0.sourceTitleAlias != $1.sourceTitleAlias { return $0.sourceTitleAlias && !$1.sourceTitleAlias }

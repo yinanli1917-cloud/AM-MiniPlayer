@@ -214,46 +214,77 @@ extension MusicController {
         // Deezer→iTunes) accumulated up to ~2s before yielding. Parallel race
         // returns within the FASTEST source's round-trip (~300-700ms typical).
         //
-        // Source priority on tie: NetEase first (best CJK coverage) > Deezer
-        // (strong Western) > iTunes (often 403, last resort). MusicKit only
-        // fires when authorized; Apple's catalog wins when available.
+        // Source priority: Apple catalog artwork should win when it arrives
+        // promptly, because the UI must match Music.app/Apple Music. Keep web
+        // results as an instant fallback, but give Apple a tiny grace period
+        // after the first web hit so the common "Apple was just behind Deezer"
+        // race does not permanently cache inconsistent covers.
 
         enum ArtworkTrust: Int { case apple = 0, web = 1 }
+        enum ArtworkRaceEvent {
+            case image(NSImage, ArtworkTrust)
+            case appleGraceExpired
+        }
 
-        return await withTaskGroup(of: (NSImage, ArtworkTrust)?.self) { group in
+        return await withTaskGroup(of: ArtworkRaceEvent?.self) { group in
             if MusicAuthorization.currentStatus == .authorized {
                 group.addTask {
                     if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
                         await self.fetchArtworkViaMusicKit(title: title, artist: artist, album: album)
-                    }) { return (img, .apple) }
+                    }) { return .image(img, .apple) }
                     return nil
                 }
             }
             group.addTask {
                 if let img = await self.withArtworkTimeout(seconds: 1.4, operation: {
                     await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
-                }) { return (img, .apple) }
+                }) { return .image(img, .apple) }
                 return nil
             }
             group.addTask {
                 if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
                     await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album)
-                }) { return (img, .web) }
+                }) { return .image(img, .web) }
                 return nil
             }
             group.addTask {
                 if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
                     await self.fetchArtworkViaDeezer(title: title, artist: artist)
-                }) { return (img, .web) }
+                }) { return .image(img, .web) }
                 return nil
             }
 
-            for await result in group {
-                guard let r = result else { continue }
-                group.cancelAll()
-                return r.0
+            var webFallback: NSImage?
+            var graceStarted = false
+
+            for await event in group {
+                guard let event else { continue }
+                switch event {
+                case let .image(image, .apple):
+                    group.cancelAll()
+                    return image
+
+                case let .image(image, .web):
+                    if webFallback == nil {
+                        webFallback = image
+                    }
+                    if !graceStarted {
+                        graceStarted = true
+                        group.addTask {
+                            try? await Task.sleep(nanoseconds: 180_000_000)
+                            return .appleGraceExpired
+                        }
+                    }
+
+                case .appleGraceExpired:
+                    if let webFallback {
+                        group.cancelAll()
+                        return webFallback
+                    }
+                }
             }
-            return nil
+
+            return webFallback
         }
     }
 

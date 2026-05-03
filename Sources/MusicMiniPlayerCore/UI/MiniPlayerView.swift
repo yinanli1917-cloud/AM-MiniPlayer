@@ -33,7 +33,6 @@ public struct MiniPlayerView: View {
     @State private var topRightLuminance: CGFloat = 0.5
 
     // 🔑 Shuffle/Repeat 流动动画进度
-    @State private var shuffleFlow: Double = 0
     @State private var repeatFlow: Double = 0
 
     // 🔑 页面切换后短暂锁定 hover 状态，防止 onHover(false) 覆盖
@@ -271,6 +270,10 @@ extension MiniPlayerView {
                     .lineLimit(1)
                     .shadow(color: .black.opacity(0.3 + 0.5 * artworkBrightness), radius: 4 + 12 * artworkBrightness, x: 0, y: 1)
                     .shadow(color: .black.opacity(0.15 + 0.25 * artworkBrightness), radius: 2 + 4 * artworkBrightness, x: 0, y: 0)
+                    .modifier(SkipTextTransition(
+                        text: musicController.currentTrackTitle,
+                        direction: musicController.skipDirection
+                    ))
                     .matchedGeometryEffect(id: "trackTitle", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -296,6 +299,12 @@ extension MiniPlayerView {
                     .lineLimit(1)
                     .shadow(color: .black.opacity(0.3 + 0.5 * artworkBrightness), radius: 4 + 12 * artworkBrightness, x: 0, y: 1)
                     .shadow(color: .black.opacity(0.15 + 0.25 * artworkBrightness), radius: 2 + 4 * artworkBrightness, x: 0, y: 0)
+                    .modifier(SkipTextTransition(
+                        text: musicController.currentArtist,
+                        direction: musicController.skipDirection,
+                        offset: 22,
+                        maxBlur: 6
+                    ))
                     .matchedGeometryEffect(id: "artistName", in: animation)
                     .frame(width: isHovering ? geo.size.width - 112 : artSize - 24, alignment: .leading)
                     .position(
@@ -357,27 +366,19 @@ extension MiniPlayerView {
 
         HStack(spacing: 4) {
             Button(action: { musicController.toggleShuffle() }) {
-                Image(systemName: "shuffle")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
-                    .rotationEffect(.degrees(shuffleFlow * 12))
-                    .scaleEffect(1 - shuffleFlow * 0.12)
-                    .frame(width: 24, height: 24)
-                    .background(
-                        Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
-                            .overlay(musicController.shuffleEnabled ? Circle().fill(themeColor.opacity(0.2)) : nil)
-                    )
+                AnimatedShuffleIcon(
+                    color: musicController.shuffleEnabled ? themeColor : .white,
+                    isEnabled: musicController.shuffleEnabled
+                )
+                .frame(width: 24, height: 24)
+                .background(
+                    Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
+                        .overlay(musicController.shuffleEnabled ? Circle().fill(themeColor.opacity(0.2)) : nil)
+                )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("随机播放")
             .accessibilityAddTraits(musicController.shuffleEnabled ? .isSelected : [])
-            .onChange(of: musicController.shuffleEnabled) { _, _ in
-                guard !reduceMotion else { return }
-                withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { shuffleFlow = 1 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    withAnimation(.interpolatingSpring(stiffness: 300, damping: 8)) { shuffleFlow = 0 }
-                }
-            }
 
             Button(action: { musicController.cycleRepeatMode() }) {
                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")

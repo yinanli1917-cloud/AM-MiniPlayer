@@ -33,3 +33,4 @@ releases/
 
 # Claude workflow state (hook-enforced, not part of codebase)
 .claude/workflow.md
+.claude/tasks/
