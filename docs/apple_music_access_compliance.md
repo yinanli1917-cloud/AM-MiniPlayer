@@ -11,6 +11,8 @@ nanoPod has two different data needs:
 
 Apple's public MusicKit and Apple Music API surface supports user-authorized catalog, library, playlist, and recently played requests. The documented recent endpoints include `GET /v1/me/recent/played` for recently played resources and `GET /v1/me/recent/played/tracks` for recently played tracks; both require a music user token. MusicKit player queues expose queues that the app creates or controls, but the reviewed docs do not expose a supported API for reading another app's existing live Music.app Up Next queue.
 
+2026-05-03 refresh against current Apple docs/guidelines confirmed the same boundary: Apple documents recently played resources/tracks under Apple Music API history, and documents MusicKit queue/current-entry APIs for a `MusicPlayer` queue, but does not document a public API for importing Music.app's already-existing live Up Next queue from another process.
+
 ## App Store-Safe Direction
 
 - Prefer MusicKit or Apple Music API for any data Apple exposes publicly: catalog metadata, artwork, library playlists, and recently played resources.
@@ -18,6 +20,7 @@ Apple's public MusicKit and Apple Music API surface supports user-authorized cat
 - Request and explain `NSAppleMusicUsageDescription` for library/media access.
 - Request Apple Events automation only for controlling or mirroring the user's active Music.app session, not for unrelated library profiling.
 - Avoid private frameworks, private selectors, injected accessibility scraping, or reverse-engineered Music.app storage.
+- App Store review notes should disclose why Apple Music and Apple Events access are requested: Apple Music for library/catalog/recent history metadata, Apple Events for user-visible control/mirroring of the active Music.app session on macOS.
 
 ## Implementation Implications
 
@@ -28,8 +31,12 @@ Apple's public MusicKit and Apple Music API surface supports user-authorized cat
 ## Sources Reviewed
 
 - Apple Music API overview: https://developer.apple.com/documentation/AppleMusicAPI
+- Apple Music API History collection: https://developer.apple.com/documentation/applemusicapi/history
 - Get Recently Played Resources: https://developer.apple.com/documentation/applemusicapi/get-recently-played-resources
 - Get Recently Played Tracks: https://developer.apple.com/documentation/applemusicapi/get-v1-me-recent-played-tracks
 - User Authentication for MusicKit: https://developer.apple.com/documentation/applemusicapi/user-authentication-for-musickit
 - MusicKit `MusicPlayer.Queue.currentEntry`: https://developer.apple.com/documentation/musickit/musicplayer/queue/currententry
+- MusicKit `MusicPlayer.Queue`: https://developer.apple.com/documentation/musickit/musicplayer/queue
+- App Review Guidelines, Apple Music/User Data notes: https://developer.apple.com/app-store/review/guidelines/
+- App Privacy Details: https://developer.apple.com/app-store/app-privacy-details/
 - Requesting access to Apple Music library: https://developer.apple.com/documentation/storekit/requesting-access-to-apple-music-library
