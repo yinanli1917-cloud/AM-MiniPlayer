@@ -1,0 +1,35 @@
+version: 1
+project: MusicMiniPlayer
+
+deny_rules:
+  - id: no-private-apis
+    pattern: "(?i)private api|undocumented api|method swizzling.*Music|ScriptingBridge.*main thread"
+    message: "Do not use private APIs or call ScriptingBridge from the main thread."
+  - id: no-known-liquid-glass-recursion
+    pattern: "Section\\s*\\{[\\s\\S]*LazyVStack"
+    message: "Avoid Section + LazyVStack in macOS 26 Liquid Glass paths. Use VStack with explicit header child."
+  - id: no-unverified-lyric-renderer-change
+    pattern: "TimelineView\\(\\.periodic|1\\.0\\s*/\\s*(24|30)\\.0|WordByWordText\\("
+    message: "Do not alter word-level lyric cadence or renderer without visual parity evidence."
+  - id: no-raw-git-push
+    pattern: "\\bgit\\s+push\\b"
+    message: "Only push when the user explicitly asks."
+
+verification_gates:
+  before_handoff:
+    - "swift build"
+    - "swift test"
+    - "./build_app.sh when app packaging changed or UI/runtime behavior changed"
+    - "python3 scripts/verify_harness.py when harness files changed"
+    - "Relevant live harness or visual check when performance or animation changed"
+
+protected_ux:
+  - "LyricLineView word-level animation cadence and renderer"
+  - "LyricsView line spacing, blur, translation pairing, and wave animation"
+  - "MiniPlayerView micro-interactions for skip, shuffle, repeat, and page switching"
+
+safe_perf_lanes:
+  - "Background task coalescing and cancellation"
+  - "Queue/history throttling"
+  - "Artwork and lyrics preloading that does not compete with current-song foreground work"
+  - "Hidden-view gating where layout and interaction are unchanged when visible"

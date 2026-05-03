@@ -1,0 +1,29 @@
+version: 1
+
+phases:
+  planning:
+    reminder: "Read current code, history, and postmortems before proposing changes."
+    checks:
+      - "Identify which UI behavior must remain visually identical."
+      - "Name the exact verification command or live scenario before editing."
+  coding:
+    reminder: "Use focused edits. Prefer existing patterns. Do not touch lyric rendering as a performance shortcut."
+    checks:
+      - "Keep production changes separated from experiments."
+      - "Use apply_patch for manual source edits."
+  debugging:
+    reminder: "Reproduce and sample before fixing. After failed attempts, stop and reassess architecture."
+    checks:
+      - "Capture the page/state being measured."
+      - "Do not compare overlapping harness runs."
+  reviewing:
+    reminder: "Review for regressions first, especially known postmortem failures."
+    checks:
+      - "Search for banned patterns."
+      - "Check changed files against protected UX list."
+  verifying:
+    reminder: "No completion claim without fresh evidence from this turn."
+    checks:
+      - "Read full command output and exit code."
+      - "Record CPU measurements with scenario and page state."
+      - "State unresolved gaps plainly."
