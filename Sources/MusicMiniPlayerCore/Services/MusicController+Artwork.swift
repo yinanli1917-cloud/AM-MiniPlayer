@@ -50,11 +50,14 @@ extension MusicController {
 
     /// 🔑 设置封面并自动计算亮度
     func setArtwork(_ image: NSImage?) {
+        if currentArtwork === image { return }
         self.currentArtwork = image
         if let img = image {
             self.artworkLuminance = img.perceivedBrightness()
+            self.controlAreaLuminance = img.controlAreaMaxLuminance()
         } else {
             self.artworkLuminance = 0.5
+            self.controlAreaLuminance = 0.5
         }
     }
 

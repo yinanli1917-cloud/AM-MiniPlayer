@@ -191,20 +191,16 @@ public struct MiniPlayerView: View {
         // 🔑 监听封面变化，计算整图 + 底部区域亮度
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
-                artworkBrightness = artwork.perceivedBrightness()
+                artworkBrightness = musicController.artworkLuminance
                 topLeftLuminance = artwork.topLeftBrightness()
                 topRightLuminance = artwork.topRightBrightness()
-                musicController.artworkLuminance = artworkBrightness
-                musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
         }
         .onAppear {
             if let artwork = musicController.currentArtwork {
-                artworkBrightness = artwork.perceivedBrightness()
+                artworkBrightness = musicController.artworkLuminance
                 topLeftLuminance = artwork.topLeftBrightness()
                 topRightLuminance = artwork.topRightBrightness()
-                musicController.artworkLuminance = artworkBrightness
-                musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
@@ -689,4 +685,3 @@ struct MiniPlayerView_Previews: PreviewProvider {
     }
 }
 #endif
-
