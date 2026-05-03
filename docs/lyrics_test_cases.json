@@ -409,10 +409,14 @@
     "title": "We've Only Just Begun",
     "artist": "Carpenters",
     "duration": 184,
+    "album": "Close To You",
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": "Begun"
+      "firstLineContains": "We've only just begun to live",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 8,
+      "firstLineStartMaxS": 16
     }
   },
   {
@@ -751,6 +755,28 @@
     "title": "Frisco Blues",
     "artist": "Lewis OfMan",
     "duration": 248,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X21_no_static_andata_immersion",
+    "title": "andata (immersion 2023)",
+    "artist": "Ryuichi Sakamoto",
+    "duration": 280,
+    "album": "async - immersion 2023",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X22_no_wrong_timestamp_a_tisket",
+    "title": "A-Tisket, A-Tasket",
+    "artist": "Ella Fitzgerald",
+    "duration": 113,
+    "album": "Pure Ella",
     "expectation": {
       "shouldFindLyrics": false,
       "allowMissingLyrics": true

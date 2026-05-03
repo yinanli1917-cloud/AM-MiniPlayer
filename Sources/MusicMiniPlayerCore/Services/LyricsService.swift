@@ -99,8 +99,6 @@ public class LyricsService: ObservableObject {
 
     /// Timestamp when good lyrics were last applied — used for stability guard
     private var lastGoodLyricsTime: Date?
-    /// The artist from the last successful lyrics fetch — for same-song detection
-    private var lastGoodArtist: String?
     /// Cooldown: refuse re-fetches within this window unless forceRefresh
     private let stabilityGuardCooldown: TimeInterval = 3.0
 
@@ -197,9 +195,10 @@ public class LyricsService: ObservableObject {
            let lastGoodTime = lastGoodLyricsTime,
            Date().timeIntervalSince(lastGoodTime) < stabilityGuardCooldown,
            !lyrics.isEmpty, error == nil {
-            // Same-song detection: exact songID match OR same artist within cooldown
+            // Same-song detection must stay identity-based. Treating same artist
+            // as same song freezes stale lyrics during fast album/playlist switches
+            // such as adjacent Carpenters tracks.
             let isSameSong = songID == currentSongID
-                || (lastGoodArtist != nil && lastGoodArtist!.lowercased() == artist.lowercased())
             if isSameSong {
                 DebugLogger.log("LyricsService", "⏭️ Stability guard: '\(songID)' blocked (\(String(format: "%.1f", Date().timeIntervalSince(lastGoodTime)))s since good lyrics)")
                 // Silently update stored duration/songID to prevent future mismatches
@@ -226,8 +225,6 @@ public class LyricsService: ObservableObject {
 
         // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
         lastGoodLyricsTime = nil
-        lastGoodArtist = artist
-
         // 🔑 立即清除 error + loading（防止切歌时 retry UI 残留）
         error = nil
         isLoading = true

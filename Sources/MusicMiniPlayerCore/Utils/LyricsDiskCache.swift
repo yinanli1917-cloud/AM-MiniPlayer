@@ -13,6 +13,7 @@ public struct LyricsDiskCacheEntry: Codable, Equatable {
     public let lines: [CachedLyricLine]?
     public let ts: TimeInterval
     public let duration: TimeInterval
+    public let album: String?
     public let matchedDurationDiff: TimeInterval?
 }
 
@@ -36,7 +37,7 @@ private struct LyricsDiskCacheFile: Codable {
 }
 
 public final class LyricsDiskCache {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 4
     public static let ttlSeconds: TimeInterval = 30 * 86400
 
     private let fileURL: URL
@@ -59,8 +60,8 @@ public final class LyricsDiskCache {
         return dir.appendingPathComponent("lyrics_cache.json")
     }
 
-    public func get(title: String, artist: String, duration: TimeInterval) -> LyricsDiskCacheEntry? {
-        let keys = Self.cacheKeys(title: title, artist: artist, duration: duration)
+    public func get(title: String, artist: String, duration: TimeInterval, album: String = "") -> LyricsDiskCacheEntry? {
+        let keys = Self.cacheKeys(title: title, artist: artist, duration: duration, album: album)
         return queue.sync {
             ensureLoaded()
             for key in keys {
@@ -75,19 +76,20 @@ public final class LyricsDiskCache {
         }
     }
 
-    public func set(title: String, artist: String, duration: TimeInterval, source: String, syncedLyrics: String, matchedDurationDiff: TimeInterval?) {
+    public func set(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, syncedLyrics: String, matchedDurationDiff: TimeInterval?) {
         let entry = LyricsDiskCacheEntry(
             source: source,
             syncedLyrics: syncedLyrics,
             lines: nil,
             ts: Date().timeIntervalSince1970,
             duration: duration,
+            album: album.isEmpty ? nil : album,
             matchedDurationDiff: matchedDurationDiff
         )
-        setEntry(entry, title: title, artist: artist, duration: duration)
+        setEntry(entry, title: title, artist: artist, duration: duration, album: album)
     }
 
-    public func set(title: String, artist: String, duration: TimeInterval, source: String, lines: [LyricLine], matchedDurationDiff: TimeInterval?) {
+    public func set(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, lines: [LyricLine], matchedDurationDiff: TimeInterval?) {
         let cachedLines = lines.map { line in
             CachedLyricLine(
                 text: line.text,
@@ -103,9 +105,10 @@ public final class LyricsDiskCache {
             lines: cachedLines,
             ts: Date().timeIntervalSince1970,
             duration: duration,
+            album: album.isEmpty ? nil : album,
             matchedDurationDiff: matchedDurationDiff
         )
-        setEntry(entry, title: title, artist: artist, duration: duration)
+        setEntry(entry, title: title, artist: artist, duration: duration, album: album)
     }
 
     public static func lyricLines(from cached: [CachedLyricLine]) -> [LyricLine] {
@@ -120,8 +123,8 @@ public final class LyricsDiskCache {
         }
     }
 
-    private func setEntry(_ entry: LyricsDiskCacheEntry, title: String, artist: String, duration: TimeInterval) {
-        let keys = Self.cacheKeys(title: title, artist: artist, duration: duration)
+    private func setEntry(_ entry: LyricsDiskCacheEntry, title: String, artist: String, duration: TimeInterval, album: String) {
+        let keys = Self.cacheKeys(title: title, artist: artist, duration: duration, album: album)
         queue.sync {
             ensureLoaded()
             for key in keys {
@@ -153,12 +156,13 @@ public final class LyricsDiskCache {
         }
     }
 
-    private static func cacheKeys(title: String, artist: String, duration: TimeInterval) -> [String] {
+    public static func cacheKeys(title: String, artist: String, duration: TimeInterval, album: String = "") -> [String] {
         let nt = MetadataDiskCache.normalize(title)
         let na = MetadataDiskCache.normalize(artist)
+        let nalb = MetadataDiskCache.normalize(album)
         let rounded = Int(duration.rounded())
         return [rounded - 1, rounded, rounded + 1].map { d in
-            let raw = "\(nt)|\(na)|\(d)"
+            let raw = "\(nt)|\(na)|\(nalb)|\(d)"
             let digest = SHA256.hash(data: Data(raw.utf8))
             return digest.compactMap { String(format: "%02x", $0) }.joined()
         }

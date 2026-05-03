@@ -330,9 +330,14 @@ extension LyricsFetcher {
     }
 
     private func hasSevereTimelineMismatch(_ result: LyricsFetchResult, songDuration: TimeInterval, allResults: [LyricsFetchResult]) -> Bool {
-        guard songDuration >= 180,
+        guard songDuration > 0,
               result.kind == .synced,
               let lastStart = result.lyrics.last?.startTime else { return false }
+        let maxEnd = result.lyrics.map(\.endTime).max() ?? lastStart
+        if maxEnd > songDuration {
+            return (maxEnd - songDuration) > max(8.0, songDuration * 0.05)
+        }
+        guard songDuration >= 180 else { return false }
         if hasIndependentLyricAgreement(for: result, allResults: allResults) {
             return false
         }

@@ -141,7 +141,7 @@ public final class LyricsFetcher {
 
         let canUseImmediateDiskLyrics = !LanguageUtils.containsCJK(ot) && !LanguageUtils.containsCJK(oa)
         if canUseImmediateDiskLyrics,
-           let cached = lyricsDiskCache.get(title: ot, artist: oa, duration: d) {
+           let cached = lyricsDiskCache.get(title: ot, artist: oa, duration: d, album: alb) {
             let lyrics = cached.lines.map { LyricsDiskCache.lyricLines(from: $0) } ?? parser.parseLRC(cached.syncedLyrics)
             if !lyrics.isEmpty {
                 let score = scorer.calculateScore(lyrics, source: cached.source, duration: d, translationEnabled: te)
@@ -442,11 +442,13 @@ public final class LyricsFetcher {
 
         if let selected = selectBestResult(from: finalResults, songDuration: d),
            selected.kind == .synced,
-           !selected.lyrics.isEmpty {
+           !selected.lyrics.isEmpty,
+           selectedHasPersistentIdentity(selected) {
             lyricsDiskCache.set(
                 title: ot,
                 artist: oa,
                 duration: d,
+                album: alb,
                 source: selected.source,
                 lines: selected.lyrics,
                 matchedDurationDiff: selected.matchedDurationDiff
@@ -551,7 +553,8 @@ public final class LyricsFetcher {
 
         guard let selected,
               selected.kind == .synced,
-              !selected.lyrics.isEmpty else {
+              !selected.lyrics.isEmpty,
+              selectedHasPersistentIdentity(selected) else {
             DebugLogger.log("🧭 Authoritative lyrics backfill MISS in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
             return nil
         }
@@ -560,12 +563,22 @@ public final class LyricsFetcher {
             title: cleanTitle,
             artist: cleanArtist,
             duration: duration,
+            album: cleanAlbum,
             source: selected.source,
             lines: selected.lyrics,
             matchedDurationDiff: selected.matchedDurationDiff
         )
         DebugLogger.log("🧭 Authoritative lyrics backfill HIT: \(selected.source) \(selected.lyrics.count)L in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
         return selected
+    }
+
+    private func selectedHasPersistentIdentity(_ result: LyricsFetchResult) -> Bool {
+        result.albumMatched
+            || (result.titleMatched && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
+            || result.source == "LRCLIB"
+            || result.source == "LRCLIB-Search"
+            || result.source == "AMLL"
+            || result.source == "AppleMusic"
     }
 
     func fetchResolvedTitleKeyedSources(
