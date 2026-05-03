@@ -37,6 +37,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Temporary flat lyrics background diagnostic | `tmp/perf/perf-20260503-003913.csv` | avg 51.52%, p95 54.8%, max 55.5 |
 | Lyrics screen after lyric time-index optimization | `tmp/perf/perf-20260503-020739.csv` | avg 17.71%, p95 28.2%, max 29.6 |
 | Lyrics rapid skip after lyric time-index optimization | `tmp/perf/perf-20260503-020824.csv` | avg 36.86%, p95 75.5%, max 81.8 |
+| Reverted foreground lyric-fetch debounce experiment | `tmp/perf/perf-20260503-021420.csv` | avg 62.52%, p95 119.4%, max 150.7 |
 
 ## Important Correction
 
@@ -60,6 +61,7 @@ Protected UX paths:
 - Replacing the lyrics background with a flat color did not materially reduce average CPU, so the blurred artwork background is not the main cause.
 - The lyric time-index optimization materially reduced steady lyrics CPU in the measured run while keeping the original renderer and layout intact.
 - Rapid skip still spikes above the target range, so the remaining gap is likely song-change invalidation, foreground lyrics fetch/apply work, or SwiftUI redraw pressure during track transitions.
+- A 120ms foreground lyric-fetch debounce made rapid switching worse and was reverted. Do not repeat that lane without lower-level evidence.
 
 ## Safe Next Lanes
 
