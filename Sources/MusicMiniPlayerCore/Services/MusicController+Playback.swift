@@ -383,6 +383,28 @@ extension MusicController {
     private func fetchRecentHistoryViaBridge() {
         guard let app = musicApp, app.isRunning else { return }
 
+        if MusicAuthorization.currentStatus == .authorized {
+            Task { [weak self] in
+                guard let self else { return }
+                if let tracks = await self.fetchRecentHistoryViaAppleMusicAPI(), !tracks.isEmpty {
+                    await MainActor.run {
+                        self.applyRecentTracksIfChanged(tracks)
+                        self.logger.info("✅ Fetched \(tracks.count) recent tracks via Apple Music API")
+                        self.preloadNearbyAssets(from: tracks)
+                    }
+                    return
+                }
+                self.fetchRecentHistoryViaScriptingBridge(app)
+            }
+            return
+        }
+
+        fetchRecentHistoryViaScriptingBridge(app)
+    }
+
+    private func fetchRecentHistoryViaScriptingBridge(_ app: SBApplication) {
+        guard app.isRunning else { return }
+
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         scriptingBridgeQueue.async { [weak self, app] in
             guard let self = self else { return }
@@ -395,6 +417,55 @@ extension MusicController {
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
                 self.preloadNearbyAssets(from: tracks)
             }
+        }
+    }
+
+    /// Apple Music API documented recent-track endpoint:
+    /// GET /v1/me/recent/played/tracks?types=songs,library-songs
+    /// This is App Store-safe user-authorized history, but it is not the live
+    /// local queue before/after the current item. ScriptingBridge remains the
+    /// fallback for exact Music.app session mirroring.
+    private func fetchRecentHistoryViaAppleMusicAPI() async -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)]? {
+        guard let url = URL(string: "https://api.music.apple.com/v1/me/recent/played/tracks?types=songs,library-songs&limit=10") else {
+            return nil
+        }
+
+        do {
+            let response = try await MusicDataRequest(urlRequest: URLRequest(url: url)).response()
+            return Self.parseRecentTracksResponse(response.data)
+        } catch {
+            DebugLogger.log("Playback", "⚠️ Apple Music recent tracks failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    static func parseRecentTracksResponse(_ data: Data) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resources = json["data"] as? [[String: Any]] else {
+            return []
+        }
+
+        return resources.compactMap { resource in
+            guard let id = resource["id"] as? String,
+                  let attributes = resource["attributes"] as? [String: Any] else {
+                return nil
+            }
+            let title = attributes["name"] as? String ?? ""
+            guard !title.isEmpty, title != kNotPlayingSentinel else { return nil }
+            let artist = attributes["artistName"] as? String ?? ""
+            let album = (attributes["albumName"] as? String)
+                ?? (attributes["collectionName"] as? String)
+                ?? ""
+            let durationMillis = attributes["durationInMillis"] as? Double
+                ?? (attributes["durationInMillis"] as? Int).map(Double.init)
+                ?? 0
+            return (
+                title: title,
+                artist: artist,
+                album: album,
+                persistentID: "am:\(id)",
+                duration: durationMillis / 1000.0
+            )
         }
     }
 

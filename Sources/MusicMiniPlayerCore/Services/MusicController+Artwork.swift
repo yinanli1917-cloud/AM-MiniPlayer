@@ -668,7 +668,7 @@ extension MusicController {
         let persistentIDs = tracks
             .prefix(4)
             .map(\.persistentID)
-            .filter { !$0.isEmpty && artworkCache.object(forKey: $0 as NSString) == nil }
+            .filter { !$0.isEmpty && !$0.hasPrefix("am:") && artworkCache.object(forKey: $0 as NSString) == nil }
 
         guard !persistentIDs.isEmpty else { return }
 
