@@ -46,6 +46,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Lyrics-page rapid switch before SB artwork debounce | `tmp/perf/perf-20260503-042839.csv` | avg 44.97%, p95 87.4%, max 95.8. Follow-up run with album-corner sampling gated but without SB debounce was avg 48.62%, p95 92.0%, max 95.0 (`tmp/perf/perf-20260503-043640.csv`). |
 | Lyrics-page rapid switch after user-action tracking + SB artwork debounce | `tmp/perf/perf-20260503-043849.csv` | avg 30.5%, p95 71.2%, max 79.5. This preserves the lyrics renderer/layout and drops stale Music.app artwork reads during rapid skips before they enter expensive ScriptingBridge extraction. |
 | Reverted offscreen wave-stagger cap experiment | `tmp/perf/perf-20260503-050230.csv` | avg 54.56%, p95 89.8%, max 98.0. Capping delayed lyric wave target updates to the visible window was not a solid improvement, so it was reverted. |
+| Reverted lyrics background drawing-group experiment | `tmp/perf/perf-20260503-050440.csv` | avg 47.42%, p95 102.3%, max 111.8. Compositing the multi-layer artwork background with `drawingGroup` improved average CPU but worsened spike behavior, so it was reverted. |
 
 ## Important Correction
 
@@ -77,6 +78,7 @@ Protected UX paths:
 - Rapid next/previous actions did not update `lastUserActionTime`, so existing user-action guards were not reliably active during the exact stress path. That is fixed.
 - ScriptingBridge artwork extraction remains expensive during rapid skipping. A short generation re-check delay now lets transient skipped tracks fall out before `currentTrack.artworks` is read, while API artwork still starts immediately for responsiveness.
 - Capping offscreen lyric wave stagger scheduling did not materially improve rapid-switch CPU and should not be repeated without a more precise SwiftUI invalidation trace.
+- `drawingGroup` on the lyrics artwork background is not a safe optimization for rapid switching because it worsened p95/max CPU.
 
 ## Safe Next Lanes
 
