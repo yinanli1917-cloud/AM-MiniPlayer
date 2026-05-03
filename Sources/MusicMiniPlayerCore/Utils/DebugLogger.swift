@@ -18,10 +18,14 @@ public enum DebugLogger {
 
     private static let logPath = "/tmp/nanopod_debug.log"
 
-    // 🔑 Always-on logging (release + debug). The log lives in /tmp and is bounded
-    // by disk pressure; cost is negligible compared to the diagnostic value when
-    // a user reports artwork/lyrics misbehavior.
-    private static var enabled = true
+    // Opt-in diagnostic logging. Playback and animation paths can call this
+    // frequently, so normal app runs must avoid file I/O and date formatting.
+    private static let enabled: Bool = {
+        if ProcessInfo.processInfo.environment["NANOPOD_DEBUG_LOG"] == "1" {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "enableDebugFileLog")
+    }()
 
     // ── 公共接口 ──
 

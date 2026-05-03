@@ -117,11 +117,24 @@ extension MusicController {
 
         // ━━━ Path 1: API fetch — starts immediately, no SB queue dependency ━━━
         // API is provisional — if SB already applied for this generation, API result is discarded.
-        // 🔑 Cancel previous API task to prevent pileup during rapid switching.
-        artworkAPITask?.cancel()
+        // Duplicate notifications for the same metadata reuse the in-flight network race.
+        // Rapid switches to a different song still cancel the old race to free URLSession slots.
+        let apiRequestKey = metadataKey ?? "lookup:\(Self.normalizeForArtworkMatching(title))|\(Self.normalizeForArtworkMatching(artist))|\(Self.normalizeForArtworkMatching(album))" as NSString
+        if artworkAPIRequestKey != apiRequestKey {
+            artworkAPITask?.cancel()
+            artworkAPIResultTask?.cancel()
+            artworkAPIRequestKey = apiRequestKey
+            artworkAPIResultTask = Task { [weak self] in
+                guard let self else { return nil }
+                return await self.fetchMusicKitArtwork(title: title, artist: artist, album: album)
+            }
+        } else {
+            artworkAPITask?.cancel()
+        }
+        guard let apiResultTask = artworkAPIResultTask else { return }
         artworkAPITask = Task { [weak self] in
             guard let self else { return }
-            if let image = await self.fetchMusicKitArtwork(title: title, artist: artist, album: album) {
+            if let image = await apiResultTask.value {
                 self.logToFile("🎨 [API] SUCCESS! Got image \(image.size)")
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
@@ -129,6 +142,10 @@ extension MusicController {
                 }
             } else {
                 guard !Task.isCancelled else { return }
+                if self.artworkAPIRequestKey == apiRequestKey {
+                    self.artworkAPIResultTask = nil
+                    self.artworkAPIRequestKey = nil
+                }
                 self.logToFile("🎨 [API] No artwork found, scheduling retry (placeholder deferred)")
                 // 🔑 Placeholder deferred — during rapid switching, the API task for
                 // an in-between track gets cancelled before completing. We must NOT
@@ -271,7 +288,7 @@ extension MusicController {
                     if !graceStarted {
                         graceStarted = true
                         group.addTask {
-                            try? await Task.sleep(nanoseconds: 180_000_000)
+                            try? await Task.sleep(nanoseconds: 80_000_000)
                             return .appleGraceExpired
                         }
                     }

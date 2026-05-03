@@ -125,6 +125,8 @@ public class MusicController: ObservableObject {
     /// Generation-based gates inside the task body + `applyArtworkIfCurrent` are the
     /// single source of truth for staleness — no separate dedup key needed.
     var artworkAPITask: Task<Void, Never>?
+    var artworkAPIResultTask: Task<NSImage?, Never>?
+    var artworkAPIRequestKey: NSString?
 
     /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
     var sbAppliedForGeneration: Int = -1
@@ -200,6 +202,13 @@ public class MusicController: ObservableObject {
     // Queue sync state
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
+    var queueFetchInFlight = false
+    var queueFetchPending = false
+    var queueFetchPendingForceRecent = false
+    var lastQueueFetchStartedAt: Date = .distantPast
+    var lastRecentHistoryFetchAt: Date = .distantPast
+    let queueFetchMinimumInterval: TimeInterval = 1.5
+    let recentHistoryRefreshInterval: TimeInterval = 20.0
     private let userActionLockDuration: TimeInterval = 1.5
     private static var isRunningUnitTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
