@@ -207,6 +207,7 @@ public class MusicController: ObservableObject {
     var queueFetchPendingForceRecent = false
     var lastQueueFetchStartedAt: Date = .distantPast
     var lastRecentHistoryFetchAt: Date = .distantPast
+    var assetPreloadTask: Task<Void, Never>?
     let queueFetchMinimumInterval: TimeInterval = 1.5
     let recentHistoryRefreshInterval: TimeInterval = 20.0
     private let userActionLockDuration: TimeInterval = 1.5

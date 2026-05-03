@@ -597,6 +597,31 @@ extension MusicController {
         recentTracks = tracks
     }
 
+    @MainActor
+    private func preloadNearbyAssets(from tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
+        let validTracks = tracks
+            .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
+            .map { (title: $0.title, artist: $0.artist, album: $0.album, persistentID: $0.persistentID, duration: TimeInterval($0.duration)) }
+
+        guard !validTracks.isEmpty else { return }
+
+        assetPreloadTask?.cancel()
+        assetPreloadTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.preloadArtwork(for: validTracks)
+                LyricsService.shared.preloadNextSongs(
+                    tracks: validTracks.map {
+                        (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+                    }
+                )
+            }
+        }
+    }
+
     private func sameTrackIdentity(
         _ lhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)],
         _ rhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]
