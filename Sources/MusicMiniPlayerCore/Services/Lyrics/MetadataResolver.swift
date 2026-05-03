@@ -551,8 +551,14 @@ public final class MetadataResolver {
     ) async -> (title: String, artist: String, region: String, durationDiff: Double)? {
         // Disk cache hit — skip iTunes entirely on warm cold starts.
         if let cached = diskCache.get(title: title, artist: artist, duration: duration) {
-            DebugLogger.log("MetadataResolver", "💾 fetchLocalizedMetadata disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (region: \(cached.region))")
-            return (cached.resolvedTitle, cached.resolvedArtist, cached.region, 0)
+            if shouldUseCachedLocalizedMetadata(
+                inputTitle: title,
+                cachedTitle: cached.resolvedTitle
+            ) {
+                DebugLogger.log("MetadataResolver", "💾 fetchLocalizedMetadata disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (region: \(cached.region))")
+                return (cached.resolvedTitle, cached.resolvedArtist, cached.region, 0)
+            }
+            DebugLogger.log("MetadataResolver", "🧹 Ignoring stale localized cache: '\(cached.resolvedTitle)' for input '\(title)'")
         }
 
         let regions = inferRegions(title: title, artist: artist)
@@ -654,6 +660,15 @@ public final class MetadataResolver {
     /// 推断可能的区域（委托给 LanguageUtils 统一实现）
     public func inferRegions(title: String, artist: String) -> [String] {
         LanguageUtils.inferRegions(title: title, artist: artist)
+    }
+
+    private func shouldUseCachedLocalizedMetadata(inputTitle: String, cachedTitle: String) -> Bool {
+        let inputNorm = LanguageUtils.normalizeTrackName(inputTitle).lowercased()
+        let cachedNorm = LanguageUtils.normalizeTrackName(cachedTitle).lowercased()
+        if inputNorm == cachedNorm { return true }
+        guard LanguageUtils.isPureASCII(inputTitle) else { return true }
+        if LanguageUtils.isLikelyRomanizedJapanese(inputTitle) { return true }
+        return !LanguageUtils.containsCJK(cachedTitle)
     }
 
     /// 区域候选结构（三层分类）
@@ -863,7 +878,7 @@ public final class MetadataResolver {
                 // 🔑 艺术家校验：与 CN P3 同规则 — 同脚本（都是 ASCII）必须匹配
                 let resultArtistIsASCII = LanguageUtils.isPureASCII(artistName)
                 let artistBlocked = resultArtistIsASCII && !artistMatch
-                let titleLooksJapanese = LanguageUtils.isPureASCII(artist)
+                let titleLooksJapanese = (LanguageUtils.isPureASCII(artist) && !LanguageUtils.isLikelyEnglishTitle(title))
                     || LanguageUtils.isLikelyRomanizedJapanese(title)
                     || (LanguageUtils.containsCJK(artist) && hasJapaneseRomanizationParticle(title))
                 if titleLooksJapanese && resultTitleHasCJK && !artistBlocked {
@@ -936,12 +951,32 @@ public final class MetadataResolver {
         // iTunes HTTP is region-specific — essential for cross-region resolution.
         // Running both ensures: MusicKit covers user's locale, HTTP covers target region.
         // Duplicates are harmless — matching logic picks the best candidate regardless.
-        async let mkTask = searchViaMusicKit(term: term, limit: limit)
-        async let httpTask = searchViaITunesAPI(term: term, region: region, limit: limit)
-
+        enum SearchBatch {
+            case results([[String: Any]])
+            case deadline
+        }
         var results: [[String: Any]] = []
-        if let mk = await mkTask { results.append(contentsOf: mk) }
-        if let http = await httpTask { results.append(contentsOf: http) }
+        await withTaskGroup(of: SearchBatch.self) { group in
+            group.addTask {
+                .results(await self.searchViaMusicKit(term: term, limit: limit) ?? [])
+            }
+            group.addTask {
+                .results(await self.searchViaITunesAPI(term: term, region: region, limit: limit) ?? [])
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                return .deadline
+            }
+            for await batch in group {
+                switch batch {
+                case .results(let batch):
+                    results.append(contentsOf: batch)
+                case .deadline:
+                    group.cancelAll()
+                    return
+                }
+            }
+        }
         return results.isEmpty ? nil : results
     }
 
@@ -973,7 +1008,7 @@ public final class MetadataResolver {
         ]
         guard let url = components.url else { return nil }
         do {
-            let (data, response) = try await HTTPClient.getData(url: url, timeout: 6.0)
+            let (data, response) = try await HTTPClient.getData(url: url, timeout: 1.2, retry: false)
             guard (200...299).contains(response.statusCode) else { return nil }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = json["results"] as? [[String: Any]] else { return nil }

@@ -42,7 +42,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "I keep looking for the truth"
             ]),
             source: "LRCLIB",
-            score: 42,
+            score: 52,
             kind: .synced
         )
         let correctUnsynced = LyricsFetcher.LyricsFetchResult(
@@ -61,7 +61,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(
             from: [wrongWordLevel, correctSynced, correctUnsynced],
-            songDuration: 195
+            songDuration: 120
         )
 
         XCTAssertEqual(selected?.source, "LRCLIB")
@@ -98,13 +98,13 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(
             from: [wordLevel, alternate],
-            songDuration: 195
+            songDuration: 120
         )
 
         XCTAssertEqual(selected?.source, "NetEase")
     }
 
-    func testUnsyncedConsensusUsedOnlyWhenNoSyncedResult() {
+    func testUnsyncedConsensusIsNotUsedForSyncedLyricsUI() {
         let fetcher = LyricsFetcher.shared
         let plainA = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -133,10 +133,9 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .unsynced
         )
 
-        let selected = fetcher.selectBestResult(from: [plainA, plainB], songDuration: 240)
+        let selected = fetcher.selectBestResult(from: [plainA, plainB], songDuration: 120)
 
-        XCTAssertEqual(selected?.source, "Genius")
-        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertNil(selected)
     }
 
     func testShortCJKGeniusSnippetIsNotUsedAsFallback() {
@@ -158,12 +157,12 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .unsynced
         )
 
-        let selected = fetcher.selectBestResult(from: [snippet], songDuration: 239)
+        let selected = fetcher.selectBestResult(from: [snippet], songDuration: 120)
 
         XCTAssertNil(selected)
     }
 
-    func testCompleteCJKGeniusLyricsCanBeFallback() {
+    func testCompleteCJKGeniusLyricsIsNotUsedAsFallback() {
         let fetcher = LyricsFetcher.shared
         let plain = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -183,13 +182,12 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .unsynced
         )
 
-        let selected = fetcher.selectBestResult(from: [plain], songDuration: 230)
+        let selected = fetcher.selectBestResult(from: [plain], songDuration: 120)
 
-        XCTAssertEqual(selected?.source, "Genius")
-        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertNil(selected)
     }
 
-    func testUnsyncedConsensusCanVetoSingleSyncedOutlier() {
+    func testUnsyncedConsensusDoesNotReplaceMissingSyncedResult() {
         let fetcher = LyricsFetcher.shared
         let synced = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -224,10 +222,9 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .unsynced
         )
 
-        let selected = fetcher.selectBestResult(from: [synced, plainA, plainB], songDuration: 240)
+        let selected = fetcher.selectBestResult(from: [synced, plainA, plainB], songDuration: 120)
 
-        XCTAssertEqual(selected?.source, "Genius")
-        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertNil(selected)
     }
 
     func testSyncedConsensusBeatsUnsyncedConsensus() {
@@ -242,7 +239,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "different timed line six"
             ]),
             source: "LRCLIB",
-            score: 35,
+            score: 52,
             kind: .synced
         )
         let syncedB = LyricsFetcher.LyricsFetchResult(
@@ -271,13 +268,13 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .unsynced
         )
 
-        let selected = fetcher.selectBestResult(from: [syncedA, syncedB, plainA, plainB], songDuration: 240)
+        let selected = fetcher.selectBestResult(from: [syncedA, syncedB, plainA, plainB], songDuration: 120)
 
         XCTAssertEqual(selected?.source, "LRCLIB")
         XCTAssertEqual(selected?.kind, .synced)
     }
 
-    func testUnsyncedConsensusCanVetoWrongSyncedOutlier() {
+    func testUnsyncedConsensusDoesNotReplaceWrongSyncedOutlier() {
         let fetcher = LyricsFetcher.shared
         let wrongSynced = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -312,10 +309,9 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .unsynced
         )
 
-        let selected = fetcher.selectBestResult(from: [wrongSynced, plainA, plainB], songDuration: 240)
+        let selected = fetcher.selectBestResult(from: [wrongSynced, plainA, plainB], songDuration: 120)
 
-        XCTAssertEqual(selected?.source, "Genius")
-        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertNil(selected)
     }
 
     func testUnsyncedConsensusDoesNotVetoStrongWordLevelSynced() {
@@ -353,9 +349,103 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .unsynced
         )
 
-        let selected = fetcher.selectBestResult(from: [strongSynced, plainA, plainB], songDuration: 307)
+        let selected = fetcher.selectBestResult(from: [strongSynced, plainA, plainB], songDuration: 120)
 
         XCTAssertEqual(selected?.source, "NetEase")
         XCTAssertEqual(selected?.kind, .synced)
+    }
+
+    func testTitleEvidenceBeatsLooseSameDurationEscape() {
+        let fetcher = LyricsFetcher.shared
+        let directTitle = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "原谅我最近在低潮期",
+                "有些话我讲得不好听",
+                "可能因为实在太熟悉",
+                "下意识对你像对我自己",
+                "生活总是不太容易",
+                "总有些压力"
+            ]),
+            source: "NetEase",
+            score: 74,
+            kind: .synced,
+            titleMatched: true
+        )
+        let looseEscape = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "千金难买的 换不回来的",
+                "取之不尽的 永无止境的",
+                "篝火还没熄灭 海风吹来有点凉",
+                "星星伴着沙滩 月光守着海浪",
+                "车灯照向远方 什么都看不到",
+                "仿佛宇宙只剩孤独的我们俩"
+            ]),
+            source: "NetEase",
+            score: 80,
+            kind: .synced,
+            titleMatched: false
+        )
+
+        let selected = fetcher.selectBestResult(from: [looseEscape, directTitle], songDuration: 120)
+
+        XCTAssertEqual(selected?.firstLineText, "原谅我最近在低潮期")
+    }
+
+    func testSevereTailGapRejectsMistimedSyncedWhenPlainConsensusExists() {
+        let fetcher = LyricsFetcher.shared
+        let mistimed = LyricsFetcher.LyricsFetchResult(
+            lyrics: [
+                LyricLine(text: "Every time you lie in my place", startTime: 10, endTime: 14),
+                LyricLine(text: "I do want to say", startTime: 20, endTime: 24),
+                LyricLine(text: "Only you can conquer time", startTime: 150, endTime: 154)
+            ],
+            source: "LRCLIB",
+            score: 55,
+            kind: .synced
+        )
+        let plainA = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "Every time you lie in my place",
+                "I do want to say",
+                "It's you, you my babe",
+                "I won't be too late",
+                "My Jinji don't you cry",
+                "This world out of time",
+                "Only you can conquer time",
+                "Only you can conquer time",
+                "Oh don't leave me behind",
+                "Without you I would cry",
+                "Cause only you my baby",
+                "Only you can conquer time",
+                "Oh sometimes I",
+                "Without you I would cry",
+                "Cause only you my baby",
+                "Only you can conquer time",
+                "Oh don't leave me behind",
+                "Without you I will cry",
+                "Cause only you my baby",
+                "Only you can conquer time",
+                "Only you can conquer time"
+            ]),
+            source: "Genius",
+            score: 15,
+            kind: .unsynced
+        )
+        let plainB = LyricsFetcher.LyricsFetchResult(
+            lyrics: plainA.lyrics,
+            source: "lyrics.ovh",
+            score: 13,
+            kind: .unsynced
+        )
+
+        let selected = fetcher.selectBestResult(from: [mistimed, plainA, plainB], songDuration: 300)
+
+        XCTAssertNil(selected)
+    }
+}
+
+private extension LyricsFetcher.LyricsFetchResult {
+    var firstLineText: String? {
+        lyrics.first?.text
     }
 }

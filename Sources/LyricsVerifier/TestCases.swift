@@ -24,12 +24,18 @@ struct TestExpectation: Codable {
     let allowMissingLyrics: Bool?
     let acceptableSources: [String]?
     let firstLineContains: String?
+    let firstLineSHA256: String?
+    let expectedClassification: String?
+    let firstLineStartMinS: Double?
+    let firstLineStartMaxS: Double?
+    let maxTailGapS: Double?
 }
 
 struct LibraryTrack {
     let title: String
     let artist: String
     let duration: Double
+    let album: String
 }
 
 // =========================================================================
@@ -84,9 +90,10 @@ func fetchLibraryTracks(count: Int) -> [LibraryTrack] {
         try
           set trackName to name of t
           set trackArtist to artist of t
+          set trackAlbum to album of t
           set trackDuration to duration of t
           if trackDuration > 30 and trackArtist is not "" then
-            set output to output & trackName & tab & trackArtist & tab & (round trackDuration) & linefeed
+            set output to output & trackName & tab & trackArtist & tab & (round trackDuration) & tab & trackAlbum & linefeed
             set collected to collected + 1
           end if
         end try
@@ -117,14 +124,15 @@ func fetchLibraryTracks(count: Int) -> [LibraryTrack] {
     return output
         .split(separator: "\n")
         .compactMap { line -> LibraryTrack? in
-            let parts = line.split(separator: "\t", maxSplits: 2)
-            guard parts.count == 3,
+            let parts = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
+            guard parts.count == 4,
                   let dur = Double(parts[2].trimmingCharacters(in: .whitespaces))
             else { return nil }
             return LibraryTrack(
                 title: String(parts[0]),
                 artist: String(parts[1]),
-                duration: dur
+                duration: dur,
+                album: String(parts[3])
             )
         }
 }

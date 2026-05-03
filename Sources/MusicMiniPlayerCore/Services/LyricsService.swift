@@ -9,6 +9,7 @@ import Foundation
 import Combine
 import os
 import Translation
+import NaturalLanguage
 
 // ============================================================================
 // MARK: - LyricsService (Facade)
@@ -161,9 +162,10 @@ public class LyricsService: ObservableObject {
             self.translationLanguage = Locale.current.language.languageCode?.identifier ?? "zh"
         }
 
-        // 缓存配置
         lyricsCache.countLimit = 50
         lyricsCache.totalCostLimit = 10 * 1024 * 1024
+
+        HTTPClient.warmup()
     }
 
     // ========================================================================
@@ -326,9 +328,37 @@ public class LyricsService: ObservableObject {
                 self.isLoading = false
                 self.error = "No lyrics found"
             }
+            let wantsTranslation = showTranslation
+            Task.detached(priority: .utility) { [weak self] in
+                guard let self else { return }
+                guard let backfilled = await self.fetcher.backfillAuthoritativeSyncedLyrics(
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    translationEnabled: wantsTranslation,
+                    album: album
+                ) else { return }
+                await self.applyFetchedLyricsIfCurrent(
+                    backfilled,
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    songID: songID
+                )
+            }
             return
         }
 
+        await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID)
+    }
+
+    private func applyFetchedLyricsIfCurrent(
+        _ bestResult: LyricsFetcher.LyricsFetchResult,
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        songID: String
+    ) async {
         // Last-resort rescale: if best lyrics still overshoot, no source had the right version
         let aligned = fetcher.rescaleTimestamps(bestResult.lyrics, duration: duration)
 
@@ -624,7 +654,7 @@ public class LyricsService: ObservableObject {
     // MARK: - Public API: Preload
     // ========================================================================
 
-    public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval)]) {
+    public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval, album: String)]) {
         for track in tracks.prefix(3) {
             let songID = "\(track.title)-\(track.artist)"
             guard lyricsCache.object(forKey: songID as NSString) == nil else { continue }
@@ -635,10 +665,21 @@ public class LyricsService: ObservableObject {
                     title: track.title,
                     artist: track.artist,
                     duration: track.duration,
-                    translationEnabled: false
+                    translationEnabled: false,
+                    album: track.album
                 )
 
-                guard let bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration), !bestResult.lyrics.isEmpty else { return }
+                var bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration)
+                if bestResult == nil {
+                    bestResult = await self.fetcher.backfillAuthoritativeSyncedLyrics(
+                        title: track.title,
+                        artist: track.artist,
+                        duration: track.duration,
+                        translationEnabled: false,
+                        album: track.album
+                    )
+                }
+                guard let bestResult, !bestResult.lyrics.isEmpty else { return }
 
                 let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
                 let processed = self.parser.processLyrics(aligned)
@@ -653,5 +694,50 @@ public class LyricsService: ObservableObject {
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
             }
         }
+    }
+}
+
+// ============================================================================
+// MARK: - TranslationService (merged from TranslationService.swift)
+// ============================================================================
+
+@available(macOS 15.0, *)
+class TranslationService {
+    static func translationTask(_ session: TranslationSession, lyrics: [String]) async -> [String]? {
+        guard !lyrics.isEmpty else { return nil }
+        DebugLogger.log("🌐 [Translation] Starting translation for \(lyrics.count) lines")
+        do {
+            let requests = lyrics.map { TranslationSession.Request(sourceText: $0) }
+            let responses = try await session.translations(from: requests)
+            let translatedTexts = responses.map { $0.targetText }
+            DebugLogger.log("✅ [Translation] Successfully translated \(translatedTexts.count) lines")
+            return translatedTexts
+        } catch {
+            DebugLogger.log("❌ [Translation] Failed: \(error.localizedDescription)")
+            if let realLanguage = detectLanguage(for: lyrics) {
+                DebugLogger.log("🔄 [Translation] Detected real language: \(realLanguage.languageCode?.identifier ?? "unknown")")
+            }
+            return nil
+        }
+    }
+
+    static func detectLanguage(for texts: [String]) -> Locale.Language? {
+        var langCount: [Locale.Language: Int] = [:]
+        let recognizer = NLLanguageRecognizer()
+        for text in texts {
+            recognizer.reset()
+            recognizer.processString(text)
+            if let dominantLanguage = recognizer.dominantLanguage {
+                let language = Locale.Language(identifier: dominantLanguage.rawValue)
+                if language != Locale.Language.systemLanguages.first {
+                    langCount[language, default: 0] += 1
+                }
+            }
+        }
+        if let mostCommon = langCount.sorted(by: { $1.value < $0.value }).first,
+           mostCommon.value >= 3 {
+            return mostCommon.key
+        }
+        return nil
     }
 }

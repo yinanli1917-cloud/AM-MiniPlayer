@@ -17,8 +17,15 @@ struct BenchmarkCase: Codable {
     let duration: Double
     let region: String                    // "en", "ko", "ja", "zh", "es", "hi", "fr", "pt", "th", "ar"
     let expectedLyricsLang: String        // "English", "Korean", "Japanese", "Chinese" ...
+    let allowedLyricsLangs: [String]?     // For code-switched songs; defaults to expectedLyricsLang only
     let expectSourceTranslation: Bool     // 歌词源（NetEase/QQ）是否应提供翻译
     let expectation: TestExpectation      // 复用已有结构
+
+    var acceptedLyricsLangs: Set<String> {
+        var langs = Set(allowedLyricsLangs ?? [])
+        langs.insert(expectedLyricsLang)
+        return langs
+    }
 }
 
 /// 区域元信息

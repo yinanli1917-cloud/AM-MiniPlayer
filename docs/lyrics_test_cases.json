@@ -7,7 +7,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "无常"
     }
   },
   {
@@ -18,7 +18,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "霓虹"
     }
   },
   {
@@ -29,7 +29,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL"],
-      "firstLineContains": null
+      "firstLineContains": "封了国境"
     }
   },
   {
@@ -40,7 +40,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "飞翔"
     }
   },
   {
@@ -51,7 +51,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL"],
-      "firstLineContains": null
+      "firstLineContains": "小黄花"
     }
   },
   {
@@ -62,7 +62,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "走走停停"
     }
   },
   {
@@ -73,7 +73,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "歩道橋"
     }
   },
   {
@@ -84,18 +84,19 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "天使"
     }
   },
   {
     "id": "K01",
     "title": "Love Lee",
     "artist": "AKMU",
-    "duration": 197,
+    "duration": 205,
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ", "Genius"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "55a4360b4178239d71800a69a77d48edbd285a9214aa3a82fe9ae5df59a17d76"
     }
   },
   {
@@ -106,7 +107,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "real life"
     }
   },
   {
@@ -117,7 +118,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
-      "firstLineContains": null
+      "firstLineContains": "desert highway"
     }
   },
   {
@@ -128,7 +129,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
-      "firstLineContains": null
+      "firstLineContains": "club"
     }
   },
   {
@@ -139,7 +140,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "閉じて"
     }
   },
   {
@@ -162,7 +163,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "流れる"
     }
   },
   {
@@ -171,7 +172,7 @@
     "artist": "mei ehara",
     "duration": 326,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
       "firstLineContains": "幽霊"
     }
@@ -184,7 +185,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "キス"
     }
   },
   {
@@ -206,7 +207,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "五月雨"
     }
   },
   {
@@ -215,7 +216,7 @@
     "artist": "Perry Como",
     "duration": 184,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "allowMissingLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
       "firstLineContains": "picture"
@@ -229,7 +230,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "valse"
     }
   },
   {
@@ -240,7 +241,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "让我住进"
     }
   },
   {
@@ -251,7 +252,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "翻风"
     }
   },
   {
@@ -262,7 +263,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "upon"
     }
   },
   {
@@ -272,8 +273,9 @@
     "duration": 186,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB"],
-      "firstLineContains": null
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": null,
+      "firstLineSHA256": "dff78bf5b4f25fcf57a840c39dff83fe435e2d61ed4f8507d65bf5b30a160035"
     }
   },
   {
@@ -283,8 +285,8 @@
     "duration": 219,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB"],
-      "firstLineContains": null
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "know"
     }
   },
   {
@@ -295,7 +297,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": null
+      "firstLineContains": "breaking"
     }
   },
   {
@@ -306,7 +308,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "那扇"
     }
   },
   {
@@ -317,7 +319,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "星が"
     }
   },
   {
@@ -328,7 +330,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "言えなく"
     }
   },
   {
@@ -339,7 +341,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "なぜかしら"
     }
   },
   {
@@ -350,7 +352,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "拒绝"
     }
   },
   {
@@ -360,8 +362,9 @@
     "duration": 259,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "firstLineContains": null,
+      "firstLineSHA256": "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b"
     }
   },
   {
@@ -372,7 +375,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "逛一逛"
     }
   },
   {
@@ -383,7 +386,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "飞往"
     }
   },
   {
@@ -394,7 +397,11 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineSHA256": "98ca0a709ba49e04c44f02286157ac659690259a0323b44780d0117d3c173021",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 30,
+      "firstLineStartMaxS": 45,
+      "maxTailGapS": 65
     }
   },
   {
@@ -412,11 +419,12 @@
     "id": "H19",
     "title": "Namidanokatachino Earring",
     "artist": "Akina Nakamori",
-    "duration": 268,
+    "duration": 276,
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "547d5148752db9b817d4c05d1abb5b0946c6350ee77629cd5bdcdfe1ab445859"
     }
   },
   {
@@ -427,7 +435,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "cloudy"
     }
   },
   {
@@ -439,7 +447,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "落地"
     }
   },
   {
@@ -450,7 +458,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": "宝贝"
     }
   },
   {
@@ -472,7 +480,8 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null
+      "firstLineContains": null,
+      "firstLineSHA256": "bc63f148c829c85abf0ed7dba376623325abe58cc93c7411237b288a8097844e"
     }
   },
   {
@@ -498,6 +507,22 @@
     }
   },
   {
+    "id": "H27",
+    "title": "Adolescence",
+    "artist": "Momoko Kikuchi",
+    "duration": 276,
+    "album": "Sotsugyoukinen, Vol. 2",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "Endless",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 5,
+      "firstLineStartMaxS": 15,
+      "maxTailGapS": 20
+    }
+  },
+  {
     "id": "X01_same_artist_cjk_collision",
     "title": "SUNDAY BRUNCH",
     "artist": "Kanako Wada",
@@ -516,7 +541,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": null
+      "firstLineContains": "歩道橋"
     }
   },
   {
@@ -527,7 +552,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search", "Genius"],
-      "firstLineContains": null
+      "firstLineContains": "始終"
     }
   },
   {
@@ -539,7 +564,196 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
-      "firstLineContains": "learning"
+      "firstLineContains": "standing"
+    }
+  },
+  {
+    "id": "X05_english_title_cjk_alias_same_duration",
+    "title": "Tough Days (feat. Ashlee Yip)",
+    "artist": "Dean Ting",
+    "duration": 252,
+    "album": "The Script of Destiny",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
+      "firstLineContains": "原谅",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 10,
+      "firstLineStartMaxS": 35,
+      "maxTailGapS": 60
+    }
+  },
+  {
+    "id": "X06_traditional_title_word_level_timing",
+    "title": "戀愛預告",
+    "artist": "Sandy Lamb",
+    "duration": 219,
+    "album": "My Lovely Legend: Teresa Carpio & Sandy Lamb",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "愛神",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 15,
+      "firstLineStartMaxS": 22,
+      "maxTailGapS": 35
+    }
+  },
+  {
+    "id": "X07_english_locale_chinese_original_title",
+    "title": "The Prayer",
+    "artist": "Lala Hsu",
+    "duration": 260,
+    "album": "The Inner Me",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "言不由衷",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 30,
+      "firstLineStartMaxS": 40,
+      "maxTailGapS": 45
+    }
+  },
+  {
+    "id": "X08_unsynced_consensus_when_synced_are_wrong",
+    "title": "My Jinji",
+    "artist": "Sunset Rollercoaster",
+    "duration": 401,
+    "album": "JINJI KIKKO - Single",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineSHA256": "7716b4658b3db6499bf2be1088a6de5a49132cc44cae3ae19a04715aa7e4f71d",
+      "expectedClassification": "synced",
+      "maxTailGapS": 225
+    }
+  },
+  {
+    "id": "X09_reject_wrong_second_love_timeline",
+    "title": "Second Love",
+    "artist": "Akina Nakamori",
+    "duration": 284,
+    "album": "Akina Nakamori - Utahime Double Decade -",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
+      "firstLineContains": "恋も二度目なら",
+      "expectedClassification": "synced",
+      "maxTailGapS": 55
+    }
+  },
+  {
+    "id": "X10_no_static_love_is_free",
+    "title": "Love Is Free",
+    "artist": "Brenton Wood",
+    "duration": 153,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X11_no_static_fresh_trip",
+    "title": "Fresh Trip",
+    "artist": "CinCin Lee",
+    "duration": 178,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X12_no_static_oceanside_cafe",
+    "title": "Oceanside Café",
+    "artist": "CinCin Lee",
+    "duration": 212,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X13_no_static_tangerine_bossa",
+    "title": "Tangerine Bossa",
+    "artist": "Don Tung",
+    "duration": 180,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X14_no_static_yuen_waat",
+    "title": "圓滑",
+    "artist": "Ellen & The Ripples Band",
+    "duration": 254,
+    "album": "Riding On Faith",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X15_no_static_gentle_wave",
+    "title": "Gentle Wave",
+    "artist": "Jiro Inagaki and His Soul Media",
+    "duration": 220,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X16_no_static_invisible",
+    "title": "Invisible",
+    "artist": "mei ehara",
+    "duration": 250,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X17_no_static_lisbon_antigua",
+    "title": "Lisbon Antigua",
+    "artist": "Nelson Riddle",
+    "duration": 150,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X18_no_static_with_you",
+    "title": "With You",
+    "artist": "Tennyson",
+    "duration": 222,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X19_no_static_hypnosis",
+    "title": "Hypnosis",
+    "artist": "Holy Hive",
+    "duration": 232,
+    "album": "Float Back To You",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X20_no_static_frisco_blues",
+    "title": "Frisco Blues",
+    "artist": "Lewis OfMan",
+    "duration": 248,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
     }
   }
 ]

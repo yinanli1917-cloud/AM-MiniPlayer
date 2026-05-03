@@ -32,9 +32,9 @@ public final class LyricsScorer {
         /// 计算质量评分因子 (0-100)
         public var qualityScore: Double {
             var score = 100.0
-            score -= timeReverseRatio * 300
-            score -= timeOverlapRatio * 200
-            score -= shortLineRatio * 100
+            score -= min(timeReverseRatio * 200, 60)
+            score -= min(timeOverlapRatio * 150, 45)
+            score -= min(shortLineRatio * 80, 30)
             return max(0, score)
         }
     }
@@ -112,12 +112,22 @@ public final class LyricsScorer {
             let coverageRatio = min((lastLyricEnd - firstLyricStart) / duration, 1.0)
             score += coverageRatio * 8
 
-            // 5b. Tail gap penalty: lyrics ending far before song ends → wrong version
-            // 90s absolute + 25% relative guards against songs with long instrumental outros
-            let tailGap = duration - lastLyricEnd
-            if tailGap > 90 && tailGap / duration > 0.25 {
-                let excess = tailGap / duration - 0.25
-                score -= 50 + excess * excess * 1000
+            // 5b. Tail gap penalty: lyrics ending far before song ends → wrong version.
+            // Use a scaled guard so 4-5 minute tracks with a full minute of
+            // missing tail timing do not still beat correct unsynced fallbacks,
+            // while genuinely long instrumental outros keep a reasonable buffer.
+            // Use the last *start* time for the gap. LRC parsers often
+            // synthesize the final line's end from the track duration, which
+            // would hide a wrong-master timeline whose final lyric actually
+            // starts almost a minute too early.
+            let lastLyricStart = lyrics.last?.startTime ?? lastLyricEnd
+            let tailGap = duration - lastLyricStart
+            let tailGapRatio = tailGap / duration
+            let instrumentalOutroRatio = duration >= 360 ? 0.55 : 0.40
+            let allowedTailGap = max(140.0, duration * instrumentalOutroRatio)
+            if tailGap > allowedTailGap {
+                let excess = max(0, tailGapRatio - instrumentalOutroRatio)
+                score -= 35 + excess * 300
             }
         }
 
@@ -333,12 +343,9 @@ public final class LyricsScorer {
 
         let mixedRatio = Double(mixedCount) / Double(sample.count)
 
-        // ≥30% 行混排 → 重惩罚（25分）
-        if mixedRatio >= 0.3 { return 25 }
-        // ≥15% 行混排 → 中惩罚（15分）
-        if mixedRatio >= 0.15 { return 15 }
-        // 少量混排 → 轻惩罚
-        if mixedCount >= 2 { return 8 }
+        if mixedRatio >= 0.3 { return 18 }
+        if mixedRatio >= 0.15 { return 12 }
+        if mixedCount >= 2 { return 6 }
 
         return 0
     }

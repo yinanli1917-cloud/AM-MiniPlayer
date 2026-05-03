@@ -89,6 +89,15 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(lines[0].text, "Rock & Roll")
     }
 
+    func testParseLRC_stripsEnhancedInlineTimestamps() {
+        let lrc = "[00:10.00]<00:10.000>青<00:10.360>花<00:10.720>瓷"
+        let lines = parser.parseLRC(lrc)
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines[0].text, "青花瓷")
+        XCTAssertEqual(lines[0].startTime, 10.0, accuracy: 0.001)
+    }
+
     func testParseLRC_sortedByTime() {
         let lrc = """
         [00:30.00]第三行
@@ -669,5 +678,33 @@ final class LyricsParserTests: XCTestCase {
         let stripped = parser.stripMetadataLines(lines)
         XCTAssertEqual(stripped.count, 1)
         XCTAssertEqual(stripped[0].text, "愛神也有苦惱")
+    }
+
+    /// Real data: NewJeans - Supernatural from NetEase can append Chinese
+    /// translation fragments directly to non-Chinese lyric text even when a
+    /// tlyric translation is also present. The displayed original line must
+    /// stay source-language only.
+    func testStripChineseTranslations_removesInlineChineseEvenWithExistingTranslation() {
+        let lines = [
+            LyricLine(text: "Stormy night", startTime: 26.9, endTime: 29.0, translation: "暴风雨夜"),
+            LyricLine(text: "Cloudy sky", startTime: 29.6, endTime: 31.0, translation: "乌云密布天际"),
+            LyricLine(text: "向着彼此 不断靠近", startTime: 42.1, endTime: 44.0, translation: "无可奈何"),
+            LyricLine(text: "내 심박수를 믿어 我相信 自己的心跳声", startTime: 51.0, endTime: 55.0, translation: "相信心跳"),
+            LyricLine(text: "もう知っている我 都已了然", startTime: 66.2, endTime: 70.0, translation: "我都已了然"),
+            LyricLine(text: "So it's sure这是可以肯定的", startTime: 77.4, endTime: 80.0, translation: "这可以肯定"),
+        ]
+
+        let stripped = parser.stripChineseTranslations(lines)
+
+        XCTAssertEqual(stripped.map(\.text), [
+            "Stormy night",
+            "Cloudy sky",
+            "내 심박수를 믿어",
+            "もう知っている",
+            "So it's sure",
+        ])
+        XCTAssertEqual(stripped[2].translation, "相信心跳")
+        XCTAssertEqual(stripped[3].translation, "我都已了然")
+        XCTAssertEqual(stripped[4].translation, "这可以肯定")
     }
 }

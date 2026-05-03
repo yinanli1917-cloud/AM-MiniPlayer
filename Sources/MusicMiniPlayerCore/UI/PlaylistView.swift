@@ -340,60 +340,55 @@ public struct PlaylistView: View {
 
                 // Shuffle & Repeat buttons — only on playlist page
                 if currentPage == .playlist {
-                HStack(spacing: 16) {
-                    let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                    let themeBackground = themeColor.opacity(0.20)
+                    HStack(spacing: 16) {
+                        let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
+                        let themeBackground = themeColor.opacity(0.20)
 
-                    Spacer()
+                        Spacer()
 
-                    Button(action: { musicController.toggleShuffle() }) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "shuffle")
-                                .font(.system(size: 11))
-                            Text("Shuffle")
-                                .font(.system(size: 10, weight: .medium))
+                        Button(action: { musicController.toggleShuffle() }) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "shuffle")
+                                    .font(.system(size: 11))
+                                Text("Shuffle")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule()
+                                    .fill(musicController.shuffleEnabled ? themeBackground : .clear)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            )
+                            .contentShape(Capsule())
                         }
-                        .foregroundStyle(musicController.shuffleEnabled ? themeColor : .white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .modifier(GlassCapsule(
-                            level: musicController.shuffleEnabled ? .regular : .clear,
-                            fallbackOpacity: musicController.shuffleEnabled ? 0.2 : 0.1,
-                            isEnabled: currentPage == .playlist
-                        ))
-                        .background(musicController.shuffleEnabled ? themeBackground : Color.clear)
-                        .clipShape(Capsule())
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+                        .buttonStyle(.plain)
 
-                    Button(action: { musicController.cycleRepeatMode() }) {
-                        HStack(spacing: 5) {
-                            Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                .contentTransition(.symbolEffect(.replace))
-                                .font(.system(size: 11))
-                            Text("Repeat")
-                                .font(.system(size: 10, weight: .medium))
+                        Button(action: { musicController.cycleRepeatMode() }) {
+                            HStack(spacing: 5) {
+                                Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                    .font(.system(size: 11))
+                                Text("Repeat")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule()
+                                    .fill(musicController.repeatMode > 0 ? themeBackground : .clear)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            )
+                            .contentShape(Capsule())
                         }
-                        .foregroundStyle(musicController.repeatMode > 0 ? themeColor : .white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .modifier(GlassCapsule(
-                            level: musicController.repeatMode > 0 ? .regular : .clear,
-                            fallbackOpacity: musicController.repeatMode > 0 ? 0.2 : 0.1,
-                            isEnabled: currentPage == .playlist
-                        ))
-                        .background(musicController.repeatMode > 0 ? themeBackground : Color.clear)
-                        .clipShape(Capsule())
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+                        .buttonStyle(.plain)
 
-                    Spacer()
-                }
-                .padding(.top, 10)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 16)
+                        Spacer()
+                    }
+                    .padding(.top, 10)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 16)
                 }
             }
         }
@@ -690,13 +685,13 @@ struct PlaylistItemRowCompact: View {
 
 struct BottomFadeMask: ViewModifier {
     var isActive: Bool
-    var topFadeHeight: CGFloat = 0  // > 0 时启用顶部渐变（歌单 header 区域）
+    var topFadeHeight: CGFloat = 0
+    var steepFade: Bool = false
 
     func body(content: Content) -> some View {
         content
             .mask(
                 VStack(spacing: 0) {
-                    // 顶部渐变：歌单行在 header 下方淡入
                     if topFadeHeight > 0 {
                         LinearGradient(
                             colors: [.clear, .black],
@@ -705,15 +700,17 @@ struct BottomFadeMask: ViewModifier {
                         )
                         .frame(height: topFadeHeight)
                     }
-                    // 中间完全可见
                     Color.black
-                    // 底部渐变：控件区域之前淡出
                     ZStack {
                         LinearGradient(
-                            gradient: Gradient(stops: [
+                            gradient: Gradient(stops: steepFade ? [
                                 .init(color: .black, location: 0),
                                 .init(color: .black.opacity(0.15), location: 0.3),
                                 .init(color: .clear, location: 0.5)
+                            ] : [
+                                .init(color: .black, location: 0),
+                                .init(color: .black.opacity(0.4), location: 0.35),
+                                .init(color: .clear, location: 0.75)
                             ]),
                             startPoint: .top,
                             endPoint: .bottom

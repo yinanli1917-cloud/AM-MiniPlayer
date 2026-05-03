@@ -289,18 +289,38 @@ private func runLibrary(args: [String]) async {
     }
     log("获取到 \(tracks.count) 首歌曲\n")
 
+    let fixtureCases = loadTestCases()
     var results: [VerifyResult] = []
     for (i, track) in tracks.enumerated() {
+        let fixture = matchingFixture(for: track, cases: fixtureCases)
         let r = await testSong(
             id: "LIB-\(String(format: "%02d", i + 1))",
             title: track.title, artist: track.artist,
-            duration: track.duration, expectation: nil
+            duration: track.duration, expectation: fixture?.expectation,
+            album: track.album
         )
         results.append(r)
         printResultLine(r)
         emitJSON(r)
     }
     printBatchSummary(results)
+}
+
+private func matchingFixture(for track: LibraryTrack, cases: [TestCase]) -> TestCase? {
+    let title = fixtureKey(track.title)
+    let artist = fixtureKey(track.artist)
+    return cases.first { tc in
+        fixtureKey(tc.title) == title &&
+        fixtureKey(tc.artist) == artist &&
+        (tc.expectation.shouldFindLyrics == false || abs(tc.duration - track.duration) <= 3.0)
+    }
+}
+
+private func fixtureKey(_ value: String) -> String {
+    LanguageUtils.toSimplifiedChinese(value)
+        .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        .lowercased()
+        .filter { $0.isLetter || $0.isNumber }
 }
 
 // =========================================================================
@@ -348,7 +368,8 @@ private func runBenchmark(args: [String]) async {
             id: bc.id, title: bc.title,
             artist: bc.artist, duration: bc.duration,
             expectation: bc.expectation,
-            translationEnabled: true
+            translationEnabled: true,
+            enforceExpectationIdentityOracle: false
         )
 
         // 2. 增强验证
@@ -376,6 +397,7 @@ private func runBenchmark(args: [String]) async {
             base: baseResult,
             region: bc.region,
             expectedLyricsLang: bc.expectedLyricsLang,
+            expectedShouldFindLyrics: bc.expectation.shouldFindLyrics,
             translationLeakCount: leakCount,
             sourceTranslationFound: baseResult.hasTranslation,
             localTranslationOK: localOK,

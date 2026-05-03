@@ -102,13 +102,6 @@ struct GlassCircle: ViewModifier {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - Hoverable Button Style Helpers
-// ═══════════════════════════════════════════════════════════════════════════════
-// 🔑 共享的亮度/透明度计算，消除 MusicButtonView/HideButtonView/ExpandButtonView 的重复代码
-
-// Helpers removed — GlassButtonBackground now only needs luminance
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - HoverableActionButton（统一的 Glass 按钮）
 // ═══════════════════════════════════════════════════════════════════════════════
 

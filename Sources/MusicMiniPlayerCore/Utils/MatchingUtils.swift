@@ -23,7 +23,12 @@ public enum MatchingUtils {
     // ── 规范化 helper ──
 
     private static func normalizedTitle(_ s: String) -> String {
-        LanguageUtils.normalizeTrackName(s).lowercased()
+        LanguageUtils.normalizeTrackName(s)
+            .lowercased()
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "’", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "´", with: "")
     }
 
     private static func normalizedArtist(_ s: String) -> String {

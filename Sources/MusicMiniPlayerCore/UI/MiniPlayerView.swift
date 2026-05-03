@@ -1,5 +1,4 @@
 import SwiftUI
-import Translation
 
 // 移除自定义transition，使用SwiftUI官方transition避免icon消失bug
 // PlayerPage enum 已移至 MusicController 以支持状态共享
@@ -122,25 +121,22 @@ public struct MiniPlayerView: View {
                 .allowsHitTesting(false)
         )
         .overlay(alignment: .topLeading) {
-            // Music按钮 - hover时显示，但歌单页面不显示
-            if showControls && musicController.currentPage != .playlist {
-                let lum = musicController.currentPage == .album ? topLeftLuminance : artworkBrightness
-                MusicButtonView(artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
+            if showControls && musicController.currentPage == .album {
+                let lum = topLeftLuminance
+                MusicButtonView(artworkBrightness: lum, isAlbumPage: true)
                     .padding(12)
                     .transition(.opacity)
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Hide/Expand 按钮 - hover时显示，但歌单页面不显示
-            if showControls && musicController.currentPage != .playlist {
-                let lum = musicController.currentPage == .album ? topRightLuminance : artworkBrightness
-                // 根据模式显示不同按钮
+            if showControls && musicController.currentPage == .album {
+                let lum = topRightLuminance
                 if onExpand != nil {
-                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
+                    ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: true)
                         .padding(12)
                         .transition(.opacity)
                 } else if onHide != nil {
-                    HideButtonView(onHide: onHide!, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
+                    HideButtonView(onHide: onHide!, artworkBrightness: lum, isAlbumPage: true)
                         .padding(12)
                         .transition(.opacity)
                 } else {
@@ -148,7 +144,7 @@ public struct MiniPlayerView: View {
                         if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
                             window.orderOut(nil)
                         }
-                    }, artworkBrightness: lum, isAlbumPage: musicController.currentPage == .album)
+                    }, artworkBrightness: lum, isAlbumPage: true)
                     .padding(12)
                     .transition(.opacity)
                 }
@@ -215,6 +211,11 @@ public struct MiniPlayerView: View {
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
         .onChange(of: musicController.currentPage) { oldPage, newPage in
             // 从歌单/歌词页切换到专辑页时，强制同步 hover 状态
+            if newPage == .playlist {
+                hoverLocked = false
+                showControls = false
+                showOverlayContent = false
+            }
             if newPage == .album && oldPage != .album {
                 let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
 

@@ -143,6 +143,18 @@ public enum LanguageUtils {
         "who", "whom",
     ]
 
+    /// High-frequency English content words that are common in song titles
+    /// and too short/simple for morphology or consonant-cluster detection.
+    /// They are still decisive when paired with another English signal word:
+    /// e.g. "Second Love", "Good Day", "Bad Dream".
+    private static let englishTitleWords: Set<String> = [
+        "love", "loved", "lover", "baby", "heart", "dream", "dreams",
+        "day", "days", "night", "nights", "time", "world", "life",
+        "second", "first", "last", "good", "bad", "blue", "sweet",
+        "song", "dance", "dancer", "light", "dark", "rain", "fire",
+        "moon", "sun", "star", "stars", "home", "lonely", "alone"
+    ]
+
     /// English morphology suffixes/prefixes rarely found in pinyin/romaji.
     /// Used as a secondary signal to identify standalone English words like
     /// "Unconditional", "Monologue", "Invisible" that carry no function-word
@@ -182,6 +194,7 @@ public enum LanguageUtils {
             .split(whereSeparator: { !$0.isLetter })
             .map(String.init)
         if words.contains(where: { englishFunctionWords.contains($0) }) { return true }
+        if words.filter({ englishTitleWords.contains($0) }).count >= 2 { return true }
         for word in words where word.count >= 5 {
             if englishMorphologySuffixes.contains(where: { word.hasSuffix($0) }) { return true }
             if englishMorphologyPrefixes.contains(where: { word.hasPrefix($0) && word.count >= $0.count + 3 }) { return true }

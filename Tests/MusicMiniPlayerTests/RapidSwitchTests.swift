@@ -109,7 +109,7 @@ final class RapidSwitchTests: XCTestCase {
     }
 
     // ------------------------------------------------------------------
-    // MARK: - artworkCacheKey (radio vs library unified key)
+    // MARK: - artworkCacheKey
     // ------------------------------------------------------------------
 
     /// 非空 persistentID → 直接用作 key（库内曲目保持原行为）
@@ -127,6 +127,14 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertNil(c.artworkCacheKey(persistentID: "", title: "Song Name", artist: "Artist Name"))
         XCTAssertNil(c.artworkCacheKey(persistentID: "", title: "", artist: "A"))
         XCTAssertNil(c.artworkCacheKey(persistentID: "", title: "Song", artist: ""))
+    }
+
+    func testMetadataArtworkCacheKeyUsesTrackIdentityBeforePersistentIDBackfill() {
+        let c = MusicController.shared
+        let key = c.artworkMetadataCacheKey(title: "戀愛預告", artist: "Sandy Lamb", album: "My Lovely Legend")
+        XCTAssertEqual(key, "meta:恋爱预告|sandy lamb|my lovely legend" as NSString)
+        XCTAssertNil(c.artworkMetadataCacheKey(title: "", artist: "Sandy Lamb", album: "My Lovely Legend"))
+        XCTAssertNil(c.artworkMetadataCacheKey(title: "戀愛預告", artist: "", album: "My Lovely Legend"))
     }
 
     // ------------------------------------------------------------------

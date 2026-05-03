@@ -73,6 +73,11 @@ final class MatchingUtilsTests: XCTestCase {
         XCTAssertEqual(score, 35, accuracy: 0.01)
     }
 
+    func testTitleMatchScore_ignoresApostropheVariants() {
+        let score = MatchingUtils.titleMatchScore(target: "Its Just A Matter Of Time", actual: "It's Just a Matter of Time")
+        XCTAssertEqual(score, 35, accuracy: 0.01)
+    }
+
     func testTitleMatchScore_containsMatch() {
         // actual 包含 target（或反过来）→ 28 分 (35 * 0.8)
         let score = MatchingUtils.titleMatchScore(target: "Love", actual: "Love Story")
@@ -94,6 +99,10 @@ final class MatchingUtilsTests: XCTestCase {
 
     func testIsTitleMatch_contains() {
         XCTAssertTrue(MatchingUtils.isTitleMatch(target: "Love", actual: "Love Story"))
+    }
+
+    func testIsTitleMatch_ignoresApostropheVariants() {
+        XCTAssertTrue(MatchingUtils.isTitleMatch(target: "Its Just A Matter Of Time", actual: "It’s Just a matter of Time"))
     }
 
     func testIsTitleMatch_noMatch() {
