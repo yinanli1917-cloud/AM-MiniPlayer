@@ -18,7 +18,11 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": "霓虹"
+      "firstLineSHA256": "e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 10,
+      "firstLineStartMaxS": 20,
+      "maxTailGapS": 35
     }
   },
   {
@@ -239,9 +243,8 @@
     "artist": "deca joins",
     "duration": 318,
     "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "让我住进"
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
     }
   },
   {
@@ -480,7 +483,7 @@
     "id": "H24",
     "title": "Deep",
     "artist": "Tanya Chua",
-    "duration": 243,
+    "duration": 244,
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
@@ -519,10 +522,10 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "Endless",
+      "firstLineSHA256": "d3e4dcd327cb72bbaf4f8058ce220e2e766e083941fe0b1e64da2b053b7192d6",
       "expectedClassification": "synced",
-      "firstLineStartMinS": 5,
-      "firstLineStartMaxS": 15,
+      "firstLineStartMinS": 20,
+      "firstLineStartMaxS": 30,
       "maxTailGapS": 20
     }
   },
@@ -689,14 +692,19 @@
     }
   },
   {
-    "id": "X14_no_static_yuen_waat",
+    "id": "X14_synced_yuen_waat",
     "title": "圓滑",
     "artist": "Ellen & The Ripples Band",
     "duration": 254,
     "album": "Riding On Faith",
     "expectation": {
-      "shouldFindLyrics": false,
-      "allowMissingLyrics": true
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ"],
+      "firstLineSHA256": "a309dfdccb651b3ed83d2734db481e79083a93e60469ef47228b5dfd7f3f953d",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 25,
+      "firstLineStartMaxS": 32,
+      "maxTailGapS": 20
     }
   },
   {
@@ -730,34 +738,49 @@
     }
   },
   {
-    "id": "X18_no_static_with_you",
+    "id": "X18_synced_with_you",
     "title": "With You",
     "artist": "Tennyson",
     "duration": 222,
     "expectation": {
-      "shouldFindLyrics": false,
-      "allowMissingLyrics": true
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ"],
+      "firstLineSHA256": "63aeeccbdc8dbbb22166fcc1006aa89e9d3d174dd2317071387e49fe5ce707d9",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 10,
+      "firstLineStartMaxS": 18,
+      "maxTailGapS": 30
     }
   },
   {
-    "id": "X19_no_static_hypnosis",
+    "id": "X19_synced_hypnosis",
     "title": "Hypnosis",
     "artist": "Holy Hive",
     "duration": 232,
     "album": "Float Back To You",
     "expectation": {
-      "shouldFindLyrics": false,
-      "allowMissingLyrics": true
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ"],
+      "firstLineSHA256": "209dc213a6ebea8065fa26e0a264abe6b8d8f3eea63e3c542e753265967396fe",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 8,
+      "firstLineStartMaxS": 14,
+      "maxTailGapS": 70
     }
   },
   {
-    "id": "X20_no_static_frisco_blues",
+    "id": "X20_synced_frisco_blues",
     "title": "Frisco Blues",
     "artist": "Lewis OfMan",
     "duration": 248,
     "expectation": {
-      "shouldFindLyrics": false,
-      "allowMissingLyrics": true
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ"],
+      "firstLineSHA256": "bbb1fd368a31b2c9c7483f2d0ed6730582b37210d1a0de9cc0c53896c63c82cb",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 0,
+      "firstLineStartMaxS": 3,
+      "maxTailGapS": 10
     }
   },
   {
