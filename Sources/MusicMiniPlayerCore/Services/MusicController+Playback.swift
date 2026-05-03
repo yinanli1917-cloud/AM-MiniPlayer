@@ -58,6 +58,7 @@ extension MusicController {
             logger.info("Preview: nextTrack")
             return
         }
+        lastUserActionTime = Date()
         skipDirection = 1
         controlQueue.async { [weak self] in
             guard let app = self?.controlApp, app.isRunning else {
@@ -77,6 +78,7 @@ extension MusicController {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
+            lastUserActionTime = Date()
             skipDirection = -1
             controlQueue.async { [weak self] in
                 guard let app = self?.controlApp, app.isRunning else {

@@ -190,6 +190,13 @@ extension MusicController {
                 self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
                 return
             }
+            if Date().timeIntervalSince(self.lastUserActionTime) < 0.6 {
+                Thread.sleep(forTimeInterval: 0.18)
+                guard self.artworkFetchGeneration == generation else {
+                    self.logToFile("🎨 [SB] stale gen \(generation) after rapid-skip debounce, skipping")
+                    return
+                }
+            }
 
             self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
             if let image = self.getArtworkImageFromApp(app) {

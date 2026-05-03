@@ -43,6 +43,8 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted throttled controls time-publisher experiment | `tmp/perf/perf-20260503-023121.csv` | avg 67.51%, p95 102.2%, max 110.6; worse than baseline, reverted. |
 | Height snapshot + lazy diagnostics + display-text cache | `tmp/perf/perf-20260503-024502.csv`, `tmp/perf/nanopod-after-displaytext.sample.txt` | Height snapshot reduced one lyrics rapid-switch run modestly (avg 57.11%, p95 90.3%) but did not bridge the CPU target. Repeated `cleanedText` sampling disappeared after moving display cleanup into `LyricLine`. |
 | Isolated progress/time controls subtree | `tmp/perf/perf-20260503-025210.csv` | Album-page rapid switching measured much lower (avg 26.65%, p95 43.5%, max 51.1), but this is not comparable to the lyrics word-level stress case because the app relaunched on album view. |
+| Lyrics-page rapid switch before SB artwork debounce | `tmp/perf/perf-20260503-042839.csv` | avg 44.97%, p95 87.4%, max 95.8. Follow-up run with album-corner sampling gated but without SB debounce was avg 48.62%, p95 92.0%, max 95.0 (`tmp/perf/perf-20260503-043640.csv`). |
+| Lyrics-page rapid switch after user-action tracking + SB artwork debounce | `tmp/perf/perf-20260503-043849.csv` | avg 30.5%, p95 71.2%, max 79.5. This preserves the lyrics renderer/layout and drops stale Music.app artwork reads during rapid skips before they enter expensive ScriptingBridge extraction. |
 
 ## Important Correction
 
@@ -71,6 +73,8 @@ Protected UX paths:
 - Throttling only the bottom-controls time publisher did not reduce rapid-switch CPU and was reverted. Do not repeat without a more precise SwiftUI invalidation trace.
 - Repeated lyric height summation, disabled diagnostic string formatting, and lyric display-text cleanup were real sampled inefficiencies and are now reduced without changing lyric layout/animation. They are incremental wins, not the full fix.
 - `SharedBottomControls` no longer observes playback time as a whole view; only the progress/time strip does. This should prevent time ticks from rebuilding the non-time playback buttons and glass cluster.
+- Rapid next/previous actions did not update `lastUserActionTime`, so existing user-action guards were not reliably active during the exact stress path. That is fixed.
+- ScriptingBridge artwork extraction remains expensive during rapid skipping. A short generation re-check delay now lets transient skipped tracks fall out before `currentTrack.artworks` is read, while API artwork still starts immediately for responsiveness.
 
 ## Safe Next Lanes
 
@@ -79,7 +83,7 @@ Protected UX paths:
 3. Investigate foreground fetch/apply contention when preloading nearby queue/history songs.
 4. Add a visual comparison harness before any lyric renderer or cadence change.
 5. Profile whether non-lyric overlays redraw during word-level animation frames.
-6. Re-run a release trace that starts directly on the lyrics page; the latest post-controls measurement was album-page only and cannot close the lyrics CPU gap.
+6. Continue lowering the lyrics rapid-switch p95; the latest run is much better but still spikes above the desired target.
 
 ## Verification Commands
 
@@ -94,4 +98,4 @@ scripts/perf_harness.py --require-music-playing --warmup 3 --duration 15 --inter
 
 ## Status
 
-Not complete. The steady lyrics-screen case is improved in the latest measured run, but rapid switching still spikes high and needs another iteration.
+Not complete. The latest lyrics rapid-switch run improved materially, but p95 is still high enough to justify another iteration.

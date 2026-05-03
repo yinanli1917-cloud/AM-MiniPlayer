@@ -191,20 +191,18 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 监听封面变化，计算整图 + 底部区域亮度
+        // 🔑 监听封面变化；album-only corner samples are deferred off lyrics/playlist pages.
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if let artwork = newArtwork {
                 artworkBrightness = musicController.artworkLuminance
-                topLeftLuminance = artwork.topLeftBrightness()
-                topRightLuminance = artwork.topRightBrightness()
+                updateAlbumCornerLuminanceIfVisible(for: artwork)
             }
             scheduleBackgroundArtworkUpdate(newArtwork)
         }
         .onAppear {
             if let artwork = musicController.currentArtwork {
                 artworkBrightness = musicController.artworkLuminance
-                topLeftLuminance = artwork.topLeftBrightness()
-                topRightLuminance = artwork.topRightBrightness()
+                updateAlbumCornerLuminanceIfVisible(for: artwork)
             }
             backgroundArtwork = musicController.currentArtwork
         }
@@ -218,6 +216,9 @@ public struct MiniPlayerView: View {
             }
             if newPage == .album && oldPage != .album {
                 let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+                if let artwork = musicController.currentArtwork {
+                    updateAlbumCornerLuminanceIfVisible(for: artwork)
+                }
 
                 // 🔑 锁定 hover 状态，防止 onHover(false) 覆盖
                 hoverLocked = true
@@ -244,6 +245,12 @@ public struct MiniPlayerView: View {
 
 // MARK: - MiniPlayerView Methods
 extension MiniPlayerView {
+    private func updateAlbumCornerLuminanceIfVisible(for artwork: NSImage) {
+        guard musicController.currentPage == .album else { return }
+        topLeftLuminance = artwork.topLeftBrightness()
+        topRightLuminance = artwork.topRightBrightness()
+    }
+
     // MARK: - Album Overlay Content (文字遮罩 + 底部控件)
     @ViewBuilder
     func albumOverlayContent(geometry: GeometryProxy) -> some View {
