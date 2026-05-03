@@ -25,6 +25,19 @@ REQUIRED = [
     ".agents/harness/specs/documentation.md",
     ".agents/harness/specs/verification.md",
     ".agents/harness/specs/data-driven.md",
+    ".agents/harness/specs/coding/documentation.md",
+    ".agents/harness/specs/coding/subagent-protocol.md",
+    ".agents/harness/specs/coding/tdd.md",
+    ".agents/harness/specs/coding/verification.md",
+    ".agents/harness/specs/enforcement/data-driven.md",
+    ".agents/harness/specs/enforcement/skill-invocation.md",
+    ".agents/harness/specs/writing/prose-constraints.md",
+    ".agents/harness/specs/writing/research-protocol.md",
+    ".agents/harness/specs/writing/revision-checklist.md",
+    ".agents/harness/rules/global.yaml",
+    ".agents/harness/rules/nightcrawl.yaml",
+    ".agents/harness/rules/phases-global.yaml",
+    ".agents/harness/rules/skill-routes.yaml",
 ]
 
 REQUIRED_SKILLS = [
@@ -87,10 +100,20 @@ def main() -> int:
         "Claude Hook Mapping",
         "Keep-Awake Protocol",
         "Commit Gates",
+        "Latest Claude Architecture Snapshot",
         "caffeinate -dimsu -t 21600",
     ]:
         if required_phrase not in operations:
             fail(f"operations.md missing {required_phrase}")
+
+    skill_routes = (ROOT / ".agents/harness/rules/skill-routes.yaml").read_text(encoding="utf-8")
+    for required_skill in [
+        "performance-optimization",
+        "appstore-compliance",
+        "swiftui-silky-animation",
+    ]:
+        if required_skill not in skill_routes:
+            fail(f"skill-routes.yaml missing {required_skill}")
 
     print("OK: Codex harness installed and referenced")
     return 0

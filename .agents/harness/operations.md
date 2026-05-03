@@ -8,13 +8,23 @@ This file maps the Claude Code harness architecture into operations Codex can ac
 |---|---|
 | `session-start.py` | Read `AGENTS.md`, `.agents/harness/README.md`, current git state, active goal summary, and relevant docs before acting. |
 | `workflow-reminder.py` | Use `.agents/harness/phases.yaml` as phase-specific reminders during planning, coding, debugging, reviewing, and verifying. |
-| `enforce-rules.py` | Run `scripts/verify_harness.py`; inspect `.agents/harness/rules.yaml`; search changed files for risky patterns before staging. |
+| `enforce-rules.py` | Run `scripts/verify_harness.py`; inspect `.agents/harness/rules.yaml`; use `.agents/harness/rules/*.yaml` as migrated data-driven rule evidence; search changed files for risky patterns before staging. |
 | `post-tool-check.py` | After failed commands, diagnose the failure path and add evidence to docs or postmortems when the failure changes the plan. |
 | `task.py` lifecycle | Use the active Codex goal, `docs/performance_audit_2026-05-03.md`, and commits as the task ledger. |
 | `~/.claude/agents/*.md` | Use `.agents/harness/agents/*.md` as bounded research, implementation, and check protocols. |
-| `~/.claude/spec/` | Use `.agents/harness/specs/*.md` for reusable verification, documentation, and data-driven expectations. |
+| `~/.claude/spec/` | Use `.agents/harness/specs/coding/`, `.agents/harness/specs/enforcement/`, and `.agents/harness/specs/writing/` for reusable protocols. |
 
-Codex cannot execute Claude hooks as callback code. The adaptation is therefore explicit: local manifests plus verifier scripts plus documented gates.
+## Latest Claude Architecture Snapshot
+
+The latest reviewed `naTure` session identified these durable harness pieces:
+
+1. Session context injection: handoff, workflow, night plan, git state, and active task.
+2. Workflow reminders: domain-aware phase routing from YAML.
+3. Pre-tool enforcement: YAML-driven deny rules, scope filtering, skill-route injection, and agent protocol injection.
+4. Post-tool checks: failed fetches or empty results require escalation instead of silent continuation.
+5. Task lifecycle: create, start, add context, finish, archive, and record sessions.
+
+Codex cannot run Claude callback hooks directly. The equivalent here is pull-based: read the manifests, keep task context in `.codex/tasks/`, and verify with `scripts/verify_harness.py`.
 
 ## Keep-Awake Protocol
 

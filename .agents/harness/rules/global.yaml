@@ -1,0 +1,12 @@
+version: 1
+
+# Rules that fire in ALL projects regardless of cwd.
+# Keep this minimal — most rules should be scoped.
+
+bash_deny:
+  - id: browse-extensions-none
+    pattern: 'BROWSE_EXTENSIONS\s*=\s*none'
+    message: "BLOCKED: BROWSE_EXTENSIONS=none disables bypass-paywall. Default is 'all'. Remove it."
+    strip_data: true
+
+webfetch_deny: []

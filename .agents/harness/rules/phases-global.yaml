@@ -1,0 +1,87 @@
+version: 1
+
+# Phase reminders injected per-turn by workflow-reminder.py.
+# Loaded based on: (1) cwd matching domain scope, (2) workflow.md ## Status.
+
+default:
+  planning:
+    reminder: "Propose 2-3 approaches with trade-offs before executing. Do not skip design."
+    inject_skills: [think, grill-me]
+  coding:
+    reminder: "TDD — failing test BEFORE production code. No completion claims without verification evidence."
+    inject_skills: [hunt, check]
+  implementing:
+    reminder: "TDD — failing test BEFORE production code. Update L2 module CLAUDE.md if files added/removed."
+    inject_skills: [hunt, check, swift-build-checklist]
+  testing:
+    reminder: "Run FULL verification command, read FULL output, check exit code, count failures. No 'should work now' claims."
+    inject_skills: [check]
+  verifying:
+    reminder: "Run FULL verification command, read FULL output, check exit code, count failures. No 'should work now' claims."
+    inject_skills: [check]
+  reviewing:
+    reminder: "Use separate evaluator agent — self-evaluation is unreliable. Spec compliance first, then code quality."
+    inject_skills: [grill-me, zoom-out]
+  debugging:
+    reminder: "NO fixes without root cause investigation. Reproduce first, diagnose second, fix third. After 3 failed fixes → STOP and question the architecture."
+    inject_skills: [hunt, diagnose]
+
+domains:
+  fiction:
+    scope:
+      paths:
+        - /Users/yinanli/Documents/fictionWorks
+    phases:
+      research:
+        reminder: "Gather material only. Do not draft prose yet. Persist findings to research/*.md files."
+        inject_skills: [deep-research, learn]
+      outlining:
+        reminder: "Structure first. Each section must have a purpose. No prose yet — just the skeleton."
+        inject_skills: [think, write]
+      drafting:
+        reminder: "Each sentence must advance. No rephrasing. No metaphor stacking. Dig deeper, don't decorate."
+        inject_skills: [write]
+        constraints:
+          - "Say what something IS — no negation ('not X but Y')"
+          - "No slashes in prose"
+          - "Never assume reader reactions or use comparison logic"
+      revision:
+        reminder: "Cut 20% before adding anything new. Challenge every metaphor — does it earn its place?"
+        inject_skills: [grill-me, zoom-out]
+      polishing:
+        reminder: "Line-level only. Rhythm, word choice, punctuation. No structural changes allowed."
+        inject_skills: [write]
+
+  swift-app:
+    scope:
+      paths:
+        - /Users/yinanli/Documents/MusicMiniPlayer
+        - /Users/yinanli/Documents/Figlaude
+    phases:
+      planning:
+        reminder: "Check HIG before UI decisions. Propose approaches considering Liquid Glass constraints."
+        inject_skills: [think, liquid-glass]
+      coding:
+        reminder: "TDD. SwiftUI previews as verification. Check HIG before UI decisions."
+        inject_skills: [hunt, swiftui-patterns, swift-concurrency, liquid-glass]
+      implementing:
+        reminder: "TDD. SwiftUI previews as verification. Performance budget: 60fps, <16ms per frame."
+        inject_skills: [hunt, swiftui-patterns, swift-build-checklist, performance-optimization]
+      debugging:
+        reminder: "Instruments first. Profile before guessing. Check if issue is concurrency-related."
+        inject_skills: [hunt, swift-concurrency, diagnose]
+
+  deep-research:
+    scope:
+      paths:
+        - /Users/yinanli/Documents/deepResearchLab
+    phases:
+      investigating:
+        reminder: "Follow leads. Note every source. Do not write conclusions yet. Persist findings to research/*.md."
+        inject_skills: [deep-research, nightcrawl, learn]
+      writing:
+        reminder: "WSJ/LatePost style. Lead with the story. Evidence inline, not appendixed."
+        inject_skills: [write, deep-research]
+      reviewing:
+        reminder: "Fact-check every claim. Verify sources are current. Cut speculation."
+        inject_skills: [grill-me, check]

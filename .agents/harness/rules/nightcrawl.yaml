@@ -1,0 +1,37 @@
+version: 1
+
+# Rules scoped to browser/nightcrawl projects only.
+# These do NOT fire in non-browser projects (MusicMiniPlayer, fictionWorks, etc.)
+
+scope:
+  paths:
+    - /Users/yinanli/Documents/nightCrawl
+    - /Users/yinanli/Documents/naTure
+    - /Users/yinanli/Documents/deepResearchLab
+
+bash_deny:
+  - id: browse-auto-handover
+    pattern: 'BROWSE_AUTO_HANDOVER\s*=\s*1'
+    message: "BLOCKED: BROWSE_AUTO_HANDOVER=1 silently pops a Chrome window over the editor. Report the login wall and ask the user first."
+    strip_data: true
+
+  - id: cookie-import-browser
+    pattern: '(?:^|[\s;&|])(?:nc\s+)?cookie-import-browser\b'
+    message: "BLOCKED: cookie-import-browser triggers Keychain popups. Cookies already persist in ~/.nightcrawl/. NEVER run this."
+    strip_data: true
+
+webfetch_deny:
+  - id: chinese-sites-via-jina
+    condition: url_contains_jina_and_domain
+    domains:
+      - zhihu.com
+      - douban.com
+      - bilibili.com
+      - weibo.com
+      - baidu.com
+      - xiaohongshu.com
+      - zhuanlan.zhihu.com
+      - tieba.baidu.com
+      - 36kr.com
+      - huxiu.com
+    message: "BLOCKED: Chinese site ({domain}) must skip L1 (jina.ai) and go straight to nightcrawl. Use: nc goto \"{raw_url}\""

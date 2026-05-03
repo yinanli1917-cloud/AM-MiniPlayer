@@ -1,0 +1,41 @@
+version: 1
+
+# Keyword → skill mapping for subagent injection.
+# When a subagent prompt matches keywords, these skills are injected.
+
+routes:
+  - keywords: [plan, design, architect, approach, strategy, decision, trade-off, tradeoff, proposal, "how should"]
+    skills: [think, grill-me]
+
+  - keywords: [ui, component, page, visual, interface, frontend, layout, css, style]
+    skills: [design]
+
+  - keywords: [implement, fix, bug, refactor, test, build, compile, lint, code, coding]
+    skills: [hunt, check, swift-build-checklist]
+
+  - keywords: [swift, swiftui, macos, ios, appkit, uikit, xcode]
+    skills: [swiftui-patterns, swift-concurrency, liquid-glass, swiftui-silky-animation, appstore-compliance, performance-optimization]
+
+  - keywords: [review, merge, pr, diff, ship, "before merge"]
+    skills: [check]
+
+  - keywords: [diagnose, broken, failing, error, crash, "not working", debug, "root cause", "stack trace", why]
+    skills: [hunt]
+
+  - keywords: [config, hook, mcp, settings, "claude ignoring", audit, "health check"]
+    skills: [health]
+
+  - keywords: [research, investigate, dig, source, report, study, acquisition, analysis, "deep dive", coverage]
+    skills: [deep-research, learn]
+
+  - keywords: [write, essay, story, narrative, prose, creative, fiction, chapter, novel, draft, polish, rewrite]
+    skills: [write, deep-research]
+
+  - keywords: [read, fetch, url, article, webpage]
+    skills: [read]
+
+  - keywords: [browse, scrape, nightcrawl, website, paywall, bypass, stealth, chromium]
+    skills: [nightcrawl]
+
+  - keywords: [animation, motion, transition, spring, gesture, cpu, performance, instruments]
+    skills: [swiftui-silky-animation, perceive-animation, performance-optimization]
