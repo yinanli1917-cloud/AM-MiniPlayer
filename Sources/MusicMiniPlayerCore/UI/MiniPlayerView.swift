@@ -31,6 +31,9 @@ public struct MiniPlayerView: View {
     @State private var artworkBrightness: CGFloat = 0.5
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
+    @State private var backgroundArtwork: NSImage? = nil
+    @State private var lastArtworkChangeTime: Date = .distantPast
+    @State private var backgroundArtworkWorkItem: DispatchWorkItem? = nil
 
     // 🔑 Shuffle/Repeat 流动动画进度
     @State private var repeatFlow: Double = 0
@@ -57,7 +60,7 @@ public struct MiniPlayerView: View {
         GeometryReader { geometry in
             ZStack {
                 // Background (Artwork-derived fluid gradient — no system glass)
-                FluidGradientBackground(artwork: musicController.currentArtwork)
+                FluidGradientBackground(artwork: backgroundArtwork ?? musicController.currentArtwork)
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
 
@@ -195,6 +198,7 @@ public struct MiniPlayerView: View {
                 topLeftLuminance = artwork.topLeftBrightness()
                 topRightLuminance = artwork.topRightBrightness()
             }
+            scheduleBackgroundArtworkUpdate(newArtwork)
         }
         .onAppear {
             if let artwork = musicController.currentArtwork {
@@ -202,6 +206,7 @@ public struct MiniPlayerView: View {
                 topLeftLuminance = artwork.topLeftBrightness()
                 topRightLuminance = artwork.topRightBrightness()
             }
+            backgroundArtwork = musicController.currentArtwork
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
         .onChange(of: musicController.currentPage) { oldPage, newPage in
@@ -647,6 +652,25 @@ extension MiniPlayerView {
                 Spacer()
             }
         }
+    }
+
+    private func scheduleBackgroundArtworkUpdate(_ artwork: NSImage?) {
+        let now = Date()
+        let isRapidChange = now.timeIntervalSince(lastArtworkChangeTime) < 0.6
+        lastArtworkChangeTime = now
+
+        backgroundArtworkWorkItem?.cancel()
+
+        if !isRapidChange {
+            backgroundArtwork = artwork
+            return
+        }
+
+        let workItem = DispatchWorkItem {
+            backgroundArtwork = artwork
+        }
+        backgroundArtworkWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
     }
 }
 

@@ -301,14 +301,7 @@ extension MusicController {
         await MainActor.run {
             self.applyUpNextTracksIfChanged(tracks)
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
-
-            // Trigger lyrics preloading for upcoming tracks
-            let tracksToPreload = Array(tracks.prefix(3)).map {
-                (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
-            }
-            if !tracksToPreload.isEmpty {
-                LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
-            }
+            self.preloadNearbyAssets(from: tracks)
         }
     }
 
@@ -398,6 +391,7 @@ extension MusicController {
             DispatchQueue.main.async {
                 self.applyRecentTracksIfChanged(tracks)
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
+                self.preloadNearbyAssets(from: tracks)
             }
         }
     }
@@ -458,6 +452,31 @@ extension MusicController {
     private func applyRecentTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
         guard !sameTrackIdentity(recentTracks, tracks) else { return }
         recentTracks = tracks
+    }
+
+    @MainActor
+    private func preloadNearbyAssets(from tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
+        let validTracks = tracks
+            .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
+            .map { (title: $0.title, artist: $0.artist, album: $0.album, persistentID: $0.persistentID, duration: TimeInterval($0.duration)) }
+
+        guard !validTracks.isEmpty else { return }
+
+        assetPreloadTask?.cancel()
+        assetPreloadTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.preloadArtwork(for: validTracks)
+                LyricsService.shared.preloadNextSongs(
+                    tracks: validTracks.map {
+                        (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+                    }
+                )
+            }
+        }
     }
 
     private func sameTrackIdentity(

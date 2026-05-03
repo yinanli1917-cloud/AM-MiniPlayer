@@ -90,31 +90,49 @@ public struct LyricsView: View {
 
     public var body: some View {
         ZStack {
-            backgroundLayer
-            VStack(spacing: 0) {
-                if lyricsService.isLoading {
-                    loadingView
-                } else if let error = lyricsService.error {
-                    errorView(error)
-                } else if lyricsService.lyrics.isEmpty {
-                    emptyStateView
-                } else {
-                    scrollableLyricsContent
+            if currentPage == .lyrics {
+                backgroundLayer
+                VStack(spacing: 0) {
+                    if lyricsService.isLoading {
+                        loadingView
+                    } else if let error = lyricsService.error {
+                        errorView(error)
+                    } else if lyricsService.lyrics.isEmpty {
+                        emptyStateView
+                    } else {
+                        scrollableLyricsContent
+                    }
                 }
+            } else {
+                Color.clear
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
             }
         }
-        .overlay(alignment: .topLeading) { musicButtonOverlay }
-        .overlay(alignment: .topTrailing) { windowButtonsOverlay }
-        .onHover { hovering in handleHover(hovering) }
+        .overlay(alignment: .topLeading) {
+            if currentPage == .lyrics { musicButtonOverlay }
+        }
+        .overlay(alignment: .topTrailing) {
+            if currentPage == .lyrics { windowButtonsOverlay }
+        }
+        .onHover { hovering in
+            if currentPage == .lyrics { handleHover(hovering) }
+        }
         // ── onChange: 页面切换 ──
         .onChange(of: currentPage) { _, newPage in
             if newPage == .lyrics {
                 isHovering = true
                 animateControlsIn()
+                lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
+                                          artist: musicController.currentArtist,
+                                          duration: musicController.duration,
+                                          album: musicController.currentAlbum)
+                if #available(macOS 15.0, *) { updateTranslationSessionConfig() }
             }
         }
         // ── onAppear + 歌曲切换 ──
         .onAppear {
+            guard currentPage == .lyrics else { return }
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
@@ -140,10 +158,12 @@ public struct LyricsView: View {
             scroll.rawScrollOffset = 0
             scroll.frozenDisplayIndex = nil
             scroll.lockedLineIndex = nil
-            lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
-                                      artist: musicController.currentArtist,
-                                      duration: musicController.duration,
-                                      album: musicController.currentAlbum)
+            if currentPage == .lyrics {
+                lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
+                                          artist: musicController.currentArtist,
+                                          duration: musicController.duration,
+                                          album: musicController.currentAlbum)
+            }
         }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
@@ -185,7 +205,7 @@ public struct LyricsView: View {
             handleExternalManualScroll(newValue)
         }
         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
-            guard let newIndex = newValue else { return }
+            guard currentPage == .lyrics, let newIndex = newValue else { return }
             let oldIndex = oldValue ?? wave.lastCurrentIndex
             if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
                 triggerWaveAnimation(from: oldIndex, to: newIndex)
@@ -213,14 +233,17 @@ public struct LyricsView: View {
         ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
     // MARK: - Sub-views
 
     private var backgroundLayer: some View {
-        AdaptiveFluidBackground(artwork: musicController.currentArtwork)
-            .id(musicController.currentTrackTitle)
-            .ignoresSafeArea()
-            .accessibilityHidden(true)
+        Group {
+            if currentPage == .lyrics {
+                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                    .id(musicController.currentTrackTitle)
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
+            }
+        }
     }
 
     private var loadingView: some View {

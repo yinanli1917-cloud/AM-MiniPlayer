@@ -95,6 +95,7 @@ public class LyricsService: ObservableObject {
     private var lastSystemTranslationLanguage: String?
 
     private var currentFetchTask: Task<Void, Never>?
+    private var preloadTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
 
     /// Timestamp when good lyrics were last applied — used for stability guard
@@ -651,13 +652,24 @@ public class LyricsService: ObservableObject {
     // MARK: - Public API: Preload
     // ========================================================================
 
+    @MainActor
     public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval, album: String)]) {
-        for track in tracks.prefix(3) {
-            let songID = "\(track.title)-\(track.artist)"
-            guard lyricsCache.object(forKey: songID as NSString) == nil else { continue }
+        let candidates = tracks
+            .prefix(4)
+            .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
+            .filter { lyricsCache.object(forKey: "\($0.title)-\($0.artist)" as NSString) == nil }
 
-            Task.detached(priority: .low) { [weak self] in
-                guard let self = self else { return }
+        guard !candidates.isEmpty else { return }
+
+        preloadTask?.cancel()
+        preloadTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+
+            for track in candidates {
+                guard !Task.isCancelled else { return }
+                let songID = "\(track.title)-\(track.artist)"
+                if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
+
                 let results = await self.fetcher.fetchAllSources(
                     title: track.title,
                     artist: track.artist,
@@ -676,7 +688,7 @@ public class LyricsService: ObservableObject {
                         album: track.album
                     )
                 }
-                guard let bestResult, !bestResult.lyrics.isEmpty else { return }
+                guard let bestResult, !bestResult.lyrics.isEmpty else { continue }
 
                 let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
                 let processed = self.parser.processLyrics(aligned)

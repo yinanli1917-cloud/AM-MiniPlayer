@@ -105,8 +105,10 @@ public struct PlaylistView: View {
                 // ═══════════════════════════════════════════
                 // MARK: - Background
                 // ═══════════════════════════════════════════
-                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
-                    .ignoresSafeArea()
+                if currentPage == .playlist {
+                    AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                        .ignoresSafeArea()
+                }
 
                 // ═══════════════════════════════════════════
                 // MARK: - Main ScrollView with Sections

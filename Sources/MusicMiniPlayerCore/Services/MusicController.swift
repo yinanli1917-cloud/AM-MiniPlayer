@@ -71,7 +71,11 @@ public class MusicController: ObservableObject {
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
-    @Published public var currentPage: PlayerPage = .album
+    @Published public var currentPage: PlayerPage = .album {
+        didSet {
+            if oldValue != currentPage { updateTimerState() }
+        }
+    }
     @Published public var userManuallyOpenedLyrics: Bool = false
     @Published public var artworkLuminance: CGFloat = 0.5
     @Published public var controlAreaLuminance: CGFloat = 0.5
@@ -178,6 +182,7 @@ public class MusicController: ObservableObject {
     private var queueCheckTimer: Timer?
     private var queueRefreshTimer: Timer?     // Debounced queue refresh on track change
     private var interpolationTimerActive = false
+    private var interpolationTimerInterval: TimeInterval = 0
     var lastPollTime: Date = .distantPast
     /// Frame-relative interpolation: tracks when the last interpolation frame ran.
     /// Unlike lastPollTime (which depends on SB queue availability), this is set
@@ -207,6 +212,7 @@ public class MusicController: ObservableObject {
     var queueFetchPendingForceRecent = false
     var lastQueueFetchStartedAt: Date = .distantPast
     var lastRecentHistoryFetchAt: Date = .distantPast
+    var assetPreloadTask: Task<Void, Never>?
     let queueFetchMinimumInterval: TimeInterval = 1.5
     let recentHistoryRefreshInterval: TimeInterval = 20.0
     private let userActionLockDuration: TimeInterval = 1.5
@@ -451,18 +457,22 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let shouldRun = self.isPlaying && !self.windowMovementPaused
-            if shouldRun && !self.interpolationTimerActive {
+            let targetInterval: TimeInterval = self.currentPage == .lyrics ? 0.016 : 0.1
+            if shouldRun && (!self.interpolationTimerActive || self.interpolationTimerInterval != targetInterval) {
+                self.interpolationTimer?.invalidate()
                 // 🔑 Reset frame clock so first dt is ~0, not time-since-last-stop
                 self.lastFrameTime = Date()
-                self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+                self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: targetInterval, repeats: true) { [weak self] _ in
                     self?.interpolateTime()
                 }
                 RunLoop.main.add(self.interpolationTimer!, forMode: .common)
                 self.interpolationTimerActive = true
+                self.interpolationTimerInterval = targetInterval
             } else if !shouldRun && self.interpolationTimerActive {
                 self.interpolationTimer?.invalidate()
                 self.interpolationTimer = nil
                 self.interpolationTimerActive = false
+                self.interpolationTimerInterval = 0
             }
         }
     }
