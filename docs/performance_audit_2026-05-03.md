@@ -19,7 +19,7 @@ Review high CPU usage and rapid song-switch behavior without compromising nanoPo
   - Debounces nearby artwork and lyrics preloading.
 - `5bf7410 chore: add codex harness architecture`
   - Adds Codex harness manifests and verifier.
-- Pending: lyric time-index optimization
+- `42f667f perf: optimize lyric time indexing`
   - Replaces per-frame linear lyric-line scanning with current-index advancement and binary search for seeks/backward jumps.
   - Does not touch `LyricsView.swift`, `LyricLineView.swift`, word-level renderer cadence, layout, or animation.
 

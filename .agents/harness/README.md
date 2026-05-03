@@ -10,7 +10,8 @@ Claude Code uses global hooks. Codex does not execute those hooks, so this repo 
 2. `phases.yaml` — phase reminders for planning, coding, debugging, reviewing, and verifying.
 3. `agents/*.md` — bounded protocols for research, implementation, and checking work.
 4. `specs/*.md` — reusable expectations for documentation, testing, verification, and data-driven changes.
-5. `scripts/verify_harness.py` — mechanical check that this harness is installed and wired into `AGENTS.md`.
+5. `operations.md` — Claude-hook-to-Codex operation mapping, keep-awake protocol, and commit gates.
+6. `scripts/verify_harness.py` — mechanical check that this harness is installed and wired into `AGENTS.md`.
 
 ## Operating Rules
 
@@ -19,6 +20,7 @@ Claude Code uses global hooks. Codex does not execute those hooks, so this repo 
 - Keep visual and animation behavior sacred: performance changes that affect UI motion need visual verification before they can stay.
 - Before claiming completion, run verification that directly covers the claim.
 - For this repo, also run `/postmortem check` when changing known-risk areas.
+- Use `operations.md` for unattended sessions, keep-awake handling, and commit gates.
 
 ## Verification
 

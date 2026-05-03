@@ -17,6 +17,7 @@ Codex uses the repo-local harness migrated from the latest Claude Code `naTure` 
 | `.agents/harness/phases.yaml` | Phase reminders for planning/coding/debugging/reviewing/verifying |
 | `.agents/harness/agents/` | Research, implementation, and check protocols |
 | `.agents/harness/specs/` | Documentation, verification, and data-driven framework specs |
+| `.agents/harness/operations.md` | Claude-hook-to-Codex mapping, keep-awake protocol, and commit gates |
 | `scripts/verify_harness.py` | Mechanical harness installation check |
 
 Harness rules for this repo:

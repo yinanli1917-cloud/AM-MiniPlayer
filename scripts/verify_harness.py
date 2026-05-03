@@ -18,6 +18,7 @@ REQUIRED = [
     ".agents/harness/README.md",
     ".agents/harness/rules.yaml",
     ".agents/harness/phases.yaml",
+    ".agents/harness/operations.md",
     ".agents/harness/agents/research.md",
     ".agents/harness/agents/implement.md",
     ".agents/harness/agents/check.md",
@@ -28,6 +29,7 @@ REQUIRED = [
 
 REQUIRED_AGENTS_PATTERNS = [
     r"\.agents/harness/README\.md",
+    r"\.agents/harness/operations\.md",
     r"scripts/verify_harness\.py",
     r"protected lyric animation",
 ]
@@ -64,6 +66,16 @@ def main() -> int:
     ]:
         if required_rule not in rules:
             fail(f"rules.yaml missing {required_rule}")
+
+    operations = (ROOT / ".agents/harness/operations.md").read_text(encoding="utf-8")
+    for required_phrase in [
+        "Claude Hook Mapping",
+        "Keep-Awake Protocol",
+        "Commit Gates",
+        "caffeinate -dimsu -t 21600",
+    ]:
+        if required_phrase not in operations:
+            fail(f"operations.md missing {required_phrase}")
 
     print("OK: Codex harness installed and referenced")
     return 0
