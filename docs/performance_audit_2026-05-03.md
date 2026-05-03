@@ -31,6 +31,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Lyrics screen with original word-level renderer | `tmp/perf/perf-20260503-002206.csv` | avg 51.91%, p95 80.8%, max 98.7 |
 | Temporary low-cost word renderer experiment | `tmp/perf/perf-20260503-002518.csv` | avg 37.64%, p95 50.4%, max 51.6 |
 | Restored original renderer, rapid skip after safe work | `tmp/perf/perf-20260503-003138.csv` | avg 52.96%, p95 90.5%, max 97.5 |
+| Temporary flat lyrics background diagnostic | `tmp/perf/perf-20260503-003913.csv` | avg 51.52%, p95 54.8%, max 55.5 |
 
 ## Important Correction
 
@@ -51,6 +52,7 @@ Protected UX paths:
 - Hidden lyrics/playlist backgrounds should not render heavy content when not visible.
 - The remaining high CPU reproduces on the lyrics page with original word-level lyrics active.
 - Sampling pointed mostly at SwiftUI display-list/layout/rendering and custom text drawing, not ScriptingBridge.
+- Replacing the lyrics background with a flat color did not materially reduce average CPU, so the blurred artwork background is not the main cause.
 
 ## Safe Next Lanes
 
