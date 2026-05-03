@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="2.3"
+VERSION="2.5"
 
 echo "🔨 Building nanoPod..."
 /usr/libexec/PlistBuddy \
