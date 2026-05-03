@@ -1,0 +1,55 @@
+{
+  "skill_name": "swiftui-expert-skill",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我 review 这段 SwiftUI 代码，指出状态管理、性能、或最佳实践方面的问题：\n\n```swift\nstruct LyricView: View {\n    @ObservedObject var viewModel: PlayerViewModel\n    @State var isAnimating = false\n    \n    var body: some View {\n        ScrollView {\n            LazyVStack {\n                ForEach(viewModel.lyrics.indices, id: \\.self) { index in\n                    let lyric = viewModel.lyrics[index]\n                    Text(lyric.text)\n                        .font(viewModel.currentIndex == index ? .title : .body)\n                        .scaleEffect(viewModel.currentIndex == index ? 1.2 : 1.0)\n                        .animation(.spring(), value: viewModel.currentIndex)\n                        .onTapGesture {\n                            viewModel.seek(to: lyric.timestamp)\n                        }\n                }\n            }\n        }\n        .onAppear {\n            isAnimating = true\n        }\n    }\n}\n```",
+      "expected_output": "识别问题：用 indices 而非 id，ObservedObject vs StateObject，动画放置位置，不必要的 @State",
+      "assertions": [
+        {
+          "name": "identifies_indices_issue",
+          "description": "指出使用 .indices 的问题（应用 Identifiable 或稳定 ID）",
+          "type": "contains_concept",
+          "expected": "should identify the issue with using .indices instead of Identifiable"
+        },
+        {
+          "name": "addresses_observedobject_vs_stateobject",
+          "description": "提到 @ObservedObject vs @StateObject 的选择问题",
+          "type": "contains_concept",
+          "expected": "should address @ObservedObject vs @StateObject choice"
+        },
+        {
+          "name": "mentions_animation_placement",
+          "description": "提到 .animation 修饰符放置位置可能导致的问题",
+          "type": "contains_concept",
+          "expected": "should mention animation modifier placement"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "我要用 SwiftUI 实现一个歌词卡片组件：点击后展开显示完整歌词，收起时只显示一行。展开/收起要有丝滑动画，在 iOS 26 上需要 Liquid Glass 背景。请给我最佳实践的实现。",
+      "expected_output": "提供完整实现：expandable 视图、动画、iOS 26 Liquid Glass 适配、正确的状态管理",
+      "assertions": [
+        {
+          "name": "uses_correct_state_management",
+          "description": "使用正确的状态管理（@State 控制展开状态）",
+          "type": "contains_concept",
+          "expected": "should use @State for expand/collapse state"
+        },
+        {
+          "name": "includes_animation",
+          "description": "包含动画实现",
+          "type": "contains_concept",
+          "expected": "should include withAnimation or animation modifier"
+        },
+        {
+          "name": "addresses_liquid_glass",
+          "description": "提到 iOS 26 Liquid Glass 适配",
+          "type": "contains_concept",
+          "expected": "should address Liquid Glass for iOS 26"
+        }
+      ]
+    }
+  ]
+}

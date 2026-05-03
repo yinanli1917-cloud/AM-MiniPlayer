@@ -11,7 +11,8 @@ Claude Code uses global hooks. Codex does not execute those hooks, so this repo 
 3. `agents/*.md` — bounded protocols for research, implementation, and checking work.
 4. `specs/*.md` — reusable expectations for documentation, testing, verification, and data-driven changes.
 5. `operations.md` — Claude-hook-to-Codex operation mapping, keep-awake protocol, and commit gates.
-6. `scripts/verify_harness.py` — mechanical check that this harness is installed and wired into `AGENTS.md`.
+6. `.agents/skills/` — repo-local Codex skills migrated from Claude skills where applicable.
+7. `scripts/verify_harness.py` — mechanical check that this harness is installed and wired into `AGENTS.md`.
 
 ## Operating Rules
 

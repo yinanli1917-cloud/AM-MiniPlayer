@@ -1,0 +1,55 @@
+{
+  "skill_name": "swiftui-silky-animation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我在做一个歌词播放器，想实现 Apple Music 那种效果：当前行歌词放大高亮，其他行缩小变灰，切换时有丝滑的 spring 动画。目前我的代码用 `.animation(.easeInOut(duration: 0.3))` 感觉很机械。怎么调整 spring 参数让它更像 Apple Music？",
+      "expected_output": "提供具体的 spring 参数（stiffness、damping 等），解释各参数效果，给出代码示例",
+      "assertions": [
+        {
+          "name": "provides_spring_parameters",
+          "description": "提供具体的 spring 参数值",
+          "type": "contains_concept",
+          "expected": "should provide specific spring parameter values (stiffness, damping)"
+        },
+        {
+          "name": "explains_parameters",
+          "description": "解释参数如何影响动画感觉",
+          "type": "contains_concept",
+          "expected": "should explain how parameters affect animation feel"
+        },
+        {
+          "name": "provides_code",
+          "description": "提供可用的代码示例",
+          "type": "contains_concept",
+          "expected": "should provide usable code example with interpolatingSpring or spring"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "我用 matchedGeometryEffect 做了一个歌词卡片的转场动画（从列表展开到全屏详情页），但是感觉不够流畅，有点抖动。代码：\n\n```swift\n.matchedGeometryEffect(id: lyric.id, in: namespace)\n.animation(.spring(), value: isExpanded)\n```\n\n应该用什么 spring 参数让它更丝滑？还有什么其他需要注意的？",
+      "expected_output": "提供 matchedGeometryEffect 的优化参数，解释抖动原因，给出丝滑转场的最佳实践",
+      "assertions": [
+        {
+          "name": "diagnoses_jitter_cause",
+          "description": "解释抖动/不流畅的可能原因",
+          "type": "contains_concept",
+          "expected": "should diagnose possible causes of jitter"
+        },
+        {
+          "name": "provides_optimized_parameters",
+          "description": "提供优化的 spring 参数",
+          "type": "contains_concept",
+          "expected": "should provide optimized spring parameters"
+        },
+        {
+          "name": "addresses_best_practices",
+          "description": "提到 matchedGeometryEffect 使用注意事项",
+          "type": "contains_concept",
+          "expected": "should mention best practices for matchedGeometryEffect"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "skill_name": "liquid-glass",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我在开发一个 iOS 26 音乐播放器 app，想给底部的 Tab Bar 加 Liquid Glass 效果。我现在用的是标准的 TabView，代码如下：\n\n```swift\nTabView {\n    PlayerView()\n        .tabItem { Label(\"播放\", systemImage: \"music.note\") }\n    LibraryView()\n        .tabItem { Label(\"音乐库\", systemImage: \"music.note.list\") }\n    SettingsView()\n        .tabItem { Label(\"设置\", systemImage: \"gear\") }\n}\n```\n\n怎么正确地加上 Liquid Glass 效果？有什么注意事项？",
+      "expected_output": "解释 TabView 在 iOS 26 自动获得 Liquid Glass，讲解 GlassEffectContainer 用法，给出注意事项",
+      "assertions": [
+        {
+          "name": "mentions_automatic_glass",
+          "description": "提到 TabView 在 iOS 26 自动应用 Liquid Glass",
+          "type": "contains_concept",
+          "expected": "should mention TabView automatically gets Liquid Glass in iOS 26"
+        },
+        {
+          "name": "mentions_glass_effect_container",
+          "description": "提到 GlassEffectContainer 或 .glassEffect() API",
+          "type": "contains_concept",
+          "expected": "should mention GlassEffectContainer or glassEffect modifier"
+        },
+        {
+          "name": "provides_practical_code",
+          "description": "提供实际可用的代码或具体指导",
+          "type": "contains_concept",
+          "expected": "should provide practical code or specific guidance"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "我用 GlassEffectContainer 给我的 macOS 26 app 加了一个浮动工具栏，但是渲染出来玻璃效果太亮了（过曝），背景几乎看不见。代码如下：\n\n```swift\nGlassEffectContainer {\n    HStack {\n        Button(\"播放\") { ... }\n        Button(\"暂停\") { ... }\n    }\n    .glassEffect()\n    .padding()\n}\n.windowStyle(.hudWindow)\n```\n\n为什么会过曝，怎么修复？",
+      "expected_output": "解释 hudWindow 在 macOS 导致过曝，建议改用 underWindowBackground 或其他修复方案",
+      "assertions": [
+        {
+          "name": "identifies_hudwindow_issue",
+          "description": "识别 .hudWindow 是导致过曝的原因",
+          "type": "contains_concept",
+          "expected": "should identify hudWindow as the cause of overexposure"
+        },
+        {
+          "name": "suggests_fix",
+          "description": "提供具体修复方案（如 underWindowBackground）",
+          "type": "contains_concept",
+          "expected": "should suggest underWindowBackground or other specific fix"
+        }
+      ]
+    }
+  ]
+}

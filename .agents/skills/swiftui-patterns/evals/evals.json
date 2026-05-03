@@ -1,0 +1,55 @@
+{
+  "skill_name": "swiftui-patterns",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我要在 SwiftUI macOS app 里做一个菜单栏图标（类似 Spotify 那种），点击后弹出一个小面板显示当前播放的歌曲信息和控制按钮。如何用 NSStatusItem 实现？请给完整代码。",
+      "expected_output": "提供 NSStatusItem 实现代码，包括在 AppDelegate/App 中设置、弹出 popover 或自定义 menu",
+      "assertions": [
+        {
+          "name": "uses_nsstatusitem",
+          "description": "使用 NSStatusItem API",
+          "type": "contains_string",
+          "expected": "NSStatusItem"
+        },
+        {
+          "name": "shows_complete_implementation",
+          "description": "提供完整可运行的实现代码",
+          "type": "contains_concept",
+          "expected": "should provide complete implementation code"
+        },
+        {
+          "name": "handles_popover_or_menu",
+          "description": "处理弹出面板或菜单",
+          "type": "contains_concept",
+          "expected": "should handle popover or menu presentation"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "我需要在 SwiftUI macOS 应用中嵌入一个 AppKit 的 NSTextView，因为 SwiftUI 的 TextEditor 不支持语法高亮。如何用 NSViewRepresentable 包装它？包括如何处理双向数据绑定（SwiftUI 的 @Binding 和 NSTextView 的 delegate）。",
+      "expected_output": "提供完整的 NSViewRepresentable 实现，包括 Coordinator 模式处理 delegate 和 Binding",
+      "assertions": [
+        {
+          "name": "uses_nsviewrepresentable",
+          "description": "使用 NSViewRepresentable",
+          "type": "contains_string",
+          "expected": "NSViewRepresentable"
+        },
+        {
+          "name": "implements_coordinator",
+          "description": "实现 Coordinator 处理 delegate",
+          "type": "contains_string",
+          "expected": "Coordinator"
+        },
+        {
+          "name": "handles_binding",
+          "description": "正确处理 SwiftUI Binding 和 NSTextView 的双向同步",
+          "type": "contains_concept",
+          "expected": "should handle two-way binding between SwiftUI and NSTextView"
+        }
+      ]
+    }
+  ]
+}

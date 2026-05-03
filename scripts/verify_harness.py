@@ -27,10 +27,21 @@ REQUIRED = [
     ".agents/harness/specs/data-driven.md",
 ]
 
+REQUIRED_SKILLS = [
+    ".agents/skills/lyrics-test/SKILL.md",
+    ".agents/skills/postmortem/SKILL.md",
+    ".agents/skills/liquid-glass/SKILL.md",
+    ".agents/skills/perceive-animation/SKILL.md",
+    ".agents/skills/swiftui-expert-skill/SKILL.md",
+    ".agents/skills/swiftui-patterns/SKILL.md",
+    ".agents/skills/swiftui-silky-animation/SKILL.md",
+]
+
 REQUIRED_AGENTS_PATTERNS = [
     r"\.agents/harness/README\.md",
     r"\.agents/harness/operations\.md",
     r"scripts/verify_harness\.py",
+    r"\.agents/skills/",
     r"protected lyric animation",
 ]
 
@@ -44,6 +55,10 @@ def main() -> int:
     missing = [path for path in REQUIRED if not (ROOT / path).is_file()]
     if missing:
         fail("missing harness files: " + ", ".join(missing))
+
+    missing_skills = [path for path in REQUIRED_SKILLS if not (ROOT / path).is_file()]
+    if missing_skills:
+        fail("missing migrated skills: " + ", ".join(missing_skills))
 
     agents = ROOT / "AGENTS.md"
     if not agents.is_file():
