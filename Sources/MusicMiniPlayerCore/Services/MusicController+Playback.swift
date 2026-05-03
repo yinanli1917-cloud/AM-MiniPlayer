@@ -210,7 +210,7 @@ extension MusicController {
         }
     }
 
-    public func fetchUpNextQueue() {
+    public func fetchUpNextQueue(forceRecent: Bool = false) {
         debugPrint("📋 [fetchUpNextQueue] Called, isPreview=\(isPreview)\n")
 
         guard !isPreview else {
@@ -227,13 +227,54 @@ extension MusicController {
             return
         }
 
+        let now = Date()
+        if queueFetchInFlight {
+            queueFetchPending = true
+            queueFetchPendingForceRecent = queueFetchPendingForceRecent || forceRecent
+            return
+        }
+
+        let elapsed = now.timeIntervalSince(lastQueueFetchStartedAt)
+        if elapsed < queueFetchMinimumInterval {
+            queueFetchPending = true
+            queueFetchPendingForceRecent = queueFetchPendingForceRecent || forceRecent
+            DispatchQueue.main.asyncAfter(deadline: .now() + (queueFetchMinimumInterval - elapsed)) { [weak self] in
+                guard let self else { return }
+                if self.queueFetchPending && !self.queueFetchInFlight {
+                    let pendingForceRecent = self.queueFetchPendingForceRecent
+                    self.queueFetchPending = false
+                    self.queueFetchPendingForceRecent = false
+                    self.fetchUpNextQueue(forceRecent: pendingForceRecent)
+                }
+            }
+            return
+        }
+
+        queueFetchInFlight = true
+        lastQueueFetchStartedAt = now
+
         // 使用 ScriptingBridge 获取队列（App Store 合规）
         Task {
             await fetchUpNextViaBridge()
+            await MainActor.run {
+                self.queueFetchInFlight = false
+                if self.queueFetchPending {
+                    let pendingForceRecent = self.queueFetchPendingForceRecent
+                    self.queueFetchPending = false
+                    self.queueFetchPendingForceRecent = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + self.queueFetchMinimumInterval) { [weak self] in
+                        self?.fetchUpNextQueue(forceRecent: pendingForceRecent)
+                    }
+                }
+            }
         }
 
         // 获取播放历史
-        fetchRecentHistoryViaBridge()
+        let shouldRefreshRecent = forceRecent || now.timeIntervalSince(lastRecentHistoryFetchAt) >= recentHistoryRefreshInterval
+        if shouldRefreshRecent {
+            lastRecentHistoryFetchAt = now
+            fetchRecentHistoryViaBridge()
+        }
     }
 
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
@@ -258,7 +299,7 @@ extension MusicController {
         }
 
         await MainActor.run {
-            self.upNextTracks = tracks
+            self.applyUpNextTracksIfChanged(tracks)
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
 
             // Trigger lyrics preloading for upcoming tracks
@@ -355,7 +396,7 @@ extension MusicController {
             let tracks = self.getRecentTracksFromApp(app, limit: 10)
 
             DispatchQueue.main.async {
-                self.recentTracks = tracks
+                self.applyRecentTracksIfChanged(tracks)
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
             }
         }
@@ -407,6 +448,29 @@ extension MusicController {
             // 返回最后 limit 个，倒序（最近播放的在前）
             return Array(recentList.suffix(limit).reversed())
         } ?? []
+    }
+
+    private func applyUpNextTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
+        guard !sameTrackIdentity(upNextTracks, tracks) else { return }
+        upNextTracks = tracks
+    }
+
+    private func applyRecentTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
+        guard !sameTrackIdentity(recentTracks, tracks) else { return }
+        recentTracks = tracks
+    }
+
+    private func sameTrackIdentity(
+        _ lhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)],
+        _ rhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]
+    ) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { left, right in
+            left.persistentID == right.persistentID
+                && left.title == right.title
+                && left.artist == right.artist
+                && abs(left.duration - right.duration) < 0.1
+        }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
