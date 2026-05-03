@@ -34,3 +34,6 @@ releases/
 # Claude workflow state (hook-enforced, not part of codebase)
 .claude/workflow.md
 .claude/tasks/
+
+# Codex workflow state (session/task runtime, not project source)
+.codex/runtime/

@@ -1,0 +1,13 @@
+{
+  ".codex/workflow.md": "10453c9e755870b6dd81bf2dd04efe23322debb47ba6f1a67460169aa5abcc37",
+  ".codex/config.yaml": "af2751b2d32bb5502821a9f0af36ec7d2f6eaf898c997014304627f69166e2c8",
+  ".codex/config.toml": "11dd0f0339ebbeb73cdae7f7693ffea8db53dc0841dc7064b1391564e82b53a3",
+  ".codex/hooks.json": "c99ca344c10794a640cc6e9075a98a6a566fafae940e53d1d2818ff262c24feb",
+  ".codex/hooks/session-start.py": "3f284623075102d51adfe0dc7f39f30a3950e69d2ccd60168183fbaffbfa9cd6",
+  ".codex/hooks/inject-workflow-state.py": "c96d77a2ac6efb254a067f754e5f9665254ea8cefb69b4ac5fba9d94379c33d3",
+  ".codex/agents/codex-research.toml": "205e9c396805ba4976f60a69bc77348fd97c6726f5b1fc9474493f3c2d08a2d3",
+  ".codex/agents/codex-implement.toml": "56920b13cd3d87a2135cfc3488d5228e05ee4040040e65f2f5c33e298c2444e3",
+  ".codex/agents/codex-check.toml": "167eea785d942cc60c8ba75a1e90e8d883ea20b047b49b4fcc8576c23c0c8123",
+  ".codex/spec/guides/index.md": "3282f4593afb7005684814618160110091234a3e0bd23cc633ab768afe0d8c79",
+  ".codex/spec/project/index.md": "b332856ea5052c7c32e252c17c22ea0bd6d80345dd07848f7b759c388b920715"
+}

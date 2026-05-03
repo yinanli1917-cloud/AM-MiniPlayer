@@ -1,0 +1,31 @@
+# Codex Harness Configuration
+# Human-edited project settings. Task context remains JSONL because it is
+# append-friendly and line-validatable.
+
+session_commit_message: "chore: record Codex journal"
+max_journal_lines: 2000
+
+# Communication policy is project-readable here, but the source of truth is
+# ~/.codex/AGENTS.md. SessionStart/prelude inject its Communication section.
+communication:
+  default_language: "English"
+  switch_language_only_when_user_explicitly_asks: true
+
+# Task lifecycle hooks. Each command receives TASK_JSON_PATH.
+# hooks:
+#   after_create:
+#     - "echo 'Task created'"
+#   after_start:
+#     - "echo 'Task started'"
+#   after_finish:
+#     - "echo 'Task finished'"
+#   after_archive:
+#     - "echo 'Task archived'"
+
+# Monorepo package hints.
+# packages:
+#   app:
+#     path: Sources/App
+#   core:
+#     path: Sources/Core
+# default_package: app

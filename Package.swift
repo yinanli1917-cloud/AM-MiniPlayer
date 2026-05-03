@@ -27,6 +27,10 @@ let package = Package(
             name: "MusicMiniPlayerCore",
             dependencies: ["ObjCSupport"],
             path: "Sources/MusicMiniPlayerCore",
+            exclude: [
+                "Models/AGENTS.md",
+                "Models/CLAUDE.md"
+            ],
             resources: [
                 .process("Resources"),
                 .process("Shaders")
@@ -42,6 +46,8 @@ let package = Package(
             dependencies: ["MusicMiniPlayerCore"],
             path: "Sources/MusicMiniPlayerApp",
             exclude: [
+                "AGENTS.md",
+                "CLAUDE.md",
                 "Info.plist",
                 "MusicMiniPlayer.entitlements"
             ],

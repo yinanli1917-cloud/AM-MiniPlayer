@@ -172,3 +172,18 @@ Existing postmortems: 001 (Section recursion), 002 (Page switch state), 003 (Art
 ---
 
 [PROTOCOL]: Update this document on architecture changes
+
+## Codex Harness
+
+Codex does not receive Claude hook injections automatically. Treat `.codex/workflow.md` and `scripts/codex_harness.py context` as the native pull-based context layer.
+
+Common commands:
+
+```bash
+python3 scripts/codex_harness.py context
+python3 scripts/codex_harness.py health
+python3 scripts/codex_harness.py task create "<title>"
+python3 scripts/codex_harness.py task start <slug-or-dir>
+python3 scripts/codex_harness.py task finish [slug-or-dir]
+python3 scripts/codex_harness.py task archive <slug-or-dir>
+```
