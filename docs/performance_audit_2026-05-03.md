@@ -40,6 +40,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted foreground lyric-fetch debounce experiment | `tmp/perf/perf-20260503-021420.csv` | avg 62.52%, p95 119.4%, max 150.7 |
 | Rapid skip sample before cached language summary | `tmp/perf/nanopod-rapid-skip.sample.txt` | Main-thread `LyricsService.canTranslate` repeatedly ran NaturalLanguage/CoreNLP (`NLLanguageRecognizer`, Espresso) from `LyricsView.bottomControlsOverlay`. |
 | Cached language summary experiment | `tmp/perf/perf-20260503-022507.csv`, `tmp/perf/nanopod-language-cache.sample.txt` | NaturalLanguage hot path no longer appears in the follow-up sample, but rapid-skip CPU remains high (avg 61.45%, p95 96.7%, max 136.6). |
+| Reverted throttled controls time-publisher experiment | `tmp/perf/perf-20260503-023121.csv` | avg 67.51%, p95 102.2%, max 110.6; worse than baseline, reverted. |
 
 ## Important Correction
 
@@ -65,6 +66,7 @@ Protected UX paths:
 - Rapid skip still spikes above the target range, so the remaining gap is likely song-change invalidation, foreground lyrics fetch/apply work, or SwiftUI redraw pressure during track transitions.
 - A 120ms foreground lyric-fetch debounce made rapid switching worse and was reverted. Do not repeat that lane without lower-level evidence.
 - `canTranslate` was doing repeated language detection from SwiftUI body recomputation. Cached language summaries remove that sampled main-thread NaturalLanguage path, but do not solve the total rapid-switch CPU budget by themselves.
+- Throttling only the bottom-controls time publisher did not reduce rapid-switch CPU and was reverted. Do not repeat without a more precise SwiftUI invalidation trace.
 
 ## Safe Next Lanes
 
