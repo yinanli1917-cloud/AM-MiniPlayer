@@ -157,4 +157,48 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertTrue(score.isReliable)
         XCTAssertGreaterThanOrEqual(score.total, 5)
     }
+
+    // ------------------------------------------------------------------
+    // MARK: - Apple Music API recent history
+    // ------------------------------------------------------------------
+
+    func testParseRecentTracksResponseMapsSongAndLibrarySongResources() throws {
+        let json = """
+        {
+          "data": [
+            {
+              "id": "123456789",
+              "type": "songs",
+              "attributes": {
+                "name": "Song A",
+                "artistName": "Artist A",
+                "albumName": "Album A",
+                "durationInMillis": 185000
+              }
+            },
+            {
+              "id": "i.abcdef",
+              "type": "library-songs",
+              "attributes": {
+                "name": "Song B",
+                "artistName": "Artist B",
+                "albumName": "Album B",
+                "durationInMillis": 201500
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let tracks = MusicController.parseRecentTracksResponse(json)
+
+        XCTAssertEqual(tracks.count, 2)
+        XCTAssertEqual(tracks[0].title, "Song A")
+        XCTAssertEqual(tracks[0].artist, "Artist A")
+        XCTAssertEqual(tracks[0].album, "Album A")
+        XCTAssertEqual(tracks[0].persistentID, "am:123456789")
+        XCTAssertEqual(tracks[0].duration, 185)
+        XCTAssertEqual(tracks[1].persistentID, "am:i.abcdef")
+        XCTAssertEqual(tracks[1].duration, 201.5)
+    }
 }

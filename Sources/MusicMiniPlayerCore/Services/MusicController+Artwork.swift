@@ -657,6 +657,24 @@ extension MusicController {
         return image
     }
 
+    public func preloadArtwork(for tracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)]) {
+        let persistentIDs = tracks
+            .prefix(4)
+            .map(\.persistentID)
+            .filter { !$0.isEmpty && !$0.hasPrefix("am:") && artworkCache.object(forKey: $0 as NSString) == nil }
+
+        guard !persistentIDs.isEmpty else { return }
+
+        Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            for persistentID in persistentIDs {
+                guard !Task.isCancelled else { return }
+                if self.artworkCache.object(forKey: persistentID as NSString) != nil { continue }
+                _ = await self.fetchArtworkByPersistentID(persistentID: persistentID)
+            }
+        }
+    }
+
     /// 从 SBApplication 获取指定 persistentID 的封面
     /// 🔑 Must be called on artworkQueue. Generation check prevents iterating stale
     /// SBElementArray objects after track change — same pattern as getUpNextTracksFromApp.
