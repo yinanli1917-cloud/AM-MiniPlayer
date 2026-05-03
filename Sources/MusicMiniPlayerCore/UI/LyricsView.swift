@@ -299,7 +299,6 @@ public struct LyricsView: View {
                 ? (scroll.frozenDisplayIndex ?? liveIndex)
                 : liveIndex
             let _ = updateLyricsContainerHeight(containerHeight)
-            let _ = ensureHeightCache()
             let anchorY = (containerHeight - controlBarHeight) * 0.24
 
             // Visibility culling: only during steady auto-play with all heights measured
@@ -334,7 +333,7 @@ public struct LyricsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .offset(y: scroll.manualScrollOffset)
         }
-        .modifier(BottomFadeMask(isActive: showControls))
+        .modifier(BottomFadeMask(isActive: showControls, steepFade: scroll.isManualScrolling))
         .id(lyricsViewID)
         .contentShape(Rectangle())
         .scrollDetectionWithVelocity(
@@ -480,7 +479,7 @@ public struct LyricsView: View {
 
     @ViewBuilder
     private var musicButtonOverlay: some View {
-        if showControls {
+        if showControls && currentPage == .lyrics {
             MusicButtonView()
                 .accessibilityLabel("打开 Music")
                 .padding(12)
@@ -490,7 +489,7 @@ public struct LyricsView: View {
 
     @ViewBuilder
     private var windowButtonsOverlay: some View {
-        if showControls {
+        if showControls && currentPage == .lyrics {
             let hideAction: () -> Void = onHide ?? {
                 NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel })?.orderOut(nil)
             }
@@ -740,13 +739,9 @@ public struct LyricsView: View {
 
     /// Self-caching: computes once, serves from cache until invalidated
     private var renderedIndices: [Int] {
-        if cache.renderedIndicesValid { return cache.renderedIndicesCached }
-        let result = lyricsService.lyrics.enumerated()
+        lyricsService.lyrics.enumerated()
             .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
             .map { $0.offset }
-        cache.renderedIndicesCached = result
-        cache.renderedIndicesValid = true
-        return result
     }
 
     private func calculateAccumulatedHeight(upTo targetIndex: Int) -> CGFloat {
