@@ -41,6 +41,8 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Rapid skip sample before cached language summary | `tmp/perf/nanopod-rapid-skip.sample.txt` | Main-thread `LyricsService.canTranslate` repeatedly ran NaturalLanguage/CoreNLP (`NLLanguageRecognizer`, Espresso) from `LyricsView.bottomControlsOverlay`. |
 | Cached language summary experiment | `tmp/perf/perf-20260503-022507.csv`, `tmp/perf/nanopod-language-cache.sample.txt` | NaturalLanguage hot path no longer appears in the follow-up sample, but rapid-skip CPU remains high (avg 61.45%, p95 96.7%, max 136.6). |
 | Reverted throttled controls time-publisher experiment | `tmp/perf/perf-20260503-023121.csv` | avg 67.51%, p95 102.2%, max 110.6; worse than baseline, reverted. |
+| Height snapshot + lazy diagnostics + display-text cache | `tmp/perf/perf-20260503-024502.csv`, `tmp/perf/nanopod-after-displaytext.sample.txt` | Height snapshot reduced one lyrics rapid-switch run modestly (avg 57.11%, p95 90.3%) but did not bridge the CPU target. Repeated `cleanedText` sampling disappeared after moving display cleanup into `LyricLine`. |
+| Isolated progress/time controls subtree | `tmp/perf/perf-20260503-025210.csv` | Album-page rapid switching measured much lower (avg 26.65%, p95 43.5%, max 51.1), but this is not comparable to the lyrics word-level stress case because the app relaunched on album view. |
 
 ## Important Correction
 
@@ -67,6 +69,8 @@ Protected UX paths:
 - A 120ms foreground lyric-fetch debounce made rapid switching worse and was reverted. Do not repeat that lane without lower-level evidence.
 - `canTranslate` was doing repeated language detection from SwiftUI body recomputation. Cached language summaries remove that sampled main-thread NaturalLanguage path, but do not solve the total rapid-switch CPU budget by themselves.
 - Throttling only the bottom-controls time publisher did not reduce rapid-switch CPU and was reverted. Do not repeat without a more precise SwiftUI invalidation trace.
+- Repeated lyric height summation, disabled diagnostic string formatting, and lyric display-text cleanup were real sampled inefficiencies and are now reduced without changing lyric layout/animation. They are incremental wins, not the full fix.
+- `SharedBottomControls` no longer observes playback time as a whole view; only the progress/time strip does. This should prevent time ticks from rebuilding the non-time playback buttons and glass cluster.
 
 ## Safe Next Lanes
 
@@ -75,6 +79,7 @@ Protected UX paths:
 3. Investigate foreground fetch/apply contention when preloading nearby queue/history songs.
 4. Add a visual comparison harness before any lyric renderer or cadence change.
 5. Profile whether non-lyric overlays redraw during word-level animation frames.
+6. Re-run a release trace that starts directly on the lyrics page; the latest post-controls measurement was album-page only and cannot close the lyrics CPU gap.
 
 ## Verification Commands
 

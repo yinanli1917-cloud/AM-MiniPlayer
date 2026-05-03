@@ -64,7 +64,7 @@ struct RoundedCornerSlideModifier: ViewModifier {
 // MARK: - Shared Bottom Controls
 struct SharedBottomControls: View {
     @EnvironmentObject var musicController: MusicController
-    @ObservedObject var timePublisher: TimePublisher
+    let timePublisher: TimePublisher
     @Binding var currentPage: PlayerPage
     @Binding var isHovering: Bool
     @Binding var showControls: Bool
@@ -90,33 +90,11 @@ struct SharedBottomControls: View {
             VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
                 // Progress Bar & Time - 🔑 时间显示移到进度条下方
                 VStack(spacing: 2) {  // 🔑 进度条与时间间距=2
-                    // Progress Bar - 放在最上面
-                    progressBar
-
-                    // Time labels - 移到进度条下方，padding与进度条一致
-                    HStack {
-                        Text(formatTime(timePublisher.currentTime))
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.6))
-                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
-                            .accessibilityHidden(true)
-
-                        Spacer()
-
-                        // Audio quality badge
-                        if let quality = musicController.audioQuality {
-                            qualityBadge(quality)
-                        }
-
-                        Spacer()
-
-                        Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.6))
-                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
-                            .accessibilityHidden(true)
-                    }
-                    .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
+                    ProgressTimeSection(
+                        timePublisher: timePublisher,
+                        isProgressBarHovering: $isProgressBarHovering,
+                        dragPosition: $dragPosition
+                    )
                 }
 
                 // Playback Controls
@@ -229,8 +207,52 @@ struct SharedBottomControls: View {
     }
 
 
+    fileprivate static func formatTime(_ time: Double) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+private struct ProgressTimeSection: View {
+    @EnvironmentObject var musicController: MusicController
+    @ObservedObject var timePublisher: TimePublisher
+    @Binding var isProgressBarHovering: Bool
+    @Binding var dragPosition: CGFloat?
+    @State private var isDraggingProgressBar: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(spacing: 2) {
+            progressBar
+
+            HStack {
+                Text(SharedBottomControls.formatTime(timePublisher.currentTime))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
+                    .accessibilityHidden(true)
+
+                Spacer()
+
+                if let quality = musicController.audioQuality {
+                    qualityBadge(quality)
+                }
+
+                Spacer()
+
+                Text("-" + SharedBottomControls.formatTime(musicController.duration - timePublisher.currentTime))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
     private var progressBar: some View {
-        let barHeight: CGFloat = isProgressBarHovering ? 12 : 7  // 🔑 hover前7px，hover后12px
+        let barHeight: CGFloat = isProgressBarHovering ? 12 : 7
 
         return GeometryReader { geo in
             let currentProgress: CGFloat = {
@@ -240,15 +262,12 @@ struct SharedBottomControls: View {
                 return 0
             }()
 
-            // 🔑 使用遮罩实现圆角不拉伸效果
             ZStack {
-                // Background Track
                 Capsule()
                     .fill(.ultraThinMaterial)
                     .environment(\.colorScheme, .light)
                     .frame(height: barHeight)
 
-                // Active Progress
                 Capsule()
                     .fill(Color.white)
                     .frame(height: barHeight)
@@ -260,7 +279,7 @@ struct SharedBottomControls: View {
                         }
                     )
             }
-            .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
+            .frame(maxHeight: .infinity)
             .contentShape(Capsule())
             .onHover { hovering in
                 let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
@@ -286,15 +305,15 @@ struct SharedBottomControls: View {
                     })
             )
         }
-        .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
-        .padding(.horizontal, 20)  // 🔑 进度条额外padding
+        .frame(height: 14)
+        .padding(.horizontal, 20)
         .accessibilityLabel("播放进度")
-        .accessibilityValue("\(formatTime(timePublisher.currentTime)) / \(formatTime(musicController.duration))")
+        .accessibilityValue("\(SharedBottomControls.formatTime(timePublisher.currentTime)) / \(SharedBottomControls.formatTime(musicController.duration))")
         .accessibilityAddTraits(.allowsDirectInteraction)
     }
 
     private func qualityBadge(_ quality: String) -> some View {
-        return HStack(spacing: 2) {
+        HStack(spacing: 2) {
             if quality == "Hi-Res Lossless" {
                 Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 8))
                     .accessibilityHidden(true)
@@ -313,12 +332,6 @@ struct SharedBottomControls: View {
         .foregroundStyle(Color.white.opacity(0.9))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("音频质量：\(quality)")
-    }
-
-    private func formatTime(_ time: Double) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

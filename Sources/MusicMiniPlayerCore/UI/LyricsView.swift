@@ -326,18 +326,19 @@ public struct LyricsView: View {
 
             // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12
-            let heightsReady = cache.lineHeights.count >= renderedIndices.count
+            let visibleIndices = renderedIndices
+            let accumulatedHeights = accumulatedHeightSnapshot(for: visibleIndices)
+            let heightsReady = cache.lineHeights.count >= visibleIndices.count
             let shouldCull = !scroll.isManualScrolling && heightsReady
 
             ZStack(alignment: .topLeading) {
                 ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                     if index == 0 || index >= lyricsService.firstRealLyricIndex {
                         let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
-
-                        let lineOffset = calculateLineOffset(
-                            index: index, currentIndex: displayIndex, anchorY: anchorY
-                        )
-                        let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+                        let lineTargetIndex = lineTargetIndex(for: index, currentIndex: displayIndex)
+                        let targetOffset = accumulatedHeights[lineTargetIndex] ?? 0
+                        let currentOffset = accumulatedHeights[index] ?? 0
+                        let fullOffset = anchorY - targetOffset + currentOffset
 
                         lyricLineContent(line: line, index: index, currentIndex: displayIndex)
                             .background(lineHeightTracker(index: index))
@@ -441,16 +442,17 @@ public struct LyricsView: View {
     }
 
     private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
+        anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex(for: index, currentIndex: currentIndex))
+    }
+
+    private func lineTargetIndex(for index: Int, currentIndex: Int) -> Int {
         if scroll.isManualScrolling {
-            let frozenTargetIndex = scroll.lockedLineIndex ?? currentIndex
-            return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
-        } else {
-            // GCD wave: each line's target is updated independently via asyncAfter.
-            // Lines not yet flipped retain the previous wave's target (= oldIndex),
-            // creating the stagger. Fallback to currentIndex for lines never in a wave.
-            let lineTargetIndex = wave.lineTargetIndices[index] ?? currentIndex
-            return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
+            return scroll.lockedLineIndex ?? currentIndex
         }
+        // GCD wave: each line's target is updated independently via asyncAfter.
+        // Lines not yet flipped retain the previous wave's target (= oldIndex),
+        // creating the stagger. Fallback to currentIndex for lines never in a wave.
+        return wave.lineTargetIndices[index] ?? currentIndex
     }
 
     // MARK: - Overlay 组件
@@ -780,6 +782,25 @@ public struct LyricsView: View {
             totalHeight += (cache.lineHeights[indices[i]] ?? defaultHeight) + spacing
         }
         return totalHeight
+    }
+
+    private func accumulatedHeightSnapshot(for indices: [Int]) -> [Int: CGFloat] {
+        let spacing: CGFloat = 6
+        let defaultHeight: CGFloat = 36
+        var accumulatedHeight: CGFloat = 0
+        var snapshot: [Int: CGFloat] = [:]
+        snapshot.reserveCapacity(indices.count)
+
+        for (i, lineIndex) in indices.enumerated() {
+            snapshot[lineIndex] = accumulatedHeight
+            let height = cache.lineHeights[lineIndex] ?? defaultHeight
+            accumulatedHeight += height
+            if i < indices.count - 1 {
+                accumulatedHeight += spacing
+            }
+        }
+
+        return snapshot
     }
 
     private func updateLyricsContainerHeight(_ height: CGFloat) {

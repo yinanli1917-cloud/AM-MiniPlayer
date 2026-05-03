@@ -63,6 +63,7 @@ public struct LyricLine: Identifiable, Equatable {
     public let text: String
     public let startTime: TimeInterval
     public let endTime: TimeInterval
+    public let displayText: String
     /// 逐字时间信息（如果有的话）
     public let words: [LyricWord]
     /// 翻译文本（如果有的话）- var 以支持系统翻译更新
@@ -82,15 +83,32 @@ public struct LyricLine: Identifiable, Equatable {
         // Invariant: words must be consistent with text.
         // If words exist but their concatenation doesn't match text,
         // they're stale (e.g., text was split/modified after parsing).
+        let finalWords: [LyricWord]
         if !words.isEmpty {
             let wordsText = words.map(\.word).joined()
                 .replacingOccurrences(of: " ", with: "")
             let normalizedText = text.replacingOccurrences(of: " ", with: "")
-            self.words = normalizedText.hasPrefix(wordsText)
+            finalWords = normalizedText.hasPrefix(wordsText)
                 || wordsText.hasPrefix(normalizedText) ? words : []
         } else {
-            self.words = words
+            finalWords = words
         }
+        self.words = finalWords
+
+        var cleaned = text.replacingOccurrences(
+            of: "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]",
+            with: "",
+            options: .regularExpression
+        )
+        .trimmingCharacters(in: .whitespaces)
+
+        if !finalWords.isEmpty {
+            let avgLen = Double(finalWords.reduce(0) { $0 + $1.word.count }) / Double(finalWords.count)
+            if avgLen <= 2 {
+                cleaned = finalWords.map(\.word).joined()
+            }
+        }
+        self.displayText = cleaned
     }
 }
 

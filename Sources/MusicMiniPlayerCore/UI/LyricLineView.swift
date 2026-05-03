@@ -95,18 +95,7 @@ struct LyricLineView: View {
 
     // 🔑 清理歌词文本 — strip timestamp tags + TTML-artifact CJK spaces
     private var cleanedText: String {
-        let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
-        var text = line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-        // TTML parser adds " " between each span. For CJK (avg word ≤ 2 chars),
-        // these spaces are artifacts — strip them so characters pack naturally.
-        if line.hasSyllableSync && !line.words.isEmpty {
-            let avgLen = Double(line.words.reduce(0) { $0 + $1.word.count }) / Double(line.words.count)
-            if avgLen <= 2 {
-                text = line.words.map(\.word).joined()
-            }
-        }
-        return text
+        line.displayText
     }
 
     // 🔑 翻译文本（如果有）
