@@ -24,7 +24,9 @@ Genius /api/search/song
 | Invisible - mei ehara | no source, 2818ms | `/get` 404; `/search` 0 rows | 404 | no hits | no synced lyrics |
 | Lisbon Antigua - Nelson Riddle | no source, 2797ms | `/get` 404; `/search` 20 rows, 0 synced | 404 | static-only hits | no synced lyrics |
 | With You - Tennyson | no source, 2785ms | `/get` 404; `/search` 4 rows, 0 synced | 404 | static-only hits | no synced lyrics |
+| Hypnosis - Holy Hive | no source, 2709ms | `/search` 1 row, plain-only, `syncedLyrics: null` | 404 | no trusted synced source | no synced lyrics |
+| Frisco Blues - Lewis OfMan | no source, 2592ms | `/search` 2 rows, plain-only, `syncedLyrics: null` | 404 | no trusted synced source | no synced lyrics |
 
 ## Regression Coverage
 
-These tracks are covered by `docs/lyrics_test_cases.json` as `X10` through `X18` with `shouldFindLyrics: false`. If a provider later adds correct synced lyrics for any of them, the fixture should be re-audited and changed from no-synced coverage to a positive synced fixture with first-line identity proof.
+These tracks are covered by `docs/lyrics_test_cases.json` as `X10` through `X20` with `shouldFindLyrics: false`. If a provider later adds correct synced lyrics for any of them, the fixture should be re-audited and changed from no-synced coverage to a positive synced fixture with first-line identity proof.

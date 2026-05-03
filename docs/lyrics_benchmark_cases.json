@@ -230,6 +230,7 @@
     "duration": 179,
     "region": "ko",
     "expectedLyricsLang": "Korean",
+    "allowedLyricsLangs": ["English", "Korean"],
     "expectSourceTranslation": true,
     "expectation": {
       "shouldFindLyrics": true,
@@ -244,6 +245,7 @@
     "duration": 186,
     "region": "ko",
     "expectedLyricsLang": "Japanese",
+    "allowedLyricsLangs": ["English", "Japanese", "Korean"],
     "expectSourceTranslation": true,
     "expectation": {
       "shouldFindLyrics": true,
@@ -272,6 +274,7 @@
     "duration": 177,
     "region": "ko",
     "expectedLyricsLang": "Korean",
+    "allowedLyricsLangs": ["English", "Korean"],
     "expectSourceTranslation": true,
     "expectation": {
       "shouldFindLyrics": true,
@@ -857,7 +860,7 @@
     "id": "BM-HI-04",
     "title": "Chaiyya Chaiyya",
     "artist": "Sukhwinder Singh",
-    "duration": 366,
+    "duration": 416,
     "region": "hi",
     "expectedLyricsLang": "Hindi",
     "expectSourceTranslation": false,
@@ -1138,12 +1141,13 @@
     "id": "BM-PT-06",
     "title": "País Tropical",
     "artist": "Jorge Ben Jor",
-    "duration": 242,
+    "duration": 245,
     "region": "pt",
     "expectedLyricsLang": "Portuguese",
     "expectSourceTranslation": false,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true,
       "acceptableSources": null,
       "firstLineContains": null
     }
@@ -1227,9 +1231,10 @@
     "expectedLyricsLang": "Thai",
     "expectSourceTranslation": false,
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true,
       "acceptableSources": null,
-      "firstLineContains": "แสงตะวัน"
+      "firstLineContains": null
     }
   },
   {

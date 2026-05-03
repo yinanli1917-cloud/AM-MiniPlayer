@@ -711,7 +711,7 @@ public final class LyricsParser {
         let chineseLineCount = lines.filter { LanguageUtils.containsChinese($0.text) }.count
         let nonChineseLineCount = lines.filter {
             let t = $0.text.trimmingCharacters(in: .whitespaces)
-            return !t.isEmpty && !LanguageUtils.containsChinese(t)
+            return !t.isEmpty && !isSolelyChineseLine(t)
         }.count
 
         // 非中文行少于中文行 → 中文歌，不处理
@@ -721,7 +721,7 @@ public final class LyricsParser {
         var processed: [(line: LyricLine, isPureChinese: Bool)] = []
         for line in lines {
             let text = line.text.trimmingCharacters(in: .whitespaces)
-            guard !text.isEmpty, line.translation == nil, LanguageUtils.containsChinese(text) else {
+            guard !text.isEmpty, LanguageUtils.containsChinese(text) else {
                 processed.append((line, false))
                 continue
             }
@@ -732,7 +732,7 @@ public final class LyricsParser {
                 if cnPart.count >= 2 && jpPart.count >= 2 {
                     processed.append((LyricLine(
                         text: jpPart, startTime: line.startTime, endTime: line.endTime,
-                        words: line.words, translation: cnPart
+                        words: line.words, translation: line.translation ?? cnPart
                     ), false))
                 } else {
                     processed.append((line, false))
@@ -747,7 +747,7 @@ public final class LyricsParser {
                 // Mixed line → split (Korean+Chinese, English+Chinese)
                 processed.append((LyricLine(
                     text: nonCN, startTime: line.startTime, endTime: line.endTime,
-                    words: line.words, translation: cnPart
+                    words: line.words, translation: line.translation ?? cnPart
                 ), false))
             } else if isSolelyChineseLine(text) {
                 processed.append((line, true))

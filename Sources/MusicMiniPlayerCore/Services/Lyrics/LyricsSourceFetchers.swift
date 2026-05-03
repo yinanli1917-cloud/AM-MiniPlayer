@@ -423,10 +423,11 @@ extension LyricsFetcher {
                 }
             }
 
-            // 🔑 最后一道防线：剥离非中文歌曲中的中文翻译
-            if !isYRC {
-                lyrics = parser.stripChineseTranslations(lyrics)
-            }
+            // 🔑 最后一道防线：剥离非中文歌曲中的中文翻译。
+            // NetEase can leak translations into both LRC and YRC original
+            // text while also providing tlyric/ytlrc, so this must run for
+            // every parsed kind after source translations are merged.
+            lyrics = parser.stripChineseTranslations(lyrics)
 
             let final = resultKind == .synced
                 ? parser.applyTimeOffset(to: lyrics, offset: netEaseTimeOffset)

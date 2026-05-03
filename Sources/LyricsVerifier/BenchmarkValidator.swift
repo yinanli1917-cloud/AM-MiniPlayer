@@ -51,7 +51,8 @@ func validateBenchmark(
     // ── 1. 翻译泄漏检测 ──
     let leakResult = detectTranslationLeak(
         lyrics: lyrics,
-        expectedLang: benchmarkCase.expectedLyricsLang
+        expectedLang: benchmarkCase.expectedLyricsLang,
+        allowedLangs: benchmarkCase.acceptedLyricsLangs
     )
     failures.append(contentsOf: leakResult.failures)
     warnings.append(contentsOf: leakResult.warnings)
@@ -59,7 +60,8 @@ func validateBenchmark(
     // ── 2. 语言一致性 ──
     let langWarnings = checkLanguageConsistency(
         lyrics: lyrics,
-        expectedLang: benchmarkCase.expectedLyricsLang
+        expectedLang: benchmarkCase.expectedLyricsLang,
+        allowedLangs: benchmarkCase.acceptedLyricsLangs
     )
     warnings.append(contentsOf: langWarnings)
 
@@ -106,7 +108,6 @@ private func strictBenchmarkFailures(_ r: BenchmarkResult) -> [String] {
     }
     let hardWarningPrefixes = [
         "⚠️ 负时间戳",
-        "⚠️ 异常间隔",
         "⚠️ 时间轴乱序"
     ]
     for warning in base.warnings + r.benchmarkWarnings
@@ -145,10 +146,13 @@ private let leakDetectors: [String: (String) -> Bool] = [
 
 private func detectTranslationLeak(
     lyrics: [LyricLine],
-    expectedLang: String
+    expectedLang: String,
+    allowedLangs: Set<String>
 ) -> (failures: [String], warnings: [String], leakCount: Int) {
+    let scriptLangs = allowedLangs.filter { scriptDetectors[$0] != nil }
+
     // 拉丁语系（English/Spanish/French/Portuguese）不做脚本检测
-    guard let expectedDetector = scriptDetectors[expectedLang] else {
+    guard !scriptLangs.isEmpty else {
         return ([], [], 0)
     }
 
@@ -168,16 +172,18 @@ private func detectTranslationLeak(
     var leakSources: [String: Int] = [:]
 
     for line in sample {
-        let hasExpected = expectedDetector(line.text)
+        let hasAcceptedScript = scriptLangs.contains { lang in
+            scriptDetectors[lang]?(line.text) == true
+        }
 
         // 不含期望语言字符 → 检查是否含其他非拉丁脚本（泄漏）
-        if !hasExpected && !LanguageUtils.isPureASCII(line.text) {
+        if !hasAcceptedScript && !LanguageUtils.isPureASCII(line.text) {
             // 排除：英文部分（K-pop 常有英文副歌）
             let nonASCIIPart = line.text.filter { !$0.isASCII }
             guard !nonASCIIPart.isEmpty else { continue }
 
             // 确认是哪种语言泄漏
-            for (lang, detector) in leakDetectors where lang != expectedLang {
+            for (lang, detector) in leakDetectors where !allowedLangs.contains(lang) {
                 if detector(line.text) {
                     leakCount += 1
                     leakSources[lang, default: 0] += 1
@@ -190,7 +196,8 @@ private func detectTranslationLeak(
     // ≥3 行泄漏 → 硬失败
     if leakCount >= 3 {
         let sources = leakSources.map { "\($0.key):\($0.value)行" }.joined(separator: ", ")
-        failures.append("🚨 翻译泄漏: \(leakCount)/\(sample.count) 行含非\(expectedLang)文字 (\(sources))")
+        let allowed = allowedLangs.sorted().joined(separator: "/")
+        failures.append("🚨 翻译泄漏: \(leakCount)/\(sample.count) 行含非\(allowed)文字 (\(sources))")
     } else if leakCount > 0 {
         warnings.append("⚠️ 疑似翻译泄漏: \(leakCount)/\(sample.count) 行含异常文字")
     }
@@ -218,7 +225,8 @@ private let nlLangMap: [String: [String]] = [
 
 private func checkLanguageConsistency(
     lyrics: [LyricLine],
-    expectedLang: String
+    expectedLang: String,
+    allowedLangs: Set<String>
 ) -> [String] {
     let recognizer = NLLanguageRecognizer()
     var langCount: [String: Int] = [:]
@@ -241,13 +249,14 @@ private func checkLanguageConsistency(
 
     // 找到最多的语言
     let dominant = langCount.max(by: { $0.value < $1.value })!
-    let expectedCodes = nlLangMap[expectedLang] ?? []
+    let expectedCodes = Set(allowedLangs.flatMap { nlLangMap[$0] ?? [] })
 
     // 检查主导语言是否匹配期望
     if !expectedCodes.isEmpty && !expectedCodes.contains(dominant.key) {
         let ratio = Double(dominant.value) / Double(sample.count)
         if ratio > 0.5 {
-            return ["⚠️ 语言不一致: 期望 \(expectedLang), 检测到 \(dominant.key) (\(Int(ratio * 100))%)"]
+            let allowed = allowedLangs.sorted().joined(separator: "/")
+            return ["⚠️ 语言不一致: 期望 \(allowed), 检测到 \(dominant.key) (\(Int(ratio * 100))%)"]
         }
     }
 

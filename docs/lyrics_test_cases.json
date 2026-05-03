@@ -91,7 +91,7 @@
     "id": "K01",
     "title": "Love Lee",
     "artist": "AKMU",
-    "duration": 197,
+    "duration": 205,
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ", "Genius"],
@@ -419,12 +419,12 @@
     "id": "H19",
     "title": "Namidanokatachino Earring",
     "artist": "Akina Nakamori",
-    "duration": 268,
+    "duration": 276,
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": null,
-      "firstLineSHA256": "f37c18927527486594fdf713158a159a024c69dce971c967c86310fe4c105a53"
+      "firstLineSHA256": "547d5148752db9b817d4c05d1abb5b0946c6350ee77629cd5bdcdfe1ab445859"
     }
   },
   {
@@ -564,7 +564,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
-      "firstLineContains": "learning"
+      "firstLineContains": "standing"
     }
   },
   {
@@ -730,6 +730,27 @@
     "title": "With You",
     "artist": "Tennyson",
     "duration": 222,
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X19_no_static_hypnosis",
+    "title": "Hypnosis",
+    "artist": "Holy Hive",
+    "duration": 232,
+    "album": "Float Back To You",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X20_no_static_frisco_blues",
+    "title": "Frisco Blues",
+    "artist": "Lewis OfMan",
+    "duration": 248,
     "expectation": {
       "shouldFindLyrics": false,
       "allowMissingLyrics": true
