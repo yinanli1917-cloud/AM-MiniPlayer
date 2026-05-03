@@ -460,16 +460,7 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        // 时间匹配
-        var bestMatch: Int? = nil
-        for index in firstRealLyricIndex..<lyrics.count {
-            let triggerTime = lyrics[index].startTime - scrollAnimationLeadTime
-            if time >= triggerTime {
-                bestMatch = index
-            } else {
-                break
-            }
-        }
+        let bestMatch = lyricIndex(at: time, leadTime: scrollAnimationLeadTime)
 
         if let newIndex = bestMatch, currentLineIndex != newIndex {
             if currentLineIndex == nil || newIndex > currentLineIndex! {
@@ -492,6 +483,45 @@ public class LyricsService: ObservableObject {
         // as past (normal blur+dim+scale animation) and centers the
         // three-dot indicator as the focal "current" element.
         updateInterludeAfterIndex(at: time)
+    }
+
+    private func lyricIndex(at time: TimeInterval, leadTime: TimeInterval) -> Int? {
+        guard firstRealLyricIndex < lyrics.count else { return nil }
+
+        if let current = currentLineIndex, current >= firstRealLyricIndex, current < lyrics.count {
+            let currentTrigger = lyrics[current].startTime - leadTime
+            if time >= currentTrigger {
+                var index = current
+                while index + 1 < lyrics.count,
+                      time >= lyrics[index + 1].startTime - leadTime {
+                    index += 1
+                }
+                return index
+            }
+
+            // Preserve the existing backward hysteresis behavior for minor
+            // playback-position jitter around a line boundary.
+            if time >= currentTrigger - 0.8 {
+                return current
+            }
+        }
+
+        var low = firstRealLyricIndex
+        var high = lyrics.count - 1
+        var bestMatch: Int?
+
+        while low <= high {
+            let mid = (low + high) / 2
+            let triggerTime = lyrics[mid].startTime - leadTime
+            if time >= triggerTime {
+                bestMatch = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+
+        return bestMatch
     }
 
     private func updateInterludeAfterIndex(at time: TimeInterval) {

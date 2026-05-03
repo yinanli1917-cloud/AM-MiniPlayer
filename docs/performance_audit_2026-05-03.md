@@ -19,6 +19,9 @@ Review high CPU usage and rapid song-switch behavior without compromising nanoPo
   - Debounces nearby artwork and lyrics preloading.
 - `5bf7410 chore: add codex harness architecture`
   - Adds Codex harness manifests and verifier.
+- Pending: lyric time-index optimization
+  - Replaces per-frame linear lyric-line scanning with current-index advancement and binary search for seeks/backward jumps.
+  - Does not touch `LyricsView.swift`, `LyricLineView.swift`, word-level renderer cadence, layout, or animation.
 
 ## Measurements
 
@@ -32,6 +35,8 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Temporary low-cost word renderer experiment | `tmp/perf/perf-20260503-002518.csv` | avg 37.64%, p95 50.4%, max 51.6 |
 | Restored original renderer, rapid skip after safe work | `tmp/perf/perf-20260503-003138.csv` | avg 52.96%, p95 90.5%, max 97.5 |
 | Temporary flat lyrics background diagnostic | `tmp/perf/perf-20260503-003913.csv` | avg 51.52%, p95 54.8%, max 55.5 |
+| Lyrics screen after lyric time-index optimization | `tmp/perf/perf-20260503-020739.csv` | avg 17.71%, p95 28.2%, max 29.6 |
+| Lyrics rapid skip after lyric time-index optimization | `tmp/perf/perf-20260503-020824.csv` | avg 36.86%, p95 75.5%, max 81.8 |
 
 ## Important Correction
 
@@ -53,14 +58,16 @@ Protected UX paths:
 - The remaining high CPU reproduces on the lyrics page with original word-level lyrics active.
 - Sampling pointed mostly at SwiftUI display-list/layout/rendering and custom text drawing, not ScriptingBridge.
 - Replacing the lyrics background with a flat color did not materially reduce average CPU, so the blurred artwork background is not the main cause.
+- The lyric time-index optimization materially reduced steady lyrics CPU in the measured run while keeping the original renderer and layout intact.
+- Rapid skip still spikes above the target range, so the remaining gap is likely song-change invalidation, foreground lyrics fetch/apply work, or SwiftUI redraw pressure during track transitions.
 
 ## Safe Next Lanes
 
-1. Profile whether the blurred artwork background is being redrawn every lyric frame.
-2. Cache or freeze non-lyric background layers while lyrics are animating, but verify visual parity.
-3. Reduce invalidations in shared controls and progress labels without changing lyric text rendering.
-4. Investigate AppKit/CoreAnimation-backed background rasterization behind the SwiftUI lyrics view.
-5. Add a visual comparison harness before any lyric renderer or cadence change.
+1. Measure rapid switching with signposts around lyrics apply, artwork apply, and page redraw.
+2. Reduce song-change invalidations in shared controls and progress labels without changing lyric text rendering.
+3. Investigate foreground fetch/apply contention when preloading nearby queue/history songs.
+4. Add a visual comparison harness before any lyric renderer or cadence change.
+5. Profile whether non-lyric overlays redraw during word-level animation frames.
 
 ## Verification Commands
 
@@ -75,4 +82,4 @@ scripts/perf_harness.py --require-music-playing --warmup 3 --duration 15 --inter
 
 ## Status
 
-Not complete. The safe performance work is committed, but the original word-level lyrics screen still reaches roughly 50%+ CPU under live playback and rapid switching.
+Not complete. The steady lyrics-screen case is improved in the latest measured run, but rapid switching still spikes high and needs another iteration.
