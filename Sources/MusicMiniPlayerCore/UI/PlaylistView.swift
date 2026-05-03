@@ -61,6 +61,9 @@ public struct PlaylistView: View {
     // 全屏封面模式
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
 
+    // Repeat animation flow
+    @State private var repeatFlow: CGFloat = 0
+
     // Sticky header 状态
     @State private var sectionOffsets: [String: CGFloat] = [:]
 
@@ -320,11 +323,23 @@ public struct PlaylistView: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
+                                .modifier(SkipTextTransition(
+                                    text: musicController.currentTrackTitle,
+                                    direction: musicController.skipDirection,
+                                    offset: 20,
+                                    maxBlur: 6
+                                ))
 
                             Text(musicController.currentArtist)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.white.opacity(0.7))
                                 .lineLimit(1)
+                                .modifier(SkipTextTransition(
+                                    text: musicController.currentArtist,
+                                    direction: musicController.skipDirection,
+                                    offset: 15,
+                                    maxBlur: 4
+                                ))
                         }
 
                         Spacer()
@@ -348,8 +363,12 @@ public struct PlaylistView: View {
 
                         Button(action: { musicController.toggleShuffle() }) {
                             HStack(spacing: 5) {
-                                Image(systemName: "shuffle")
-                                    .font(.system(size: 11))
+                                AnimatedShuffleIcon(
+                                    color: musicController.shuffleEnabled ? themeColor : .white,
+                                    isEnabled: musicController.shuffleEnabled,
+                                    size: 11,
+                                    weight: .regular
+                                )
                                 Text("Shuffle")
                                     .font(.system(size: 10, weight: .medium))
                             }
@@ -363,12 +382,15 @@ public struct PlaylistView: View {
                             )
                             .contentShape(Capsule())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CapsulePressStyle())
 
                         Button(action: { musicController.cycleRepeatMode() }) {
                             HStack(spacing: 5) {
                                 Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                    .contentTransition(.symbolEffect(.replace))
                                     .font(.system(size: 11))
+                                    .rotationEffect(.degrees(repeatFlow * 12))
+                                    .scaleEffect(1 - repeatFlow * 0.12)
                                 Text("Repeat")
                                     .font(.system(size: 10, weight: .medium))
                             }
@@ -382,7 +404,13 @@ public struct PlaylistView: View {
                             )
                             .contentShape(Capsule())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CapsulePressStyle())
+                        .onChange(of: musicController.repeatMode) { _, _ in
+                            withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { repeatFlow = 1 }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { repeatFlow = 0 }
+                            }
+                        }
 
                         Spacer()
                     }

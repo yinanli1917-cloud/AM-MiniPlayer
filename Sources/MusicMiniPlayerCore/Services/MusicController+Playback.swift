@@ -58,9 +58,7 @@ extension MusicController {
             logger.info("Preview: nextTrack")
             return
         }
-        // 🔑 User controls use dedicated controlApp/controlQueue — instant response,
-        // never blocked by heavyweight scriptingBridgeQueue work.
-        // Notification path (playerInfoChanged → handleTrackChange) handles UI updates.
+        skipDirection = 1
         controlQueue.async { [weak self] in
             guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
@@ -76,11 +74,10 @@ extension MusicController {
             logger.info("Preview: previousTrack")
             return
         }
-        // Apple Music 标准行为：播放超过3秒时按上一首会回到歌曲开头
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
-            // 🔑 Same controlQueue pattern as nextTrack — see comment there.
+            skipDirection = -1
             controlQueue.async { [weak self] in
                 guard let app = self?.controlApp, app.isRunning else {
                     debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
