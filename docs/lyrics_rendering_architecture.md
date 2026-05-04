@@ -58,6 +58,9 @@ translation, interlude, or scroll behavior by accident.
 - Removing `LyricsTextRenderer.animatableData` regressed CPU.
 - Caching `Text` in `@State` inside `SyllableSyncedLine` regressed rapid switching
   and must not be repeated as-is.
+- Materializing `Array(layout.flattenedRuns)` once inside `LyricsTextRenderer.draw`
+  regressed p95/max under the forced lyrics-page harness and must not be repeated
+  as a standalone renderer micro-optimization.
 
 ## Next Approved Hypothesis Candidate
 
