@@ -27,11 +27,12 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - `nanopod://page/{album,lyrics,playlist}` and `scripts/perf_harness.py --page lyrics` now provide a reliable lyrics-page measurement entry point.
 - `scripts/perf_harness.py --play-title/--play-artist --expect-lyrics syllable|line` now provides deterministic local-track measurements and records the verified lyric workload in each summary.
 - Deterministic local word-level translated baseline on `Strangers By Nature` by Adele: `tmp/perf/perf-20260504-000453.csv` avg `48.31%`, p95 `53.4%`, max `55.4`.
-- Current translation fast path on the same deterministic workload: `tmp/perf/perf-20260504-001921.csv` avg `37.61%`, p95 `40.2%`, max `40.6`.
-- Second deterministic local word-level translated check on `Escape` by EPO: `tmp/perf/perf-20260504-002330.csv` avg `31.73%`, p95 `39.1%`, max `41.4`.
+- Rejected translation fast path on the same deterministic workload: `tmp/perf/perf-20260504-001921.csv` avg `37.61%`, p95 `40.2%`, max `40.6`. The user rejected this masked translation reveal because it visibly damaged the translation animation, so it must not be kept or repeated as a final approach.
+- Second deterministic local word-level translated check on `Escape` by EPO under the rejected fast path: `tmp/perf/perf-20260504-002330.csv` avg `31.73%`, p95 `39.1%`, max `41.4`.
 - User-reported live CPU above 50% was reproduced on the running workspace bundle: `tmp/perf/live-sample-20260504-user-highcpu.txt`, top sample around `51-55%`.
 - Disabling lyric animation alone did not solve the live issue; disabling current-line lyric timelines plus SB poll/hash timers dropped steady CPU to roughly `4-5%`, proving SB polling/hash work was a major non-visual contributor.
-- UX-preserving SB backoff plus translation mask cleanup is currently measured at roughly `34-40%` live CPU with lyrics animations restored: `tmp/perf/live-sample-20260504-ux-preserving-sb-backoff.txt`.
+- UX-preserving SB backoff is currently the kept live CPU lane. The translation mask cleanup from the same session is rejected and being reverted; re-measure after restoring the original translation sweep.
+- Renderer line-rect traversal merge was tested on the deterministic `Strangers By Nature` translated word-level gate and rejected: `tmp/perf/perf-20260504-005355.csv` avg `46.42%`, p95 `54.3%`, max `56.5`.
 - Latest forced translated lyrics-page settled baseline: `tmp/perf/perf-20260503-225431.csv` avg 22.48%, p95 24.8%, max 26.3.
 - Latest forced translated lyrics-page rapid-switch baseline: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9; stack sample `tmp/perf/sample-20260503-225633.txt` measured avg 54.95%, p95 132.0%, max 139.9.
 - Passive preload signposts now identify nearby preload timing without touching protected lyrics UI. Logging trace `tmp/perf/nanopod-preload-logging-20260503-2312.trace` confirmed nearby preload still fires during rapid switching; NetEase artwork spans were roughly 0.54-1.27s and lyrics preload fetch spans reached about 1.93s.
@@ -84,3 +85,4 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - Latest sample points to SwiftUI/CoreAnimation display-list and glyph rendering.
 - 2026-05-03 live word-level lyrics no-skip measurement still reproduces high CPU after the first renderer fix: `tmp/perf/perf-20260503-203254.csv` avg `40.91%`, p95 `53.4%`, max `56.6%`; sample `tmp/perf/sample-20260503-203254.txt` still points at `LyricsTextRenderer` glyph/display-list drawing.
 - User explicitly clarified that both line-synced and word-level lyrics must be optimized and should outperform Apple Music.
+- User explicitly rejected the translation animation simplification on 2026-05-04. Performance work must preserve the original translation sweep visual behavior; use non-visual CPU lanes first.

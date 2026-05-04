@@ -331,38 +331,119 @@ private struct TranslationSweepText: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if let staticOpacity {
-                translationText
-                    .foregroundColor(.white.opacity(staticOpacity))
-            } else if #available(macOS 15.0, *) {
-                translationText
-                    .foregroundColor(.white.opacity(0.20))
-                    .overlay(alignment: .leading) {
-                        translationText
-                            .foregroundColor(.white.opacity(0.75 * postLineFadeOut()))
-                            .mask(alignment: .leading) {
-                                Rectangle()
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                                    .scaleEffect(x: max(0, min(1, lineProgress)), y: 1, anchor: .leading)
-                            }
-                        .allowsHitTesting(false)
-                    }
+            if #available(macOS 15.0, *) {
+                Text(text)
+                    .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
+                    .foregroundColor(.white)
+                    .textRenderer(TranslationSweepRenderer(
+                        progress: staticOpacity != nil ? 1.0 : lineProgress,
+                        currentTime: currentTime,
+                        lineEndTime: lineEndTime,
+                        staticOpacity: staticOpacity
+                    ))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(LyricMetrics.translationLineSpacing)
             } else {
-                translationText
-                    .foregroundColor(.white.opacity(LyricMetrics.currentTranslationOpacityFactor))
+                Text(text)
+                    .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
+                    .foregroundColor(.white.opacity(staticOpacity ?? LyricMetrics.currentTranslationOpacityFactor))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(LyricMetrics.translationLineSpacing)
             }
             Spacer(minLength: 0)
         }
     }
+}
 
-    private var translationText: some View {
-        Text(text)
-            .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .lineSpacing(LyricMetrics.translationLineSpacing)
+/// TextRenderer for translation — same dim-base + bright-sweep technique as LyricsTextRenderer.
+/// Each visual line is a separate run, so the gradient mask is per-line (no cross-line bleeding).
+/// Progress is distributed across actual rendered line widths sequentially.
+@available(macOS 15.0, *)
+private struct TranslationSweepRenderer: TextRenderer {
+    let progress: CGFloat
+    let currentTime: TimeInterval
+    let lineEndTime: TimeInterval
+    var staticOpacity: CGFloat? = nil  // non-nil → render at flat opacity (non-current)
+    private let brightAlpha: CGFloat = 0.75
+    private let dimAlpha: CGFloat = 0.20
+    private let fadeHalfPt: CGFloat = 8
+
+    var displayPadding: EdgeInsets {
+        // Keep vertical padding at zero. Inflating visual lines increases wrapped
+        // translation gaps and changes the protected lyric layout.
+        EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4)
     }
 
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        // Static mode: flat opacity, no sweep, matching the main lyric static path.
+        if let opacity = staticOpacity {
+            for run in layout.flattenedRuns {
+                var ctx = context
+                ctx.opacity = Double(opacity)
+                ctx.draw(run, options: .disablesSubpixelQuantization)
+            }
+            return
+        }
+
+        let runs = Array(layout.flattenedRuns)
+        let totalWidth = runs.reduce(CGFloat(0)) { $0 + $1.typographicBounds.rect.width }
+        guard totalWidth > 0 else { return }
+        let filledWidth = progress * totalWidth
+
+        // Pass 1: dim base so the full translation remains readable before fill.
+        for run in runs {
+            var ctx = context
+            ctx.opacity = Double(dimAlpha)
+            ctx.draw(run, options: .disablesSubpixelQuantization)
+        }
+
+        // Pass 2: bright overlay with the original per-run sweep mask.
+        let fade = postLineFadeOut()
+        guard fade > 0 else { return }
+        let brightBoost = (brightAlpha - dimAlpha) * fade
+        var cumWidth: CGFloat = 0
+        for run in runs {
+            let runRect = run.typographicBounds.rect
+            let localFilled = filledWidth - cumWidth
+
+            if localFilled > 0 {
+                let localProgress = min(1.0, localFilled / max(1, runRect.width))
+                let sweepX = runRect.minX + runRect.width * localProgress
+
+                context.drawLayer { layerCtx in
+                    var textCtx = layerCtx
+                    textCtx.opacity = Double(brightBoost)
+                    textCtx.draw(run, options: .disablesSubpixelQuantization)
+
+                    let padded = runRect.insetBy(dx: -20, dy: -20)
+                    let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
+                    let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+
+                    var maskCtx = layerCtx
+                    maskCtx.blendMode = .destinationIn
+                    maskCtx.fill(
+                        Path(padded),
+                        with: .linearGradient(
+                            Gradient(stops: [
+                                .init(color: .white, location: 0),
+                                .init(color: .white, location: max(0, leftEdge)),
+                                .init(color: .clear, location: min(1, rightEdge)),
+                                .init(color: .clear, location: 1),
+                            ]),
+                            startPoint: CGPoint(x: padded.minX, y: 0),
+                            endPoint: CGPoint(x: padded.maxX, y: 0)
+                        )
+                    )
+                }
+            }
+
+            cumWidth += runRect.width
+        }
+    }
+
+    /// Fade bright overlay after line ends — syncs with LyricsTextRenderer.postLineFadeOut.
     private func postLineFadeOut() -> CGFloat {
         let fadeOutDuration: TimeInterval = 1.5
         let timeSinceLineEnd = currentTime - lineEndTime

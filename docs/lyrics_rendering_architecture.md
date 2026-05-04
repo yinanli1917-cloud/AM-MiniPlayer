@@ -17,7 +17,7 @@ translation, interlude, or scroll behavior by accident.
 | Line view | `Sources/MusicMiniPlayerCore/UI/LyricLineView.swift` | Per-line opacity, scale, blur, hover/tap, translation display, interlude blend, word-level vs plain-line branch. | Must keep stable identity across current/non-current states to avoid layout jumps. |
 | Word-level text builder | `SyllableSyncedLine` in `LyricLineView.swift` | Builds one concatenated `Text` with `WordTimingAttribute` on each word. | Static word/timing attributes are immutable for a line, but `body` can be re-entered during active-line animation. |
 | Animated renderer | `LyricsTextRenderer` in `LyricLineView.swift` | Draws dim base, bright sweep, emphasis lift/glow, CJK shared wavefront, and post-line fade. | Runs on animation frames for the active syllable line; stack samples point at TextRenderer/display-list/glyph work. |
-| Translation sweep | `TranslationSweepText` in `LyricLineView.swift` | Mirrors word-level sweep over translated text with a masked `Text` fast path for the active translated line. | Animated only when translation is visible on the active syllable line; static translations render as plain `Text`. |
+| Translation sweep | `TranslationSweepText` in `LyricLineView.swift` | Mirrors word-level sweep over translated text with the original `TextRenderer` dim-base + bright-sweep path. | Animated only when translation is visible on the active syllable line; protected because visual simplifications are noticeable. |
 
 ## Current Rendering Flow
 
@@ -66,17 +66,16 @@ translation, interlude, or scroll behavior by accident.
   as a standalone renderer micro-optimization.
 - Replacing the current translated line's `TextRenderer` sweep with a masked
   `Text` fast path improved deterministic settled word-level CPU on
-  `Strangers By Nature` from avg 48.31%, p95 53.4% to avg 37.61%, p95 40.2%.
-  A second local word-level translated check on `Escape` by EPO measured avg
-  31.73%, p95 39.1%, max 41.4 with the same fast path.
-- A live high-CPU repro showed the masked translation path should avoid
-  `GeometryReader`; use a scale-based mask so translation reveal does not add
-  per-frame layout work.
+  `Strangers By Nature` from avg 48.31%, p95 53.4% to avg 37.61%, p95 40.2%,
+  and `Escape` by EPO measured avg 31.73%, p95 39.1%, max 41.4. The user
+  rejected the resulting translation animation on 2026-05-04, so this path is
+  not an acceptable final optimization.
 
 ## Next Approved Hypothesis Candidate
 
 The next protected renderer experiment should not change timing cadence,
-spacing, masking math, translation layout, or the word renderer's visual output.
+spacing, masking math, translation layout, translation sweep character, or the
+word renderer's visual output.
 
 Candidate: isolate immutable per-line word/timing preparation from frame-time
 animation by introducing a small value model for precomputed word attributes.
@@ -97,6 +96,7 @@ Required evidence before keeping it:
 ## Non-Goals
 
 - Do not replace the word-level renderer with a low-cost approximation.
+- Do not replace the translation sweep with the rejected masked `Text` shortcut.
 - Do not lower animation cadence as a shortcut.
 - Do not remove blur, wave, translation sweep, interlude, or line spacing.
 - Do not use album-page screenshots as lyrics-page evidence.
