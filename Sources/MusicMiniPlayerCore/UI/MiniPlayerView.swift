@@ -59,10 +59,18 @@ public struct MiniPlayerView: View {
     var mainBody: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background (Artwork-derived fluid gradient — no system glass)
-                FluidGradientBackground(artwork: backgroundArtwork ?? musicController.currentArtwork)
-                    .ignoresSafeArea()
-                    .accessibilityHidden(true)
+                // Background (Artwork-derived fluid gradient — no system glass).
+                // LyricsView draws its own full-screen background, so keep this root
+                // layer inert there to avoid duplicate artwork-driven invalidations.
+                if musicController.currentPage == .lyrics {
+                    Color.clear
+                        .ignoresSafeArea()
+                        .accessibilityHidden(true)
+                } else {
+                    FluidGradientBackground(artwork: backgroundArtwork ?? musicController.currentArtwork)
+                        .ignoresSafeArea()
+                        .accessibilityHidden(true)
+                }
 
                 // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
                 WindowDraggableView()
