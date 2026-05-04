@@ -24,6 +24,7 @@ Done:
 - Implemented playback for Apple Music API recent-history rows by routing `am:` IDs through MusicKit `ApplicationMusicPlayer`; local Music.app rows still use persistent-ID AppleScript playback.
 - Pushed one retained source performance fix in `bad9f22 perf: stabilize lyric renderer timing updates`.
 - Added `nanopod://page/{album,lyrics,playlist}` plus `scripts/perf_harness.py --page` so lyrics-page measurements no longer depend on album-page state or blocked assistive clicking.
+- Mapped the current lyrics rendering architecture and hot invalidation points in `docs/lyrics_rendering_architecture.md`.
 - Documented rejected experiments so they are not repeated blindly:
   - cached `@State Text` / syllable text experiment regressed rapid switching.
   - artwork matching input precompute regressed live rapid switching.
@@ -70,8 +71,8 @@ Current evidence:
 1. Commit this handoff, the active PRD update, and the task context manifest updates.
 2. Ask for explicit approval before touching protected lyrics rendering.
 3. Capture a word-level lyrics baseline using `scripts/perf_harness.py --page lyrics`; the current fresh baseline is translated line-synced, not word-level.
-4. Use the new preload signposts to test a narrower cancellation/concurrency change for nearby preloads during skip bursts.
-5. Only after the preload lane is exhausted, test a narrow protected renderer experiment, likely around fade-mask / clipping / display-list invalidation, and keep it only if CPU improves without visual regression.
+4. If approved, test the renderer hypothesis in `docs/lyrics_rendering_architecture.md`: isolate immutable word/timing preparation without changing `LyricsTextRenderer` timing, spacing, masks, or visual output.
+5. Keep the experiment only if same-track visual parity is obvious and CPU p95/max do not regress.
 
 ## Verified Commands
 
@@ -97,6 +98,7 @@ Current evidence:
 - `.codex/tasks/05-03-daily-use-cpu-and-rapid-switch-performance/prd.md`
 - `docs/performance_audit_2026-05-03.md`
 - `docs/lyrics_rendering_performance_plan.md`
+- `docs/lyrics_rendering_architecture.md`
 - `docs/apple_music_access_compliance.md`
 - `scripts/perf_harness.py`
 - `Sources/MusicMiniPlayerCore/UI/LyricsView.swift`

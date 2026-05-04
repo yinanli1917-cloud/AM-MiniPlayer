@@ -18,6 +18,7 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - Compliance research has a durable document: `docs/apple_music_access_compliance.md`.
 - Apple Music API recent-history rows with `am:` IDs now have a MusicKit playback path through `ApplicationMusicPlayer`; local Music.app rows still use persistent-ID AppleScript playback.
 - Lyrics rendering guardrails have a durable document: `docs/lyrics_rendering_performance_plan.md`.
+- Lyrics rendering architecture and hot invalidation points are mapped in `docs/lyrics_rendering_architecture.md`.
 - Performance evidence and rejected experiments have a durable document: `docs/performance_audit_2026-05-03.md`.
 - One source fix was kept and pushed: `bad9f22 perf: stabilize lyric renderer timing updates`.
 - Daily-use CPU remains above target on lyrics playback, especially word-level lyrics and rapid switching.
