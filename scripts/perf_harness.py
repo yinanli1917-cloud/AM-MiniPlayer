@@ -158,7 +158,10 @@ def main() -> None:
     rss = [row["rss_mb"] for row in samples]
     if sample_proc is not None:
         try:
-            sample_proc.wait(timeout=5)
+            # `sample` often spends several seconds symbolizing after the timed
+            # capture ends. Give it enough time to finish writing the report so
+            # rapid-skip runs retain the stack evidence they were asked to collect.
+            sample_proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             sample_proc.terminate()
             sample_proc.wait(timeout=2)
