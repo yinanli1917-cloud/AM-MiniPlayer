@@ -179,6 +179,72 @@ extension MusicController {
         }
     }
 
+    public func playTrack(title: String, artist: String, album: String, persistentID: String) {
+        if persistentID.hasPrefix("am:") {
+            playAppleMusicTrack(title: title, artist: artist, album: album, appleMusicID: String(persistentID.dropFirst(3)))
+        } else {
+            playTrack(persistentID: persistentID)
+        }
+    }
+
+    private func playAppleMusicTrack(title: String, artist: String, album: String, appleMusicID: String) {
+        guard MusicAuthorization.currentStatus == .authorized else {
+            DebugLogger.log("Playback", "⚠️ Apple Music row playback requires MusicKit authorization")
+            return
+        }
+
+        Task(priority: .userInitiated) { [weak self] in
+            do {
+                guard let song = try await self?.resolveAppleMusicSong(
+                    id: appleMusicID,
+                    title: title,
+                    artist: artist,
+                    album: album
+                ) else {
+                    DebugLogger.log("Playback", "⚠️ Apple Music row playback could not resolve '\(title)' by '\(artist)'")
+                    return
+                }
+
+                let player = ApplicationMusicPlayer.shared
+                player.queue = ApplicationMusicPlayer.Queue(for: [song], startingAt: song)
+                try await player.play()
+                let playbackStartTime = Date()
+                await MainActor.run { [weak self] in
+                    self?.lastUserActionTime = playbackStartTime
+                }
+            } catch {
+                DebugLogger.log("Playback", "⚠️ Apple Music row playback failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func resolveAppleMusicSong(id: String, title: String, artist: String, album: String) async throws -> Song? {
+        if !id.hasPrefix("i.") {
+            var request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
+            request.limit = 1
+            if let song = try await request.response().items.first {
+                return song
+            }
+        }
+
+        var search = MusicCatalogSearchRequest(term: "\(title) \(artist)", types: [Song.self])
+        search.limit = 10
+        let songs = try await search.response().songs
+        return songs
+            .map { song -> (song: Song, score: ArtworkMatchScore) in
+                (song, Self.scoreArtworkCandidate(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    candidateTitle: song.title,
+                    candidateArtist: song.artistName,
+                    candidateAlbum: song.albumTitle ?? ""
+                ))
+            }
+            .filter { $0.score.isReliable }
+            .max(by: { $0.score.total < $1.score.total })?.song
+    }
+
     public func cycleRepeatMode() {
         if isPreview {
             logger.info("Preview: cycleRepeatMode")

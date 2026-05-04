@@ -52,6 +52,7 @@ Current local implementation check:
 
 - `MusicController+Playback.fetchRecentHistoryViaBridge()` prefers the documented Apple Music API recent-track endpoint when `MusicAuthorization.currentStatus == .authorized`.
 - `fetchRecentHistoryViaAppleMusicAPI()` uses `MusicDataRequest` against `/v1/me/recent/played/tracks?types=songs,library-songs&limit=10`.
+- Apple Music API recent-history rows with `am:` IDs now use MusicKit playback through `ApplicationMusicPlayer`, because `SystemMusicPlayer` is unavailable on macOS. Local Music.app rows still use the existing Music.app persistent-ID AppleScript path.
 - `fetchUpNextViaBridge()` remains ScriptingBridge-backed, bounded to 2 tracks off the playlist page and 10 tracks on the playlist page.
 - `preloadNearbyAssets(from:)` waits for track-generation stability before starting nearby artwork/lyrics preloads.
 

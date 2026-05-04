@@ -21,6 +21,7 @@ Done:
 - Created and pushed branch `codex/performance-playlist-compliance-review`.
 - Researched Apple Music / MusicKit compliance for playlist, recent-history, and up-next behavior.
 - Documented the compliance result in `docs/apple_music_access_compliance.md`.
+- Implemented playback for Apple Music API recent-history rows by routing `am:` IDs through MusicKit `ApplicationMusicPlayer`; local Music.app rows still use persistent-ID AppleScript playback.
 - Pushed one retained source performance fix in `bad9f22 perf: stabilize lyric renderer timing updates`.
 - Added `nanopod://page/{album,lyrics,playlist}` plus `scripts/perf_harness.py --page` so lyrics-page measurements no longer depend on album-page state or blocked assistive clicking.
 - Documented rejected experiments so they are not repeated blindly:

@@ -621,7 +621,12 @@ struct PlaylistItemRowCompact: View {
                     currentPage = .album
                 }
             } else {
-                musicController.playTrack(persistentID: track.persistentID)
+                musicController.playTrack(
+                    title: track.title,
+                    artist: track.artist,
+                    album: track.album,
+                    persistentID: track.persistentID
+                )
             }
         }) {
             HStack(spacing: 8) {
