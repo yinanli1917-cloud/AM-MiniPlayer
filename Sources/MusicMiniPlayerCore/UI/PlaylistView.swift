@@ -674,11 +674,17 @@ struct PlaylistItemRowCompact: View {
             }
         }
         .task(id: track.persistentID) {
+            guard currentPage == .playlist else { return }
             await loadArtwork()
+        }
+        .onChange(of: currentPage) { _, newPage in
+            guard newPage == .playlist else { return }
+            Task { await loadArtwork() }
         }
     }
 
     private func loadArtwork() async {
+        guard currentPage == .playlist else { return }
         let pid = track.persistentID
         guard currentArtworkID != pid else { return }
 

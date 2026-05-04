@@ -670,19 +670,25 @@ extension MusicController {
     }
 
     public func preloadArtwork(for tracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)]) {
-        let persistentIDs = tracks
+        let preloadTracks = tracks
             .prefix(4)
-            .map(\.persistentID)
-            .filter { !$0.isEmpty && !$0.hasPrefix("am:") && artworkCache.object(forKey: $0 as NSString) == nil }
+            .filter { track in
+                !track.persistentID.isEmpty &&
+                !track.persistentID.hasPrefix("am:") &&
+                artworkCache.object(forKey: track.persistentID as NSString) == nil
+            }
 
-        guard !persistentIDs.isEmpty else { return }
+        guard !preloadTracks.isEmpty else { return }
 
         Task(priority: .utility) { [weak self] in
             guard let self else { return }
-            for persistentID in persistentIDs {
+            for track in preloadTracks {
                 guard !Task.isCancelled else { return }
+                let persistentID = track.persistentID
                 if self.artworkCache.object(forKey: persistentID as NSString) != nil { continue }
-                _ = await self.fetchArtworkByPersistentID(persistentID: persistentID)
+                if let image = await self.fetchMusicKitArtwork(title: track.title, artist: track.artist, album: track.album) {
+                    self.artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
+                }
             }
         }
     }
