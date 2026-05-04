@@ -73,6 +73,7 @@ class AppMain: NSObject, NSApplicationDelegate {
         createMenuBarPopover()
         createSettingsWindow()
         setupMainMenu()
+        setupURLHandling()
         showFloatingWindow()
 
         // ──────────────────────────────────────────────
@@ -415,6 +416,68 @@ class AppMain: NSObject, NSApplicationDelegate {
 
     @objc func showFloatingWindowAction(_ sender: Any?) {
         showFloatingWindow()
+    }
+
+    // MARK: - URL Handling
+
+    func setupURLHandling() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: urlString),
+              url.scheme == "nanopod" else {
+            return
+        }
+
+        switch pageTarget(from: url) {
+        case .album:
+            musicController.currentPage = .album
+            showFloatingWindow()
+        case .lyrics:
+            musicController.userManuallyOpenedLyrics = true
+            musicController.currentPage = .lyrics
+            showFloatingWindow()
+        case .playlist:
+            musicController.currentPage = .playlist
+            showFloatingWindow()
+        case nil:
+            break
+        }
+    }
+
+    private func pageTarget(from url: URL) -> PlayerPage? {
+        let host = url.host?.lowercased()
+        let components = url.pathComponents
+            .filter { $0 != "/" }
+            .map { $0.lowercased() }
+
+        if host == "page", let target = components.first {
+            return pageTarget(named: target)
+        }
+        if let host, let target = pageTarget(named: host) {
+            return target
+        }
+        return components.first.flatMap(pageTarget(named:))
+    }
+
+    private func pageTarget(named value: String) -> PlayerPage? {
+        switch value {
+        case "album":
+            return .album
+        case "lyrics", "lyric":
+            return .lyrics
+        case "playlist", "queue":
+            return .playlist
+        default:
+            return nil
+        }
     }
 }
 

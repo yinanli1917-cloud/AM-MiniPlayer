@@ -89,6 +89,9 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Word-level follow-up correction | `tmp/perf/perf-20260503-203254.csv`, `tmp/perf/sample-20260503-203254.txt`, `tmp/perf/perf-20260503-203743.csv`, `tmp/perf/sample-20260503-203743.txt`, `tmp/perf/nanopod-lyrics-swiftui-20260503-2043.trace`, `tmp/perf/perf-20260503-205219.csv` | The daily-use improvement above is not sufficient for all word-level tracks. A later live word-level run still measured avg 40.91%, p95 53.4%, max 56.6 and pointed at `LyricsTextRenderer`/SwiftUI text layout. A 30Hz TimelineView cadence cap did not materially improve it (avg 38.68%, p95 53.7%, max 55.0) and was reverted as a UX-risky non-fix. SwiftUI trace fan-in showed `AnimatableAttribute<LyricsTextRenderer>` and `StaticBody<ViewBodyAccessor<SyllableSyncedLine>>` feeding the renderer 1537 times during the trace. Removing `animatableData` locally regressed to avg 50.49%, p95 60.7%, max 62.7, so keep the pushed line for now, but treat word-level CPU as still unresolved. |
 | Reverted cached `SyllableSyncedLine` text experiment | `tmp/perf/perf-20260503-212834.csv`, `tmp/perf/sample-20260503-212834.txt`, `tmp/perf/perf-20260503-213134.csv`, `tmp/perf/sample-20260503-213134.txt`, `tmp/perf/perf-20260503-213357.csv`, `tmp/perf/perf-20260503-213538-trials.json` | Caching the immutable concatenated `Text` in `SyllableSyncedLine` reduced direct `buildText` stack samples and one settled lyrics-page run looked better (avg 16.69%, p95 38.9%, max 44.9), but the A/B was not same-track clean and the rapid-switch gate regressed badly: median avg 65.36%, p95 97.6%, max 105.1 across 3 trials. Reverted. Do not keep a `@State Text` cache on this protected renderer unless a future same-track trace proves it also improves rapid switching. |
 | Reverted artwork matching input precompute | `tmp/perf/perf-20260503-214341.csv`, `tmp/perf/sample-20260503-214341.txt`, `tmp/perf/perf-20260503-215124-trials.json` | A fresh lyrics-page rapid-switch sample showed both SwiftUI display-list/text work and artwork candidate scoring (`normalizeForArtworkMatching`, `artworkTextScore`) in the stack. Precomputing normalized input-side artwork match fields passed `swift build` and `swift test --filter RapidSwitchTests`, but live rapid switching regressed to median avg 54.35%, p95 102.1%, max 103.1 with all 20/20 skips completed. Reverted. Do not repeat this micro-optimization as a standalone fix; if artwork matching is revisited, measure source-level network fan-out and cancellation, not just string normalization. |
+| Lyrics-page automation harness | `Sources/MusicMiniPlayerApp/MusicMiniPlayerApp.swift`, `scripts/perf_harness.py --page lyrics --help`, Computer Use screenshot after `nanopod://page/lyrics` | Added a `nanopod://page/{album,lyrics,playlist}` handler and `--page` harness option so future measurements can force the real lyrics page instead of accidentally measuring album-page proxies. This does not touch lyric layout, renderer timing, or animation. |
+| Lyrics-page translated settled baseline via URL harness | `tmp/perf/perf-20260503-225431.csv`, `tmp/perf/sample-20260503-225431.txt`, Computer Use screenshot showing translated lyrics page | Visible lyrics page with translation measured avg 22.48%, p95 24.8%, max 26.3. Stack still shows SwiftUI display-list/layout/clip work, but this line-synced/translated settled case is below the user's 50% CPU complaint threshold. |
+| Lyrics-page translated rapid-switch baseline via URL harness | `tmp/perf/perf-20260503-225611-trials.json`, `tmp/perf/perf-20260503-225633.csv`, `tmp/perf/sample-20260503-225633.txt`, Computer Use screenshot after rapid switching | Three async lyrics-page rapid-switch trials completed all 20/20 skips. Median avg is 42.39%, but median p95/max remain high at 80.8%/119.9%; the stack-sampled run measured avg 54.95%, p95 132.0%, max 139.9. Current sample points at RenderBox/CoreGraphics glyph drawing, SwiftUI display-list/clip/geometry work, and residual artwork/lyrics preload work. |
 
 ## Important Correction
 
@@ -158,6 +161,9 @@ Protected UX paths:
 - The rapid-skip harness must use asynchronous skip scheduling by default. The older synchronous skip mode distorted CPU samples and skip delivery by blocking inside Music.app AppleEvents; keep it only for historical comparison via `--sync-skips`.
 - Artwork API fetches should not begin immediately for a newly observed track during rapid switching. A short generation-guarded startup delay filters transient tracks before network and image-decode work, without touching lyric layout or animation.
 - Do not keep duplicate artwork-derived root backgrounds active beneath the lyrics page. `LyricsView` owns the visible lyrics background; keeping the root gradient inert there reduces SwiftUI invalidation and memory pressure without changing lyric text rendering.
+- `scripts/perf_harness.py --page lyrics` is now the required gate for lyrics-page performance. Album-page results cannot be used as lyrics-page evidence.
+- On the new forced lyrics-page baseline, translated settled playback is acceptable, but rapid-switch p95/max remain unresolved.
+- The latest rapid-switch sample still shows renderer/display-list pressure, but also shows residual nearby artwork/lyrics preload work during skip bursts; any preload change must be instrumented by phase because coarse burst gates already failed.
 
 ## Safe Next Lanes
 
@@ -167,6 +173,7 @@ Protected UX paths:
 4. Add a visual comparison harness before any lyric renderer or cadence change.
 5. Profile whether non-lyric overlays redraw during word-level animation frames.
 6. Continue lowering the lyrics rapid-switch p95; daily-use lyrics CPU is improved, but rapid switching still spikes above the desired target.
+7. Use `nanopod://page/lyrics` or `scripts/perf_harness.py --page lyrics` for every lyrics-page gate; do not accept album-page measurements as a proxy.
 
 ## Verification Commands
 
@@ -175,6 +182,10 @@ swift build
 swift test
 ./build_app.sh
 python3 scripts/verify_harness.py
+python3 scripts/perf_harness.py --help
+open 'nanopod://page/lyrics'
+scripts/perf_harness.py --page lyrics --require-music-playing --duration 12 --warmup 2 --interval 0.2 --stack-sample
+scripts/perf_harness.py --page lyrics --require-music-playing --duration 20 --warmup 2 --interval 0.2 --skip-count 20 --skip-interval 0.2 --trials 3 --trial-gap 2
 scripts/perf_harness.py --require-music-playing --warmup 5 --duration 20 --interval 0.5 --skip-count 0
 scripts/perf_harness.py --require-music-playing --warmup 3 --duration 15 --interval 0.25 --skip-count 12 --skip-interval 0.25
 scripts/perf_harness.py --require-music-playing --warmup 1 --duration 12 --interval 0.2 --skip-count 20 --skip-interval 0.25 --trials 3 --trial-gap 2
@@ -182,4 +193,4 @@ scripts/perf_harness.py --require-music-playing --warmup 1 --duration 12 --inter
 
 ## Status
 
-Not complete. The `LyricsTextRenderer.animatableData` change is still the best verified incremental renderer fix, but word-level daily-use CPU can still sit around 40-50%, and rapid-switch p95 remains high. The next viable lane is reducing `SyllableSyncedLine` / `TextRenderer` invalidation without changing lyric layout, timing, or visual effects.
+Not complete. The `LyricsTextRenderer.animatableData` change is still the best verified incremental renderer fix, and the new forced lyrics-page translated settled baseline is below 50% CPU. Word-level daily-use CPU can still sit around 40-50%, and forced lyrics-page rapid-switch p95/max remain high. The next viable lane is reducing lyrics-page display-list/glyph/preload churn without changing lyric layout, timing, or visual effects.

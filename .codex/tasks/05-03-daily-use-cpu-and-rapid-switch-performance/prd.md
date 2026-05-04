@@ -21,12 +21,16 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - One source fix was kept and pushed: `bad9f22 perf: stabilize lyric renderer timing updates`.
 - Daily-use CPU remains above target on lyrics playback, especially word-level lyrics and rapid switching.
 - Album-page visual checks are not enough. Lyrics-page preservation needs its own before/after evidence before any protected lyric-surface experiment can be kept.
-- Harness is partially effective: context/task/health commands work, but `.codex/workflow.md` still advertises `no_task` while the harness reports this active task, and global backlog refresh currently fails.
+- Harness is taking effect: context/task/health commands work, the workflow-state hook reports this active `in_progress` task, the state resolver reports `confidence: verified`, and global backlog refresh reports fresh after being allowed to write under `/Users/yinanli/.codex/harness/backlog`.
+- `nanopod://page/{album,lyrics,playlist}` and `scripts/perf_harness.py --page lyrics` now provide a reliable lyrics-page measurement entry point.
+- Latest forced translated lyrics-page settled baseline: `tmp/perf/perf-20260503-225431.csv` avg 22.48%, p95 24.8%, max 26.3.
+- Latest forced translated lyrics-page rapid-switch baseline: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9; stack sample `tmp/perf/sample-20260503-225633.txt` measured avg 54.95%, p95 132.0%, max 139.9.
 
 ## Acceptance Criteria
 
 - [ ] Capture fresh baseline numbers for settled playback and async rapid switching on the current branch.
 - [ ] Split all lyrics-page metrics into plain/line-synced and word-level workloads.
+- [ ] Use `scripts/perf_harness.py --page lyrics` for lyrics-page gates.
 - [ ] Identify one concrete current hot path from stack sampling or Instruments, not old audit memory.
 - [ ] Implement only a narrowly scoped change tied to that hot path.
 - [ ] Verify `swift build`.
@@ -43,7 +47,7 @@ This task is also the continuation point for Apple Music playlist/recent-history
 
 1. Stabilize project state:
    - keep `HANDOFF.md` current;
-   - fix or document harness state mismatch;
+   - keep using harness context/health/resolver checks during long-running work;
    - avoid staging generated app bundles, caches, or temporary profiler artifacts.
 2. Establish lyrics-page proof:
    - capture a line-synced lyrics baseline;

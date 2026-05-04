@@ -22,6 +22,7 @@ Done:
 - Researched Apple Music / MusicKit compliance for playlist, recent-history, and up-next behavior.
 - Documented the compliance result in `docs/apple_music_access_compliance.md`.
 - Pushed one retained source performance fix in `bad9f22 perf: stabilize lyric renderer timing updates`.
+- Added `nanopod://page/{album,lyrics,playlist}` plus `scripts/perf_harness.py --page` so lyrics-page measurements no longer depend on album-page state or blocked assistive clicking.
 - Documented rejected experiments so they are not repeated blindly:
   - cached `@State Text` / syllable text experiment regressed rapid switching.
   - artwork matching input precompute regressed live rapid switching.
@@ -31,14 +32,15 @@ In progress:
 
 - Daily-use CPU still reproduces high load on lyrics playback and rapid switching.
 - Word-level and line-synced lyrics must be measured separately.
-- Remaining sampled hot path points at SwiftUI/CoreAnimation display-list, text/glyph drawing, clipping, and fade-mask work around lyrics rendering.
-- Lyrics-page visual parity is not yet documented with the same strength as album-page UX preservation.
+- Latest forced lyrics-page translated settled baseline is acceptable: `tmp/perf/perf-20260503-225431.csv` avg 22.48%, p95 24.8%, max 26.3.
+- Latest forced lyrics-page rapid-switch baseline is still not acceptable: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9, with all 20/20 skips completed.
+- Latest rapid-switch sample `tmp/perf/sample-20260503-225633.txt` points at RenderBox/CoreGraphics glyph drawing, SwiftUI display-list/clip/geometry work, and residual nearby artwork/lyrics preload work.
+- Lyrics-page visual baseline now exists through Computer Use screenshots, but word-level visual parity still needs a same-track before/after recording before protected renderer changes.
 
 Not done:
 
 - No protected lyrics layout or animation change should be made until the user explicitly approves the exact experiment and before/after lyrics-page visual evidence is captured.
-- The Codex harness has a state mismatch: `scripts/codex_harness.py task current` reports an active task, while `.codex/workflow.md` still contains a static `no_task` block.
-- Global backlog refresh currently fails inside `/Users/yinanli/.codex/harness/bin/init_global_backlog.py`.
+- The Codex harness should still be monitored during long-running work, but the active task resolver currently verifies cleanly.
 
 ## Harness State
 
@@ -47,7 +49,9 @@ Current evidence:
 - `python3 scripts/codex_harness.py context` finds the active task and prints its PRD/context manifests.
 - `python3 scripts/codex_harness.py task current` reports `.codex/tasks/05-03-daily-use-cpu-and-rapid-switch-performance`.
 - `python3 scripts/codex_harness.py health` passes generic project checks.
-- The harness is taking effect as a pull-based context layer, but the workflow-state and global backlog failures must be fixed before calling it fully healthy.
+- `python3 .codex/hooks/inject-workflow-state.py` reports the same active `in_progress` task.
+- `python3 /Users/yinanli/.codex/harness/bin/resolve_codex_state.py --cwd /Users/yinanli/Documents/MusicMiniPlayer --pretty` reports `confidence: verified`.
+- Global backlog refresh works when the harness is allowed to write under `/Users/yinanli/.codex/harness/backlog`; after refresh, `context` reports `global_backlog: fresh`.
 
 ## Decisions
 
@@ -60,9 +64,9 @@ Current evidence:
 ## Next Actions
 
 1. Commit this handoff, the active PRD update, and the task context manifest updates.
-2. Fix or document the harness state mismatch and global backlog failure.
-3. Ask for explicit approval before touching protected lyrics rendering.
-4. Capture lyrics-page baseline visual evidence and CPU evidence for both line-synced and word-level workloads.
+2. Ask for explicit approval before touching protected lyrics rendering.
+3. Capture a word-level lyrics baseline using `scripts/perf_harness.py --page lyrics`; the current fresh baseline is translated line-synced, not word-level.
+4. Add finer signposts or phase logging around nearby artwork/lyrics preload during rapid switching before changing preload behavior again.
 5. Only then test a narrow protected experiment, likely around fade-mask / clipping / display-list invalidation, and keep it only if CPU improves without visual regression.
 
 ## Verified Commands
@@ -70,9 +74,15 @@ Current evidence:
 - `python3 scripts/codex_harness.py context`
 - `python3 scripts/codex_harness.py task current`
 - `python3 scripts/codex_harness.py health`
+- `python3 .codex/hooks/inject-workflow-state.py`
+- `python3 /Users/yinanli/.codex/harness/bin/resolve_codex_state.py --cwd /Users/yinanli/Documents/MusicMiniPlayer --pretty`
 - `swift build`
 - `swift test --filter RapidSwitchTests`
 - `./build_app.sh`
+- `python3 scripts/perf_harness.py --help`
+- `python3 scripts/perf_harness.py --page lyrics --duration 12 --warmup 2 --interval 0.2 --stack-sample --require-music-playing`
+- `python3 scripts/perf_harness.py --page lyrics --duration 20 --warmup 2 --interval 0.2 --skip-count 20 --skip-interval 0.2 --trials 3 --trial-gap 2 --require-music-playing`
+- `python3 scripts/perf_harness.py --page lyrics --duration 20 --warmup 2 --interval 0.2 --skip-count 20 --skip-interval 0.2 --stack-sample --require-music-playing`
 - `scripts/perf_harness.py` runs recorded under `tmp/perf/` and summarized in `docs/performance_audit_2026-05-03.md`
 
 ## Related Files

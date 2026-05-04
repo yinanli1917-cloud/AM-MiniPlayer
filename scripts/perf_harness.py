@@ -42,6 +42,12 @@ def launch_app() -> int:
     raise SystemExit("nanoPod did not launch within 10s")
 
 
+def request_page(page: str) -> None:
+    if page == "current":
+        return
+    run(["open", f"nanopod://page/{page}"], check=False)
+
+
 def find_pid() -> int | None:
     result = run(["pgrep", "-x", "nanoPod"], check=False)
     pids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -110,6 +116,7 @@ def percentile(values: list[float], pct: float) -> float:
 
 def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> dict[str, object]:
     pid = launch_app()
+    request_page(args.page)
     if args.warmup > 0:
         time.sleep(args.warmup)
 
@@ -199,6 +206,7 @@ def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> d
         "skip_count_sent": skips_scheduled,
         "skip_count_completed": skips_completed,
         "sync_skips": args.sync_skips,
+        "page_requested": args.page,
         "samples": len(samples),
         "cpu_avg_pct": round(statistics.fmean(cpus), 2) if cpus else 0,
         "cpu_p95_pct": round(percentile(cpus, 0.95), 2),
@@ -247,6 +255,7 @@ def main() -> None:
     parser.add_argument("--require-music-playing", action="store_true", help="fail if Music.app is not currently playing")
     parser.add_argument("--stack-sample", action="store_true", help="also collect a macOS sample stack file for nanoPod")
     parser.add_argument("--sync-skips", action="store_true", help="send next-track AppleEvents synchronously, matching the original harness behavior")
+    parser.add_argument("--page", choices=["current", "album", "lyrics", "playlist"], default="current", help="request a nanoPod page before sampling")
     args = parser.parse_args()
 
     if args.trials < 1:
