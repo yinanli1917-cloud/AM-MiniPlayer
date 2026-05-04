@@ -1,0 +1,6 @@
+{"file":"docs/performance_audit_2026-05-03.md","reason":"Confirm new result documentation maps to actual harness artifacts."}
+{"file":"docs/lyrics_rendering_performance_plan.md","reason":"Confirm any lyric-surface change satisfied visual parity gates."}
+{"file":"scripts/perf_harness.py","reason":"Confirm performance verification commands and output artifacts."}
+{"file":"docs/apple_music_access_compliance.md","reason":"Confirm queue/history/preload decisions stay within documented App Store compliance constraints."}
+{"file":"HANDOFF.md","reason":"Confirm continuation state reflects current evidence and unresolved gaps."}
+{"file":".codex/tasks/05-03-daily-use-cpu-and-rapid-switch-performance/prd.md","reason":"Confirm active roadmap and acceptance criteria include lyrics-page visual proof and compliance work."}

@@ -1,0 +1,8 @@
+{"file":"docs/performance_audit_2026-05-03.md","reason":"Existing performance evidence, rejected approaches, and place to record new before/after measurements."}
+{"file":"docs/lyrics_rendering_performance_plan.md","reason":"Required approval and visual parity gates for protected lyric rendering work."}
+{"file":"scripts/perf_harness.py","reason":"Primary daily-use and rapid-switch CPU measurement harness."}
+{"file":"Sources/MusicMiniPlayerCore/UI/LyricsView.swift","reason":"Protected lyrics surface only if current sampling proves the remaining hot path requires it."}
+{"file":"Sources/MusicMiniPlayerCore/UI/LyricLineView.swift","reason":"Protected word-level rendering surface only if explicitly justified by current sampling and parity gates."}
+{"file":"docs/apple_music_access_compliance.md","reason":"App Store-compliant playlist, recent-history, and up-next constraints for preload planning."}
+{"file":"HANDOFF.md","reason":"Durable continuation state for the current performance/compliance loop."}
+{"file":".codex/tasks/05-03-daily-use-cpu-and-rapid-switch-performance/prd.md","reason":"Unified task roadmap and acceptance criteria for CPU, lyrics UX, and playlist compliance work."}

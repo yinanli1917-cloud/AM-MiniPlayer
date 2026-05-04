@@ -4,7 +4,7 @@
   "title": "nanoPod rapid-skip lyrics performance loop",
   "description": "Continue the active Codex Optimize playback performance thread for MusicMiniPlayer/nanoPod. The current evidence points at remaining lyrics-page rapid-skip CPU spikes, SwiftUI invalidation/rendering, and prior failed experiments that must not be repeated without new evidence.",
   "slug": "nanopod-rapid-skip-performance-loop",
-  "status": "in_progress",
+  "status": "paused",
   "priority": "P1",
   "creator": "yinanli",
   "assignee": "yinanli",
@@ -38,5 +38,6 @@
   "created_at": "2026-05-03T11:20:01.283318+00:00",
   "started_at": "2026-05-03T11:20:01.343952+00:00",
   "completed_at": null,
-  "archived_at": null
+  "archived_at": null,
+  "paused_at": "2026-05-04T03:33:51.852478+00:00"
 }
