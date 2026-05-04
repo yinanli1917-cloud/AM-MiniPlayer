@@ -97,11 +97,13 @@ public struct PlaylistView: View {
     // MARK: - Body
     // ═══════════════════════════════════════════════════════════════════════════════
     public var body: some View {
-        GeometryReader { geometry in
-            let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
-            let rowArtSize = min(geometry.size.width * 0.12, 40.0)
+        Group {
+            if currentPage == .playlist {
+                GeometryReader { geometry in
+                    let artSize = min(geometry.size.width * artSizeRatio, artSizeMax)
+                    let rowArtSize = min(geometry.size.width * 0.12, 40.0)
 
-            ZStack(alignment: .top) {
+                    ZStack(alignment: .top) {
                 // ═══════════════════════════════════════════
                 // MARK: - Background
                 // ═══════════════════════════════════════════
@@ -274,6 +276,12 @@ public struct PlaylistView: View {
                         fullscreenAlbumCover = newValue
                     }
                 }
+                    }
+                }
+            } else {
+                Color.clear
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
             }
         }
     }

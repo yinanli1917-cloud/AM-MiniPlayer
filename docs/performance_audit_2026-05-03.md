@@ -69,6 +69,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted artwork luminance identity-cache experiment | `tmp/perf/perf-20260503-181542.csv`, `tmp/perf/perf-20260503-181601.csv`, `tmp/perf/perf-20260503-181631.csv` | Caching luminance samples per `NSImage` instance removed luminance functions from one steady-state sample and briefly measured near baseline (avg 33.31%, p95 86.3%, max 91.1), but the next repeat regressed hard (avg 72.17%, p95 119.0%, max 125.5). Reverted. |
 | Cancellable 250ms foreground lyric-fetch debounce | `tmp/perf/perf-20260503-182047-trials.json`, `tmp/perf/sample-20260503-182101.txt`, `tmp/perf/perf-20260503-182557-trials.json`, `tmp/perf/perf-20260503-183039-trials.json` | Repeated-trial baseline before the change was median avg 80.85%, p95 121.1%, max 128.6, and only 13-15 of 20 skips were sent. The stack sample showed foreground lyrics work during rapid switching (`LyricsParser.parseYRC`, `LyricsFetcher.fetchFromAMLL`, source fan-out, cached word encoding). Debouncing controller-triggered lyric fetches by 250ms, with cancellation and generation guard, improved repeat runs to median avg 53.96-55.84%, p95 100.5-106.9%, max 104.3-128.1, with all 20 skips sent in each trial. |
 | Reverted 450ms lyric-fetch debounce tuning | `tmp/perf/perf-20260503-182735-trials.json` | Raising the debounce to 450ms worsened repeat rapid-switch CPU (median avg 66.58%, p95 136.3%, max 141.4). Keep the current 250ms value unless a broader fetch scheduler is introduced. |
+| Hidden page render gating | `tmp/perf/perf-20260503-183546-trials.json` | `LyricsView` no longer resets wave/scroll/cache state on every track change while hidden, and `PlaylistView` returns a clear placeholder instead of building its scroll sections outside the playlist page. Repeated rapid-switch run improved to median avg 44.92%, p95 52.3%, max 55.0, with all 20 skips sent in each trial and max RSS around 220.8 MB. |
 
 ## Important Correction
 
@@ -121,6 +122,7 @@ Protected UX paths:
 - Caching artwork luminance by `NSImage` identity did not stabilize rapid-switch CPU and should not be repeated without a deterministic repeat-artwork workload.
 - Foreground lyric fetches are now cancellably delayed by 250ms on controller-detected track changes. This avoids launching full word-level lyric source fan-out for songs skipped almost immediately, while remaining well inside the 3-second response requirement.
 - Raising that foreground lyric debounce to 450ms is not a safe tuning improvement; it worsened repeat-trial p95/max and should not be repeated as a standalone change.
+- Hidden lyrics and playlist pages should not perform track-change reset/layout work while not visible. Keep page bodies cheap offscreen; preserve full rendering only for the active page.
 
 ## Safe Next Lanes
 

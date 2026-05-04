@@ -142,6 +142,7 @@ public struct LyricsView: View {
             if #available(macOS 15.0, *) { updateTranslationSessionConfig() }
         }
         .onChange(of: musicController.currentTrackTitle) {
+            guard currentPage == .lyrics else { return }
             debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             cancelWaveAnimations()
             wave.lineTargetIndices.removeAll()
@@ -159,12 +160,10 @@ public struct LyricsView: View {
             scroll.rawScrollOffset = 0
             scroll.frozenDisplayIndex = nil
             scroll.lockedLineIndex = nil
-            if currentPage == .lyrics {
-                lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
-                                          artist: musicController.currentArtist,
-                                          duration: musicController.duration,
-                                          album: musicController.currentAlbum)
-            }
+            lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
+                                      artist: musicController.currentArtist,
+                                      duration: musicController.duration,
+                                      album: musicController.currentAlbum)
         }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
