@@ -55,6 +55,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted controls environment-object isolation experiment | `tmp/perf/perf-20260503-164828.csv` | avg 70.56%, p95 106.0%, max 109.1 with only 19/20 skips sent. Passing `MusicController` explicitly into shared controls instead of using `@EnvironmentObject` did not reduce the lyrics-page spike path, so it was reverted. |
 | Reverted preload generation-gate experiment | `tmp/perf/perf-20260503-165251.csv` | avg 67.2%, p95 108.7%, max 127.8. Gating nearby artwork/lyrics preloads by unchanged track generation did not improve rapid-switch CPU and worsened max CPU in this run, so it was reverted. |
 | Reverted conditional line-height tracker experiment | `tmp/perf/perf-20260503-165822.csv` | avg 72.76%, p95 131.5%, max 132.3. Disabling `GeometryReader` height trackers for hidden measured lyric lines worsened layout spikes, so it was reverted. |
+| Reverted renderer flattened-runs caching experiment | `tmp/perf/perf-20260503-170410.csv` | avg 73.47%, p95 141.5%, max 145.1. Materializing `Array(layout.flattenedRuns)` once inside `LyricsTextRenderer.draw` worsened spike behavior, so it was reverted. |
 
 ## Important Correction
 
@@ -95,6 +96,7 @@ Protected UX paths:
 - Removing shared controls' nested `@EnvironmentObject` subscription did not reduce rapid-switch spikes and should not be repeated as a standalone optimization.
 - Gating nearby preload work by unchanged track generation did not improve the measured rapid-switch CPU path and should not be repeated as a standalone performance fix.
 - Conditional lyric height tracking for hidden measured lines worsened layout spikes and should not be repeated without a different layout model.
+- Caching `layout.flattenedRuns` into an array inside `LyricsTextRenderer.draw` worsened p95/max CPU and should not be repeated.
 
 ## Safe Next Lanes
 
