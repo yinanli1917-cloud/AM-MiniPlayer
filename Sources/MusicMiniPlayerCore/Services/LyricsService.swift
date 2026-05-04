@@ -92,6 +92,7 @@ public class LyricsService: ObservableObject {
 
     private var currentSongID: String?
     private var currentSongDuration: TimeInterval = 0
+    private var currentSongAlbum: String = ""
     private var currentSongTranslationID: String?
     private var translationsAreFromLyricsSource: Bool = false
     private var lastSystemTranslationLanguage: String?
@@ -225,6 +226,9 @@ public class LyricsService: ObservableObject {
                 DebugLogger.log("LyricsService", "⏭️ Stability guard: '\(songID)' blocked (\(String(format: "%.1f", Date().timeIntervalSince(lastGoodTime)))s since good lyrics)")
                 // Silently update stored duration/songID to prevent future mismatches
                 currentSongDuration = duration
+                if !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    currentSongAlbum = album
+                }
                 return
             }
         }
@@ -233,8 +237,14 @@ public class LyricsService: ObservableObject {
         let canRetryWithBetterDuration = songID == currentSongID && !forceRefresh
             && duration > 0
             && (currentSongDuration == 0 || abs(duration - currentSongDuration) > 1.0)
+        let cleanAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanCurrentAlbum = currentSongAlbum.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canRetryWithBetterAlbum = songID == currentSongID && !forceRefresh
+            && !cleanAlbum.isEmpty
+            && (cleanCurrentAlbum.isEmpty || cleanCurrentAlbum != cleanAlbum)
+            && (lyrics.isEmpty || error != nil || isLoading)
 
-        guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration else {
+        guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration || canRetryWithBetterAlbum else {
             DebugLogger.log("LyricsService", "⏭️ 跳过重复获取: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
             return
         }
@@ -242,8 +252,11 @@ public class LyricsService: ObservableObject {
         if canRetryWithBetterDuration {
             DebugLogger.log("LyricsService", "🔄 duration 改善重试: \(currentSongDuration) → \(duration)")
         }
+        if canRetryWithBetterAlbum {
+            DebugLogger.log("LyricsService", "🔄 album 改善重试: '\(currentSongAlbum)' → '\(album)'")
+        }
 
-        DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' dur=\(duration) (forceRefresh=\(forceRefresh), curSongID='\(currentSongID ?? "nil")', curDur=\(currentSongDuration))")
+        DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' dur=\(duration) album='\(album)' (forceRefresh=\(forceRefresh), curSongID='\(currentSongID ?? "nil")', curDur=\(currentSongDuration), curAlbum='\(currentSongAlbum)')")
 
         // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
         lastGoodLyricsTime = nil
@@ -278,6 +291,7 @@ public class LyricsService: ObservableObject {
             if cached.isNoLyrics {
                 currentSongID = songID
                 currentSongDuration = duration
+                currentSongAlbum = album
                 isLoading = false
                 error = "No lyrics available"
                 DebugLogger.log("LyricsService", "❌ 使用 No Lyrics 缓存")
@@ -294,12 +308,14 @@ public class LyricsService: ObservableObject {
                         detectedLanguageCode: cached.detectedLanguageCode,
                         isPredominantlyChinese: cached.isPredominantlyChinese,
                         songID: songID,
-                        duration: duration)
+                        duration: duration,
+                        album: album)
             return
         }
 
         currentSongID = songID
         currentSongDuration = duration
+        currentSongAlbum = album
 
         // 🔑 同步设置加载状态（避免竞态条件）
         isLoading = true
@@ -355,7 +371,8 @@ public class LyricsService: ObservableObject {
                     title: title,
                     artist: artist,
                     duration: duration,
-                    songID: songID
+                    songID: songID,
+                    album: album
                 )
                 return
             }
@@ -376,7 +393,7 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID)
+        await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
     }
 
     private func applyFetchedLyricsIfCurrent(
@@ -384,7 +401,8 @@ public class LyricsService: ObservableObject {
         title: String,
         artist: String,
         duration: TimeInterval,
-        songID: String
+        songID: String,
+        album: String
     ) async {
         // Last-resort rescale: if best lyrics still overshoot, no source had the right version
         let aligned = fetcher.rescaleTimestamps(bestResult.lyrics, duration: duration)
@@ -423,7 +441,8 @@ public class LyricsService: ObservableObject {
                         detectedLanguageCode: languageSummary.detectedLanguageCode,
                         isPredominantlyChinese: languageSummary.isPredominantlyChinese,
                         songID: songID,
-                        duration: duration)
+                        duration: duration,
+                        album: album)
         }
     }
 
@@ -435,7 +454,8 @@ public class LyricsService: ObservableObject {
                              detectedLanguageCode: String?,
                              isPredominantlyChinese: Bool,
                              songID: String,
-                             duration: TimeInterval) {
+                             duration: TimeInterval,
+                             album: String = "") {
         let signpostID = OSSignpostID(log: Self.performanceLog)
         os_signpost(.begin, log: Self.performanceLog, name: "ApplyLyrics", signpostID: signpostID, "lineCount=%{public}d", newLyrics.count)
         defer { os_signpost(.end, log: Self.performanceLog, name: "ApplyLyrics", signpostID: signpostID) }
@@ -453,6 +473,9 @@ public class LyricsService: ObservableObject {
         self.isUnsyncedLyrics = isUnsynced
         self.currentSongID = songID
         self.currentSongDuration = duration
+        if !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.currentSongAlbum = album
+        }
 
         // canTranslate guards translation attempts; don't reset showTranslation
         // so the user's preference is preserved across same-language songs
