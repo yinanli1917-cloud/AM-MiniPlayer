@@ -26,6 +26,7 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - Latest forced translated lyrics-page settled baseline: `tmp/perf/perf-20260503-225431.csv` avg 22.48%, p95 24.8%, max 26.3.
 - Latest forced translated lyrics-page rapid-switch baseline: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9; stack sample `tmp/perf/sample-20260503-225633.txt` measured avg 54.95%, p95 132.0%, max 139.9.
 - Passive preload signposts now identify nearby preload timing without touching protected lyrics UI. Logging trace `tmp/perf/nanopod-preload-logging-20260503-2312.trace` confirmed nearby preload still fires during rapid switching; NetEase artwork spans were roughly 0.54-1.27s and lyrics preload fetch spans reached about 1.93s.
+- A cancellable artwork-preload ownership experiment was reverted before commit because `tmp/perf/perf-20260503-232041-trials.json` regressed to median avg 62.54%, p95 116.1%, max 134.9.
 
 ## Acceptance Criteria
 

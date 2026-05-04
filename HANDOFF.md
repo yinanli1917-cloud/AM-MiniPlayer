@@ -26,6 +26,7 @@ Done:
 - Documented rejected experiments so they are not repeated blindly:
   - cached `@State Text` / syllable text experiment regressed rapid switching.
   - artwork matching input precompute regressed live rapid switching.
+  - cancellable artwork preload ownership regressed live rapid switching.
 - Rebuilt and relaunched the app after reverting failed experiments.
 
 In progress:
@@ -36,6 +37,7 @@ In progress:
 - Latest forced lyrics-page rapid-switch baseline is still not acceptable: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9, with all 20/20 skips completed.
 - Latest rapid-switch sample `tmp/perf/sample-20260503-225633.txt` points at RenderBox/CoreGraphics glyph drawing, SwiftUI display-list/clip/geometry work, and residual nearby artwork/lyrics preload work.
 - Passive preload signposts are now available in the source and built app. Logging trace `tmp/perf/nanopod-preload-logging-20260503-2312.trace` confirmed nearby preload still fires during rapid switching, with NetEase artwork spans around 0.54-1.27s and lyrics preload fetch spans up to about 1.93s.
+- A cancellable artwork-preload ownership experiment was tested after that trace and reverted before commit because `tmp/perf/perf-20260503-232041-trials.json` regressed to median avg 62.54%, p95 116.1%, max 134.9.
 - Lyrics-page visual baseline now exists through Computer Use screenshots, but word-level visual parity still needs a same-track before/after recording before protected renderer changes.
 
 Not done:
