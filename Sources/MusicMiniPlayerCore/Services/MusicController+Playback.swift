@@ -582,12 +582,14 @@ extension MusicController {
         guard !validTracks.isEmpty else { return }
 
         assetPreloadTask?.cancel()
+        let generation = artworkFetchGeneration
         assetPreloadTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
                 guard let self else { return }
+                guard self.artworkFetchGeneration == generation else { return }
                 self.preloadArtwork(for: validTracks)
                 LyricsService.shared.preloadNextSongs(
                     tracks: validTracks.map {

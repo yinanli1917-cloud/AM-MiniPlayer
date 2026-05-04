@@ -749,6 +749,7 @@ public class LyricsService: ObservableObject {
                     translationEnabled: false,
                     album: track.album
                 )
+                guard !Task.isCancelled else { return }
 
                 var bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration)
                 if bestResult == nil {
@@ -760,10 +761,12 @@ public class LyricsService: ObservableObject {
                         album: track.album
                     )
                 }
+                guard !Task.isCancelled else { return }
                 guard let bestResult, !bestResult.lyrics.isEmpty else { continue }
 
                 let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
                 let processed = self.parser.processLyrics(aligned)
+                guard !Task.isCancelled else { return }
                 let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
                 let languageSummary = Self.languageSummary(for: processed.lyrics)
 

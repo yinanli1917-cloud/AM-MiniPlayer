@@ -302,6 +302,11 @@ public final class LyricsFetcher {
             // from entries WITHOUT album match no longer trigger early return.
             let hasAlbumHint = !alb.isEmpty
             for await result in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+
                 if let r = result {
                     results.append(r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
@@ -395,6 +400,11 @@ public final class LyricsFetcher {
                     break
                 }
             }
+        }
+
+        guard !Task.isCancelled else {
+            DebugLogger.log("⏭️ fetchAllSources cancelled before result normalization")
+            return []
         }
 
         let elapsed = Date().timeIntervalSince(fetchStart)
