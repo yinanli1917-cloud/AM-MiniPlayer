@@ -341,24 +341,15 @@ public class LyricsService: ObservableObject {
                 return
             }
             DebugLogger.log("LyricsService", "❌ SEARCH NO RESULTS: '\(songID)' dur=\(duration) sources=\(results.count)")
-            let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
-            lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
 
-            await MainActor.run {
-                guard self.currentSongID == songID else { return }
-                self.isLoading = false
-                self.error = "No lyrics found"
-            }
             let wantsTranslation = showTranslation
-            Task.detached(priority: .utility) { [weak self] in
-                guard let self else { return }
-                guard let backfilled = await self.fetcher.backfillAuthoritativeSyncedLyrics(
-                    title: title,
-                    artist: artist,
-                    duration: duration,
-                    translationEnabled: wantsTranslation,
-                    album: album
-                ) else { return }
+            if let backfilled = await fetcher.backfillAuthoritativeSyncedLyrics(
+                title: title,
+                artist: artist,
+                duration: duration,
+                translationEnabled: wantsTranslation,
+                album: album
+            ) {
                 await self.applyFetchedLyricsIfCurrent(
                     backfilled,
                     title: title,
@@ -366,6 +357,21 @@ public class LyricsService: ObservableObject {
                     duration: duration,
                     songID: songID
                 )
+                return
+            }
+
+            if Task.isCancelled {
+                DebugLogger.log("LyricsService", "⏭️ Task cancelled after backfill miss, NOT caching empty results: '\(songID)'")
+                return
+            }
+
+            let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
+            lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
+
+            await MainActor.run {
+                guard self.currentSongID == songID else { return }
+                self.isLoading = false
+                self.error = "No lyrics found"
             }
             return
         }
