@@ -64,6 +64,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted duplicate lyric-fetch/preload burst gate experiment | `tmp/perf/perf-20260503-175523.csv`, `tmp/perf/perf-20260503-175544.csv`, `tmp/perf/perf-20260503-175604.csv`, `tmp/perf/perf-20260503-180244.csv` | Removing the `LyricsView` title-change fetch and delaying/cancelling nearby artwork/lyrics preload during skip bursts did not produce stable improvement. Best steady run improved to avg 30.71%, p95 80.7%, max 87.8, but verification regressed to avg 54.08%, p95 106.8%, max 122.0. Reverted. Preload scheduling remains a suspect, but this coarse burst gate is not a safe standalone fix. |
 | Reverted generic shared-controls translation button experiment | `tmp/perf/perf-20260503-180844.csv`, `tmp/perf/perf-20260503-180903.csv` | Replacing the lyrics bottom-controls `AnyView` translation slot with a generic builder passed build/tests but worsened live rapid-switch CPU on repeat (avg 51.31%, p95 114.1%, max 115.9). Reverted. Do not treat `AnyView` removal in `SharedBottomControls` as a standalone performance fix. |
 | Reverted async artwork luminance experiment | `tmp/perf/perf-20260503-181319.csv`, `tmp/perf/sample-20260503-181319.txt` | Moving `perceivedBrightness` and `controlAreaMaxLuminance` off the main `setArtwork` path passed build/tests but worsened live rapid-switch CPU (avg 76.86%, p95 117.0%, max 122.6). The sample still showed ImageIO/CoreImage luminance work and higher display-list churn. Reverted. |
+| Reverted artwork luminance identity-cache experiment | `tmp/perf/perf-20260503-181542.csv`, `tmp/perf/perf-20260503-181601.csv`, `tmp/perf/perf-20260503-181631.csv` | Caching luminance samples per `NSImage` instance removed luminance functions from one steady-state sample and briefly measured near baseline (avg 33.31%, p95 86.3%, max 91.1), but the next repeat regressed hard (avg 72.17%, p95 119.0%, max 125.5). Reverted. |
 
 ## Important Correction
 
@@ -113,6 +114,7 @@ Protected UX paths:
 - Coarsely cancelling/delaying nearby artwork and lyric preloads during skip bursts did not stabilize rapid-switch CPU and should not be repeated as a standalone fix. If revisited, instrument individual preload phases and separate artwork, lyrics fetch, parsing, and language-summary costs.
 - Replacing the shared controls translation button's `AnyView` with a generic builder worsened repeat rapid-switch CPU and should not be repeated as a standalone type-erasure cleanup.
 - Moving global artwork luminance calculation off the main `setArtwork` path increased total rapid-switch CPU and should not be repeated without changing the underlying image sampling/caching strategy.
+- Caching artwork luminance by `NSImage` identity did not stabilize rapid-switch CPU and should not be repeated without a deterministic repeat-artwork workload.
 
 ## Safe Next Lanes
 
