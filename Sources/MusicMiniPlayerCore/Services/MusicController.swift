@@ -473,8 +473,11 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // 0.5s lightweight SB position poll (lyrics sync needs sub-second accuracy)
-            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            // SB is the expensive part of steady playback. Interpolation drives
+            // smooth lyrics locally; this poll is only a drift/radio fallback, so
+            // keep it comfortably under the 3s response target without running at
+            // animation cadence.
+            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.pollPositionViaSB()
             }
             RunLoop.main.add(self.pollingTimer!, forMode: .common)
@@ -487,12 +490,13 @@ public class MusicController: ObservableObject {
             RunLoop.main.add(self.fullSyncTimer!, forMode: .common)
             self.fullSyncTimer?.fire()  // initial full sync on startup
 
-            // 5s 队列 hash 检测 (notification path catches most changes immediately)
-            self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            // Queue hash scans touch Music.app's current playlist/tracks through SB.
+            // Notifications and track-change refreshes handle normal queue updates;
+            // this is only a low-frequency safety net.
+            self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
                 self?.checkQueueHashAndRefresh()
             }
             RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
-            self.queueCheckTimer?.fire()
 
             self.setupMusicKitQueueObserver()
             self.setupWindowMovementObserver()

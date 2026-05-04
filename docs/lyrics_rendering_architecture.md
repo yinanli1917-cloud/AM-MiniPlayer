@@ -69,6 +69,9 @@ translation, interlude, or scroll behavior by accident.
   `Strangers By Nature` from avg 48.31%, p95 53.4% to avg 37.61%, p95 40.2%.
   A second local word-level translated check on `Escape` by EPO measured avg
   31.73%, p95 39.1%, max 41.4 with the same fast path.
+- A live high-CPU repro showed the masked translation path should avoid
+  `GeometryReader`; use a scale-based mask so translation reveal does not add
+  per-frame layout work.
 
 ## Next Approved Hypothesis Candidate
 

@@ -338,14 +338,13 @@ private struct TranslationSweepText: View {
                 translationText
                     .foregroundColor(.white.opacity(0.20))
                     .overlay(alignment: .leading) {
-                        GeometryReader { proxy in
-                            translationText
-                                .foregroundColor(.white.opacity(0.75 * postLineFadeOut()))
-                                .mask(alignment: .leading) {
-                                    Rectangle()
-                                        .frame(width: max(0, min(proxy.size.width, proxy.size.width * lineProgress)))
-                                }
-                        }
+                        translationText
+                            .foregroundColor(.white.opacity(0.75 * postLineFadeOut()))
+                            .mask(alignment: .leading) {
+                                Rectangle()
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                                    .scaleEffect(x: max(0, min(1, lineProgress)), y: 1, anchor: .leading)
+                            }
                         .allowsHitTesting(false)
                     }
             } else {
