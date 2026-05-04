@@ -63,6 +63,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted hot-path debug logging gate experiment | `tmp/perf/perf-20260503-175013.csv`, `tmp/perf/perf-20260503-175038.csv`, `tmp/perf/perf-20260503-175057.csv` | Converting playback/queue/artwork `debugPrint` calls to opt-in `DebugLogger.log` passed build and tests but was unstable in live rapid-switch runs: avg 62.33%, then 24.67%, then 74.33%. The regression/noise profile does not justify carrying the patch, so it was reverted. Do not treat debug string construction as the primary remaining CPU source. |
 | Reverted duplicate lyric-fetch/preload burst gate experiment | `tmp/perf/perf-20260503-175523.csv`, `tmp/perf/perf-20260503-175544.csv`, `tmp/perf/perf-20260503-175604.csv`, `tmp/perf/perf-20260503-180244.csv` | Removing the `LyricsView` title-change fetch and delaying/cancelling nearby artwork/lyrics preload during skip bursts did not produce stable improvement. Best steady run improved to avg 30.71%, p95 80.7%, max 87.8, but verification regressed to avg 54.08%, p95 106.8%, max 122.0. Reverted. Preload scheduling remains a suspect, but this coarse burst gate is not a safe standalone fix. |
 | Reverted generic shared-controls translation button experiment | `tmp/perf/perf-20260503-180844.csv`, `tmp/perf/perf-20260503-180903.csv` | Replacing the lyrics bottom-controls `AnyView` translation slot with a generic builder passed build/tests but worsened live rapid-switch CPU on repeat (avg 51.31%, p95 114.1%, max 115.9). Reverted. Do not treat `AnyView` removal in `SharedBottomControls` as a standalone performance fix. |
+| Reverted async artwork luminance experiment | `tmp/perf/perf-20260503-181319.csv`, `tmp/perf/sample-20260503-181319.txt` | Moving `perceivedBrightness` and `controlAreaMaxLuminance` off the main `setArtwork` path passed build/tests but worsened live rapid-switch CPU (avg 76.86%, p95 117.0%, max 122.6). The sample still showed ImageIO/CoreImage luminance work and higher display-list churn. Reverted. |
 
 ## Important Correction
 
@@ -111,6 +112,7 @@ Protected UX paths:
 - Gating playback/queue/artwork debug logs with `DebugLogger.log` did not produce stable live improvement and was reverted. The remaining CPU path should stay focused on SwiftUI invalidation/rendering and foreground song-change work.
 - Coarsely cancelling/delaying nearby artwork and lyric preloads during skip bursts did not stabilize rapid-switch CPU and should not be repeated as a standalone fix. If revisited, instrument individual preload phases and separate artwork, lyrics fetch, parsing, and language-summary costs.
 - Replacing the shared controls translation button's `AnyView` with a generic builder worsened repeat rapid-switch CPU and should not be repeated as a standalone type-erasure cleanup.
+- Moving global artwork luminance calculation off the main `setArtwork` path increased total rapid-switch CPU and should not be repeated without changing the underlying image sampling/caching strategy.
 
 ## Safe Next Lanes
 
