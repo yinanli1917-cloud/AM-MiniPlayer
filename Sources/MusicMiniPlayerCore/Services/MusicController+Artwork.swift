@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import MusicKit
 import ObjCSupport
+import os
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Artwork Extraction Helper
@@ -51,6 +52,10 @@ extension MusicController {
     /// 🔑 设置封面并自动计算亮度
     func setArtwork(_ image: NSImage?) {
         if currentArtwork === image { return }
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "SetArtwork", signpostID: signpostID, "hasImage=%{public}d", image == nil ? 0 : 1)
+        defer { os_signpost(.end, log: performanceLog, name: "SetArtwork", signpostID: signpostID) }
+
         self.currentArtwork = image
         if let img = image {
             self.artworkLuminance = img.perceivedBrightness()

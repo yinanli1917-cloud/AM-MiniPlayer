@@ -101,6 +101,7 @@ public class LyricsService: ObservableObject {
     private var currentFetchTask: Task<Void, Never>?
     private var preloadTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
+    private static let performanceLog = OSLog(subsystem: "com.yinanli.MusicMiniPlayer", category: "Performance")
 
     /// Timestamp when good lyrics were last applied — used for stability guard
     private var lastGoodLyricsTime: Date?
@@ -429,6 +430,10 @@ public class LyricsService: ObservableObject {
                              isPredominantlyChinese: Bool,
                              songID: String,
                              duration: TimeInterval) {
+        let signpostID = OSSignpostID(log: Self.performanceLog)
+        os_signpost(.begin, log: Self.performanceLog, name: "ApplyLyrics", signpostID: signpostID, "lineCount=%{public}d", newLyrics.count)
+        defer { os_signpost(.end, log: Self.performanceLog, name: "ApplyLyrics", signpostID: signpostID) }
+
         self.lyrics = newLyrics
         self.firstRealLyricIndex = firstRealLyricIndex
         self.translationsAreFromLyricsSource = hasSourceTranslation

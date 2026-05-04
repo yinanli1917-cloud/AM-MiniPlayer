@@ -6,6 +6,7 @@
 import SwiftUI
 import AppKit
 import Translation
+import os
 
 // MARK: - Accessibility
 
@@ -862,6 +863,11 @@ public struct LyricsView: View {
     /// Each mutation triggers a SwiftUI body re-evaluation, starting that line's spring
     /// at a genuinely different wall-clock time — creating natural stagger.
     private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
+        let performanceLog = OSLog(subsystem: "com.yinanli.MusicMiniPlayer", category: "Performance")
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "TriggerWaveAnimation", signpostID: signpostID, "from=%{public}d to=%{public}d", oldIndex, newIndex)
+        defer { os_signpost(.end, log: performanceLog, name: "TriggerWaveAnimation", signpostID: signpostID) }
+
         guard !scroll.isManualScrolling else { return }
         let lyrics = lyricsService.lyrics
         guard !lyrics.isEmpty else { return }

@@ -44,6 +44,7 @@ public class MusicController: ObservableObject {
     public static let shared = MusicController()
 
     let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "MusicController")
+    let performanceLog = OSLog(subsystem: "com.yinanli.MusicMiniPlayer", category: "Performance")
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - @Published 状态（SwiftUI 视图绑定层）
@@ -1102,6 +1103,10 @@ public class MusicController: ObservableObject {
 
     /// 将快照应用到 @Published 属性（主线程，由 processPlayerState 在 DispatchQueue.main.async 中调用）
     private func applySnapshot(_ s: PlayerStateSnapshot, quality: String?, trackChanged: Bool) {
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "ApplySnapshot", signpostID: signpostID, "trackChanged=%{public}d", trackChanged ? 1 : 0)
+        defer { os_signpost(.end, log: performanceLog, name: "ApplySnapshot", signpostID: signpostID) }
+
         // 值守卫：只在值变化时赋值，避免无谓的 SwiftUI 重绘
         if Date().timeIntervalSince(lastUserActionTime) > userActionLockDuration {
             if isPlaying != s.isPlaying { isPlaying = s.isPlaying }
