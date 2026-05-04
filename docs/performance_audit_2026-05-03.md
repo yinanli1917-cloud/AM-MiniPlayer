@@ -60,6 +60,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Non-playlist queue preload window tuning | `tmp/perf/perf-20260503-172751.csv`, `tmp/perf/sample-20260503-172751.txt`, `tmp/perf/perf-20260503-172915.csv`, `tmp/perf/sample-20260503-172915.txt` | A 1-track preload window measured avg 21.81%, p95 88.5%, max 94.5. A 2-track window measured avg 33.26%, p95 88.7%, max 90.6. The 2-track window keeps immediate-plus-one preload coverage while preserving the improved spike profile, so it is the better UX/performance tradeoff than 1 or 3 tracks. |
 | Reverted hidden album overlay gate experiment | `tmp/perf/perf-20260503-173300.csv`, `tmp/perf/sample-20260503-173300.txt` | Removing album placeholders/overlay from the root view while lyrics was active worsened rapid-switch CPU (avg 58.41%, p95 118.3%, max 177.9), likely due to page-tree identity churn. Reverted. Do not repeat simple root-level gating of album content during lyrics. |
 | SwiftUI trace and reverted translation-state observer experiment | `tmp/perf/rapid-skip-swiftui.trace`, `tmp/perf/rapid-skip-swiftui-analysis.json`, `tmp/perf/perf-20260503-174314.csv`, `tmp/perf/sample-20260503-174314.txt` | SwiftUI trace captured 94 app hitches and 4 brief main-thread unresponsiveness windows. Causes highlighted `@ObservedObject TranslationButtonView.lyricsService` and `@State LyricLineView.internalShowTranslation`, but converting the button to value inputs and initializing `internalShowTranslation` from `showTranslation` worsened live rapid-switch CPU (avg 47.85%, p95 97.4%, max 184.1). Reverted. |
+| Reverted hot-path debug logging gate experiment | `tmp/perf/perf-20260503-175013.csv`, `tmp/perf/perf-20260503-175038.csv`, `tmp/perf/perf-20260503-175057.csv` | Converting playback/queue/artwork `debugPrint` calls to opt-in `DebugLogger.log` passed build and tests but was unstable in live rapid-switch runs: avg 62.33%, then 24.67%, then 74.33%. The regression/noise profile does not justify carrying the patch, so it was reverted. Do not treat debug string construction as the primary remaining CPU source. |
 
 ## Important Correction
 
@@ -105,6 +106,7 @@ Protected UX paths:
 - Music.app queue/history mirroring must avoid full playlist scans during rapid switching. Use current-track index shortcuts, and keep non-playlist preloading bounded to two nearby tracks unless the visible playlist needs the full list.
 - Root-level removal of album placeholders/overlay while lyrics is active worsened display-list churn and should not be repeated as a simple conditional gate.
 - The SwiftUI trace points at translation button/line translation state as invalidation participants, but the straightforward observer/value split and `@State` initialization cleanup worsened live CPU. Do not repeat that exact refactor without a narrower visual/invalidation proof.
+- Gating playback/queue/artwork debug logs with `DebugLogger.log` did not produce stable live improvement and was reverted. The remaining CPU path should stay focused on SwiftUI invalidation/rendering and foreground song-change work.
 
 ## Safe Next Lanes
 
