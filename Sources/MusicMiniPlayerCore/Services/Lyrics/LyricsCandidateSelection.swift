@@ -91,6 +91,14 @@ extension LyricsFetcher {
         // 按优先级递减尝试
         let priorities: [(String, Int, (SearchCandidate<ID>) -> Bool)] = [
             ("P1", 0, { $0.titleMatch && $0.artistMatch && $0.durationDiff < 3 }),
+            ("P1a", 1, { candidate in
+                guard candidate.artistMatch else { return false }
+                guard candidate.albumMatch else { return false }
+                guard LanguageUtils.isPureASCII(inputTitle) else { return false }
+                guard candidate.durationDiff < 1.5 else { return false }
+                guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
+                return !isBackingTrack(candidate)
+            }),
             ("P1b", 1, { candidate in
                 guard allowNativeTitleAlias else { return false }
                 guard candidate.artistMatch else { return false }
