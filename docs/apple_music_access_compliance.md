@@ -25,6 +25,29 @@ Apple's public MusicKit and Apple Music API surface supports user-authorized cat
 - Live Up Next can remain ScriptingBridge-backed on macOS for now because it mirrors Music.app state that MusicKit does not publicly expose. The implementation should minimize scans, coalesce refreshes, and avoid background profiling behavior.
 - If App Review objects to queue mirroring, the fallback is to show Up Next only for queues created by nanoPod through MusicKit/SystemMusicPlayer and hide or degrade the live Music.app queue feature.
 
+## Local Entitlement Audit
+
+- `Sources/MusicMiniPlayerApp/MusicMiniPlayer.entitlements` has App Sandbox enabled, network client access for MusicKit/Apple Music API, Apple Events automation enabled, and the temporary Apple Events target scoped to `com.apple.Music`.
+- `Sources/MusicMiniPlayerApp/Info.plist` includes `NSAppleMusicUsageDescription` and `NSAppleEventsUsageDescription`.
+- App Store Connect sandbox information should explain the temporary Apple Events exception narrowly: nanoPod uses it to control and mirror the user's visible Music.app playback session on macOS, including playback controls, current-track state, artwork, and live queue display. It is not used for private storage access, hidden scraping, or unrelated library profiling.
+
+Current local implementation check:
+
+- `MusicController+Playback.fetchRecentHistoryViaBridge()` prefers the documented Apple Music API recent-track endpoint when `MusicAuthorization.currentStatus == .authorized`.
+- `fetchRecentHistoryViaAppleMusicAPI()` uses `MusicDataRequest` against `/v1/me/recent/played/tracks?types=songs,library-songs&limit=10`.
+- Apple Music API recent-history rows with `am:` IDs now use MusicKit playback through `ApplicationMusicPlayer`, because `SystemMusicPlayer` is unavailable on macOS. Local Music.app rows still use the existing Music.app persistent-ID AppleScript path.
+- `fetchUpNextViaBridge()` remains ScriptingBridge-backed, bounded to 2 tracks off the playlist page and 10 tracks on the playlist page.
+- `preloadNearbyAssets(from:)` waits for track-generation stability before starting nearby artwork/lyrics preloads.
+
+## Review Fallback Plan
+
+If Apple rejects or questions live Music.app queue mirroring:
+
+1. Keep Apple Music API recent history enabled because it is documented, user-authorized, and already separate from live queue mirroring.
+2. Gate live Up Next behind the Music.app automation permission and review notes. If review still objects, hide live Up Next for App Store builds.
+3. Offer a degraded Up Next mode only for queues nanoPod creates or controls through MusicKit/SystemMusicPlayer, because those queues are inside the documented MusicKit player model.
+4. Keep artwork/metadata preloading for documented Apple Music API and MusicKit results; do not add private API, database inspection, accessibility scraping, or reverse-engineered queue reads to recover the hidden live queue.
+
 ## Sources Reviewed
 
 - Apple Music API overview: https://developer.apple.com/documentation/AppleMusicAPI
