@@ -72,6 +72,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Hidden page render gating | `tmp/perf/perf-20260503-183546-trials.json` | `LyricsView` no longer resets wave/scroll/cache state on every track change while hidden, and `PlaylistView` returns a clear placeholder instead of building its scroll sections outside the playlist page. Repeated rapid-switch run improved to median avg 44.92%, p95 52.3%, max 55.0, with all 20 skips sent in each trial and max RSS around 220.8 MB. |
 | Reverted active lyric render-list culling | `tmp/perf/perf-20260503-184122-trials.json` | Building only the active lyric-line window after heights were known looked attractive because the sample showed SwiftUI layout churn, but it worsened repeat rapid-switch CPU to median avg 70.14%, p95 116.5%, max 131.0, and max RSS 599.3 MB. Keeping all lines mounted with opacity culling is currently more stable for SwiftUI's layout cache and lyric animation continuity. |
 | Reverted equatable syllable-line boundary | `tmp/perf/perf-20260503-184706-trials.json` | Adding `Equatable`/`.equatable()` around `SyllableSyncedLine` did not safely reduce active-lyrics churn. The repeat run measured median avg 61.46%, p95 131.1%, max 142.3, and max RSS 653.2 MB. Reverted. SwiftUI's text renderer/layout cache appears more sensitive to the additional boundary than expected. |
+| Active lyrics track-change fetch debounce | `tmp/perf/perf-20260503-185258-trials.json` | The active lyrics page still had its own immediate title-change fetch path, bypassing the controller-level debounce during rapid skips. Coalescing that active-page fetch with a cancellable 250ms delay keeps page entry/on-appear fetches immediate and stays well inside the 3-second response requirement. Three active lyrics-page trials measured median avg 44.44%, p95 52.7%, max 53.4, and all 20/20 skips sent. Trial 1 still spiked to p95/max 94.2/102.4, while trials 2-3 stayed around 52-53, so this is a confirmed improvement but not the final spike closure. |
 
 ## Important Correction
 
@@ -127,6 +128,7 @@ Protected UX paths:
 - Hidden lyrics and playlist pages should not perform track-change reset/layout work while not visible. Keep page bodies cheap offscreen; preserve full rendering only for the active page.
 - Do not replace active lyrics opacity culling with render-list filtering as a standalone optimization. It destabilized SwiftUI layout/cache behavior and regressed both CPU and memory.
 - Do not wrap `SyllableSyncedLine` in an `EquatableView` as a standalone fix. It worsened p95/max CPU and memory in active lyrics rapid-switch testing.
+- Active lyrics track-title changes must use the same cancellable 250ms coalescing as controller-detected track changes. Immediate lyrics fetches are still correct for page entry/on-appear, but rapid-skip title changes should not start full source fan-out for transient tracks.
 
 ## Safe Next Lanes
 
