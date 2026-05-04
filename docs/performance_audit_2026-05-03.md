@@ -57,6 +57,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted conditional line-height tracker experiment | `tmp/perf/perf-20260503-165822.csv` | avg 72.76%, p95 131.5%, max 132.3. Disabling `GeometryReader` height trackers for hidden measured lyric lines worsened layout spikes, so it was reverted. |
 | Reverted renderer flattened-runs caching experiment | `tmp/perf/perf-20260503-170410.csv` | avg 73.47%, p95 141.5%, max 145.1. Materializing `Array(layout.flattenedRuns)` once inside `LyricsTextRenderer.draw` worsened spike behavior, so it was reverted. |
 | Hidden playlist artwork and bounded queue preloading | `tmp/perf/perf-20260503-172350.csv`, `tmp/perf/sample-20260503-172350.txt`, `tmp/perf/perf-20260503-172548.csv`, `tmp/perf/sample-20260503-172548.txt` | Hidden playlist row artwork tasks were still fetching artwork while the album page was active. Gating row artwork to the visible playlist page removed `fetchArtworkByPersistentID` from the hot sample. Switching preload artwork to metadata/API lookup and using the Music.app current-track index for nearby queue/history avoids full playlist scans. Limiting non-playlist queue mirroring to 3 nearby tracks reduced average rapid-switch CPU from 69.35% to 52.98%, but p95/max remain high (107.0%/118.4%), so this is not the final fix. |
+| Non-playlist queue preload window tuning | `tmp/perf/perf-20260503-172751.csv`, `tmp/perf/sample-20260503-172751.txt`, `tmp/perf/perf-20260503-172915.csv`, `tmp/perf/sample-20260503-172915.txt` | A 1-track preload window measured avg 21.81%, p95 88.5%, max 94.5. A 2-track window measured avg 33.26%, p95 88.7%, max 90.6. The 2-track window keeps immediate-plus-one preload coverage while preserving the improved spike profile, so it is the better UX/performance tradeoff than 1 or 3 tracks. |
 
 ## Important Correction
 
@@ -99,7 +100,7 @@ Protected UX paths:
 - Conditional lyric height tracking for hidden measured lines worsened layout spikes and should not be repeated without a different layout model.
 - Caching `layout.flattenedRuns` into an array inside `LyricsTextRenderer.draw` worsened p95/max CPU and should not be repeated.
 - Hidden playlist artwork rows were a confirmed background cost on non-playlist pages. Keep artwork row loading gated to the playlist page.
-- Music.app queue/history mirroring must avoid full playlist scans during rapid switching. Use current-track index shortcuts, and keep non-playlist preloading bounded to nearby tracks unless the visible playlist needs the full list.
+- Music.app queue/history mirroring must avoid full playlist scans during rapid switching. Use current-track index shortcuts, and keep non-playlist preloading bounded to two nearby tracks unless the visible playlist needs the full list.
 
 ## Safe Next Lanes
 

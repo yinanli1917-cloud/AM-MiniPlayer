@@ -295,7 +295,7 @@ extension MusicController {
                     return
                 }
                 defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
-                let limit = self.currentPage == .playlist ? 10 : 3
+                let limit = self.currentPage == .playlist ? 10 : 2
                 let result = self.getUpNextTracksFromApp(app, limit: limit)
                 continuation.resume(returning: result)
             }
