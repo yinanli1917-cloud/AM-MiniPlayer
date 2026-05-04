@@ -65,6 +65,15 @@ def send_next_track() -> None:
     run(["osascript", "-e", 'tell application "Music" to next track'], check=False)
 
 
+def start_next_track() -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        ["osascript", "-e", 'tell application "Music" to next track'],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def sample_process(pid: int) -> tuple[float, float] | None:
     result = run(["ps", "-p", str(pid), "-o", "%cpu=,rss="], check=False)
     line = result.stdout.strip()
@@ -117,7 +126,8 @@ def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> d
 
     samples: list[dict[str, float]] = []
     next_skip_at = time.time()
-    skips_sent = 0
+    skips_scheduled = 0
+    skip_processes: list[subprocess.Popen[str]] = []
     started = time.time()
 
     with csv_path.open("w", newline="") as f:
@@ -125,9 +135,12 @@ def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> d
         writer.writeheader()
         while time.time() - started < args.duration:
             now = time.time()
-            if skips_sent < args.skip_count and now >= next_skip_at:
-                send_next_track()
-                skips_sent += 1
+            if skips_scheduled < args.skip_count and now >= next_skip_at:
+                if args.sync_skips:
+                    send_next_track()
+                else:
+                    skip_processes.append(start_next_track())
+                skips_scheduled += 1
                 next_skip_at = now + args.skip_interval
 
             sample = sample_process(pid)
@@ -138,11 +151,29 @@ def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> d
                 "elapsed_s": round(now - started, 3),
                 "cpu_pct": cpu,
                 "rss_mb": round(rss_mb, 1),
-                "skips_sent": skips_sent,
+                "skips_sent": skips_scheduled,
             }
             samples.append(row)
             writer.writerow(row)
             time.sleep(args.interval)
+
+    skips_completed = skips_scheduled
+    if skip_processes:
+        deadline = time.time() + 5
+        skips_completed = 0
+        for proc in skip_processes:
+            timeout = max(0.0, deadline - time.time())
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=1)
+            if proc.returncode == 0:
+                skips_completed += 1
 
     cpus = [row["cpu_pct"] for row in samples]
     rss = [row["rss_mb"] for row in samples]
@@ -165,7 +196,9 @@ def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> d
         "warmup_s": args.warmup,
         "interval_s": args.interval,
         "skip_count_requested": args.skip_count,
-        "skip_count_sent": skips_sent,
+        "skip_count_sent": skips_scheduled,
+        "skip_count_completed": skips_completed,
+        "sync_skips": args.sync_skips,
         "samples": len(samples),
         "cpu_avg_pct": round(statistics.fmean(cpus), 2) if cpus else 0,
         "cpu_p95_pct": round(percentile(cpus, 0.95), 2),
@@ -213,6 +246,7 @@ def main() -> None:
     parser.add_argument("--trial-gap", type=float, default=2.0, help="seconds to wait between repeated trials")
     parser.add_argument("--require-music-playing", action="store_true", help="fail if Music.app is not currently playing")
     parser.add_argument("--stack-sample", action="store_true", help="also collect a macOS sample stack file for nanoPod")
+    parser.add_argument("--sync-skips", action="store_true", help="send next-track AppleEvents synchronously, matching the original harness behavior")
     args = parser.parse_args()
 
     if args.trials < 1:
