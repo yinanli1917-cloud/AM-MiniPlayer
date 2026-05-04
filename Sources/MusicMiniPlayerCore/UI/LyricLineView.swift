@@ -689,6 +689,11 @@ private struct LyricsTextRenderer: TextRenderer {
     // visibility because adjacent runs' ranges still overlap by 24pt.
     private let fadeHalfPt: CGFloat = 12
 
+    var animatableData: Double {
+        get { currentTime }
+        set { }
+    }
+
     var displayPadding: EdgeInsets {
         // 🔑 MUST stay zero. SwiftUI applies displayPadding per visual line of
         // wrapped text, not per frame. Any non-zero value inflates the measured
