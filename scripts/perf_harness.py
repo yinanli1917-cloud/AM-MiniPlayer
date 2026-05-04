@@ -99,18 +99,7 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[idx]
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Measure nanoPod CPU during idle or rapid Music.app skips.")
-    parser.add_argument("--duration", type=float, default=10.0, help="sampling duration in seconds")
-    parser.add_argument("--warmup", type=float, default=2.0, help="seconds to wait after launch before sampling")
-    parser.add_argument("--interval", type=float, default=0.2, help="sampling interval in seconds")
-    parser.add_argument("--skip-count", type=int, default=0, help="number of next-track commands to send")
-    parser.add_argument("--skip-interval", type=float, default=0.25, help="delay between next-track commands")
-    parser.add_argument("--require-music-playing", action="store_true", help="fail if Music.app is not currently playing")
-    parser.add_argument("--stack-sample", action="store_true", help="also collect a macOS sample stack file for nanoPod")
-    args = parser.parse_args()
-
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> dict[str, object]:
     pid = launch_app()
     if args.warmup > 0:
         time.sleep(args.warmup)
@@ -120,9 +109,10 @@ def main() -> None:
         raise SystemExit(f"Music.app is {state}; start playback before rapid-switch testing")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    csv_path = OUT_DIR / f"perf-{stamp}.csv"
-    summary_path = OUT_DIR / f"perf-{stamp}.json"
-    sample_path = OUT_DIR / f"sample-{stamp}.txt"
+    suffix = f"-t{trial_index}" if trial_count > 1 else ""
+    csv_path = OUT_DIR / f"perf-{stamp}{suffix}.csv"
+    summary_path = OUT_DIR / f"perf-{stamp}{suffix}.json"
+    sample_path = OUT_DIR / f"sample-{stamp}{suffix}.txt"
     sample_proc = start_stack_sample(pid, args.duration, sample_path) if args.stack_sample else None
 
     samples: list[dict[str, float]] = []
@@ -168,6 +158,8 @@ def main() -> None:
 
     summary = {
         "pid": pid,
+        "trial": trial_index,
+        "trials": trial_count,
         "music_state_at_start": state,
         "duration_s": args.duration,
         "warmup_s": args.warmup,
@@ -185,6 +177,60 @@ def main() -> None:
     if args.stack_sample:
         summary["sample"] = str(sample_path) if sample_path.exists() else None
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
+def summarize_trials(trials: list[dict[str, object]]) -> dict[str, object]:
+    avg_values = [float(t["cpu_avg_pct"]) for t in trials]
+    p95_values = [float(t["cpu_p95_pct"]) for t in trials]
+    max_values = [float(t["cpu_max_pct"]) for t in trials]
+    rss_max_values = [float(t["rss_max_mb"]) for t in trials]
+
+    return {
+        "trials": len(trials),
+        "cpu_avg_pct_median": round(statistics.median(avg_values), 2),
+        "cpu_avg_pct_min": round(min(avg_values), 2),
+        "cpu_avg_pct_max": round(max(avg_values), 2),
+        "cpu_p95_pct_median": round(statistics.median(p95_values), 2),
+        "cpu_p95_pct_min": round(min(p95_values), 2),
+        "cpu_p95_pct_max": round(max(p95_values), 2),
+        "cpu_max_pct_median": round(statistics.median(max_values), 2),
+        "cpu_max_pct_min": round(min(max_values), 2),
+        "cpu_max_pct_max": round(max(max_values), 2),
+        "rss_max_mb_max": round(max(rss_max_values), 1),
+        "trial_summaries": trials,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Measure nanoPod CPU during idle or rapid Music.app skips.")
+    parser.add_argument("--duration", type=float, default=10.0, help="sampling duration in seconds")
+    parser.add_argument("--warmup", type=float, default=2.0, help="seconds to wait after launch before sampling")
+    parser.add_argument("--interval", type=float, default=0.2, help="sampling interval in seconds")
+    parser.add_argument("--skip-count", type=int, default=0, help="number of next-track commands to send")
+    parser.add_argument("--skip-interval", type=float, default=0.25, help="delay between next-track commands")
+    parser.add_argument("--trials", type=int, default=1, help="number of repeated measurements to run")
+    parser.add_argument("--trial-gap", type=float, default=2.0, help="seconds to wait between repeated trials")
+    parser.add_argument("--require-music-playing", action="store_true", help="fail if Music.app is not currently playing")
+    parser.add_argument("--stack-sample", action="store_true", help="also collect a macOS sample stack file for nanoPod")
+    args = parser.parse_args()
+
+    if args.trials < 1:
+        raise SystemExit("--trials must be >= 1")
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    trial_summaries: list[dict[str, object]] = []
+    for trial_index in range(1, args.trials + 1):
+        trial_summaries.append(run_trial(args, trial_index, args.trials))
+        if trial_index < args.trials and args.trial_gap > 0:
+            time.sleep(args.trial_gap)
+
+    summary = trial_summaries[0] if args.trials == 1 else summarize_trials(trial_summaries)
+    if args.trials > 1:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        summary_path = OUT_DIR / f"perf-{stamp}-trials.json"
+        summary["summary"] = str(summary_path)
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 
 

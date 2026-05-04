@@ -17,6 +17,8 @@ Review high CPU usage and rapid song-switch behavior without compromising nanoPo
   - Gates hidden lyrics/playlist backgrounds.
   - Uses lower playback timer cadence outside lyrics.
   - Debounces nearby artwork and lyrics preloading.
+- Current harness update
+  - Adds repeated-trial support to `scripts/perf_harness.py` so noisy rapid-switch changes can be judged by median and worst-case summaries instead of a single run.
 - `5bf7410 chore: add codex harness architecture`
   - Adds Codex harness manifests and verifier.
 - `42f667f perf: optimize lyric time indexing`
@@ -134,6 +136,7 @@ swift test
 python3 scripts/verify_harness.py
 scripts/perf_harness.py --require-music-playing --warmup 5 --duration 20 --interval 0.5 --skip-count 0
 scripts/perf_harness.py --require-music-playing --warmup 3 --duration 15 --interval 0.25 --skip-count 12 --skip-interval 0.25
+scripts/perf_harness.py --require-music-playing --warmup 1 --duration 12 --interval 0.2 --skip-count 20 --skip-interval 0.25 --trials 3 --trial-gap 2
 ```
 
 ## Status
