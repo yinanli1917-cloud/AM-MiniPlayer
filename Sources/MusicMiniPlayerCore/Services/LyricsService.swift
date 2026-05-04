@@ -733,15 +733,21 @@ public class LyricsService: ObservableObject {
 
         guard !candidates.isEmpty else { return }
 
+        os_signpost(.event, log: Self.performanceLog, name: "PreloadLyricsScheduled", "count=%{public}d", candidates.count)
         preloadTask?.cancel()
         preloadTask = Task(priority: .utility) { [weak self] in
             guard let self else { return }
+            let batchSignpostID = OSSignpostID(log: Self.performanceLog)
+            os_signpost(.begin, log: Self.performanceLog, name: "PreloadLyricsBatch", signpostID: batchSignpostID, "count=%{public}d", candidates.count)
+            defer { os_signpost(.end, log: Self.performanceLog, name: "PreloadLyricsBatch", signpostID: batchSignpostID) }
 
             for track in candidates {
                 guard !Task.isCancelled else { return }
                 let songID = "\(track.title)-\(track.artist)"
                 if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
 
+                let fetchSignpostID = OSSignpostID(log: Self.performanceLog)
+                os_signpost(.begin, log: Self.performanceLog, name: "PreloadLyricsFetch", signpostID: fetchSignpostID)
                 let results = await self.fetcher.fetchAllSources(
                     title: track.title,
                     artist: track.artist,
@@ -749,7 +755,12 @@ public class LyricsService: ObservableObject {
                     translationEnabled: false,
                     album: track.album
                 )
+                os_signpost(.end, log: Self.performanceLog, name: "PreloadLyricsFetch", signpostID: fetchSignpostID)
                 guard !Task.isCancelled else { return }
+
+                let processSignpostID = OSSignpostID(log: Self.performanceLog)
+                os_signpost(.begin, log: Self.performanceLog, name: "PreloadLyricsProcess", signpostID: processSignpostID)
+                defer { os_signpost(.end, log: Self.performanceLog, name: "PreloadLyricsProcess", signpostID: processSignpostID) }
 
                 var bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration)
                 if bestResult == nil {

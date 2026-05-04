@@ -35,6 +35,7 @@ In progress:
 - Latest forced lyrics-page translated settled baseline is acceptable: `tmp/perf/perf-20260503-225431.csv` avg 22.48%, p95 24.8%, max 26.3.
 - Latest forced lyrics-page rapid-switch baseline is still not acceptable: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9, with all 20/20 skips completed.
 - Latest rapid-switch sample `tmp/perf/sample-20260503-225633.txt` points at RenderBox/CoreGraphics glyph drawing, SwiftUI display-list/clip/geometry work, and residual nearby artwork/lyrics preload work.
+- Passive preload signposts are now available in the source and built app. Logging trace `tmp/perf/nanopod-preload-logging-20260503-2312.trace` confirmed nearby preload still fires during rapid switching, with NetEase artwork spans around 0.54-1.27s and lyrics preload fetch spans up to about 1.93s.
 - Lyrics-page visual baseline now exists through Computer Use screenshots, but word-level visual parity still needs a same-track before/after recording before protected renderer changes.
 
 Not done:
@@ -66,8 +67,8 @@ Current evidence:
 1. Commit this handoff, the active PRD update, and the task context manifest updates.
 2. Ask for explicit approval before touching protected lyrics rendering.
 3. Capture a word-level lyrics baseline using `scripts/perf_harness.py --page lyrics`; the current fresh baseline is translated line-synced, not word-level.
-4. Add finer signposts or phase logging around nearby artwork/lyrics preload during rapid switching before changing preload behavior again.
-5. Only then test a narrow protected experiment, likely around fade-mask / clipping / display-list invalidation, and keep it only if CPU improves without visual regression.
+4. Use the new preload signposts to test a narrower cancellation/concurrency change for nearby preloads during skip bursts.
+5. Only after the preload lane is exhausted, test a narrow protected renderer experiment, likely around fade-mask / clipping / display-list invalidation, and keep it only if CPU improves without visual regression.
 
 ## Verified Commands
 
@@ -83,6 +84,9 @@ Current evidence:
 - `python3 scripts/perf_harness.py --page lyrics --duration 12 --warmup 2 --interval 0.2 --stack-sample --require-music-playing`
 - `python3 scripts/perf_harness.py --page lyrics --duration 20 --warmup 2 --interval 0.2 --skip-count 20 --skip-interval 0.2 --trials 3 --trial-gap 2 --require-music-playing`
 - `python3 scripts/perf_harness.py --page lyrics --duration 20 --warmup 2 --interval 0.2 --skip-count 20 --skip-interval 0.2 --stack-sample --require-music-playing`
+- `python3 /Users/yinanli/.codex/skills/swiftui-expert-skill/scripts/record_trace.py --attach nanoPod --template Logging --time-limit 22s --output /Users/yinanli/Documents/MusicMiniPlayer/tmp/perf/nanopod-preload-logging-20260503-2312.trace`
+- `python3 /Users/yinanli/.codex/skills/swiftui-expert-skill/scripts/analyze_trace.py --trace /Users/yinanli/Documents/MusicMiniPlayer/tmp/perf/nanopod-preload-logging-20260503-2312.trace --list-signposts --signpost-name-contains Preload`
+- `python3 /Users/yinanli/.codex/skills/swiftui-expert-skill/scripts/analyze_trace.py --trace /Users/yinanli/Documents/MusicMiniPlayer/tmp/perf/nanopod-preload-logging-20260503-2312.trace --list-signposts --signpost-name-contains Artwork`
 - `scripts/perf_harness.py` runs recorded under `tmp/perf/` and summarized in `docs/performance_audit_2026-05-03.md`
 
 ## Related Files

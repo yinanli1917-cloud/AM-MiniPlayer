@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import MusicKit
 import ObjCSupport
+import os
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Apple Event 常量（Music.app ScriptingBridge 返回值）
@@ -581,6 +582,7 @@ extension MusicController {
 
         guard !validTracks.isEmpty else { return }
 
+        os_signpost(.event, log: performanceLog, name: "PreloadNearbyScheduled", "count=%{public}d", validTracks.count)
         assetPreloadTask?.cancel()
         let generation = artworkFetchGeneration
         assetPreloadTask = Task { [weak self] in
@@ -590,6 +592,9 @@ extension MusicController {
             await MainActor.run {
                 guard let self else { return }
                 guard self.artworkFetchGeneration == generation else { return }
+                let signpostID = OSSignpostID(log: self.performanceLog)
+                os_signpost(.begin, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID, "count=%{public}d", validTracks.count)
+                defer { os_signpost(.end, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID) }
                 self.preloadArtwork(for: validTracks)
                 LyricsService.shared.preloadNextSongs(
                     tracks: validTracks.map {

@@ -92,6 +92,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Lyrics-page automation harness | `Sources/MusicMiniPlayerApp/MusicMiniPlayerApp.swift`, `scripts/perf_harness.py --page lyrics --help`, Computer Use screenshot after `nanopod://page/lyrics` | Added a `nanopod://page/{album,lyrics,playlist}` handler and `--page` harness option so future measurements can force the real lyrics page instead of accidentally measuring album-page proxies. This does not touch lyric layout, renderer timing, or animation. |
 | Lyrics-page translated settled baseline via URL harness | `tmp/perf/perf-20260503-225431.csv`, `tmp/perf/sample-20260503-225431.txt`, Computer Use screenshot showing translated lyrics page | Visible lyrics page with translation measured avg 22.48%, p95 24.8%, max 26.3. Stack still shows SwiftUI display-list/layout/clip work, but this line-synced/translated settled case is below the user's 50% CPU complaint threshold. |
 | Lyrics-page translated rapid-switch baseline via URL harness | `tmp/perf/perf-20260503-225611-trials.json`, `tmp/perf/perf-20260503-225633.csv`, `tmp/perf/sample-20260503-225633.txt`, Computer Use screenshot after rapid switching | Three async lyrics-page rapid-switch trials completed all 20/20 skips. Median avg is 42.39%, but median p95/max remain high at 80.8%/119.9%; the stack-sampled run measured avg 54.95%, p95 132.0%, max 139.9. Current sample points at RenderBox/CoreGraphics glyph drawing, SwiftUI display-list/clip/geometry work, and residual artwork/lyrics preload work. |
+| Preload signpost instrumentation | `Sources/MusicMiniPlayerCore/Services/MusicController+Playback.swift`, `Sources/MusicMiniPlayerCore/Services/MusicController+Artwork.swift`, `Sources/MusicMiniPlayerCore/Services/LyricsService.swift`, `tmp/perf/nanopod-preload-logging-20260503-2312.trace`, `tmp/perf/perf-20260503-231357.csv` | Added passive `os_signpost` spans around nearby preload scheduling/apply, artwork preload batch/track/source fetches, and lyrics preload batch/fetch/process. A 12-skip forced lyrics-page run measured avg 36.48%, p95 89.5%, max 100.7. The Logging trace confirms preload still fires during rapid switching: NetEase artwork spans were roughly 0.54-1.27s, iTunes artwork spans were roughly 33-138ms, and lyrics preload fetch spans reached about 1.93s. This is measurement only, not a UX or renderer change. |
 
 ## Important Correction
 
@@ -164,6 +165,7 @@ Protected UX paths:
 - `scripts/perf_harness.py --page lyrics` is now the required gate for lyrics-page performance. Album-page results cannot be used as lyrics-page evidence.
 - On the new forced lyrics-page baseline, translated settled playback is acceptable, but rapid-switch p95/max remain unresolved.
 - The latest rapid-switch sample still shows renderer/display-list pressure, but also shows residual nearby artwork/lyrics preload work during skip bursts; any preload change must be instrumented by phase because coarse burst gates already failed.
+- Logging-template Instruments traces capture the new preload signposts; the SwiftUI template did not export those signposts for this run. Use Logging for preload timing and SwiftUI/Time Profiler for renderer invalidation.
 
 ## Safe Next Lanes
 
@@ -174,6 +176,7 @@ Protected UX paths:
 5. Profile whether non-lyric overlays redraw during word-level animation frames.
 6. Continue lowering the lyrics rapid-switch p95; daily-use lyrics CPU is improved, but rapid switching still spikes above the desired target.
 7. Use `nanopod://page/lyrics` or `scripts/perf_harness.py --page lyrics` for every lyrics-page gate; do not accept album-page measurements as a proxy.
+8. Use the preload signposts to test a narrower queue/preload cancellation or concurrency change before touching protected lyrics rendering.
 
 ## Verification Commands
 
@@ -186,6 +189,8 @@ python3 scripts/perf_harness.py --help
 open 'nanopod://page/lyrics'
 scripts/perf_harness.py --page lyrics --require-music-playing --duration 12 --warmup 2 --interval 0.2 --stack-sample
 scripts/perf_harness.py --page lyrics --require-music-playing --duration 20 --warmup 2 --interval 0.2 --skip-count 20 --skip-interval 0.2 --trials 3 --trial-gap 2
+python3 /Users/yinanli/.codex/skills/swiftui-expert-skill/scripts/record_trace.py --attach nanoPod --template Logging --time-limit 22s --output tmp/perf/nanopod-preload-logging.trace
+python3 /Users/yinanli/.codex/skills/swiftui-expert-skill/scripts/analyze_trace.py --trace tmp/perf/nanopod-preload-logging.trace --list-signposts --signpost-name-contains Preload
 scripts/perf_harness.py --require-music-playing --warmup 5 --duration 20 --interval 0.5 --skip-count 0
 scripts/perf_harness.py --require-music-playing --warmup 3 --duration 15 --interval 0.25 --skip-count 12 --skip-interval 0.25
 scripts/perf_harness.py --require-music-playing --warmup 1 --duration 12 --interval 0.2 --skip-count 20 --skip-interval 0.25 --trials 3 --trial-gap 2

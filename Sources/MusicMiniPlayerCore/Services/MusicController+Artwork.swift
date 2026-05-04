@@ -398,6 +398,10 @@ extension MusicController {
     /// CJK-track coverage available; also returns hits for many Western tracks.
     /// Match priority: title+artist+album > title+artist > first result.
     private func fetchArtworkViaNetEase(title: String, artist: String, album: String) async -> NSImage? {
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "ArtworkNetEaseFetch", signpostID: signpostID)
+        defer { os_signpost(.end, log: performanceLog, name: "ArtworkNetEaseFetch", signpostID: signpostID) }
+
         let query = "\(title) \(artist)"
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let searchURL = URL(string: "https://music.163.com/api/cloudsearch/pc?s=\(encoded)&type=1&limit=10") else {
@@ -527,6 +531,10 @@ extension MusicController {
     /// iTunes Search API 方式获取封面（公开 API，无需授权）
     /// 🔑 优先匹配同专辑版本，避免返回不同版本的封面
     private func fetchArtworkViaITunesAPI(title: String, artist: String, album: String) async -> NSImage? {
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "ArtworkITunesFetch", signpostID: signpostID)
+        defer { os_signpost(.end, log: performanceLog, name: "ArtworkITunesFetch", signpostID: signpostID) }
+
         // 多级搜索策略
         let searchStrategies = [
             "\(title) \(artist)",           // 1. title + artist（最精确）
@@ -685,10 +693,17 @@ extension MusicController {
 
         Task(priority: .utility) { [weak self] in
             guard let self else { return }
+            let batchSignpostID = OSSignpostID(log: self.performanceLog)
+            os_signpost(.begin, log: self.performanceLog, name: "PreloadArtworkBatch", signpostID: batchSignpostID, "count=%{public}d", preloadTracks.count)
+            defer { os_signpost(.end, log: self.performanceLog, name: "PreloadArtworkBatch", signpostID: batchSignpostID) }
+
             for track in preloadTracks {
                 guard !Task.isCancelled else { return }
                 let persistentID = track.persistentID
                 if self.artworkCache.object(forKey: persistentID as NSString) != nil { continue }
+                let trackSignpostID = OSSignpostID(log: self.performanceLog)
+                os_signpost(.begin, log: self.performanceLog, name: "PreloadArtworkTrack", signpostID: trackSignpostID)
+                defer { os_signpost(.end, log: self.performanceLog, name: "PreloadArtworkTrack", signpostID: trackSignpostID) }
                 if let image = await self.fetchMusicKitArtwork(title: track.title, artist: track.artist, album: track.album) {
                     self.artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
                 }

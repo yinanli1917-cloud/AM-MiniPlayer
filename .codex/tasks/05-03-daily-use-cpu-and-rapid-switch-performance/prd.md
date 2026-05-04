@@ -25,6 +25,7 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - `nanopod://page/{album,lyrics,playlist}` and `scripts/perf_harness.py --page lyrics` now provide a reliable lyrics-page measurement entry point.
 - Latest forced translated lyrics-page settled baseline: `tmp/perf/perf-20260503-225431.csv` avg 22.48%, p95 24.8%, max 26.3.
 - Latest forced translated lyrics-page rapid-switch baseline: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9; stack sample `tmp/perf/sample-20260503-225633.txt` measured avg 54.95%, p95 132.0%, max 139.9.
+- Passive preload signposts now identify nearby preload timing without touching protected lyrics UI. Logging trace `tmp/perf/nanopod-preload-logging-20260503-2312.trace` confirmed nearby preload still fires during rapid switching; NetEase artwork spans were roughly 0.54-1.27s and lyrics preload fetch spans reached about 1.93s.
 
 ## Acceptance Criteria
 
@@ -32,6 +33,7 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - [ ] Split all lyrics-page metrics into plain/line-synced and word-level workloads.
 - [ ] Use `scripts/perf_harness.py --page lyrics` for lyrics-page gates.
 - [ ] Identify one concrete current hot path from stack sampling or Instruments, not old audit memory.
+- [ ] Use Logging-template Instruments traces for preload signposts; SwiftUI-template trace export did not expose signposts in the latest run.
 - [ ] Implement only a narrowly scoped change tied to that hot path.
 - [ ] Verify `swift build`.
 - [ ] Verify performance with `scripts/perf_harness.py` before/after.
@@ -55,6 +57,7 @@ This task is also the continuation point for Apple Music playlist/recent-history
    - record visual evidence for the exact lyrics page, not just album page.
 3. Optimize only from fresh evidence:
    - sample the current app under rapid switching;
+   - use preload/artwork/lyrics signposts when the suspected hot path is nearby preloading;
    - choose one hot path;
    - patch narrowly;
    - revert and document if median, p95, max, or UX regress.
