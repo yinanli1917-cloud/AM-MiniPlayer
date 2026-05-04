@@ -24,6 +24,9 @@ Review high CPU usage and rapid song-switch behavior without compromising nanoPo
 - `42f667f perf: optimize lyric time indexing`
   - Replaces per-frame linear lyric-line scanning with current-index advancement and binary search for seeks/backward jumps.
   - Does not touch `LyricsView.swift`, `LyricLineView.swift`, word-level renderer cadence, layout, or animation.
+- `a7f58e8 test: make rapid skip harness nonblocking`
+  - Schedules rapid-skip AppleEvents asynchronously and reports completed sends.
+  - Makes the default rapid-switch gate match user-like rapid switching instead of blocking measurement inside Music.app AppleEvents.
 
 ## Measurements
 
@@ -77,6 +80,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Generation-stable nearby asset preload | `tmp/perf/perf-20260503-190250-trials.json`, `tmp/perf/perf-20260503-190350-trials.json` | Nearby artwork/lyrics preloads now wait 1.2s and require the track generation to remain unchanged before starting. This protects external Music.app rapid skipping, where nanoPod's direct user-action timestamp does not fire. Stack-sampled repeat measured median avg 44.91%, p95 101.4%, max 113.4, with all 20/20 skips sent. A no-profiler repeat measured median avg 16.81%, p95 78.6%, max 84.4, but trial 1 still spiked to avg 59.28%, p95 125.0%, max 131.1. Keep this as a responsiveness win; continue investigating residual p95 spikes separately. |
 | Reverted structured artwork timeout experiment | `tmp/perf/perf-20260503-190832-trials.json`, `tmp/perf/perf-20260503-190932-trials.json` | Replacing artwork timeout continuations with a structured task-group timeout looked safer for cancellation, but it was not safe in the live lyrics-page path. The first lyrics-page repeat had good CPU but only sent 15-16/20 skips in two trials. The confirmation repeat regressed to median avg 74.67%, p95 111.3%, max 121.0, and only 15-16/20 skips sent. Reverted. Do not retry this timeout refactor without isolating Music.app AppleEvent blocking from nanoPod artwork work. |
 | Async rapid-skip harness correction | `tmp/perf/perf-20260503-191215-trials.json`, `tmp/perf/perf-20260503-191225.json`, `tmp/perf/sample-20260503-191225.txt` | The harness now schedules skip AppleEvents asynchronously and separately reports completed sends, instead of blocking the sampling loop while Music.app processes each skip. Lyrics-page async rapid switching completed all 20/20 skips but exposed a worse true stress path: median avg 75.15%, p95 131.0%, max 137.7. A stack-sampled async run measured avg 71.63%, p95 133.1%, max 141.5. This supersedes synchronous skip runs as the default rapid-switch gate; use `--sync-skips` only for comparison with older evidence. |
+| Generation-guarded artwork API startup | `tmp/perf/perf-20260503-192210-trials.json`, `tmp/perf/perf-20260503-192223.json`, `tmp/perf/sample-20260503-192223.txt` | Artwork API races now wait 220ms and re-check cancellation plus track generation before starting network/image-decode work. This preserves settled-track responsiveness within the 3-second requirement while dropping transient skipped tracks before their API work begins. Async lyrics-page rapid switching improved from the corrected baseline median avg 75.15%, p95 131.0%, max 137.7 to median avg 44.24%, p95 82.0%, max 93.4, with all 20/20 skips completed in every trial. The stack-sampled confirmation measured avg 48.51%, p95 86.6%, max 94.2; remaining samples still point mostly at SwiftUI display-list/layout churn. |
 
 ## Important Correction
 
@@ -137,6 +141,7 @@ Protected UX paths:
 - Nearby artwork/lyrics preloads must wait for a stable track generation before starting. This still preloads after the user settles, but avoids doing heavy work for transient tracks when skips come from Music.app rather than nanoPod controls.
 - Do not replace `withArtworkTimeout` with a structured task-group timeout as a standalone cancellation cleanup. In live lyrics-page rapid-switch testing it reduced skip delivery and regressed CPU on repeat.
 - The rapid-skip harness must use asynchronous skip scheduling by default. The older synchronous skip mode distorted CPU samples and skip delivery by blocking inside Music.app AppleEvents; keep it only for historical comparison via `--sync-skips`.
+- Artwork API fetches should not begin immediately for a newly observed track during rapid switching. A short generation-guarded startup delay filters transient tracks before network and image-decode work, without touching lyric layout or animation.
 
 ## Safe Next Lanes
 

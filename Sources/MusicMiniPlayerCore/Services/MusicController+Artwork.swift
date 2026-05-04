@@ -134,6 +134,9 @@ extension MusicController {
             artworkAPIRequestKey = apiRequestKey
             artworkAPIResultTask = Task { [weak self] in
                 guard let self else { return nil }
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                guard !Task.isCancelled else { return nil }
+                guard self.artworkFetchGeneration == generation else { return nil }
                 return await self.fetchMusicKitArtwork(title: title, artist: artist, album: album)
             }
         } else {
