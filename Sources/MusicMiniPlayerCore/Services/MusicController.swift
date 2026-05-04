@@ -132,6 +132,7 @@ public class MusicController: ObservableObject {
     var artworkAPITask: Task<Void, Never>?
     var artworkAPIResultTask: Task<NSImage?, Never>?
     var artworkAPIRequestKey: NSString?
+    var pendingLyricsFetchTask: Task<Void, Never>?
 
     /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
     var sbAppliedForGeneration: Int = -1
@@ -166,6 +167,33 @@ public class MusicController: ObservableObject {
         let gen = _artworkFetchGeneration
         os_unfair_lock_unlock(&_generationLock)
         return gen
+    }
+
+    private func scheduleLyricsFetch(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String,
+        generation: Int,
+        forceRefresh: Bool = false
+    ) {
+        pendingLyricsFetchTask?.cancel()
+
+        pendingLyricsFetchTask = Task { @MainActor [weak self] in
+            let delay: UInt64 = 250_000_000
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+
+            guard let self else { return }
+            guard self.artworkFetchGeneration == generation else { return }
+            self.lyricsService.fetchLyrics(
+                for: title,
+                artist: artist,
+                duration: duration,
+                album: album,
+                forceRefresh: forceRefresh
+            )
+        }
     }
 
     @inline(__always)
@@ -717,9 +745,7 @@ public class MusicController: ObservableObject {
         // so self.duration may already reflect a different song by execution time.
         let capturedDuration = self.duration
         let capturedAlbum = album
-        Task { @MainActor in
-            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: capturedDuration, album: capturedAlbum)
-        }
+        scheduleLyricsFetch(title: name, artist: artist, duration: capturedDuration, album: capturedAlbum, generation: generation)
 
         // ━━━ PARALLEL: persistentID + duration + queue refresh on SB queue ━━━
         scriptingBridgeQueue.async { [weak self] in
@@ -778,9 +804,7 @@ public class MusicController: ObservableObject {
                     self.updateTrackMetadata(duration: sbDuration)
                     // Re-fetch lyrics if SB duration differs significantly from notification
                     if abs(sbDuration - oldDuration) > 1.0 {
-                        Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: self.currentAlbum)
-                        }
+                        self.scheduleLyricsFetch(title: name, artist: artist, duration: sbDuration, album: self.currentAlbum, generation: generation)
                     }
                 }
 
@@ -825,9 +849,7 @@ public class MusicController: ObservableObject {
                     // 🔑 Duration recovered from 0 — re-fetch lyrics with correct duration.
                     // Without this, lyrics stay at "No Lyrics" even though duration is now valid.
                     if abs(dur - oldDuration) > 1.0 {
-                        Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum)
-                        }
+                        self.scheduleLyricsFetch(title: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum, generation: generation)
                     }
                 }
             }
@@ -1155,9 +1177,7 @@ public class MusicController: ObservableObject {
             let generation = incrementGeneration()
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID, generation: generation)
             // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
-            Task { @MainActor in
-                self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum)
-            }
+            scheduleLyricsFetch(title: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum, generation: generation)
             debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(userManuallyOpenedLyrics))\n")
             userManuallyOpenedLyrics = false
         }
@@ -1170,6 +1190,8 @@ public class MusicController: ObservableObject {
         if currentTrackTitle != kNotPlayingSentinel {
             logger.info("⏹️ No track playing")
         }
+        pendingLyricsFetchTask?.cancel()
+        pendingLyricsFetchTask = nil
         updateTrackMetadata(
             title: kNotPlayingSentinel,
             artist: "",
