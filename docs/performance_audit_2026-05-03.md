@@ -83,6 +83,9 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Generation-guarded artwork API startup | `tmp/perf/perf-20260503-192210-trials.json`, `tmp/perf/perf-20260503-192223.json`, `tmp/perf/sample-20260503-192223.txt` | Artwork API races now wait 220ms and re-check cancellation plus track generation before starting network/image-decode work. This preserves settled-track responsiveness within the 3-second requirement while dropping transient skipped tracks before their API work begins. Async lyrics-page rapid switching improved from the corrected baseline median avg 75.15%, p95 131.0%, max 137.7 to median avg 44.24%, p95 82.0%, max 93.4, with all 20/20 skips completed in every trial. The stack-sampled confirmation measured avg 48.51%, p95 86.6%, max 94.2; remaining samples still point mostly at SwiftUI display-list/layout churn. |
 | Lyrics-page root background gate | `tmp/perf/perf-20260503-192624-trials.json`, `tmp/perf/perf-20260503-192654.json`, `tmp/perf/sample-20260503-192654.txt` | The root `MiniPlayerView` artwork gradient now becomes inert while the lyrics page is active, because `LyricsView` already draws its own full-screen adaptive artwork background. This removes duplicate artwork-driven invalidations without changing lyric layout, line rendering, or word-level animation code. Async lyrics-page rapid switching improved again to median avg 34.1%, p95 37.6%, max 39.5, with all 20/20 skips completed in each trial and RSS capped at 391.4 MB. A stack-sampled confirmation measured avg 46.42%, p95 79.1%, max 83.9; sampling still points at SwiftUI display-list/layout, but the no-profiler gate is now below the original 50% CPU complaint threshold. |
 | Post-compliance refresh measurement | `tmp/perf/perf-20260503-195708-trials.json`, `tmp/perf/perf-20260503-195718.csv`, `tmp/perf/sample-20260503-195718.txt` | Current lyrics-page async rapid switching completed all 20/20 skips but measured median avg 47.28%, p95 93.3%, max 119.5 across three trials. The stack sample again points at SwiftUI/CoreAnimation display-list, clip-state, layer commit, and glyph rendering work (`DisplayList.ViewUpdater`, `RenderBox`, `CoreGraphics` glyph paths), not ScriptingBridge queue/history fetching. Do not pursue more queue/compliance work as the primary fix for this residual spike; the next performance work needs a UI-rendering plan with explicit lyric UX parity. |
+| Daily-use lyrics CPU reproduction | `tmp/perf/perf-20260503-200941.csv`, `tmp/perf/perf-20260503-201026.csv`, `tmp/perf/sample-20260503-201026.txt` | Settled playback with no skips reproduced the user's daily-use complaint: avg 41.69%, p95 79.0%, max 87.3 without stack sampling; avg 50.63%, p95 66.9%, max 73.6 with stack sampling. The sample points at `LyricsTextRenderer`, `TextRendererBox.sizeThatFits`, `ResolvedStyledText`, and glyph/display-list rendering, not playlist fetching or Apple Music queue/history work. |
+| Reverted fully swept direct-draw experiment | `tmp/perf/perf-20260503-201633.csv`, `tmp/perf/sample-20260503-201633.txt` | Drawing fully swept non-emphasis words directly instead of through the gradient-mask layer looked visually equivalent, but it worsened spike behavior (avg 45.04%, p95 90.2%, max 133.3). Reverted. Do not repeat this branch-level shortcut as a standalone fix. |
+| TextRenderer animatable time data | `tmp/perf/perf-20260503-202539.csv`, `tmp/perf/sample-20260503-202539.txt`, `tmp/perf/perf-20260503-202740-trials.json` | `LyricsTextRenderer` now exposes `currentTime` as `animatableData`, telling SwiftUI that playback time animates the renderer rather than changing text geometry. On a forced lyrics-page verification build, settled playback improved from avg 50.63%, p95 66.9%, max 73.6 to avg 18.4%, p95 40.4%, max 46.1 with stack sampling. Visual check showed the same lyrics page structure and word-level lyric surface. Async rapid switching remains mixed: all 20/20 skips completed, median avg improved slightly to 45.23%, but p95 regressed to 102.3%, so this fixes daily-use lyric CPU but does not close rapid-switch spikes. |
 
 ## Important Correction
 
@@ -117,6 +120,10 @@ Protected UX paths:
 - `drawingGroup` on the lyrics artwork background is not a safe optimization for rapid switching because it worsened p95/max CPU.
 - The new stack-sample evidence continues to point at SwiftUI display-list/layer churn. It did not show NaturalLanguage, translation, or network fetch dominating the captured rapid-switch window.
 - The 2026-05-03 19:57 stack sample still points at SwiftUI display-list/glyph rendering after the playlist/compliance refresh. Since that area overlaps protected lyric UX, further work there needs explicit visual parity verification before code changes.
+- Daily-use CPU was reproduced without rapid switching. The dominant path was the active word-level `LyricsTextRenderer` causing SwiftUI text sizing/layout/display-list work every frame.
+- Marking `LyricsTextRenderer.currentTime` as `animatableData` is a confirmed daily-use lyrics-page CPU fix. It preserves text/layout code and tells SwiftUI the time value is animation data, not text geometry. Keep this unless a later visual parity check finds timing damage.
+- The fully swept direct-draw shortcut is not safe. It regressed p95/max and should not be repeated without a different profiler trace.
+- Rapid-switch p95 remains unresolved after the animatable renderer fix. The average CPU is slightly better, but the p95 regression means the rapid-switch transition path still needs another targeted pass.
 - Removing the progress-bar mask is not a safe optimization; it worsened p95/max CPU.
 - Conditional removal of the lyrics controls blur filter did not reduce p95/max CPU and should not be repeated without more precise evidence.
 - Track metadata no longer emits separate broad SwiftUI invalidations for title, artist, album, duration, audio-quality, and persistentID changes. This preserves the visible lyric renderer but only reduces one invalidation source; the remaining spike path is still SwiftUI display-list/layout/layer work.
@@ -154,7 +161,7 @@ Protected UX paths:
 3. Investigate foreground fetch/apply contention when preloading nearby queue/history songs.
 4. Add a visual comparison harness before any lyric renderer or cadence change.
 5. Profile whether non-lyric overlays redraw during word-level animation frames.
-6. Continue lowering the lyrics rapid-switch p95; the latest run is much better but still spikes above the desired target.
+6. Continue lowering the lyrics rapid-switch p95; daily-use lyrics CPU is improved, but rapid switching still spikes above the desired target.
 
 ## Verification Commands
 
@@ -170,4 +177,4 @@ scripts/perf_harness.py --require-music-playing --warmup 1 --duration 12 --inter
 
 ## Status
 
-Not complete. The latest lyrics rapid-switch runs show an incremental state-layer improvement, but p95/max are still high enough to justify another iteration.
+Not complete. Daily-use lyrics-page CPU is now materially improved by the `LyricsTextRenderer.animatableData` change, but rapid-switch p95 remains high enough to justify another iteration.
