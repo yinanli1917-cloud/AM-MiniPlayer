@@ -24,6 +24,7 @@ No further code changes in this surface should happen without explicit approval 
 - Rejected word-level follow-ups:
   - 30Hz `TimelineView(.periodic)` cadence cap: `tmp/perf/perf-20260503-203743.csv`, avg `38.68%`, p95 `53.7%`, max `55.0%`; not enough improvement and risks visible stepping.
   - Removing `LyricsTextRenderer.animatableData`: `tmp/perf/perf-20260503-205219.csv`, avg `50.49%`, p95 `60.7%`, max `62.7%`; worse, so keep `animatableData`.
+  - Caching `SyllableSyncedLine`'s concatenated `Text` in `@State`: settled runs were mixed and not same-track clean, while rapid switch regressed to median avg `65.36%`, p95 `97.6%`, max `105.1%`; reverted.
 - SwiftUI trace fan-in:
   - `tmp/perf/nanopod-lyrics-swiftui-20260503-2043.trace`.
   - `--fanin-for Lyrics` showed `AnimatableAttribute<LyricsTextRenderer>` and `StaticBody<ViewBodyAccessor<SyllableSyncedLine>>` feeding `_TextRendererViewModifier<LyricsTextRenderer>` 1537 times during the trace.
@@ -102,6 +103,7 @@ Do not repeat these without new evidence:
 - Conditional line-height tracker removal.
 - 30Hz/low-cadence word-level TimelineView cap.
 - Removing `LyricsTextRenderer.animatableData`.
+- `@State Text` cache inside `SyllableSyncedLine`.
 - `drawingGroup` on lyrics artwork background.
 - Generic `AnyView` removal in shared controls as a standalone optimization.
 - Coarse lyric-fetch/preload burst gates that damage fetch behavior or UX.
