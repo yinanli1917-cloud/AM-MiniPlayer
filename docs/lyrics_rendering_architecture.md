@@ -17,7 +17,7 @@ translation, interlude, or scroll behavior by accident.
 | Line view | `Sources/MusicMiniPlayerCore/UI/LyricLineView.swift` | Per-line opacity, scale, blur, hover/tap, translation display, interlude blend, word-level vs plain-line branch. | Must keep stable identity across current/non-current states to avoid layout jumps. |
 | Word-level text builder | `SyllableSyncedLine` in `LyricLineView.swift` | Builds one concatenated `Text` with `WordTimingAttribute` on each word. | Static word/timing attributes are immutable for a line, but `body` can be re-entered during active-line animation. |
 | Animated renderer | `LyricsTextRenderer` in `LyricLineView.swift` | Draws dim base, bright sweep, emphasis lift/glow, CJK shared wavefront, and post-line fade. | Runs on animation frames for the active syllable line; stack samples point at TextRenderer/display-list/glyph work. |
-| Translation sweep | `TranslationSweepText` in `LyricLineView.swift` | Mirrors word-level sweep over translated text. | Animated only when translation is visible on the active syllable line. |
+| Translation sweep | `TranslationSweepText` in `LyricLineView.swift` | Mirrors word-level sweep over translated text with a masked `Text` fast path for the active translated line. | Animated only when translation is visible on the active syllable line; static translations render as plain `Text`. |
 
 ## Current Rendering Flow
 
@@ -55,12 +55,20 @@ translation, interlude, or scroll behavior by accident.
   `AnimatableAttribute<LyricsTextRenderer>` and
   `StaticBody<ViewBodyAccessor<SyllableSyncedLine>>` feeding
   `_TextRendererViewModifier<LyricsTextRenderer>` 1537 times.
+- `tmp/perf/sample-20260504-000535.txt` on deterministic local word-level
+  `Strangers By Nature` showed `TranslationSweepRenderer` as a major user-code
+  text rendering path when source translations are visible.
 - Removing `LyricsTextRenderer.animatableData` regressed CPU.
 - Caching `Text` in `@State` inside `SyllableSyncedLine` regressed rapid switching
   and must not be repeated as-is.
 - Materializing `Array(layout.flattenedRuns)` once inside `LyricsTextRenderer.draw`
   regressed p95/max under the forced lyrics-page harness and must not be repeated
   as a standalone renderer micro-optimization.
+- Replacing the current translated line's `TextRenderer` sweep with a masked
+  `Text` fast path improved deterministic settled word-level CPU on
+  `Strangers By Nature` from avg 48.31%, p95 53.4% to avg 37.61%, p95 40.2%.
+  A second local word-level translated check on `Escape` by EPO measured avg
+  31.73%, p95 39.1%, max 41.4 with the same fast path.
 
 ## Next Approved Hypothesis Candidate
 

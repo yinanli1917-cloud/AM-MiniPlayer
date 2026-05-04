@@ -25,6 +25,10 @@ This task is also the continuation point for Apple Music playlist/recent-history
 - Album-page visual checks are not enough. Lyrics-page preservation needs its own before/after evidence before any protected lyric-surface experiment can be kept.
 - Harness is taking effect: context/task/health commands work, the workflow-state hook reports this active `in_progress` task, the state resolver reports `confidence: verified`, and global backlog refresh reports fresh after being allowed to write under `/Users/yinanli/.codex/harness/backlog`.
 - `nanopod://page/{album,lyrics,playlist}` and `scripts/perf_harness.py --page lyrics` now provide a reliable lyrics-page measurement entry point.
+- `scripts/perf_harness.py --play-title/--play-artist --expect-lyrics syllable|line` now provides deterministic local-track measurements and records the verified lyric workload in each summary.
+- Deterministic local word-level translated baseline on `Strangers By Nature` by Adele: `tmp/perf/perf-20260504-000453.csv` avg `48.31%`, p95 `53.4%`, max `55.4`.
+- Current translation fast path on the same deterministic workload: `tmp/perf/perf-20260504-001921.csv` avg `37.61%`, p95 `40.2%`, max `40.6`.
+- Second deterministic local word-level translated check on `Escape` by EPO: `tmp/perf/perf-20260504-002330.csv` avg `31.73%`, p95 `39.1%`, max `41.4`.
 - Latest forced translated lyrics-page settled baseline: `tmp/perf/perf-20260503-225431.csv` avg 22.48%, p95 24.8%, max 26.3.
 - Latest forced translated lyrics-page rapid-switch baseline: `tmp/perf/perf-20260503-225611-trials.json` median avg 42.39%, p95 80.8%, max 119.9; stack sample `tmp/perf/sample-20260503-225633.txt` measured avg 54.95%, p95 132.0%, max 139.9.
 - Passive preload signposts now identify nearby preload timing without touching protected lyrics UI. Logging trace `tmp/perf/nanopod-preload-logging-20260503-2312.trace` confirmed nearby preload still fires during rapid switching; NetEase artwork spans were roughly 0.54-1.27s and lyrics preload fetch spans reached about 1.93s.

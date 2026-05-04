@@ -67,6 +67,100 @@ def music_player_state() -> str:
     return result.stdout.strip()
 
 
+def play_music_library_track(title: str, artist: str) -> str:
+    script = r'''
+on run argv
+    set targetTitle to item 1 of argv
+    set targetArtist to item 2 of argv
+    tell application "Music"
+        if it is not running then run
+        set targetTrack to missing value
+        repeat with candidateTrack in every track of library playlist 1
+            if (name of candidateTrack is targetTitle) and (artist of candidateTrack is targetArtist) then
+                set targetTrack to candidateTrack
+                exit repeat
+            end if
+        end repeat
+        if targetTrack is missing value then
+            repeat with candidateTrack in every track of library playlist 1
+                if (name of candidateTrack contains targetTitle) and (artist of candidateTrack contains targetArtist) then
+                    set targetTrack to candidateTrack
+                    exit repeat
+                end if
+            end repeat
+        end if
+        if targetTrack is missing value then return "NOT_FOUND"
+        play targetTrack
+        set trackID to persistent ID of targetTrack
+        set trackName to name of targetTrack
+        set trackArtist to artist of targetTrack
+        return trackID & "\t" & trackName & "\t" & trackArtist
+    end tell
+end run
+'''
+    result = run(["osascript", "-e", script, title, artist], check=False)
+    output = result.stdout.strip()
+    if result.returncode != 0:
+        raise SystemExit(f"Music.app failed to play requested track: {result.stderr.strip()}")
+    if output == "NOT_FOUND" or not output:
+        raise SystemExit(f'Music.app library track not found: "{title}" - {artist}')
+    return output
+
+
+def verify_lyrics_workload(args: argparse.Namespace) -> dict[str, object] | None:
+    if args.expect_lyrics == "any":
+        return None
+    if not args.play_title or not args.play_artist or args.play_duration is None:
+        raise SystemExit("--expect-lyrics requires --play-title, --play-artist, and --play-duration")
+
+    cmd = [
+        "swift", "run", "LyricsVerifier", "check",
+        args.play_title,
+        args.play_artist,
+        str(args.play_duration),
+    ]
+    if args.play_album:
+        cmd += ["--album", args.play_album]
+    result = run(cmd, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"LyricsVerifier failed:\n{result.stderr.strip()}")
+
+    records = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    if not records:
+        raise SystemExit("LyricsVerifier produced no JSON result")
+
+    record = records[-1]
+    has_syllable = bool(record.get("hasSyllableSync"))
+    if args.expect_lyrics == "syllable" and not has_syllable:
+        raise SystemExit(
+            f'Expected word-level/syllable lyrics for "{args.play_title}" - {args.play_artist}, '
+            f"but verifier selected {record.get('selectedSource')} without syllable sync"
+        )
+    if args.expect_lyrics == "line" and has_syllable:
+        raise SystemExit(
+            f'Expected line-synced/non-syllable lyrics for "{args.play_title}" - {args.play_artist}, '
+            f"but verifier selected word-level lyrics from {record.get('selectedSource')}"
+        )
+    return {
+        "expectation": args.expect_lyrics,
+        "title": record.get("title"),
+        "artist": record.get("artist"),
+        "selectedSource": record.get("selectedSource"),
+        "hasSyllableSync": has_syllable,
+        "hasTranslation": bool(record.get("hasTranslation")),
+        "lyricsLineCount": record.get("lyricsLineCount"),
+        "elapsedMs": record.get("elapsedMs"),
+    }
+
+
 def send_next_track() -> None:
     run(["osascript", "-e", 'tell application "Music" to next track'], check=False)
 
@@ -115,6 +209,13 @@ def percentile(values: list[float], pct: float) -> float:
 
 
 def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> dict[str, object]:
+    played_track = None
+    if args.play_title and args.play_artist:
+        played_track = play_music_library_track(args.play_title, args.play_artist)
+        if args.play_settle > 0:
+            time.sleep(args.play_settle)
+
+    lyrics_workload = verify_lyrics_workload(args)
     pid = launch_app()
     request_page(args.page)
     if args.warmup > 0:
@@ -207,6 +308,8 @@ def run_trial(args: argparse.Namespace, trial_index: int, trial_count: int) -> d
         "skip_count_completed": skips_completed,
         "sync_skips": args.sync_skips,
         "page_requested": args.page,
+        "played_track": played_track,
+        "lyrics_workload": lyrics_workload,
         "samples": len(samples),
         "cpu_avg_pct": round(statistics.fmean(cpus), 2) if cpus else 0,
         "cpu_p95_pct": round(percentile(cpus, 0.95), 2),
@@ -256,6 +359,12 @@ def main() -> None:
     parser.add_argument("--stack-sample", action="store_true", help="also collect a macOS sample stack file for nanoPod")
     parser.add_argument("--sync-skips", action="store_true", help="send next-track AppleEvents synchronously, matching the original harness behavior")
     parser.add_argument("--page", choices=["current", "album", "lyrics", "playlist"], default="current", help="request a nanoPod page before sampling")
+    parser.add_argument("--play-title", help="play this Music.app library track before measuring")
+    parser.add_argument("--play-artist", help="artist for --play-title")
+    parser.add_argument("--play-album", default="", help="album hint for LyricsVerifier workload validation")
+    parser.add_argument("--play-duration", type=float, help="duration in seconds for LyricsVerifier workload validation")
+    parser.add_argument("--play-settle", type=float, default=2.0, help="seconds to wait after starting --play-title before launching nanoPod")
+    parser.add_argument("--expect-lyrics", choices=["any", "syllable", "line"], default="any", help="validate the requested track's lyrics workload before measuring")
     args = parser.parse_args()
 
     if args.trials < 1:
