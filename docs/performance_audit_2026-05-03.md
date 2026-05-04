@@ -70,6 +70,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Cancellable 250ms foreground lyric-fetch debounce | `tmp/perf/perf-20260503-182047-trials.json`, `tmp/perf/sample-20260503-182101.txt`, `tmp/perf/perf-20260503-182557-trials.json`, `tmp/perf/perf-20260503-183039-trials.json` | Repeated-trial baseline before the change was median avg 80.85%, p95 121.1%, max 128.6, and only 13-15 of 20 skips were sent. The stack sample showed foreground lyrics work during rapid switching (`LyricsParser.parseYRC`, `LyricsFetcher.fetchFromAMLL`, source fan-out, cached word encoding). Debouncing controller-triggered lyric fetches by 250ms, with cancellation and generation guard, improved repeat runs to median avg 53.96-55.84%, p95 100.5-106.9%, max 104.3-128.1, with all 20 skips sent in each trial. |
 | Reverted 450ms lyric-fetch debounce tuning | `tmp/perf/perf-20260503-182735-trials.json` | Raising the debounce to 450ms worsened repeat rapid-switch CPU (median avg 66.58%, p95 136.3%, max 141.4). Keep the current 250ms value unless a broader fetch scheduler is introduced. |
 | Hidden page render gating | `tmp/perf/perf-20260503-183546-trials.json` | `LyricsView` no longer resets wave/scroll/cache state on every track change while hidden, and `PlaylistView` returns a clear placeholder instead of building its scroll sections outside the playlist page. Repeated rapid-switch run improved to median avg 44.92%, p95 52.3%, max 55.0, with all 20 skips sent in each trial and max RSS around 220.8 MB. |
+| Reverted active lyric render-list culling | `tmp/perf/perf-20260503-184122-trials.json` | Building only the active lyric-line window after heights were known looked attractive because the sample showed SwiftUI layout churn, but it worsened repeat rapid-switch CPU to median avg 70.14%, p95 116.5%, max 131.0, and max RSS 599.3 MB. Keeping all lines mounted with opacity culling is currently more stable for SwiftUI's layout cache and lyric animation continuity. |
 
 ## Important Correction
 
@@ -123,6 +124,7 @@ Protected UX paths:
 - Foreground lyric fetches are now cancellably delayed by 250ms on controller-detected track changes. This avoids launching full word-level lyric source fan-out for songs skipped almost immediately, while remaining well inside the 3-second response requirement.
 - Raising that foreground lyric debounce to 450ms is not a safe tuning improvement; it worsened repeat-trial p95/max and should not be repeated as a standalone change.
 - Hidden lyrics and playlist pages should not perform track-change reset/layout work while not visible. Keep page bodies cheap offscreen; preserve full rendering only for the active page.
+- Do not replace active lyrics opacity culling with render-list filtering as a standalone optimization. It destabilized SwiftUI layout/cache behavior and regressed both CPU and memory.
 
 ## Safe Next Lanes
 
