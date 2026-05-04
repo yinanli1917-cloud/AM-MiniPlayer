@@ -71,6 +71,7 @@ Measurements were taken with `scripts/perf_harness.py`. CPU is process percent f
 | Reverted 450ms lyric-fetch debounce tuning | `tmp/perf/perf-20260503-182735-trials.json` | Raising the debounce to 450ms worsened repeat rapid-switch CPU (median avg 66.58%, p95 136.3%, max 141.4). Keep the current 250ms value unless a broader fetch scheduler is introduced. |
 | Hidden page render gating | `tmp/perf/perf-20260503-183546-trials.json` | `LyricsView` no longer resets wave/scroll/cache state on every track change while hidden, and `PlaylistView` returns a clear placeholder instead of building its scroll sections outside the playlist page. Repeated rapid-switch run improved to median avg 44.92%, p95 52.3%, max 55.0, with all 20 skips sent in each trial and max RSS around 220.8 MB. |
 | Reverted active lyric render-list culling | `tmp/perf/perf-20260503-184122-trials.json` | Building only the active lyric-line window after heights were known looked attractive because the sample showed SwiftUI layout churn, but it worsened repeat rapid-switch CPU to median avg 70.14%, p95 116.5%, max 131.0, and max RSS 599.3 MB. Keeping all lines mounted with opacity culling is currently more stable for SwiftUI's layout cache and lyric animation continuity. |
+| Reverted equatable syllable-line boundary | `tmp/perf/perf-20260503-184706-trials.json` | Adding `Equatable`/`.equatable()` around `SyllableSyncedLine` did not safely reduce active-lyrics churn. The repeat run measured median avg 61.46%, p95 131.1%, max 142.3, and max RSS 653.2 MB. Reverted. SwiftUI's text renderer/layout cache appears more sensitive to the additional boundary than expected. |
 
 ## Important Correction
 
@@ -125,6 +126,7 @@ Protected UX paths:
 - Raising that foreground lyric debounce to 450ms is not a safe tuning improvement; it worsened repeat-trial p95/max and should not be repeated as a standalone change.
 - Hidden lyrics and playlist pages should not perform track-change reset/layout work while not visible. Keep page bodies cheap offscreen; preserve full rendering only for the active page.
 - Do not replace active lyrics opacity culling with render-list filtering as a standalone optimization. It destabilized SwiftUI layout/cache behavior and regressed both CPU and memory.
+- Do not wrap `SyllableSyncedLine` in an `EquatableView` as a standalone fix. It worsened p95/max CPU and memory in active lyrics rapid-switch testing.
 
 ## Safe Next Lanes
 
