@@ -371,14 +371,30 @@ public class LyricsService: ObservableObject {
             )
 
             await MainActor.run {
-                guard self.currentSongID == songID else { return }
-                self.isLoading = false
-                self.error = "No lyrics found"
+                self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
             }
             return
         }
 
         await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
+    }
+
+    static func shouldApplyNoLyricsMiss(currentSongID: String?, missSongID: String, hasDisplayedLyrics: Bool) -> Bool {
+        currentSongID == missSongID && !hasDisplayedLyrics
+    }
+
+    @MainActor
+    private func applyNoLyricsMissIfStillCurrentAndEmpty(songID: String) {
+        guard Self.shouldApplyNoLyricsMiss(
+            currentSongID: currentSongID,
+            missSongID: songID,
+            hasDisplayedLyrics: !lyrics.isEmpty
+        ) else {
+            DebugLogger.log("LyricsService", "⏭️ Ignoring stale no-lyrics miss after lyrics/backfill applied: '\(songID)'")
+            return
+        }
+        isLoading = false
+        error = "No lyrics found"
     }
 
     private func launchAuthoritativeBackfill(
