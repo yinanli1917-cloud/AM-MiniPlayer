@@ -201,7 +201,7 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        let songID = "\(title)-\(artist)"
+        let songID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
 
         // 🔑 STABILITY GUARD: Once good lyrics are loaded, block ALL re-fetches
         // for the same song within a cooldown window. This prevents:
@@ -210,17 +210,16 @@ public class LyricsService: ObservableObject {
         // - updatePlayerState 30s full-sync creating a subtly different songID
         // - Any other path that creates a new songID for the same song
         //
-        // The guard is artist-based: if good lyrics exist, artist matches, and we're
-        // within the cooldown window → same song, skip. This catches variant titles
-        // like "Cloudy na Gogo" vs "くもりのちゴーゴー" that create different songIDs.
+        // The guard is strict identity-based: same title/artist/album/duration
+        // only. Same title or same artist alone is not safe for lyric reuse.
         // Only forceRefresh (user-initiated retry button) bypasses this guard.
         if !forceRefresh,
            let lastGoodTime = lastGoodLyricsTime,
            Date().timeIntervalSince(lastGoodTime) < stabilityGuardCooldown,
            !lyrics.isEmpty, error == nil {
-            // Same-song detection must stay identity-based. Treating same artist
-            // as same song freezes stale lyrics during fast album/playlist switches
-            // such as adjacent Carpenters tracks.
+            // Same-song detection must stay strict. Treating same artist or
+            // title-only as same song freezes stale lyrics during fast switches
+            // and same-title catalog collisions.
             let isSameSong = songID == currentSongID
             if isSameSong {
                 DebugLogger.log("LyricsService", "⏭️ Stability guard: '\(songID)' blocked (\(String(format: "%.1f", Date().timeIntervalSince(lastGoodTime)))s since good lyrics)")
@@ -775,7 +774,10 @@ public class LyricsService: ObservableObject {
         let candidates = tracks
             .prefix(4)
             .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
-            .filter { lyricsCache.object(forKey: "\($0.title)-\($0.artist)" as NSString) == nil }
+            .filter {
+                let songID = Self.songIdentity(title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+                return lyricsCache.object(forKey: songID as NSString) == nil
+            }
 
         guard !candidates.isEmpty else { return }
 
@@ -789,7 +791,12 @@ public class LyricsService: ObservableObject {
 
             for track in candidates {
                 guard !Task.isCancelled else { return }
-                let songID = "\(track.title)-\(track.artist)"
+                let songID = Self.songIdentity(
+                    title: track.title,
+                    artist: track.artist,
+                    duration: track.duration,
+                    album: track.album
+                )
                 if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
 
                 let fetchSignpostID = OSSignpostID(log: Self.performanceLog)
@@ -837,6 +844,14 @@ public class LyricsService: ObservableObject {
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
             }
         }
+    }
+
+    private static func songIdentity(title: String, artist: String, duration: TimeInterval, album: String) -> String {
+        let normalizedTitle = MetadataDiskCache.normalize(title)
+        let normalizedArtist = MetadataDiskCache.normalize(artist)
+        let normalizedAlbum = MetadataDiskCache.normalize(album)
+        let roundedDuration = duration > 0 ? Int(duration.rounded()) : 0
+        return "\(normalizedTitle)|\(normalizedArtist)|\(normalizedAlbum)|\(roundedDuration)"
     }
 }
 

@@ -104,6 +104,9 @@ extension LyricsFetcher {
                 guard candidate.artistMatch else { return false }
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
                 guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
+                if candidate.durationDiff < 1.0 {
+                    return true
+                }
                 let artistIsCJK = candidate.artist.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) })
                     || aliasConfirmedCJK
                 guard artistIsCJK else { return false }

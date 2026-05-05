@@ -226,19 +226,23 @@ public final class MetadataResolver {
             let titleHasCJK: Bool
             let albumHasCJK: Bool
             let artistMatches: Bool
+            let termRank: Int
         }
 
-        let regions = inferRegions(title: title + " " + cleanAlbum, artist: artist)
+        var regions = inferRegions(title: title + " " + cleanAlbum, artist: artist)
+        if !regions.contains("CN") {
+            regions.insert("CN", at: 0)
+        }
         let searchTerms = [
-            "\(cleanAlbum) \(artist)",
             "\(title) \(artist)",
-            "\(title) \(cleanAlbum) \(artist)"
+            "\(title) \(cleanAlbum) \(artist)",
+            "\(cleanAlbum) \(artist)"
         ]
         var candidates: [AlbumScopedCandidate] = []
 
         await withTaskGroup(of: [AlbumScopedCandidate].self) { group in
             for region in regions {
-                for term in searchTerms {
+                for (termRank, term) in searchTerms.enumerated() {
                     group.addTask {
                         guard let results = await self.searchITunes(term: term, region: region, limit: 25) else {
                             return []
@@ -258,6 +262,9 @@ public final class MetadataResolver {
                             let albumHasCJK = LanguageUtils.containsCJK(collectionName)
                             guard artistMatches || titleHasCJK || albumHasCJK else { continue }
                             guard titleHasCJK || albumHasCJK else { continue }
+                            if self.hasUnrequestedVersionMarker(resultTitle: trackName, resultAlbum: collectionName, inputTitle: title, inputAlbum: cleanAlbum) {
+                                continue
+                            }
 
                             local.append(AlbumScopedCandidate(
                                 title: trackName,
@@ -267,7 +274,8 @@ public final class MetadataResolver {
                                 durationDiff: durationDiff,
                                 titleHasCJK: titleHasCJK,
                                 albumHasCJK: albumHasCJK,
-                                artistMatches: artistMatches
+                                artistMatches: artistMatches,
+                                termRank: termRank
                             ))
                         }
                         return local
@@ -282,6 +290,7 @@ public final class MetadataResolver {
         guard !candidates.isEmpty else { return nil }
         let best = candidates.min { lhs, rhs in
             if lhs.artistMatches != rhs.artistMatches { return lhs.artistMatches && !rhs.artistMatches }
+            if lhs.termRank != rhs.termRank { return lhs.termRank < rhs.termRank }
             if lhs.titleHasCJK != rhs.titleHasCJK { return lhs.titleHasCJK && !rhs.titleHasCJK }
             if lhs.albumHasCJK != rhs.albumHasCJK { return lhs.albumHasCJK && !rhs.albumHasCJK }
             if lhs.durationDiff != rhs.durationDiff { return lhs.durationDiff < rhs.durationDiff }
@@ -311,6 +320,17 @@ public final class MetadataResolver {
         return inputNoSpace == resultNoSpace
             || inputNoSpace.contains(resultNoSpace)
             || resultNoSpace.contains(inputNoSpace)
+    }
+
+    private func hasUnrequestedVersionMarker(resultTitle: String, resultAlbum: String, inputTitle: String, inputAlbum: String) -> Bool {
+        let result = "\(resultTitle) \(resultAlbum)".lowercased()
+        let input = "\(inputTitle) \(inputAlbum)".lowercased()
+        let markers = [
+            "lp version", "single version", "album version", "remastered",
+            "remaster", "live", "demo", "acoustic", "edit", "version",
+            "現場", "现场", "版"
+        ]
+        return markers.contains { result.contains($0) && !input.contains($0) }
     }
 
     /// 拆分 Apple Music 双标题（"A / B" → (A, B)），仅当 " / " 分隔且两侧非空

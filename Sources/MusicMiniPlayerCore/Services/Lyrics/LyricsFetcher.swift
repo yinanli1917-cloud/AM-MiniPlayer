@@ -226,7 +226,7 @@ public final class LyricsFetcher {
                     group.addTask {
                         branch2Fired.value = true
                         albumScopedBranchFired.value = true
-                        guard let localized = await self.withHardMetadataTimeout(seconds: 1.35, operation: {
+                        guard let localized = await self.withHardMetadataTimeout(seconds: 1.8, operation: {
                             await self.metadataResolver.resolveAlbumScopedMetadata(
                                 title: ot,
                                 artist: oa,
@@ -238,7 +238,7 @@ public final class LyricsFetcher {
                             return nil
                         }
                         DebugLogger.log("💿 Branch-2 album scoped: '\(localized.title)' by '\(localized.artist)' album='\(localized.album)'")
-                        guard let best = await self.withHardSourceTimeout(seconds: 2.0, operation: {
+                        guard let best = await self.withHardSourceTimeout(seconds: 1.8, operation: {
                             await self.fetchResolvedTitleKeyedSources(
                                 title: localized.title,
                                 artist: localized.artist,
@@ -427,7 +427,7 @@ public final class LyricsFetcher {
 
                 let elapsed = Date().timeIntervalSince(fetchStart)
                 if results.isEmpty {
-                    if albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed < 2.25 {
+                    if albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed < 3.1 {
                         continue
                     }
                     if branch2Fired.value && !branch2Landed.value && elapsed < 2.2 {
@@ -453,6 +453,9 @@ public final class LyricsFetcher {
                             || (lrclibCanFastExit && ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") && $0.score >= 50)
                         )
                 }
+                let hasAlbumMatchedSyncedResult = results.contains {
+                    $0.kind == .synced && $0.albumMatched && $0.score >= 30
+                }
                 let hasAnySyncedResult = results.contains { $0.kind == .synced && $0.score > 0 }
                 let hasAnyPotentiallyUsableSyncedResult = results.contains {
                     $0.kind == .synced && (
@@ -472,8 +475,8 @@ public final class LyricsFetcher {
                     && elapsed < 2.2
                 let albumScopedBranchNeedsLandingWindow = albumScopedBranchFired.value
                     && !albumScopedBranchLanded.value
-                    && !hasFastExitSyncedResult
-                    && elapsed < 2.25
+                    && (!hasFastExitSyncedResult || !hasAlbumMatchedSyncedResult)
+                    && elapsed < 3.1
                 if albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
                 }
@@ -486,7 +489,7 @@ public final class LyricsFetcher {
                 if (hasHighConfidenceResult && elapsed >= 1.5)
                     || (hasFastExitSyncedResult && elapsed >= 0.15)
                     || (!branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.2)
-                    || (albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed >= 2.25)
+                    || (albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed >= 3.1)
                     || (branch2Fired.value && !branch2Landed.value && elapsed >= 2.2)
                     || (branch3Fired.value && !branch3Landed.value && elapsed >= 2.2)
                     || (hasAnySyncedResult && elapsed >= 2.2)

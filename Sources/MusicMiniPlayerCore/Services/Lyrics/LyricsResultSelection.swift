@@ -76,7 +76,7 @@ extension LyricsFetcher {
                     return true
                 }
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 30
+                    return $0.score >= 10
                 }
                 return $0.score >= 35
             }
@@ -163,10 +163,10 @@ extension LyricsFetcher {
             DebugLogger.log("🏆 No trustworthy synced results available: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
             return nil
         }
-        // 🔑 Hard word-level priority.
-        // If any candidate carries word-level (syllable) sync, collapse the
-        // pool to word-level only BEFORE the album/score selection runs.
-        let wordLevelPool = usableSynced.filter { r in
+        // 🔑 Word-level priority is conditional. Album-scoped catalog evidence
+        // beats word-level timing from a different same-artist song.
+        let hasAlbumMatchedCandidate = usableSynced.contains { $0.albumMatched }
+        let wordLevelPool = hasAlbumMatchedCandidate ? [] : usableSynced.filter { r in
             guard !r.lyrics.isEmpty else { return false }
             let syllableCount = r.lyrics.filter { $0.hasSyllableSync }.count
             return Double(syllableCount) / Double(r.lyrics.count) >= 0.3
