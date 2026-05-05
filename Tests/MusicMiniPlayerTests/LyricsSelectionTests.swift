@@ -17,6 +17,22 @@ final class LyricsSelectionTests: XCTestCase {
         }
     }
 
+    func testArtistAliasRequiresProviderConfirmation() {
+        XCTAssertTrue(
+            LyricsFetcher.isConfirmedArtistAlias(
+                asciiArtist: "Tanya Chua",
+                providerAliases: ["Tanya Chua"]
+            )
+        )
+
+        XCTAssertFalse(
+            LyricsFetcher.isConfirmedArtistAlias(
+                asciiArtist: "Tanya Chua",
+                providerAliases: ["JJ Lin", "Sun Yanzi"]
+            )
+        )
+    }
+
     func testContentConsensusBeatsWrongWordLevelOutlier() {
         let fetcher = LyricsFetcher.shared
         let wrongWordLevel = LyricsFetcher.LyricsFetchResult(

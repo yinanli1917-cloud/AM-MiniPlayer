@@ -618,6 +618,14 @@ extension LyricsFetcher {
         Set(s.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
     }
 
+    static func isConfirmedArtistAlias(asciiArtist: String, providerAliases: [String]) -> Bool {
+        let inputTokens = Self.nameTokens(asciiArtist)
+        guard !inputTokens.isEmpty else { return false }
+        return providerAliases.contains {
+            Self.nameTokens($0) == inputTokens
+        }
+    }
+
     actor ArtistAliasCache {
         private var cache: [String: [String]] = [:]
         func get(_ key: String) -> [String]? { cache[key] }
@@ -664,8 +672,9 @@ extension LyricsFetcher {
         return probes
     }
 
-    /// Resolve an ASCII artist name to ALL plausible CJK catalog names via
-    /// NetEase's artist-search endpoint.
+    /// Resolve an ASCII artist name to confirmed CJK catalog names via
+    /// NetEase's artist-search endpoint. Search results are not aliases by
+    /// themselves; the CJK artist must explicitly list the ASCII name as an alias.
     func resolveArtistCJKAliases(asciiArtist: String) async -> [String] {
         let key = asciiArtist.lowercased()
         if let cached = await artistAliasCache.get(key) { return cached }
@@ -686,27 +695,21 @@ extension LyricsFetcher {
                 guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let result = json["result"] as? [String: Any],
                       let artists = result["artists"] as? [[String: Any]] else { continue }
-                for artist in artists.prefix(3) {
+                for artist in artists.prefix(5) {
                     guard let cjkName = artist["name"] as? String,
                           LanguageUtils.containsCJK(cjkName),
                           !seen.contains(cjkName) else { continue }
-                    let aliasList = (artist["alias"] as? [String] ?? []).map { $0.lowercased() }
-                    let inputTokens = Self.nameTokens(inputLower)
-                    let isConfirmed = !inputTokens.isEmpty && aliasList.contains {
-                        Self.nameTokens($0) == inputTokens
-                    }
-                    if isConfirmed {
-                        aliases.insert(cjkName, at: 0)
-                    } else {
-                        aliases.append(cjkName)
-                    }
+                    let aliasList = artist["alias"] as? [String] ?? []
+                    let isConfirmed = Self.isConfirmedArtistAlias(asciiArtist: inputLower, providerAliases: aliasList)
+                    guard isConfirmed else { continue }
+                    aliases.append(cjkName)
                     seen.insert(cjkName)
                 }
             } catch { continue }
-            if aliases.contains(where: { _ in true }) && probe == asciiArtist { break }
+            if !aliases.isEmpty && probe == asciiArtist { break }
         }
         if !aliases.isEmpty {
-            DebugLogger.log("NetEase", "🔗 alias resolve: '\(asciiArtist)' → \(aliases.prefix(5))")
+            DebugLogger.log("NetEase", "🔗 confirmed alias resolve: '\(asciiArtist)' → \(aliases.prefix(5))")
         }
         await artistAliasCache.set(key, aliases)
         return aliases
