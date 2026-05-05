@@ -181,28 +181,32 @@ public final class LyricsFetcher {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                return await self.withHardSourceTimeout(seconds: 2.9) { await self.fetchFromLRCLIB(title: ot, artist: oa, duration: d, translationEnabled: te) }
+                let timeout = alb.isEmpty ? 2.9 : 1.7
+                return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromLRCLIB(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {
                 if lowTierFallbackDelay > 0 {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                return await self.withHardSourceTimeout(seconds: 2.9) { await self.fetchFromLRCLIBSearch(title: ot, artist: oa, duration: d, translationEnabled: te) }
+                let timeout = alb.isEmpty ? 2.9 : 1.7
+                return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromLRCLIBSearch(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {
                 if lowTierFallbackDelay > 0 {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                return await self.withHardSourceTimeout(seconds: 2.0) { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
+                let timeout = alb.isEmpty ? 2.0 : 1.0
+                return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {
                 if lowTierFallbackDelay > 0 {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                return await self.withHardSourceTimeout(seconds: 2.0) { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
+                let timeout = alb.isEmpty ? 2.0 : 1.0
+                return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {
                 await self.withHardSourceTimeout(seconds: 2.2) {
@@ -289,13 +293,13 @@ public final class LyricsFetcher {
             // ───────────────────────────────────────────────────────────────
             if titleIsASCII {
                 group.addTask {
-                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    try? await Task.sleep(nanoseconds: 600_000_000)
                     if Task.isCancelled { return nil }
-                    guard let cjkArtist = await self.probeQQForCJKArtist(
-                        title: ot, artist: oa, duration: d
-                    ) else { return nil }
+                    guard let cjkArtist = await self.withHardMetadataTimeout(seconds: 1.0, operation: {
+                        await self.probeQQForCJKArtist(title: ot, artist: oa, duration: d)
+                    }) else { return nil }
                     DebugLogger.log("🌉 Branch-4 QQ→NE bridge: '\(oa)' → '\(cjkArtist)'")
-                    return await self.withHardSourceTimeout(seconds: 2.0) { await self.fetchFromNetEase(
+                    return await self.withHardSourceTimeout(seconds: 1.4) { await self.fetchFromNetEase(
                         title: ot, artist: cjkArtist,
                         originalTitle: ot, originalArtist: oa,
                         duration: d, translationEnabled: te, album: alb
@@ -385,13 +389,13 @@ public final class LyricsFetcher {
 
                 let elapsed = Date().timeIntervalSince(fetchStart)
                 if results.isEmpty {
-                    if branch2Fired.value && !branch2Landed.value && elapsed < 2.45 {
+                    if branch2Fired.value && !branch2Landed.value && elapsed < 2.2 {
                         continue
                     }
-                    if branch3Fired.value && !branch3Landed.value && elapsed < 2.6 {
+                    if branch3Fired.value && !branch3Landed.value && elapsed < 2.35 {
                         continue
                     }
-                    if elapsed >= 2.45 {
+                    if elapsed >= 2.2 {
                         DebugLogger.log("⏱️ No synced candidate within \(String(format: "%.1f", elapsed))s")
                         group.cancelAll()
                         break
@@ -420,11 +424,11 @@ public final class LyricsFetcher {
                 let branch3NeedsLandingWindow = branch3Fired.value
                     && !branch3Landed.value
                     && !hasFastExitSyncedResult
-                    && elapsed < 2.6
+                    && elapsed < 2.35
                 let branch2NeedsLandingWindow = branch2Fired.value
                     && !branch2Landed.value
                     && !hasFastExitSyncedResult
-                    && elapsed < 2.45
+                    && elapsed < 2.2
                 if branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
                 }
@@ -436,10 +440,10 @@ public final class LyricsFetcher {
                 }
                 if (hasHighConfidenceResult && elapsed >= 1.5)
                     || (hasFastExitSyncedResult && elapsed >= 0.15)
-                    || (!branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.45)
-                    || (branch2Fired.value && !branch2Landed.value && elapsed >= 2.45)
-                    || (branch3Fired.value && !branch3Landed.value && elapsed >= 2.45)
-                    || (hasAnySyncedResult && elapsed >= 2.45)
+                    || (!branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.2)
+                    || (branch2Fired.value && !branch2Landed.value && elapsed >= 2.2)
+                    || (branch3Fired.value && !branch3Landed.value && elapsed >= 2.2)
+                    || (hasAnySyncedResult && elapsed >= 2.2)
                     || elapsed >= 8.0 {
                     DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
                     group.cancelAll()

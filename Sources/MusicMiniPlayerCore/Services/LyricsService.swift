@@ -358,32 +358,18 @@ public class LyricsService: ObservableObject {
             }
             DebugLogger.log("LyricsService", "❌ SEARCH NO RESULTS: '\(songID)' dur=\(duration) sources=\(results.count)")
 
-            let wantsTranslation = showTranslation
-            if let backfilled = await fetcher.backfillAuthoritativeSyncedLyrics(
+            if Task.isCancelled {
+                DebugLogger.log("LyricsService", "⏭️ Task cancelled after foreground miss, NOT caching empty results: '\(songID)'")
+                return
+            }
+
+            launchAuthoritativeBackfill(
                 title: title,
                 artist: artist,
                 duration: duration,
-                translationEnabled: wantsTranslation,
-                album: album
-            ) {
-                await self.applyFetchedLyricsIfCurrent(
-                    backfilled,
-                    title: title,
-                    artist: artist,
-                    duration: duration,
-                    songID: songID,
-                    album: album
-                )
-                return
-            }
-
-            if Task.isCancelled {
-                DebugLogger.log("LyricsService", "⏭️ Task cancelled after backfill miss, NOT caching empty results: '\(songID)'")
-                return
-            }
-
-            let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
-            lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
+                album: album,
+                songID: songID
+            )
 
             await MainActor.run {
                 guard self.currentSongID == songID else { return }
@@ -394,6 +380,37 @@ public class LyricsService: ObservableObject {
         }
 
         await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
+    }
+
+    private func launchAuthoritativeBackfill(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String,
+        songID: String
+    ) {
+        let wantsTranslation = showTranslation
+        Task { [weak self] in
+            guard let self else { return }
+            guard let backfilled = await self.fetcher.backfillAuthoritativeSyncedLyrics(
+                title: title,
+                artist: artist,
+                duration: duration,
+                translationEnabled: wantsTranslation,
+                album: album
+            ) else {
+                DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
+                return
+            }
+            await self.applyFetchedLyricsIfCurrent(
+                backfilled,
+                title: title,
+                artist: artist,
+                duration: duration,
+                songID: songID,
+                album: album
+            )
+        }
     }
 
     private func applyFetchedLyricsIfCurrent(
