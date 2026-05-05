@@ -553,7 +553,49 @@ public final class LyricsParser {
             if isPureSymbols(trimmed) { return false }
             return true
         }
-        return stripOpeningTitleCardCluster(basicFiltered)
+        return stripOpeningTitleCardCluster(stripOpeningSourceIntroCluster(basicFiltered))
+    }
+
+    private func stripOpeningSourceIntroCluster(_ lines: [LyricLine]) -> [LyricLine] {
+        guard lines.count >= 2 else { return lines }
+        let leadingWindow = lines.prefix(3)
+        guard leadingWindow.contains(where: { isSourceEditorialIntroMarker($0.text) }) else {
+            return lines
+        }
+
+        var dropCount = 0
+        while dropCount < lines.count {
+            let line = lines[dropCount]
+            guard line.startTime <= 45.0 else { break }
+            let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+            if isSourceEditorialIntroMarker(trimmed)
+                || isOpeningEditorialProseLine(trimmed)
+                || isMetadataKeywordLine(trimmed) {
+                dropCount += 1
+                continue
+            }
+            break
+        }
+
+        guard dropCount > 0, dropCount < lines.count else { return lines }
+        return Array(lines.dropFirst(dropCount))
+    }
+
+    private func isSourceEditorialIntroMarker(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let markers = [
+            "单曲介绍", "單曲介紹", "歌曲介绍", "歌曲介紹",
+            "专辑介绍", "專輯介紹", "曲目介绍", "曲目介紹"
+        ]
+        return markers.contains { trimmed.hasPrefix($0) }
+    }
+
+    private func isOpeningEditorialProseLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 24 else { return false }
+        let hasCJK = LanguageUtils.containsCJK(trimmed)
+        let prosePunctuation = ["，", "。", "；", "：", "、"]
+        return hasCJK && prosePunctuation.contains { trimmed.contains($0) }
     }
 
     private func stripOpeningTitleCardCluster(_ lines: [LyricLine]) -> [LyricLine] {
@@ -968,7 +1010,7 @@ public final class LyricsParser {
                 "作词", "作曲", "编曲", "制作", "制作人", "混音", "录音", "演唱",
                 "演奏", "和声", "键盘", "吉他", "贝斯", "鼓手", "提琴", "弦乐",
                 "监制", "母带", "母帶", "編曲", "作詞", "作曲", "製作", "錄音",
-                "詞", "曲", "編", "唱", "演", "奏", "鼓", "鼓組", "鼓组"
+                "词", "曲", "詞", "編", "唱", "演", "奏", "鼓", "鼓組", "鼓组"
             ]
             let isCJKMetaLabel = cjkMetadataKeywords.contains(where: { labelTrimmed.contains($0) })
                 && labelTrimmed.count <= 12

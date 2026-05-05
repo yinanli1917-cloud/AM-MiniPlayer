@@ -167,6 +167,8 @@ public final class LyricsFetcher {
         let fetchStart = Date()
         let branch2Fired = Box(false)
         let branch2Landed = Box(false)
+        let albumScopedBranchFired = Box(false)
+        let albumScopedBranchLanded = Box(false)
         let branch3Fired = Box(false)
         let branch3Landed = Box(false)
         let lowTierFallbackDelay: UInt64 = alb.isEmpty ? 0 : 700_000_000
@@ -220,6 +222,42 @@ public final class LyricsFetcher {
             // Branch 2 — speculative per-region (ASCII input only)
             // ───────────────────────────────────────────────────────────────
             if titleIsASCII {
+                if !alb.isEmpty {
+                    group.addTask {
+                        branch2Fired.value = true
+                        albumScopedBranchFired.value = true
+                        guard let localized = await self.withHardMetadataTimeout(seconds: 1.35, operation: {
+                            await self.metadataResolver.resolveAlbumScopedMetadata(
+                                title: ot,
+                                artist: oa,
+                                duration: d,
+                                album: alb
+                            )
+                        }) else {
+                            albumScopedBranchLanded.value = true
+                            return nil
+                        }
+                        DebugLogger.log("💿 Branch-2 album scoped: '\(localized.title)' by '\(localized.artist)' album='\(localized.album)'")
+                        guard let best = await self.withHardSourceTimeout(seconds: 2.0, operation: {
+                            await self.fetchResolvedTitleKeyedSources(
+                                title: localized.title,
+                                artist: localized.artist,
+                                originalTitle: ot,
+                                originalArtist: oa,
+                                duration: d,
+                                translationEnabled: te,
+                                album: localized.album
+                            )
+                        }) else {
+                            albumScopedBranchLanded.value = true
+                            return nil
+                        }
+                        branch2Landed.value = true
+                        albumScopedBranchLanded.value = true
+                        return best
+                    }
+                }
+
                 if let cached = self.metadataResolver.diskCache.get(title: ot, artist: oa, duration: d),
                    LanguageUtils.containsCJK(cached.resolvedTitle),
                    cached.resolvedTitle != ot {
@@ -389,6 +427,9 @@ public final class LyricsFetcher {
 
                 let elapsed = Date().timeIntervalSince(fetchStart)
                 if results.isEmpty {
+                    if albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed < 2.25 {
+                        continue
+                    }
                     if branch2Fired.value && !branch2Landed.value && elapsed < 2.2 {
                         continue
                     }
@@ -429,7 +470,11 @@ public final class LyricsFetcher {
                     && !branch2Landed.value
                     && !hasFastExitSyncedResult
                     && elapsed < 2.2
-                if branch2NeedsLandingWindow || branch3NeedsLandingWindow {
+                let albumScopedBranchNeedsLandingWindow = albumScopedBranchFired.value
+                    && !albumScopedBranchLanded.value
+                    && !hasFastExitSyncedResult
+                    && elapsed < 2.25
+                if albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
                 }
                 let hasHighConfidenceResult = results.contains {
@@ -441,6 +486,7 @@ public final class LyricsFetcher {
                 if (hasHighConfidenceResult && elapsed >= 1.5)
                     || (hasFastExitSyncedResult && elapsed >= 0.15)
                     || (!branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.2)
+                    || (albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed >= 2.25)
                     || (branch2Fired.value && !branch2Landed.value && elapsed >= 2.2)
                     || (branch3Fired.value && !branch3Landed.value && elapsed >= 2.2)
                     || (hasAnySyncedResult && elapsed >= 2.2)
@@ -726,7 +772,8 @@ public final class LyricsFetcher {
         let hasAlbumHint = !album.isEmpty
         var resolvedResults: [LyricsFetchResult] = []
         let effectiveArtist: String
-        if LanguageUtils.containsCJK(title),
+        if !hasAlbumHint,
+           LanguageUtils.containsCJK(title),
            LanguageUtils.isPureASCII(artist),
            let cjkArtist = await resolveArtistCJKAliases(asciiArtist: artist).first {
             effectiveArtist = cjkArtist
@@ -768,6 +815,11 @@ public final class LyricsFetcher {
                 let hasStrongCatalogEvidence = result.albumMatched
                     || (result.matchedDurationDiff.map { $0 < 1.0 } ?? false)
                     || (result.titleMatched && (result.matchedDurationDiff.map { $0 < 1.5 } ?? false))
+                let hasAlbumExactSyncedResult = result.kind == .synced
+                    && result.albumMatched
+                    && result.titleMatched
+                    && (result.matchedDurationDiff.map { $0 < 2.0 } ?? false)
+                    && result.score >= 30
                 let albumGate = !hasAlbumHint || result.albumMatched || hasStrongCatalogEvidence
                 let needsIdentityWitness = hasAlbumHint
                     && ["NetEase", "QQ"].contains(result.source)
@@ -785,6 +837,10 @@ public final class LyricsFetcher {
                     && self.earlyReturnSources.contains(result.source)
                     && albumGate
                     && (!needsIdentityWitness || hasIdentityWitness) {
+                    group.cancelAll()
+                    return result
+                }
+                if hasAlbumExactSyncedResult && self.earlyReturnSources.contains(result.source) {
                     group.cancelAll()
                     return result
                 }

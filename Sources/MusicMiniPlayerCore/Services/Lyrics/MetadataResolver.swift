@@ -200,6 +200,119 @@ public final class MetadataResolver {
         return (title, artist)
     }
 
+    /// Resolve English storefront title/album pairs to provider-native catalog
+    /// metadata by searching localized storefront albums and selecting the row
+    /// whose artist and duration match the current track.
+    ///
+    /// This covers translated catalog metadata, not romanization. Example:
+    /// Apple Music US exposes deca joins as `A Brief Stop` / `A Brief Stop`,
+    /// while CN/HK/JP provider catalogs expose `在这里停一下` / `在这里停一下`.
+    public func resolveAlbumScopedMetadata(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String
+    ) async -> (title: String, artist: String, album: String, region: String, durationDiff: Double)? {
+        let cleanAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanAlbum.isEmpty else { return nil }
+        guard LanguageUtils.isPureASCII(title) || LanguageUtils.isPureASCII(cleanAlbum) else { return nil }
+
+        struct AlbumScopedCandidate {
+            let title: String
+            let artist: String
+            let album: String
+            let region: String
+            let durationDiff: Double
+            let titleHasCJK: Bool
+            let albumHasCJK: Bool
+            let artistMatches: Bool
+        }
+
+        let regions = inferRegions(title: title + " " + cleanAlbum, artist: artist)
+        let searchTerms = [
+            "\(cleanAlbum) \(artist)",
+            "\(title) \(artist)",
+            "\(title) \(cleanAlbum) \(artist)"
+        ]
+        var candidates: [AlbumScopedCandidate] = []
+
+        await withTaskGroup(of: [AlbumScopedCandidate].self) { group in
+            for region in regions {
+                for term in searchTerms {
+                    group.addTask {
+                        guard let results = await self.searchITunes(term: term, region: region, limit: 25) else {
+                            return []
+                        }
+                        var local: [AlbumScopedCandidate] = []
+                        for result in results {
+                            guard let trackName = result["trackName"] as? String,
+                                  let artistName = result["artistName"] as? String,
+                                  let collectionName = result["collectionName"] as? String,
+                                  let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
+                            let trackDuration = Double(trackTimeMillis) / 1000.0
+                            let durationDiff = abs(trackDuration - duration)
+                            guard durationDiff < 1.5 else { continue }
+
+                            let artistMatches = self.catalogArtistMatches(input: artist, result: artistName)
+                            let titleHasCJK = LanguageUtils.containsCJK(trackName)
+                            let albumHasCJK = LanguageUtils.containsCJK(collectionName)
+                            guard artistMatches || titleHasCJK || albumHasCJK else { continue }
+                            guard titleHasCJK || albumHasCJK else { continue }
+
+                            local.append(AlbumScopedCandidate(
+                                title: trackName,
+                                artist: artistName,
+                                album: collectionName,
+                                region: region,
+                                durationDiff: durationDiff,
+                                titleHasCJK: titleHasCJK,
+                                albumHasCJK: albumHasCJK,
+                                artistMatches: artistMatches
+                            ))
+                        }
+                        return local
+                    }
+                }
+            }
+            for await local in group {
+                candidates.append(contentsOf: local)
+            }
+        }
+
+        guard !candidates.isEmpty else { return nil }
+        let best = candidates.min { lhs, rhs in
+            if lhs.artistMatches != rhs.artistMatches { return lhs.artistMatches && !rhs.artistMatches }
+            if lhs.titleHasCJK != rhs.titleHasCJK { return lhs.titleHasCJK && !rhs.titleHasCJK }
+            if lhs.albumHasCJK != rhs.albumHasCJK { return lhs.albumHasCJK && !rhs.albumHasCJK }
+            if lhs.durationDiff != rhs.durationDiff { return lhs.durationDiff < rhs.durationDiff }
+            return lhs.title.count < rhs.title.count
+        }!
+
+        diskCache.set(
+            title: title,
+            artist: artist,
+            duration: duration,
+            resolvedTitle: best.title,
+            resolvedArtist: best.artist,
+            region: best.region
+        )
+        DebugLogger.log("MetadataResolver", "💿 album scoped resolve: '\(title)'/'\(cleanAlbum)' → '\(best.title)'/'\(best.album)' by '\(best.artist)' (\(best.region), Δ\(String(format: "%.2f", best.durationDiff))s)")
+        return (best.title, best.artist, best.album, best.region, best.durationDiff)
+    }
+
+    private func catalogArtistMatches(input: String, result: String) -> Bool {
+        let inputNorm = LanguageUtils.normalizeArtistName(input).lowercased()
+        let resultNorm = LanguageUtils.normalizeArtistName(result).lowercased()
+        guard !inputNorm.isEmpty, !resultNorm.isEmpty else { return false }
+        if inputNorm == resultNorm { return true }
+        if inputNorm.contains(resultNorm) || resultNorm.contains(inputNorm) { return true }
+        let inputNoSpace = inputNorm.replacingOccurrences(of: " ", with: "")
+        let resultNoSpace = resultNorm.replacingOccurrences(of: " ", with: "")
+        return inputNoSpace == resultNoSpace
+            || inputNoSpace.contains(resultNoSpace)
+            || resultNoSpace.contains(inputNoSpace)
+    }
+
     /// 拆分 Apple Music 双标题（"A / B" → (A, B)），仅当 " / " 分隔且两侧非空
     public func splitDualTitle(_ title: String) -> (first: String, second: String)? {
         let parts = title.components(separatedBy: " / ")

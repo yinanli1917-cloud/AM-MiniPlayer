@@ -565,12 +565,18 @@ extension LyricsFetcher {
                 if params.normalizedAlbum == normalizedAlbum { return true }
                 if params.normalizedAlbum.contains(normalizedAlbum) { return true }
                 if normalizedAlbum.contains(params.normalizedAlbum) { return true }
+                let inputLatin = LanguageUtils.toLatinLower(params.normalizedAlbum)
+                let resultLatin = LanguageUtils.toLatinLower(normalizedAlbum)
+                if !inputLatin.isEmpty, !resultLatin.isEmpty,
+                   inputLatin.count >= 3, resultLatin.count >= 3 {
+                    if inputLatin == resultLatin { return true }
+                    if inputLatin.contains(resultLatin) { return true }
+                    if resultLatin.contains(inputLatin) { return true }
+                }
                 // 🔑 Pinyin/Romaji album cross-script match
                 let inputHasCJK = LanguageUtils.containsCJK(params.normalizedAlbum)
                 let resultHasCJK = LanguageUtils.containsCJK(normalizedAlbum)
                 if inputHasCJK != resultHasCJK {
-                    let inputLatin = LanguageUtils.toLatinLower(params.normalizedAlbum)
-                    let resultLatin = LanguageUtils.toLatinLower(normalizedAlbum)
                     guard !inputLatin.isEmpty, !resultLatin.isEmpty,
                           inputLatin.count >= 3, resultLatin.count >= 3 else { return false }
                     if inputLatin == resultLatin { return true }
