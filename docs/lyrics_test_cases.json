@@ -243,8 +243,10 @@
     "artist": "deca joins",
     "duration": 318,
     "expectation": {
-      "shouldFindLyrics": false,
-      "allowMissingLyrics": true
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineSHA256": "e18454925bf51c9fb7e21c22f720b9221355a8d36d955ab306f8c6ac1ac558a4",
+      "expectedClassification": "synced"
     }
   },
   {

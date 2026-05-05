@@ -145,6 +145,11 @@ public struct LyricsView: View {
                                       duration: musicController.duration,
                                       album: musicController.currentAlbum)
         }
+        .onChange(of: musicController.currentAlbum) { _, newAlbum in
+            guard currentPage == .lyrics else { return }
+            guard !newAlbum.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            scheduleTrackChangeLyricsFetch()
+        }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
         // ── onChange: 翻译相关 ──

@@ -223,7 +223,7 @@ extension LyricsFetcher {
     /// Low-score synced catalog hits can still be correct when the scorer
     /// penalizes sparse vocals or long outros. Admit them only with exact
     /// title/duration evidence plus an independent lyric-text witness.
-    private func hasIndependentLyricAgreement(for result: LyricsFetchResult, allResults: [LyricsFetchResult]) -> Bool {
+    func hasIndependentLyricAgreement(for result: LyricsFetchResult, allResults: [LyricsFetchResult]) -> Bool {
         guard result.kind == .synced,
               result.score >= 10,
               result.lyrics.count >= 12,
@@ -345,6 +345,12 @@ extension LyricsFetcher {
             return (lastStart - songDuration) > max(10.0, songDuration * 0.05)
         }
         let tailGap = songDuration - lastStart
+        if result.albumMatched,
+           result.titleMatched,
+           result.score >= 30,
+           tailGap <= max(225.0, songDuration * 0.56) {
+            return false
+        }
         if result.score < 50,
            tailGap > min(180.0, max(120.0, songDuration * 0.45)) {
             return true

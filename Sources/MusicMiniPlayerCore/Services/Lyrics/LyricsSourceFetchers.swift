@@ -14,6 +14,32 @@ import MusicKit
 
 extension LyricsFetcher {
 
+    private func scoreWithCatalogEvidence(
+        baseScore: Double,
+        lyrics: [LyricLine],
+        kind: LyricsKind,
+        albumMatched: Bool,
+        titleMatched: Bool,
+        durationDiff: Double?
+    ) -> Double {
+        guard kind != .unsynced,
+              albumMatched,
+              titleMatched,
+              let durationDiff,
+              durationDiff < 2.0,
+              baseScore >= 20 else {
+            return baseScore
+        }
+
+        let realLineCount = lyrics.filter {
+            let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+        }.count
+        guard realLineCount >= 5 else { return baseScore }
+
+        return max(baseScore, 32)
+    }
+
     // MARK: - AMLL-TTML-DB
 
     func fetchFromAMLL(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
@@ -264,9 +290,12 @@ extension LyricsFetcher {
             if let result = await fetchNetEaseLyrics(songId: match.id, duration: duration, expectedTitle: match.title, expectedArtist: match.artist) {
                 let lyrics = result.lyrics
                 let kind = result.kind
-                let score = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
+                let rawScore = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
+                let score = scoreWithCatalogEvidence(baseScore: rawScore, lyrics: lyrics, kind: kind, albumMatched: match.albumMatched, titleMatched: match.titleMatched, durationDiff: match.durationDiff)
                 let fetched = LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind, albumMatched: match.albumMatched, titleMatched: match.titleMatched, matchedDurationDiff: match.durationDiff)
-                if score >= 35 || result.kind == .synced && result.lyrics.contains(where: { $0.hasSyllableSync }) {
+                if score >= 35
+                    || (result.kind == .synced && match.albumMatched && match.titleMatched && match.durationDiff < 2.0 && score >= 30)
+                    || result.kind == .synced && result.lyrics.contains(where: { $0.hasSyllableSync }) {
                     return fetched
                 }
                 primaryResult = fetched
@@ -294,7 +323,7 @@ extension LyricsFetcher {
             guard let id = s["id"] as? Int,
                   let name = s["name"] as? String,
                   let dur = (s["duration"] as? Double).map({ $0 / 1000.0 }) else { return nil }
-            if let primaryId = match?.id, id == primaryId { return nil }
+            if let primaryId = match?.id, id == primaryId, primaryResult != nil { return nil }
             let artistName = ((s["artists"] as? [[String: Any]])?.first?["name"] as? String) ?? cjkArtistForFallback
             let delta = abs(dur - duration)
             guard delta < 20.0 else { return nil }
@@ -529,7 +558,8 @@ extension LyricsFetcher {
         }
         let lyrics = result.lyrics
         let kind = result.kind
-        let score = scorer.calculateScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled, kind: kind)
+        let rawScore = scorer.calculateScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled, kind: kind)
+        let score = scoreWithCatalogEvidence(baseScore: rawScore, lyrics: lyrics, kind: kind, albumMatched: qqMatch.albumMatched, titleMatched: qqMatch.titleMatched, durationDiff: qqMatch.durationDiff)
         return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score, kind: kind, albumMatched: qqMatch.albumMatched, titleMatched: qqMatch.titleMatched, matchedDurationDiff: qqMatch.durationDiff)
     }
 
