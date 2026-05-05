@@ -67,6 +67,7 @@ public struct LyricsView: View {
     @State private var controlsBlurAmount: CGFloat = 0
     @State private var controlsOffsetY: CGFloat = 0
     @State private var autoScrollTimer: Timer? = nil
+    @State private var pendingTrackLyricsFetchTask: Task<Void, Never>? = nil
 
     // ── 翻译状态 ──
     @State private var translationSessionConfigAny: Any?
@@ -108,6 +109,10 @@ public struct LyricsView: View {
         .onHover { hovering in handleHover(hovering) }
         // ── onChange: 页面切换 ──
         .onChange(of: currentPage) { _, newPage in
+            if newPage != .lyrics {
+                pendingTrackLyricsFetchTask?.cancel()
+                pendingTrackLyricsFetchTask = nil
+            }
             if newPage == .lyrics {
                 isHovering = true
                 animateControlsIn()
@@ -140,10 +145,7 @@ public struct LyricsView: View {
             scroll.rawScrollOffset = 0
             scroll.frozenDisplayIndex = nil
             scroll.lockedLineIndex = nil
-            lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
-                                      artist: musicController.currentArtist,
-                                      duration: musicController.duration,
-                                      album: musicController.currentAlbum)
+            scheduleTrackChangeLyricsFetch()
         }
         .onChange(of: musicController.currentAlbum) { _, newAlbum in
             guard currentPage == .lyrics else { return }
@@ -565,6 +567,26 @@ public struct LyricsView: View {
         scroll.rawScrollOffset = 0
         scroll.manualScrollOffset = 0
         musicController.seek(to: line.startTime)
+    }
+
+    private func scheduleTrackChangeLyricsFetch() {
+        pendingTrackLyricsFetchTask?.cancel()
+        let title = musicController.currentTrackTitle
+        let artist = musicController.currentArtist
+        let duration = musicController.duration
+        let album = musicController.currentAlbum
+
+        pendingTrackLyricsFetchTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            guard currentPage == .lyrics else { return }
+            guard musicController.currentTrackTitle == title,
+                  musicController.currentArtist == artist else { return }
+            lyricsService.fetchLyrics(for: title,
+                                      artist: artist,
+                                      duration: duration,
+                                      album: album)
+        }
     }
 
     private func handleExternalManualScroll(_ newValue: Bool) {
