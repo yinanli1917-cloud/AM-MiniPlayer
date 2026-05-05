@@ -179,7 +179,7 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        let songID = "\(title)-\(artist)"
+        let songID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
 
         // 🔑 STABILITY GUARD: Once good lyrics are loaded, block ALL re-fetches
         // for the same song within a cooldown window. This prevents:
@@ -188,17 +188,16 @@ public class LyricsService: ObservableObject {
         // - updatePlayerState 30s full-sync creating a subtly different songID
         // - Any other path that creates a new songID for the same song
         //
-        // The guard is artist-based: if good lyrics exist, artist matches, and we're
-        // within the cooldown window → same song, skip. This catches variant titles
-        // like "Cloudy na Gogo" vs "くもりのちゴーゴー" that create different songIDs.
+        // The guard is strict identity-based: same title/artist/album/duration
+        // only. Same title or same artist alone is not safe for lyric reuse.
         // Only forceRefresh (user-initiated retry button) bypasses this guard.
         if !forceRefresh,
            let lastGoodTime = lastGoodLyricsTime,
            Date().timeIntervalSince(lastGoodTime) < stabilityGuardCooldown,
            !lyrics.isEmpty, error == nil {
-            // Same-song detection must stay identity-based. Treating same artist
-            // as same song freezes stale lyrics during fast album/playlist switches
-            // such as adjacent Carpenters tracks.
+            // Same-song detection must stay strict. Treating same artist or
+            // title-only as same song freezes stale lyrics during fast switches
+            // and same-title catalog collisions.
             let isSameSong = songID == currentSongID
             if isSameSong {
                 DebugLogger.log("LyricsService", "⏭️ Stability guard: '\(songID)' blocked (\(String(format: "%.1f", Date().timeIntervalSince(lastGoodTime)))s since good lyrics)")
@@ -334,32 +333,18 @@ public class LyricsService: ObservableObject {
             }
             DebugLogger.log("LyricsService", "❌ SEARCH NO RESULTS: '\(songID)' dur=\(duration) sources=\(results.count)")
 
-            let wantsTranslation = showTranslation
-            if let backfilled = await fetcher.backfillAuthoritativeSyncedLyrics(
+            if Task.isCancelled {
+                DebugLogger.log("LyricsService", "⏭️ Task cancelled after foreground miss, NOT caching empty results: '\(songID)'")
+                return
+            }
+
+            launchAuthoritativeBackfill(
                 title: title,
                 artist: artist,
                 duration: duration,
-                translationEnabled: wantsTranslation,
-                album: album
-            ) {
-                await self.applyFetchedLyricsIfCurrent(
-                    backfilled,
-                    title: title,
-                    artist: artist,
-                    duration: duration,
-                    songID: songID,
-                    album: album
-                )
-                return
-            }
-
-            if Task.isCancelled {
-                DebugLogger.log("LyricsService", "⏭️ Task cancelled after backfill miss, NOT caching empty results: '\(songID)'")
-                return
-            }
-
-            let noLyricsCache = CachedLyricsItem(lyrics: [], isNoLyrics: true)
-            lyricsCache.setObject(noLyricsCache, forKey: songID as NSString)
+                album: album,
+                songID: songID
+            )
 
             await MainActor.run {
                 guard self.currentSongID == songID else { return }
@@ -370,6 +355,37 @@ public class LyricsService: ObservableObject {
         }
 
         await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
+    }
+
+    private func launchAuthoritativeBackfill(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String,
+        songID: String
+    ) {
+        let wantsTranslation = showTranslation
+        Task { [weak self] in
+            guard let self else { return }
+            guard let backfilled = await self.fetcher.backfillAuthoritativeSyncedLyrics(
+                title: title,
+                artist: artist,
+                duration: duration,
+                translationEnabled: wantsTranslation,
+                album: album
+            ) else {
+                DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
+                return
+            }
+            await self.applyFetchedLyricsIfCurrent(
+                backfilled,
+                title: title,
+                artist: artist,
+                duration: duration,
+                songID: songID,
+                album: album
+            )
+        }
     }
 
     private func applyFetchedLyricsIfCurrent(
@@ -681,12 +697,28 @@ public class LyricsService: ObservableObject {
     // ========================================================================
 
     public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval, album: String)]) {
-        for track in tracks.prefix(3) {
-            let songID = "\(track.title)-\(track.artist)"
-            guard lyricsCache.object(forKey: songID as NSString) == nil else { continue }
+        let candidates = tracks
+            .prefix(4)
+            .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
+            .filter {
+                let songID = Self.songIdentity(title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+                return lyricsCache.object(forKey: songID as NSString) == nil
+            }
 
-            Task.detached(priority: .low) { [weak self] in
-                guard let self = self else { return }
+        guard !candidates.isEmpty else { return }
+
+        Task.detached(priority: .low) { [weak self] in
+            guard let self else { return }
+            for track in candidates {
+                guard !Task.isCancelled else { return }
+                let songID = Self.songIdentity(
+                    title: track.title,
+                    artist: track.artist,
+                    duration: track.duration,
+                    album: track.album
+                )
+                if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
+
                 let results = await self.fetcher.fetchAllSources(
                     title: track.title,
                     artist: track.artist,
@@ -705,7 +737,7 @@ public class LyricsService: ObservableObject {
                         album: track.album
                     )
                 }
-                guard let bestResult, !bestResult.lyrics.isEmpty else { return }
+                guard let bestResult, !bestResult.lyrics.isEmpty else { continue }
 
                 let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
                 let processed = self.parser.processLyrics(aligned)
@@ -720,6 +752,14 @@ public class LyricsService: ObservableObject {
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
             }
         }
+    }
+
+    private static func songIdentity(title: String, artist: String, duration: TimeInterval, album: String) -> String {
+        let normalizedTitle = MetadataDiskCache.normalize(title)
+        let normalizedArtist = MetadataDiskCache.normalize(artist)
+        let normalizedAlbum = MetadataDiskCache.normalize(album)
+        let roundedDuration = duration > 0 ? Int(duration.rounded()) : 0
+        return "\(normalizedTitle)|\(normalizedArtist)|\(normalizedAlbum)|\(roundedDuration)"
     }
 }
 

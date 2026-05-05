@@ -23,11 +23,9 @@ extension LyricsFetcher {
         durationDiff: Double?
     ) -> Double {
         guard kind != .unsynced,
-              albumMatched,
               titleMatched,
               let durationDiff,
-              durationDiff < 2.0,
-              baseScore >= 20 else {
+              durationDiff < 2.0 else {
             return baseScore
         }
 
@@ -37,7 +35,13 @@ extension LyricsFetcher {
         }.count
         guard realLineCount >= 5 else { return baseScore }
 
-        return max(baseScore, 32)
+        if albumMatched && baseScore >= 20 {
+            return max(baseScore, 32)
+        }
+        if durationDiff < 1.0 && baseScore >= 10 {
+            return max(baseScore, 30)
+        }
+        return baseScore
     }
 
     // MARK: - AMLL-TTML-DB

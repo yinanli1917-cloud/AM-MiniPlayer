@@ -4,10 +4,10 @@
  * [POS]: Utils — disk-backed cache used by MetadataResolver / LyricsPrewarmer
  *
  * ---------------------------------------------------------------------------
- * On-disk schema (human-readable JSON, version: 1):
+ * On-disk schema (human-readable JSON, version: 4):
  *
  *     {
- *       "version": 1,
+ *       "version": 4,
  *       "entries": {
  *         "<sha256-hex-key>": {
  *           "resolved_title": "プラスティック・ラヴ",
@@ -77,7 +77,7 @@ public struct PreflightEntry: Codable, Equatable {
 
 public final class MetadataDiskCache {
 
-    public static let schemaVersion = 1
+    public static let schemaVersion = 4
     public static let ttlSeconds: TimeInterval = 30 * 86400  // 30 days
 
     private let fileURL: URL

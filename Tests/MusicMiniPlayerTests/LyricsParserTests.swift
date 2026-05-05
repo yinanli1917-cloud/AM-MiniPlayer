@@ -652,6 +652,20 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertFalse(stripped.contains(where: { $0.text.contains("[") }))
     }
 
+    func testStripMetadataLines_openingSourceIntroBlock() {
+        let lines = [
+            LyricLine(text: "单曲介绍｜", startTime: 0.0, endTime: 3.0),
+            LyricLine(text: "这首歌以细腻的吉他声线展开，描写城市夜色里的失重感。", startTime: 3.0, endTime: 10.0),
+            LyricLine(text: "词/曲：郑敬儒", startTime: 10.0, endTime: 14.0),
+            LyricLine(text: "一滩死水", startTime: 31.4, endTime: 35.0),
+            LyricLine(text: "慢慢地流向我", startTime: 35.0, endTime: 39.0),
+        ]
+
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.map(\.text), ["一滩死水", "慢慢地流向我"])
+    }
+
     /// Real data: 戀愛預告 by Sandy Lamb (NetEase id=5258725) — the title card
     /// at 0s is `戀愛預告（《開心鬼》電影插曲-林姍姍（SandyLim` which uses:
     /// - CJK fullwidth open paren `（` inside
