@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import MusicKit
 import ObjCSupport
+import os
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Artwork Extraction Helper
@@ -51,6 +52,10 @@ extension MusicController {
     /// 🔑 设置封面并自动计算亮度
     func setArtwork(_ image: NSImage?) {
         if currentArtwork === image { return }
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "SetArtwork", signpostID: signpostID, "hasImage=%{public}d", image == nil ? 0 : 1)
+        defer { os_signpost(.end, log: performanceLog, name: "SetArtwork", signpostID: signpostID) }
+
         self.currentArtwork = image
         if let img = image {
             self.artworkLuminance = img.perceivedBrightness()
@@ -99,7 +104,7 @@ extension MusicController {
     ///    - `artworkAPITask?.cancel()` 避免 API pileup；
     ///    - `artworkFetchGeneration` gate 在 API/SB 回调里拒绝过期结果。
     ///    没有独立的 fetching-key 标志（它是 stale-state 滋生源）。
-    func fetchArtwork(for title: String, artist: String, album: String, persistentID: String, generation: Int) {
+    func fetchArtwork(for title: String, artist: String, album: String, duration: TimeInterval = 0, persistentID: String, generation: Int) {
         logToFile("🎨 fetchArtwork: \(title) - \(artist) gen=\(generation)")
 
         // Check cache first — radio tracks use "radio:title|artist" stable key
@@ -129,7 +134,10 @@ extension MusicController {
             artworkAPIRequestKey = apiRequestKey
             artworkAPIResultTask = Task { [weak self] in
                 guard let self else { return nil }
-                return await self.fetchMusicKitArtwork(title: title, artist: artist, album: album)
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                guard !Task.isCancelled else { return nil }
+                guard self.artworkFetchGeneration == generation else { return nil }
+                return await self.fetchMusicKitArtwork(title: title, artist: artist, album: album, duration: duration)
             }
         } else {
             artworkAPITask?.cancel()
@@ -190,6 +198,13 @@ extension MusicController {
                 self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
                 return
             }
+            if Date().timeIntervalSince(self.lastUserActionTime) < 0.6 {
+                Thread.sleep(forTimeInterval: 0.18)
+                guard self.artworkFetchGeneration == generation else {
+                    self.logToFile("🎨 [SB] stale gen \(generation) after rapid-skip debounce, skipping")
+                    return
+                }
+            }
 
             self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
             if let image = self.getArtworkImageFromApp(app) {
@@ -223,7 +238,7 @@ extension MusicController {
     /// 获取封面图片 - 双轨方案
     /// 1. 优先尝试 MusicKit（App Store 版本，需要开发者签名）
     /// 2. 回退到 iTunes Search API（开发版本，公开 API 无需签名）
-    public func fetchMusicKitArtwork(title: String, artist: String, album: String) async -> NSImage? {
+    public func fetchMusicKitArtwork(title: String, artist: String, album: String, duration: TimeInterval = 0) async -> NSImage? {
         guard !isPreview else { return nil }
 
         // 🔑 The user's library is mostly Apple Music subscription tracks, which
@@ -263,7 +278,7 @@ extension MusicController {
             }
             group.addTask {
                 if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
-                    await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album)
+                    await self.fetchArtworkViaNetEase(title: title, artist: artist, album: album, duration: duration)
                 }) { return .image(img, .web) }
                 return nil
             }
@@ -382,24 +397,33 @@ extension MusicController {
     /// NetEase Cloud Music — single-call cloudsearch returns album picUrl. Best
     /// CJK-track coverage available; also returns hits for many Western tracks.
     /// Match priority: title+artist+album > title+artist > first result.
-    private func fetchArtworkViaNetEase(title: String, artist: String, album: String) async -> NSImage? {
-        let query = "\(title) \(artist)"
-        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let searchURL = URL(string: "https://music.163.com/api/cloudsearch/pc?s=\(encoded)&type=1&limit=10") else {
-            return nil
-        }
+    private func fetchArtworkViaNetEase(title: String, artist: String, album: String, duration: TimeInterval = 0) async -> NSImage? {
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "ArtworkNetEaseFetch", signpostID: signpostID)
+        defer { os_signpost(.end, log: performanceLog, name: "ArtworkNetEaseFetch", signpostID: signpostID) }
 
-        var req = URLRequest(url: searchURL, timeoutInterval: 2.0)
-        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
-        req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        let queries = [
+            "\(title) \(artist)",
+            "\(album) \(artist)"
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-        do {
-            let (data, _) = try await URLSession.shared.data(for: req)
+        for query in queries where !query.isEmpty {
+            guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let searchURL = URL(string: "https://music.163.com/api/cloudsearch/pc?s=\(encoded)&type=1&limit=10") else {
+                continue
+            }
+
+            var req = URLRequest(url: searchURL, timeoutInterval: 2.0)
+            req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+            req.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+
+            do {
+                let (data, _) = try await URLSession.shared.data(for: req)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let result = json["result"] as? [String: Any],
                   let songs = result["songs"] as? [[String: Any]],
                   !songs.isEmpty else {
-                return nil
+                continue
             }
 
             // Match preference uses CJK-aware title comparison so 愛你不是兩三天 ↔ 爱你不是两三天
@@ -413,14 +437,31 @@ extension MusicController {
                     candidateTitle: sTitle, candidateArtist: sArtist, candidateAlbum: sAlbum
                 ))
             }
-            guard let best = scored.filter({ $0.score.isReliable })
-                .max(by: { $0.score.total < $1.score.total })?.song else {
-                return nil
-            }
+            let reliableBest = scored.filter({ $0.score.isReliable })
+                .max(by: { $0.score.total < $1.score.total })?.song
+            let nativeAlbumBest: [String: Any]? = reliableBest ?? {
+                guard duration > 0,
+                      query != "\(title) \(artist)",
+                      LanguageUtils.isPureASCII(title),
+                      let candidate = songs.first(where: { song in
+                          let name = (song["name"] as? String) ?? ""
+                          let artists = (song["ar"] as? [[String: Any]]) ?? []
+                          let artistName = artists.first?["name"] as? String ?? ""
+                          let trackDuration = ((song["dt"] as? Double) ?? Double(song["duration"] as? Int ?? 0)) / 1000.0
+                          let delta = abs(trackDuration - duration)
+                          return delta < 1.25
+                              && name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) })
+                              && artistName.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) })
+                      }) else {
+                    return nil
+                }
+                return candidate
+            }()
+            guard let best = nativeAlbumBest else { continue }
             guard let al = best["al"] as? [String: Any],
                   let picStr = al["picUrl"] as? String,
                   let picURL = URL(string: picStr.replacingOccurrences(of: "http://", with: "https://")) else {
-                return nil
+                continue
             }
 
             // NetEase param `?param=300y300` requests a 300×300 crop — same size as our
@@ -429,9 +470,11 @@ extension MusicController {
             let (imageData, _) = try await HTTPClient.getData(url: sizedURL, timeout: 1.0, retry: false)
             DebugLogger.log("Artwork", "🎨 [NetEase] 命中: '\(best["name"] ?? "?")' al='\((best["al"] as? [String: Any])?["name"] ?? "?")'")
             return NSImage(data: imageData)
-        } catch {
-            return nil
+            } catch {
+                continue
+            }
         }
+        return nil
     }
 
     /// Deezer API — free, no auth, reliable artwork source
@@ -512,6 +555,10 @@ extension MusicController {
     /// iTunes Search API 方式获取封面（公开 API，无需授权）
     /// 🔑 优先匹配同专辑版本，避免返回不同版本的封面
     private func fetchArtworkViaITunesAPI(title: String, artist: String, album: String) async -> NSImage? {
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "ArtworkITunesFetch", signpostID: signpostID)
+        defer { os_signpost(.end, log: performanceLog, name: "ArtworkITunesFetch", signpostID: signpostID) }
+
         // 多级搜索策略
         let searchStrategies = [
             "\(title) \(artist)",           // 1. title + artist（最精确）
@@ -658,19 +705,32 @@ extension MusicController {
     }
 
     public func preloadArtwork(for tracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)]) {
-        let persistentIDs = tracks
+        let preloadTracks = tracks
             .prefix(4)
-            .map(\.persistentID)
-            .filter { !$0.isEmpty && !$0.hasPrefix("am:") && artworkCache.object(forKey: $0 as NSString) == nil }
+            .filter { track in
+                !track.persistentID.isEmpty &&
+                !track.persistentID.hasPrefix("am:") &&
+                artworkCache.object(forKey: track.persistentID as NSString) == nil
+            }
 
-        guard !persistentIDs.isEmpty else { return }
+        guard !preloadTracks.isEmpty else { return }
 
         Task(priority: .utility) { [weak self] in
             guard let self else { return }
-            for persistentID in persistentIDs {
+            let batchSignpostID = OSSignpostID(log: self.performanceLog)
+            os_signpost(.begin, log: self.performanceLog, name: "PreloadArtworkBatch", signpostID: batchSignpostID, "count=%{public}d", preloadTracks.count)
+            defer { os_signpost(.end, log: self.performanceLog, name: "PreloadArtworkBatch", signpostID: batchSignpostID) }
+
+            for track in preloadTracks {
                 guard !Task.isCancelled else { return }
+                let persistentID = track.persistentID
                 if self.artworkCache.object(forKey: persistentID as NSString) != nil { continue }
-                _ = await self.fetchArtworkByPersistentID(persistentID: persistentID)
+                let trackSignpostID = OSSignpostID(log: self.performanceLog)
+                os_signpost(.begin, log: self.performanceLog, name: "PreloadArtworkTrack", signpostID: trackSignpostID)
+                defer { os_signpost(.end, log: self.performanceLog, name: "PreloadArtworkTrack", signpostID: trackSignpostID) }
+                if let image = await self.fetchMusicKitArtwork(title: track.title, artist: track.artist, album: track.album) {
+                    self.artworkCache.setObject(image, forKey: persistentID as NSString, cost: Self.imageCacheCost(image))
+                }
             }
         }
     }

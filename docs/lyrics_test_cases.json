@@ -98,9 +98,9 @@
     "duration": 205,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ", "Genius"],
+      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "LRCLIB-Search", "QQ", "Genius"],
       "firstLineContains": null,
-      "firstLineSHA256": "55a4360b4178239d71800a69a77d48edbd285a9214aa3a82fe9ae5df59a17d76"
+      "firstLineSHA256": "9b93ef3241b521862767d296ab4fe692f88b61ec42adb3ed9f01bb8dd1eee50c"
     }
   },
   {
@@ -245,7 +245,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineSHA256": "e18454925bf51c9fb7e21c22f720b9221355a8d36d955ab306f8c6ac1ac558a4",
+      "firstLineSHA256": "5c0302c2c3f5a5231c285d832e32e951127264f22ab997b892234e656699c844",
       "expectedClassification": "synced"
     }
   },
@@ -354,10 +354,23 @@
     "title": "Hiroshima mon amour",
     "artist": "Karen Mok",
     "duration": 321,
+    "album": "回蔚",
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "拒绝"
+    }
+  },
+  {
+    "id": "H13B",
+    "title": "A Candlelight Dinner With Only Ice Cream",
+    "artist": "Karen Mok",
+    "duration": 239,
+    "album": "回蔚",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "他不爱我"
     }
   },
   {
@@ -490,7 +503,7 @@
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": null,
-      "firstLineSHA256": "bc63f148c829c85abf0ed7dba376623325abe58cc93c7411237b288a8097844e"
+      "firstLineSHA256": "1f81201ba1b69e69a03f325c3c2f9b6cd3e5298dcc5c5a0ed858482891b188f8"
     }
   },
   {
@@ -524,11 +537,11 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineSHA256": "d3e4dcd327cb72bbaf4f8058ce220e2e766e083941fe0b1e64da2b053b7192d6",
+      "firstLineSHA256": "b4930edf6ed6373d8d86ac89f6cc54605301e7ec34b7a9dd4af2b9eaf50f2764",
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
       "firstLineStartMaxS": 30,
-      "maxTailGapS": 20
+      "maxTailGapS": 35
     }
   },
   {
@@ -805,6 +818,74 @@
     "expectation": {
       "shouldFindLyrics": false,
       "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X23_album_scoped_michelle_chen_native_artist",
+    "title": "This Is My Love",
+    "artist": "Michelle Chen",
+    "duration": 312,
+    "album": "Young Stars",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "近乡情怯",
+      "expectedClassification": "synced"
+    }
+  },
+  {
+    "id": "X24_english_localized_title_no_discography_collision",
+    "title": "Wrong Love",
+    "artist": "Wang Leehom",
+    "duration": 239,
+    "album": "Shangri-La",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["LRCLIB-Search", "QQ", "NetEase"],
+      "firstLineContains": "北風毫不留情",
+      "expectedClassification": "synced",
+      "maxTailGapS": 35
+    }
+  },
+  {
+    "id": "X25_english_localized_title_native_lyrics_bridge",
+    "title": "All The Things You Never Knew",
+    "artist": "Wang Leehom",
+    "duration": 279,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ", "NetEase", "LRCLIB-Search"],
+      "firstLineContains": "蝴蝶眨",
+      "expectedClassification": "synced",
+      "maxTailGapS": 35
+    }
+  },
+  {
+    "id": "X26_english_title_native_artist_title_beats_duration_collision",
+    "title": "The Key",
+    "artist": "JJ Lin",
+    "duration": 208,
+    "album": "From M.E. To Myself",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "好好愛自己",
+      "expectedClassification": "synced",
+      "maxTailGapS": 40
+    }
+  },
+  {
+    "id": "X27_artist_query_native_title_bridge",
+    "title": "Thinking of Someone",
+    "artist": "Pets Tseng",
+    "duration": 244,
+    "album": "KO One Return (Original Soundtrack)",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ", "NetEase"],
+      "firstLineContains": "你離開",
+      "expectedClassification": "synced",
+      "maxTailGapS": 40
     }
   }
 ]

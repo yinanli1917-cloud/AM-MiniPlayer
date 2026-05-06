@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import MusicKit
 import ObjCSupport
+import os
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Apple Event 常量（Music.app ScriptingBridge 返回值）
@@ -58,6 +59,7 @@ extension MusicController {
             logger.info("Preview: nextTrack")
             return
         }
+        lastUserActionTime = Date()
         skipDirection = 1
         controlQueue.async { [weak self] in
             guard let app = self?.controlApp, app.isRunning else {
@@ -77,6 +79,7 @@ extension MusicController {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
+            lastUserActionTime = Date()
             skipDirection = -1
             controlQueue.async { [weak self] in
                 guard let app = self?.controlApp, app.isRunning else {
@@ -359,7 +362,8 @@ extension MusicController {
                     return
                 }
                 defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
-                let result = self.getUpNextTracksFromApp(app, limit: 10)
+                let limit = self.currentPage == .playlist ? 10 : 2
+                let result = self.getUpNextTracksFromApp(app, limit: limit)
                 continuation.resume(returning: result)
             }
         }
@@ -367,14 +371,7 @@ extension MusicController {
         await MainActor.run {
             self.applyUpNextTracksIfChanged(tracks)
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
-
-            // Trigger lyrics preloading for upcoming tracks
-            let tracksToPreload = Array(tracks.prefix(3)).map {
-                (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
-            }
-            if !tracksToPreload.isEmpty {
-                LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
-            }
+            self.preloadNearbyAssets(from: tracks)
         }
     }
 
@@ -406,23 +403,20 @@ extension MusicController {
                 return
             }
 
-            let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
             let trackCount = tracks.count
-            debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks\n")
+            let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
+            let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
+            debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks, index=\(currentIndex)\n")
 
-            var foundCurrent = false
-            var currentIndex = -1
-
-            for i in 0..<trackCount {
-                guard self.artworkFetchGeneration == gen else {
-                    debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
-                    return
-                }
-
-                guard let track = tracks.object(at: i) as? NSObject,
-                      let trackID = track.value(forKey: "persistentID") as? String else { continue }
-
-                if foundCurrent {
+            if currentIndex >= 0 && currentIndex < trackCount {
+                let upperBound = min(trackCount, currentIndex + 1 + limit)
+                for i in (currentIndex + 1)..<upperBound {
+                    guard self.artworkFetchGeneration == gen else {
+                        debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                        return
+                    }
+                    guard let track = tracks.object(at: i) as? NSObject,
+                          let trackID = track.value(forKey: "persistentID") as? String else { continue }
                     let name = track.value(forKey: "name") as? String ?? ""
                     let artist = track.value(forKey: "artist") as? String ?? ""
                     let album = track.value(forKey: "album") as? String ?? ""
@@ -434,13 +428,41 @@ extension MusicController {
                     } else if !name.isEmpty {
                         debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
                     }
-                } else if trackID == currentID {
-                    foundCurrent = true
-                    currentIndex = i
                 }
+            } else {
+                var foundCurrent = false
+                var fallbackIndex = -1
+
+                for i in 0..<trackCount {
+                    guard self.artworkFetchGeneration == gen else {
+                        debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                        return
+                    }
+
+                    guard let track = tracks.object(at: i) as? NSObject,
+                          let trackID = track.value(forKey: "persistentID") as? String else { continue }
+
+                    if foundCurrent {
+                        let name = track.value(forKey: "name") as? String ?? ""
+                        let artist = track.value(forKey: "artist") as? String ?? ""
+                        let album = track.value(forKey: "album") as? String ?? ""
+                        let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                        if self.isValidTrackName(name, trackID: trackID) {
+                            result.append((name, artist, album, trackID, duration))
+                            if result.count >= limit { break }
+                        } else if !name.isEmpty {
+                            debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        }
+                    } else if trackID == currentID {
+                        foundCurrent = true
+                        fallbackIndex = i
+                    }
+                }
+                debugPrint("🎵 [getUpNextTracksFromApp] Fallback scan found current at index \(fallbackIndex), fetched \(result.count) tracks\n")
             }
 
-            debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), fetched \(result.count) tracks\n")
+            debugPrint("🎵 [getUpNextTracksFromApp] Fetched \(result.count) tracks\n")
             }
 
             if let ex {
@@ -486,6 +508,7 @@ extension MusicController {
             DispatchQueue.main.async {
                 self.applyRecentTracksIfChanged(tracks)
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
+                self.preloadNearbyAssets(from: tracks)
             }
         }
     }
@@ -557,23 +580,43 @@ extension MusicController {
                     return
                 }
 
-                for i in 0..<tracks.count {
-                    guard let track = tracks.object(at: i) as? NSObject,
-                          let trackID = track.value(forKey: "persistentID") as? String else { continue }
+                let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
+                if currentIndex >= 0 && currentIndex < tracks.count {
+                    let lowerBound = max(0, currentIndex - limit)
+                    for i in lowerBound..<currentIndex {
+                        guard let track = tracks.object(at: i) as? NSObject,
+                              let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-                    if trackID == currentID {
-                        break
+                        let name = track.value(forKey: "name") as? String ?? ""
+                        let artist = track.value(forKey: "artist") as? String ?? ""
+                        let album = track.value(forKey: "album") as? String ?? ""
+                        let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                        if self.isValidTrackName(name, trackID: trackID) {
+                            recentList.append((name, artist, album, trackID, duration))
+                        } else if !name.isEmpty {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        }
                     }
+                } else {
+                    for i in 0..<tracks.count {
+                        guard let track = tracks.object(at: i) as? NSObject,
+                              let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-                    let name = track.value(forKey: "name") as? String ?? ""
-                    let artist = track.value(forKey: "artist") as? String ?? ""
-                    let album = track.value(forKey: "album") as? String ?? ""
-                    let duration = track.value(forKey: "duration") as? Double ?? 0
+                        if trackID == currentID {
+                            break
+                        }
 
-                    if self.isValidTrackName(name, trackID: trackID) {
-                        recentList.append((name, artist, album, trackID, duration))
-                    } else if !name.isEmpty {
-                        debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        let name = track.value(forKey: "name") as? String ?? ""
+                        let artist = track.value(forKey: "artist") as? String ?? ""
+                        let album = track.value(forKey: "album") as? String ?? ""
+                        let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                        if self.isValidTrackName(name, trackID: trackID) {
+                            recentList.append((name, artist, album, trackID, duration))
+                        } else if !name.isEmpty {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        }
                     }
                 }
             }
@@ -605,13 +648,19 @@ extension MusicController {
 
         guard !validTracks.isEmpty else { return }
 
+        os_signpost(.event, log: performanceLog, name: "PreloadNearbyScheduled", "count=%{public}d", validTracks.count)
         assetPreloadTask?.cancel()
+        let generation = artworkFetchGeneration
         assetPreloadTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
                 guard let self else { return }
+                guard self.artworkFetchGeneration == generation else { return }
+                let signpostID = OSSignpostID(log: self.performanceLog)
+                os_signpost(.begin, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID, "count=%{public}d", validTracks.count)
+                defer { os_signpost(.end, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID) }
                 self.preloadArtwork(for: validTracks)
                 LyricsService.shared.preloadNextSongs(
                     tracks: validTracks.map {

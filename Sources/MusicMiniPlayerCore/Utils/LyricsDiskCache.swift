@@ -1,7 +1,7 @@
 /**
  * [INPUT]: Foundation + CryptoKit
  * [OUTPUT]: LyricsDiskCache (persistent JSON cache for verified synced lyrics)
- * [POS]: Utils — keeps slow-but-correct synced source results off the interactive path
+ * [POS]: Utils — keeps slow-but-correct synced source results off the interactive path; schema version invalidates rows when identity gates change
  */
 
 import Foundation
@@ -37,7 +37,7 @@ private struct LyricsDiskCacheFile: Codable {
 }
 
 public final class LyricsDiskCache {
-    public static let schemaVersion = 8
+    public static let schemaVersion = 22
     public static let ttlSeconds: TimeInterval = 30 * 86400
 
     private let fileURL: URL
