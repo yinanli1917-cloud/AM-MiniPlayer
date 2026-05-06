@@ -136,6 +136,11 @@ postmortem/001~006                 - 已知 bug 根因 + 解决方案
 Matching weights: Duration (40%) + Title (35%) + Artist (25%), threshold >= 50
 Multi-region metadata: Auto-detects Japanese/Korean/Thai/Vietnamese characters, queries corresponding iTunes regional API
 Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title takes priority
+Album-scoped metadata: Translated storefront album/title pairs may resolve to native title/artist/album before provider lookup. Native CJK artist identities outrank ambiguous ASCII artist aliases. Provider compilation rows (`Various Artists` / `群星`) are accepted only when title, album, and duration are all tight matches.
+Confirmed artist aliases: For ASCII artists with catalog-confirmed CJK aliases, NetEase/QQ may probe both `title + alias` and alias-only discography search. Alias-only results still must pass the normal title/artist/duration/version gates. Ordinary English localized titles must not fall through to same-artist CJK discography rows without title evidence; use catalog metadata, album scope, or source title match instead.
+Lyrics cache: Exact title/artist/duration cache hits remain usable when a later caller supplies noisy album metadata; album match is only marked true when the cached album actually matches. Bump `LyricsDiskCache.schemaVersion` when candidate identity gates become stricter enough that older cached wrong-song rows could otherwise survive.
+ASCII punctuation variants: Titles with missing/restored apostrophes and common contractions run as speculative metadata branches, so library metadata like `Its` can still hit provider titles like `It's` without per-song aliases.
+Low-score synced acceptance: Keep the normal floor for loose provider hits. Below-floor synced lyrics are only admitted with exact catalog evidence such as LRCLIB title+tight duration, or tight-duration title matches whose only issue is a long instrumental outro.
 
 ### Performance Traps (Verified — Never Repeat)
 
@@ -153,6 +158,8 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ `selectBest` prefers synced sources with score >= 30 over unsynced; romaji penalty applies to all unsynced sources
 - ❌ P4 (artist-only match) without title guard → Same-artist collisions when durations align (NewJeans "How Sweet" 191s → "Supernatural" 191s)
   ✅ P4 requires token overlap or CJK title — blocks coincidental duration-only matches
+- ❌ Title-only CJK escape for English/localized titles → same-title or romanized payload collisions (Wang Leehom/Karen Mok/Ellen & The Ripples Band)
+  ✅ Require query provenance: confirmed CJK artist alias, album/artist-backed rows, tight duration, or native-source evidence; romanized LRCLIB text cannot fast-exit native CJK candidates
 - ❌ QQ Music timestamps used raw → Consistently ~0.4s late (verified across 614 lines, 16 songs, median +0.42s vs NetEase)
   ✅ `qqTimeOffset = 0.4` applied via `applyTimeOffset` (same pattern as NetEase 0.7s)
 - ❌ Dynamic `setActivationPolicy(.regular↔.accessory)` in FloatingWindowDelegate → macOS 26 destroys NSStatusItem visibility on every toggle
@@ -165,6 +172,7 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
 
 NetEase/QQ share `SearchCandidate<ID>` + `selectBestCandidate()` priority chain:
 - P1: Title + Artist + Duration < 3s → P2: Title + Artist + Duration < 20s → P3: Title-only + Duration < 1s → P4: Artist-only + Duration < 0.5s + title token overlap or CJK
+- `SearchCandidate.searchDescriptor` records query provenance (`title only`, `artist only`, `album+artist`, alias probes); relaxed CJK bridges are allowed only with source evidence, never from title-only rows alone.
 - `isTitleMatch()` / `isArtistMatch()` handle Simplified/Traditional Chinese + CJK uniformly
 - Dual-title matching with original + resolved (MetadataResolver preserves original title after translation)
 

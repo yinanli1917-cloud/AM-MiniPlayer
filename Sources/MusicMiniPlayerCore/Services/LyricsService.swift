@@ -362,17 +362,13 @@ public class LyricsService: ObservableObject {
                 return
             }
 
-            launchAuthoritativeBackfill(
+            await runAuthoritativeBackfill(
                 title: title,
                 artist: artist,
                 duration: duration,
                 album: album,
                 songID: songID
             )
-
-            await MainActor.run {
-                self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
-            }
             return
         }
 
@@ -397,35 +393,35 @@ public class LyricsService: ObservableObject {
         error = "No lyrics found"
     }
 
-    private func launchAuthoritativeBackfill(
+    private func runAuthoritativeBackfill(
         title: String,
         artist: String,
         duration: TimeInterval,
         album: String,
         songID: String
-    ) {
+    ) async {
         let wantsTranslation = showTranslation
-        Task { [weak self] in
-            guard let self else { return }
-            guard let backfilled = await self.fetcher.backfillAuthoritativeSyncedLyrics(
-                title: title,
-                artist: artist,
-                duration: duration,
-                translationEnabled: wantsTranslation,
-                album: album
-            ) else {
-                DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
-                return
+        guard let backfilled = await fetcher.backfillAuthoritativeSyncedLyrics(
+            title: title,
+            artist: artist,
+            duration: duration,
+            translationEnabled: wantsTranslation,
+            album: album
+        ) else {
+            DebugLogger.log("LyricsService", "🧭 Authoritative backfill miss: '\(songID)'")
+            await MainActor.run {
+                self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
             }
-            await self.applyFetchedLyricsIfCurrent(
-                backfilled,
-                title: title,
-                artist: artist,
-                duration: duration,
-                songID: songID,
-                album: album
-            )
+            return
         }
+        await applyFetchedLyricsIfCurrent(
+            backfilled,
+            title: title,
+            artist: artist,
+            duration: duration,
+            songID: songID,
+            album: album
+        )
     }
 
     private func applyFetchedLyricsIfCurrent(

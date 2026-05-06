@@ -249,6 +249,16 @@ public enum LanguageUtils {
         if words.contains(where: { strongParticles.contains($0) }) { return true }
 
         let weakParticles: Set<String> = ["no", "to", "de"]
+        if words.count == 1, let word = words.first {
+            guard word.count >= 5,
+                  !englishFunctionWords.contains(word),
+                  !englishMorphologySuffixes.contains(where: { word.hasSuffix($0) }),
+                  !englishMorphologyPrefixes.contains(where: { word.hasPrefix($0) && word.count >= $0.count + 3 }),
+                  !hasEnglishConsonantCluster(word)
+            else { return false }
+            return isRomajiSyllableWord(word)
+        }
+
         guard words.contains(where: { weakParticles.contains($0) }) else { return false }
 
         return words.contains { word in
@@ -261,6 +271,33 @@ public enum LanguageUtils {
             else { return false }
             return !hasEnglishConsonantCluster(word)
         }
+    }
+
+    private static func isRomajiSyllableWord(_ word: String) -> Bool {
+        var rest = Array(word)
+        let syllables = [
+            "kya", "kyu", "kyo", "sha", "shu", "sho", "cha", "chu", "cho",
+            "nya", "nyu", "nyo", "hya", "hyu", "hyo", "mya", "myu", "myo",
+            "rya", "ryu", "ryo", "gya", "gyu", "gyo", "ja", "ju", "jo",
+            "shi", "chi", "tsu", "fu",
+            "ka", "ki", "ku", "ke", "ko", "sa", "su", "se", "so",
+            "ta", "te", "to", "na", "ni", "nu", "ne", "no",
+            "ha", "hi", "he", "ho", "ma", "mi", "mu", "me", "mo",
+            "ya", "yu", "yo", "ra", "ri", "ru", "re", "ro",
+            "wa", "wo", "ga", "gi", "gu", "ge", "go",
+            "za", "ji", "zu", "ze", "zo", "da", "de", "do",
+            "ba", "bi", "bu", "be", "bo", "pa", "pi", "pu", "pe", "po",
+            "a", "i", "u", "e", "o", "n"
+        ].sorted { $0.count > $1.count }
+
+        while !rest.isEmpty {
+            let current = String(rest)
+            guard let match = syllables.first(where: { current.hasPrefix($0) }) else {
+                return false
+            }
+            rest.removeFirst(match.count)
+        }
+        return true
     }
 
     // MARK: - Region Inference
