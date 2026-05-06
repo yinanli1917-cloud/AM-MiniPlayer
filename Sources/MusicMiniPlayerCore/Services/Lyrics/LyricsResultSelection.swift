@@ -559,6 +559,13 @@ extension LyricsFetcher {
             }
             // Only consider album-matched candidates that ALSO passed validity.
             if let albumMatched = valid.first(where: { $0.albumMatched }) {
+                if top.nativeAliasMatched,
+                   !top.albumMatched,
+                   !top.titleMatched,
+                   albumMatched.score >= 30 {
+                    DebugLogger.log("🏆 Album identity preferred over loose native alias: \(albumMatched.source) (\(String(format: "%.1f", albumMatched.score))) over \(top.source) (\(String(format: "%.1f", top.score)))")
+                    return albumMatched
+                }
                 // 🔑 Timing sanity gate: album-matched lyrics with large timeline
                 // overshoot vs the other contender's score-based winner indicate
                 // wrong-master timing data.

@@ -37,7 +37,7 @@ private struct LyricsDiskCacheFile: Codable {
 }
 
 public final class LyricsDiskCache {
-    public static let schemaVersion = 21
+    public static let schemaVersion = 22
     public static let ttlSeconds: TimeInterval = 30 * 86400
 
     private let fileURL: URL

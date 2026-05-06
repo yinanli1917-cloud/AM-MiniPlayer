@@ -861,7 +861,21 @@
     }
   },
   {
-    "id": "X26_artist_query_native_title_bridge",
+    "id": "X26_english_title_native_artist_title_beats_duration_collision",
+    "title": "The Key",
+    "artist": "JJ Lin",
+    "duration": 208,
+    "album": "From M.E. To Myself",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "好好愛自己",
+      "expectedClassification": "synced",
+      "maxTailGapS": 40
+    }
+  },
+  {
+    "id": "X27_artist_query_native_title_bridge",
     "title": "Thinking of Someone",
     "artist": "Pets Tseng",
     "duration": 244,

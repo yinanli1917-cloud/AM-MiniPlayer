@@ -501,10 +501,12 @@ public final class LyricsFetcher {
                     continue
                 }
                 let hasFastExitSyncedResult = results.contains {
+                    let looseNativeAlias = $0.nativeAliasMatched && !$0.titleMatched && !$0.albumMatched
                     let lrclibCanFastExit = !LanguageUtils.containsCJK(ot)
                         && !LanguageUtils.containsCJK(oa)
                         && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)
                     return $0.kind == .synced
+                        && !looseNativeAlias
                         && $0.score >= 40
                         && (
                             self.earlyReturnSources.contains($0.source)
@@ -516,6 +518,9 @@ public final class LyricsFetcher {
                     $0.kind == .synced && $0.albumMatched && $0.score >= 30
                 }
                 let hasAnySyncedResult = results.contains { $0.kind == .synced && $0.score > 0 }
+                let hasOnlyLooseNativeAliasSyncedResults = hasAnySyncedResult && results.allSatisfy {
+                    $0.kind != .synced || ($0.nativeAliasMatched && !$0.titleMatched && !$0.albumMatched)
+                }
                 let hasAnyPotentiallyUsableSyncedResult = results.contains {
                     $0.kind == .synced && (
                         $0.score >= 18 ||
@@ -544,6 +549,9 @@ public final class LyricsFetcher {
                         && $0.score >= 60
                         && self.earlyReturnSources.contains($0.source)
                         && $0.titleMatched
+                }
+                if hasOnlyLooseNativeAliasSyncedResults && (branch2Fired.value || albumScopedBranchFired.value) && elapsed < 4.6 {
+                    continue
                 }
                 if (hasHighConfidenceResult && elapsed >= 1.5)
                     || (hasFastExitSyncedResult && elapsed >= 0.15)
@@ -817,7 +825,6 @@ public final class LyricsFetcher {
     private func selectedHasPersistentIdentity(_ result: LyricsFetchResult) -> Bool {
         result.albumMatched
             || (result.titleMatched && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
-            || (result.nativeAliasMatched && result.score >= 45 && (result.matchedDurationDiff.map { $0 < 5.0 } ?? false))
             || result.source == "LRCLIB"
             || result.source == "LRCLIB-Search"
             || result.source == "AMLL"
