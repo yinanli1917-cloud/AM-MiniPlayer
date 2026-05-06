@@ -719,7 +719,8 @@ struct PlaylistItemRowCompact: View {
         let img = await musicController.fetchMusicKitArtwork(
             title: track.title,
             artist: track.artist,
-            album: track.album
+            album: track.album,
+            duration: track.duration
         )
         await MainActor.run {
             if currentArtworkID == pid { artwork = img }

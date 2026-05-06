@@ -743,11 +743,11 @@ public class MusicController: ObservableObject {
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
         // fetchArtwork uses artworkQueue (separate SB instance) + API in parallel.
         // Empty persistentID = title-based dedup; cache backfill happens when SB returns ID.
-        fetchArtwork(for: name, artist: artist, album: album, persistentID: "", generation: generation)
         // 🔑 Capture duration NOW — Task { @MainActor } defers execution.
         // During rapid switching, later notifications' GCD blocks run before earlier Tasks,
         // so self.duration may already reflect a different song by execution time.
         let capturedDuration = self.duration
+        fetchArtwork(for: name, artist: artist, album: album, duration: capturedDuration, persistentID: "", generation: generation)
         let capturedAlbum = album
         scheduleLyricsFetch(title: name, artist: artist, duration: capturedDuration, album: capturedAlbum, generation: generation)
 
@@ -1179,7 +1179,7 @@ public class MusicController: ObservableObject {
 
             lastPolledPosition = 0  // Reset position-jump detection
             let generation = incrementGeneration()
-            fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID, generation: generation)
+            fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, duration: s.trackDuration, persistentID: s.persistentID, generation: generation)
             // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
             scheduleLyricsFetch(title: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum, generation: generation)
             debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(userManuallyOpenedLyrics))\n")

@@ -155,6 +155,15 @@ extension LyricsFetcher {
                 guard candidate.durationDiff < 0.8 else { return false }
                 return !isBackingTrack(candidate)
             }),
+            ("P2d", 2, { candidate in
+                guard hasAlbumHint else { return false }
+                guard candidate.searchDescriptor == "artist only" else { return false }
+                guard LanguageUtils.isPureASCII(inputTitle) else { return false }
+                guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
+                guard candidate.artist.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
+                guard candidate.durationDiff < 1.25 else { return false }
+                return !isBackingTrack(candidate)
+            }),
             // 🔑 P3: 仅艺术家匹配 + 时长极精确 — 覆盖罗马字/翻译标题场景
             ("P3", 3, { candidate in
                 guard candidate.artistMatch else { return false }
@@ -230,6 +239,7 @@ extension LyricsFetcher {
                 titleMatched: winner.candidate.titleMatch || winner.candidate.albumMatch,
                 nativeAliasMatched: !winner.candidate.titleMatch && (
                     (winner.rank == 1 && !winner.candidate.albumMatch)
+                        || winner.label == "P2d"
                         || winner.candidate.searchDescriptor.hasPrefix("alias artist only")
                         || winner.candidate.searchDescriptor.hasPrefix("alias album+artist")
                 ),

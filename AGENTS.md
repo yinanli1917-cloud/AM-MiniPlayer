@@ -160,6 +160,8 @@ Low-score synced acceptance: Keep the normal floor for loose provider hits. Belo
   ✅ P4 requires token overlap or CJK title — blocks coincidental duration-only matches
 - ❌ Title-only CJK escape for English/localized titles → same-title or romanized payload collisions (Wang Leehom/Karen Mok/Ellen & The Ripples Band)
   ✅ Require query provenance: confirmed CJK artist alias, album/artist-backed rows, tight duration, or native-source evidence; romanized LRCLIB text cannot fast-exit native CJK candidates
+- ❌ English-display Chinese songs rejected after provider artist search exposes native title/artist → no lyrics for Apple Music localized rows (e.g. "Thinking of Someone" / Pets Tseng)
+  ✅ Allow provider-proven native title bridges only for artist-only rows with an album hint, CJK title + CJK artist, tight duration, and no backing-track marker
 - ❌ QQ Music timestamps used raw → Consistently ~0.4s late (verified across 614 lines, 16 songs, median +0.42s vs NetEase)
   ✅ `qqTimeOffset = 0.4` applied via `applyTimeOffset` (same pattern as NetEase 0.7s)
 - ❌ Dynamic `setActivationPolicy(.regular↔.accessory)` in FloatingWindowDelegate → macOS 26 destroys NSStatusItem visibility on every toggle

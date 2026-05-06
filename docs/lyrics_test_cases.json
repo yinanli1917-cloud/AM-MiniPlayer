@@ -859,5 +859,19 @@
       "expectedClassification": "synced",
       "maxTailGapS": 35
     }
+  },
+  {
+    "id": "X26_artist_query_native_title_bridge",
+    "title": "Thinking of Someone",
+    "artist": "Pets Tseng",
+    "duration": 244,
+    "album": "KO One Return (Original Soundtrack)",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ", "NetEase"],
+      "firstLineContains": "你離開",
+      "expectedClassification": "synced",
+      "maxTailGapS": 40
+    }
   }
 ]
