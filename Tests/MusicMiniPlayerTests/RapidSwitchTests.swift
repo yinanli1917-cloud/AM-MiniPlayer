@@ -201,4 +201,28 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(tracks[1].persistentID, "am:i.abcdef")
         XCTAssertEqual(tracks[1].duration, 201.5)
     }
+
+    func testSameTrackIdentityDetectsQueueReorder() {
+        let original = [
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.0),
+            (title: "B", artist: "Artist", album: "Album", persistentID: "2", duration: 181.0),
+        ]
+        let reordered = [
+            (title: "B", artist: "Artist", album: "Album", persistentID: "2", duration: 181.0),
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.0),
+        ]
+
+        XCTAssertFalse(MusicController.sameTrackIdentity(original, reordered))
+    }
+
+    func testSameTrackIdentityIgnoresTinyDurationDrift() {
+        let original = [
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.0),
+        ]
+        let drifted = [
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.05),
+        ]
+
+        XCTAssertTrue(MusicController.sameTrackIdentity(original, drifted))
+    }
 }

@@ -590,7 +590,20 @@ public class MusicController: ObservableObject {
                   let currentID = currentTrack.value(forKey: "persistentID") as? String else {
                 return nil
             }
-            return "\(playlistName):\(tracks.count):\(currentID)"
+            let trackCount = tracks.count
+            let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
+            var upcomingIDs: [String] = []
+            if currentIndex >= 0 && currentIndex < trackCount {
+                let upperBound = min(trackCount, currentIndex + 4)
+                for i in (currentIndex + 1)..<upperBound {
+                    guard let track = tracks.object(at: i) as? NSObject,
+                          let trackID = track.value(forKey: "persistentID") as? String else {
+                        continue
+                    }
+                    upcomingIDs.append(trackID)
+                }
+            }
+            return "\(playlistName):\(trackCount):\(currentID):\(upcomingIDs.joined(separator: ","))"
         }
     }
 

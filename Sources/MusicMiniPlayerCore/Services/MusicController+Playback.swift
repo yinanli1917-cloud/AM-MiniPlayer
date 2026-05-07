@@ -346,6 +346,17 @@ extension MusicController {
         }
     }
 
+    public func refreshQueueForPlaylistOpen() {
+        let hasVisibleQueueData = !upNextTracks.isEmpty || !recentTracks.isEmpty
+        let recentlyFetchedQueue = Date().timeIntervalSince(lastQueueFetchStartedAt) < 5.0
+
+        if hasVisibleQueueData && recentlyFetchedQueue {
+            return
+        }
+
+        fetchUpNextQueue(forceRecent: recentTracks.isEmpty)
+    }
+
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
     private func fetchUpNextViaBridge() async {
         debugPrint("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n")
@@ -353,6 +364,8 @@ extension MusicController {
             debugPrint("⚠️ [fetchUpNextViaBridge] musicApp not available\n")
             return
         }
+
+        let requestGeneration = artworkFetchGeneration
 
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
@@ -369,9 +382,15 @@ extension MusicController {
         }
 
         await MainActor.run {
-            self.applyUpNextTracksIfChanged(tracks)
+            guard self.artworkFetchGeneration == requestGeneration else {
+                self.logger.info("Discarded stale Up Next fetch for generation \(requestGeneration)")
+                return
+            }
+            let didChange = self.applyUpNextTracksIfChanged(tracks)
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
-            self.preloadNearbyAssets(from: tracks)
+            if didChange {
+                self.preloadNearbyAssets(from: tracks)
+            }
         }
     }
 
@@ -481,9 +500,11 @@ extension MusicController {
                 guard let self else { return }
                 if let tracks = await self.fetchRecentHistoryViaAppleMusicAPI(), !tracks.isEmpty {
                     await MainActor.run {
-                        self.applyRecentTracksIfChanged(tracks)
+                        let didChange = self.applyRecentTracksIfChanged(tracks)
                         self.logger.info("✅ Fetched \(tracks.count) recent tracks via Apple Music API")
-                        self.preloadNearbyAssets(from: tracks)
+                        if didChange {
+                            self.preloadNearbyAssets(from: tracks)
+                        }
                     }
                     return
                 }
@@ -506,9 +527,11 @@ extension MusicController {
             let tracks = self.getRecentTracksFromApp(app, limit: 10)
 
             DispatchQueue.main.async {
-                self.applyRecentTracksIfChanged(tracks)
+                let didChange = self.applyRecentTracksIfChanged(tracks)
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
-                self.preloadNearbyAssets(from: tracks)
+                if didChange {
+                    self.preloadNearbyAssets(from: tracks)
+                }
             }
         }
     }
@@ -630,14 +653,18 @@ extension MusicController {
         } ?? []
     }
 
-    private func applyUpNextTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
-        guard !sameTrackIdentity(upNextTracks, tracks) else { return }
+    @discardableResult
+    private func applyUpNextTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) -> Bool {
+        guard !sameTrackIdentity(upNextTracks, tracks) else { return false }
         upNextTracks = tracks
+        return true
     }
 
-    private func applyRecentTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
-        guard !sameTrackIdentity(recentTracks, tracks) else { return }
+    @discardableResult
+    private func applyRecentTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) -> Bool {
+        guard !sameTrackIdentity(recentTracks, tracks) else { return false }
         recentTracks = tracks
+        return true
     }
 
     @MainActor
@@ -672,6 +699,13 @@ extension MusicController {
     }
 
     private func sameTrackIdentity(
+        _ lhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)],
+        _ rhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]
+    ) -> Bool {
+        Self.sameTrackIdentity(lhs, rhs)
+    }
+
+    static func sameTrackIdentity(
         _ lhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)],
         _ rhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]
     ) -> Bool {

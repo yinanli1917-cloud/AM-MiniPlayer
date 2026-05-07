@@ -260,7 +260,7 @@ public struct PlaylistView: View {
                 .animation(.easeInOut(duration: 0.3), value: controlsVisible)
             }
             .onAppear {
-                musicController.fetchUpNextQueue(forceRecent: true)
+                musicController.refreshQueueForPlaylistOpen()
             }
             .onHover { hovering in
                 handleHover(hovering: hovering)
