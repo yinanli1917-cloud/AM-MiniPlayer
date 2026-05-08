@@ -61,6 +61,7 @@ extension MusicController {
         }
         lastUserActionTime = Date()
         skipDirection = 1
+        markQueueMayHaveChanged()
         controlQueue.async { [weak self] in
             guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
@@ -81,6 +82,7 @@ extension MusicController {
         } else {
             lastUserActionTime = Date()
             skipDirection = -1
+            markQueueMayHaveChanged()
             controlQueue.async { [weak self] in
                 guard let app = self?.controlApp, app.isRunning else {
                     debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
@@ -133,20 +135,20 @@ extension MusicController {
         let newShuffleState = !shuffleEnabled
         // Optimistic UI update
         self.shuffleEnabled = newShuffleState
+        markQueueMayHaveChanged()
 
         // 🔑 User-initiated control uses dedicated controlQueue
         controlQueue.async { [weak self] in
-            guard let app = self?.controlApp, app.isRunning else {
+            guard let self, let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] toggleShuffle: app not available\n")
                 return
             }
             debugPrint("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on controlQueue\n")
             app.setValue(newShuffleState, forKey: "shuffleEnabled")
-        }
-
-        // Wait a moment for Music.app to apply shuffle, then refresh queue
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.fetchUpNextQueue()
+            DispatchQueue.main.async { [weak self] in
+                self?.markQueueMayHaveChanged()
+                self?.scheduleQueueRefreshAfterMusicControlChange()
+            }
         }
     }
 
@@ -157,6 +159,7 @@ extension MusicController {
         }
 
         debugPrint("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n")
+        markQueueMayHaveChanged()
 
         // 🔑 AppleScript execution — not SBApplication, so global queue is safe
         DispatchQueue.global(qos: .userInteractive).async {
@@ -211,6 +214,7 @@ extension MusicController {
                 let playbackStartTime = Date()
                 await MainActor.run { [weak self] in
                     self?.lastUserActionTime = playbackStartTime
+                    self?.markQueueMayHaveChanged()
                 }
             } catch {
                 DebugLogger.log("Playback", "⚠️ Apple Music row playback failed: \(error.localizedDescription)")
@@ -253,6 +257,7 @@ extension MusicController {
         }
 
         let newMode = (repeatMode + 1) % 3
+        markQueueMayHaveChanged()
         let repeatValue: Int
         switch newMode {
         case 1: repeatValue = AppleEventCode.repeatOne
@@ -265,17 +270,23 @@ extension MusicController {
 
         // 🔑 User-initiated control uses dedicated controlQueue
         controlQueue.async { [weak self] in
-            guard let app = self?.controlApp, app.isRunning else {
+            guard let self, let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] cycleRepeatMode: app not available\n")
                 return
             }
             debugPrint("🔁 [MusicController] setRepeat(\(newMode)) -> 0x\(String(repeatValue, radix: 16))\n")
             app.setValue(repeatValue, forKey: "songRepeat")
+            DispatchQueue.main.async { [weak self] in
+                self?.markQueueMayHaveChanged()
+                self?.scheduleQueueRefreshAfterMusicControlChange()
+            }
         }
+    }
 
-        // Refresh queue after repeat mode change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.fetchUpNextQueue()
+    private func scheduleQueueRefreshAfterMusicControlChange() {
+        fetchUpNextQueue()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.fetchUpNextQueue()
         }
     }
 
@@ -321,10 +332,11 @@ extension MusicController {
 
         queueFetchInFlight = true
         lastQueueFetchStartedAt = now
+        let requestQueueGeneration = queueSyncGeneration
 
         // 使用 ScriptingBridge 获取队列（App Store 合规）
         Task {
-            await fetchUpNextViaBridge()
+            await fetchUpNextViaBridge(requestQueueGeneration: requestQueueGeneration)
             await MainActor.run {
                 self.queueFetchInFlight = false
                 if self.queueFetchPending {
@@ -348,9 +360,14 @@ extension MusicController {
 
     public func refreshQueueForPlaylistOpen() {
         let hasVisibleQueueData = !upNextTracks.isEmpty || !recentTracks.isEmpty
-        let recentlyFetchedQueue = Date().timeIntervalSince(lastQueueFetchStartedAt) < 5.0
+        let recentlyCompletedQueue = Date().timeIntervalSince(lastQueueFetchCompletedAt) < 5.0
+        let completedCurrentQueueGeneration = lastQueueFetchCompletedGeneration == queueSyncGeneration
 
-        if hasVisibleQueueData && recentlyFetchedQueue {
+        if Self.shouldUseCachedQueueForPlaylistOpen(
+            hasVisibleQueueData: hasVisibleQueueData,
+            recentlyCompletedQueue: recentlyCompletedQueue,
+            completedCurrentQueueGeneration: completedCurrentQueueGeneration
+        ) {
             return
         }
 
@@ -358,7 +375,7 @@ extension MusicController {
     }
 
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
-    private func fetchUpNextViaBridge() async {
+    private func fetchUpNextViaBridge(requestQueueGeneration: UInt64) async {
         debugPrint("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n")
         guard let app = musicApp, app.isRunning else {
             debugPrint("⚠️ [fetchUpNextViaBridge] musicApp not available\n")
@@ -382,11 +399,18 @@ extension MusicController {
         }
 
         await MainActor.run {
-            guard self.artworkFetchGeneration == requestGeneration else {
-                self.logger.info("Discarded stale Up Next fetch for generation \(requestGeneration)")
+            guard Self.shouldApplyQueueSnapshot(
+                requestQueueGeneration: requestQueueGeneration,
+                currentQueueGeneration: self.queueSyncGeneration,
+                requestTrackGeneration: requestGeneration,
+                currentTrackGeneration: self.artworkFetchGeneration
+            ) else {
+                self.logger.info("Discarded stale Up Next fetch for queue generation \(requestQueueGeneration), track generation \(requestGeneration)")
                 return
             }
             let didChange = self.applyUpNextTracksIfChanged(tracks)
+            self.lastQueueFetchCompletedAt = Date()
+            self.lastQueueFetchCompletedGeneration = requestQueueGeneration
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
             if didChange {
                 self.preloadNearbyAssets(from: tracks)
@@ -716,6 +740,24 @@ extension MusicController {
                 && left.artist == right.artist
                 && abs(left.duration - right.duration) < 0.1
         }
+    }
+
+    static func shouldApplyQueueSnapshot(
+        requestQueueGeneration: UInt64,
+        currentQueueGeneration: UInt64,
+        requestTrackGeneration: Int,
+        currentTrackGeneration: Int
+    ) -> Bool {
+        requestQueueGeneration == currentQueueGeneration
+            && requestTrackGeneration == currentTrackGeneration
+    }
+
+    static func shouldUseCachedQueueForPlaylistOpen(
+        hasVisibleQueueData: Bool,
+        recentlyCompletedQueue: Bool,
+        completedCurrentQueueGeneration: Bool
+    ) -> Bool {
+        hasVisibleQueueData && recentlyCompletedQueue && completedCurrentQueueGeneration
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

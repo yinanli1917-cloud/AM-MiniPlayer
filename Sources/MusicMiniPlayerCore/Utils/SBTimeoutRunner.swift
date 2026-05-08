@@ -14,12 +14,12 @@
  * poll, artwork fetch, and backfill behind that one stuck call.
  *
  * SBTimeoutRunner bounds the wait:
- *   - Dispatch `block` onto a private concurrent queue.
+ *   - Dispatch `block` onto a private serial queue.
  *   - Wait on a semaphore with `timeout`.
  *   - On timeout, return nil. The underlying call keeps running on its own
  *     thread and will eventually finish (or be killed by Music.app); it just
- *     no longer blocks the caller. The concurrent queue + thread pool bounds
- *     the resource cost.
+ *     no longer blocks the caller. The serial queue avoids concurrent Apple
+ *     Event calls against the same ScriptingBridge proxy.
  *
  * This complements — does not replace — the queue heartbeat recovery in
  * MusicController (recreates the queue after 5 s of silence). Timeout is
@@ -29,6 +29,13 @@
 import Foundation
 
 public enum SBTimeoutRunner {
+    private final class TimeoutState<T>: @unchecked Sendable {
+        let lock = NSLock()
+        var result: T?
+        var signaled = false
+        var canceled = false
+    }
+
     /// Dedicated SERIAL worker queue for bounded SB calls.
     ///
     /// ⚠️ Must be SERIAL, not concurrent:
@@ -71,39 +78,40 @@ public enum SBTimeoutRunner {
     /// Music.app responds. But every subsequent queued block exits cleanly.
     public static func run<T>(timeout: TimeInterval, _ block: @escaping () -> T?) -> T? {
         let sem = DispatchSemaphore(value: 0)
-        var result: T?
-        var signaled = false
-        var canceled = false
-        let lock = NSLock()
+        let state = TimeoutState<T>()
 
         workerQueue.async {
             // Skip the SB call entirely if the caller already gave up.
-            lock.lock()
-            let skip = canceled
-            lock.unlock()
+            state.lock.lock()
+            let skip = state.canceled
+            state.lock.unlock()
             if skip { return }
 
             let value = block()
-            lock.lock()
-            if !signaled {
-                result = value
-                signaled = true
+            state.lock.lock()
+            if !state.signaled {
+                state.result = value
+                state.signaled = true
                 sem.signal()
             }
-            lock.unlock()
+            state.lock.unlock()
         }
 
         let waitResult = sem.wait(timeout: .now() + timeout)
         if waitResult == .timedOut {
-            lock.lock()
+            state.lock.lock()
             // `signaled` flips true here so a late worker can't write `result`.
             // `canceled` flips true so blocks still queued behind us skip outright.
-            let late = signaled
-            signaled = true
-            canceled = true
-            lock.unlock()
+            let late = state.signaled
+            state.signaled = true
+            state.canceled = true
+            let result = state.result
+            state.lock.unlock()
             return late ? result : nil
         }
+        state.lock.lock()
+        let result = state.result
+        state.lock.unlock()
         return result
     }
 }

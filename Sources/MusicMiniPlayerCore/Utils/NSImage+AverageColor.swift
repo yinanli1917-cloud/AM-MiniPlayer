@@ -234,7 +234,7 @@ extension NSImage {
 
         let originalWidth = CGFloat(cgImage.width)
         let originalHeight = CGFloat(cgImage.height)
-        var inputImage = CIImage(cgImage: cgImage)
+        let inputImage = CIImage(cgImage: cgImage)
 
         // 🔑 Step 1: 用 CIImage 模拟 scaledToFill + clipped
         // 计算缩放比例（填满正方形）

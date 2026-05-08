@@ -57,12 +57,28 @@ extension MusicController {
         defer { os_signpost(.end, log: performanceLog, name: "SetArtwork", signpostID: signpostID) }
 
         self.currentArtwork = image
-        if let img = image {
-            self.artworkLuminance = img.perceivedBrightness()
-            self.controlAreaLuminance = img.controlAreaMaxLuminance()
-        } else {
+        guard let img = image else {
             self.artworkLuminance = 0.5
             self.controlAreaLuminance = 0.5
+            self.topLeftArtworkLuminance = 0.5
+            self.topRightArtworkLuminance = 0.5
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async { [weak self, weak img] in
+            guard let img else { return }
+            let artworkLuminance = img.perceivedBrightness()
+            let controlAreaLuminance = img.controlAreaMaxLuminance()
+            let topLeftLuminance = img.topLeftBrightness()
+            let topRightLuminance = img.topRightBrightness()
+
+            DispatchQueue.main.async { [weak self, weak img] in
+                guard let self, let img, self.currentArtwork === img else { return }
+                self.artworkLuminance = artworkLuminance
+                self.controlAreaLuminance = controlAreaLuminance
+                self.topLeftArtworkLuminance = topLeftLuminance
+                self.topRightArtworkLuminance = topRightLuminance
+            }
         }
     }
 

@@ -95,9 +95,12 @@ struct LyricLineView: View {
 
     // 🔑 清理歌词文本 — strip timestamp tags + TTML-artifact CJK spaces
     private var cleanedText: String {
-        let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
-        var text = line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
+        var text = line.text
+        if text.contains("[") {
+            let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
+            text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        text = text.trimmingCharacters(in: .whitespaces)
         // TTML parser adds " " between each span. For CJK (avg word ≤ 2 chars),
         // these spaces are artifacts — strip them so characters pack naturally.
         if line.hasSyllableSync && !line.words.isEmpty {
@@ -149,7 +152,7 @@ struct LyricLineView: View {
                 if line.hasSyllableSync {
                     if #available(macOS 15.0, *) {
                         if isCurrent, let mc = musicController {
-                            TimelineView(.animation) { _ in
+                            TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
                                 SyllableSyncedLine(
                                     words: line.words,
                                     currentTime: mc.wordFillTime,
@@ -168,7 +171,7 @@ struct LyricLineView: View {
                     } else {
                         // macOS 14 fallback: per-word WordFillSpan
                         if isCurrent, let mc = musicController {
-                            TimelineView(.animation) { _ in
+                            TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
                                 WordByWordText(
                                     words: line.words,
                                     lineText: cleanedText,
@@ -201,7 +204,7 @@ struct LyricLineView: View {
             if internalShowTranslation, let translation = translationText {
                 if line.hasSyllableSync {
                     if isCurrent, let mc = musicController {
-                        TimelineView(.animation) { _ in
+                        TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
                             TranslationSweepText(
                                 text: translation,
                                 words: line.words,

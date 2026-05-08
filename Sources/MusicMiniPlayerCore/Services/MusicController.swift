@@ -80,6 +80,8 @@ public class MusicController: ObservableObject {
     @Published public var userManuallyOpenedLyrics: Bool = false
     @Published public var artworkLuminance: CGFloat = 0.5
     @Published public var controlAreaLuminance: CGFloat = 0.5
+    @Published public var topLeftArtworkLuminance: CGFloat = 0.5
+    @Published public var topRightArtworkLuminance: CGFloat = 0.5
     @Published public var skipDirection: CGFloat = 1
     public var currentPersistentID: String?
     @Published public var musicKitAuthorized: Bool = false
@@ -241,6 +243,7 @@ public class MusicController: ObservableObject {
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var queueRefreshTimer: Timer?     // Debounced queue refresh on track change
+    private var queueChangeRefreshWorkItem: DispatchWorkItem?
     private var interpolationTimerActive = false
     private var interpolationTimerInterval: TimeInterval = 0
     var lastPollTime: Date = .distantPast
@@ -271,7 +274,10 @@ public class MusicController: ObservableObject {
     var queueFetchPending = false
     var queueFetchPendingForceRecent = false
     var lastQueueFetchStartedAt: Date = .distantPast
+    var lastQueueFetchCompletedAt: Date = .distantPast
+    var lastQueueFetchCompletedGeneration: UInt64 = 0
     var lastRecentHistoryFetchAt: Date = .distantPast
+    var queueSyncGeneration: UInt64 = 0
     var assetPreloadTask: Task<Void, Never>?
     let queueFetchMinimumInterval: TimeInterval = 1.5
     let recentHistoryRefreshInterval: TimeInterval = 20.0
@@ -280,10 +286,18 @@ public class MusicController: ObservableObject {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || ProcessInfo.processInfo.processName.contains("xctest")
     }
+    private static let timingDiagnosticsEnabled =
+        ProcessInfo.processInfo.environment["NANOPOD_TIMING_DIAGNOSTICS"] == "1"
 
     // 防止 AppleScript 轮询重叠
     private var lastUpdateTime: Date = .distantPast
     private let updateTimeout: TimeInterval = 0.4
+
+    @discardableResult
+    func markQueueMayHaveChanged() -> UInt64 {
+        queueSyncGeneration &+= 1
+        return queueSyncGeneration
+    }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Init / Deinit
@@ -513,6 +527,8 @@ public class MusicController: ObservableObject {
         interpolationTimerActive = false
         queueCheckTimer?.invalidate()
         queueCheckTimer = nil
+        queueChangeRefreshWorkItem?.cancel()
+        queueChangeRefreshWorkItem = nil
     }
 
     /// 根据播放状态动态启停 60fps 插值 Timer（减少 CPU 占用）
@@ -521,7 +537,7 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let shouldRun = self.isPlaying && !self.windowMovementPaused
-            let targetInterval: TimeInterval = self.currentPage == .lyrics ? 0.016 : 0.1
+            let targetInterval: TimeInterval = self.currentPage == .lyrics ? (1.0 / 15.0) : 0.1
             if shouldRun && (!self.interpolationTimerActive || self.interpolationTimerInterval != targetInterval) {
                 self.interpolationTimer?.invalidate()
                 // 🔑 Reset frame clock so first dt is ~0, not time-since-last-stop
@@ -573,6 +589,7 @@ public class MusicController: ObservableObject {
                 if hash != self.lastQueueHash {
                     debugPrint("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n")
                     self.lastQueueHash = hash
+                    self.markQueueMayHaveChanged()
                     self.fetchUpNextQueue()
                 }
             }
@@ -590,6 +607,8 @@ public class MusicController: ObservableObject {
                   let currentID = currentTrack.value(forKey: "persistentID") as? String else {
                 return nil
             }
+            let shuffle = app.value(forKey: "shuffleEnabled") as? Bool ?? false
+            let repeatRaw = app.value(forKey: "songRepeat") as? Int ?? 0
             let trackCount = tracks.count
             let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
             var upcomingIDs: [String] = []
@@ -603,7 +622,7 @@ public class MusicController: ObservableObject {
                     upcomingIDs.append(trackID)
                 }
             }
-            return "\(playlistName):\(trackCount):\(currentID):\(upcomingIDs.joined(separator: ","))"
+            return "\(playlistName):\(trackCount):\(currentID):shuffle=\(shuffle):repeat=\(repeatRaw):\(upcomingIDs.joined(separator: ","))"
         }
     }
 
@@ -616,10 +635,12 @@ public class MusicController: ObservableObject {
     }
 
     @objc private func queueMayHaveChanged(_ notification: Notification) {
-        guard Date().timeIntervalSince(lastPollTime) >= 1.0 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        queueChangeRefreshWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
             self?.checkQueueHashAndRefresh()
         }
+        queueChangeRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -649,20 +670,21 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 🔬 Diagnostic logging — every 5s, summarize frame timing health
-        diagFrameCount += 1
-        if dt > diagMaxDt { diagMaxDt = dt }
-        if dt > 0.032 { diagDroppedFrames += 1 }
-        if dt > 0.100 { diagStalledFrames += 1 }
-        if dt > 0.050 {
-            DebugLogger.log("Timing", "🐌 SLOW FRAME: dt=\(String(format: "%.1f", dt * 1000))ms pos=\(String(format: "%.2f", internalCurrentTime))")
-        }
-        let sinceLast = now.timeIntervalSince(diagLastLogTime)
-        if sinceLast >= 5.0 {
-            let avgDt = sinceLast / Double(max(diagFrameCount, 1))
-            DebugLogger.log("Timing", "📊 \(diagFrameCount) frames in \(String(format: "%.1f", sinceLast))s | avg=\(String(format: "%.1f", avgDt * 1000))ms max=\(String(format: "%.1f", diagMaxDt * 1000))ms | dropped=\(diagDroppedFrames) stalled=\(diagStalledFrames) | pos=\(String(format: "%.2f", internalCurrentTime))/\(String(format: "%.0f", duration))")
-            diagFrameCount = 0; diagMaxDt = 0; diagDroppedFrames = 0; diagStalledFrames = 0
-            diagLastLogTime = now
+        if Self.timingDiagnosticsEnabled {
+            diagFrameCount += 1
+            if dt > diagMaxDt { diagMaxDt = dt }
+            if dt > 0.032 { diagDroppedFrames += 1 }
+            if dt > 0.100 { diagStalledFrames += 1 }
+            if dt > 0.050 {
+                DebugLogger.log("Timing", "🐌 SLOW FRAME: dt=\(String(format: "%.1f", dt * 1000))ms pos=\(String(format: "%.2f", internalCurrentTime))")
+            }
+            let sinceLast = now.timeIntervalSince(diagLastLogTime)
+            if sinceLast >= 5.0 {
+                let avgDt = sinceLast / Double(max(diagFrameCount, 1))
+                DebugLogger.log("Timing", "📊 \(diagFrameCount) frames in \(String(format: "%.1f", sinceLast))s | avg=\(String(format: "%.1f", avgDt * 1000))ms max=\(String(format: "%.1f", diagMaxDt * 1000))ms | dropped=\(diagDroppedFrames) stalled=\(diagStalledFrames) | pos=\(String(format: "%.2f", internalCurrentTime))/\(String(format: "%.0f", duration))")
+                diagFrameCount = 0; diagMaxDt = 0; diagDroppedFrames = 0; diagStalledFrames = 0
+                diagLastLogTime = now
+            }
         }
 
         internalCurrentTime += dt
@@ -825,12 +847,12 @@ public class MusicController: ObservableObject {
                     }
                 }
 
-                // 🔑 Debounced queue refresh — 2s to survive rapid switching bursts.
-                // 1s was too short: user pressing next every 0.5s would fire queue refresh
-                // mid-burst, causing SBElementArray iteration on a mutating playlist → crash.
+                // Refresh quickly when the playlist page is visible; otherwise keep
+                // the background refresh calmer to survive rapid switching bursts.
                 self.queueRefreshTimer?.invalidate()
                 let refreshGen = generation
-                self.queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                let queueRefreshDelay = self.currentPage == .playlist ? 0.35 : 2.0
+                self.queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: queueRefreshDelay, repeats: false) { [weak self] _ in
                     guard let self = self, self.artworkFetchGeneration == refreshGen else { return }
                     self.fetchUpNextQueue()
                 }
@@ -1192,6 +1214,7 @@ public class MusicController: ObservableObject {
 
             lastPolledPosition = 0  // Reset position-jump detection
             let generation = incrementGeneration()
+            markQueueMayHaveChanged()
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, duration: s.trackDuration, persistentID: s.persistentID, generation: generation)
             // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
             scheduleLyricsFetch(title: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum, generation: generation)

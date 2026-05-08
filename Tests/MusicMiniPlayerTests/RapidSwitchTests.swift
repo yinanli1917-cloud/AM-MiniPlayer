@@ -225,4 +225,41 @@ final class RapidSwitchTests: XCTestCase {
 
         XCTAssertTrue(MusicController.sameTrackIdentity(original, drifted))
     }
+
+    func testQueueSnapshotAppliesOnlyWhenQueueAndTrackGenerationsMatch() {
+        XCTAssertTrue(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 4,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 8
+        ))
+    }
+
+    func testPlaylistOpenCachedQueueRequiresCurrentGeneration() {
+        XCTAssertTrue(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            hasVisibleQueueData: true,
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: true
+        ))
+
+        XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            hasVisibleQueueData: true,
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: false
+        ))
+    }
 }

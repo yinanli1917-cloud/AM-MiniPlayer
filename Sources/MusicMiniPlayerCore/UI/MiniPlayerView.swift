@@ -69,12 +69,13 @@ public struct MiniPlayerView: View {
                 // 🔑 使用ZStack叠加所有页面，通过opacity和zIndex控制显示
                 // matchedGeometryEffect: 使用单个浮动Image + invisible placeholders避免crossfade
 
-                // Lyrics View - 使用 opacity 模式与其他页面一致，避免阻挡 WindowDraggableView
-                LyricsView(currentPage: $musicController.currentPage, openWindow: openWindow, onHide: onHide, onExpand: onExpand)
-                    .opacity(musicController.currentPage == .lyrics ? 1 : 0)
-                    .zIndex(musicController.currentPage == .lyrics ? 1 : 0)
-                    .allowsHitTesting(musicController.currentPage == .lyrics)
-                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
+                // Lyrics is the only page with frame-driven word rendering. Keep it
+                // unmounted while hidden so album/playlist pages do not pay that CPU cost.
+                if musicController.currentPage == .lyrics {
+                    LyricsView(currentPage: $musicController.currentPage, openWindow: openWindow, onHide: onHide, onExpand: onExpand)
+                        .zIndex(1)
+                        .transition(.opacity)
+                }
 
                 // Playlist View - 始终存在以支持matchedGeometryEffect
                 PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent)
@@ -190,18 +191,25 @@ public struct MiniPlayerView: View {
         }
         // 🔑 监听封面变化，计算整图 + 底部区域亮度
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
-            if let artwork = newArtwork {
-                artworkBrightness = musicController.artworkLuminance
-                topLeftLuminance = artwork.topLeftBrightness()
-                topRightLuminance = artwork.topRightBrightness()
+            if newArtwork != nil {
+                syncArtworkLuminance()
+            } else {
+                artworkBrightness = 0.5
+                topLeftLuminance = 0.5
+                topRightLuminance = 0.5
             }
         }
+        .onChange(of: musicController.artworkLuminance) { _, _ in
+            syncArtworkLuminance()
+        }
+        .onChange(of: musicController.topLeftArtworkLuminance) { _, _ in
+            syncArtworkLuminance()
+        }
+        .onChange(of: musicController.topRightArtworkLuminance) { _, _ in
+            syncArtworkLuminance()
+        }
         .onAppear {
-            if let artwork = musicController.currentArtwork {
-                artworkBrightness = musicController.artworkLuminance
-                topLeftLuminance = artwork.topLeftBrightness()
-                topRightLuminance = artwork.topRightBrightness()
-            }
+            syncArtworkLuminance()
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
         .onChange(of: musicController.currentPage) { oldPage, newPage in
@@ -234,6 +242,12 @@ public struct MiniPlayerView: View {
                 }
             }
         }
+    }
+
+    private func syncArtworkLuminance() {
+        artworkBrightness = musicController.artworkLuminance
+        topLeftLuminance = musicController.topLeftArtworkLuminance
+        topRightLuminance = musicController.topRightArtworkLuminance
     }
 }
 
@@ -409,8 +423,6 @@ extension MiniPlayerView {
             // 控件区域高度（与albumOverlayContent一致）
             let controlsHeight: CGFloat = 80
             let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
-            // 🔑 底部延伸区域高度（全屏模式用）
-            let remainingHeight = geo.size.height - geo.size.width
 
             // 根据当前页面计算尺寸和位置
             let (artSize, cornerRadius, shadowRadius, xPosition, yPosition): (CGFloat, CGFloat, CGFloat, CGFloat, CGFloat) = {

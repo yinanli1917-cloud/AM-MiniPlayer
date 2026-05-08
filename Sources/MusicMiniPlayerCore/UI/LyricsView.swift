@@ -224,8 +224,7 @@ public struct LyricsView: View {
     // MARK: - Sub-views
 
     private var backgroundLayer: some View {
-        AdaptiveFluidBackground(artwork: musicController.currentArtwork)
-            .id(musicController.currentTrackTitle)
+        Color.clear
             .ignoresSafeArea()
             .accessibilityHidden(true)
     }
@@ -310,30 +309,32 @@ public struct LyricsView: View {
 
             // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12
-            let heightsReady = cache.lineHeights.count >= renderedIndices.count
-            let shouldCull = !scroll.isManualScrolling && heightsReady
+            let cullingMeasurementThreshold = min(renderedIndices.count, max(8, visibleRange * 2))
+            let hasEnoughMeasuredHeights = cache.lineHeights.count >= cullingMeasurementThreshold
+            let shouldCull = !scroll.isManualScrolling && hasEnoughMeasuredHeights
 
             ZStack(alignment: .topLeading) {
                 ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
                     if index == 0 || index >= lyricsService.firstRealLyricIndex {
                         let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
 
-                        let lineOffset = calculateLineOffset(
-                            index: index, currentIndex: displayIndex, anchorY: anchorY
-                        )
-                        let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
-
-                        lyricLineContent(line: line, index: index, currentIndex: displayIndex)
-                            .background(lineHeightTracker(index: index))
-                            .opacity(isVisible ? 1 : 0)
-                            .allowsHitTesting(isVisible)
-                            .offset(y: fullOffset)
-                            .animation(
-                                scroll.isManualScrolling || reduceMotion ? nil : .interpolatingSpring(
-                                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
-                                ),
-                                value: scroll.isManualScrolling ? 0 : fullOffset
+                        if isVisible {
+                            let lineOffset = calculateLineOffset(
+                                index: index, currentIndex: displayIndex, anchorY: anchorY
                             )
+                            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+
+                            lyricLineContent(line: line, index: index, currentIndex: displayIndex)
+                                .background(lineHeightTracker(index: index))
+                                .allowsHitTesting(true)
+                                .offset(y: fullOffset)
+                                .animation(
+                                    scroll.isManualScrolling || reduceMotion ? nil : .interpolatingSpring(
+                                        mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+                                    ),
+                                    value: scroll.isManualScrolling ? 0 : fullOffset
+                                )
+                        }
                     }
                 }
             }
@@ -853,7 +854,10 @@ public struct LyricsView: View {
         for item in wave.workItems { item.cancel() }
         wave.workItems.removeAll()
 
-        let indices = renderedIndices
+        let indices = renderedIndices.filter {
+            abs($0 - newIndex) <= 14 || abs($0 - oldIndex) <= 14
+        }
+        guard !indices.isEmpty else { return }
 
         // Skip wave on large jumps (seeks) or accessibility
         let isLargeJump = abs(newIndex - oldIndex) > 4
