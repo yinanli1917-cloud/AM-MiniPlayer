@@ -194,6 +194,7 @@ public enum LanguageUtils {
             .split(whereSeparator: { !$0.isLetter })
             .map(String.init)
         if words.contains(where: { englishFunctionWords.contains($0) }) { return true }
+        if words.count == 1, let word = words.first, englishTitleWords.contains(word) { return true }
         if words.filter({ englishTitleWords.contains($0) }).count >= 2 { return true }
         for word in words where word.count >= 5 {
             if englishMorphologySuffixes.contains(where: { word.hasSuffix($0) }) { return true }

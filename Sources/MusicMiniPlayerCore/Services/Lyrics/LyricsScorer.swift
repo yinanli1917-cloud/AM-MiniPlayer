@@ -56,6 +56,8 @@ public final class LyricsScorer {
         kind: LyricsKind = .synced
     ) -> Double {
         guard !lyrics.isEmpty else { return 0 }
+        if kind == .instrumental { return -100 }
+        if kind == .unavailable { return -80 }
 
         var score: Double = 0
 
@@ -276,7 +278,7 @@ public final class LyricsScorer {
             if ellipsisPatterns.contains(trimmed) { return false }
 
             // 跳过纯音乐提示
-            if instrumentalPatterns.contains(where: { trimmed.contains($0) }) { return false }
+            if instrumentalPatterns.contains(where: { trimmed.localizedCaseInsensitiveContains($0) }) { return false }
 
             // 跳过元信息行
             let lowercased = trimmed.lowercased()

@@ -120,7 +120,7 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.source, "NetEase")
     }
 
-    func testUnsyncedConsensusIsNotUsedForSyncedLyricsUI() {
+    func testUnsyncedConsensusCanReturnStaticFallbackWhenNoSyncedSurvives() {
         let fetcher = LyricsFetcher.shared
         let plainA = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -151,7 +151,8 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [plainA, plainB], songDuration: 120)
 
-        XCTAssertNil(selected)
+        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertEqual(selected?.source, "Genius")
     }
 
     func testShortCJKGeniusSnippetIsNotUsedAsFallback() {
@@ -203,7 +204,39 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertNil(selected)
     }
 
-    func testUnsyncedConsensusDoesNotReplaceMissingSyncedResult() {
+    func testExactLyricsOvhCanBeStaticFallbackWhenSyncedIsMissing() {
+        let fetcher = LyricsFetcher.shared
+        let plain = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "samidare wa midori iro",
+                "kanashiku saseta yo",
+                "koi wo shite sabishikute",
+                "todokanu omoi wo atatamete ita",
+                "suki da yo to iezu ni",
+                "hatsukoi wa furiko zaiku no kokoro",
+                "houkago no koutei wo hashiru kimi ga ita",
+                "asai yume dakara mune wo hanarenai",
+                "yuubae wa anzu iro",
+                "kaerimichi hitori kuchibue fuite",
+                "namae sae yobenakute",
+                "torawareta kokoro mitsumete ita yo",
+                "kaze ni matta hanabira ga",
+                "minamo wo midasu you ni",
+                "ima mo hanarenai",
+                "mune wo hanarenai"
+            ]),
+            source: "lyrics.ovh",
+            score: 25,
+            kind: .unsynced
+        )
+
+        let selected = fetcher.selectBestResult(from: [plain], songDuration: 225)
+
+        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertEqual(selected?.source, "lyrics.ovh")
+    }
+
+    func testUnsyncedConsensusReplacesMissingSyncedResultWithStaticFallback() {
         let fetcher = LyricsFetcher.shared
         let synced = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -240,7 +273,8 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [synced, plainA, plainB], songDuration: 120)
 
-        XCTAssertNil(selected)
+        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertEqual(selected?.source, "Genius")
     }
 
     func testSyncedConsensusBeatsUnsyncedConsensus() {
@@ -290,7 +324,7 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.kind, .synced)
     }
 
-    func testUnsyncedConsensusDoesNotReplaceWrongSyncedOutlier() {
+    func testUnsyncedConsensusReplacesWrongSyncedOutlierWithStaticFallback() {
         let fetcher = LyricsFetcher.shared
         let wrongSynced = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -327,7 +361,8 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [wrongSynced, plainA, plainB], songDuration: 120)
 
-        XCTAssertNil(selected)
+        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertEqual(selected?.source, "Genius")
     }
 
     func testUnsyncedConsensusDoesNotVetoStrongWordLevelSynced() {
@@ -407,7 +442,7 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.firstLineText, "原谅我最近在低潮期")
     }
 
-    func testSevereTailGapRejectsMistimedSyncedWhenPlainConsensusExists() {
+    func testSevereTailGapFallsBackToStaticConsensusWhenSyncedIsMistimed() {
         let fetcher = LyricsFetcher.shared
         let mistimed = LyricsFetcher.LyricsFetchResult(
             lyrics: [
@@ -456,7 +491,49 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [mistimed, plainA, plainB], songDuration: 300)
 
-        XCTAssertNil(selected)
+        XCTAssertEqual(selected?.kind, .unsynced)
+        XCTAssertEqual(selected?.source, "Genius")
+    }
+
+    func testEnglishContractionVariantsCoverApostropheMissingTitles() {
+        XCTAssertEqual(
+            LyricsFetcher.englishContractionVariants("Its Just A Matter Of Time"),
+            ["it's Just A Matter Of Time"]
+        )
+    }
+
+    func testArtistProbeVariantsConvertWadeGilesNames() {
+        let probes = LyricsFetcher.shared.artistProbeVariants("Lee Chih Ching")
+
+        XCTAssertTrue(probes.contains("li zhi qin"))
+        XCTAssertTrue(probes.contains("lizhiqin"))
+    }
+
+    func testCJKExactTitleArtistCanUseBoundedLooseDuration() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "江山（剧集《洪武三十二》主题曲）",
+                artist: "馬德鍾",
+                album: "江山（剧集《洪武三十二》主题曲）",
+                durationDiff: 27,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 16,
+                resultIndex: 0
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "江山"
+        )
+
+        XCTAssertEqual(selected?.id, 1)
+        XCTAssertEqual(selected?.matchRank, 2)
     }
 }
 

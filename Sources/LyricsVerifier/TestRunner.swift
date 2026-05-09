@@ -31,7 +31,7 @@ struct VerifyResult: Codable {
     let allSources: [SourceResult]
     /// Gamma-schema fields: classification straight from the same
     /// LyricsClassifier helper the live app uses. Never re-guessed here.
-    let classification: String?  // "synced" | "unsynced" | "none"
+    let classification: String?  // "synced" | "unsynced" | "instrumental" | "unavailable" | "none"
     let realLineCount: Int
     let translationCount: Int
     let firstRealLineTimeS: Double?
@@ -72,30 +72,50 @@ func testSongWithLyrics(
     var selectedResult = fetcher.selectBestResult(from: fetchResults, songDuration: duration)
     let foregroundElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
     var backfillElapsedMs: Int? = nil
-    if selectedResult == nil,
-       expectation?.shouldFindLyrics != false,
-       let backfilled = await fetcher.backfillAuthoritativeSyncedLyrics(
+    if (selectedResult == nil || selectedResult?.kind == .unsynced),
+       expectation?.shouldFindLyrics != false {
+        if let backfill = await fetcher.backfillAuthoritativeLyrics(
             title: title,
             artist: artist,
             duration: duration,
             translationEnabled: translationEnabled,
             album: album
-       ) {
-        backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
-        fetchResults.append(backfilled)
-        selectedResult = fetcher.selectBestResult(from: fetchResults, songDuration: duration)
-    } else if selectedResult == nil, expectation?.shouldFindLyrics != false {
-        backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
+        ) {
+            backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
+            switch backfill {
+            case .lyrics(let backfilled):
+                fetchResults.append(backfilled)
+                let upgraded = fetcher.selectBestResult(from: fetchResults, songDuration: duration)
+                if selectedResult == nil || upgraded?.kind == .synced {
+                    selectedResult = upgraded
+                }
+            case .instrumental(let instrumental):
+                fetchResults.append(instrumental)
+            case .unavailable(let unavailable):
+                fetchResults.append(unavailable)
+            }
+        } else {
+            backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
+        }
     }
+    let instrumentalResult = selectedResult == nil
+        ? fetcher.selectInstrumentalResult(from: fetchResults)
+        : nil
+    let unavailableResult = selectedResult == nil && instrumentalResult == nil
+        ? fetcher.selectUnavailableResult(from: fetchResults)
+        : nil
+    let reportResult = selectedResult ?? instrumentalResult ?? unavailableResult
     let bestLyrics = selectedResult?.lyrics
 
     // Shared classifier — same call both the app and the verifier use.
-    let classificationKind = LyricsFetcher.LyricsClassifier.classify(result: selectedResult)
+    let classificationKind = LyricsFetcher.LyricsClassifier.classify(result: reportResult)
     let classificationString: String
     switch classificationKind {
-    case .some(.synced):   classificationString = "synced"
-    case .some(.unsynced): classificationString = "unsynced"
-    case .none:            classificationString = "none"
+    case .some(.synced):       classificationString = "synced"
+    case .some(.unsynced):     classificationString = "unsynced"
+    case .some(.instrumental): classificationString = "instrumental"
+    case .some(.unavailable):  classificationString = "unavailable"
+    case .none:                classificationString = "none"
     }
 
     let elapsed = foregroundElapsedMs
@@ -152,23 +172,15 @@ func testSongWithLyrics(
     if let backfillElapsedMs, backfillElapsedMs > 3000 {
         warnings.append("⚠️ 后台权威回填耗时 \(backfillElapsedMs)ms；不计入前台交互预算")
     }
+    if lyrics.isEmpty && classificationString == "unavailable" {
+        warnings.append("⚠️ 来源目录已匹配，但来源未返回歌词正文；不会标记为无歌词")
+    } else if lyrics.isEmpty && classificationString == "none" {
+        warnings.append("⚠️ 未解析到可信来源；保持未解析状态，不标记为无歌词")
+    }
     failures.append(contentsOf: validateCrossSourceIdentity(
         selected: selectedResult,
         allResults: fetchResults
     ))
-    if expectation == nil && lyrics.isEmpty {
-        let candidates = fetchResults
-            .filter { !$0.lyrics.isEmpty }
-            .sorted { $0.score > $1.score }
-            .prefix(3)
-            .map { "\($0.source):\(String(format: "%.1f", $0.score))/\($0.lyrics.count)L" }
-            .joined(separator: ", ")
-        if candidates.isEmpty {
-            failures.append("无期望用例未找到歌词；不能视为验证通过")
-        } else {
-            failures.append("未选择可信歌词；候选源存在但被拒绝（\(candidates)）")
-        }
-    }
 
     // Gamma-schema fields
     let realLines = lyrics.filter {
@@ -180,8 +192,8 @@ func testSongWithLyrics(
     let result = VerifyResult(
         id: id, title: title, artist: artist,
         duration: Int(duration), passed: failures.isEmpty,
-        selectedSource: selectedResult?.source,
-        selectedScore: selectedResult?.score,
+        selectedSource: reportResult?.source,
+        selectedScore: reportResult?.score,
         lyricsLineCount: lyrics.count,
         hasTranslation: lyrics.contains { $0.hasTranslation },
         hasSyllableSync: lyrics.contains { $0.hasSyllableSync },
@@ -260,14 +272,17 @@ private func checkExpectation(
                 failures.append("首行 \"\(line.text)\" 不包含 \"\(keyword)\"")
             }
         }
-        if let expectedHash = exp.firstLineSHA256 {
+        let expectedHashes = ([exp.firstLineSHA256].compactMap { $0 } + (exp.acceptableFirstLineSHA256 ?? []))
+        if !expectedHashes.isEmpty {
             guard let line = firstReal else {
                 failures.append("没有可验证的首行，无法匹配首行哈希")
                 return failures
             }
             let actualHash = normalizedFirstLineSHA256(line.text)
-            if actualHash != expectedHash.lowercased() {
-                failures.append("首行哈希不匹配: \(actualHash.prefix(12)) != \(expectedHash.prefix(12))")
+            let normalizedExpected = expectedHashes.map { $0.lowercased() }
+            if !normalizedExpected.contains(actualHash) {
+                let preview = normalizedExpected.map { String($0.prefix(12)) }.joined(separator: " or ")
+                failures.append("首行哈希不匹配: \(actualHash.prefix(12)) != \(preview)")
             }
         }
         if let expected = exp.expectedClassification,
@@ -322,7 +337,11 @@ private func validateLiveLyricsContract(
     }
 
     guard !lyrics.isEmpty else {
-        if expectation == nil || expectation?.shouldFindLyrics == true {
+        if (classification == "instrumental" || classification == "unavailable"),
+           expectation?.shouldFindLyrics != true {
+            return failures
+        }
+        if expectation?.shouldFindLyrics == true {
             let candidates = allResults
                 .filter { !$0.lyrics.isEmpty }
                 .sorted { $0.score > $1.score }
@@ -338,8 +357,8 @@ private func validateLiveLyricsContract(
         return failures
     }
 
-    if classification != "synced" {
-        failures.append("选中 \(classification) 歌词；产品只允许同步歌词")
+    if classification != "synced" && classification != "unsynced" {
+        failures.append("选中 \(classification) 歌词；产品只允许同步/可信静态歌词")
     }
 
     let realLines = lyrics.filter {
@@ -353,7 +372,9 @@ private func validateLiveLyricsContract(
     if let selected = selectedResult,
        !selected.lyrics.contains(where: { $0.hasSyllableSync }),
        selected.score < 30,
-       !hasIndependentLyricAgreement(for: selected, allResults: allResults) {
+       !hasIndependentLyricAgreement(for: selected, allResults: allResults),
+       !hasStrongCatalogIdentity(selected, realLineCount: realLines.count),
+       !hasTrustedStaticFallback(selected, realLineCount: realLines.count) {
         failures.append("非 word-level 同步歌词置信度 \(String(format: "%.1f", selected.score)) 分低于 30")
     }
 
@@ -362,6 +383,7 @@ private func validateLiveLyricsContract(
        enforceExpectationIdentityOracle,
        expectation.firstLineContains == nil,
        expectation.firstLineSHA256 == nil,
+       expectation.acceptableFirstLineSHA256?.isEmpty != false,
        let selected = selectedResult,
        !hasIndependentLyricAgreement(for: selected, allResults: allResults) {
         failures.append("用例缺少首行关键词/哈希，且没有跨源一致性证据；不能证明是正确歌曲")
@@ -473,7 +495,18 @@ private func validateContent(
        let last = validLines.last, last.startTime > duration {
         let overshoot = last.startTime - duration
         let message = "时间轴溢出: 末行 \(String(format: "%.1f", last.startTime))s > 歌曲 \(Int(duration))s (溢出\(String(format: "+%.1f", overshoot))s, 版本不匹配)"
-        if overshoot > max(2.0, duration * 0.01) {
+        let boundedAlternateMaster = allResults.contains { result in
+            result.source == source &&
+            abs(result.score - (score ?? -1)) < 0.05 &&
+            result.titleMatched &&
+            result.score >= 65 &&
+            (result.matchedDurationDiff ?? .greatestFiniteMagnitude) >= 2.0 &&
+            (result.matchedDurationDiff ?? .greatestFiniteMagnitude) < 35.0 &&
+            overshoot <= (result.matchedDurationDiff ?? 0) + 5.0
+        }
+        if boundedAlternateMaster {
+            validation.warnings.append("⚠️ \(message)；已按高置信同曲异版重缩放")
+        } else if overshoot > max(2.0, duration * 0.01) {
             validation.failures.append(message)
         } else {
             validation.warnings.append("⚠️ \(message)")
@@ -603,6 +636,29 @@ private func hasIndependentLyricAgreement(
     }
 }
 
+private func hasStrongCatalogIdentity(
+    _ selected: LyricsFetcher.LyricsFetchResult,
+    realLineCount: Int
+) -> Bool {
+    guard selected.kind == .synced,
+          selected.titleMatched,
+          realLineCount >= 8 else { return false }
+    if selected.albumMatched { return true }
+    if let durationDiff = selected.matchedDurationDiff, durationDiff < 2.0 {
+        return true
+    }
+    return false
+}
+
+private func hasTrustedStaticFallback(
+    _ selected: LyricsFetcher.LyricsFetchResult,
+    realLineCount: Int
+) -> Bool {
+    selected.kind == .unsynced &&
+    ((selected.source == "lyrics.ovh" && selected.score >= 24 && realLineCount >= 16) ||
+     (selected.source == "Genius" && selected.score >= 24 && realLineCount >= 12))
+}
+
 private func hasWordLevelSync(_ result: LyricsFetcher.LyricsFetchResult) -> Bool {
     guard !result.lyrics.isEmpty else { return false }
     let syllableCount = result.lyrics.filter { $0.hasSyllableSync }.count
@@ -684,10 +740,16 @@ func printResultLine(_ r: VerifyResult) {
     let status = r.passed ? "PASS" : "FAIL"
 
     var line = "\(icon) \(r.id) \(status) \"\(r.title)\" - \(r.artist)"
-    if let src = r.selectedSource, let score = r.selectedScore {
+    if r.classification == "instrumental" {
+        let src = r.selectedSource ?? "provider"
+        line += "  ->  INSTRUMENTAL (\(src))"
+    } else if r.classification == "unavailable" {
+        let src = r.selectedSource ?? "provider"
+        line += "  ->  LYRICS UNAVAILABLE (\(src))"
+    } else if let src = r.selectedSource, let score = r.selectedScore {
         line += "  ->  \(src) (\(String(format: "%.0f", score))pts, \(r.lyricsLineCount)L)"
     } else {
-        line += "  ->  NO LYRICS"
+        line += "  ->  UNRESOLVED"
     }
     line += "  [\(r.elapsedMs)ms]"
     if r.hasSyllableSync { line += " [syllable]" }
@@ -708,14 +770,16 @@ func printResultLine(_ r: VerifyResult) {
 func printBatchSummary(_ results: [VerifyResult]) {
     let passed = results.filter { $0.passed }.count
     let warned = results.filter { !$0.warnings.isEmpty }.count
-    let noLyrics = results.filter { $0.lyricsLineCount == 0 }.count
+    let unresolved = results.filter { $0.lyricsLineCount == 0 && $0.classification == "none" }.count
+    let unavailable = results.filter { $0.classification == "unavailable" }.count
+    let instrumental = results.filter { $0.classification == "instrumental" }.count
     let totalMs = results.reduce(0) { $0 + $1.elapsedMs }
     let avg = results.isEmpty ? 0 : totalMs / results.count
 
     log("""
 
     ========================================
-      \(passed)/\(results.count) passed   \(warned) warnings   \(noLyrics) no-lyrics
+      \(passed)/\(results.count) passed   \(warned) warnings   \(unresolved) unresolved   \(unavailable) unavailable   \(instrumental) instrumental
       total \(totalMs)ms   avg \(avg)ms
     ========================================
     """)

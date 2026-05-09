@@ -338,6 +338,13 @@ public class LyricsService: ObservableObject {
                 return
             }
 
+            if fetcher.selectInstrumentalResult(from: results) != nil {
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+                }
+                return
+            }
+
             launchAuthoritativeBackfill(
                 title: title,
                 artist: artist,
@@ -345,14 +352,19 @@ public class LyricsService: ObservableObject {
                 album: album,
                 songID: songID
             )
-
-            await MainActor.run {
-                self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
-            }
             return
         }
 
         await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
+        if bestResult.kind == .unsynced {
+            launchAuthoritativeBackfill(
+                title: title,
+                artist: artist,
+                duration: duration,
+                album: album,
+                songID: songID
+            )
+        }
     }
 
     static func shouldApplyNoLyricsMiss(currentSongID: String?, missSongID: String, hasDisplayedLyrics: Bool) -> Bool {
@@ -360,7 +372,7 @@ public class LyricsService: ObservableObject {
     }
 
     @MainActor
-    private func applyNoLyricsMissIfStillCurrentAndEmpty(songID: String) {
+    private func applyNoLyricsMissIfStillCurrentAndEmpty(songID: String, isInstrumental: Bool = false) {
         guard Self.shouldApplyNoLyricsMiss(
             currentSongID: currentSongID,
             missSongID: songID,
@@ -370,7 +382,7 @@ public class LyricsService: ObservableObject {
             return
         }
         isLoading = false
-        error = "No lyrics found"
+        error = isInstrumental ? "Instrumental track" : "Lyrics unavailable"
     }
 
     private func launchAuthoritativeBackfill(
@@ -383,7 +395,7 @@ public class LyricsService: ObservableObject {
         let wantsTranslation = showTranslation
         Task { [weak self] in
             guard let self else { return }
-            guard let backfilled = await self.fetcher.backfillAuthoritativeSyncedLyrics(
+            guard let backfill = await self.fetcher.backfillAuthoritativeLyrics(
                 title: title,
                 artist: artist,
                 duration: duration,
@@ -391,16 +403,30 @@ public class LyricsService: ObservableObject {
                 album: album
             ) else {
                 DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                }
                 return
             }
-            await self.applyFetchedLyricsIfCurrent(
-                backfilled,
-                title: title,
-                artist: artist,
-                duration: duration,
-                songID: songID,
-                album: album
-            )
+            switch backfill {
+            case .lyrics(let backfilled):
+                await self.applyFetchedLyricsIfCurrent(
+                    backfilled,
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    songID: songID,
+                    album: album
+                )
+            case .instrumental:
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+                }
+            case .unavailable:
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                }
+            }
         }
     }
 

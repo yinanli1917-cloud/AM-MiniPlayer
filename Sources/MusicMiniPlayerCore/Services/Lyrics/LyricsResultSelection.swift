@@ -161,6 +161,10 @@ extension LyricsFetcher {
 
         if usableSynced.isEmpty {
             DebugLogger.log("🏆 No trustworthy synced results available: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
+            if let unsynced = selectUnsyncedFallback(from: results) {
+                DebugLogger.log("🏆 Conservative unsynced fallback: \(unsynced.source) \(Int(unsynced.score))")
+                return unsynced
+            }
             return nil
         }
         // 🔑 Word-level priority is conditional. Album-scoped catalog evidence
@@ -208,8 +212,8 @@ extension LyricsFetcher {
 
         let candidates = plainCandidates.filter {
             $0.score >= 28 ||
-            ($0.source == "Genius" && $0.score >= 24) ||
-            ($0.source == "Genius" && $0.score >= 20 && $0.lyrics.count >= 10 && lyricsContainCJK($0.lyrics))
+            ($0.source == "lyrics.ovh" && $0.score >= 24 && $0.lyrics.count >= 16) ||
+            ($0.source == "Genius" && $0.score >= 24)
         }
         return candidates.max(by: { $0.score < $1.score })
     }
@@ -335,6 +339,9 @@ extension LyricsFetcher {
               let lastStart = result.lyrics.last?.startTime else { return false }
         let maxEnd = result.lyrics.map(\.endTime).max() ?? lastStart
         if maxEnd > songDuration {
+            if isBoundedAlternateMasterTimeline(result, songDuration: songDuration, maxEnd: maxEnd) {
+                return false
+            }
             return (maxEnd - songDuration) > max(8.0, songDuration * 0.05)
         }
         guard songDuration >= 180 else { return false }
@@ -361,6 +368,22 @@ extension LyricsFetcher {
         }
         let instrumentalOutroRatio = songDuration >= 360 ? 0.55 : 0.40
         return tailGap > max(140.0, songDuration * instrumentalOutroRatio)
+    }
+
+    private func isBoundedAlternateMasterTimeline(
+        _ result: LyricsFetchResult,
+        songDuration: TimeInterval,
+        maxEnd: TimeInterval
+    ) -> Bool {
+        guard result.kind == .synced,
+              result.titleMatched,
+              result.score >= 65,
+              let catalogDurationDiff = result.matchedDurationDiff,
+              catalogDurationDiff >= 2.0,
+              catalogDurationDiff < 35.0 else { return false }
+        let overshoot = maxEnd - songDuration
+        guard overshoot > 0 else { return false }
+        return overshoot <= catalogDurationDiff + 5.0
     }
 
     // MARK: - Deduplication
