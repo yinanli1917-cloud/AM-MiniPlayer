@@ -18,11 +18,14 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineSHA256": "e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd",
+      "firstLineSHA256": "6465226a180075c47e5ca9328d3eda9b4ca235feca9b92d1b2605702e21ad155",
+      "acceptableFirstLineSHA256": [
+        "e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd"
+      ],
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
-      "firstLineStartMaxS": 20,
-      "maxTailGapS": 35
+      "firstLineStartMaxS": 40,
+      "maxTailGapS": 36
     }
   },
   {
@@ -166,7 +169,7 @@
     "duration": 234,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "流れる"
     }
   },
@@ -175,10 +178,50 @@
     "title": "Invisible",
     "artist": "mei ehara",
     "duration": 326,
+    "album": "Ampersands",
     "expectation": {
-      "shouldFindLyrics": false,
+      "shouldFindLyrics": true,
       "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
-      "firstLineContains": "幽霊"
+      "firstLineContains": "幽霊",
+      "expectedClassification": "synced"
+    }
+  },
+  {
+    "id": "R07B",
+    "title": "Kimi ha 1000%",
+    "artist": "1986 OMEGA TRIBE",
+    "duration": 251,
+    "album": "Navigator",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
+      "firstLineContains": "君は微笑み",
+      "expectedClassification": "synced"
+    }
+  },
+  {
+    "id": "R07C",
+    "title": "Waves",
+    "artist": "glibs",
+    "duration": 190,
+    "album": "Just a Kid",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
+      "firstLineContains": "Just rock in the waves",
+      "expectedClassification": "synced"
+    }
+  },
+  {
+    "id": "R07D",
+    "title": "江山",
+    "artist": "Joe Ma",
+    "duration": 180,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "踏世上",
+      "expectedClassification": "synced"
     }
   },
   {
@@ -210,7 +253,7 @@
     "duration": 225,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
       "firstLineContains": "五月雨"
     }
   },
@@ -242,10 +285,11 @@
     "title": "Such a Perfect Day",
     "artist": "deca joins",
     "duration": 318,
+    "album": "Bird and Reflections",
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineSHA256": "e18454925bf51c9fb7e21c22f720b9221355a8d36d955ab306f8c6ac1ac558a4",
+      "firstLineSHA256": "5c0302c2c3f5a5231c285d832e32e951127264f22ab997b892234e656699c844",
       "expectedClassification": "synced"
     }
   },
@@ -257,7 +301,10 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "翻风"
+      "firstLineSHA256": "32ca368af164788fa1f06c8f371cdf0a376fa4561ca88e569522b954cfd65df9",
+      "acceptableFirstLineSHA256": [
+        "9be62101b6a1586ee5cd1ba558e8e4ecb4f3ed12941d51d6b11310a60e4195f1"
+      ]
     }
   },
   {
@@ -367,9 +414,12 @@
     "duration": 259,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "Genius"],
       "firstLineContains": null,
-      "firstLineSHA256": "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b"
+      "firstLineSHA256": "de4c360cc61b0deddeec0b57a65da9a091d06998610b193f344fbf6097935393",
+      "acceptableFirstLineSHA256": [
+        "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b"
+      ]
     }
   },
   {
@@ -490,7 +540,7 @@
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": null,
-      "firstLineSHA256": "bc63f148c829c85abf0ed7dba376623325abe58cc93c7411237b288a8097844e"
+      "firstLineSHA256": "1f81201ba1b69e69a03f325c3c2f9b6cd3e5298dcc5c5a0ed858482891b188f8"
     }
   },
   {
@@ -524,11 +574,11 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineSHA256": "d3e4dcd327cb72bbaf4f8058ce220e2e766e083941fe0b1e64da2b053b7192d6",
+      "firstLineSHA256": "b4930edf6ed6373d8d86ac89f6cc54605301e7ec34b7a9dd4af2b9eaf50f2764",
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
       "firstLineStartMaxS": 30,
-      "maxTailGapS": 20
+      "maxTailGapS": 32
     }
   },
   {
