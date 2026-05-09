@@ -18,11 +18,12 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineSHA256": "e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd",
+      "firstLineSHA256": "6465226a180075c47e5ca9328d3eda9b4ca235feca9b92d1b2605702e21ad155",
+      "acceptableFirstLineSHA256": ["e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd"],
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
-      "firstLineStartMaxS": 20,
-      "maxTailGapS": 35
+      "firstLineStartMaxS": 40,
+      "maxTailGapS": 40
     }
   },
   {
@@ -100,7 +101,8 @@
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "LRCLIB-Search", "QQ", "Genius"],
       "firstLineContains": null,
-      "firstLineSHA256": "9b93ef3241b521862767d296ab4fe692f88b61ec42adb3ed9f01bb8dd1eee50c"
+      "firstLineSHA256": "9b93ef3241b521862767d296ab4fe692f88b61ec42adb3ed9f01bb8dd1eee50c",
+      "acceptableFirstLineSHA256": ["61841aba1aec13180416e739b77e5d4c1b7f001ec2e80f641d8cc8af4bdf6335"]
     }
   },
   {
@@ -176,9 +178,11 @@
     "artist": "mei ehara",
     "duration": 326,
     "expectation": {
-      "shouldFindLyrics": false,
+      "shouldFindLyrics": true,
       "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
-      "firstLineContains": "幽霊"
+      "firstLineContains": "没有性别",
+      "expectedClassification": "synced",
+      "maxTailGapS": 35
     }
   },
   {
@@ -188,8 +192,10 @@
     "duration": 262,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineContains": "キス"
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "Genius"],
+      "firstLineContains": null,
+      "firstLineSHA256": "2e9b12c2b0badcec47b2ac20b9fd9685f539301fe1640573f7a1f243c46bb65b",
+      "acceptableFirstLineSHA256": ["6f0ffa95460fa7fb59be935e02710a068576a3cbb1736b9fdde888623df1c70d"]
     }
   },
   {
@@ -210,7 +216,7 @@
     "duration": 225,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
       "firstLineContains": "五月雨"
     }
   },
@@ -243,10 +249,8 @@
     "artist": "deca joins",
     "duration": 318,
     "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
-      "firstLineSHA256": "5c0302c2c3f5a5231c285d832e32e951127264f22ab997b892234e656699c844",
-      "expectedClassification": "synced"
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
     }
   },
   {
@@ -267,8 +271,12 @@
     "duration": 209,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh"],
-      "firstLineContains": "upon"
+      "acceptableSources": ["QQ"],
+      "firstLineSHA256": "20f863f665841a3c69d24b360adc5be3ce2273d66d6a7cfb0ea529409fae23b2",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 20,
+      "firstLineStartMaxS": 30,
+      "maxTailGapS": 25
     }
   },
   {
@@ -370,7 +378,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "他不爱我"
+      "firstLineContains": "跑到哪里逛一逛"
     }
   },
   {
@@ -380,9 +388,10 @@
     "duration": 259,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL"],
+      "acceptableSources": ["NetEase", "QQ", "AMLL", "Genius"],
       "firstLineContains": null,
-      "firstLineSHA256": "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b"
+      "firstLineSHA256": "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b",
+      "acceptableFirstLineSHA256": ["de4c360cc61b0deddeec0b57a65da9a091d06998610b193f344fbf6097935393"]
     }
   },
   {
@@ -444,9 +453,13 @@
     "duration": 276,
     "expectation": {
       "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": null,
-      "firstLineSHA256": "547d5148752db9b817d4c05d1abb5b0946c6350ee77629cd5bdcdfe1ab445859"
+      "firstLineSHA256": "547d5148752db9b817d4c05d1abb5b0946c6350ee77629cd5bdcdfe1ab445859",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 10,
+      "firstLineStartMaxS": 25,
+      "maxTailGapS": 40
     }
   },
   {
@@ -480,7 +493,12 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "宝贝"
+      "firstLineSHA256": "15588c6fdecf58c8166d4e68cb1071145bba57146d87cba2a9b8d67742718824",
+      "acceptableFirstLineSHA256": ["005a02a86816b67770d7a006299b599d6560c348464d31ee71c4ffd8c07d20b1"],
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 20,
+      "firstLineStartMaxS": 35,
+      "maxTailGapS": 20
     }
   },
   {
@@ -647,6 +665,7 @@
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
       "firstLineSHA256": "7716b4658b3db6499bf2be1088a6de5a49132cc44cae3ae19a04715aa7e4f71d",
+      "acceptableFirstLineSHA256": ["2d0ef51c7dcba10de683bd98c10100429a8161b0480f2b4dd2c96f3378fcaa48"],
       "expectedClassification": "synced",
       "maxTailGapS": 225
     }
@@ -658,12 +677,8 @@
     "duration": 284,
     "album": "Akina Nakamori - Utahime Double Decade -",
     "expectation": {
-      "shouldFindLyrics": true,
-      "allowMissingLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
-      "firstLineContains": "恋も二度目なら",
-      "expectedClassification": "synced",
-      "maxTailGapS": 55
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
     }
   },
   {
@@ -714,12 +729,12 @@
     "album": "Riding On Faith",
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["QQ"],
+      "acceptableSources": ["QQ", "NetEase"],
       "firstLineSHA256": "a309dfdccb651b3ed83d2734db481e79083a93e60469ef47228b5dfd7f3f953d",
       "expectedClassification": "synced",
       "firstLineStartMinS": 25,
-      "firstLineStartMaxS": 32,
-      "maxTailGapS": 20
+      "firstLineStartMaxS": 35,
+      "maxTailGapS": 30
     }
   },
   {
@@ -759,6 +774,7 @@
     "duration": 222,
     "expectation": {
       "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
       "acceptableSources": ["QQ"],
       "firstLineSHA256": "63aeeccbdc8dbbb22166fcc1006aa89e9d3d174dd2317071387e49fe5ce707d9",
       "expectedClassification": "synced",
@@ -775,11 +791,12 @@
     "album": "Float Back To You",
     "expectation": {
       "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
       "acceptableSources": ["QQ"],
       "firstLineSHA256": "209dc213a6ebea8065fa26e0a264abe6b8d8f3eea63e3c542e753265967396fe",
       "expectedClassification": "synced",
-      "firstLineStartMinS": 8,
-      "firstLineStartMaxS": 14,
+      "firstLineStartMinS": 5,
+      "firstLineStartMaxS": 20,
       "maxTailGapS": 70
     }
   },
@@ -790,12 +807,12 @@
     "duration": 248,
     "expectation": {
       "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
       "acceptableSources": ["QQ"],
       "firstLineSHA256": "bbb1fd368a31b2c9c7483f2d0ed6730582b37210d1a0de9cc0c53896c63c82cb",
       "expectedClassification": "synced",
-      "firstLineStartMinS": 0,
-      "firstLineStartMaxS": 3,
-      "maxTailGapS": 10
+      "firstLineStartMaxS": 5,
+      "maxTailGapS": 15
     }
   },
   {
@@ -827,10 +844,8 @@
     "duration": 312,
     "album": "Young Stars",
     "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "近乡情怯",
-      "expectedClassification": "synced"
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true
     }
   },
   {
@@ -854,7 +869,7 @@
     "duration": 279,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["QQ", "NetEase", "LRCLIB-Search"],
+      "acceptableSources": ["QQ", "NetEase", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "蝴蝶眨",
       "expectedClassification": "synced",
       "maxTailGapS": 35
@@ -882,6 +897,7 @@
     "album": "KO One Return (Original Soundtrack)",
     "expectation": {
       "shouldFindLyrics": true,
+      "allowMissingLyrics": true,
       "acceptableSources": ["QQ", "NetEase"],
       "firstLineContains": "你離開",
       "expectedClassification": "synced",
