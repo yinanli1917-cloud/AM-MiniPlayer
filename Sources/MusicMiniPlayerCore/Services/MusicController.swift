@@ -44,17 +44,18 @@ public class MusicController: ObservableObject {
     public static let shared = MusicController()
 
     let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "MusicController")
+    let performanceLog = OSLog(subsystem: "com.yinanli.MusicMiniPlayer", category: "Performance")
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - @Published 状态（SwiftUI 视图绑定层）
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @Published public var isPlaying: Bool = false
-    @Published public var currentTrackTitle: String = kNotPlayingSentinel
-    @Published public var currentArtist: String = ""
-    @Published public var currentAlbum: String = ""
+    public var currentTrackTitle: String = kNotPlayingSentinel
+    public var currentArtist: String = ""
+    public var currentAlbum: String = ""
     @Published public var currentArtwork: NSImage? = nil
-    @Published public var duration: Double = 0
+    public var duration: Double = 0
     // currentTime is NOT @Published to avoid triggering objectWillChange at 10Hz,
     // which would cause ALL views observing MusicController to re-evaluate body.
     // Views needing time reactivity observe timePublisher instead.
@@ -66,17 +67,23 @@ public class MusicController: ObservableObject {
     /// NOT @Published — read by TimelineView inside LyricLineView to avoid triggering SwiftUI diffs.
     public private(set) var wordFillTime: TimeInterval = 0
     @Published public var connectionError: String? = nil
-    @Published public var audioQuality: String? = nil // "Lossless", "Hi-Res Lossless", "Dolby Atmos", nil
+    public var audioQuality: String? = nil // "Lossless", "Hi-Res Lossless", "Dolby Atmos", nil
     @Published public var shuffleEnabled: Bool = false
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
-    @Published public var currentPage: PlayerPage = .album
+    @Published public var currentPage: PlayerPage = .album {
+        didSet {
+            if oldValue != currentPage { updateTimerState() }
+        }
+    }
     @Published public var userManuallyOpenedLyrics: Bool = false
     @Published public var artworkLuminance: CGFloat = 0.5
     @Published public var controlAreaLuminance: CGFloat = 0.5
+    @Published public var topLeftArtworkLuminance: CGFloat = 0.5
+    @Published public var topRightArtworkLuminance: CGFloat = 0.5
     @Published public var skipDirection: CGFloat = 1
-    @Published public var currentPersistentID: String?
+    public var currentPersistentID: String?
     @Published public var musicKitAuthorized: Bool = false
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -125,6 +132,9 @@ public class MusicController: ObservableObject {
     /// Generation-based gates inside the task body + `applyArtworkIfCurrent` are the
     /// single source of truth for staleness — no separate dedup key needed.
     var artworkAPITask: Task<Void, Never>?
+    var artworkAPIResultTask: Task<NSImage?, Never>?
+    var artworkAPIRequestKey: NSString?
+    var pendingLyricsFetchTask: Task<Void, Never>?
 
     /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
     var sbAppliedForGeneration: Int = -1
@@ -161,9 +171,67 @@ public class MusicController: ObservableObject {
         return gen
     }
 
+    private func scheduleLyricsFetch(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String,
+        generation: Int,
+        forceRefresh: Bool = false
+    ) {
+        pendingLyricsFetchTask?.cancel()
+
+        pendingLyricsFetchTask = Task { @MainActor [weak self] in
+            let delay: UInt64 = 250_000_000
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+
+            guard let self else { return }
+            guard self.artworkFetchGeneration == generation else { return }
+            self.lyricsService.fetchLyrics(
+                for: title,
+                artist: artist,
+                duration: duration,
+                album: album,
+                forceRefresh: forceRefresh
+            )
+        }
+    }
+
     @inline(__always)
     func logToFile(_ message: String) {
         DebugLogger.log("Artwork", message)
+    }
+
+    @discardableResult
+    private func updateTrackMetadata(
+        title: String? = nil,
+        artist: String? = nil,
+        album: String? = nil,
+        duration newDuration: Double? = nil,
+        audioQuality newAudioQuality: String? = nil,
+        updateAudioQuality: Bool = false,
+        persistentID newPersistentID: String? = nil,
+        updatePersistentID: Bool = false
+    ) -> Bool {
+        let titleChanged = title.map { currentTrackTitle != $0 } ?? false
+        let artistChanged = artist.map { currentArtist != $0 } ?? false
+        let albumChanged = album.map { currentAlbum != $0 } ?? false
+        let durationChanged = newDuration.map { duration != $0 } ?? false
+        let audioQualityChanged = updateAudioQuality && audioQuality != newAudioQuality
+        let persistentIDChanged = updatePersistentID && currentPersistentID != newPersistentID
+        let changed = titleChanged || artistChanged || albumChanged || durationChanged || audioQualityChanged || persistentIDChanged
+
+        guard changed else { return false }
+
+        objectWillChange.send()
+        if let title { currentTrackTitle = title }
+        if let artist { currentArtist = artist }
+        if let album { currentAlbum = album }
+        if let newDuration { duration = newDuration }
+        if updateAudioQuality { audioQuality = newAudioQuality }
+        if updatePersistentID { currentPersistentID = newPersistentID }
+        return true
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -175,7 +243,9 @@ public class MusicController: ObservableObject {
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var queueRefreshTimer: Timer?     // Debounced queue refresh on track change
+    private var queueChangeRefreshWorkItem: DispatchWorkItem?
     private var interpolationTimerActive = false
+    private var interpolationTimerInterval: TimeInterval = 0
     var lastPollTime: Date = .distantPast
     /// Frame-relative interpolation: tracks when the last interpolation frame ran.
     /// Unlike lastPollTime (which depends on SB queue availability), this is set
@@ -200,15 +270,34 @@ public class MusicController: ObservableObject {
     // Queue sync state
     private var lastQueueHash: String = ""
     private var queueObserverTask: Task<Void, Never>?
+    var queueFetchInFlight = false
+    var queueFetchPending = false
+    var queueFetchPendingForceRecent = false
+    var lastQueueFetchStartedAt: Date = .distantPast
+    var lastQueueFetchCompletedAt: Date = .distantPast
+    var lastQueueFetchCompletedGeneration: UInt64 = 0
+    var lastRecentHistoryFetchAt: Date = .distantPast
+    var queueSyncGeneration: UInt64 = 0
+    var assetPreloadTask: Task<Void, Never>?
+    let queueFetchMinimumInterval: TimeInterval = 1.5
+    let recentHistoryRefreshInterval: TimeInterval = 20.0
     private let userActionLockDuration: TimeInterval = 1.5
     private static var isRunningUnitTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || ProcessInfo.processInfo.processName.contains("xctest")
     }
+    private static let timingDiagnosticsEnabled =
+        ProcessInfo.processInfo.environment["NANOPOD_TIMING_DIAGNOSTICS"] == "1"
 
     // 防止 AppleScript 轮询重叠
     private var lastUpdateTime: Date = .distantPast
     private let updateTimeout: TimeInterval = 0.4
+
+    @discardableResult
+    func markQueueMayHaveChanged() -> UInt64 {
+        queueSyncGeneration &+= 1
+        return queueSyncGeneration
+    }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Init / Deinit
@@ -259,8 +348,10 @@ public class MusicController: ObservableObject {
             debugPrint("❌ [MusicController] Failed to create SBApplication\n")
             logger.error("❌ Failed to create SBApplication for Music.app")
             DispatchQueue.main.async {
-                self.currentTrackTitle = "Failed to Connect"
-                self.currentArtist = "Please ensure Music.app is installed"
+                self.updateTrackMetadata(
+                    title: "Failed to Connect",
+                    artist: "Please ensure Music.app is installed"
+                )
             }
             return
         }
@@ -374,9 +465,7 @@ public class MusicController: ObservableObject {
         logger.info("Initializing MusicController in PREVIEW mode")
         self.musicApp = nil
         self.isPlaying = false
-        self.currentTrackTitle = "Preview Track"
-        self.currentArtist = "Preview Artist"
-        self.currentAlbum = "Preview Album"
+        self.updateTrackMetadata(title: "Preview Track", artist: "Preview Artist", album: "Preview Album")
         self.currentArtwork = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Preview")
         self.recentTracks = [
             (title: "Recent Song 1", artist: "Artist A", album: "Album A", persistentID: "1", duration: 190.0),
@@ -398,8 +487,11 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // 0.5s lightweight SB position poll (lyrics sync needs sub-second accuracy)
-            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            // SB is the expensive part of steady playback. Interpolation drives
+            // smooth lyrics locally; this poll is only a drift/radio fallback, so
+            // keep it comfortably under the 3s response target without running at
+            // animation cadence.
+            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.pollPositionViaSB()
             }
             RunLoop.main.add(self.pollingTimer!, forMode: .common)
@@ -412,12 +504,13 @@ public class MusicController: ObservableObject {
             RunLoop.main.add(self.fullSyncTimer!, forMode: .common)
             self.fullSyncTimer?.fire()  // initial full sync on startup
 
-            // 5s 队列 hash 检测 (notification path catches most changes immediately)
-            self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            // Queue hash scans touch Music.app's current playlist/tracks through SB.
+            // Notifications and track-change refreshes handle normal queue updates;
+            // this is only a low-frequency safety net.
+            self.queueCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
                 self?.checkQueueHashAndRefresh()
             }
             RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
-            self.queueCheckTimer?.fire()
 
             self.setupMusicKitQueueObserver()
             self.setupWindowMovementObserver()
@@ -434,6 +527,8 @@ public class MusicController: ObservableObject {
         interpolationTimerActive = false
         queueCheckTimer?.invalidate()
         queueCheckTimer = nil
+        queueChangeRefreshWorkItem?.cancel()
+        queueChangeRefreshWorkItem = nil
     }
 
     /// 根据播放状态动态启停 60fps 插值 Timer（减少 CPU 占用）
@@ -442,18 +537,22 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let shouldRun = self.isPlaying && !self.windowMovementPaused
-            if shouldRun && !self.interpolationTimerActive {
+            let targetInterval: TimeInterval = self.currentPage == .lyrics ? (1.0 / 15.0) : 0.1
+            if shouldRun && (!self.interpolationTimerActive || self.interpolationTimerInterval != targetInterval) {
+                self.interpolationTimer?.invalidate()
                 // 🔑 Reset frame clock so first dt is ~0, not time-since-last-stop
                 self.lastFrameTime = Date()
-                self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+                self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: targetInterval, repeats: true) { [weak self] _ in
                     self?.interpolateTime()
                 }
                 RunLoop.main.add(self.interpolationTimer!, forMode: .common)
                 self.interpolationTimerActive = true
+                self.interpolationTimerInterval = targetInterval
             } else if !shouldRun && self.interpolationTimerActive {
                 self.interpolationTimer?.invalidate()
                 self.interpolationTimer = nil
                 self.interpolationTimerActive = false
+                self.interpolationTimerInterval = 0
             }
         }
     }
@@ -490,6 +589,7 @@ public class MusicController: ObservableObject {
                 if hash != self.lastQueueHash {
                     debugPrint("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n")
                     self.lastQueueHash = hash
+                    self.markQueueMayHaveChanged()
                     self.fetchUpNextQueue()
                 }
             }
@@ -507,7 +607,22 @@ public class MusicController: ObservableObject {
                   let currentID = currentTrack.value(forKey: "persistentID") as? String else {
                 return nil
             }
-            return "\(playlistName):\(tracks.count):\(currentID)"
+            let shuffle = app.value(forKey: "shuffleEnabled") as? Bool ?? false
+            let repeatRaw = app.value(forKey: "songRepeat") as? Int ?? 0
+            let trackCount = tracks.count
+            let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
+            var upcomingIDs: [String] = []
+            if currentIndex >= 0 && currentIndex < trackCount {
+                let upperBound = min(trackCount, currentIndex + 4)
+                for i in (currentIndex + 1)..<upperBound {
+                    guard let track = tracks.object(at: i) as? NSObject,
+                          let trackID = track.value(forKey: "persistentID") as? String else {
+                        continue
+                    }
+                    upcomingIDs.append(trackID)
+                }
+            }
+            return "\(playlistName):\(trackCount):\(currentID):shuffle=\(shuffle):repeat=\(repeatRaw):\(upcomingIDs.joined(separator: ","))"
         }
     }
 
@@ -520,10 +635,12 @@ public class MusicController: ObservableObject {
     }
 
     @objc private func queueMayHaveChanged(_ notification: Notification) {
-        guard Date().timeIntervalSince(lastPollTime) >= 1.0 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        queueChangeRefreshWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
             self?.checkQueueHashAndRefresh()
         }
+        queueChangeRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -553,20 +670,21 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 🔬 Diagnostic logging — every 5s, summarize frame timing health
-        diagFrameCount += 1
-        if dt > diagMaxDt { diagMaxDt = dt }
-        if dt > 0.032 { diagDroppedFrames += 1 }
-        if dt > 0.100 { diagStalledFrames += 1 }
-        if dt > 0.050 {
-            DebugLogger.log("Timing", "🐌 SLOW FRAME: dt=\(String(format: "%.1f", dt * 1000))ms pos=\(String(format: "%.2f", internalCurrentTime))")
-        }
-        let sinceLast = now.timeIntervalSince(diagLastLogTime)
-        if sinceLast >= 5.0 {
-            let avgDt = sinceLast / Double(max(diagFrameCount, 1))
-            DebugLogger.log("Timing", "📊 \(diagFrameCount) frames in \(String(format: "%.1f", sinceLast))s | avg=\(String(format: "%.1f", avgDt * 1000))ms max=\(String(format: "%.1f", diagMaxDt * 1000))ms | dropped=\(diagDroppedFrames) stalled=\(diagStalledFrames) | pos=\(String(format: "%.2f", internalCurrentTime))/\(String(format: "%.0f", duration))")
-            diagFrameCount = 0; diagMaxDt = 0; diagDroppedFrames = 0; diagStalledFrames = 0
-            diagLastLogTime = now
+        if Self.timingDiagnosticsEnabled {
+            diagFrameCount += 1
+            if dt > diagMaxDt { diagMaxDt = dt }
+            if dt > 0.032 { diagDroppedFrames += 1 }
+            if dt > 0.100 { diagStalledFrames += 1 }
+            if dt > 0.050 {
+                DebugLogger.log("Timing", "🐌 SLOW FRAME: dt=\(String(format: "%.1f", dt * 1000))ms pos=\(String(format: "%.2f", internalCurrentTime))")
+            }
+            let sinceLast = now.timeIntervalSince(diagLastLogTime)
+            if sinceLast >= 5.0 {
+                let avgDt = sinceLast / Double(max(diagFrameCount, 1))
+                DebugLogger.log("Timing", "📊 \(diagFrameCount) frames in \(String(format: "%.1f", sinceLast))s | avg=\(String(format: "%.1f", avgDt * 1000))ms max=\(String(format: "%.1f", diagMaxDt * 1000))ms | dropped=\(diagDroppedFrames) stalled=\(diagStalledFrames) | pos=\(String(format: "%.2f", internalCurrentTime))/\(String(format: "%.0f", duration))")
+                diagFrameCount = 0; diagMaxDt = 0; diagDroppedFrames = 0; diagStalledFrames = 0
+                diagLastLogTime = now
+            }
         }
 
         internalCurrentTime += dt
@@ -636,12 +754,12 @@ public class MusicController: ObservableObject {
         let trackChanged = (newName != nil && newName != currentTrackTitle) ||
                           (newArtist != nil && newArtist != currentArtist)
 
-        if let name = newName { currentTrackTitle = name }
-        if let artist = newArtist { currentArtist = artist }
-        if let album = newAlbum { currentAlbum = album }
-        if let totalTime = userInfo["Total Time"] as? Int {
-            duration = Double(totalTime) / 1000.0
-        }
+        updateTrackMetadata(
+            title: newName,
+            artist: newArtist,
+            album: newAlbum,
+            duration: (userInfo["Total Time"] as? Int).map { Double($0) / 1000.0 }
+        )
 
         return (trackChanged, newName, newArtist, newAlbum)
     }
@@ -660,15 +778,13 @@ public class MusicController: ObservableObject {
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
         // fetchArtwork uses artworkQueue (separate SB instance) + API in parallel.
         // Empty persistentID = title-based dedup; cache backfill happens when SB returns ID.
-        fetchArtwork(for: name, artist: artist, album: album, persistentID: "", generation: generation)
         // 🔑 Capture duration NOW — Task { @MainActor } defers execution.
         // During rapid switching, later notifications' GCD blocks run before earlier Tasks,
         // so self.duration may already reflect a different song by execution time.
         let capturedDuration = self.duration
+        fetchArtwork(for: name, artist: artist, album: album, duration: capturedDuration, persistentID: "", generation: generation)
         let capturedAlbum = album
-        Task { @MainActor in
-            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: capturedDuration, album: capturedAlbum)
-        }
+        scheduleLyricsFetch(title: name, artist: artist, duration: capturedDuration, album: capturedAlbum, generation: generation)
 
         // ━━━ PARALLEL: persistentID + duration + queue refresh on SB queue ━━━
         scriptingBridgeQueue.async { [weak self] in
@@ -711,7 +827,7 @@ public class MusicController: ObservableObject {
             }
 
             DispatchQueue.main.async {
-                self.currentPersistentID = persistentID
+                self.updateTrackMetadata(persistentID: persistentID, updatePersistentID: true)
 
                 // Backfill cache: if artwork already arrived, cache it under persistentID
                 if !persistentID.isEmpty, let artwork = self.currentArtwork,
@@ -724,21 +840,19 @@ public class MusicController: ObservableObject {
                     // 🔑 Save old duration BEFORE overwriting — comparing after
                     // overwrite was a no-op bug (always 0, re-fetch never fired)
                     let oldDuration = self.duration
-                    self.duration = sbDuration
+                    self.updateTrackMetadata(duration: sbDuration)
                     // Re-fetch lyrics if SB duration differs significantly from notification
                     if abs(sbDuration - oldDuration) > 1.0 {
-                        Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: self.currentAlbum)
-                        }
+                        self.scheduleLyricsFetch(title: name, artist: artist, duration: sbDuration, album: self.currentAlbum, generation: generation)
                     }
                 }
 
-                // 🔑 Debounced queue refresh — 2s to survive rapid switching bursts.
-                // 1s was too short: user pressing next every 0.5s would fire queue refresh
-                // mid-burst, causing SBElementArray iteration on a mutating playlist → crash.
+                // Refresh quickly when the playlist page is visible; otherwise keep
+                // the background refresh calmer to survive rapid switching bursts.
                 self.queueRefreshTimer?.invalidate()
                 let refreshGen = generation
-                self.queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                let queueRefreshDelay = self.currentPage == .playlist ? 0.35 : 2.0
+                self.queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: queueRefreshDelay, repeats: false) { [weak self] _ in
                     guard let self = self, self.artworkFetchGeneration == refreshGen else { return }
                     self.fetchUpNextQueue()
                 }
@@ -770,13 +884,11 @@ public class MusicController: ObservableObject {
             if let dur = dur {
                 DispatchQueue.main.async {
                     let oldDuration = self.duration
-                    self.duration = dur
+                    self.updateTrackMetadata(duration: dur)
                     // 🔑 Duration recovered from 0 — re-fetch lyrics with correct duration.
                     // Without this, lyrics stay at "No Lyrics" even though duration is now valid.
                     if abs(dur - oldDuration) > 1.0 {
-                        Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum)
-                        }
+                        self.scheduleLyricsFetch(title: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum, generation: generation)
                     }
                 }
             }
@@ -1052,6 +1164,10 @@ public class MusicController: ObservableObject {
 
     /// 将快照应用到 @Published 属性（主线程，由 processPlayerState 在 DispatchQueue.main.async 中调用）
     private func applySnapshot(_ s: PlayerStateSnapshot, quality: String?, trackChanged: Bool) {
+        let signpostID = OSSignpostID(log: performanceLog)
+        os_signpost(.begin, log: performanceLog, name: "ApplySnapshot", signpostID: signpostID, "trackChanged=%{public}d", trackChanged ? 1 : 0)
+        defer { os_signpost(.end, log: performanceLog, name: "ApplySnapshot", signpostID: signpostID) }
+
         // 值守卫：只在值变化时赋值，避免无谓的 SwiftUI 重绘
         if Date().timeIntervalSince(lastUserActionTime) > userActionLockDuration {
             if isPlaying != s.isPlaying { isPlaying = s.isPlaying }
@@ -1065,10 +1181,16 @@ public class MusicController: ObservableObject {
             return
         }
 
-        if currentTrackTitle != s.trackName { currentTrackTitle = s.trackName }
-        if currentArtist != s.trackArtist { currentArtist = s.trackArtist }
-        if currentAlbum != s.trackAlbum { currentAlbum = s.trackAlbum }
-        if duration != s.trackDuration { duration = s.trackDuration }
+        updateTrackMetadata(
+            title: s.trackName,
+            artist: s.trackArtist,
+            album: s.trackAlbum,
+            duration: s.trackDuration,
+            audioQuality: quality,
+            updateAudioQuality: true,
+            persistentID: trackChanged ? s.persistentID : nil,
+            updatePersistentID: trackChanged
+        )
 
         // 时间同步
         // 🔑 Use measurementTime (captured before AppleScript ran) instead of Date()
@@ -1086,20 +1208,16 @@ public class MusicController: ObservableObject {
             }
         }
 
-        if audioQuality != quality { audioQuality = quality }
-
         if trackChanged {
             debugPrint("🎵 [updatePlayerState] Track changed: \(s.trackName) by \(s.trackArtist)\n")
             logger.info("🎵 Track changed: \(s.trackName) by \(s.trackArtist)")
 
             lastPolledPosition = 0  // Reset position-jump detection
             let generation = incrementGeneration()
-            currentPersistentID = s.persistentID
-            fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: s.persistentID, generation: generation)
+            markQueueMayHaveChanged()
+            fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, duration: s.trackDuration, persistentID: s.persistentID, generation: generation)
             // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
-            Task { @MainActor in
-                self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum)
-            }
+            scheduleLyricsFetch(title: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum, generation: generation)
             debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(userManuallyOpenedLyrics))\n")
             userManuallyOpenedLyrics = false
         }
@@ -1112,14 +1230,21 @@ public class MusicController: ObservableObject {
         if currentTrackTitle != kNotPlayingSentinel {
             logger.info("⏹️ No track playing")
         }
-        currentTrackTitle = kNotPlayingSentinel
-        currentArtist = ""
-        currentAlbum = ""
-        duration = 0
+        pendingLyricsFetchTask?.cancel()
+        pendingLyricsFetchTask = nil
+        updateTrackMetadata(
+            title: kNotPlayingSentinel,
+            artist: "",
+            album: "",
+            duration: 0,
+            audioQuality: nil,
+            updateAudioQuality: true,
+            persistentID: nil,
+            updatePersistentID: true
+        )
         currentTime = 0
         wordFillTime = 0
         internalCurrentTime = 0
-        audioQuality = nil
         setArtwork(nil)
     }
 }

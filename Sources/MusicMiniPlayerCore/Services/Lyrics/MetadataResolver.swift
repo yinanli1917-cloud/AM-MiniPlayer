@@ -657,7 +657,7 @@ public final class MetadataResolver {
         let isArtistOnlySearch = searchTerm.lowercased() == inputArtistLower
 
         // 🔑 artist-only 搜索更严格（同歌手不同歌时长可能极度接近）
-        let maxDuration = isArtistOnlySearch ? 0.35 : 0.5
+        let maxDuration = isArtistOnlySearch ? 0.35 : (searchTerm.lowercased().contains(inputArtistLower) ? 1.5 : 0.5)
         guard best.durationDiff < maxDuration else { return }
 
         // 安全条件：唯一候选 或 最佳标题占多数（如 2/3 的"广岛之恋"）

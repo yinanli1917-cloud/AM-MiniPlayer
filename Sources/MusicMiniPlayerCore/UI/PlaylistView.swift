@@ -260,7 +260,7 @@ public struct PlaylistView: View {
                 .animation(.easeInOut(duration: 0.3), value: controlsVisible)
             }
             .onAppear {
-                musicController.fetchUpNextQueue()
+                musicController.refreshQueueForPlaylistOpen()
             }
             .onHover { hovering in
                 handleHover(hovering: hovering)
@@ -611,7 +611,12 @@ struct PlaylistItemRowCompact: View {
                     currentPage = .album
                 }
             } else {
-                musicController.playTrack(persistentID: track.persistentID)
+                musicController.playTrack(
+                    title: track.title,
+                    artist: track.artist,
+                    album: track.album,
+                    persistentID: track.persistentID
+                )
             }
         }) {
             HStack(spacing: 8) {

@@ -157,4 +157,109 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertTrue(score.isReliable)
         XCTAssertGreaterThanOrEqual(score.total, 5)
     }
+
+    // ------------------------------------------------------------------
+    // MARK: - Apple Music API recent history
+    // ------------------------------------------------------------------
+
+    func testParseRecentTracksResponseMapsSongAndLibrarySongResources() throws {
+        let json = """
+        {
+          "data": [
+            {
+              "id": "123456789",
+              "type": "songs",
+              "attributes": {
+                "name": "Song A",
+                "artistName": "Artist A",
+                "albumName": "Album A",
+                "durationInMillis": 185000
+              }
+            },
+            {
+              "id": "i.abcdef",
+              "type": "library-songs",
+              "attributes": {
+                "name": "Song B",
+                "artistName": "Artist B",
+                "albumName": "Album B",
+                "durationInMillis": 201500
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let tracks = MusicController.parseRecentTracksResponse(json)
+
+        XCTAssertEqual(tracks.count, 2)
+        XCTAssertEqual(tracks[0].title, "Song A")
+        XCTAssertEqual(tracks[0].artist, "Artist A")
+        XCTAssertEqual(tracks[0].album, "Album A")
+        XCTAssertEqual(tracks[0].persistentID, "am:123456789")
+        XCTAssertEqual(tracks[0].duration, 185)
+        XCTAssertEqual(tracks[1].persistentID, "am:i.abcdef")
+        XCTAssertEqual(tracks[1].duration, 201.5)
+    }
+
+    func testSameTrackIdentityDetectsQueueReorder() {
+        let original = [
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.0),
+            (title: "B", artist: "Artist", album: "Album", persistentID: "2", duration: 181.0),
+        ]
+        let reordered = [
+            (title: "B", artist: "Artist", album: "Album", persistentID: "2", duration: 181.0),
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.0),
+        ]
+
+        XCTAssertFalse(MusicController.sameTrackIdentity(original, reordered))
+    }
+
+    func testSameTrackIdentityIgnoresTinyDurationDrift() {
+        let original = [
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.0),
+        ]
+        let drifted = [
+            (title: "A", artist: "Artist", album: "Album", persistentID: "1", duration: 180.05),
+        ]
+
+        XCTAssertTrue(MusicController.sameTrackIdentity(original, drifted))
+    }
+
+    func testQueueSnapshotAppliesOnlyWhenQueueAndTrackGenerationsMatch() {
+        XCTAssertTrue(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 4,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 8
+        ))
+    }
+
+    func testPlaylistOpenCachedQueueRequiresCurrentGeneration() {
+        XCTAssertTrue(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            hasVisibleQueueData: true,
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: true
+        ))
+
+        XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            hasVisibleQueueData: true,
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: false
+        ))
+    }
 }

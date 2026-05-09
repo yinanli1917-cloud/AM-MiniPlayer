@@ -73,6 +73,7 @@ class AppMain: NSObject, NSApplicationDelegate {
         createMenuBarPopover()
         createSettingsWindow()
         setupMainMenu()
+        setupURLHandling()
         showFloatingWindow()
 
         // ──────────────────────────────────────────────
@@ -93,6 +94,53 @@ class AppMain: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         UpdateApplier.applyIfStaged()
+    }
+
+    // MARK: - URL Handling
+
+    func setupURLHandling() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @objc func handleURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        guard
+            let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+            let url = URL(string: urlString)
+        else { return }
+
+        handleAppURL(url)
+    }
+
+    func handleAppURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "nanopod" else { return }
+
+        if url.host?.lowercased() == "page" {
+            openPage(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        }
+    }
+
+    func openPage(named pageName: String) {
+        let page: PlayerPage?
+        switch pageName.lowercased() {
+        case "album", "":
+            page = .album
+        case "lyrics":
+            page = .lyrics
+        case "playlist", "queue":
+            page = .playlist
+        default:
+            page = nil
+        }
+
+        guard let page else { return }
+        showFloatingWindow()
+        musicController.currentPage = page
+        musicController.userManuallyOpenedLyrics = page == .lyrics
     }
 
     // MARK: - Dock Visibility

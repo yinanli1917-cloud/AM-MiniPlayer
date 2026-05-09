@@ -471,7 +471,8 @@ public final class LyricsParser {
         // 纯音乐检测
         if rawLyrics.count <= 2 {
             for line in rawLyrics {
-                if isInstrumentalNotice(line.text) {
+                let text = line.text.trimmingCharacters(in: .whitespaces)
+                if kInstrumentalPatterns.contains(where: { text.contains($0) }) {
                     return ([], 0)
                 }
             }

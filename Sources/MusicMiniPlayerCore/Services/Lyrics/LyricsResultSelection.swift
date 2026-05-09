@@ -55,6 +55,7 @@ extension LyricsFetcher {
         // identity/timing gates can still reject them.
         var syncedResults = results.filter {
             guard $0.kind == .synced else { return false }
+            if isLikelyRomanizedCJKLyricsCandidate($0) { return false }
             if hasWordLevelSync($0) && $0.score > 0 { return true }
             if hasIndependentLyricAgreement(for: $0, allResults: results) { return true }
             switch $0.source {
@@ -69,6 +70,9 @@ extension LyricsFetcher {
             case "LRCLIB":
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
                     return $0.score >= 10
+                }
+                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 5.0 } ?? false) {
+                    return $0.score >= 20 && $0.lyrics.count >= 10
                 }
                 return $0.score >= 45
             default:
@@ -161,10 +165,6 @@ extension LyricsFetcher {
 
         if usableSynced.isEmpty {
             DebugLogger.log("🏆 No trustworthy synced results available: \(results.map { "\($0.source):\(Int($0.score))/\($0.kind.rawValue)" })")
-            if let unsynced = selectUnsyncedFallback(from: results) {
-                DebugLogger.log("🏆 Conservative unsynced fallback: \(unsynced.source) \(Int(unsynced.score))")
-                return unsynced
-            }
             return nil
         }
         // 🔑 Word-level priority is conditional. Album-scoped catalog evidence
@@ -212,8 +212,8 @@ extension LyricsFetcher {
 
         let candidates = plainCandidates.filter {
             $0.score >= 28 ||
-            ($0.source == "lyrics.ovh" && $0.score >= 24 && $0.lyrics.count >= 16) ||
-            ($0.source == "Genius" && $0.score >= 24)
+            ($0.source == "Genius" && $0.score >= 24) ||
+            ($0.source == "Genius" && $0.score >= 20 && $0.lyrics.count >= 10 && lyricsContainCJK($0.lyrics))
         }
         return candidates.max(by: { $0.score < $1.score })
     }
@@ -222,6 +222,30 @@ extension LyricsFetcher {
 
     private func lyricsContainCJK(_ lyrics: [LyricLine]) -> Bool {
         lyrics.contains { LanguageUtils.containsCJK($0.text) }
+    }
+
+    private func isLikelyRomanizedCJKLyricsCandidate(_ result: LyricsFetchResult) -> Bool {
+        guard result.source == "LRCLIB" || result.source == "LRCLIB-Search" else { return false }
+        let lines = result.lyrics.map(\.text)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != "..." && $0 != "…" && $0 != "⋯" }
+            .prefix(12)
+        guard lines.count >= 4 else { return false }
+        if lines.contains(where: { LanguageUtils.containsCJK($0) }) { return false }
+        let syllables: Set<String> = [
+            "ai", "an", "ang", "ba", "bei", "bu", "cai", "de", "di", "dui",
+            "fei", "ge", "guo", "hai", "hen", "hui", "ji", "jian", "kai",
+            "kan", "li", "man", "me", "mei", "men", "ni", "qing", "shi",
+            "shuo", "sui", "ta", "wo", "xin", "xing", "yan", "ye", "yi",
+            "you", "zai", "zha", "zhi", "zhong"
+        ]
+        let tokens = lines.joined(separator: " ").lowercased()
+            .split(whereSeparator: { !$0.isLetter })
+            .map(String.init)
+            .filter { $0.count >= 2 }
+        guard tokens.count >= 12 else { return false }
+        let hits = tokens.filter { syllables.contains($0) }.count
+        return Double(hits) / Double(tokens.count) >= 0.45
     }
 
     /// Low-score synced catalog hits can still be correct when the scorer
@@ -339,9 +363,6 @@ extension LyricsFetcher {
               let lastStart = result.lyrics.last?.startTime else { return false }
         let maxEnd = result.lyrics.map(\.endTime).max() ?? lastStart
         if maxEnd > songDuration {
-            if isBoundedAlternateMasterTimeline(result, songDuration: songDuration, maxEnd: maxEnd) {
-                return false
-            }
             return (maxEnd - songDuration) > max(8.0, songDuration * 0.05)
         }
         guard songDuration >= 180 else { return false }
@@ -358,6 +379,13 @@ extension LyricsFetcher {
            tailGap <= max(225.0, songDuration * 0.56) {
             return false
         }
+        if result.titleMatched,
+           result.score >= 45,
+           result.lyrics.count >= 20,
+           result.matchedDurationDiff.map({ $0 < 2.0 }) ?? false,
+           tailGap <= max(160.0, songDuration * 0.55) {
+            return false
+        }
         if result.score < 50,
            tailGap > min(180.0, max(120.0, songDuration * 0.45)) {
             return true
@@ -368,22 +396,6 @@ extension LyricsFetcher {
         }
         let instrumentalOutroRatio = songDuration >= 360 ? 0.55 : 0.40
         return tailGap > max(140.0, songDuration * instrumentalOutroRatio)
-    }
-
-    private func isBoundedAlternateMasterTimeline(
-        _ result: LyricsFetchResult,
-        songDuration: TimeInterval,
-        maxEnd: TimeInterval
-    ) -> Bool {
-        guard result.kind == .synced,
-              result.titleMatched,
-              result.score >= 65,
-              let catalogDurationDiff = result.matchedDurationDiff,
-              catalogDurationDiff >= 2.0,
-              catalogDurationDiff < 35.0 else { return false }
-        let overshoot = maxEnd - songDuration
-        guard overshoot > 0 else { return false }
-        return overshoot <= catalogDurationDiff + 5.0
     }
 
     // MARK: - Deduplication
@@ -547,6 +559,13 @@ extension LyricsFetcher {
             }
             // Only consider album-matched candidates that ALSO passed validity.
             if let albumMatched = valid.first(where: { $0.albumMatched }) {
+                if top.nativeAliasMatched,
+                   !top.albumMatched,
+                   !top.titleMatched,
+                   albumMatched.score >= 30 {
+                    DebugLogger.log("🏆 Album identity preferred over loose native alias: \(albumMatched.source) (\(String(format: "%.1f", albumMatched.score))) over \(top.source) (\(String(format: "%.1f", top.score)))")
+                    return albumMatched
+                }
                 // 🔑 Timing sanity gate: album-matched lyrics with large timeline
                 // overshoot vs the other contender's score-based winner indicate
                 // wrong-master timing data.

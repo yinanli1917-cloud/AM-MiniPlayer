@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import MusicKit
 import ObjCSupport
+import os
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Apple Event 常量（Music.app ScriptingBridge 返回值）
@@ -58,7 +59,9 @@ extension MusicController {
             logger.info("Preview: nextTrack")
             return
         }
+        lastUserActionTime = Date()
         skipDirection = 1
+        markQueueMayHaveChanged()
         controlQueue.async { [weak self] in
             guard let app = self?.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
@@ -77,7 +80,9 @@ extension MusicController {
         if currentTime > 3.0 {
             seek(to: 0)
         } else {
+            lastUserActionTime = Date()
             skipDirection = -1
+            markQueueMayHaveChanged()
             controlQueue.async { [weak self] in
                 guard let app = self?.controlApp, app.isRunning else {
                     debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
@@ -130,20 +135,20 @@ extension MusicController {
         let newShuffleState = !shuffleEnabled
         // Optimistic UI update
         self.shuffleEnabled = newShuffleState
+        markQueueMayHaveChanged()
 
         // 🔑 User-initiated control uses dedicated controlQueue
         controlQueue.async { [weak self] in
-            guard let app = self?.controlApp, app.isRunning else {
+            guard let self, let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] toggleShuffle: app not available\n")
                 return
             }
             debugPrint("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on controlQueue\n")
             app.setValue(newShuffleState, forKey: "shuffleEnabled")
-        }
-
-        // Wait a moment for Music.app to apply shuffle, then refresh queue
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.fetchUpNextQueue()
+            DispatchQueue.main.async { [weak self] in
+                self?.markQueueMayHaveChanged()
+                self?.scheduleQueueRefreshAfterMusicControlChange()
+            }
         }
     }
 
@@ -154,6 +159,7 @@ extension MusicController {
         }
 
         debugPrint("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n")
+        markQueueMayHaveChanged()
 
         // 🔑 AppleScript execution — not SBApplication, so global queue is safe
         DispatchQueue.global(qos: .userInteractive).async {
@@ -176,6 +182,73 @@ extension MusicController {
         }
     }
 
+    public func playTrack(title: String, artist: String, album: String, persistentID: String) {
+        if persistentID.hasPrefix("am:") {
+            playAppleMusicTrack(title: title, artist: artist, album: album, appleMusicID: String(persistentID.dropFirst(3)))
+        } else {
+            playTrack(persistentID: persistentID)
+        }
+    }
+
+    private func playAppleMusicTrack(title: String, artist: String, album: String, appleMusicID: String) {
+        guard MusicAuthorization.currentStatus == .authorized else {
+            DebugLogger.log("Playback", "⚠️ Apple Music row playback requires MusicKit authorization")
+            return
+        }
+
+        Task(priority: .userInitiated) { [weak self] in
+            do {
+                guard let song = try await self?.resolveAppleMusicSong(
+                    id: appleMusicID,
+                    title: title,
+                    artist: artist,
+                    album: album
+                ) else {
+                    DebugLogger.log("Playback", "⚠️ Apple Music row playback could not resolve '\(title)' by '\(artist)'")
+                    return
+                }
+
+                let player = ApplicationMusicPlayer.shared
+                player.queue = ApplicationMusicPlayer.Queue(for: [song], startingAt: song)
+                try await player.play()
+                let playbackStartTime = Date()
+                await MainActor.run { [weak self] in
+                    self?.lastUserActionTime = playbackStartTime
+                    self?.markQueueMayHaveChanged()
+                }
+            } catch {
+                DebugLogger.log("Playback", "⚠️ Apple Music row playback failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func resolveAppleMusicSong(id: String, title: String, artist: String, album: String) async throws -> Song? {
+        if !id.hasPrefix("i.") {
+            var request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
+            request.limit = 1
+            if let song = try await request.response().items.first {
+                return song
+            }
+        }
+
+        var search = MusicCatalogSearchRequest(term: "\(title) \(artist)", types: [Song.self])
+        search.limit = 10
+        let songs = try await search.response().songs
+        return songs
+            .map { song -> (song: Song, score: ArtworkMatchScore) in
+                (song, Self.scoreArtworkCandidate(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    candidateTitle: song.title,
+                    candidateArtist: song.artistName,
+                    candidateAlbum: song.albumTitle ?? ""
+                ))
+            }
+            .filter { $0.score.isReliable }
+            .max(by: { $0.score.total < $1.score.total })?.song
+    }
+
     public func cycleRepeatMode() {
         if isPreview {
             logger.info("Preview: cycleRepeatMode")
@@ -184,6 +257,7 @@ extension MusicController {
         }
 
         let newMode = (repeatMode + 1) % 3
+        markQueueMayHaveChanged()
         let repeatValue: Int
         switch newMode {
         case 1: repeatValue = AppleEventCode.repeatOne
@@ -196,21 +270,27 @@ extension MusicController {
 
         // 🔑 User-initiated control uses dedicated controlQueue
         controlQueue.async { [weak self] in
-            guard let app = self?.controlApp, app.isRunning else {
+            guard let self, let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] cycleRepeatMode: app not available\n")
                 return
             }
             debugPrint("🔁 [MusicController] setRepeat(\(newMode)) -> 0x\(String(repeatValue, radix: 16))\n")
             app.setValue(repeatValue, forKey: "songRepeat")
-        }
-
-        // Refresh queue after repeat mode change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.fetchUpNextQueue()
+            DispatchQueue.main.async { [weak self] in
+                self?.markQueueMayHaveChanged()
+                self?.scheduleQueueRefreshAfterMusicControlChange()
+            }
         }
     }
 
-    public func fetchUpNextQueue() {
+    private func scheduleQueueRefreshAfterMusicControlChange() {
+        fetchUpNextQueue()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.fetchUpNextQueue()
+        }
+    }
+
+    public func fetchUpNextQueue(forceRecent: Bool = false) {
         debugPrint("📋 [fetchUpNextQueue] Called, isPreview=\(isPreview)\n")
 
         guard !isPreview else {
@@ -227,22 +307,82 @@ extension MusicController {
             return
         }
 
+        let now = Date()
+        if queueFetchInFlight {
+            queueFetchPending = true
+            queueFetchPendingForceRecent = queueFetchPendingForceRecent || forceRecent
+            return
+        }
+
+        let elapsed = now.timeIntervalSince(lastQueueFetchStartedAt)
+        if elapsed < queueFetchMinimumInterval {
+            queueFetchPending = true
+            queueFetchPendingForceRecent = queueFetchPendingForceRecent || forceRecent
+            DispatchQueue.main.asyncAfter(deadline: .now() + (queueFetchMinimumInterval - elapsed)) { [weak self] in
+                guard let self else { return }
+                if self.queueFetchPending && !self.queueFetchInFlight {
+                    let pendingForceRecent = self.queueFetchPendingForceRecent
+                    self.queueFetchPending = false
+                    self.queueFetchPendingForceRecent = false
+                    self.fetchUpNextQueue(forceRecent: pendingForceRecent)
+                }
+            }
+            return
+        }
+
+        queueFetchInFlight = true
+        lastQueueFetchStartedAt = now
+        let requestQueueGeneration = queueSyncGeneration
+
         // 使用 ScriptingBridge 获取队列（App Store 合规）
         Task {
-            await fetchUpNextViaBridge()
+            await fetchUpNextViaBridge(requestQueueGeneration: requestQueueGeneration)
+            await MainActor.run {
+                self.queueFetchInFlight = false
+                if self.queueFetchPending {
+                    let pendingForceRecent = self.queueFetchPendingForceRecent
+                    self.queueFetchPending = false
+                    self.queueFetchPendingForceRecent = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + self.queueFetchMinimumInterval) { [weak self] in
+                        self?.fetchUpNextQueue(forceRecent: pendingForceRecent)
+                    }
+                }
+            }
         }
 
         // 获取播放历史
-        fetchRecentHistoryViaBridge()
+        let shouldRefreshRecent = forceRecent || now.timeIntervalSince(lastRecentHistoryFetchAt) >= recentHistoryRefreshInterval
+        if shouldRefreshRecent {
+            lastRecentHistoryFetchAt = now
+            fetchRecentHistoryViaBridge()
+        }
+    }
+
+    public func refreshQueueForPlaylistOpen() {
+        let hasVisibleQueueData = !upNextTracks.isEmpty || !recentTracks.isEmpty
+        let recentlyCompletedQueue = Date().timeIntervalSince(lastQueueFetchCompletedAt) < 5.0
+        let completedCurrentQueueGeneration = lastQueueFetchCompletedGeneration == queueSyncGeneration
+
+        if Self.shouldUseCachedQueueForPlaylistOpen(
+            hasVisibleQueueData: hasVisibleQueueData,
+            recentlyCompletedQueue: recentlyCompletedQueue,
+            completedCurrentQueueGeneration: completedCurrentQueueGeneration
+        ) {
+            return
+        }
+
+        fetchUpNextQueue(forceRecent: recentTracks.isEmpty)
     }
 
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
-    private func fetchUpNextViaBridge() async {
+    private func fetchUpNextViaBridge(requestQueueGeneration: UInt64) async {
         debugPrint("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n")
         guard let app = musicApp, app.isRunning else {
             debugPrint("⚠️ [fetchUpNextViaBridge] musicApp not available\n")
             return
         }
+
+        let requestGeneration = artworkFetchGeneration
 
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
@@ -252,21 +392,28 @@ extension MusicController {
                     return
                 }
                 defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
-                let result = self.getUpNextTracksFromApp(app, limit: 10)
+                let limit = self.currentPage == .playlist ? 10 : 2
+                let result = self.getUpNextTracksFromApp(app, limit: limit)
                 continuation.resume(returning: result)
             }
         }
 
         await MainActor.run {
-            self.upNextTracks = tracks
-            self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
-
-            // Trigger lyrics preloading for upcoming tracks
-            let tracksToPreload = Array(tracks.prefix(3)).map {
-                (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+            guard Self.shouldApplyQueueSnapshot(
+                requestQueueGeneration: requestQueueGeneration,
+                currentQueueGeneration: self.queueSyncGeneration,
+                requestTrackGeneration: requestGeneration,
+                currentTrackGeneration: self.artworkFetchGeneration
+            ) else {
+                self.logger.info("Discarded stale Up Next fetch for queue generation \(requestQueueGeneration), track generation \(requestGeneration)")
+                return
             }
-            if !tracksToPreload.isEmpty {
-                LyricsService.shared.preloadNextSongs(tracks: tracksToPreload)
+            let didChange = self.applyUpNextTracksIfChanged(tracks)
+            self.lastQueueFetchCompletedAt = Date()
+            self.lastQueueFetchCompletedGeneration = requestQueueGeneration
+            self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
+            if didChange {
+                self.preloadNearbyAssets(from: tracks)
             }
         }
     }
@@ -299,23 +446,20 @@ extension MusicController {
                 return
             }
 
-            let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
             let trackCount = tracks.count
-            debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks\n")
+            let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
+            let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
+            debugPrint("🎵 [getUpNextTracksFromApp] currentTrack: \(currentName) (ID: \(currentID.prefix(8))...), playlist has \(trackCount) tracks, index=\(currentIndex)\n")
 
-            var foundCurrent = false
-            var currentIndex = -1
-
-            for i in 0..<trackCount {
-                guard self.artworkFetchGeneration == gen else {
-                    debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
-                    return
-                }
-
-                guard let track = tracks.object(at: i) as? NSObject,
-                      let trackID = track.value(forKey: "persistentID") as? String else { continue }
-
-                if foundCurrent {
+            if currentIndex >= 0 && currentIndex < trackCount {
+                let upperBound = min(trackCount, currentIndex + 1 + limit)
+                for i in (currentIndex + 1)..<upperBound {
+                    guard self.artworkFetchGeneration == gen else {
+                        debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                        return
+                    }
+                    guard let track = tracks.object(at: i) as? NSObject,
+                          let trackID = track.value(forKey: "persistentID") as? String else { continue }
                     let name = track.value(forKey: "name") as? String ?? ""
                     let artist = track.value(forKey: "artist") as? String ?? ""
                     let album = track.value(forKey: "album") as? String ?? ""
@@ -327,13 +471,41 @@ extension MusicController {
                     } else if !name.isEmpty {
                         debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
                     }
-                } else if trackID == currentID {
-                    foundCurrent = true
-                    currentIndex = i
                 }
+            } else {
+                var foundCurrent = false
+                var fallbackIndex = -1
+
+                for i in 0..<trackCount {
+                    guard self.artworkFetchGeneration == gen else {
+                        debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                        return
+                    }
+
+                    guard let track = tracks.object(at: i) as? NSObject,
+                          let trackID = track.value(forKey: "persistentID") as? String else { continue }
+
+                    if foundCurrent {
+                        let name = track.value(forKey: "name") as? String ?? ""
+                        let artist = track.value(forKey: "artist") as? String ?? ""
+                        let album = track.value(forKey: "album") as? String ?? ""
+                        let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                        if self.isValidTrackName(name, trackID: trackID) {
+                            result.append((name, artist, album, trackID, duration))
+                            if result.count >= limit { break }
+                        } else if !name.isEmpty {
+                            debugPrint("⚠️ [getUpNextTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        }
+                    } else if trackID == currentID {
+                        foundCurrent = true
+                        fallbackIndex = i
+                    }
+                }
+                debugPrint("🎵 [getUpNextTracksFromApp] Fallback scan found current at index \(fallbackIndex), fetched \(result.count) tracks\n")
             }
 
-            debugPrint("🎵 [getUpNextTracksFromApp] Found current at index \(currentIndex), fetched \(result.count) tracks\n")
+            debugPrint("🎵 [getUpNextTracksFromApp] Fetched \(result.count) tracks\n")
             }
 
             if let ex {
@@ -347,6 +519,30 @@ extension MusicController {
     private func fetchRecentHistoryViaBridge() {
         guard let app = musicApp, app.isRunning else { return }
 
+        if MusicAuthorization.currentStatus == .authorized {
+            Task { [weak self] in
+                guard let self else { return }
+                if let tracks = await self.fetchRecentHistoryViaAppleMusicAPI(), !tracks.isEmpty {
+                    await MainActor.run {
+                        let didChange = self.applyRecentTracksIfChanged(tracks)
+                        self.logger.info("✅ Fetched \(tracks.count) recent tracks via Apple Music API")
+                        if didChange {
+                            self.preloadNearbyAssets(from: tracks)
+                        }
+                    }
+                    return
+                }
+                self.fetchRecentHistoryViaScriptingBridge(app)
+            }
+            return
+        }
+
+        fetchRecentHistoryViaScriptingBridge(app)
+    }
+
+    private func fetchRecentHistoryViaScriptingBridge(_ app: SBApplication) {
+        guard app.isRunning else { return }
+
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         scriptingBridgeQueue.async { [weak self, app] in
             guard let self = self else { return }
@@ -355,9 +551,61 @@ extension MusicController {
             let tracks = self.getRecentTracksFromApp(app, limit: 10)
 
             DispatchQueue.main.async {
-                self.recentTracks = tracks
+                let didChange = self.applyRecentTracksIfChanged(tracks)
                 self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
+                if didChange {
+                    self.preloadNearbyAssets(from: tracks)
+                }
             }
+        }
+    }
+
+    /// Apple Music API documented recent-track endpoint:
+    /// GET /v1/me/recent/played/tracks?types=songs,library-songs
+    /// This is App Store-safe user-authorized history, but it is not the live
+    /// local queue before/after the current item. ScriptingBridge remains the
+    /// fallback for exact Music.app session mirroring.
+    private func fetchRecentHistoryViaAppleMusicAPI() async -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)]? {
+        guard let url = URL(string: "https://api.music.apple.com/v1/me/recent/played/tracks?types=songs,library-songs&limit=10") else {
+            return nil
+        }
+
+        do {
+            let response = try await MusicDataRequest(urlRequest: URLRequest(url: url)).response()
+            return Self.parseRecentTracksResponse(response.data)
+        } catch {
+            DebugLogger.log("Playback", "⚠️ Apple Music recent tracks failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    static func parseRecentTracksResponse(_ data: Data) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resources = json["data"] as? [[String: Any]] else {
+            return []
+        }
+
+        return resources.compactMap { resource in
+            guard let id = resource["id"] as? String,
+                  let attributes = resource["attributes"] as? [String: Any] else {
+                return nil
+            }
+            let title = attributes["name"] as? String ?? ""
+            guard !title.isEmpty, title != kNotPlayingSentinel else { return nil }
+            let artist = attributes["artistName"] as? String ?? ""
+            let album = (attributes["albumName"] as? String)
+                ?? (attributes["collectionName"] as? String)
+                ?? ""
+            let durationMillis = attributes["durationInMillis"] as? Double
+                ?? (attributes["durationInMillis"] as? Int).map(Double.init)
+                ?? 0
+            return (
+                title: title,
+                artist: artist,
+                album: album,
+                persistentID: "am:\(id)",
+                duration: durationMillis / 1000.0
+            )
         }
     }
 
@@ -379,23 +627,43 @@ extension MusicController {
                     return
                 }
 
-                for i in 0..<tracks.count {
-                    guard let track = tracks.object(at: i) as? NSObject,
-                          let trackID = track.value(forKey: "persistentID") as? String else { continue }
+                let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
+                if currentIndex >= 0 && currentIndex < tracks.count {
+                    let lowerBound = max(0, currentIndex - limit)
+                    for i in lowerBound..<currentIndex {
+                        guard let track = tracks.object(at: i) as? NSObject,
+                              let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-                    if trackID == currentID {
-                        break
+                        let name = track.value(forKey: "name") as? String ?? ""
+                        let artist = track.value(forKey: "artist") as? String ?? ""
+                        let album = track.value(forKey: "album") as? String ?? ""
+                        let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                        if self.isValidTrackName(name, trackID: trackID) {
+                            recentList.append((name, artist, album, trackID, duration))
+                        } else if !name.isEmpty {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        }
                     }
+                } else {
+                    for i in 0..<tracks.count {
+                        guard let track = tracks.object(at: i) as? NSObject,
+                              let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
-                    let name = track.value(forKey: "name") as? String ?? ""
-                    let artist = track.value(forKey: "artist") as? String ?? ""
-                    let album = track.value(forKey: "album") as? String ?? ""
-                    let duration = track.value(forKey: "duration") as? Double ?? 0
+                        if trackID == currentID {
+                            break
+                        }
 
-                    if self.isValidTrackName(name, trackID: trackID) {
-                        recentList.append((name, artist, album, trackID, duration))
-                    } else if !name.isEmpty {
-                        debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        let name = track.value(forKey: "name") as? String ?? ""
+                        let artist = track.value(forKey: "artist") as? String ?? ""
+                        let album = track.value(forKey: "album") as? String ?? ""
+                        let duration = track.value(forKey: "duration") as? Double ?? 0
+
+                        if self.isValidTrackName(name, trackID: trackID) {
+                            recentList.append((name, artist, album, trackID, duration))
+                        } else if !name.isEmpty {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Skipping track with suspicious name: '\(name)' (ID: \(trackID.prefix(8))...)\n")
+                        }
                     }
                 }
             }
@@ -407,6 +675,89 @@ extension MusicController {
             // 返回最后 limit 个，倒序（最近播放的在前）
             return Array(recentList.suffix(limit).reversed())
         } ?? []
+    }
+
+    @discardableResult
+    private func applyUpNextTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) -> Bool {
+        guard !sameTrackIdentity(upNextTracks, tracks) else { return false }
+        upNextTracks = tracks
+        return true
+    }
+
+    @discardableResult
+    private func applyRecentTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) -> Bool {
+        guard !sameTrackIdentity(recentTracks, tracks) else { return false }
+        recentTracks = tracks
+        return true
+    }
+
+    @MainActor
+    private func preloadNearbyAssets(from tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) {
+        let validTracks = tracks
+            .filter { !$0.title.isEmpty && $0.title != kNotPlayingSentinel }
+            .map { (title: $0.title, artist: $0.artist, album: $0.album, persistentID: $0.persistentID, duration: TimeInterval($0.duration)) }
+
+        guard !validTracks.isEmpty else { return }
+
+        os_signpost(.event, log: performanceLog, name: "PreloadNearbyScheduled", "count=%{public}d", validTracks.count)
+        assetPreloadTask?.cancel()
+        let generation = artworkFetchGeneration
+        assetPreloadTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self else { return }
+                guard self.artworkFetchGeneration == generation else { return }
+                let signpostID = OSSignpostID(log: self.performanceLog)
+                os_signpost(.begin, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID, "count=%{public}d", validTracks.count)
+                defer { os_signpost(.end, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID) }
+                self.preloadArtwork(for: validTracks)
+                LyricsService.shared.preloadNextSongs(
+                    tracks: validTracks.map {
+                        (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+                    }
+                )
+            }
+        }
+    }
+
+    private func sameTrackIdentity(
+        _ lhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)],
+        _ rhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]
+    ) -> Bool {
+        Self.sameTrackIdentity(lhs, rhs)
+    }
+
+    static func sameTrackIdentity(
+        _ lhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)],
+        _ rhs: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]
+    ) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { left, right in
+            left.persistentID == right.persistentID
+                && left.title == right.title
+                && left.artist == right.artist
+                && abs(left.duration - right.duration) < 0.1
+        }
+    }
+
+    static func shouldApplyQueueSnapshot(
+        requestQueueGeneration: UInt64,
+        currentQueueGeneration: UInt64,
+        requestTrackGeneration: Int,
+        currentTrackGeneration: Int
+    ) -> Bool {
+        requestQueueGeneration == currentQueueGeneration
+            && requestTrackGeneration == currentTrackGeneration
+    }
+
+    static func shouldUseCachedQueueForPlaylistOpen(
+        hasVisibleQueueData: Bool,
+        recentlyCompletedQueue: Bool,
+        completedCurrentQueueGeneration: Bool
+    ) -> Bool {
+        hasVisibleQueueData && recentlyCompletedQueue && completedCurrentQueueGeneration
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

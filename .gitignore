@@ -30,7 +30,11 @@ secrets/
 # Release artifacts (built on demand)
 releases/
 .nightcrawl/
+tmp/visual/
 
 # Claude workflow state (hook-enforced, not part of codebase)
 .claude/workflow.md
 .claude/tasks/
+
+# Codex runtime state
+.codex/runtime/

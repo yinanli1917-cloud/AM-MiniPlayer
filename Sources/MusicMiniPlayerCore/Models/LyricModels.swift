@@ -25,10 +25,6 @@ public enum LyricsKind: String, Codable, Equatable, Sendable {
     case synced
     /// Fabricated timestamps built from duration (lyrics.ovh, Genius, etc.).
     case unsynced
-    /// Provider explicitly says the track has no vocal lyric text.
-    case instrumental
-    /// Provider catalog identity matched, but the provider returned no lyric payload.
-    case unavailable
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -113,12 +109,6 @@ public let kInstrumentalPatterns: [String] = [
     "歌词正在制作中", "Instrumental", "This song is instrumental",
     "No lyrics available", "No lyrics", "歌詞なし", "インストゥルメンタル", "インスト"
 ]
-
-public func isInstrumentalNotice(_ text: String) -> Bool {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return false }
-    return kInstrumentalPatterns.contains { trimmed.localizedCaseInsensitiveContains($0) }
-}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Vocable Detection (LyricsParser + LyricsService shared)

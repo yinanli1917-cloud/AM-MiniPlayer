@@ -25,7 +25,6 @@ struct TestExpectation: Codable {
     let acceptableSources: [String]?
     let firstLineContains: String?
     let firstLineSHA256: String?
-    let acceptableFirstLineSHA256: [String]?
     let expectedClassification: String?
     let firstLineStartMinS: Double?
     let firstLineStartMaxS: Double?

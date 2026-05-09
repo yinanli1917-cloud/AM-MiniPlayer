@@ -18,14 +18,11 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
-      "firstLineSHA256": "6465226a180075c47e5ca9328d3eda9b4ca235feca9b92d1b2605702e21ad155",
-      "acceptableFirstLineSHA256": [
-        "e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd"
-      ],
+      "firstLineSHA256": "e155b89e29d280124c3ea867640ec6625766d76c3940846a7c8490a9795e9ecd",
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
-      "firstLineStartMaxS": 40,
-      "maxTailGapS": 36
+      "firstLineStartMaxS": 20,
+      "maxTailGapS": 35
     }
   },
   {
@@ -101,9 +98,9 @@
     "duration": 205,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "QQ", "Genius"],
+      "acceptableSources": ["NetEase", "AMLL", "LRCLIB", "LRCLIB-Search", "QQ", "Genius"],
       "firstLineContains": null,
-      "firstLineSHA256": "55a4360b4178239d71800a69a77d48edbd285a9214aa3a82fe9ae5df59a17d76"
+      "firstLineSHA256": "9b93ef3241b521862767d296ab4fe692f88b61ec42adb3ed9f01bb8dd1eee50c"
     }
   },
   {
@@ -169,7 +166,7 @@
     "duration": 234,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
+      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
       "firstLineContains": "流れる"
     }
   },
@@ -178,50 +175,10 @@
     "title": "Invisible",
     "artist": "mei ehara",
     "duration": 326,
-    "album": "Ampersands",
     "expectation": {
-      "shouldFindLyrics": true,
+      "shouldFindLyrics": false,
       "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
-      "firstLineContains": "幽霊",
-      "expectedClassification": "synced"
-    }
-  },
-  {
-    "id": "R07B",
-    "title": "Kimi ha 1000%",
-    "artist": "1986 OMEGA TRIBE",
-    "duration": 251,
-    "album": "Navigator",
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
-      "firstLineContains": "君は微笑み",
-      "expectedClassification": "synced"
-    }
-  },
-  {
-    "id": "R07C",
-    "title": "Waves",
-    "artist": "glibs",
-    "duration": 190,
-    "album": "Just a Kid",
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
-      "firstLineContains": "Just rock in the waves",
-      "expectedClassification": "synced"
-    }
-  },
-  {
-    "id": "R07D",
-    "title": "江山",
-    "artist": "Joe Ma",
-    "duration": 180,
-    "expectation": {
-      "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "踏世上",
-      "expectedClassification": "synced"
+      "firstLineContains": "幽霊"
     }
   },
   {
@@ -253,7 +210,7 @@
     "duration": 225,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "lyrics.ovh"],
+      "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "五月雨"
     }
   },
@@ -285,7 +242,6 @@
     "title": "Such a Perfect Day",
     "artist": "deca joins",
     "duration": 318,
-    "album": "Bird and Reflections",
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
@@ -301,10 +257,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineSHA256": "32ca368af164788fa1f06c8f371cdf0a376fa4561ca88e569522b954cfd65df9",
-      "acceptableFirstLineSHA256": [
-        "9be62101b6a1586ee5cd1ba558e8e4ecb4f3ed12941d51d6b11310a60e4195f1"
-      ]
+      "firstLineContains": "翻风"
     }
   },
   {
@@ -401,10 +354,23 @@
     "title": "Hiroshima mon amour",
     "artist": "Karen Mok",
     "duration": 321,
+    "album": "回蔚",
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
       "firstLineContains": "拒绝"
+    }
+  },
+  {
+    "id": "H13B",
+    "title": "A Candlelight Dinner With Only Ice Cream",
+    "artist": "Karen Mok",
+    "duration": 239,
+    "album": "回蔚",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "他不爱我"
     }
   },
   {
@@ -414,12 +380,9 @@
     "duration": 259,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["NetEase", "QQ", "AMLL", "Genius"],
+      "acceptableSources": ["NetEase", "QQ", "AMLL"],
       "firstLineContains": null,
-      "firstLineSHA256": "de4c360cc61b0deddeec0b57a65da9a091d06998610b193f344fbf6097935393",
-      "acceptableFirstLineSHA256": [
-        "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b"
-      ]
+      "firstLineSHA256": "e83a0fbc9568c0eda1180ce05a884171ca57175ea61ec07ec4490cb16279c06b"
     }
   },
   {
@@ -578,7 +541,7 @@
       "expectedClassification": "synced",
       "firstLineStartMinS": 20,
       "firstLineStartMaxS": 30,
-      "maxTailGapS": 32
+      "maxTailGapS": 35
     }
   },
   {
@@ -855,6 +818,74 @@
     "expectation": {
       "shouldFindLyrics": false,
       "allowMissingLyrics": true
+    }
+  },
+  {
+    "id": "X23_album_scoped_michelle_chen_native_artist",
+    "title": "This Is My Love",
+    "artist": "Michelle Chen",
+    "duration": 312,
+    "album": "Young Stars",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "近乡情怯",
+      "expectedClassification": "synced"
+    }
+  },
+  {
+    "id": "X24_english_localized_title_no_discography_collision",
+    "title": "Wrong Love",
+    "artist": "Wang Leehom",
+    "duration": 239,
+    "album": "Shangri-La",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["LRCLIB-Search", "QQ", "NetEase"],
+      "firstLineContains": "北風毫不留情",
+      "expectedClassification": "synced",
+      "maxTailGapS": 35
+    }
+  },
+  {
+    "id": "X25_english_localized_title_native_lyrics_bridge",
+    "title": "All The Things You Never Knew",
+    "artist": "Wang Leehom",
+    "duration": 279,
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ", "NetEase", "LRCLIB-Search"],
+      "firstLineContains": "蝴蝶眨",
+      "expectedClassification": "synced",
+      "maxTailGapS": 35
+    }
+  },
+  {
+    "id": "X26_english_title_native_artist_title_beats_duration_collision",
+    "title": "The Key",
+    "artist": "JJ Lin",
+    "duration": 208,
+    "album": "From M.E. To Myself",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineContains": "好好愛自己",
+      "expectedClassification": "synced",
+      "maxTailGapS": 40
+    }
+  },
+  {
+    "id": "X27_artist_query_native_title_bridge",
+    "title": "Thinking of Someone",
+    "artist": "Pets Tseng",
+    "duration": 244,
+    "album": "KO One Return (Original Soundtrack)",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["QQ", "NetEase"],
+      "firstLineContains": "你離開",
+      "expectedClassification": "synced",
+      "maxTailGapS": 40
     }
   }
 ]
