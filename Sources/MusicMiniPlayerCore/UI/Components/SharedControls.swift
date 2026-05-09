@@ -365,39 +365,49 @@ struct HoverableControlButton: View {
 
 // MARK: - Skip Control Button (Replacement Flow Micro-Interaction)
 
-private struct TriangleAnimValues {
-    var offsetX: CGFloat = 0
-    var opacity: Double = 1.0
-    var scaleX: CGFloat = 1.0
-}
-
 struct SkipControlButton: View {
     let action: () -> Void
     let direction: CGFloat
 
     @State private var isHovering = false
-    @State private var commitTrigger = 0
+    @State private var replacementPhase: CGFloat = 0
+    @State private var animationSerial = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.white.opacity(isHovering ? 0.25 : 0))
+        Button {
+            playReplacementAnimation(perform: action)
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(isHovering ? 0.25 : 0))
 
-            Button {
-                action()
-                if !reduceMotion { commitTrigger += 1 }
-            } label: {
-                HStack(spacing: -4) {
-                    trailTriangle
-                    leadTriangle
+                Circle()
+                    .fill(Color.white.opacity(internalPulseOpacity))
+                    .scaleEffect(internalPulseScale)
+                    .blur(radius: 0.6)
+
+                Circle()
+                    .strokeBorder(Color.white.opacity(internalRingOpacity), lineWidth: 1.0)
+                    .scaleEffect(internalRingScale)
+
+                interiorMotion
+
+                ZStack {
+                    triangle(role: .incoming)
+                    triangle(role: .backAdvance)
+                    triangle(role: .frontExit)
                 }
-                .scaleEffect(x: direction, y: 1)
                 .frame(width: 32, height: 32)
-                .contentShape(Circle())
+                .scaleEffect(clusterScale)
+                .offset(x: clusterOffset)
+                .scaleEffect(x: direction, y: 1)
             }
-            .buttonStyle(SkipPressStyle(reduceMotion: reduceMotion))
+            .frame(width: 32, height: 32)
+            .clipShape(Circle())
+            .contentShape(Circle())
         }
+        .buttonStyle(SkipPressStyle(reduceMotion: reduceMotion))
         .frame(width: 32, height: 32)
         .onHover { hovering in
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
@@ -406,69 +416,334 @@ struct SkipControlButton: View {
         }
     }
 
-    private var leadTriangle: some View {
-        Image(systemName: "play.fill")
-            .font(.system(size: 13.5))
-            .foregroundColor(.white)
-            .keyframeAnimator(
-                initialValue: TriangleAnimValues(),
-                trigger: commitTrigger
-            ) { content, value in
-                content
-                    .scaleEffect(x: value.scaleX, y: 1.0)
-                    .offset(x: value.offsetX)
-                    .opacity(value.opacity)
-            } keyframes: { _ in
-                KeyframeTrack(\.offsetX) {
-                    CubicKeyframe(18, duration: 0.28)
-                    MoveKeyframe(-14)
-                    SpringKeyframe(0, duration: 0.42, spring: .init(response: 0.38, dampingRatio: 0.88))
-                }
-                KeyframeTrack(\.opacity) {
-                    CubicKeyframe(0, duration: 0.22)
-                    MoveKeyframe(0)
-                    CubicKeyframe(1.0, duration: 0.34)
-                }
-                KeyframeTrack(\.scaleX) {
-                    CubicKeyframe(1.15, duration: 0.25)
-                    MoveKeyframe(0.88)
-                    SpringKeyframe(1.0, duration: 0.34, spring: .init(response: 0.30, dampingRatio: 0.85))
-                }
-            }
+    private enum TriangleRole {
+        case frontExit, backAdvance, incoming
     }
 
-    private var trailTriangle: some View {
-        Image(systemName: "play.fill")
-            .font(.system(size: 13.5))
-            .foregroundColor(.white)
-            .keyframeAnimator(
-                initialValue: TriangleAnimValues(),
-                trigger: commitTrigger
-            ) { content, value in
-                content
-                    .scaleEffect(x: value.scaleX, y: 1.0)
-                    .offset(x: value.offsetX)
-                    .opacity(value.opacity)
-            } keyframes: { _ in
-                KeyframeTrack(\.offsetX) {
-                    LinearKeyframe(0, duration: 0.06)
-                    CubicKeyframe(15, duration: 0.28)
-                    MoveKeyframe(-12)
-                    SpringKeyframe(0, duration: 0.40, spring: .init(response: 0.38, dampingRatio: 0.88))
-                }
-                KeyframeTrack(\.opacity) {
-                    LinearKeyframe(1.0, duration: 0.06)
-                    CubicKeyframe(0, duration: 0.22)
-                    MoveKeyframe(0)
-                    CubicKeyframe(1.0, duration: 0.32)
-                }
-                KeyframeTrack(\.scaleX) {
-                    LinearKeyframe(1.0, duration: 0.06)
-                    CubicKeyframe(1.12, duration: 0.25)
-                    MoveKeyframe(0.90)
-                    SpringKeyframe(1.0, duration: 0.32, spring: .init(response: 0.30, dampingRatio: 0.85))
-                }
+    private struct TriangleMetrics {
+        let x: CGFloat
+        let opacity: Double
+        let scaleX: CGFloat
+        let scaleY: CGFloat
+        let blur: CGFloat
+        let brightness: Double
+        let coreOpacity: Double
+        let coreX: CGFloat
+        let coreScaleX: CGFloat
+        let coreScaleY: CGFloat
+        let coreBlur: CGFloat
+    }
+
+    private struct MomentumRibbonMetrics {
+        let x: CGFloat
+        let opacity: Double
+        let scaleX: CGFloat
+        let blur: CGFloat
+    }
+
+    private struct SparkMetrics {
+        let x: CGFloat
+        let opacity: Double
+        let scale: CGFloat
+        let blur: CGFloat
+    }
+
+    private struct InteriorCueMetrics {
+        let x: CGFloat
+        let opacity: Double
+        let scale: CGFloat
+        let stretch: CGFloat
+        let blur: CGFloat
+    }
+
+    private var interiorMotion: some View {
+        ZStack {
+            momentumRibbon(delay: 0.00, y: -4.1, width: 14.4, height: 1.75, peakOpacity: 0.24)
+            momentumRibbon(delay: 0.06, y: 0.2, width: 10.8, height: 1.45, peakOpacity: 0.16)
+            momentumRibbon(delay: 0.12, y: 4.3, width: 7.8, height: 1.25, peakOpacity: 0.12)
+
+            contactBridge(y: -1.2, width: 12.6, height: 1.9, peakOpacity: 0.58)
+            contactBridge(y: 3.9, width: 8.8, height: 1.45, peakOpacity: 0.38)
+
+            sparkAccent(delay: 0.16, originX: -6.0, y: -6.0, size: 2.1, peakOpacity: 0.30)
+            sparkAccent(delay: 0.25, originX: -2.8, y: 6.2, size: 1.55, peakOpacity: 0.22)
+            sparkAccent(delay: 0.34, originX: 2.8, y: -6.8, size: 1.25, peakOpacity: 0.18)
+        }
+        .frame(width: 32, height: 32)
+        .scaleEffect(x: direction, y: 1)
+        .allowsHitTesting(false)
+    }
+
+    private var internalPulseOpacity: Double {
+        let launch = smoothStep(replacementPhase, start: 0.00, end: 0.18)
+        let decay = 1 - smoothStep(replacementPhase, start: 0.46, end: 0.94)
+        return Double(0.44 * launch * decay)
+    }
+
+    private var internalPulseScale: CGFloat {
+        0.20 + 0.82 * smoothStep(replacementPhase, start: 0.00, end: 0.82)
+    }
+
+    private var internalRingOpacity: Double {
+        let launch = smoothStep(replacementPhase, start: 0.10, end: 0.36)
+        let decay = 1 - smoothStep(replacementPhase, start: 0.54, end: 0.98)
+        return Double(0.52 * launch * decay)
+    }
+
+    private var internalRingScale: CGFloat {
+        0.36 + 0.60 * smoothStep(replacementPhase, start: 0.10, end: 0.92)
+    }
+
+    private var clusterScale: CGFloat {
+        let press = smoothStep(replacementPhase, start: 0.00, end: 0.08) * (1 - smoothStep(replacementPhase, start: 0.10, end: 0.20))
+        let settle = pulse(replacementPhase, start: 0.78, duration: 0.18)
+        return 1.0 - 0.12 * press + 0.024 * settle
+    }
+
+    private var clusterOffset: CGFloat {
+        let press = smoothStep(replacementPhase, start: 0.00, end: 0.08) * (1 - smoothStep(replacementPhase, start: 0.10, end: 0.18))
+        return -0.82 * press
+    }
+
+    private func playReplacementAnimation(perform action: @escaping () -> Void) {
+        guard !reduceMotion else {
+            action()
+            return
+        }
+
+        animationSerial += 1
+        let serial = animationSerial
+
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) {
+            replacementPhase = 0
+        }
+
+        DispatchQueue.main.async {
+            guard animationSerial == serial else { return }
+            withAnimation(.timingCurve(0.08, 0.86, 0.12, 1.0, duration: 1.18)) {
+                replacementPhase = 1
             }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.052) {
+            action()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.36) {
+            guard animationSerial == serial else { return }
+
+            var reset = Transaction()
+            reset.disablesAnimations = true
+            withTransaction(reset) {
+                replacementPhase = 0
+            }
+        }
+    }
+
+    private func triangle(role: TriangleRole) -> some View {
+        let metrics = triangleMetrics(for: role, phase: replacementPhase)
+
+        return ZStack {
+            Image(systemName: "play.fill")
+                .font(.system(size: 13.6, weight: .semibold))
+                .foregroundStyle(.white)
+
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(metrics.coreOpacity))
+                .frame(width: 7.0, height: 2.0)
+                .scaleEffect(x: metrics.coreScaleX, y: metrics.coreScaleY)
+                .offset(x: metrics.coreX)
+                .blur(radius: metrics.coreBlur)
+                .mask {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 13.6, weight: .semibold))
+                        .scaleEffect(0.74)
+                }
+                .opacity(metrics.coreOpacity > 0 ? 1 : 0)
+        }
+            .scaleEffect(x: metrics.scaleX, y: metrics.scaleY)
+            .offset(x: metrics.x)
+            .blur(radius: metrics.blur)
+            .brightness(metrics.brightness)
+            .shadow(color: .white.opacity(metrics.opacity * 0.18), radius: 2.0, x: 0, y: 0)
+            .opacity(metrics.opacity)
+    }
+
+    private func momentumRibbon(delay: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, peakOpacity: Double) -> some View {
+        let metrics = momentumRibbonMetrics(delay: delay, peakOpacity: peakOpacity, phase: replacementPhase)
+
+        return Capsule(style: .continuous)
+            .fill(Color.white.opacity(metrics.opacity))
+            .frame(width: width, height: height)
+            .scaleEffect(x: metrics.scaleX, y: 1)
+            .offset(x: metrics.x, y: y)
+            .blur(radius: metrics.blur)
+            .opacity(metrics.opacity > 0 ? 1 : 0)
+    }
+
+    private func contactBridge(y: CGFloat, width: CGFloat, height: CGFloat, peakOpacity: Double) -> some View {
+        let metrics = contactBridgeMetrics(peakOpacity: peakOpacity, phase: replacementPhase)
+
+        return Capsule(style: .continuous)
+            .fill(Color.white.opacity(metrics.opacity))
+            .frame(width: width, height: height)
+            .scaleEffect(x: metrics.stretch, y: metrics.scale)
+            .offset(x: metrics.x, y: y)
+            .blur(radius: metrics.blur)
+            .opacity(metrics.opacity > 0 ? 1 : 0)
+    }
+
+    private func sparkAccent(delay: CGFloat, originX: CGFloat, y: CGFloat, size: CGFloat, peakOpacity: Double) -> some View {
+        let metrics = sparkMetrics(delay: delay, originX: originX, peakOpacity: peakOpacity, phase: replacementPhase)
+
+        return Circle()
+            .fill(Color.white.opacity(metrics.opacity))
+            .frame(width: size, height: size)
+            .scaleEffect(metrics.scale)
+            .offset(x: metrics.x, y: y)
+            .blur(radius: metrics.blur)
+            .opacity(metrics.opacity > 0 ? 1 : 0)
+    }
+
+    private func momentumRibbonMetrics(delay: CGFloat, peakOpacity: Double, phase rawPhase: CGFloat) -> MomentumRibbonMetrics {
+        let phase = min(max(rawPhase, 0), 1)
+        let appear = smoothStep(phase, start: 0.10 + delay, end: 0.22 + delay)
+        let vanish = smoothStep(phase, start: 0.58 + delay, end: 0.88 + delay)
+        let travel = smoothStep(phase, start: 0.13 + delay, end: 0.48 + delay)
+        let recoil = smoothStep(phase, start: 0.56 + delay, end: 0.74 + delay)
+        let inertia = pulse(phase, start: 0.36 + delay, duration: 0.18)
+        let pullback = pulse(phase, start: 0.56 + delay, duration: 0.22)
+        let settle = pulse(phase, start: 0.76 + delay, duration: 0.16)
+        let active = appear * (1 - vanish)
+
+        return MomentumRibbonMetrics(
+            x: -5.2 + 10.4 * travel - 1.08 * recoil + 0.82 * inertia - 0.66 * pullback + 0.14 * settle,
+            opacity: Double(CGFloat(peakOpacity) * active),
+            scaleX: 0.18 + 0.88 * travel + 0.18 * inertia - 0.18 * pullback + 0.04 * settle,
+            blur: 0.35 * (1 - active)
+        )
+    }
+
+    private func contactBridgeMetrics(peakOpacity: Double, phase rawPhase: CGFloat) -> InteriorCueMetrics {
+        let phase = min(max(rawPhase, 0), 1)
+        let appear = smoothStep(phase, start: 0.62, end: 0.70)
+        let vanish = smoothStep(phase, start: 0.88, end: 1.0)
+        let contact = pulse(phase, start: 0.66, duration: 0.18)
+        let pullback = pulse(phase, start: 0.78, duration: 0.18)
+        let rebound = pulse(phase, start: 0.91, duration: 0.09)
+        let active = appear * (1 - vanish)
+
+        return InteriorCueMetrics(
+            x: 1.85 * contact - 3.35 * pullback + 0.82 * rebound,
+            opacity: Double(CGFloat(peakOpacity) * active),
+            scale: max(0.36, 0.72 + 0.34 * contact - 0.22 * pullback),
+            stretch: max(0.18, 0.22 + 1.70 * contact - 0.78 * pullback + 0.18 * rebound),
+            blur: 0.16 * (1 - active) + 0.06 * pullback
+        )
+    }
+
+    private func sparkMetrics(delay: CGFloat, originX: CGFloat, peakOpacity: Double, phase rawPhase: CGFloat) -> SparkMetrics {
+        let phase = min(max(rawPhase, 0), 1)
+        let appear = smoothStep(phase, start: 0.12 + delay, end: 0.22 + delay)
+        let vanish = smoothStep(phase, start: 0.46 + delay, end: 0.70 + delay)
+        let travel = smoothStep(phase, start: 0.14 + delay, end: 0.44 + delay)
+        let recoil = smoothStep(phase, start: 0.52 + delay, end: 0.68 + delay)
+        let pop = pulse(phase, start: 0.18 + delay, duration: 0.20)
+        let pullback = pulse(phase, start: 0.54 + delay, duration: 0.20)
+        let active = appear * (1 - vanish)
+
+        return SparkMetrics(
+            x: originX + 7.4 * travel - 1.4 * recoil + 0.58 * pop - 0.46 * pullback,
+            opacity: Double(CGFloat(peakOpacity) * active),
+            scale: max(0.2, 0.34 + 0.78 * pop - 0.22 * pullback),
+            blur: 0.18 * (1 - active)
+        )
+    }
+
+    private func triangleMetrics(for role: TriangleRole, phase rawPhase: CGFloat) -> TriangleMetrics {
+        let phase = min(max(rawPhase, 0), 1)
+        let rearSlot: CGFloat = -4.9
+        let frontSlot: CGFloat = 4.9
+        let slotDistance = frontSlot - rearSlot
+        let press = pulse(phase, start: 0.00, duration: 0.16)
+        let advance = smoothStep(phase, start: 0.18, end: 0.54)
+        let postTransitionInertia = pulse(phase, start: 0.62, duration: 0.16)
+        let contact = pulse(phase, start: 0.66, duration: 0.18)
+        let pullback = pulse(phase, start: 0.78, duration: 0.18)
+        let settle = pulse(phase, start: 0.91, duration: 0.09)
+
+        switch role {
+        case .frontExit:
+            let exit = smoothStep(phase, start: 0.08, end: 0.40)
+            let collapse = smoothStep(phase, start: 0.10, end: 0.42)
+            let fade = smoothStep(phase, start: 0.28, end: 0.48)
+            let squash = pulse(phase, start: 0.08, duration: 0.18)
+            return TriangleMetrics(
+                x: frontSlot - 0.36 * press + 8.4 * exit,
+                opacity: Double(1 - fade),
+                scaleX: max(0.08, 1.0 + 0.18 * squash - 0.92 * collapse),
+                scaleY: max(0.12, 1.0 - 0.12 * squash - 0.82 * collapse),
+                blur: 0.34 * collapse,
+                brightness: Double(0.10 * press + 0.10 * squash),
+                coreOpacity: Double(0.22 * (1 - fade) * (1 - collapse)),
+                coreX: -0.65 * collapse,
+                coreScaleX: max(0.12, 0.86 - 0.62 * collapse),
+                coreScaleY: max(0.18, 0.72 - 0.42 * collapse),
+                coreBlur: 0.10 + 0.18 * collapse
+            )
+
+        case .backAdvance:
+            let overshoot = 3.05 * postTransitionInertia + 1.20 * contact
+            let recoil = -3.10 * pullback + 0.72 * settle
+            return TriangleMetrics(
+                x: rearSlot - 0.24 * press + slotDistance * advance + overshoot + recoil,
+                opacity: 1.0,
+                scaleX: 1.0 + 0.10 * advance + 0.08 * postTransitionInertia + 0.06 * contact - 0.12 * pullback,
+                scaleY: 1.0 - 0.04 * advance + 0.08 * contact + 0.04 * pullback,
+                blur: 0.0,
+                brightness: Double(0.08 * postTransitionInertia + 0.22 * contact),
+                coreOpacity: Double(0.14 + 0.56 * contact * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
+                coreX: -0.90 + 2.35 * contact - 2.10 * pullback + 0.44 * settle,
+                coreScaleX: max(0.28, 0.58 + 1.34 * contact - 0.64 * pullback),
+                coreScaleY: max(0.24, 0.62 + 0.32 * contact - 0.18 * pullback),
+                coreBlur: 0.04 + 0.06 * pullback
+            )
+
+        case .incoming:
+            let enter = smoothStep(phase, start: 0.18, end: 0.58)
+            let fade = smoothStep(phase, start: 0.14, end: 0.26)
+            let grow = smoothStep(phase, start: 0.18, end: 0.52)
+            let arrivalPop = pulse(phase, start: 0.42, duration: 0.18)
+            let overshoot = 2.76 * postTransitionInertia + 1.08 * contact
+            let recoil = -2.78 * pullback + 0.62 * settle
+            return TriangleMetrics(
+                x: rearSlot - 8.8 + 8.8 * enter + overshoot + recoil,
+                opacity: Double(fade),
+                scaleX: max(0.08, 0.08 + 0.92 * grow + 0.18 * arrivalPop + 0.09 * postTransitionInertia + 0.07 * contact - 0.12 * pullback + 0.03 * settle),
+                scaleY: max(0.10, 0.12 + 0.88 * grow + 0.12 * arrivalPop + 0.07 * postTransitionInertia + 0.08 * contact - 0.08 * pullback + 0.02 * settle),
+                blur: 0.26 * (1 - enter),
+                brightness: Double(0.14 * fade + 0.08 * arrivalPop + 0.24 * contact),
+                coreOpacity: Double(0.62 * fade * contact * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
+                coreX: 1.02 - 2.20 * contact + 1.86 * pullback - 0.32 * settle,
+                coreScaleX: max(0.24, 0.50 + 1.36 * contact - 0.58 * pullback),
+                coreScaleY: max(0.24, 0.56 + 0.34 * contact - 0.16 * pullback),
+                coreBlur: 0.04 + 0.06 * pullback
+            )
+        }
+    }
+
+    private func smoothStep(_ value: CGFloat, start: CGFloat = 0, end: CGFloat = 1) -> CGFloat {
+        guard end > start else { return value >= end ? 1 : 0 }
+        let t = min(max((value - start) / (end - start), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
+    private func pulse(_ value: CGFloat, start: CGFloat, duration: CGFloat) -> CGFloat {
+        guard duration > 0 else { return 0 }
+        let t = min(max((value - start) / duration, 0), 1)
+        return sin(CGFloat.pi * t)
     }
 }
 
@@ -477,10 +752,10 @@ private struct SkipPressStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.85 : 1.0)
-            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.78 : 1.0)
+            .opacity(1.0)
             .animation(
-                reduceMotion ? nil : .spring(response: 0.12, dampingFraction: 0.65),
+                reduceMotion ? nil : .interpolatingSpring(mass: 0.75, stiffness: 520, damping: 18, initialVelocity: 0),
                 value: configuration.isPressed
             )
     }
