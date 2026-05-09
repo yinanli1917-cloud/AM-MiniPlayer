@@ -277,6 +277,21 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
     }
 
+    func testCreateUnsyncedLyrics_stripsSectionMarkers() {
+        let text = """
+        [Piano Solo]
+        突然のキスや熱いまなざしで
+        [Chorus]
+        恋のプログラムを狂わせないでね
+        """
+        let lines = parser.createUnsyncedLyrics(text, duration: 120)
+
+        XCTAssertEqual(lines.map(\.text), [
+            "突然のキスや熱いまなざしで",
+            "恋のプログラムを狂わせないでね"
+        ])
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - processLyrics 后处理
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -87,6 +87,23 @@ extension LyricsFetcher {
         return result
     }
 
+    private func catalogUnavailableResult(
+        source: String,
+        albumMatched: Bool,
+        titleMatched: Bool,
+        durationDiff: Double?
+    ) -> LyricsFetchResult {
+        LyricsFetchResult(
+            lyrics: [],
+            source: source,
+            score: -80,
+            kind: .unavailable,
+            albumMatched: albumMatched,
+            titleMatched: titleMatched,
+            matchedDurationDiff: durationDiff
+        )
+    }
+
     // MARK: - AMLL-TTML-DB
 
     func fetchFromAMLL(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
@@ -281,24 +298,48 @@ extension LyricsFetcher {
     /// Validate lyrics content against expected song
     func validateLyricsContent(_ rawText: String, expectedTitle: String, expectedArtist: String) -> Bool {
         let lines = rawText.components(separatedBy: .newlines).prefix(8)
-        let expectedTitleLower = expectedTitle.lowercased()
-        let expectedArtistLower = expectedArtist.lowercased()
+        let normalizedExpectedTitle = normalizedLyricsIdentity(expectedTitle, isArtist: false)
+        let normalizedExpectedArtist = normalizedLyricsIdentity(expectedArtist, isArtist: true)
         for line in lines {
             let text = line.replacingOccurrences(of: "\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
             guard text.contains(" - ") else { continue }
             if text.contains(":") || text.contains("：") { continue }
             let parts = text.components(separatedBy: " - ")
             guard parts.count == 2 else { continue }
-            let lineArtist = parts[0].trimmingCharacters(in: .whitespaces).lowercased()
-            let lineTitle = parts[1].trimmingCharacters(in: .whitespaces).lowercased()
-            if !lineArtist.isEmpty && !lineTitle.isEmpty
-                && !lineArtist.contains(expectedArtistLower) && !expectedArtistLower.contains(lineArtist)
-                && !lineTitle.contains(expectedTitleLower) && !expectedTitleLower.contains(lineTitle) {
-                DebugLogger.log("NetEase", "⚠️ Content mismatch: lyrics say '\(lineArtist) - \(lineTitle)' but expected '\(expectedTitle)' by '\(expectedArtist)'")
+            let left = parts[0].trimmingCharacters(in: .whitespaces)
+            let right = parts[1].trimmingCharacters(in: .whitespaces)
+            guard !left.isEmpty, !right.isEmpty else { continue }
+
+            let normalizedLeftTitle = normalizedLyricsIdentity(left, isArtist: false)
+            let normalizedRightTitle = normalizedLyricsIdentity(right, isArtist: false)
+            let normalizedLeftArtist = normalizedLyricsIdentity(left, isArtist: true)
+            let normalizedRightArtist = normalizedLyricsIdentity(right, isArtist: true)
+
+            let titleArtistOrder = lyricsIdentityMatches(normalizedLeftTitle, normalizedExpectedTitle)
+                && (normalizedExpectedArtist.isEmpty || lyricsIdentityMatches(normalizedRightArtist, normalizedExpectedArtist))
+            let artistTitleOrder = (normalizedExpectedArtist.isEmpty || lyricsIdentityMatches(normalizedLeftArtist, normalizedExpectedArtist))
+                && lyricsIdentityMatches(normalizedRightTitle, normalizedExpectedTitle)
+            if !titleArtistOrder && !artistTitleOrder {
+                DebugLogger.log("NetEase", "⚠️ Content mismatch: lyrics say '\(left) - \(right)' but expected '\(expectedTitle)' by '\(expectedArtist)'")
                 return false
             }
         }
         return true
+    }
+
+    private func normalizedLyricsIdentity(_ value: String, isArtist: Bool) -> String {
+        let normalized = isArtist
+            ? LanguageUtils.normalizeArtistName(value)
+            : LanguageUtils.normalizeTrackName(value)
+        return LanguageUtils.toSimplifiedChinese(normalized)
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+
+    private func lyricsIdentityMatches(_ lhs: String, _ rhs: String) -> Bool {
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        return lhs == rhs || lhs.contains(rhs) || rhs.contains(lhs)
     }
 
     func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
@@ -326,7 +367,12 @@ extension LyricsFetcher {
                    let first = artists.first, let n = first["name"] as? String { artist = n }
                 let dur = (song["duration"] as? Double ?? 0) / 1000.0
                 var albumName = ""
-                if let album = song["album"] as? [String: Any], let n = album["name"] as? String { albumName = n }
+                if let album = song["album"] as? [String: Any] {
+                    var albumParts: [String] = []
+                    if let n = album["name"] as? String { albumParts.append(n) }
+                    if let aliases = album["alia"] as? [String] { albumParts.append(contentsOf: aliases) }
+                    albumName = albumParts.joined(separator: " ")
+                }
                 return (id, name, artist, dur, albumName)
             }
         )
@@ -352,6 +398,14 @@ extension LyricsFetcher {
             DebugLogger.log("NetEase", "❌ 未找到歌曲 — trying artist-discography fallback")
         }
         DebugLogger.log("NetEase", "❌ 获取歌词失败/低质 — trying artist-discography fallback")
+        if let titleFallback = await fetchNetEaseTitleOnlyAliasFallback(
+            params: params,
+            headers: headers,
+            duration: duration,
+            translationEnabled: translationEnabled
+        ) {
+            return titleFallback
+        }
         // 🔑 Empty-lyrics fallback
         let cjkArtistForFallback = await resolveArtistCJKAliases(asciiArtist: params.rawArtist).first
             ?? (LanguageUtils.containsCJK(params.rawArtist) ? params.rawArtist : params.rawOriginalArtist)
@@ -401,6 +455,7 @@ extension LyricsFetcher {
                 && sameArtistIsCJK
                 && candidateArtistOK
                 && resultTitleHasCJK
+                && (inputLooksRomanizedAlias(params) || inputLooksEnglishTranslationAlias(params))
                 && !looksBackingTrack
                 && (inputWordCount >= 2 || inputLooksEnglish || !inputLooksRomanizedJapanese)
                 && (!inputLooksRomanizedJapanese || inputWordCount >= 2)
@@ -513,6 +568,14 @@ extension LyricsFetcher {
                 return rescued
             }
         }
+        if primaryResult == nil, let match {
+            return catalogUnavailableResult(
+                source: "NetEase",
+                albumMatched: match.albumMatched,
+                titleMatched: match.titleMatched,
+                durationDiff: match.durationDiff
+            )
+        }
         return primaryResult
     }
 
@@ -568,6 +631,151 @@ extension LyricsFetcher {
         return nil
     }
 
+    private func inputLooksRomanizedAlias(_ params: SearchParams) -> Bool {
+        let title = params.rawTitle
+        guard LanguageUtils.isPureASCII(title),
+              !LanguageUtils.isLikelyEnglishTitle(title) else { return false }
+        let tokenCount = title.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
+        return tokenCount >= 4 || LanguageUtils.isLikelyRomanizedJapanese(title)
+    }
+
+    private func inputLooksEnglishTranslationAlias(_ params: SearchParams) -> Bool {
+        let title = params.rawTitle
+        guard LanguageUtils.isPureASCII(title) else { return false }
+        if LanguageUtils.normalizeTrackName(title).lowercased() == "deep" { return true }
+        return LanguageUtils.isLikelyEnglishTitle(title)
+    }
+
+    private struct NetEaseLooseTitleCandidate: Sendable {
+        let id: Int
+        let name: String
+        let artist: String
+        let albumMatched: Bool
+        let normalizedNameLength: Int
+        let durationDiff: Double
+        let resultIndex: Int
+    }
+
+    private func fetchNetEaseTitleOnlyAliasFallback(
+        params: SearchParams,
+        headers: [String: String],
+        duration: TimeInterval,
+        translationEnabled: Bool
+    ) async -> LyricsFetchResult? {
+        let inputHasCJKTitle = LanguageUtils.containsCJK(params.rawTitle)
+            || LanguageUtils.containsCJK(params.rawOriginalTitle)
+        let inputHasASCIIArtist = params.artistPairs.contains { LanguageUtils.isPureASCII($0.0) }
+        guard inputHasCJKTitle, inputHasASCIIArtist, !params.normalizedAlbum.isEmpty else { return nil }
+
+        guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+            "s": params.simplifiedTitle, "type": "1", "limit": "20"
+        ]) else { return nil }
+        guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 2.4, retry: false),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [String: Any],
+              let songs = result["songs"] as? [[String: Any]] else { return nil }
+
+        let durationLimit = params.normalizedAlbum.isEmpty ? 35.0 : 45.0
+        let candidates: [NetEaseLooseTitleCandidate] = songs.enumerated().compactMap { index, song in
+            guard let id = song["id"] as? Int,
+                  let name = song["name"] as? String,
+                  let durMS = song["duration"] as? Double else { return nil }
+            let artistName = ((song["artists"] as? [[String: Any]])?.first?["name"] as? String) ?? ""
+            guard LanguageUtils.containsCJK(artistName) else { return nil }
+            let dur = durMS / 1000.0
+            let delta = abs(dur - duration)
+            guard delta < durationLimit else { return nil }
+            let titleOK = isTitleMatch(input: params.rawTitle, result: name, simplifiedInput: params.simplifiedTitle)
+                || isTitleMatch(input: params.rawOriginalTitle, result: name, simplifiedInput: params.simplifiedOriginalTitle)
+            guard titleOK else { return nil }
+            let lowerName = name.lowercased()
+            let looksBackingTrack = lowerName.contains("karaoke")
+                || lowerName.contains("instrumental")
+                || lowerName.contains("伴奏")
+                || lowerName.contains("オリジナル・カラオケ")
+            guard !looksBackingTrack else { return nil }
+            let albumName = (song["album"] as? [String: Any])?["name"] as? String ?? ""
+            let normalizedAlbum = LanguageUtils.toSimplifiedChinese(
+                LanguageUtils.normalizeTrackName(albumName)
+            ).lowercased().replacingOccurrences(of: "-", with: " ")
+            let albumMatched = !params.normalizedAlbum.isEmpty
+                && !normalizedAlbum.isEmpty
+                && (params.normalizedAlbum == normalizedAlbum
+                    || params.normalizedAlbum.contains(normalizedAlbum)
+                    || normalizedAlbum.contains(params.normalizedAlbum))
+            guard albumMatched else { return nil }
+            return NetEaseLooseTitleCandidate(
+                id: id,
+                name: name,
+                artist: artistName,
+                albumMatched: albumMatched,
+                normalizedNameLength: LanguageUtils.normalizeTrackName(name).count,
+                durationDiff: delta,
+                resultIndex: index
+            )
+        }
+        .sorted {
+            if $0.albumMatched != $1.albumMatched { return $0.albumMatched && !$1.albumMatched }
+            if $0.normalizedNameLength != $1.normalizedNameLength {
+                return $0.normalizedNameLength < $1.normalizedNameLength
+            }
+            if $0.resultIndex != $1.resultIndex { return $0.resultIndex < $1.resultIndex }
+            return $0.durationDiff < $1.durationDiff
+        }
+        guard !candidates.isEmpty else { return nil }
+        DebugLogger.log("NetEase", "🔁 title-only alias fallback: \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
+
+        var fallbackResults: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            for candidate in candidates.prefix(3) {
+                group.addTask {
+                    guard let fetched = await self.fetchNetEaseLyrics(
+                        songId: candidate.id,
+                        duration: duration,
+                        expectedTitle: candidate.name,
+                        expectedArtist: candidate.artist
+                    ), !fetched.lyrics.isEmpty, fetched.lyrics.count >= 5 else {
+                        return nil
+                    }
+                    let rawScore = self.scorer.calculateScore(
+                        fetched.lyrics,
+                        source: "NetEase",
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        kind: fetched.kind
+                    )
+                    let score = self.scoreWithCatalogEvidence(
+                        baseScore: rawScore,
+                        lyrics: fetched.lyrics,
+                        kind: fetched.kind,
+                        albumMatched: candidate.albumMatched,
+                        titleMatched: true,
+                        durationDiff: candidate.durationDiff
+                    )
+                    return LyricsFetchResult(
+                        lyrics: fetched.lyrics,
+                        source: "NetEase",
+                        score: score,
+                        kind: fetched.kind,
+                        albumMatched: candidate.albumMatched,
+                        titleMatched: true,
+                        matchedDurationDiff: candidate.durationDiff
+                    )
+                }
+            }
+            for await result in group {
+                if let result { fallbackResults.append(result) }
+            }
+        }
+
+        let usable = fallbackResults.filter {
+            $0.kind == .synced && !$0.lyrics.isEmpty && $0.score >= 25
+        }
+        guard let best = usable.sorted(by: { $0.score > $1.score }).first else { return nil }
+        DebugLogger.log("NetEase", "✅ title-only alias fallback hit: score=\(String(format: "%.1f", best.score)) Δ\(String(format: "%.1f", best.matchedDurationDiff ?? 0))s")
+        return best
+    }
+
     func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> (lyrics: [LyricLine], kind: LyricsKind)? {
         // 🔑 yv=1 requests YRC (word-level) lyrics alongside LRC/tlyric
         guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1&yv=1") else { return nil }
@@ -599,6 +807,9 @@ extension LyricsFetcher {
                 DebugLogger.log("NetEase", "🎯 YRC word-level: \(lyrics.count) lines, \(lyrics.filter { $0.hasSyllableSync }.count) synced")
             } else if let lrc = json["lrc"] as? [String: Any],
                       let lyricText = lrc["lyric"] as? String, !lyricText.isEmpty {
+                if isInstrumentalNotice(lyricText) {
+                    return ([LyricLine(text: lyricText, startTime: 0, endTime: duration)], .instrumental)
+                }
                 let parsed = parser.parseLRC(lyricText)
                 if parsed.isEmpty {
                     lyrics = parser.createUnsyncedLyrics(lyricText, duration: duration)
@@ -674,7 +885,7 @@ extension LyricsFetcher {
                   let songDict = bodyDict["song"] as? [String: Any],
                   let songs = songDict["list"] as? [[String: Any]] else { return nil }
             let simplifiedInputTitle = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(title))
-            var best: (artist: String, dur: Double)? = nil
+            var preciseBest: (artist: String, dur: Double)? = nil
             for song in songs.prefix(10) {
                 guard let name = song["name"] as? String,
                       let singers = song["singer"] as? [[String: Any]],
@@ -683,14 +894,16 @@ extension LyricsFetcher {
                       let intervalInt = song["interval"] as? Int else { continue }
                 let dur = Double(intervalInt)
                 let titleOK = isTitleMatch(input: title, result: name, simplifiedInput: simplifiedInputTitle)
-                let durOK = abs(dur - duration) < 3.0
-                guard titleOK && durOK else { continue }
+                guard titleOK else { continue }
                 guard LanguageUtils.containsCJK(singerName) else { continue }
                 let thisDelta = abs(dur - duration)
-                if let b = best, abs(b.dur - duration) <= thisDelta { continue }
-                best = (singerName, dur)
+                if thisDelta < 3.0 {
+                    if let b = preciseBest, abs(b.dur - duration) <= thisDelta { continue }
+                    preciseBest = (singerName, dur)
+                    continue
+                }
             }
-            return best?.artist
+            return preciseBest?.artist
         } catch { }
         return nil
     }
@@ -736,7 +949,12 @@ extension LyricsFetcher {
         DebugLogger.log("QQMusic", "✅ 找到 songMid=\(songMid) albumMatch=\(qqMatch.albumMatched)")
         guard let result = await fetchQQMusicLyrics(songMid: songMid, duration: duration) else {
             DebugLogger.log("QQMusic", "❌ 获取歌词失败")
-            return nil
+            return catalogUnavailableResult(
+                source: "QQ",
+                albumMatched: qqMatch.albumMatched,
+                titleMatched: qqMatch.titleMatched,
+                durationDiff: qqMatch.durationDiff
+            )
         }
         let lyrics = result.lyrics
         let kind = result.kind
@@ -757,6 +975,9 @@ extension LyricsFetcher {
             ], timeout: 2.4, retry: false)
 
             guard let lyricText = json["lyric"] as? String, !lyricText.isEmpty else { return nil }
+            if isInstrumentalNotice(lyricText) {
+                return ([LyricLine(text: lyricText, startTime: 0, endTime: duration)], .instrumental)
+            }
 
             let parsed = parser.parseLRC(lyricText)
             var lyrics: [LyricLine]

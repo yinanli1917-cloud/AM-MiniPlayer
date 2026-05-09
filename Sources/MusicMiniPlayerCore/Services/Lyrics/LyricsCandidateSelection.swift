@@ -119,7 +119,8 @@ extension LyricsFetcher {
                 if aliasConfirmedCJK,
                    LanguageUtils.isLikelyEnglishTitle(inputTitle),
                    !LanguageUtils.isLikelyRomanizedJapanese(inputTitle),
-                   candidate.durationDiff < 1.5 {
+                   candidate.durationDiff < 3.0,
+                   candidate.searchDescriptor.hasPrefix("alias+title") {
                     return true
                 }
                 guard hasSameArtistTitleEvidence else { return false }
@@ -164,6 +165,16 @@ extension LyricsFetcher {
                 guard candidate.durationDiff < 1.25 else { return false }
                 return !isBackingTrack(candidate)
             }),
+            ("P2loose", 2, { candidate in
+                guard candidate.titleMatch,
+                      candidate.artistMatch,
+                      candidate.durationDiff >= 20,
+                      candidate.durationDiff < (hasAlbumHint ? 45 : 35) else { return false }
+                let hasCJKIdentity = LanguageUtils.containsCJK(inputTitle)
+                    || LanguageUtils.containsCJK(candidate.name)
+                    || LanguageUtils.containsCJK(candidate.artist)
+                return (candidate.albumMatch || hasCJKIdentity) && !isBackingTrack(candidate)
+            }),
             // 🔑 P3: 仅艺术家匹配 + 时长极精确 — 覆盖罗马字/翻译标题场景
             ("P3", 3, { candidate in
                 guard candidate.artistMatch else { return false }
@@ -182,11 +193,12 @@ extension LyricsFetcher {
                 if disableCjkEscape { return false }
                 // 🔑 Romanized→CJK escape
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
+                let wordCount = inputTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
+                let looksRomanized = wordCount >= 4 || LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
                 // 🔑 English title guard
                 let likelyJapaneseRomaji = LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
                 let inputLooksEnglish = LanguageUtils.isLikelyEnglishTitle(inputTitle)
                 if inputLooksEnglish && !likelyJapaneseRomaji {
-                    let wordCount = inputTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
                     if !(aliasConfirmedCJK && wordCount <= 3) { return false }
                 }
                 let resultTitleHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
@@ -197,12 +209,11 @@ extension LyricsFetcher {
                     return false
                 }
                 if resultTitleHasCJK && candidate.durationDiff < 1.0 {
-                    let wordCount = inputTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
+                    guard looksRomanized || aliasConfirmedCJK || candidate.albumMatch else { return false }
                     if wordCount <= 1 && !candidate.albumMatch && !hasSameArtistTitleEvidence {
                         return false
                     }
                     if hasAlbumHint && !candidate.albumMatch {
-                        let looksRomanized = wordCount >= 2 || LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
                         guard looksRomanized || aliasConfirmedCJK else { return false }
                     }
                     return true
@@ -260,11 +271,24 @@ extension LyricsFetcher {
         let cleanedResult = LanguageUtils.normalizeTrackName(result).lowercased()
         let simplifiedResult = LanguageUtils.toSimplifiedChinese(cleanedResult)
         let simplifiedCleanedInput = LanguageUtils.toSimplifiedChinese(cleanedInput)
+        let compactInput = compactTitleIdentity(cleanedInput)
+        let compactResult = compactTitleIdentity(cleanedResult)
 
         return cleanedInput == cleanedResult ||
                simplifiedCleanedInput == simplifiedResult ||
+               (!compactInput.isEmpty && compactInput == compactResult) ||
                cleanedInput.contains(cleanedResult) || cleanedResult.contains(cleanedInput) ||
                simplifiedCleanedInput.contains(simplifiedResult) || simplifiedResult.contains(simplifiedCleanedInput)
+    }
+
+    private func compactTitleIdentity(_ value: String) -> String {
+        let normalized = LanguageUtils.toSimplifiedChinese(
+            LanguageUtils.normalizeTrackName(value)
+        ).folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+        return String(normalized.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0) || LanguageUtils.isCJKScalar($0)
+        })
     }
 
     /// 统一艺术家匹配（简繁体 + CJK 跨语言 + normalized 去后缀）
@@ -273,35 +297,74 @@ extension LyricsFetcher {
         let resultLower = result.lowercased()
         let simplifiedInputLower = simplifiedInput.lowercased()
         let simplifiedResult = LanguageUtils.toSimplifiedChinese(result).lowercased()
+        let hasCJKIdentity = LanguageUtils.containsCJK(input)
+            || LanguageUtils.containsCJK(result)
+            || LanguageUtils.containsCJK(simplifiedInput)
+            || LanguageUtils.containsCJK(simplifiedResult)
 
         // 直接匹配或包含匹配
         if inputLower == resultLower || simplifiedInputLower == simplifiedResult { return true }
-        if inputLower.contains(resultLower) || resultLower.contains(inputLower) { return true }
-        if simplifiedInputLower.contains(simplifiedResult) || simplifiedResult.contains(simplifiedInputLower) { return true }
+        if hasCJKIdentity {
+            let inputParts = artistIdentityParts(input) + artistIdentityParts(simplifiedInput)
+            let resultParts = artistIdentityParts(result) + artistIdentityParts(simplifiedResult)
+            if inputParts.contains(where: { inputPart in
+                resultParts.contains { resultPart in inputPart == resultPart }
+            }) { return true }
+        } else {
+            if inputLower.contains(resultLower) || resultLower.contains(inputLower) { return true }
+            if simplifiedInputLower.contains(simplifiedResult) || simplifiedResult.contains(simplifiedInputLower) { return true }
+        }
 
         // 🔑 normalized 后再匹配
         let normalizedInput = LanguageUtils.normalizeArtistName(input).lowercased()
         let normalizedResult = LanguageUtils.normalizeArtistName(result).lowercased()
         if !normalizedInput.isEmpty && !normalizedResult.isEmpty {
             if normalizedInput == normalizedResult { return true }
-            if normalizedInput.contains(normalizedResult) || normalizedResult.contains(normalizedInput) { return true }
+            if !hasCJKIdentity,
+               normalizedInput.contains(normalizedResult) || normalizedResult.contains(normalizedInput) { return true }
         }
 
         // 🔑 去空格匹配
         let inputNoSpace = inputLower.replacingOccurrences(of: " ", with: "")
         let resultNoSpace = resultLower.replacingOccurrences(of: " ", with: "")
         if inputNoSpace == resultNoSpace { return true }
-        if inputNoSpace.contains(resultNoSpace) || resultNoSpace.contains(inputNoSpace) { return true }
+        if !hasCJKIdentity,
+           inputNoSpace.contains(resultNoSpace) || resultNoSpace.contains(inputNoSpace) { return true }
 
         // 🔑 CJK surname match: 中原明子 vs 中原めいこ (kanji→hiragana given name)
         let inputCJK = inputNoSpace.filter { $0.unicodeScalars.allSatisfy { LanguageUtils.isCJKScalar($0) } }
         let resultCJK = resultNoSpace.filter { $0.unicodeScalars.allSatisfy { LanguageUtils.isCJKScalar($0) } }
         if inputCJK.count >= 2 && resultCJK.count >= 2 {
             let prefix = inputCJK.commonPrefix(with: resultCJK)
-            if prefix.count >= 2 { return true }
+            if prefix.count >= 2 && abs(inputCJK.count - resultCJK.count) <= 2 { return true }
         }
 
         return false
+    }
+
+    private func artistIdentityParts(_ value: String) -> [String] {
+        var normalized = LanguageUtils.toSimplifiedChinese(
+            LanguageUtils.normalizeArtistName(value)
+        ).lowercased()
+        let textualSeparators = [
+            " featuring ", " feat. ", " feat ", " ft. ", " ft ",
+            " with ", " and ", " x "
+        ]
+        for separator in textualSeparators {
+            normalized = normalized.replacingOccurrences(of: separator, with: "/")
+        }
+        let separators = CharacterSet(charactersIn: "/／&＆,，、;；|｜+＋")
+        return normalized
+            .components(separatedBy: separators)
+            .map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .filter { ch in
+                        ch.unicodeScalars.allSatisfy {
+                            CharacterSet.alphanumerics.contains($0) || LanguageUtils.isCJKScalar($0)
+                        }
+                    }
+            }
+            .filter { !$0.isEmpty }
     }
 
     // MARK: - NetEase / QQ Music 共用搜索模板
@@ -327,6 +390,12 @@ extension LyricsFetcher {
         /// resolved + original + dual-title halves 的标题/艺术家对（供 buildCandidates 匹配）
         var titlePairs: [(String, String)] {
             var pairs = [(rawTitle, simplifiedTitle), (rawOriginalTitle, simplifiedOriginalTitle)]
+            for raw in [rawTitle, rawOriginalTitle] {
+                for variant in LyricsFetcher.englishContractionVariants(raw) {
+                    let simplified = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(variant))
+                    pairs.append((variant, simplified))
+                }
+            }
             // 🔑 双标题
             for raw in [rawTitle, rawOriginalTitle] {
                 if let halves = MetadataResolver.shared.splitDualTitle(raw) {
@@ -366,6 +435,7 @@ extension LyricsFetcher {
         if desc.hasPrefix("punctuation-title+artist") { return 2 }
         if desc.hasPrefix("traditional") { return 3 }
         if desc.hasPrefix("dual-") { return 4 }
+        if desc.hasPrefix("contraction") { return 4 }
         if desc == "title only" { return 5 }
         if desc.hasPrefix("title+album") { return 6 }
         if desc.hasPrefix("album+artist") { return 7 }
@@ -373,7 +443,51 @@ extension LyricsFetcher {
         if desc.hasPrefix("alias+title") { return 8 }
         if desc.hasPrefix("alias artist only") { return 9 }
         if desc == "artist only" { return 10 }
-        return 8
+        return 10
+    }
+
+    static func englishContractionVariants(_ input: String) -> [String] {
+        guard LanguageUtils.isPureASCII(input) else { return [] }
+        let replacements: [(String, String)] = [
+            (#"\bits\b"#, "it's"),
+            (#"\bim\b"#, "i'm"),
+            (#"\bid\b"#, "i'd"),
+            (#"\bill\b"#, "i'll"),
+            (#"\bive\b"#, "i've"),
+            (#"\byoure\b"#, "you're"),
+            (#"\byoud\b"#, "you'd"),
+            (#"\byoull\b"#, "you'll"),
+            (#"\byouve\b"#, "you've"),
+            (#"\bdont\b"#, "don't"),
+            (#"\bcant\b"#, "can't"),
+            (#"\bwont\b"#, "won't"),
+            (#"\bdidnt\b"#, "didn't"),
+            (#"\bdoesnt\b"#, "doesn't"),
+            (#"\bisnt\b"#, "isn't"),
+            (#"\barent\b"#, "aren't"),
+            (#"\bwasnt\b"#, "wasn't"),
+            (#"\bwerent\b"#, "weren't"),
+            (#"\bhavent\b"#, "haven't"),
+            (#"\bhasnt\b"#, "hasn't"),
+            (#"\bhadnt\b"#, "hadn't"),
+            (#"\bcouldnt\b"#, "couldn't"),
+            (#"\bwouldnt\b"#, "wouldn't"),
+            (#"\bshouldnt\b"#, "shouldn't")
+        ]
+        let lower = input.lowercased()
+        var variants: [String] = []
+        for (pattern, replacement) in replacements {
+            guard lower.range(of: pattern, options: .regularExpression) != nil else { continue }
+            let variant = input.replacingOccurrences(
+                of: pattern,
+                with: replacement,
+                options: [.regularExpression, .caseInsensitive]
+            )
+            if variant != input, !variants.contains(variant) {
+                variants.append(variant)
+            }
+        }
+        return variants
     }
 
     /// 统一搜索模板：构建关键词 → 逐轮调 API → 构建候选 → 选择最佳
@@ -389,6 +503,13 @@ extension LyricsFetcher {
         var keywords: [(String, String)] = [
             ("\(params.simplifiedTitle) \(params.simplifiedArtist)", "title+artist")
         ]
+        for variant in Self.englishContractionVariants(params.rawTitle) {
+            let normalizedVariant = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(variant))
+            let kw = "\(normalizedVariant) \(params.simplifiedArtist)"
+            if !keywords.contains(where: { $0.0 == kw }) {
+                keywords.append((kw, "contraction+artist"))
+            }
+        }
         if params.simplifiedOriginalTitle != params.simplifiedTitle ||
            params.simplifiedOriginalArtist != params.simplifiedArtist {
             keywords.append(("\(params.simplifiedOriginalTitle) \(params.simplifiedOriginalArtist)", "original"))
@@ -398,6 +519,13 @@ extension LyricsFetcher {
             let kw = "\(simplified) \(params.simplifiedArtist)"
             if !keywords.contains(where: { $0.0 == kw }) {
                 keywords.append((kw, "punctuation-title+artist"))
+            }
+        }
+        for variant in Self.englishContractionVariants(params.rawOriginalTitle) {
+            let normalizedVariant = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(variant))
+            let kw = "\(normalizedVariant) \(params.simplifiedOriginalArtist)"
+            if !keywords.contains(where: { $0.0 == kw }) {
+                keywords.append((kw, "contraction-original"))
             }
         }
         let traditionalPairs = [
@@ -446,17 +574,20 @@ extension LyricsFetcher {
         if titleHasCJK {
             keywords.append((params.simplifiedTitle, "title only"))
         }
-        // 🔑 Title+album keyword
-        if !params.normalizedAlbum.isEmpty &&
-           LanguageUtils.containsCJK(params.normalizedAlbum) {
-            let kw = "\(params.simplifiedTitle) \(params.normalizedAlbum)"
-            if !keywords.contains(where: { $0.0 == kw }) {
-                keywords.append((kw, "title+album"))
+        // 🔑 Title+album keyword. ASCII album aliases from Apple Music are
+        // useful evidence for localized native-title rows.
+        if !params.normalizedAlbum.isEmpty {
+            let albumKeywords = [
+                ("\(params.simplifiedTitle) \(params.normalizedAlbum)", "title+album"),
+                ("\(params.simplifiedTitle) \(params.normalizedAlbum) \(params.simplifiedArtist)", "title+album+artist")
+            ]
+            for (kw, label) in albumKeywords where !keywords.contains(where: { $0.0 == kw }) {
+                keywords.append((kw, label))
             }
             for (rawArtist, simplifiedArtist) in params.artistPairs {
-                guard LanguageUtils.containsCJK(rawArtist) || LanguageUtils.containsCJK(simplifiedArtist) else {
-                    continue
-                }
+                guard LanguageUtils.containsCJK(rawArtist)
+                    || LanguageUtils.containsCJK(simplifiedArtist)
+                    || LanguageUtils.isPureASCII(rawArtist) else { continue }
                 let albumArtist = "\(params.normalizedAlbum) \(simplifiedArtist)"
                 if !keywords.contains(where: { $0.0 == albumArtist }) {
                     keywords.append((albumArtist, "album+artist"))
@@ -483,15 +614,17 @@ extension LyricsFetcher {
             if enableAliasResolve && (artistIsASCII || originalArtistIsASCII) {
                 group.addTask {
                     let asciiProbe = artistIsASCII ? params.rawArtist : params.rawOriginalArtist
-                    let aliases = await self.resolveArtistCJKAliases(asciiArtist: asciiProbe)
+                    let aliases = await self.resolveArtistCJKAliases(
+                        asciiArtist: asciiProbe,
+                        allowUnconfirmedCatalogMatches: titleHasCJK
+                    )
                     for cjkArtist in aliases.prefix(5) {
                         let probes = [
                             ("\(params.simplifiedTitle) \(cjkArtist)", "alias+title:\(cjkArtist)"),
                             (cjkArtist, "alias artist only:\(cjkArtist)")
                         ]
                         var aliasProbes = probes
-                        if !params.normalizedAlbum.isEmpty,
-                           LanguageUtils.containsCJK(params.normalizedAlbum) {
+                        if !params.normalizedAlbum.isEmpty {
                             aliasProbes.append(("\(params.normalizedAlbum) \(cjkArtist)", "alias album+artist:\(cjkArtist)"))
                         }
                         for (kw, desc) in aliasProbes {
@@ -564,8 +697,8 @@ extension LyricsFetcher {
             guard !allResults.isEmpty else { return nil }
             let best = allResults.min { a, b in
                 if a.0.albumMatched != b.0.albumMatched { return a.0.albumMatched && !b.0.albumMatched }
-                if a.0.matchRank != b.0.matchRank { return a.0.matchRank < b.0.matchRank }
                 if a.0.titleMatched != b.0.titleMatched { return a.0.titleMatched && !b.0.titleMatched }
+                if a.0.matchRank != b.0.matchRank { return a.0.matchRank < b.0.matchRank }
                 if a.0.durationDiff != b.0.durationDiff { return a.0.durationDiff < b.0.durationDiff }
                 return a.2 < b.2
             }!
@@ -640,7 +773,6 @@ extension LyricsFetcher {
         songs.enumerated().compactMap { index, song in
             guard let s = extractSong(song) else { return nil }
             let durationDiff = abs(s.duration - params.duration)
-            guard durationDiff < 20 else { return nil }
 
             // 🔑 Cover/Live rejection
             let coverMarkers = ["cover", "翻唱", "翻奏", "翻自", "demo", "demo版", "试唱"]
@@ -654,6 +786,7 @@ extension LyricsFetcher {
                 "英文版", "英语版", "中文版", "国语版", "國語版", "粤语版", "粵語版"
             ]
             let resultNameLower = s.name.lowercased()
+            let resultAlbumLower = s.album.lowercased()
             let inputHasCover = params.titlePairs.contains { pair in
                 coverMarkers.contains(where: { pair.0.lowercased().contains($0) })
             }
@@ -669,8 +802,21 @@ extension LyricsFetcher {
             }
             let resultHasLocalizedVersion = localizedVersionMarkers.contains(where: { resultNameLower.contains($0) })
             if resultHasLocalizedVersion && !inputHasLocalizedVersion { return nil }
+            let backingTrackMarkers = ["karaoke", "instrumental", "伴奏", "カラオケ", "オリジナル・カラオケ"]
+            let inputHasBackingTrack = params.titlePairs.contains { pair in
+                backingTrackMarkers.contains(where: { pair.0.lowercased().contains($0) })
+            }
+            let resultHasBackingTrack = backingTrackMarkers.contains {
+                resultNameLower.contains($0) || resultAlbumLower.contains($0)
+            }
+            if resultHasBackingTrack && !inputHasBackingTrack { return nil }
 
             let titleMatch = params.titlePairs.contains { isTitleMatch(input: $0.0, result: s.name, simplifiedInput: $0.1) }
+            let compactTitleMatch = params.titlePairs.contains { pair in
+                let inputCompact = compactTitleIdentity(pair.0)
+                let resultCompact = compactTitleIdentity(s.name)
+                return !inputCompact.isEmpty && inputCompact == resultCompact
+            }
             var artistMatch = params.artistPairs.contains { isArtistMatch(input: $0.0, result: s.artist, simplifiedInput: $0.1) }
 
             // 🔑 Cross-script tolerance
@@ -716,6 +862,7 @@ extension LyricsFetcher {
             if !artistMatch && isCrossScriptArtist && !inputHasBothScripts {
                 if (albumMatch && titleMatch) ||
                    (titleMatch && durationDiff < 1.0) ||
+                   (compactTitleMatch && searchDescriptor.hasPrefix("title+artist") && durationDiff < 20.0) ||
                    (!titleMatch && resultTitleIsCJK && durationDiff < 1.0) {
                     artistMatch = true
                 }
@@ -727,6 +874,18 @@ extension LyricsFetcher {
                isCompilationArtistName(s.artist) {
                 artistMatch = true
             }
+            let hasCJKIdentity = params.titlePairs.contains { LanguageUtils.containsCJK($0.0) }
+                || params.artistPairs.contains { LanguageUtils.containsCJK($0.0) }
+                || LanguageUtils.containsCJK(s.name)
+                || LanguageUtils.containsCJK(s.artist)
+            let exactIdentityDurationLimit: Double = {
+                if albumMatch { return 45 }
+                if hasCJKIdentity { return 35 }
+                return 20
+            }()
+            let durationLimit = titleMatch && artistMatch ? exactIdentityDurationLimit : 20
+            guard durationDiff < durationLimit else { return nil }
+
             let normalizedNameLength = LanguageUtils.normalizeTrackName(s.name).count
 
             return SearchCandidate(
@@ -814,11 +973,15 @@ extension LyricsFetcher {
         return probes
     }
 
-    /// Resolve an ASCII artist name to confirmed CJK catalog names via
-    /// NetEase's artist-search endpoint. Search results are not aliases by
-    /// themselves; the CJK artist must explicitly list the ASCII name as an alias.
-    func resolveArtistCJKAliases(asciiArtist: String) async -> [String] {
-        let key = asciiArtist.lowercased()
+    /// Resolve an ASCII artist name to CJK catalog names. Strict mode only
+    /// accepts provider-declared aliases. When the title is already CJK, the
+    /// caller may also allow lower-confidence CJK artist probes; those probes
+    /// still have to survive the normal title+artist+duration candidate gates.
+    func resolveArtistCJKAliases(
+        asciiArtist: String,
+        allowUnconfirmedCatalogMatches: Bool = false
+    ) async -> [String] {
+        let key = "\(asciiArtist.lowercased())|\(allowUnconfirmedCatalogMatches ? "loose" : "strict")"
         if let cached = await artistAliasCache.get(key) { return cached }
         guard LanguageUtils.isPureASCII(asciiArtist) else {
             await artistAliasCache.set(key, []); return []
@@ -828,32 +991,143 @@ extension LyricsFetcher {
         let inputLower = asciiArtist.lowercased()
         var seen: Set<String> = []
         var aliases: [String] = []
-        for probe in artistProbeVariants(asciiArtist) {
-            guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
-                "s": probe, "type": "100", "limit": "5"
-            ]) else { continue }
-            do {
-                let (data, _) = try await HTTPClient.getData(url: url, headers: headers, timeout: 2.0, retry: false)
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let result = json["result"] as? [String: Any],
-                      let artists = result["artists"] as? [[String: Any]] else { continue }
-                for artist in artists.prefix(5) {
-                    guard let cjkName = artist["name"] as? String,
-                          LanguageUtils.containsCJK(cjkName),
-                          !seen.contains(cjkName) else { continue }
-                    let aliasList = artist["alias"] as? [String] ?? []
-                    let isConfirmed = Self.isConfirmedArtistAlias(asciiArtist: inputLower, providerAliases: aliasList)
-                    guard isConfirmed else { continue }
-                    aliases.append(cjkName)
-                    seen.insert(cjkName)
+        var catalogCandidates: [String] = []
+        let probes = artistProbeVariants(asciiArtist)
+        let resolvedBatches = await withTaskGroup(of: (Int, [String], [String]).self) { group in
+            for (index, probe) in probes.enumerated() {
+                group.addTask {
+                    guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+                        "s": probe, "type": "100", "limit": "5"
+                    ]) else { return (index, [], []) }
+                    do {
+                        let (data, _) = try await HTTPClient.getData(url: url, headers: headers, timeout: 1.2, retry: false)
+                        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let result = json["result"] as? [String: Any],
+                              let artists = result["artists"] as? [[String: Any]] else { return (index, [], []) }
+                        var confirmed: [String] = []
+                        var catalog: [String] = []
+                        for artist in artists.prefix(5) {
+                            guard let cjkName = artist["name"] as? String,
+                                  LanguageUtils.containsCJK(cjkName) else { continue }
+                            let aliasList = artist["alias"] as? [String] ?? []
+                            let isConfirmed = Self.isConfirmedArtistAlias(asciiArtist: inputLower, providerAliases: aliasList)
+                            if isConfirmed {
+                                confirmed.append(cjkName)
+                            } else if allowUnconfirmedCatalogMatches,
+                                      probe.lowercased() != inputLower {
+                                catalog.append(cjkName)
+                            }
+                        }
+                        return (index, confirmed, catalog)
+                    } catch {
+                        return (index, [], [])
+                    }
                 }
-            } catch { continue }
-            if !aliases.isEmpty && probe == asciiArtist { break }
+            }
+            if allowUnconfirmedCatalogMatches {
+                group.addTask {
+                    let wikiAliases = await self.resolveWikipediaChineseArtistAliases(asciiArtist: asciiArtist)
+                    return (-1, wikiAliases, [])
+                }
+            }
+
+            var batches: [(Int, [String], [String])] = []
+            for await batch in group {
+                batches.append(batch)
+            }
+            return batches.sorted { lhs, rhs in
+                if lhs.0 == -1 { return false }
+                if rhs.0 == -1 { return true }
+                return lhs.0 < rhs.0
+            }
+        }
+
+        for (_, confirmed, catalog) in resolvedBatches {
+            for cjkName in confirmed where !seen.contains(cjkName) {
+                aliases.append(cjkName)
+                seen.insert(cjkName)
+            }
+            for cjkName in catalog where !catalogCandidates.contains(cjkName) {
+                catalogCandidates.append(cjkName)
+            }
+        }
+        if allowUnconfirmedCatalogMatches {
+            for cjkName in catalogCandidates.prefix(5) where !seen.contains(cjkName) {
+                aliases.append(cjkName)
+                seen.insert(cjkName)
+            }
         }
         if !aliases.isEmpty {
-            DebugLogger.log("NetEase", "🔗 confirmed alias resolve: '\(asciiArtist)' → \(aliases.prefix(5))")
+            DebugLogger.log("NetEase", "🔗 CJK artist resolve: '\(asciiArtist)' → \(aliases.prefix(5))")
         }
         await artistAliasCache.set(key, aliases)
         return aliases
+    }
+
+    private func resolveWikipediaChineseArtistAliases(asciiArtist: String) async -> [String] {
+        guard let encoded = asciiArtist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=\(encoded)&srlimit=5&format=json") else {
+            return []
+        }
+        do {
+            let json = try await HTTPClient.getJSON(url: url, headers: [
+                "User-Agent": "nanoPod/1.0 (artist-alias lookup)"
+            ], timeout: 1.2, retry: false)
+            guard let query = json["query"] as? [String: Any],
+                  let results = query["search"] as? [[String: Any]] else { return [] }
+            var aliases: [String] = []
+            for result in results {
+                guard let title = result["title"] as? String,
+                      title.lowercased().contains(asciiArtist.lowercased()) else { continue }
+                if let snippet = result["snippet"] as? String {
+                    aliases.append(contentsOf: extractChineseNames(fromWikipediaSnippet: snippet))
+                }
+                aliases.append(contentsOf: await fetchWikipediaChineseLanglink(title: title))
+                if !aliases.isEmpty { break }
+            }
+            return aliases
+        } catch {
+            return []
+        }
+    }
+
+    private func fetchWikipediaChineseLanglink(title: String) async -> [String] {
+        guard let encoded = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://en.wikipedia.org/w/api.php?action=query&prop=langlinks&lllang=zh&titles=\(encoded)&format=json") else {
+            return []
+        }
+        do {
+            let json = try await HTTPClient.getJSON(url: url, headers: [
+                "User-Agent": "nanoPod/1.0 (artist-alias lookup)"
+            ], timeout: 1.2, retry: false)
+            guard let query = json["query"] as? [String: Any],
+                  let pages = query["pages"] as? [String: Any] else { return [] }
+            return pages.values.compactMap { value in
+                guard let page = value as? [String: Any],
+                      let links = page["langlinks"] as? [[String: Any]],
+                      let zh = links.first?["*"] as? String,
+                      LanguageUtils.containsCJK(zh) else { return nil }
+                return zh
+            }
+        } catch {
+            return []
+        }
+    }
+
+    private func extractChineseNames(fromWikipediaSnippet snippet: String) -> [String] {
+        let decoded = snippet
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#039;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
+        guard let range = decoded.range(of: #"Chinese:\s*([^;,\)\(]+)"#, options: .regularExpression) else {
+            return []
+        }
+        let match = String(decoded[range])
+        guard let colon = match.firstIndex(of: ":") else { return [] }
+        let name = match[match.index(after: colon)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard LanguageUtils.containsCJK(name) else { return [] }
+        return [name]
     }
 }

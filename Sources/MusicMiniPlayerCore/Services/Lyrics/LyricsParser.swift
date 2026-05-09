@@ -405,7 +405,15 @@ public final class LyricsParser {
     public func createUnsyncedLyrics(_ plainText: String, duration: TimeInterval) -> [LyricLine] {
         let textLines = plainText.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+            .filter { text in
+                guard !text.isEmpty else { return false }
+                if isMetadataKeywordLine(text) { return false }
+                if isByCreditLine(text) { return false }
+                if isDecorativeMarker(text) { return false }
+                if isSectionTagLine(text) { return false }
+                if isPureSymbols(text) { return false }
+                return true
+            }
 
         guard !textLines.isEmpty else { return [] }
 
@@ -471,8 +479,7 @@ public final class LyricsParser {
         // 纯音乐检测
         if rawLyrics.count <= 2 {
             for line in rawLyrics {
-                let text = line.text.trimmingCharacters(in: .whitespaces)
-                if kInstrumentalPatterns.contains(where: { text.contains($0) }) {
+                if isInstrumentalNotice(line.text) {
                     return ([], 0)
                 }
             }
@@ -681,6 +688,7 @@ public final class LyricsParser {
         let sectionKeywords = [
             "chorus", "verse", "bridge", "intro", "outro", "hook", "refrain",
             "pre-chorus", "prechorus", "interlude", "breakdown", "drop", "post-chorus",
+            "solo", "piano solo", "guitar solo", "instrumental", "instrumental break",
             "副歌", "主歌", "桥段", "间奏", "前奏", "尾奏", "过门", "副歌 ", "副歌1", "副歌2"
         ]
         let innerLower = inner.lowercased()

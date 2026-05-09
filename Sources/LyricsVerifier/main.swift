@@ -156,6 +156,7 @@ private func writeGammaJSON(results: [VerifyResult], path: String, interSongDela
     let overBudget = results.filter { $0.elapsedMs > 3000 }.count
     let syncedCount = results.filter { $0.classification == "synced" }.count
     let unsyncedCount = results.filter { $0.classification == "unsynced" }.count
+    let instrumentalCount = results.filter { $0.classification == "instrumental" }.count
 
     let summary: [String: Any] = [
         "total": results.count,
@@ -165,7 +166,8 @@ private func writeGammaJSON(results: [VerifyResult], path: String, interSongDela
         "median_latency_ms": median,
         "p95_latency_ms": p95,
         "synced_count": syncedCount,
-        "unsynced_count": unsyncedCount
+        "unsynced_count": unsyncedCount,
+        "instrumental_count": instrumentalCount
     ]
 
     let root: [String: Any] = [
@@ -312,7 +314,8 @@ private func matchingFixture(for track: LibraryTrack, cases: [TestCase]) -> Test
     return cases.first { tc in
         fixtureKey(tc.title) == title &&
         fixtureKey(tc.artist) == artist &&
-        (tc.expectation.shouldFindLyrics == false || abs(tc.duration - track.duration) <= 3.0)
+        tc.expectation.shouldFindLyrics &&
+        abs(tc.duration - track.duration) <= 3.0
     }
 }
 

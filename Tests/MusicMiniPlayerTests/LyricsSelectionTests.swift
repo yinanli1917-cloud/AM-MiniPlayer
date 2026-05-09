@@ -17,6 +17,13 @@ final class LyricsSelectionTests: XCTestCase {
         }
     }
 
+    private func makeLines(_ seed: [String], startingAt firstStart: Double, gap: Double = 4.0) -> [LyricLine] {
+        seed.enumerated().map { index, text in
+            let start = firstStart + Double(index) * gap
+            return LyricLine(text: text, startTime: start, endTime: start + gap - 0.5)
+        }
+    }
+
     func testArtistAliasRequiresProviderConfirmation() {
         XCTAssertTrue(
             LyricsFetcher.isConfirmedArtistAlias(
@@ -495,6 +502,29 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.source, "Genius")
     }
 
+    func testLateFirstVocalTimelineIsRejected() {
+        let fetcher = LyricsFetcher.shared
+        let lateSynced = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "...",
+                "you know I never found you",
+                "walking through the city",
+                "waiting for the evening",
+                "nothing ever changes",
+                "call me in the morning"
+            ], startingAt: 183),
+            source: "NetEase",
+            score: 42,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.5
+        )
+
+        let selected = fetcher.selectBestResult(from: [lateSynced], songDuration: 248)
+
+        XCTAssertNil(selected)
+    }
+
     func testEnglishContractionVariantsCoverApostropheMissingTitles() {
         XCTAssertEqual(
             LyricsFetcher.englishContractionVariants("Its Just A Matter Of Time"),
@@ -507,6 +537,143 @@ final class LyricsSelectionTests: XCTestCase {
 
         XCTAssertTrue(probes.contains("li zhi qin"))
         XCTAssertTrue(probes.contains("lizhiqin"))
+    }
+
+    func testCJKArtistDoesNotMatchFanSuffix() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertTrue(
+            fetcher.isArtistMatch(
+                input: "王力宏",
+                result: "王力宏",
+                simplifiedInput: "王力宏"
+            )
+        )
+        XCTAssertFalse(
+            fetcher.isArtistMatch(
+                input: "王力宏",
+                result: "王力宏的小迷妹",
+                simplifiedInput: "王力宏"
+            )
+        )
+    }
+
+    func testCompactRomanizedTitleMatchesProviderParticleSpacing() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertTrue(
+            fetcher.isTitleMatch(
+                input: "Namidanokatachino Earring",
+                result: "Namidano katachino Earring",
+                simplifiedInput: "namidanokatachino earring"
+            )
+        )
+    }
+
+    func testCompactRomanizedTitleDropsBackingTrackAndAllowsConfirmedSearchArtist() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "Namidanokatachino Earring",
+            artist: "Akina Nakamori",
+            originalTitle: "Namidanokatachino Earring",
+            originalArtist: "Akina Nakamori",
+            duration: 276
+        )
+        let songs: [[String: Any]] = [
+            [
+                "id": 1,
+                "name": "Namida No Katachi No Earring (Instrumental) [2014 Remaster]",
+                "artist": "Akina Nakamori",
+                "duration": 267.9,
+                "album": "北ウイング (+5) [2014 Remaster]"
+            ],
+            [
+                "id": 2,
+                "name": "Namidano katachino Earring",
+                "artist": "中森明菜",
+                "duration": 265.0,
+                "album": "COMPLETE SINGLE COLLECTIONS ~FIRST TEN YEARS"
+            ]
+        ]
+
+        let candidates: [LyricsFetcher.SearchCandidate<Int>] = fetcher.buildCandidates(
+            songs: songs,
+            params: params,
+            searchDescriptor: "title+artist",
+            extractSong: { song in
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let artist = song["artist"] as? String,
+                      let duration = song["duration"] as? Double,
+                      let album = song["album"] as? String else { return nil }
+                return (id, name, artist, duration, album)
+            }
+        )
+
+        XCTAssertFalse(candidates.contains { $0.id == 1 })
+        let vocal = candidates.first { $0.id == 2 }
+        XCTAssertEqual(vocal?.titleMatch, true)
+        XCTAssertEqual(vocal?.artistMatch, true)
+    }
+
+    func testConfirmedCJKArtistAliasCanSelectNativeEnglishTitleTranslation() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "The Key",
+                artist: "Craig Ruhnke",
+                album: "Sweet Feelings",
+                durationDiff: 5.3,
+                titleMatch: true,
+                artistMatch: false,
+                albumMatch: false,
+                normalizedNameLength: 7,
+                resultIndex: 0,
+                searchDescriptor: "alias+title:林俊杰"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 2,
+                name: "关键词",
+                artist: "林俊杰",
+                album: "和自己对话",
+                durationDiff: 2.3,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 1,
+                searchDescriptor: "alias+title:林俊杰"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "The Key",
+            inputArtist: "JJ Lin",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 2)
+        XCTAssertEqual(selected?.nativeAliasMatched, true)
+    }
+
+    func testUnavailableCatalogIdentityAllowsLooseExactTitleDuration() {
+        let fetcher = LyricsFetcher.shared
+        let unavailable = LyricsFetcher.LyricsFetchResult(
+            lyrics: [],
+            source: "NetEase",
+            score: -80,
+            kind: .unavailable,
+            titleMatched: true,
+            matchedDurationDiff: 7.8
+        )
+
+        let selected = fetcher.selectUnavailableResult(from: [unavailable])
+
+        XCTAssertEqual(selected?.source, "NetEase")
     }
 
     func testCJKExactTitleArtistCanUseBoundedLooseDuration() {
@@ -522,7 +689,8 @@ final class LyricsSelectionTests: XCTestCase {
                 artistMatch: true,
                 albumMatch: false,
                 normalizedNameLength: 16,
-                resultIndex: 0
+                resultIndex: 0,
+                searchDescriptor: ""
             )
         ]
 
