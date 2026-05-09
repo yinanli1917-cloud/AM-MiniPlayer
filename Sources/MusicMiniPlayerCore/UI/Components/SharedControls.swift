@@ -188,7 +188,7 @@ struct SharedBottomControls: View {
             .frame(width: 30, height: 30)
             .accessibilityLabel("上一首")
 
-            HoverableControlButton(iconName: musicController.isPlaying ? "pause.fill" : "play.fill", size: 21) {
+            PlayPauseControlButton(isPlaying: musicController.isPlaying) {
                 musicController.togglePlayPause()
             }
             .frame(width: 30, height: 30)
@@ -360,6 +360,61 @@ struct HoverableControlButton: View {
                 isHovering = hovering
             }
         }
+    }
+}
+
+private struct PlayPauseControlButton: View {
+    let isPlaying: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(isHovering ? 0.25 : 0))
+
+                ZStack {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 21, weight: .regular))
+                        .foregroundStyle(.white)
+                        .offset(x: 1.0)
+                        .scaleEffect(isPlaying ? 0.82 : 1.0)
+                        .opacity(isPlaying ? 0.0 : 1.0)
+
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 21, weight: .regular))
+                        .foregroundStyle(.white)
+                        .scaleEffect(isPlaying ? 1.0 : 0.82)
+                        .opacity(isPlaying ? 1.0 : 0.0)
+                }
+                .frame(width: 32, height: 32)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: isPlaying)
+            }
+            .frame(width: 32, height: 32)
+            .contentShape(Circle())
+        }
+        .buttonStyle(PlayPausePressStyle(reduceMotion: reduceMotion))
+        .onHover { hovering in
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+    }
+}
+
+private struct PlayPausePressStyle: ButtonStyle {
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.86 : 1.0)
+            .animation(
+                reduceMotion ? nil : .interpolatingSpring(mass: 0.75, stiffness: 560, damping: 22, initialVelocity: 0),
+                value: configuration.isPressed
+            )
     }
 }
 
@@ -628,15 +683,15 @@ struct SkipControlButton: View {
 
     private func contactBridgeMetrics(peakOpacity: Double, phase rawPhase: CGFloat) -> InteriorCueMetrics {
         let phase = min(max(rawPhase, 0), 1)
-        let appear = smoothStep(phase, start: 0.64, end: 0.70)
-        let vanish = smoothStep(phase, start: 0.88, end: 1.0)
-        let followThrough = pulse(phase, start: 0.66, duration: 0.16)
-        let pullback = pulse(phase, start: 0.80, duration: 0.16)
-        let rebound = pulse(phase, start: 0.91, duration: 0.09)
+        let appear = smoothStep(phase, start: 0.42, end: 0.50)
+        let vanish = smoothStep(phase, start: 0.74, end: 0.90)
+        let arrivalOvershoot = heldPulse(phase, start: 0.42, holdStart: 0.52, holdEnd: 0.64, end: 0.76)
+        let pullback = smoothStep(phase, start: 0.64, end: 0.82)
+        let rebound = pulse(phase, start: 0.76, duration: 0.14)
         let active = appear * (1 - vanish)
 
         return InteriorCueMetrics(
-            x: 1.25 * followThrough - 1.45 * pullback + 0.28 * rebound,
+            x: 1.55 * arrivalOvershoot * (1 - pullback) + 0.18 * rebound,
             opacity: Double(CGFloat(peakOpacity) * active),
             scale: 1.0,
             stretch: 1.0,
@@ -669,9 +724,9 @@ struct SkipControlButton: View {
         let slotDistance = frontSlot - rearSlot
         let press = pulse(phase, start: 0.00, duration: 0.16)
         let advance = smoothStep(phase, start: 0.18, end: 0.58)
-        let arrivalOvershoot = pulse(phase, start: 0.44, duration: 0.22)
-        let pullback = pulse(phase, start: 0.60, duration: 0.20)
-        let settle = pulse(phase, start: 0.76, duration: 0.14)
+        let arrivalOvershoot = heldPulse(phase, start: 0.42, holdStart: 0.52, holdEnd: 0.64, end: 0.76)
+        let pullback = smoothStep(phase, start: 0.64, end: 0.82)
+        let settle = pulse(phase, start: 0.82, duration: 0.12)
 
         switch role {
         case .frontExit:
@@ -694,8 +749,8 @@ struct SkipControlButton: View {
             )
 
         case .backAdvance:
-            let overshoot = 3.65 * arrivalOvershoot
-            let recoil = -3.50 * pullback + 0.36 * settle
+            let overshoot = 5.25 * arrivalOvershoot * (1 - pullback)
+            let recoil = 0.22 * settle
             return TriangleMetrics(
                 x: rearSlot - 0.24 * press + slotDistance * advance + overshoot + recoil,
                 opacity: 1.0,
@@ -704,7 +759,7 @@ struct SkipControlButton: View {
                 blur: 0.0,
                 brightness: Double(0.12 * arrivalOvershoot),
                 coreOpacity: Double(0.12 + 0.18 * arrivalOvershoot * (1 - smoothStep(phase, start: 0.78, end: 0.92))),
-                coreX: -0.40 + 0.50 * arrivalOvershoot - 0.40 * pullback + 0.10 * settle,
+                coreX: -0.40 + 0.58 * arrivalOvershoot * (1 - pullback) + 0.08 * settle,
                 coreScaleX: 0.72,
                 coreScaleY: 0.64,
                 coreBlur: 0.05
@@ -715,8 +770,8 @@ struct SkipControlButton: View {
             let fade = smoothStep(phase, start: 0.14, end: 0.26)
             let grow = smoothStep(phase, start: 0.18, end: 0.52)
             let arrivalPop = pulse(phase, start: 0.42, duration: 0.18)
-            let overshoot = 3.65 * arrivalOvershoot
-            let recoil = -3.50 * pullback + 0.36 * settle
+            let overshoot = 5.25 * arrivalOvershoot * (1 - pullback)
+            let recoil = 0.22 * settle
             return TriangleMetrics(
                 x: rearSlot - 8.8 + 8.8 * enter + overshoot + recoil,
                 opacity: Double(fade),
@@ -725,7 +780,7 @@ struct SkipControlButton: View {
                 blur: 0.26 * (1 - enter),
                 brightness: Double(0.14 * fade + 0.08 * arrivalPop + 0.12 * arrivalOvershoot),
                 coreOpacity: Double(0.22 * fade * arrivalOvershoot * (1 - smoothStep(phase, start: 0.78, end: 0.92))),
-                coreX: 0.40 - 0.50 * arrivalOvershoot + 0.40 * pullback - 0.10 * settle,
+                coreX: 0.40 - 0.58 * arrivalOvershoot * (1 - pullback) - 0.08 * settle,
                 coreScaleX: 0.68,
                 coreScaleY: 0.62,
                 coreBlur: 0.05
@@ -743,6 +798,12 @@ struct SkipControlButton: View {
         guard duration > 0 else { return 0 }
         let t = min(max((value - start) / duration, 0), 1)
         return sin(CGFloat.pi * t)
+    }
+
+    private func heldPulse(_ value: CGFloat, start: CGFloat, holdStart: CGFloat, holdEnd: CGFloat, end: CGFloat) -> CGFloat {
+        let rise = smoothStep(value, start: start, end: holdStart)
+        let fall = 1 - smoothStep(value, start: holdEnd, end: end)
+        return min(rise, fall)
     }
 }
 
