@@ -668,10 +668,10 @@ struct SkipControlButton: View {
         let frontSlot: CGFloat = 4.9
         let slotDistance = frontSlot - rearSlot
         let press = pulse(phase, start: 0.00, duration: 0.16)
-        let advance = smoothStep(phase, start: 0.18, end: 0.54)
-        let postTransitionInertia = pulse(phase, start: 0.66, duration: 0.16)
-        let pullback = pulse(phase, start: 0.80, duration: 0.16)
-        let settle = pulse(phase, start: 0.91, duration: 0.09)
+        let advance = smoothStep(phase, start: 0.18, end: 0.58)
+        let arrivalOvershoot = pulse(phase, start: 0.46, duration: 0.20)
+        let pullback = pulse(phase, start: 0.60, duration: 0.18)
+        let settle = pulse(phase, start: 0.74, duration: 0.14)
 
         switch role {
         case .frontExit:
@@ -694,17 +694,17 @@ struct SkipControlButton: View {
             )
 
         case .backAdvance:
-            let overshoot = 1.42 * postTransitionInertia
-            let recoil = -1.36 * pullback + 0.18 * settle
+            let overshoot = 1.55 * arrivalOvershoot
+            let recoil = -1.48 * pullback + 0.18 * settle
             return TriangleMetrics(
                 x: rearSlot - 0.24 * press + slotDistance * advance + overshoot + recoil,
                 opacity: 1.0,
                 scaleX: 1.0,
                 scaleY: 1.0,
                 blur: 0.0,
-                brightness: Double(0.08 * postTransitionInertia),
-                coreOpacity: Double(0.12 + 0.20 * postTransitionInertia * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
-                coreX: -0.40 + 0.58 * postTransitionInertia - 0.46 * pullback + 0.10 * settle,
+                brightness: Double(0.08 * arrivalOvershoot),
+                coreOpacity: Double(0.12 + 0.18 * arrivalOvershoot * (1 - smoothStep(phase, start: 0.78, end: 0.92))),
+                coreX: -0.40 + 0.50 * arrivalOvershoot - 0.40 * pullback + 0.10 * settle,
                 coreScaleX: 0.72,
                 coreScaleY: 0.64,
                 coreBlur: 0.05
@@ -715,17 +715,17 @@ struct SkipControlButton: View {
             let fade = smoothStep(phase, start: 0.14, end: 0.26)
             let grow = smoothStep(phase, start: 0.18, end: 0.52)
             let arrivalPop = pulse(phase, start: 0.42, duration: 0.18)
-            let overshoot = 1.42 * postTransitionInertia
-            let recoil = -1.36 * pullback + 0.18 * settle
+            let overshoot = 1.55 * arrivalOvershoot
+            let recoil = -1.48 * pullback + 0.18 * settle
             return TriangleMetrics(
                 x: rearSlot - 8.8 + 8.8 * enter + overshoot + recoil,
                 opacity: Double(fade),
                 scaleX: max(0.08, 0.08 + 0.92 * grow + 0.18 * arrivalPop),
                 scaleY: max(0.10, 0.12 + 0.88 * grow + 0.12 * arrivalPop),
                 blur: 0.26 * (1 - enter),
-                brightness: Double(0.14 * fade + 0.08 * arrivalPop + 0.08 * postTransitionInertia),
-                coreOpacity: Double(0.24 * fade * postTransitionInertia * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
-                coreX: 0.40 - 0.58 * postTransitionInertia + 0.46 * pullback - 0.10 * settle,
+                brightness: Double(0.14 * fade + 0.08 * arrivalPop + 0.08 * arrivalOvershoot),
+                coreOpacity: Double(0.22 * fade * arrivalOvershoot * (1 - smoothStep(phase, start: 0.78, end: 0.92))),
+                coreX: 0.40 - 0.50 * arrivalOvershoot + 0.40 * pullback - 0.10 * settle,
                 coreScaleX: 0.68,
                 coreScaleY: 0.62,
                 coreBlur: 0.05
