@@ -628,18 +628,18 @@ struct SkipControlButton: View {
 
     private func contactBridgeMetrics(peakOpacity: Double, phase rawPhase: CGFloat) -> InteriorCueMetrics {
         let phase = min(max(rawPhase, 0), 1)
-        let appear = smoothStep(phase, start: 0.62, end: 0.70)
+        let appear = smoothStep(phase, start: 0.64, end: 0.70)
         let vanish = smoothStep(phase, start: 0.88, end: 1.0)
-        let contact = pulse(phase, start: 0.66, duration: 0.18)
+        let followThrough = pulse(phase, start: 0.66, duration: 0.14)
         let pullback = pulse(phase, start: 0.78, duration: 0.18)
         let rebound = pulse(phase, start: 0.91, duration: 0.09)
         let active = appear * (1 - vanish)
 
         return InteriorCueMetrics(
-            x: 1.85 * contact - 3.35 * pullback + 0.82 * rebound,
+            x: 2.20 * followThrough - 3.25 * pullback + 0.82 * rebound,
             opacity: Double(CGFloat(peakOpacity) * active),
-            scale: max(0.36, 0.72 + 0.34 * contact - 0.22 * pullback),
-            stretch: max(0.18, 0.22 + 1.70 * contact - 0.78 * pullback + 0.18 * rebound),
+            scale: max(0.36, 0.72 + 0.36 * followThrough - 0.22 * pullback),
+            stretch: max(0.18, 0.22 + 1.88 * followThrough - 0.78 * pullback + 0.18 * rebound),
             blur: 0.16 * (1 - active) + 0.06 * pullback
         )
     }
@@ -669,8 +669,7 @@ struct SkipControlButton: View {
         let slotDistance = frontSlot - rearSlot
         let press = pulse(phase, start: 0.00, duration: 0.16)
         let advance = smoothStep(phase, start: 0.18, end: 0.54)
-        let postTransitionInertia = pulse(phase, start: 0.62, duration: 0.16)
-        let contact = pulse(phase, start: 0.66, duration: 0.18)
+        let postTransitionInertia = pulse(phase, start: 0.66, duration: 0.14)
         let pullback = pulse(phase, start: 0.78, duration: 0.18)
         let settle = pulse(phase, start: 0.91, duration: 0.09)
 
@@ -695,19 +694,19 @@ struct SkipControlButton: View {
             )
 
         case .backAdvance:
-            let overshoot = 3.05 * postTransitionInertia + 1.20 * contact
-            let recoil = -3.10 * pullback + 0.72 * settle
+            let overshoot = 4.15 * postTransitionInertia
+            let recoil = -3.95 * pullback + 0.74 * settle
             return TriangleMetrics(
                 x: rearSlot - 0.24 * press + slotDistance * advance + overshoot + recoil,
                 opacity: 1.0,
-                scaleX: 1.0 + 0.10 * advance + 0.08 * postTransitionInertia + 0.06 * contact - 0.12 * pullback,
-                scaleY: 1.0 - 0.04 * advance + 0.08 * contact + 0.04 * pullback,
+                scaleX: 1.0 + 0.10 * advance + 0.14 * postTransitionInertia - 0.14 * pullback,
+                scaleY: 1.0 - 0.04 * advance + 0.10 * postTransitionInertia + 0.05 * pullback,
                 blur: 0.0,
-                brightness: Double(0.08 * postTransitionInertia + 0.22 * contact),
-                coreOpacity: Double(0.14 + 0.56 * contact * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
-                coreX: -0.90 + 2.35 * contact - 2.10 * pullback + 0.44 * settle,
-                coreScaleX: max(0.28, 0.58 + 1.34 * contact - 0.64 * pullback),
-                coreScaleY: max(0.24, 0.62 + 0.32 * contact - 0.18 * pullback),
+                brightness: Double(0.26 * postTransitionInertia),
+                coreOpacity: Double(0.14 + 0.62 * postTransitionInertia * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
+                coreX: -0.90 + 2.65 * postTransitionInertia - 2.10 * pullback + 0.44 * settle,
+                coreScaleX: max(0.28, 0.58 + 1.46 * postTransitionInertia - 0.64 * pullback),
+                coreScaleY: max(0.24, 0.62 + 0.36 * postTransitionInertia - 0.18 * pullback),
                 coreBlur: 0.04 + 0.06 * pullback
             )
 
@@ -716,19 +715,19 @@ struct SkipControlButton: View {
             let fade = smoothStep(phase, start: 0.14, end: 0.26)
             let grow = smoothStep(phase, start: 0.18, end: 0.52)
             let arrivalPop = pulse(phase, start: 0.42, duration: 0.18)
-            let overshoot = 2.76 * postTransitionInertia + 1.08 * contact
-            let recoil = -2.78 * pullback + 0.62 * settle
+            let overshoot = 4.15 * postTransitionInertia
+            let recoil = -3.95 * pullback + 0.74 * settle
             return TriangleMetrics(
                 x: rearSlot - 8.8 + 8.8 * enter + overshoot + recoil,
                 opacity: Double(fade),
-                scaleX: max(0.08, 0.08 + 0.92 * grow + 0.18 * arrivalPop + 0.09 * postTransitionInertia + 0.07 * contact - 0.12 * pullback + 0.03 * settle),
-                scaleY: max(0.10, 0.12 + 0.88 * grow + 0.12 * arrivalPop + 0.07 * postTransitionInertia + 0.08 * contact - 0.08 * pullback + 0.02 * settle),
+                scaleX: max(0.08, 0.08 + 0.92 * grow + 0.18 * arrivalPop + 0.14 * postTransitionInertia - 0.14 * pullback + 0.03 * settle),
+                scaleY: max(0.10, 0.12 + 0.88 * grow + 0.12 * arrivalPop + 0.10 * postTransitionInertia - 0.09 * pullback + 0.02 * settle),
                 blur: 0.26 * (1 - enter),
-                brightness: Double(0.14 * fade + 0.08 * arrivalPop + 0.24 * contact),
-                coreOpacity: Double(0.62 * fade * contact * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
-                coreX: 1.02 - 2.20 * contact + 1.86 * pullback - 0.32 * settle,
-                coreScaleX: max(0.24, 0.50 + 1.36 * contact - 0.58 * pullback),
-                coreScaleY: max(0.24, 0.56 + 0.34 * contact - 0.16 * pullback),
+                brightness: Double(0.14 * fade + 0.08 * arrivalPop + 0.26 * postTransitionInertia),
+                coreOpacity: Double(0.68 * fade * postTransitionInertia * (1 - smoothStep(phase, start: 0.88, end: 1.0))),
+                coreX: 1.02 - 2.52 * postTransitionInertia + 1.86 * pullback - 0.32 * settle,
+                coreScaleX: max(0.24, 0.50 + 1.48 * postTransitionInertia - 0.58 * pullback),
+                coreScaleY: max(0.24, 0.56 + 0.38 * postTransitionInertia - 0.16 * pullback),
                 coreBlur: 0.04 + 0.06 * pullback
             )
         }
