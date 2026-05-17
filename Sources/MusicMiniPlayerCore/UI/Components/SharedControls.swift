@@ -523,9 +523,9 @@ struct SkipControlButton: View {
 
     private func clusterScale(phase: CGFloat) -> CGFloat {
         let pressSink = asymmetricGlide(phase, start: 0.00, peak: 0.075, end: 0.22)
-        let under = arrivalUndertravel(phase)
-        let over = arrivalOvershoot(phase)
-        return 1.0 - 0.082 * pressSink - 0.026 * under + 0.040 * over
+        let compression = arrivalCompression(phase)
+        let bloom = arrivalScaleBloom(phase)
+        return 1.0 - 0.082 * pressSink - 0.020 * compression + 0.018 * bloom
     }
 
     private func clusterOffset(phase: CGFloat) -> CGFloat {
@@ -592,8 +592,8 @@ struct SkipControlButton: View {
         let slotDistance = frontSlot - rearSlot
         let pressSink = asymmetricGlide(phase, start: 0.00, peak: 0.075, end: 0.22)
         let touchScale = 1.0 - 0.038 * pressSink
-        let under = arrivalUndertravel(phase)
-        let over = arrivalOvershoot(phase)
+        let compression = arrivalCompression(phase)
+        let scaleBloom = arrivalScaleBloom(phase)
         let pairDrift = pairedOvershoot(phase)
         let pairCompression = pairSpacingCompression(phase)
         let pairReleaseOvershoot = pairSpacingRelease(phase)
@@ -619,16 +619,16 @@ struct SkipControlButton: View {
             let anticipate = asymmetricGlide(phase, start: 0.04, peak: 0.12, end: 0.22)
             let advance = easeInOutSmoother(phase, start: 0.11, end: 0.58)
             let carryStretch = asymmetricGlide(phase, start: 0.18, peak: 0.36, end: 0.58)
-            let compressedX = 1.0 - 0.090 * under
-            let compressedY = 1.0 - 0.078 * under
+            let compressedX = 1.0 - 0.086 * compression
+            let compressedY = 1.0 - 0.076 * compression
             return TriangleMetrics(
                 x: rearSlot - 0.18 * anticipate + slotDistance * advance + pairDrift - pairCompression + pairReleaseOvershoot,
                 y: -0.008 * pressSink,
                 opacity: 1.0,
-                scaleX: touchScale * (compressedX - 0.018 * anticipate + 0.020 * carryStretch + 0.180 * over),
-                scaleY: touchScale * (compressedY - 0.026 * anticipate - 0.006 * carryStretch + 0.110 * over),
+                scaleX: touchScale * (compressedX - 0.018 * anticipate + 0.020 * carryStretch + 0.034 * scaleBloom),
+                scaleY: touchScale * (compressedY - 0.026 * anticipate - 0.006 * carryStretch + 0.026 * scaleBloom),
                 blur: 0.0,
-                brightness: Double(0.002 * over)
+                brightness: Double(0.002 * scaleBloom)
             )
 
         case .incoming:
@@ -640,46 +640,42 @@ struct SkipControlButton: View {
                 x: rearSlot - 20.80 + 20.80 * enter + pairDrift + pairCompression - pairReleaseOvershoot,
                 y: -0.006 * pressSink,
                 opacity: Double(fade),
-                scaleX: max(0.28, touchScale * (0.30 + 0.70 * grow + 0.042 * travelStretch - 0.098 * under + 0.220 * over)),
-                scaleY: max(0.30, touchScale * (0.32 + 0.68 * grow - 0.016 * travelStretch - 0.084 * under + 0.140 * over)),
+                scaleX: max(0.28, touchScale * (0.30 + 0.70 * grow + 0.042 * travelStretch - 0.094 * compression + 0.042 * scaleBloom)),
+                scaleY: max(0.30, touchScale * (0.32 + 0.68 * grow - 0.016 * travelStretch - 0.080 * compression + 0.032 * scaleBloom)),
                 blur: 0.08 * (1 - enter),
-                brightness: Double(0.003 * fade + 0.002 * over)
+                brightness: Double(0.003 * fade + 0.002 * scaleBloom)
             )
         }
     }
 
     private func pairedOvershoot(_ phase: CGFloat) -> CGFloat {
-        5.0 * arrivalOvershoot(phase)
+        0.52 * arrivalPositionCarry(phase)
     }
 
     private func pairSpacingCompression(_ phase: CGFloat) -> CGFloat {
-        1.65 * arrivalUndertravel(phase)
+        1.45 * arrivalCompression(phase)
     }
 
     private func pairSpacingRelease(_ phase: CGFloat) -> CGFloat {
-        2.0 * arrivalOvershoot(phase)
+        0.30 * arrivalSpacingBloom(phase)
     }
 
-    private func arrivalUndertravel(_ phase: CGFloat) -> CGFloat {
-        max(0, 1 - arrivalSpringResponse(phase)) * pairPresence(phase)
+    private func arrivalCompression(_ phase: CGFloat) -> CGFloat {
+        let form = smootherStep(phase, start: 0.30, end: 0.48)
+        let release = smootherStep(phase, start: 0.48, end: 0.62)
+        return form * (1 - release)
     }
 
-    private func arrivalOvershoot(_ phase: CGFloat) -> CGFloat {
-        max(0, arrivalSpringResponse(phase) - 1)
+    private func arrivalPositionCarry(_ phase: CGFloat) -> CGFloat {
+        asymmetricGlide(phase, start: 0.54, peak: 0.66, end: 0.94)
     }
 
-    private func arrivalSpringResponse(_ phase: CGFloat) -> CGFloat {
-        let t = unitProgress(phase, start: 0.40, end: 1.00)
-        guard t > 0 else { return 0 }
-        guard t < 1 else { return 1 }
-
-        let decay: CGFloat = 4.2
-        let frequency: CGFloat = 6.2
-        return 1 - exp(-decay * t) * (cos(frequency * t) + decay / frequency * sin(frequency * t))
+    private func arrivalScaleBloom(_ phase: CGFloat) -> CGFloat {
+        asymmetricGlide(phase, start: 0.56, peak: 0.74, end: 1.00)
     }
 
-    private func pairPresence(_ phase: CGFloat) -> CGFloat {
-        smootherStep(phase, start: 0.30, end: 0.52)
+    private func arrivalSpacingBloom(_ phase: CGFloat) -> CGFloat {
+        asymmetricGlide(phase, start: 0.58, peak: 0.80, end: 1.00)
     }
 
     private func pairFormation(_ phase: CGFloat) -> CGFloat {
