@@ -31,6 +31,7 @@ public struct MiniPlayerView: View {
     @State private var artworkBrightness: CGFloat = 0.5
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
+    @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
 
     // 🔑 Shuffle/Repeat 流动动画进度
     @State private var repeatFlow: Double = 0
@@ -194,6 +195,7 @@ public struct MiniPlayerView: View {
                 artworkBrightness = artwork.perceivedBrightness()
                 topLeftLuminance = artwork.topLeftBrightness()
                 topRightLuminance = artwork.topRightBrightness()
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
                 musicController.artworkLuminance = artworkBrightness
                 musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
@@ -203,6 +205,7 @@ public struct MiniPlayerView: View {
                 artworkBrightness = artwork.perceivedBrightness()
                 topLeftLuminance = artwork.topLeftBrightness()
                 topRightLuminance = artwork.topRightBrightness()
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
                 musicController.artworkLuminance = artworkBrightness
                 musicController.controlAreaLuminance = artwork.controlAreaMaxLuminance()
             }
@@ -413,8 +416,6 @@ extension MiniPlayerView {
             // 控件区域高度（与albumOverlayContent一致）
             let controlsHeight: CGFloat = 80
             let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
-            // 🔑 底部延伸区域高度（全屏模式用）
-            let remainingHeight = geo.size.height - geo.size.width
 
             // 根据当前页面计算尺寸和位置
             let (artSize, cornerRadius, shadowRadius, xPosition, yPosition): (CGFloat, CGFloat, CGFloat, CGFloat, CGFloat) = {
@@ -494,8 +495,10 @@ extension MiniPlayerView {
                         .frame(width: geo.size.width, height: geo.size.height)
                         .clipped()
                         .blur(radius: 50, opaque: true)
-                        .saturation(1.2)
-                        .brightness(-0.1)
+                        .saturation(artworkTone.textureSaturation)
+                        .contrast(artworkTone.textureContrast)
+                        .brightness(artworkTone.textureBrightness)
+                        .overlay(Color.black.opacity(artworkTone.textureDimmingOpacity))
                         .opacity(isAlbumPage ? 1 : 0)  // 🔑 opacity 动画过渡
                         .accessibilityHidden(true)
 
@@ -689,4 +692,3 @@ struct MiniPlayerView_Previews: PreviewProvider {
     }
 }
 #endif
-

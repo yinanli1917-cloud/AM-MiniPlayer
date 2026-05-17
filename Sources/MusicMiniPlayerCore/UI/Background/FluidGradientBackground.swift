@@ -9,6 +9,7 @@ import AppKit
 /// 🔑 优化：静态多层 + 更大偏移/旋转差异 = 流体扭曲感（无动画，CPU 友好）
 public struct FluidGradientBackground: View {
     let artwork: NSImage?
+    @State private var tone = ArtworkBackgroundToneMap.neutral
 
     public init(artwork: NSImage?) {
         self.artwork = artwork
@@ -20,37 +21,41 @@ public struct FluidGradientBackground: View {
             let diagonal = sqrt(size.width * size.width + size.height * size.height)
 
             ZStack {
+                Color.black
+
                 if let artwork = artwork {
-                    fluidLayer(artwork: artwork, containerSize: size,
-                               size: diagonal * 1.5,
-                               offsetX: size.width * 0.05, offsetY: -size.height * 0.03,
-                               rotation: 0.12)
+                    ZStack {
+                        fluidLayer(artwork: artwork, containerSize: size,
+                                   size: diagonal * 1.5,
+                                   offsetX: size.width * 0.05, offsetY: -size.height * 0.03,
+                                   rotation: 0.12)
 
-                    fluidLayer(artwork: artwork, containerSize: size,
-                               size: diagonal * 0.95,
-                               offsetX: -size.width * 0.22, offsetY: -size.height * 0.15,
-                               rotation: 0.45)
+                        fluidLayer(artwork: artwork, containerSize: size,
+                                   size: diagonal * 0.95,
+                                   offsetX: -size.width * 0.22, offsetY: -size.height * 0.15,
+                                   rotation: 0.45)
 
-                    fluidLayer(artwork: artwork, containerSize: size,
-                               size: diagonal * 0.8,
-                               offsetX: size.width * 0.25, offsetY: size.height * 0.2,
-                               rotation: -0.35)
+                        fluidLayer(artwork: artwork, containerSize: size,
+                                   size: diagonal * 0.8,
+                                   offsetX: size.width * 0.25, offsetY: size.height * 0.2,
+                                   rotation: -0.35)
+                    }
+                    .blur(radius: 58)
+                    .saturation(tone.textureSaturation)
+                    .contrast(tone.textureContrast)
+                    .brightness(tone.textureBrightness)
 
-                    fluidLayer(artwork: artwork, containerSize: size,
-                               size: diagonal * 0.65,
-                               offsetX: -size.width * 0.18, offsetY: size.height * 0.22,
-                               rotation: 0.7)
+                    Color.white
+                        .opacity(tone.liftOpacity)
+                        .blendMode(.screen)
 
-                    fluidLayer(artwork: artwork, containerSize: size,
-                               size: diagonal * 0.5,
-                               offsetX: size.width * 0.2, offsetY: -size.height * 0.18,
-                               rotation: -0.55)
+                    Color.black
+                        .opacity(tone.shadeOpacity)
                 }
             }
-            .blur(radius: 55)
-            .saturation(1.2)
-            .brightness(-0.15)
         }
+        .onAppear { updateTone() }
+        .onChange(of: artwork) { updateTone() }
     }
 
     @ViewBuilder
@@ -69,6 +74,83 @@ public struct FluidGradientBackground: View {
             .clipped()
             .rotationEffect(.radians(rotation))
             .position(x: containerSize.width / 2 + offsetX, y: containerSize.height / 2 + offsetY)
+    }
+
+    private func updateTone() {
+        guard let artwork else {
+            tone = .neutral
+            return
+        }
+        tone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+    }
+}
+
+struct ArtworkVisualMetrics: Equatable {
+    let averageLuminance: Double
+    let shadowLuminance: Double
+    let highlightLuminance: Double
+    let luminanceSpread: Double
+    let averageSaturation: Double
+
+    static let neutral = ArtworkVisualMetrics(
+        averageLuminance: 0.5,
+        shadowLuminance: 0.25,
+        highlightLuminance: 0.75,
+        luminanceSpread: 0.5,
+        averageSaturation: 0.35
+    )
+}
+
+struct ArtworkBackgroundToneMap {
+    static let neutral = ArtworkBackgroundToneMap(
+        shadeOpacity: 0.18,
+        liftOpacity: 0.0,
+        textureBrightness: -0.16,
+        textureSaturation: 1.14,
+        textureContrast: 1.08,
+        textureDimmingOpacity: 0.06
+    )
+
+    let shadeOpacity: Double
+    let liftOpacity: Double
+    let textureBrightness: Double
+    let textureSaturation: Double
+    let textureContrast: Double
+    let textureDimmingOpacity: Double
+
+    static func forLuminance(_ luminance: CGFloat) -> ArtworkBackgroundToneMap {
+        forMetrics(ArtworkVisualMetrics(
+            averageLuminance: Double(luminance),
+            shadowLuminance: max(0, Double(luminance) - 0.25),
+            highlightLuminance: min(1, Double(luminance) + 0.25),
+            luminanceSpread: 0.5,
+            averageSaturation: 0.35
+        ))
+    }
+
+    static func forMetrics(_ metrics: ArtworkVisualMetrics) -> ArtworkBackgroundToneMap {
+        let average = clamp(metrics.averageLuminance)
+        let highlight = clamp(metrics.highlightLuminance)
+        let spread = clamp(metrics.luminanceSpread)
+        let saturation = clamp(metrics.averageSaturation)
+        let highlightPressure = max(0.0, (highlight - 0.62) / 0.38)
+        let whiteoutPressure = max(0.0, (average - 0.56) / 0.44)
+        let flatness = max(0.0, (0.22 - spread) / 0.22)
+        let lowChroma = max(0.0, (0.18 - saturation) / 0.18)
+        let darkPressure = max(0.0, (0.18 - metrics.shadowLuminance) / 0.18)
+
+        return ArtworkBackgroundToneMap(
+            shadeOpacity: min(0.36, 0.14 + highlightPressure * 0.12 + whiteoutPressure * 0.08 + flatness * 0.04),
+            liftOpacity: min(0.04, darkPressure * 0.04),
+            textureBrightness: -0.14 - highlightPressure * 0.12 - whiteoutPressure * 0.10 + darkPressure * 0.04,
+            textureSaturation: min(1.42, 1.10 + saturation * 0.38 + lowChroma * 0.12),
+            textureContrast: min(1.32, 1.06 + flatness * 0.16 + highlightPressure * 0.10),
+            textureDimmingOpacity: min(0.14, highlightPressure * 0.08 + whiteoutPressure * 0.06)
+        )
+    }
+
+    private static func clamp(_ value: Double) -> Double {
+        min(max(value, 0), 1)
     }
 }
 

@@ -4,6 +4,64 @@ extension NSImage {
     // 🔑 共享 CIContext，避免重复创建（性能优化）
     private static let sharedCIContext = CIContext(options: [.useSoftwareRenderer: false])
 
+    func artworkVisualMetrics(sampleSize: Int = 24) -> ArtworkVisualMetrics {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return .neutral
+        }
+
+        let width = max(sampleSize, 4)
+        let height = max(sampleSize, 4)
+        var pixelData = [UInt8](repeating: 0, count: width * height * 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return .neutral
+        }
+
+        ctx.interpolationQuality = .low
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var luminances: [Double] = []
+        luminances.reserveCapacity(width * height)
+        var luminanceSum = 0.0
+        var saturationSum = 0.0
+
+        for offset in stride(from: 0, to: pixelData.count, by: 4) {
+            let r = Double(pixelData[offset]) / 255.0
+            let g = Double(pixelData[offset + 1]) / 255.0
+            let b = Double(pixelData[offset + 2]) / 255.0
+            let maxComponent = max(r, max(g, b))
+            let minComponent = min(r, min(g, b))
+            let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            let saturation = maxComponent == 0 ? 0 : (maxComponent - minComponent) / maxComponent
+
+            luminances.append(luminance)
+            luminanceSum += luminance
+            saturationSum += saturation
+        }
+
+        guard !luminances.isEmpty else { return .neutral }
+        luminances.sort()
+        let count = Double(luminances.count)
+        let p10 = luminances[max(0, Int(count * 0.10) - 1)]
+        let p90 = luminances[min(luminances.count - 1, Int(count * 0.90))]
+
+        return ArtworkVisualMetrics(
+            averageLuminance: luminanceSum / count,
+            shadowLuminance: p10,
+            highlightLuminance: p90,
+            luminanceSpread: max(0, p90 - p10),
+            averageSaturation: saturationSum / count
+        )
+    }
+
     func dominantColor() -> NSColor? {
         // 🔑 减小采样尺寸：50x50 -> 30x30（减少 64% 像素计算）
         let size = CGSize(width: 30, height: 30)
@@ -234,7 +292,7 @@ extension NSImage {
 
         let originalWidth = CGFloat(cgImage.width)
         let originalHeight = CGFloat(cgImage.height)
-        var inputImage = CIImage(cgImage: cgImage)
+        let inputImage = CIImage(cgImage: cgImage)
 
         // 🔑 Step 1: 用 CIImage 模拟 scaledToFill + clipped
         // 计算缩放比例（填满正方形）

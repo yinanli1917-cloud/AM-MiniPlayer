@@ -137,6 +137,106 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertNil(c.artworkMetadataCacheKey(title: "戀愛預告", artist: "", album: "My Lovely Legend"))
     }
 
+    func testRadioArtworkCurrentGuardRequiresTitleAndArtist() {
+        let c = MusicController(preview: true)
+        c.currentPersistentID = nil
+        c.currentTrackTitle = "Shared Station Title"
+        c.currentArtist = "Actual Artist"
+
+        XCTAssertTrue(c.isStillCurrentTrack(persistentID: "", title: "Shared Station Title", artist: "Actual Artist"))
+        XCTAssertFalse(
+            c.isStillCurrentTrack(persistentID: "", title: "Shared Station Title", artist: "Previous Artist"),
+            "Radio artwork callbacks without persistentID must not apply on title-only matches"
+        )
+    }
+
+    func testPlaybackSessionArtworkExtractorFindsApplePlaybackArtworkURL() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlaybackSessionArtworkFetcherTests-\(UUID().uuidString)")
+        let archive = root.appendingPathComponent("IT-1.playbackSessionArchive")
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let payload = """
+        name:夜機 artist:Priscilla Chan album:陳慧嫻金曲精選
+        https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/34/cf/5a/34cf5a94-fee1-760e-1cbb-9fde06a7a8d5/24UMGIM15495.rgb.jpg/800x800bb.jpg
+        """
+        let gz = archive.appendingPathComponent("contentItem.protobuf.gz")
+        try makeGzip(payload, at: gz)
+
+        let url = PlaybackSessionArtworkFetcher.latestArtworkURL(
+            title: "夜機",
+            artist: "Priscilla Chan",
+            album: "陳慧嫻金曲精選",
+            root: root
+        )
+
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/34/cf/5a/34cf5a94-fee1-760e-1cbb-9fde06a7a8d5/24UMGIM15495.rgb.jpg/800x800bb.jpg"
+        )
+    }
+
+    func testPlaybackSessionArtworkExtractorNormalizesEscapedTemplateURL() {
+        let payload = #"https:\/\/is1-ssl.mzstatic.com\/image\/thumb\/Music112\/v4\/34\/cf\/5a\/cover.rgb.jpg\/{w}x{h}{c}.{f}"#
+        let url = PlaybackSessionArtworkFetcher.firstAppleArtworkURL(in: payload)
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/34/cf/5a/cover.rgb.jpg/800x800bb.jpg"
+        )
+    }
+
+    func testArtworkBackgroundToneMapDarkensBrightArtwork() {
+        let dark = ArtworkBackgroundToneMap.forLuminance(0.1)
+        let mid = ArtworkBackgroundToneMap.forLuminance(0.45)
+        let bright = ArtworkBackgroundToneMap.forLuminance(0.9)
+
+        XCTAssertGreaterThan(bright.shadeOpacity, mid.shadeOpacity)
+        XCTAssertGreaterThanOrEqual(bright.shadeOpacity, 0.25)
+        XCTAssertLessThanOrEqual(bright.shadeOpacity, 0.36)
+        XCTAssertGreaterThan(bright.textureDimmingOpacity, mid.textureDimmingOpacity)
+        XCTAssertLessThanOrEqual(bright.textureDimmingOpacity, 0.14)
+        XCTAssertGreaterThan(dark.liftOpacity, mid.liftOpacity)
+        XCTAssertLessThanOrEqual(dark.liftOpacity, 0.04)
+    }
+
+    func testArtworkBackgroundToneMapUsesHighlightPressureNotJustAverage() {
+        let flatMid = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.45,
+            shadowLuminance: 0.36,
+            highlightLuminance: 0.54,
+            luminanceSpread: 0.18,
+            averageSaturation: 0.10
+        ))
+        let whiteCover = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.62,
+            shadowLuminance: 0.42,
+            highlightLuminance: 0.98,
+            luminanceSpread: 0.56,
+            averageSaturation: 0.08
+        ))
+
+        XCTAssertGreaterThan(whiteCover.shadeOpacity, flatMid.shadeOpacity)
+        XCTAssertGreaterThan(whiteCover.textureSaturation, flatMid.textureSaturation)
+        XCTAssertLessThan(whiteCover.textureBrightness, flatMid.textureBrightness)
+    }
+
+    private func makeGzip(_ text: String, at url: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = ["-c"]
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        input.fileHandleForWriting.write(Data(text.utf8))
+        input.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        try output.fileHandleForReading.readDataToEndOfFile().write(to: url)
+    }
+
     // ------------------------------------------------------------------
     // MARK: - artwork candidate matching
     // ------------------------------------------------------------------

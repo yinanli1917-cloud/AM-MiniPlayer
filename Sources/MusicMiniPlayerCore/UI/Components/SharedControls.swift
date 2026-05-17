@@ -77,6 +77,8 @@ struct SharedBottomControls: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let ink = controlInk
+        let subduedInk = controlInk.opacity(lightControlSurface ? 0.62 : 0.68)
         VStack(spacing: 0) {
             if let translationButton = translationButton {
                 HStack {
@@ -97,8 +99,8 @@ struct SharedBottomControls: View {
                     HStack {
                         Text(formatTime(timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.6))
-                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
+                            .foregroundStyle(subduedInk)
+                            .shadow(color: controlShadowColor, radius: controlShadowRadius)
                             .accessibilityHidden(true)
 
                         Spacer()
@@ -112,8 +114,8 @@ struct SharedBottomControls: View {
 
                         Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.6))
-                            .shadow(color: .black.opacity(0.2 + 0.4 * musicController.controlAreaLuminance), radius: 2 + 6 * musicController.controlAreaLuminance)
+                            .foregroundStyle(subduedInk)
+                            .shadow(color: controlShadowColor, radius: controlShadowRadius)
                             .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
@@ -138,6 +140,8 @@ struct SharedBottomControls: View {
                     .frame(width: 26, height: 26)
                     .accessibilityLabel(currentPage == .playlist ? "播放列表（已选中）" : "播放列表")
                 }
+                .foregroundStyle(ink)
+                .shadow(color: controlShadowColor, radius: controlShadowRadius, y: lightControlSurface ? 0 : 1)
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
@@ -160,7 +164,9 @@ struct SharedBottomControls: View {
     private var leftNavigationButton: some View {
         NavigationIconButton(
             iconName: currentPage == .lyrics ? "quote.bubble.fill" : "quote.bubble",
-            isActive: currentPage == .lyrics
+            isActive: currentPage == .lyrics,
+            inkColor: controlInk,
+            hoverFill: controlInk.opacity(lightControlSurface ? 0.12 : 0.22)
         ) {
             let animation: Animation? = reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 1.0)
             withAnimation(animation) {
@@ -184,11 +190,15 @@ struct SharedBottomControls: View {
         let buttons = HStack(spacing: 10) {
             SkipControlButton(action: {
                 musicController.previousTrack()
-            }, direction: -1)
+            }, direction: -1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18))
             .frame(width: 30, height: 30)
             .accessibilityLabel("上一首")
 
-            PlayPauseControlButton(isPlaying: musicController.isPlaying) {
+            PlayPauseControlButton(
+                isPlaying: musicController.isPlaying,
+                inkColor: controlInk,
+                hoverFill: controlInk.opacity(lightControlSurface ? 0.12 : 0.22)
+            ) {
                 musicController.togglePlayPause()
             }
             .frame(width: 30, height: 30)
@@ -196,7 +206,7 @@ struct SharedBottomControls: View {
 
             SkipControlButton(action: {
                 musicController.nextTrack()
-            }, direction: 1)
+            }, direction: 1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18))
             .frame(width: 30, height: 30)
             .accessibilityLabel("下一首")
         }
@@ -213,7 +223,9 @@ struct SharedBottomControls: View {
     private var playlistNavigationButton: some View {
         NavigationIconButton(
             iconName: currentPage == .playlist ? "play.square.stack.fill" : "play.square.stack",
-            isActive: currentPage == .playlist
+            isActive: currentPage == .playlist,
+            inkColor: controlInk,
+            hoverFill: controlInk.opacity(lightControlSurface ? 0.12 : 0.22)
         ) {
             let animation: Animation? = reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 1.0)
             withAnimation(animation) {
@@ -250,7 +262,7 @@ struct SharedBottomControls: View {
 
                 // Active Progress
                 Capsule()
-                    .fill(Color.white)
+                    .fill(controlInk.opacity(lightControlSurface ? 0.78 : 1.0))
                     .frame(height: barHeight)
                     .mask(
                         HStack(spacing: 0) {
@@ -310,9 +322,25 @@ struct SharedBottomControls: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .modifier(GlassCapsule(fallbackOpacity: 0.15))
-        .foregroundStyle(Color.white.opacity(0.9))
+        .foregroundStyle(controlInk.opacity(0.9))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("音频质量：\(quality)")
+    }
+
+    private var lightControlSurface: Bool {
+        musicController.controlAreaLuminance > 0.64
+    }
+
+    private var controlInk: Color {
+        lightControlSurface ? Color.black : Color.white
+    }
+
+    private var controlShadowColor: Color {
+        lightControlSurface ? Color.white.opacity(0.28) : Color.black.opacity(0.35 + 0.28 * musicController.controlAreaLuminance)
+    }
+
+    private var controlShadowRadius: CGFloat {
+        lightControlSurface ? 2.5 : 2 + 5 * musicController.controlAreaLuminance
     }
 
     private func formatTime(_ time: Double) -> String {
@@ -365,6 +393,8 @@ struct HoverableControlButton: View {
 
 private struct PlayPauseControlButton: View {
     let isPlaying: Bool
+    let inkColor: Color
+    let hoverFill: Color
     let action: () -> Void
 
     @State private var isHovering = false
@@ -374,19 +404,19 @@ private struct PlayPauseControlButton: View {
         Button(action: action) {
             ZStack {
                 Circle()
-                    .fill(Color.white.opacity(isHovering ? 0.25 : 0))
+                    .fill(isHovering ? hoverFill : Color.clear)
 
                 ZStack {
                     Image(systemName: "play.fill")
                         .font(.system(size: 21, weight: .regular))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(inkColor)
                         .offset(x: 1.0)
                         .scaleEffect(isPlaying ? 0.82 : 1.0)
                         .opacity(isPlaying ? 0.0 : 1.0)
 
                     Image(systemName: "pause.fill")
                         .font(.system(size: 21, weight: .regular))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(inkColor)
                         .scaleEffect(isPlaying ? 1.0 : 0.82)
                         .opacity(isPlaying ? 1.0 : 0.0)
                 }
@@ -423,44 +453,23 @@ private struct PlayPausePressStyle: ButtonStyle {
 struct SkipControlButton: View {
     let action: () -> Void
     let direction: CGFloat
+    let inkColor: Color
+    let hoverFill: Color
 
     @State private var isHovering = false
-    @State private var replacementPhase: CGFloat = 0
+    @State private var replacementStart: Date?
     @State private var animationSerial = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let replacementDuration: TimeInterval = 0.60
 
     var body: some View {
         Button {
             playReplacementAnimation(perform: action)
         } label: {
-            ZStack {
-                Circle()
-                    .fill(Color.white.opacity(isHovering ? 0.25 : 0))
-
-                Circle()
-                    .fill(Color.white.opacity(internalPulseOpacity))
-                    .scaleEffect(internalPulseScale)
-                    .blur(radius: 0.6)
-
-                Circle()
-                    .strokeBorder(Color.white.opacity(internalRingOpacity), lineWidth: 1.0)
-                    .scaleEffect(internalRingScale)
-
-                interiorMotion
-
-                ZStack {
-                    triangle(role: .incoming)
-                    triangle(role: .backAdvance)
-                    triangle(role: .frontExit)
-                }
-                .frame(width: 32, height: 32)
-                .scaleEffect(clusterScale)
-                .offset(x: clusterOffset)
-                .scaleEffect(x: direction, y: 1)
+            TimelineView(.animation) { timeline in
+                skipGlyph(phase: replacementPhase(at: timeline.date))
             }
-            .frame(width: 32, height: 32)
-            .clipShape(Circle())
-            .contentShape(Circle())
         }
         .buttonStyle(SkipPressStyle(reduceMotion: reduceMotion))
         .frame(width: 32, height: 32)
@@ -471,93 +480,57 @@ struct SkipControlButton: View {
         }
     }
 
+    private func skipGlyph(phase: CGFloat) -> some View {
+        let hoverOpacity = isHovering ? 1.0 : 0.0
+
+        return ZStack {
+            Circle()
+                .fill(hoverFill.opacity(hoverOpacity))
+
+            ZStack {
+                triangle(role: .incoming, phase: phase)
+                triangle(role: .backAdvance, phase: phase)
+                triangle(role: .frontExit, phase: phase)
+            }
+            .frame(width: 32, height: 32)
+            .scaleEffect(clusterScale(phase: phase))
+            .offset(x: clusterOffset(phase: phase))
+            .scaleEffect(x: direction, y: 1)
+        }
+        .frame(width: 32, height: 32)
+        .clipShape(Circle())
+        .contentShape(Circle())
+    }
+
+    private func replacementPhase(at date: Date) -> CGFloat {
+        guard let replacementStart else { return 0 }
+        return min(max(CGFloat(date.timeIntervalSince(replacementStart) / replacementDuration), 0), 1)
+    }
+
     private enum TriangleRole {
         case frontExit, backAdvance, incoming
     }
 
     private struct TriangleMetrics {
         let x: CGFloat
+        let y: CGFloat
         let opacity: Double
         let scaleX: CGFloat
         let scaleY: CGFloat
         let blur: CGFloat
         let brightness: Double
-        let coreOpacity: Double
-        let coreX: CGFloat
-        let coreScaleX: CGFloat
-        let coreScaleY: CGFloat
-        let coreBlur: CGFloat
     }
 
-    private struct MomentumRibbonMetrics {
-        let x: CGFloat
-        let opacity: Double
-        let scaleX: CGFloat
-        let blur: CGFloat
+    private func clusterScale(phase: CGFloat) -> CGFloat {
+        let pressSink = asymmetricGlide(phase, start: 0.00, peak: 0.075, end: 0.22)
+        let under = arrivalUndertravel(phase)
+        let over = arrivalOvershoot(phase)
+        return 1.0 - 0.082 * pressSink - 0.026 * under + 0.040 * over
     }
 
-    private struct SparkMetrics {
-        let x: CGFloat
-        let opacity: Double
-        let scale: CGFloat
-        let blur: CGFloat
-    }
-
-    private struct InteriorCueMetrics {
-        let x: CGFloat
-        let opacity: Double
-        let scale: CGFloat
-        let stretch: CGFloat
-        let blur: CGFloat
-    }
-
-    private var interiorMotion: some View {
-        ZStack {
-            momentumRibbon(delay: 0.00, y: -4.1, width: 14.4, height: 1.75, peakOpacity: 0.24)
-            momentumRibbon(delay: 0.06, y: 0.2, width: 10.8, height: 1.45, peakOpacity: 0.16)
-            momentumRibbon(delay: 0.12, y: 4.3, width: 7.8, height: 1.25, peakOpacity: 0.12)
-
-            contactBridge(y: -1.2, width: 8.4, height: 1.15, peakOpacity: 0.24)
-            contactBridge(y: 3.9, width: 5.8, height: 0.95, peakOpacity: 0.16)
-
-            sparkAccent(delay: 0.16, originX: -6.0, y: -6.0, size: 2.1, peakOpacity: 0.30)
-            sparkAccent(delay: 0.25, originX: -2.8, y: 6.2, size: 1.55, peakOpacity: 0.22)
-            sparkAccent(delay: 0.34, originX: 2.8, y: -6.8, size: 1.25, peakOpacity: 0.18)
-        }
-        .frame(width: 32, height: 32)
-        .scaleEffect(x: direction, y: 1)
-        .allowsHitTesting(false)
-    }
-
-    private var internalPulseOpacity: Double {
-        let launch = smoothStep(replacementPhase, start: 0.00, end: 0.18)
-        let decay = 1 - smoothStep(replacementPhase, start: 0.46, end: 0.94)
-        return Double(0.44 * launch * decay)
-    }
-
-    private var internalPulseScale: CGFloat {
-        0.20 + 0.82 * smoothStep(replacementPhase, start: 0.00, end: 0.82)
-    }
-
-    private var internalRingOpacity: Double {
-        let launch = smoothStep(replacementPhase, start: 0.10, end: 0.36)
-        let decay = 1 - smoothStep(replacementPhase, start: 0.54, end: 0.98)
-        return Double(0.52 * launch * decay)
-    }
-
-    private var internalRingScale: CGFloat {
-        0.36 + 0.60 * smoothStep(replacementPhase, start: 0.10, end: 0.92)
-    }
-
-    private var clusterScale: CGFloat {
-        let press = smoothStep(replacementPhase, start: 0.00, end: 0.08) * (1 - smoothStep(replacementPhase, start: 0.10, end: 0.20))
-        let settle = pulse(replacementPhase, start: 0.78, duration: 0.18)
-        return 1.0 - 0.12 * press + 0.024 * settle
-    }
-
-    private var clusterOffset: CGFloat {
-        let press = smoothStep(replacementPhase, start: 0.00, end: 0.08) * (1 - smoothStep(replacementPhase, start: 0.10, end: 0.18))
-        return -0.82 * press
+    private func clusterOffset(phase: CGFloat) -> CGFloat {
+        let pressSink = asymmetricGlide(phase, start: 0.00, peak: 0.075, end: 0.22)
+        return -0.24 * pressSink
     }
 
     private func playReplacementAnimation(perform action: @escaping () -> Void) {
@@ -572,149 +545,44 @@ struct SkipControlButton: View {
         var reset = Transaction()
         reset.disablesAnimations = true
         withTransaction(reset) {
-            replacementPhase = 0
+            replacementStart = nil
         }
 
         DispatchQueue.main.async {
             guard animationSerial == serial else { return }
-            withAnimation(.timingCurve(0.08, 0.86, 0.12, 1.0, duration: 1.18)) {
-                replacementPhase = 1
+            var start = Transaction()
+            start.disablesAnimations = true
+            withTransaction(start) {
+                replacementStart = Date()
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.052) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
             action()
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.36) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + replacementDuration + 0.08) {
             guard animationSerial == serial else { return }
 
             var reset = Transaction()
             reset.disablesAnimations = true
             withTransaction(reset) {
-                replacementPhase = 0
+                replacementStart = nil
             }
         }
     }
 
-    private func triangle(role: TriangleRole) -> some View {
-        let metrics = triangleMetrics(for: role, phase: replacementPhase)
+    private func triangle(role: TriangleRole, phase: CGFloat) -> some View {
+        let metrics = triangleMetrics(for: role, phase: phase)
 
-        return ZStack {
-            Image(systemName: "play.fill")
-                .font(.system(size: 13.6, weight: .semibold))
-                .foregroundStyle(.white)
-
-            Capsule(style: .continuous)
-                .fill(Color.white.opacity(metrics.coreOpacity))
-                .frame(width: 7.0, height: 2.0)
-                .scaleEffect(x: metrics.coreScaleX, y: metrics.coreScaleY)
-                .offset(x: metrics.coreX)
-                .blur(radius: metrics.coreBlur)
-                .mask {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 13.6, weight: .semibold))
-                        .scaleEffect(0.74)
-                }
-                .opacity(metrics.coreOpacity > 0 ? 1 : 0)
-        }
+        return Image(systemName: "play.fill")
+            .font(.system(size: 13.6, weight: .semibold))
+            .foregroundStyle(inkColor)
             .scaleEffect(x: metrics.scaleX, y: metrics.scaleY)
-            .offset(x: metrics.x)
+            .offset(x: metrics.x, y: metrics.y)
             .blur(radius: metrics.blur)
             .brightness(metrics.brightness)
-            .shadow(color: .white.opacity(metrics.opacity * 0.18), radius: 2.0, x: 0, y: 0)
             .opacity(metrics.opacity)
-    }
-
-    private func momentumRibbon(delay: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, peakOpacity: Double) -> some View {
-        let metrics = momentumRibbonMetrics(delay: delay, peakOpacity: peakOpacity, phase: replacementPhase)
-
-        return Capsule(style: .continuous)
-            .fill(Color.white.opacity(metrics.opacity))
-            .frame(width: width, height: height)
-            .scaleEffect(x: metrics.scaleX, y: 1)
-            .offset(x: metrics.x, y: y)
-            .blur(radius: metrics.blur)
-            .opacity(metrics.opacity > 0 ? 1 : 0)
-    }
-
-    private func contactBridge(y: CGFloat, width: CGFloat, height: CGFloat, peakOpacity: Double) -> some View {
-        let metrics = contactBridgeMetrics(peakOpacity: peakOpacity, phase: replacementPhase)
-
-        return Capsule(style: .continuous)
-            .fill(Color.white.opacity(metrics.opacity))
-            .frame(width: width, height: height)
-            .scaleEffect(x: metrics.stretch, y: metrics.scale)
-            .offset(x: metrics.x, y: y)
-            .blur(radius: metrics.blur)
-            .opacity(metrics.opacity > 0 ? 1 : 0)
-    }
-
-    private func sparkAccent(delay: CGFloat, originX: CGFloat, y: CGFloat, size: CGFloat, peakOpacity: Double) -> some View {
-        let metrics = sparkMetrics(delay: delay, originX: originX, peakOpacity: peakOpacity, phase: replacementPhase)
-
-        return Circle()
-            .fill(Color.white.opacity(metrics.opacity))
-            .frame(width: size, height: size)
-            .scaleEffect(metrics.scale)
-            .offset(x: metrics.x, y: y)
-            .blur(radius: metrics.blur)
-            .opacity(metrics.opacity > 0 ? 1 : 0)
-    }
-
-    private func momentumRibbonMetrics(delay: CGFloat, peakOpacity: Double, phase rawPhase: CGFloat) -> MomentumRibbonMetrics {
-        let phase = min(max(rawPhase, 0), 1)
-        let appear = smoothStep(phase, start: 0.10 + delay, end: 0.22 + delay)
-        let vanish = smoothStep(phase, start: 0.58 + delay, end: 0.88 + delay)
-        let travel = smoothStep(phase, start: 0.13 + delay, end: 0.48 + delay)
-        let recoil = smoothStep(phase, start: 0.56 + delay, end: 0.74 + delay)
-        let inertia = pulse(phase, start: 0.36 + delay, duration: 0.18)
-        let pullback = pulse(phase, start: 0.56 + delay, duration: 0.22)
-        let settle = pulse(phase, start: 0.76 + delay, duration: 0.16)
-        let active = appear * (1 - vanish)
-
-        return MomentumRibbonMetrics(
-            x: -5.2 + 10.4 * travel - 1.08 * recoil + 0.82 * inertia - 0.66 * pullback + 0.14 * settle,
-            opacity: Double(CGFloat(peakOpacity) * active),
-            scaleX: 0.18 + 0.88 * travel + 0.18 * inertia - 0.18 * pullback + 0.04 * settle,
-            blur: 0.35 * (1 - active)
-        )
-    }
-
-    private func contactBridgeMetrics(peakOpacity: Double, phase rawPhase: CGFloat) -> InteriorCueMetrics {
-        let phase = min(max(rawPhase, 0), 1)
-        let appear = smoothStep(phase, start: 0.42, end: 0.50)
-        let vanish = smoothStep(phase, start: 0.74, end: 0.90)
-        let arrivalOvershoot = heldPulse(phase, start: 0.42, holdStart: 0.52, holdEnd: 0.64, end: 0.76)
-        let pullback = smoothStep(phase, start: 0.64, end: 0.82)
-        let rebound = pulse(phase, start: 0.76, duration: 0.14)
-        let active = appear * (1 - vanish)
-
-        return InteriorCueMetrics(
-            x: 1.55 * arrivalOvershoot * (1 - pullback) + 0.18 * rebound,
-            opacity: Double(CGFloat(peakOpacity) * active),
-            scale: 1.0,
-            stretch: 1.0,
-            blur: 0.16 * (1 - active)
-        )
-    }
-
-    private func sparkMetrics(delay: CGFloat, originX: CGFloat, peakOpacity: Double, phase rawPhase: CGFloat) -> SparkMetrics {
-        let phase = min(max(rawPhase, 0), 1)
-        let appear = smoothStep(phase, start: 0.12 + delay, end: 0.22 + delay)
-        let vanish = smoothStep(phase, start: 0.46 + delay, end: 0.70 + delay)
-        let travel = smoothStep(phase, start: 0.14 + delay, end: 0.44 + delay)
-        let recoil = smoothStep(phase, start: 0.52 + delay, end: 0.68 + delay)
-        let pop = pulse(phase, start: 0.18 + delay, duration: 0.20)
-        let pullback = pulse(phase, start: 0.54 + delay, duration: 0.20)
-        let active = appear * (1 - vanish)
-
-        return SparkMetrics(
-            x: originX + 7.4 * travel - 1.4 * recoil + 0.58 * pop - 0.46 * pullback,
-            opacity: Double(CGFloat(peakOpacity) * active),
-            scale: max(0.2, 0.34 + 0.78 * pop - 0.22 * pullback),
-            blur: 0.18 * (1 - active)
-        )
     }
 
     private func triangleMetrics(for role: TriangleRole, phase rawPhase: CGFloat) -> TriangleMetrics {
@@ -722,88 +590,130 @@ struct SkipControlButton: View {
         let rearSlot: CGFloat = -4.9
         let frontSlot: CGFloat = 4.9
         let slotDistance = frontSlot - rearSlot
-        let press = pulse(phase, start: 0.00, duration: 0.16)
-        let advance = smoothStep(phase, start: 0.18, end: 0.58)
-        let arrivalOvershoot = heldPulse(phase, start: 0.42, holdStart: 0.52, holdEnd: 0.64, end: 0.76)
-        let pullback = smoothStep(phase, start: 0.64, end: 0.82)
-        let settle = pulse(phase, start: 0.82, duration: 0.12)
+        let pressSink = asymmetricGlide(phase, start: 0.00, peak: 0.075, end: 0.22)
+        let touchScale = 1.0 - 0.038 * pressSink
+        let under = arrivalUndertravel(phase)
+        let over = arrivalOvershoot(phase)
+        let pairDrift = pairedOvershoot(phase)
+        let pairCompression = pairSpacingCompression(phase)
+        let pairReleaseOvershoot = pairSpacingRelease(phase)
 
         switch role {
         case .frontExit:
-            let exit = smoothStep(phase, start: 0.08, end: 0.40)
-            let collapse = smoothStep(phase, start: 0.10, end: 0.42)
-            let fade = smoothStep(phase, start: 0.28, end: 0.48)
-            let squash = pulse(phase, start: 0.08, duration: 0.18)
+            let anticipate = asymmetricGlide(phase, start: 0.02, peak: 0.10, end: 0.21)
+            let exit = easeInOutSmoother(phase, start: 0.09, end: 0.44)
+            let fade = easeInOutSmoother(phase, start: 0.26, end: 0.46)
+            let collapse = easeInOutSmoother(phase, start: 0.11, end: 0.42)
+            let float = asymmetricGlide(phase, start: 0.08, peak: 0.22, end: 0.44)
             return TriangleMetrics(
-                x: frontSlot - 0.36 * press + 8.4 * exit,
+                x: frontSlot - 0.28 * anticipate + 20.80 * exit,
+                y: -0.012 * pressSink - 0.040 * float,
                 opacity: Double(1 - fade),
-                scaleX: max(0.08, 1.0 + 0.18 * squash - 0.92 * collapse),
-                scaleY: max(0.12, 1.0 - 0.12 * squash - 0.82 * collapse),
-                blur: 0.34 * collapse,
-                brightness: Double(0.10 * press + 0.10 * squash),
-                coreOpacity: Double(0.22 * (1 - fade) * (1 - collapse)),
-                coreX: -0.65 * collapse,
-                coreScaleX: max(0.12, 0.86 - 0.62 * collapse),
-                coreScaleY: max(0.18, 0.72 - 0.42 * collapse),
-                coreBlur: 0.10 + 0.18 * collapse
+                scaleX: max(0.22, touchScale * (1.0 + 0.060 * anticipate - 0.760 * collapse)),
+                scaleY: max(0.24, touchScale * (1.0 - 0.040 * anticipate - 0.660 * collapse)),
+                blur: 0.06 * exit,
+                brightness: Double(0.003 * anticipate)
             )
 
         case .backAdvance:
-            let overshoot = 5.25 * arrivalOvershoot * (1 - pullback)
-            let recoil = 0.22 * settle
+            let anticipate = asymmetricGlide(phase, start: 0.04, peak: 0.12, end: 0.22)
+            let advance = easeInOutSmoother(phase, start: 0.11, end: 0.58)
+            let carryStretch = asymmetricGlide(phase, start: 0.18, peak: 0.36, end: 0.58)
+            let compressedX = 1.0 - 0.090 * under
+            let compressedY = 1.0 - 0.078 * under
             return TriangleMetrics(
-                x: rearSlot - 0.24 * press + slotDistance * advance + overshoot + recoil,
+                x: rearSlot - 0.18 * anticipate + slotDistance * advance + pairDrift - pairCompression + pairReleaseOvershoot,
+                y: -0.008 * pressSink,
                 opacity: 1.0,
-                scaleX: 1.0,
-                scaleY: 1.0,
+                scaleX: touchScale * (compressedX - 0.018 * anticipate + 0.020 * carryStretch + 0.180 * over),
+                scaleY: touchScale * (compressedY - 0.026 * anticipate - 0.006 * carryStretch + 0.110 * over),
                 blur: 0.0,
-                brightness: Double(0.12 * arrivalOvershoot),
-                coreOpacity: Double(0.12 + 0.18 * arrivalOvershoot * (1 - smoothStep(phase, start: 0.78, end: 0.92))),
-                coreX: -0.40 + 0.58 * arrivalOvershoot * (1 - pullback) + 0.08 * settle,
-                coreScaleX: 0.72,
-                coreScaleY: 0.64,
-                coreBlur: 0.05
+                brightness: Double(0.002 * over)
             )
 
         case .incoming:
-            let enter = smoothStep(phase, start: 0.18, end: 0.58)
-            let fade = smoothStep(phase, start: 0.14, end: 0.26)
-            let grow = smoothStep(phase, start: 0.18, end: 0.52)
-            let arrivalPop = pulse(phase, start: 0.42, duration: 0.18)
-            let overshoot = 5.25 * arrivalOvershoot * (1 - pullback)
-            let recoil = 0.22 * settle
+            let enter = easeInOutSmoother(phase, start: 0.15, end: 0.58)
+            let fade = easeInOutSmoother(phase, start: 0.19, end: 0.40)
+            let grow = easeInOutSmoother(phase, start: 0.15, end: 0.56)
+            let travelStretch = asymmetricGlide(phase, start: 0.20, peak: 0.38, end: 0.58)
             return TriangleMetrics(
-                x: rearSlot - 8.8 + 8.8 * enter + overshoot + recoil,
+                x: rearSlot - 20.80 + 20.80 * enter + pairDrift + pairCompression - pairReleaseOvershoot,
+                y: -0.006 * pressSink,
                 opacity: Double(fade),
-                scaleX: max(0.08, 0.08 + 0.92 * grow + 0.18 * arrivalPop),
-                scaleY: max(0.10, 0.12 + 0.88 * grow + 0.12 * arrivalPop),
-                blur: 0.26 * (1 - enter),
-                brightness: Double(0.14 * fade + 0.08 * arrivalPop + 0.12 * arrivalOvershoot),
-                coreOpacity: Double(0.22 * fade * arrivalOvershoot * (1 - smoothStep(phase, start: 0.78, end: 0.92))),
-                coreX: 0.40 - 0.58 * arrivalOvershoot * (1 - pullback) - 0.08 * settle,
-                coreScaleX: 0.68,
-                coreScaleY: 0.62,
-                coreBlur: 0.05
+                scaleX: max(0.28, touchScale * (0.30 + 0.70 * grow + 0.042 * travelStretch - 0.098 * under + 0.220 * over)),
+                scaleY: max(0.30, touchScale * (0.32 + 0.68 * grow - 0.016 * travelStretch - 0.084 * under + 0.140 * over)),
+                blur: 0.08 * (1 - enter),
+                brightness: Double(0.003 * fade + 0.002 * over)
             )
         }
     }
 
-    private func smoothStep(_ value: CGFloat, start: CGFloat = 0, end: CGFloat = 1) -> CGFloat {
+    private func pairedOvershoot(_ phase: CGFloat) -> CGFloat {
+        5.0 * arrivalOvershoot(phase)
+    }
+
+    private func pairSpacingCompression(_ phase: CGFloat) -> CGFloat {
+        1.65 * arrivalUndertravel(phase)
+    }
+
+    private func pairSpacingRelease(_ phase: CGFloat) -> CGFloat {
+        2.0 * arrivalOvershoot(phase)
+    }
+
+    private func arrivalUndertravel(_ phase: CGFloat) -> CGFloat {
+        max(0, 1 - arrivalSpringResponse(phase)) * pairPresence(phase)
+    }
+
+    private func arrivalOvershoot(_ phase: CGFloat) -> CGFloat {
+        max(0, arrivalSpringResponse(phase) - 1)
+    }
+
+    private func arrivalSpringResponse(_ phase: CGFloat) -> CGFloat {
+        let t = unitProgress(phase, start: 0.40, end: 1.00)
+        guard t > 0 else { return 0 }
+        guard t < 1 else { return 1 }
+
+        let decay: CGFloat = 4.2
+        let frequency: CGFloat = 6.2
+        return 1 - exp(-decay * t) * (cos(frequency * t) + decay / frequency * sin(frequency * t))
+    }
+
+    private func pairPresence(_ phase: CGFloat) -> CGFloat {
+        smootherStep(phase, start: 0.30, end: 0.52)
+    }
+
+    private func pairFormation(_ phase: CGFloat) -> CGFloat {
+        smootherStep(phase, start: 0.34, end: 0.48)
+    }
+
+    private func tailCompletion(_ phase: CGFloat, delay: CGFloat = 0) -> CGFloat {
+        smootherStep(phase, start: 0.48 + delay, end: 0.76 + delay)
+    }
+
+    private func tailOvershoot(_ phase: CGFloat, delay: CGFloat = 0) -> CGFloat {
+        asymmetricGlide(phase, start: 0.58 + delay, peak: 0.76 + delay, end: 0.98 + delay)
+    }
+
+    private func unitProgress(_ value: CGFloat, start: CGFloat, end: CGFloat) -> CGFloat {
         guard end > start else { return value >= end ? 1 : 0 }
-        let t = min(max((value - start) / (end - start), 0), 1)
-        return t * t * (3 - 2 * t)
+        return min(max((value - start) / (end - start), 0), 1)
     }
 
-    private func pulse(_ value: CGFloat, start: CGFloat, duration: CGFloat) -> CGFloat {
-        guard duration > 0 else { return 0 }
-        let t = min(max((value - start) / duration, 0), 1)
-        return sin(CGFloat.pi * t)
+    private func smootherStep(_ value: CGFloat, start: CGFloat = 0, end: CGFloat = 1) -> CGFloat {
+        let t = unitProgress(value, start: start, end: end)
+        return t * t * t * (t * (t * 6 - 15) + 10)
     }
 
-    private func heldPulse(_ value: CGFloat, start: CGFloat, holdStart: CGFloat, holdEnd: CGFloat, end: CGFloat) -> CGFloat {
-        let rise = smoothStep(value, start: start, end: holdStart)
-        let fall = 1 - smoothStep(value, start: holdEnd, end: end)
-        return min(rise, fall)
+    private func easeInOutSmoother(_ value: CGFloat, start: CGFloat, end: CGFloat) -> CGFloat {
+        smootherStep(value, start: start, end: end)
+    }
+
+    private func asymmetricGlide(_ value: CGFloat, start: CGFloat, peak: CGFloat, end: CGFloat) -> CGFloat {
+        guard start < peak, peak < end else { return 0 }
+        if value <= peak {
+            return smootherStep(value, start: start, end: peak)
+        }
+        return 1 - smootherStep(value, start: peak, end: end)
     }
 }
 
@@ -812,10 +722,10 @@ private struct SkipPressStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.78 : 1.0)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.90 : 1.0)
             .opacity(1.0)
             .animation(
-                reduceMotion ? nil : .interpolatingSpring(mass: 0.75, stiffness: 520, damping: 18, initialVelocity: 0),
+                reduceMotion ? nil : .interpolatingSpring(mass: 1.0, stiffness: 400, damping: 28, initialVelocity: 0),
                 value: configuration.isPressed
             )
     }
@@ -941,6 +851,8 @@ struct CapsulePressStyle: ButtonStyle {
 struct NavigationIconButton: View {
     let iconName: String
     let isActive: Bool
+    let inkColor: Color
+    let hoverFill: Color
     let action: () -> Void
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -950,11 +862,11 @@ struct NavigationIconButton: View {
             Image(systemName: iconName)
                 .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: 15))
-                .foregroundColor(.white)
+                .foregroundStyle(inkColor)
                 .frame(width: 26, height: 26)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity((isActive || isHovering) ? 0.25 : 0))
+                        .fill((isActive || isHovering) ? hoverFill : Color.clear)
                 )
         }
         .buttonStyle(.plain)
