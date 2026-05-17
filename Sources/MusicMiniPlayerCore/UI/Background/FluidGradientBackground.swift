@@ -137,15 +137,17 @@ struct ArtworkBackgroundToneMap {
         let whiteoutPressure = max(0.0, (average - 0.56) / 0.44)
         let flatness = max(0.0, (0.22 - spread) / 0.22)
         let lowChroma = max(0.0, (0.18 - saturation) / 0.18)
-        let darkPressure = max(0.0, (0.18 - metrics.shadowLuminance) / 0.18)
+        let highChroma = max(0.0, (saturation - 0.58) / 0.42)
+        let darkPressure = max(0.0, (0.24 - average) / 0.24)
+        let shadowPressure = max(0.0, (0.18 - metrics.shadowLuminance) / 0.18)
 
         return ArtworkBackgroundToneMap(
-            shadeOpacity: min(0.36, 0.14 + highlightPressure * 0.12 + whiteoutPressure * 0.08 + flatness * 0.04),
-            liftOpacity: min(0.04, darkPressure * 0.04),
-            textureBrightness: -0.14 - highlightPressure * 0.12 - whiteoutPressure * 0.10 + darkPressure * 0.04,
-            textureSaturation: min(1.42, 1.10 + saturation * 0.38 + lowChroma * 0.12),
-            textureContrast: min(1.32, 1.06 + flatness * 0.16 + highlightPressure * 0.10),
-            textureDimmingOpacity: min(0.14, highlightPressure * 0.08 + whiteoutPressure * 0.06)
+            shadeOpacity: min(0.34, 0.12 + highlightPressure * 0.11 + whiteoutPressure * 0.08 + flatness * 0.03 + highChroma * 0.04 - darkPressure * 0.05),
+            liftOpacity: min(0.075, shadowPressure * 0.035 + darkPressure * 0.055),
+            textureBrightness: -0.13 - highlightPressure * 0.12 - whiteoutPressure * 0.10 + darkPressure * 0.10,
+            textureSaturation: min(1.26, max(0.82, 1.08 + lowChroma * 0.10 - highChroma * 0.24)),
+            textureContrast: min(1.24, max(1.02, 1.06 + flatness * 0.12 + highlightPressure * 0.08 - highChroma * 0.10 - darkPressure * 0.04)),
+            textureDimmingOpacity: min(0.13, highlightPressure * 0.07 + whiteoutPressure * 0.06 + highChroma * 0.025)
         )
     }
 

@@ -197,7 +197,7 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertGreaterThan(bright.textureDimmingOpacity, mid.textureDimmingOpacity)
         XCTAssertLessThanOrEqual(bright.textureDimmingOpacity, 0.14)
         XCTAssertGreaterThan(dark.liftOpacity, mid.liftOpacity)
-        XCTAssertLessThanOrEqual(dark.liftOpacity, 0.04)
+        XCTAssertLessThanOrEqual(dark.liftOpacity, 0.075)
     }
 
     func testArtworkBackgroundToneMapUsesHighlightPressureNotJustAverage() {
@@ -219,6 +219,51 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertGreaterThan(whiteCover.shadeOpacity, flatMid.shadeOpacity)
         XCTAssertGreaterThan(whiteCover.textureSaturation, flatMid.textureSaturation)
         XCTAssertLessThan(whiteCover.textureBrightness, flatMid.textureBrightness)
+    }
+
+    func testArtworkBackgroundToneMapCompressesOversaturatedArtwork() {
+        let balancedRed = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.42,
+            shadowLuminance: 0.24,
+            highlightLuminance: 0.64,
+            luminanceSpread: 0.40,
+            averageSaturation: 0.35
+        ))
+        let oversaturatedRed = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.42,
+            shadowLuminance: 0.24,
+            highlightLuminance: 0.64,
+            luminanceSpread: 0.40,
+            averageSaturation: 0.95
+        ))
+
+        XCTAssertLessThan(oversaturatedRed.textureSaturation, balancedRed.textureSaturation)
+        XCTAssertLessThanOrEqual(oversaturatedRed.textureSaturation, 0.92)
+        XCTAssertLessThan(oversaturatedRed.textureContrast, balancedRed.textureContrast)
+        XCTAssertGreaterThan(oversaturatedRed.textureDimmingOpacity, balancedRed.textureDimmingOpacity)
+    }
+
+    func testArtworkBackgroundToneMapLiftsDarkArtworkWithoutFlattening() {
+        let mid = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.42,
+            shadowLuminance: 0.24,
+            highlightLuminance: 0.62,
+            luminanceSpread: 0.38,
+            averageSaturation: 0.45
+        ))
+        let dark = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.12,
+            shadowLuminance: 0.04,
+            highlightLuminance: 0.32,
+            luminanceSpread: 0.28,
+            averageSaturation: 0.45
+        ))
+
+        XCTAssertGreaterThan(dark.liftOpacity, mid.liftOpacity)
+        XCTAssertGreaterThanOrEqual(dark.liftOpacity, 0.05)
+        XCTAssertLessThanOrEqual(dark.liftOpacity, 0.075)
+        XCTAssertGreaterThan(dark.textureBrightness, mid.textureBrightness)
+        XCTAssertGreaterThanOrEqual(dark.textureContrast, 1.02)
     }
 
     private func makeGzip(_ text: String, at url: URL) throws {

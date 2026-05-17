@@ -328,19 +328,19 @@ struct SharedBottomControls: View {
     }
 
     private var lightControlSurface: Bool {
-        musicController.controlAreaLuminance > 0.64
+        false
     }
 
     private var controlInk: Color {
-        lightControlSurface ? Color.black : Color.white
+        Color.white
     }
 
     private var controlShadowColor: Color {
-        lightControlSurface ? Color.white.opacity(0.28) : Color.black.opacity(0.35 + 0.28 * musicController.controlAreaLuminance)
+        Color.black.opacity(0.35 + 0.28 * musicController.controlAreaLuminance)
     }
 
     private var controlShadowRadius: CGFloat {
-        lightControlSurface ? 2.5 : 2 + 5 * musicController.controlAreaLuminance
+        2 + 5 * musicController.controlAreaLuminance
     }
 
     private func formatTime(_ time: Double) -> String {
