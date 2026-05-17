@@ -31,6 +31,7 @@ public struct MiniPlayerView: View {
     @State private var artworkBrightness: CGFloat = 0.5
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
+    @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
 
     // 🔑 Shuffle/Repeat 流动动画进度
     @State private var repeatFlow: Double = 0
@@ -193,10 +194,14 @@ public struct MiniPlayerView: View {
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
             if newArtwork != nil {
                 syncArtworkLuminance()
+                if let artwork = newArtwork {
+                    artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+                }
             } else {
                 artworkBrightness = 0.5
                 topLeftLuminance = 0.5
                 topRightLuminance = 0.5
+                artworkTone = .neutral
             }
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
@@ -210,6 +215,9 @@ public struct MiniPlayerView: View {
         }
         .onAppear {
             syncArtworkLuminance()
+            if let artwork = musicController.currentArtwork {
+                artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
+            }
         }
         // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
         .onChange(of: musicController.currentPage) { oldPage, newPage in
@@ -502,8 +510,10 @@ extension MiniPlayerView {
                         .frame(width: geo.size.width, height: geo.size.height)
                         .clipped()
                         .blur(radius: 50, opaque: true)
-                        .saturation(1.2)
-                        .brightness(-0.1)
+                        .saturation(artworkTone.textureSaturation)
+                        .contrast(artworkTone.textureContrast)
+                        .brightness(artworkTone.textureBrightness)
+                        .overlay(Color.black.opacity(artworkTone.textureDimmingOpacity))
                         .opacity(isAlbumPage ? 1 : 0)  // 🔑 opacity 动画过渡
                         .accessibilityHidden(true)
 

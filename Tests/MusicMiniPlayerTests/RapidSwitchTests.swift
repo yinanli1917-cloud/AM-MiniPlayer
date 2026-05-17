@@ -137,6 +137,86 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertNil(c.artworkMetadataCacheKey(title: "戀愛預告", artist: "", album: "My Lovely Legend"))
     }
 
+    func testArtworkBackgroundToneMapDarkensBrightArtwork() {
+        let dark = ArtworkBackgroundToneMap.forLuminance(0.1)
+        let mid = ArtworkBackgroundToneMap.forLuminance(0.45)
+        let bright = ArtworkBackgroundToneMap.forLuminance(0.9)
+
+        XCTAssertGreaterThan(bright.shadeOpacity, mid.shadeOpacity)
+        XCTAssertGreaterThanOrEqual(bright.shadeOpacity, 0.25)
+        XCTAssertLessThanOrEqual(bright.shadeOpacity, 0.36)
+        XCTAssertGreaterThan(bright.textureDimmingOpacity, mid.textureDimmingOpacity)
+        XCTAssertLessThanOrEqual(bright.textureDimmingOpacity, 0.14)
+        XCTAssertGreaterThan(dark.liftOpacity, mid.liftOpacity)
+        XCTAssertLessThanOrEqual(dark.liftOpacity, 0.075)
+    }
+
+    func testArtworkBackgroundToneMapUsesHighlightPressureNotJustAverage() {
+        let flatMid = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.45,
+            shadowLuminance: 0.36,
+            highlightLuminance: 0.54,
+            luminanceSpread: 0.18,
+            averageSaturation: 0.10
+        ))
+        let whiteCover = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.62,
+            shadowLuminance: 0.42,
+            highlightLuminance: 0.98,
+            luminanceSpread: 0.56,
+            averageSaturation: 0.08
+        ))
+
+        XCTAssertGreaterThan(whiteCover.shadeOpacity, flatMid.shadeOpacity)
+        XCTAssertGreaterThan(whiteCover.textureSaturation, flatMid.textureSaturation)
+        XCTAssertLessThan(whiteCover.textureBrightness, flatMid.textureBrightness)
+    }
+
+    func testArtworkBackgroundToneMapCompressesOversaturatedArtwork() {
+        let balancedRed = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.42,
+            shadowLuminance: 0.24,
+            highlightLuminance: 0.64,
+            luminanceSpread: 0.40,
+            averageSaturation: 0.35
+        ))
+        let oversaturatedRed = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.42,
+            shadowLuminance: 0.24,
+            highlightLuminance: 0.64,
+            luminanceSpread: 0.40,
+            averageSaturation: 0.95
+        ))
+
+        XCTAssertLessThan(oversaturatedRed.textureSaturation, balancedRed.textureSaturation)
+        XCTAssertLessThanOrEqual(oversaturatedRed.textureSaturation, 0.92)
+        XCTAssertLessThan(oversaturatedRed.textureContrast, balancedRed.textureContrast)
+        XCTAssertGreaterThan(oversaturatedRed.textureDimmingOpacity, balancedRed.textureDimmingOpacity)
+    }
+
+    func testArtworkBackgroundToneMapLiftsDarkArtworkWithoutFlattening() {
+        let mid = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.42,
+            shadowLuminance: 0.24,
+            highlightLuminance: 0.62,
+            luminanceSpread: 0.38,
+            averageSaturation: 0.45
+        ))
+        let dark = ArtworkBackgroundToneMap.forMetrics(ArtworkVisualMetrics(
+            averageLuminance: 0.12,
+            shadowLuminance: 0.04,
+            highlightLuminance: 0.32,
+            luminanceSpread: 0.28,
+            averageSaturation: 0.45
+        ))
+
+        XCTAssertGreaterThan(dark.liftOpacity, mid.liftOpacity)
+        XCTAssertGreaterThanOrEqual(dark.liftOpacity, 0.05)
+        XCTAssertLessThanOrEqual(dark.liftOpacity, 0.075)
+        XCTAssertGreaterThan(dark.textureBrightness, mid.textureBrightness)
+        XCTAssertGreaterThanOrEqual(dark.textureContrast, 1.02)
+    }
+
     // ------------------------------------------------------------------
     // MARK: - artwork candidate matching
     // ------------------------------------------------------------------
