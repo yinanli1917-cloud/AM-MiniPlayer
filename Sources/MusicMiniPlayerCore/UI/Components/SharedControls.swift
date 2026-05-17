@@ -141,7 +141,6 @@ struct SharedBottomControls: View {
                     .accessibilityLabel(currentPage == .playlist ? "播放列表（已选中）" : "播放列表")
                 }
                 .foregroundStyle(ink)
-                .shadow(color: controlShadowColor, radius: controlShadowRadius, y: lightControlSurface ? 0 : 1)
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
