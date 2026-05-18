@@ -2,7 +2,7 @@
  * [INPUT]: Raw search results from NetEase/QQ APIs
  * [OUTPUT]: selectBestCandidate — unified priority-chain candidate matching with explicit title-evidence state
  * [POS]: Candidate selection sub-module of LyricsFetcher — SearchCandidate + matching + alias resolution
- * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, and buildCandidates generic builder
+ * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, bounded English-title native aliases, and buildCandidates generic builder
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -123,6 +123,10 @@ extension LyricsFetcher {
                    candidate.durationDiff < 3.0,
                    candidate.searchDescriptor.hasPrefix("alias+title") {
                     return true
+                }
+                if LanguageUtils.isLikelyEnglishTitle(inputTitle),
+                   !LanguageUtils.isLikelyRomanizedJapanese(inputTitle) {
+                    return false
                 }
                 return candidate.durationDiff < 20
             }),

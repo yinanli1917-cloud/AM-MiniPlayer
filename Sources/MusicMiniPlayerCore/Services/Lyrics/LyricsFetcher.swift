@@ -228,7 +228,7 @@ public final class LyricsFetcher {
             }
             group.addTask {
                 await self.withHardSourceTimeout(seconds: 2.2) {
-                    await self.fetchFromAppleMusic(title: ot, artist: oa, duration: d, translationEnabled: te)
+                    await self.fetchFromAppleMusic(title: ot, artist: oa, duration: d, translationEnabled: te, album: alb)
                 }
             }
             group.addTask { await self.withHardSourceTimeout(seconds: 2.2) { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) } }
@@ -1117,7 +1117,10 @@ public final class LyricsFetcher {
         resultIndex: Int
     ) -> String? {
         guard let name = song["name"] as? String else { return nil }
-        let artistName = ((song["artists"] as? [[String: Any]])?.first?["name"] as? String) ?? ""
+        let artistName = (song["artists"] as? [[String: Any]])?
+            .compactMap { ($0["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " / ") ?? ""
         guard isArtistMatch(
             input: cjkArtist,
             result: artistName,

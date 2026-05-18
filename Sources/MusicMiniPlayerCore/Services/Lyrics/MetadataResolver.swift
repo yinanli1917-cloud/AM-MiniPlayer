@@ -686,7 +686,8 @@ public final class MetadataResolver {
         if let cached = diskCache.get(title: title, artist: artist, duration: duration) {
             if shouldUseCachedLocalizedMetadata(
                 inputTitle: title,
-                cachedTitle: cached.resolvedTitle
+                cachedTitle: cached.resolvedTitle,
+                cachedArtist: cached.resolvedArtist
             ) {
                 DebugLogger.log("MetadataResolver", "💾 fetchLocalizedMetadata disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (region: \(cached.region))")
                 return (cached.resolvedTitle, cached.resolvedArtist, cached.region, 0)
@@ -795,10 +796,12 @@ public final class MetadataResolver {
         LanguageUtils.inferRegions(title: title, artist: artist)
     }
 
-    private func shouldUseCachedLocalizedMetadata(inputTitle: String, cachedTitle: String) -> Bool {
+    private func shouldUseCachedLocalizedMetadata(inputTitle: String, cachedTitle: String, cachedArtist: String) -> Bool {
         let inputNorm = LanguageUtils.normalizeTrackName(inputTitle).lowercased()
         let cachedNorm = LanguageUtils.normalizeTrackName(cachedTitle).lowercased()
-        if inputNorm == cachedNorm { return true }
+        if inputNorm == cachedNorm {
+            return LanguageUtils.containsCJK(cachedTitle) || LanguageUtils.containsCJK(cachedArtist)
+        }
         guard LanguageUtils.isPureASCII(inputTitle) else { return true }
         if LanguageUtils.isLikelyRomanizedJapanese(inputTitle) { return true }
         return !LanguageUtils.containsCJK(cachedTitle)

@@ -14,6 +14,14 @@ import MusicKit
 
 extension LyricsFetcher {
 
+    private func joinedProviderArtists(_ artists: [[String: Any]], nameKey: String = "name") -> String {
+        artists.compactMap { artist in
+            (artist[nameKey] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        .filter { !$0.isEmpty }
+        .joined(separator: " / ")
+    }
+
     private func scoreWithCatalogEvidence(
         baseScore: Double,
         lyrics: [LyricLine],
@@ -363,8 +371,9 @@ extension LyricsFetcher {
             extractSong: { song in
                 guard let id = song["id"] as? Int, let name = song["name"] as? String else { return nil }
                 var artist = ""
-                if let artists = song["artists"] as? [[String: Any]],
-                   let first = artists.first, let n = first["name"] as? String { artist = n }
+                if let artists = song["artists"] as? [[String: Any]] {
+                    artist = self.joinedProviderArtists(artists)
+                }
                 let dur = (song["duration"] as? Double ?? 0) / 1000.0
                 var albumName = ""
                 if let album = song["album"] as? [String: Any] {
@@ -425,7 +434,7 @@ extension LyricsFetcher {
                   let name = s["name"] as? String,
                   let dur = (s["duration"] as? Double).map({ $0 / 1000.0 }) else { return nil }
             if let primaryId = match?.id, id == primaryId, primaryResult != nil { return nil }
-            let artistName = ((s["artists"] as? [[String: Any]])?.first?["name"] as? String) ?? cjkArtistForFallback
+            let artistName = (s["artists"] as? [[String: Any]]).map { joinedProviderArtists($0) } ?? cjkArtistForFallback
             let delta = abs(dur - duration)
             guard delta < 20.0 else { return nil }
             let titleOK = isTitleMatch(input: params.rawTitle, result: name, simplifiedInput: simplifiedInputTitle)
@@ -610,7 +619,7 @@ extension LyricsFetcher {
         for song in songs.prefix(8) {
             guard let id = song["id"] as? Int,
                   let name = song["name"] as? String else { continue }
-            let artistName = ((song["artists"] as? [[String: Any]])?.first?["name"] as? String) ?? ""
+            let artistName = (song["artists"] as? [[String: Any]]).map { joinedProviderArtists($0) } ?? ""
             guard let fetched = await fetchNetEaseLyrics(songId: id, duration: duration, expectedTitle: name, expectedArtist: artistName),
                   !fetched.lyrics.isEmpty,
                   hasCJKLyricOverlap(fetched.lyrics, witness.lyrics) else { continue }
@@ -680,7 +689,7 @@ extension LyricsFetcher {
             guard let id = song["id"] as? Int,
                   let name = song["name"] as? String,
                   let durMS = song["duration"] as? Double else { return nil }
-            let artistName = ((song["artists"] as? [[String: Any]])?.first?["name"] as? String) ?? ""
+            let artistName = (song["artists"] as? [[String: Any]]).map { joinedProviderArtists($0) } ?? ""
             guard LanguageUtils.containsCJK(artistName) else { return nil }
             let dur = durMS / 1000.0
             let delta = abs(dur - duration)
@@ -934,8 +943,9 @@ extension LyricsFetcher {
             extractSong: { song in
                 guard let mid = song["mid"] as? String, let name = song["name"] as? String else { return nil }
                 var artist = ""
-                if let singers = song["singer"] as? [[String: Any]],
-                   let first = singers.first, let n = first["name"] as? String { artist = n }
+                if let singers = song["singer"] as? [[String: Any]] {
+                    artist = self.joinedProviderArtists(singers)
+                }
                 let dur = Double(song["interval"] as? Int ?? 0)
                 let albumName = (song["album"] as? [String: Any])?["name"] as? String ?? ""
                 return (mid, name, artist, dur, albumName)
@@ -1261,7 +1271,42 @@ extension LyricsFetcher {
 
     // MARK: - Apple Music Catalog (MusicKit / MusicDataRequest)
 
-    func fetchFromAppleMusic(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+    func appleMusicCatalogIdentityMatches(
+        inputTitle: String,
+        inputArtist: String,
+        inputAlbum: String,
+        inputDuration: TimeInterval,
+        catalogTitle: String,
+        catalogArtist: String,
+        catalogAlbum: String,
+        catalogDuration: TimeInterval
+    ) -> Bool {
+        guard abs(catalogDuration - inputDuration) < 3.0 else { return false }
+        let inputTitleNorm = LanguageUtils.normalizeTrackName(inputTitle).lowercased()
+        let inputArtistNorm = LanguageUtils.normalizeArtistName(inputArtist).lowercased()
+        let inputAlbumNorm = LanguageUtils.normalizeTrackName(inputAlbum).lowercased()
+        let catalogTitleNorm = LanguageUtils.normalizeTrackName(catalogTitle).lowercased()
+        let catalogArtistNorm = LanguageUtils.normalizeArtistName(catalogArtist).lowercased()
+        let catalogAlbumNorm = LanguageUtils.normalizeTrackName(catalogAlbum).lowercased()
+        let titleOK = catalogTitleNorm == inputTitleNorm
+            || catalogTitleNorm.contains(inputTitleNorm)
+            || inputTitleNorm.contains(catalogTitleNorm)
+        let artistOK = catalogArtistNorm == inputArtistNorm
+            || catalogArtistNorm.contains(inputArtistNorm)
+            || inputArtistNorm.contains(catalogArtistNorm)
+        let albumOK = !inputAlbumNorm.isEmpty
+            && !catalogAlbumNorm.isEmpty
+            && (catalogAlbumNorm == inputAlbumNorm
+                || catalogAlbumNorm.contains(inputAlbumNorm)
+                || inputAlbumNorm.contains(catalogAlbumNorm))
+        let crossScriptCatalogOK = titleOK
+            && abs(catalogDuration - inputDuration) < 1.0
+            && LanguageUtils.isPureASCII(inputArtist)
+            && LanguageUtils.containsCJK(catalogArtist)
+        return titleOK && (artistOK || albumOK || crossScriptCatalogOK)
+    }
+
+    func fetchFromAppleMusic(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
         do {
             // Step 1: locate the song in Apple's catalog
             var request = MusicCatalogSearchRequest(term: "\(title) \(artist)", types: [Song.self])
@@ -1273,18 +1318,17 @@ extension LyricsFetcher {
             }
 
             // Step 2: pick the song whose title + artist + duration align
-            let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
-            let inputArtistNorm = LanguageUtils.normalizeArtistName(artist).lowercased()
             let matched: Song? = response.songs.first { s in
-                let songDuration = s.duration ?? 0
-                guard abs(songDuration - duration) < 3.0 else { return false }
-                let sTitle = LanguageUtils.normalizeTrackName(s.title).lowercased()
-                let sArtist = LanguageUtils.normalizeArtistName(s.artistName).lowercased()
-                let titleOK = sTitle == inputTitleNorm
-                    || sTitle.contains(inputTitleNorm) || inputTitleNorm.contains(sTitle)
-                let artistOK = sArtist == inputArtistNorm
-                    || sArtist.contains(inputArtistNorm) || inputArtistNorm.contains(sArtist)
-                return titleOK && artistOK
+                appleMusicCatalogIdentityMatches(
+                    inputTitle: title,
+                    inputArtist: artist,
+                    inputAlbum: album,
+                    inputDuration: duration,
+                    catalogTitle: s.title,
+                    catalogArtist: s.artistName,
+                    catalogAlbum: s.albumTitle ?? "",
+                    catalogDuration: s.duration ?? 0
+                )
             }
             guard let song = matched else {
                 DebugLogger.log("AppleMusic", "❌ no catalog match for '\(title)' by '\(artist)'")

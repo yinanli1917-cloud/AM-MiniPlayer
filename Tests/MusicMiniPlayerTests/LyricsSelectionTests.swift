@@ -558,6 +558,25 @@ final class LyricsSelectionTests: XCTestCase {
         )
     }
 
+    func testCJKArtistMatchesWithinProviderArtistList() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertTrue(
+            fetcher.isArtistMatch(
+                input: "陈妍希",
+                result: "陈晓 / 陈妍希",
+                simplifiedInput: "陈妍希"
+            )
+        )
+        XCTAssertFalse(
+            fetcher.isArtistMatch(
+                input: "陈妍希",
+                result: "陈晓 / 杨丞琳",
+                simplifiedInput: "陈妍希"
+            )
+        )
+    }
+
     func testCompactRomanizedTitleMatchesProviderParticleSpacing() {
         let fetcher = LyricsFetcher.shared
 
@@ -658,6 +677,54 @@ final class LyricsSelectionTests: XCTestCase {
 
         XCTAssertEqual(selected?.id, 2)
         XCTAssertEqual(selected?.nativeAliasMatched, true)
+    }
+
+    func testEnglishTitleDoesNotUseArtistOnlyNativeAlias() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 34324547,
+                name: "爱如初见",
+                artist: "陈晓 / 陈妍希",
+                album: "热门华语280",
+                durationDiff: 6.2,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 4,
+                resultIndex: 4,
+                searchDescriptor: "alias artist only:陈妍希"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "This Is My Love",
+            inputArtist: "Michelle Chen",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertNil(selected)
+    }
+
+    func testAppleCatalogAllowsLocalizedArtistForExactTitleDuration() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertTrue(
+            fetcher.appleMusicCatalogIdentityMatches(
+                inputTitle: "This Is My Love",
+                inputArtist: "Michelle Chen",
+                inputAlbum: "Young Stars",
+                inputDuration: 312,
+                catalogTitle: "This Is My Love",
+                catalogArtist: "陳冠蒨",
+                catalogAlbum: "脫掉制服",
+                catalogDuration: 312
+            )
+        )
     }
 
     func testUnavailableCatalogIdentityAllowsLooseExactTitleDuration() {
