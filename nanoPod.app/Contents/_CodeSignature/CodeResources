@@ -10,7 +10,11 @@
 		</data>
 		<key>Resources/Assets.car</key>
 		<data>
-		4TCWDsO1hbSWoNmWuLl0g6FHTB0=
+		PFaMiAI4EJAEfN2D7kifB3D0IUc=
+		</data>
+		<key>Resources/BuildInfo.txt</key>
+		<data>
+		PPt42PWc8i6EQguuws+t/iIA8TU=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -26,7 +30,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			VFrHodoTd5HhvQ/uAHx/DdJ2Xwg/oPpvZLm+C3rEwyo=
+			9wYlel6VZPFj2cz5f5rwXK7mdiYqEbiY7Awr+GlsM+8=
+			</data>
+		</dict>
+		<key>Resources/BuildInfo.txt</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ore+2McLlH3SssAR8mUYffN+YMnNrGHotJjRVne9zD8=
 			</data>
 		</dict>
 	</dict>
