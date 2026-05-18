@@ -776,13 +776,7 @@ struct SkipTextTransition: ViewModifier {
     }
 }
 
-// MARK: - Animated Shuffle Icon (Per-Arrow Swap Flow)
-
-private struct ShuffleArrowValues {
-    var offsetX: CGFloat = 0
-    var opacity: Double = 1.0
-    var scale: CGFloat = 1.0
-}
+// MARK: - Animated Shuffle Icon
 
 struct AnimatedShuffleIcon: View {
     let color: Color
@@ -794,38 +788,280 @@ struct AnimatedShuffleIcon: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        ShuffleCrossGlyph(
+            color: color,
+            size: size,
+            weight: weight,
+            values: ShuffleDrawValues()
+        )
+        .keyframeAnimator(
+            initialValue: ShuffleDrawValues(),
+            trigger: commitTrigger
+        ) { _, value in
+            ShuffleCrossGlyph(
+                color: color,
+                size: size,
+                weight: weight,
+                values: value
+            )
+        } keyframes: { _ in
+            KeyframeTrack(\.phase) {
+                MoveKeyframe(0.0)
+                CubicKeyframe(0.18, duration: 0.055)
+                CubicKeyframe(0.76, duration: 0.155)
+                CubicKeyframe(1.0, duration: 0.105)
+            }
+            KeyframeTrack(\.glyphScale) {
+                MoveKeyframe(0.94)
+                CubicKeyframe(0.965, duration: 0.055)
+                CubicKeyframe(1.014, duration: 0.165)
+                SpringKeyframe(1.0, duration: 0.160, spring: .init(response: 0.28, dampingRatio: 0.90))
+            }
+        }
+        .onChange(of: isEnabled) { _, _ in
+            guard !reduceMotion else { return }
+            commitTrigger += 1
+        }
+    }
+}
+
+private struct ShuffleDrawValues {
+    var phase: CGFloat = 1.0
+    var glyphScale: CGFloat = 1.0
+}
+
+private struct ShuffleCrossGlyph: View {
+    let color: Color
+    let size: CGFloat
+    let weight: Font.Weight
+    let values: ShuffleDrawValues
+
+    private var glyphWidth: CGFloat {
+        max(size * 1.68, 16)
+    }
+
+    private var glyphHeight: CGFloat {
+        max(size * 1.44, 13)
+    }
+
+    var body: some View {
         Image(systemName: "shuffle")
             .font(.system(size: size, weight: weight))
             .foregroundStyle(color)
-            .keyframeAnimator(
-                initialValue: ShuffleArrowValues(),
-                trigger: commitTrigger
-            ) { content, value in
-                content
-                    .scaleEffect(value.scale)
-                    .offset(x: value.offsetX)
-                    .opacity(value.opacity)
-            } keyframes: { _ in
-                KeyframeTrack(\.offsetX) {
-                    CubicKeyframe(12, duration: 0.25)
-                    MoveKeyframe(-10)
-                    SpringKeyframe(0, duration: 0.40, spring: .init(response: 0.38, dampingRatio: 0.88))
-                }
-                KeyframeTrack(\.scale) {
-                    CubicKeyframe(1.12, duration: 0.22)
-                    MoveKeyframe(0.88)
-                    SpringKeyframe(1.0, duration: 0.32, spring: .init(response: 0.30, dampingRatio: 0.85))
-                }
-                KeyframeTrack(\.opacity) {
-                    CubicKeyframe(0, duration: 0.20)
-                    MoveKeyframe(0)
-                    CubicKeyframe(1.0, duration: 0.32)
-                }
-            }
-            .onChange(of: isEnabled) { _, _ in
-                guard !reduceMotion else { return }
-                commitTrigger += 1
-            }
+            .frame(width: glyphWidth, height: glyphHeight)
+            .mask(
+                ShuffleSymbolRevealMask(
+                    size: size,
+                    weight: weight,
+                    phase: values.phase
+                )
+                .frame(width: glyphWidth, height: glyphHeight)
+            )
+            .scaleEffect(values.glyphScale)
+            .frame(width: glyphWidth, height: glyphHeight)
+    }
+}
+
+private struct ShuffleSymbolRevealMask: View {
+    let size: CGFloat
+    let weight: Font.Weight
+    let phase: CGFloat
+
+    private var glyphWidth: CGFloat {
+        max(size * 1.68, 16)
+    }
+
+    private var glyphHeight: CGFloat {
+        max(size * 1.44, 13)
+    }
+
+    var body: some View {
+        let lineWidth = revealWidth(for: size, weight: weight)
+        let style = StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+        let headStyle = StrokeStyle(lineWidth: lineWidth * 1.12, lineCap: .round, lineJoin: .round)
+        let leadMotion = strokeMotion(start: 0.00, end: 0.80)
+        let trailMotion = strokeMotion(start: 0.17, end: 1.00)
+
+        ZStack {
+            routeLayer(route: .topToBottom, motion: leadMotion, style: style, headStyle: headStyle)
+            routeLayer(route: .bottomToTop, motion: trailMotion, style: style, headStyle: headStyle)
+
+            Image(systemName: "shuffle")
+                .font(.system(size: size, weight: weight))
+                .foregroundStyle(.white)
+                .opacity(Double(smootherStep(phase, start: 0.985, end: 1.0)))
+        }
+        .frame(width: glyphWidth, height: glyphHeight)
+    }
+
+    @ViewBuilder
+    private func routeLayer(
+        route: ShuffleRoute,
+        motion: ShuffleStrokeMotion,
+        style: StrokeStyle,
+        headStyle: StrokeStyle
+    ) -> some View {
+        ShuffleRouteShape(route: route)
+            .trim(from: 0, to: motion.inkEnd)
+            .stroke(.white, style: style)
+            .opacity(motion.inkOpacity)
+
+        ShuffleRouteShape(route: route)
+            .trim(from: motion.headStart, to: motion.headEnd)
+            .stroke(.white, style: headStyle)
+            .opacity(motion.headOpacity)
+
+        ShuffleArrowWingShape(route: route, wing: .upper)
+            .trim(from: 0, to: motion.upperWing)
+            .stroke(.white, style: style)
+            .opacity(motion.wingOpacity)
+
+        ShuffleArrowWingShape(route: route, wing: .lower)
+            .trim(from: 0, to: motion.lowerWing)
+            .stroke(.white, style: style)
+            .opacity(motion.wingOpacity)
+    }
+
+    private func revealWidth(for size: CGFloat, weight: Font.Weight) -> CGFloat {
+        let base = max(size * 0.31, 3.4)
+        switch weight {
+        case .regular:
+            return base - 0.18
+        case .medium:
+            return base - 0.08
+        case .semibold:
+            return base
+        case .bold, .heavy, .black:
+            return base + 0.18
+        default:
+            return base
+        }
+    }
+
+    private func strokeMotion(start: CGFloat, end: CGFloat) -> ShuffleStrokeMotion {
+        let local = unitProgress(phase, start: start, end: end)
+        let travel = smootherStep(local, start: 0.00, end: 0.86)
+        let tailLag = 0.120 - 0.055 * smootherStep(local, start: 0.30, end: 0.78)
+        let headLength = 0.225 - 0.075 * smootherStep(local, start: 0.22, end: 0.72)
+        let inkEnd = clamped(travel - tailLag * (1 - smootherStep(local, start: 0.82, end: 1.00)))
+        let headStart = clamped(travel - headLength)
+        let headVisibility = smootherStep(local, start: 0.02, end: 0.16) * (1 - smootherStep(local, start: 0.82, end: 1.00))
+        let upperWing = smootherStep(local, start: 0.72, end: 0.93)
+        let lowerWing = smootherStep(local, start: 0.78, end: 0.98)
+        let wingOpacity = smootherStep(local, start: 0.70, end: 0.86)
+
+        return ShuffleStrokeMotion(
+            inkEnd: local >= 1 ? 1 : inkEnd,
+            headStart: local >= 1 ? 1 : headStart,
+            headEnd: local >= 1 ? 1 : travel,
+            headOpacity: Double(headVisibility),
+            upperWing: upperWing,
+            lowerWing: lowerWing,
+            wingOpacity: Double(wingOpacity),
+            inkOpacity: Double(0.74 + smootherStep(local, start: 0.06, end: 0.28) * 0.26)
+        )
+    }
+
+    private func unitProgress(_ value: CGFloat, start: CGFloat, end: CGFloat) -> CGFloat {
+        guard end > start else { return value >= end ? 1 : 0 }
+        return clamped((value - start) / (end - start))
+    }
+
+    private func smootherStep(_ value: CGFloat, start: CGFloat = 0, end: CGFloat = 1) -> CGFloat {
+        let t = unitProgress(value, start: start, end: end)
+        return t * t * t * (t * (t * 6 - 15) + 10)
+    }
+
+    private func clamped(_ value: CGFloat) -> CGFloat {
+        min(max(value, 0), 1)
+    }
+}
+
+private struct ShuffleStrokeMotion {
+    let inkEnd: CGFloat
+    let headStart: CGFloat
+    let headEnd: CGFloat
+    let headOpacity: Double
+    let upperWing: CGFloat
+    let lowerWing: CGFloat
+    let wingOpacity: Double
+    let inkOpacity: Double
+}
+
+private enum ShuffleRoute {
+    case topToBottom
+    case bottomToTop
+}
+
+private struct ShuffleRouteShape: Shape {
+    let route: ShuffleRoute
+
+    func path(in rect: CGRect) -> Path {
+        let leftX = rect.minX + rect.width * 0.06
+        let leadX = rect.minX + rect.width * 0.25
+        let tipX = rect.minX + rect.width * 0.94
+        let topY = rect.minY + rect.height * 0.33
+        let bottomY = rect.minY + rect.height * 0.67
+
+        var path = Path()
+
+        switch route {
+        case .topToBottom:
+            path.move(to: CGPoint(x: leftX, y: topY))
+            path.addLine(to: CGPoint(x: leadX, y: topY))
+            path.addCurve(
+                to: CGPoint(x: tipX, y: bottomY),
+                control1: CGPoint(x: rect.minX + rect.width * 0.42, y: topY),
+                control2: CGPoint(x: rect.minX + rect.width * 0.60, y: bottomY)
+            )
+        case .bottomToTop:
+            path.move(to: CGPoint(x: leftX, y: bottomY))
+            path.addLine(to: CGPoint(x: leadX, y: bottomY))
+            path.addCurve(
+                to: CGPoint(x: tipX, y: topY),
+                control1: CGPoint(x: rect.minX + rect.width * 0.42, y: bottomY),
+                control2: CGPoint(x: rect.minX + rect.width * 0.60, y: topY)
+            )
+        }
+
+        return path
+    }
+}
+
+private enum ShuffleArrowWing {
+    case upper
+    case lower
+}
+
+private struct ShuffleArrowWingShape: Shape {
+    let route: ShuffleRoute
+    let wing: ShuffleArrowWing
+
+    func path(in rect: CGRect) -> Path {
+        let tipX = rect.minX + rect.width * 0.94
+        let wingX = rect.minX + rect.width * 0.78
+        let wingOffsetY = rect.height * 0.145
+        let centerY: CGFloat
+
+        switch route {
+        case .topToBottom:
+            centerY = rect.minY + rect.height * 0.68
+        case .bottomToTop:
+            centerY = rect.minY + rect.height * 0.32
+        }
+
+        let wingY: CGFloat
+        switch wing {
+        case .upper:
+            wingY = centerY - wingOffsetY
+        case .lower:
+            wingY = centerY + wingOffsetY
+        }
+
+        var path = Path()
+        path.move(to: CGPoint(x: wingX, y: wingY))
+        path.addLine(to: CGPoint(x: tipX, y: centerY))
+        return path
     }
 }
 
