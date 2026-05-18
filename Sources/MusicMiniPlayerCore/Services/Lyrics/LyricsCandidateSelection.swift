@@ -116,6 +116,7 @@ extension LyricsFetcher {
                     || aliasConfirmedCJK
                 guard artistIsCJK else { return false }
                 if isBackingTrack(candidate) { return false }
+                guard !hasSameArtistTitleEvidence else { return false }
                 if aliasConfirmedCJK,
                    LanguageUtils.isLikelyEnglishTitle(inputTitle),
                    !LanguageUtils.isLikelyRomanizedJapanese(inputTitle),
@@ -123,7 +124,6 @@ extension LyricsFetcher {
                    candidate.searchDescriptor.hasPrefix("alias+title") {
                     return true
                 }
-                guard hasSameArtistTitleEvidence else { return false }
                 return candidate.durationDiff < 20
             }),
             ("P2", 2, { $0.titleMatch && $0.artistMatch && $0.durationDiff < 20 }),

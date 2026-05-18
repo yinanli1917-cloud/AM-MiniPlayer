@@ -676,6 +676,49 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.source, "NetEase")
     }
 
+    func testNativeAliasDoesNotBeatExplicitSameArtistTitleEvidence() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "駅",
+                artist: "中森明菜",
+                album: "CRIMSON",
+                durationDiff: 16.6,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 1,
+                resultIndex: 0,
+                searchDescriptor: "alias+title:中森明菜"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 2,
+                name: "Second Love",
+                artist: "中森明菜",
+                album: "Akina Box",
+                durationDiff: 17.2,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 11,
+                resultIndex: 1,
+                searchDescriptor: "title+artist"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Second Love",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 2)
+        XCTAssertEqual(selected?.matchRank, 2)
+    }
+
     func testCJKExactTitleArtistCanUseBoundedLooseDuration() {
         let fetcher = LyricsFetcher.shared
         let candidates = [

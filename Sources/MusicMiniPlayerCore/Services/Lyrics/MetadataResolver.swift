@@ -1137,6 +1137,7 @@ public final class MetadataResolver {
             URLQueryItem(name: "term", value: term),
             URLQueryItem(name: "country", value: region),
             URLQueryItem(name: "media", value: "music"),
+            URLQueryItem(name: "entity", value: "song"),
             URLQueryItem(name: "limit", value: String(limit))
         ]
         guard let url = components.url else { return nil }

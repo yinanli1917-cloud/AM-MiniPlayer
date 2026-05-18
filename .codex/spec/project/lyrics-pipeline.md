@@ -15,6 +15,8 @@ Do not collapse all empty lyric outcomes into "no lyrics".
 - Trust synced lyrics first, but allow conservative static fallback from `lyrics.ovh`/Genius only after synced candidates are missing or rejected by timing/identity gates.
 - Same-artist CJK duration escapes must require strong romanization/translation evidence; single ambiguous words such as `Hatsukoi` or `Deep` cannot globally bypass title identity.
 - English-title to native-title fallbacks belong in the guarded source alias path, not in broad language detection, so short ambiguous English words do not break romanization lookups.
+- Native-title alias tiers must not outrank explicit same-artist title evidence unless album evidence or sub-second catalog evidence is present. A short CJK title with a nearby duration is not enough to beat a direct title hit.
+- iTunes catalog searches must stay song-scoped (`entity=song`) so storefront bridge lookups do not depend on broad `media=music` behavior, which can be throttled or rejected differently by region.
 
 ## Verifier Semantics
 
