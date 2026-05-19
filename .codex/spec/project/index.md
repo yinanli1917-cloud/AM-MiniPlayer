@@ -13,6 +13,7 @@ Use this folder for rules that should survive conversation compaction:
 ## Specs
 
 - `lyrics-pipeline.md`: lyrics result taxonomy, fallback selection, and verifier semantics.
+- `lyrics-renderer-performance.md`: protected lyrics UX, verified performance fixes, and profiling gates.
 
 ## Pre-Development Checklist
 
