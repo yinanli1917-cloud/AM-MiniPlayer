@@ -169,7 +169,11 @@ struct SharedBottomControls: View {
         let buttons = HStack(spacing: 10) {
             SkipControlButton(action: {
                 musicController.previousTrack()
-            }, direction: -1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18))
+            }, direction: -1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18), beginDiagnostics: {
+                beginPlaybackInteraction(.previousTrack)
+            }, finishDiagnostics: { id, status, detail in
+                finishPlaybackInteraction(id, status: status, detail: detail)
+            })
             .frame(width: 30, height: 30)
             .accessibilityLabel("上一首")
 
@@ -185,7 +189,11 @@ struct SharedBottomControls: View {
 
             SkipControlButton(action: {
                 musicController.nextTrack()
-            }, direction: 1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18))
+            }, direction: 1, inkColor: controlInk, hoverFill: controlInk.opacity(lightControlSurface ? 0.10 : 0.18), beginDiagnostics: {
+                beginPlaybackInteraction(.nextTrack)
+            }, finishDiagnostics: { id, status, detail in
+                finishPlaybackInteraction(id, status: status, detail: detail)
+            })
             .frame(width: 30, height: 30)
             .accessibilityLabel("下一首")
         }
@@ -234,6 +242,41 @@ struct SharedBottomControls: View {
 
     private var controlShadowRadius: CGFloat {
         2 + 5 * musicController.controlAreaLuminance
+    }
+
+    private func beginPlaybackInteraction(_ type: DiagnosticInteractionType) -> UUID? {
+        let page = String(describing: currentPage)
+        var metrics = musicController.diagnosticsLyricsWorkloadMetrics()
+        metrics["skipAnimationDurationMs"] = 600
+        var evidence = musicController.diagnosticsLyricsWorkloadEvidence()
+        evidence["animation"] = "SkipControlButton.replacementFlow"
+        evidence["pageAtStart"] = page
+        return DiagnosticsService.shared.beginInteraction(
+            type: type,
+            page: page,
+            expectedDuration: 0.60,
+            track: musicController.diagnosticsTrackContext(),
+            metrics: metrics,
+            evidence: evidence
+        )
+    }
+
+    private func finishPlaybackInteraction(
+        _ id: UUID?,
+        status: DiagnosticInteractionStatus,
+        detail: String?
+    ) {
+        var metrics = musicController.diagnosticsLyricsWorkloadMetrics()
+        metrics["skipAnimationFinished"] = status == .completed ? 1 : 0
+        var evidence = musicController.diagnosticsLyricsWorkloadEvidence()
+        evidence["pageAtFinish"] = String(describing: currentPage)
+        DiagnosticsService.shared.completeInteraction(
+            id,
+            status: status,
+            detail: detail,
+            metrics: metrics,
+            evidence: evidence
+        )
     }
 }
 
@@ -472,10 +515,13 @@ struct SkipControlButton: View {
     let direction: CGFloat
     let inkColor: Color
     let hoverFill: Color
+    var beginDiagnostics: (() -> UUID?)? = nil
+    var finishDiagnostics: ((UUID?, DiagnosticInteractionStatus, String?) -> Void)? = nil
 
     @State private var isHovering = false
     @State private var replacementStart: Date?
     @State private var animationSerial = 0
+    @State private var activeDiagnosticID: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let replacementDuration: TimeInterval = 0.60
@@ -560,8 +606,22 @@ struct SkipControlButton: View {
     }
 
     private func playReplacementAnimation(perform action: @escaping () -> Void) {
+        if let activeDiagnosticID {
+            finishDiagnostics?(
+                activeDiagnosticID,
+                .interrupted,
+                "Skip animation was replaced by another skip request before it completed."
+            )
+            self.activeDiagnosticID = nil
+        }
+
+        let diagnosticID = beginDiagnostics?()
+        activeDiagnosticID = diagnosticID
+
         guard !reduceMotion else {
             action()
+            finishDiagnostics?(diagnosticID, .completed, "Reduced motion path completed without replacement animation.")
+            activeDiagnosticID = nil
             return
         }
 
@@ -594,6 +654,10 @@ struct SkipControlButton: View {
             reset.disablesAnimations = true
             withTransaction(reset) {
                 replacementStart = nil
+            }
+            finishDiagnostics?(diagnosticID, .completed, nil)
+            if activeDiagnosticID == diagnosticID {
+                activeDiagnosticID = nil
             }
         }
     }

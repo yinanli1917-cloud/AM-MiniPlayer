@@ -39,7 +39,11 @@ extension MusicController {
 
         // 🔑 Optimistic UI update FIRST (before async call)
         self.lastUserActionTime = Date()
+        let now = Date()
+        let renderTime = lyricRenderTime(at: now)
         self.isPlaying.toggle()
+        syncPlaybackClock(to: renderTime, playing: self.isPlaying, at: now)
+        updateTimerState()
 
         // 🔑 User controls use dedicated controlApp/controlQueue — never blocked by
         // heavyweight scriptingBridgeQueue work (polls, queue scans, state syncs).
@@ -99,6 +103,7 @@ extension MusicController {
             logger.info("Preview: seek to \(position)")
             currentTime = position
             internalCurrentTime = position
+            syncPlaybackClock(to: position, playing: isPlaying)
             return
         }
         // Optimistic UI update
@@ -106,6 +111,7 @@ extension MusicController {
         internalCurrentTime = position
         lastPollTime = Date()
         lastFrameTime = Date()  // 🔑 Reset frame clock so next interpolation adds ~0, not pre-seek delta
+        syncPlaybackClock(to: position, playing: isPlaying, at: lastFrameTime)
         // 🔑 标记 seek 执行中，下次轮询时立即同步
         seekPending = true
         // 🔑 Immediately update lyrics line index while seekPending is true.
@@ -385,13 +391,14 @@ extension MusicController {
         let requestGeneration = artworkFetchGeneration
 
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
+        let controller = WeakSendableReference(self)
         let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
-            scriptingBridgeQueue.async { [weak self] in
-                guard let self = self else {
+            scriptingBridgeQueue.async {
+                guard let self = controller.value else {
                     continuation.resume(returning: [])
                     return
                 }
-                defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
+                defer { DispatchQueue.main.async { controller.value?.lastSBQueueHeartbeat = Date() } }
                 let limit = self.currentPage == .playlist ? 10 : 2
                 let result = self.getUpNextTracksFromApp(app, limit: limit)
                 continuation.resume(returning: result)

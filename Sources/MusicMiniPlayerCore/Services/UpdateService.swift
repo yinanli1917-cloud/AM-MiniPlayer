@@ -66,12 +66,19 @@ public final class UpdateService: ObservableObject {
     private var stagedMarkerURL: URL { updatesDir.appendingPathComponent("staged.version") }
     private var stagedAppURL: URL { updatesDir.appendingPathComponent("staged.app") }
     private var downloadedZipURL: URL { updatesDir.appendingPathComponent("download.zip") }
+    private var applyScriptURL: URL { updatesDir.appendingPathComponent("apply.sh") }
+    private var applyLogURL: URL { updatesDir.appendingPathComponent("apply.log") }
+    private var tmpExpandURL: URL { updatesDir.appendingPathComponent("tmp-expand", isDirectory: true) }
 
     // ──────────────────────────────────────────────
     // MARK: - Init
     // ──────────────────────────────────────────────
 
     private init() {
+        if Self.autoUpdatesDisabled() {
+            discardStagedUpdate()
+            return
+        }
         loadStagedMarker()
     }
 
@@ -81,6 +88,12 @@ public final class UpdateService: ObservableObject {
 
     /// Fire-and-forget background check. Called 5s after applicationDidFinishLaunching.
     public func checkInBackground() {
+        guard !Self.autoUpdatesDisabled() else {
+            discardStagedUpdate()
+            state = .upToDate
+            return
+        }
+
         Task.detached(priority: .utility) { [weak self] in
             await self?.performCheck()
         }
@@ -88,6 +101,11 @@ public final class UpdateService: ObservableObject {
 
     /// Path of staged .app if present and verified — UpdateApplier reads this on quit.
     public func stagedAppIfReady() -> URL? {
+        guard !Self.autoUpdatesDisabled() else {
+            discardStagedUpdate()
+            return nil
+        }
+
         guard stagedVersion != nil,
               FileManager.default.fileExists(atPath: stagedAppURL.path) else {
             return nil
@@ -272,6 +290,17 @@ public final class UpdateService: ObservableObject {
         stagedVersion = version
     }
 
+    private func discardStagedUpdate() {
+        let fm = FileManager.default
+        try? fm.removeItem(at: stagedAppURL)
+        try? fm.removeItem(at: stagedMarkerURL)
+        try? fm.removeItem(at: downloadedZipURL)
+        try? fm.removeItem(at: applyScriptURL)
+        try? fm.removeItem(at: applyLogURL)
+        try? fm.removeItem(at: tmpExpandURL)
+        stagedVersion = nil
+    }
+
     // ──────────────────────────────────────────────
     // MARK: - State helper
     // ──────────────────────────────────────────────
@@ -287,6 +316,38 @@ public final class UpdateService: ObservableObject {
     public nonisolated static var installedVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
         return normalize(v)
+    }
+
+    public nonisolated static func autoUpdatesDisabled(
+        info: [String: Any] = Bundle.main.infoDictionary ?? [:],
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        if truthy(environment["NANOPOD_DISABLE_AUTO_UPDATE"]) {
+            return true
+        }
+
+        if truthy(info["NPDisableAutoUpdate"]) || truthy(info["NPLocalDeveloperBuild"]) {
+            return true
+        }
+
+        return false
+    }
+
+    private nonisolated static func truthy(_ value: Any?) -> Bool {
+        if let bool = value as? Bool {
+            return bool
+        }
+
+        if let string = value as? String {
+            let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return normalized == "1" || normalized == "true" || normalized == "yes"
+        }
+
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+
+        return false
     }
 
     /// "v2.0.0" → "2.0.0"; "2.0" → "2.0"; strips leading "v" or "V".

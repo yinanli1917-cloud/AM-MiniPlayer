@@ -144,6 +144,26 @@ private let leakDetectors: [String: (String) -> Bool] = [
     "Japanese": { LanguageUtils.containsJapanese($0) },
 ]
 
+private func sampledLyrics(
+    from lyrics: [LyricLine],
+    limit: Int,
+    minCharacterCount: Int = 0,
+    excludeEllipsis: Bool = false
+) -> [LyricLine] {
+    var sample: [LyricLine] = []
+    sample.reserveCapacity(limit)
+
+    for line in lyrics {
+        let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count > minCharacterCount else { continue }
+        if excludeEllipsis && (text == "..." || text == "…" || text == "⋯") { continue }
+        sample.append(line)
+        if sample.count == limit { break }
+    }
+
+    return sample
+}
+
 private func detectTranslationLeak(
     lyrics: [LyricLine],
     expectedLang: String,
@@ -160,11 +180,7 @@ private func detectTranslationLeak(
     var warnings: [String] = []
 
     // 采样前 15 行非空歌词
-    let validLines = lyrics.filter {
-        let t = $0.text.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
-    }
-    let sample = Array(validLines.prefix(15))
+    let sample = sampledLyrics(from: lyrics, limit: 15, excludeEllipsis: true)
     guard sample.count >= 3 else { return ([], [], 0) }
 
     // 检测每行是否包含期望语言字符
@@ -232,10 +248,7 @@ private func checkLanguageConsistency(
     var langCount: [String: Int] = [:]
 
     // 采样前 20 行
-    let sample = lyrics.filter {
-        let t = $0.text.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t.count > 3
-    }.prefix(20)
+    let sample = sampledLyrics(from: lyrics, limit: 20, minCharacterCount: 3)
 
     for line in sample {
         recognizer.reset()
@@ -321,10 +334,7 @@ func checkLocalTranslation(
     expectedLang: String
 ) async -> (ok: Bool, warning: String?) {
     // 取前 5 行非空歌词
-    let sample = lyrics.filter {
-        let t = $0.text.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t.count > 3
-    }.prefix(5)
+    let sample = sampledLyrics(from: lyrics, limit: 5, minCharacterCount: 3)
 
     guard !sample.isEmpty else { return (false, "无有效歌词行可翻译") }
 
@@ -438,37 +448,55 @@ func printBenchmarkSummary(_ results: [BenchmarkResult]) {
 
     for regionInfo in kSupportedRegions {
         guard let regionResults = grouped[regionInfo.code] else { continue }
-        let passed = regionResults.filter { benchmarkPassed($0) }.count
-        let warned = regionResults.filter { !$0.benchmarkWarnings.isEmpty }.count
-        let noLyrics = regionResults.filter { $0.base.lyricsLineCount == 0 }.count
-        let leaks = regionResults.filter { $0.translationLeakCount > 0 }.count
-        let hasTrans = regionResults.filter { $0.sourceTranslationFound }.count
-        let mlOK = regionResults.filter { $0.localTranslationOK == true }.count
-        let mlTested = regionResults.filter { $0.localTranslationOK != nil }.count
-        let avgMs = regionResults.isEmpty ? 0 : regionResults.reduce(0) { $0 + $1.base.elapsedMs } / regionResults.count
+        let stats = benchmarkStats(for: regionResults)
 
         log("""
 
         === Region: \(regionInfo.code) - \(regionInfo.name) (\(regionResults.count) songs) ===
-          \(passed)/\(regionResults.count) passed   \(warned) warnings   \(noLyrics) no-lyrics
-          Source translation: \(hasTrans)/\(regionResults.count)   Translation leaks: \(leaks)
-          Local ML: \(mlOK)/\(mlTested) OK   avg \(avgMs)ms
+          \(stats.passed)/\(regionResults.count) passed   \(stats.warned) warnings   \(stats.noLyrics) no-lyrics
+          Source translation: \(stats.hasTrans)/\(regionResults.count)   Translation leaks: \(stats.leaks)
+          Local ML: \(stats.mlOK)/\(stats.mlTested) OK   avg \(stats.avgMs)ms
         """)
     }
 
     // 总览
-    let totalPassed = results.filter { benchmarkPassed($0) }.count
-    let totalWarned = results.filter { !$0.benchmarkWarnings.isEmpty }.count
-    let totalNoLyrics = results.filter { $0.base.lyricsLineCount == 0 }.count
-    let totalLeaks = results.filter { $0.translationLeakCount > 0 }.count
-    let totalMs = results.reduce(0) { $0 + $1.base.elapsedMs }
-    let avgMs = results.isEmpty ? 0 : totalMs / results.count
+    let totalStats = benchmarkStats(for: results)
 
     log("""
 
     ========================================
-      Overall: \(totalPassed)/\(results.count) passed   \(totalWarned) warnings   \(totalNoLyrics) no-lyrics
-      Translation leaks: \(totalLeaks)   total \(totalMs)ms   avg \(avgMs)ms
+      Overall: \(totalStats.passed)/\(results.count) passed   \(totalStats.warned) warnings   \(totalStats.noLyrics) no-lyrics
+      Translation leaks: \(totalStats.leaks)   total \(totalStats.totalMs)ms   avg \(totalStats.avgMs)ms
     ========================================
     """)
+}
+
+private struct BenchmarkStats {
+    var passed = 0
+    var warned = 0
+    var noLyrics = 0
+    var leaks = 0
+    var hasTrans = 0
+    var mlOK = 0
+    var mlTested = 0
+    var totalMs = 0
+
+    var avgMs: Int { count == 0 ? 0 : totalMs / count }
+    fileprivate var count = 0
+}
+
+private func benchmarkStats(for results: [BenchmarkResult]) -> BenchmarkStats {
+    var stats = BenchmarkStats()
+    for result in results {
+        stats.count += 1
+        if benchmarkPassed(result) { stats.passed += 1 }
+        if !result.benchmarkWarnings.isEmpty { stats.warned += 1 }
+        if result.base.lyricsLineCount == 0 { stats.noLyrics += 1 }
+        if result.translationLeakCount > 0 { stats.leaks += 1 }
+        if result.sourceTranslationFound { stats.hasTrans += 1 }
+        if result.localTranslationOK == true { stats.mlOK += 1 }
+        if result.localTranslationOK != nil { stats.mlTested += 1 }
+        stats.totalMs += result.base.elapsedMs
+    }
+    return stats
 }

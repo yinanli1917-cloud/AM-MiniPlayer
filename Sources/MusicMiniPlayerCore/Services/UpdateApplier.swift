@@ -27,6 +27,7 @@ public enum UpdateApplier {
 
     /// Call from `applicationWillTerminate`. No-op unless a staged bundle is ready.
     public static func applyIfStaged() {
+        guard !UpdateService.autoUpdatesDisabled() else { return }
         guard let staged = UpdateService.shared.stagedAppIfReady() else { return }
 
         let currentBundle = Bundle.main.bundleURL

@@ -77,10 +77,36 @@ public class LyricsService: ObservableObject {
         guard !lyrics.isEmpty else { return false }
         if translationsAreFromLyricsSource { return true }
         let isTargetChinese = translationLanguage.hasPrefix("zh")
-        if isTargetChinese && lyricsPredominantlyChinese { return false }
-        guard let detectedLyricsLanguageCode else { return true }
-        let targetPrefix = String(translationLanguage.prefix(2))
-        return !detectedLyricsLanguageCode.hasPrefix(targetPrefix)
+        if isTargetChinese && lyricsArePredominantlyChinese() { return false }
+        return !lyricsAreInTargetLanguage()
+    }
+
+    public func diagnosticsWorkloadMetrics() -> [String: Double] {
+        [
+            "lyricLineCount": Double(lyrics.count),
+            "hasSyllableSyncLyrics": hasSyllableSyncLyrics ? 1 : 0,
+            "hasTranslation": hasTranslation ? 1 : 0,
+            "showTranslation": showTranslation ? 1 : 0,
+            "isUnsyncedLyrics": isUnsyncedLyrics ? 1 : 0,
+            "isLoadingLyrics": isLoading ? 1 : 0,
+            "isTranslatingLyrics": isTranslating ? 1 : 0,
+            "translationFailed": translationFailed ? 1 : 0,
+            "manualLyricsScrollActive": isManualScrolling ? 1 : 0,
+            "currentLineIndex": Double(currentLineIndex ?? -1),
+            "interludeActive": interludeAfterIndex == nil ? 0 : 1
+        ]
+    }
+
+    public func diagnosticsWorkloadEvidence() -> [String: String] {
+        var evidence: [String: String] = [
+            "lyricsWorkload": diagnosticsWorkloadDescription(),
+            "translationLanguage": translationLanguage,
+            "sourceTranslation": translationsAreFromLyricsSource ? "true" : "false"
+        ]
+        if let error, !error.isEmpty {
+            evidence["lyricsError"] = error
+        }
+        return evidence
     }
 
     // ========================================================================
@@ -96,27 +122,41 @@ public class LyricsService: ObservableObject {
     private var currentSongTranslationID: String?
     private var translationsAreFromLyricsSource: Bool = false
     private var lastSystemTranslationLanguage: String?
-    private var detectedLyricsLanguageCode: String?
-    private var lyricsPredominantlyChinese: Bool = false
 
     private var currentFetchTask: Task<Void, Never>?
-    private var preloadTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
-    private static let performanceLog = OSLog(subsystem: "com.yinanli.MusicMiniPlayer", category: "Performance")
+    private var currentStableSongID: String?
 
     /// Timestamp when good lyrics were last applied — used for stability guard
     private var lastGoodLyricsTime: Date?
     /// Cooldown: refuse re-fetches within this window unless forceRefresh
     private let stabilityGuardCooldown: TimeInterval = 3.0
 
-    private struct LanguageSummary {
-        let detectedLanguageCode: String?
-        let isPredominantlyChinese: Bool
-    }
-
     /// 清除所有歌词行的翻译数据
     private func clearAllTranslations() {
         for i in lyrics.indices { lyrics[i].translation = nil }
+    }
+
+    private func diagnosticsWorkloadDescription() -> String {
+        if lyrics.isEmpty {
+            if isLoading { return "loading" }
+            return error == nil ? "empty" : "error"
+        }
+        var parts: [String] = ["\(lyrics.count) lines"]
+        if hasSyllableSyncLyrics {
+            parts.append("syllable-sync")
+        } else if isUnsyncedLyrics {
+            parts.append("unsynced")
+        } else {
+            parts.append("line-sync")
+        }
+        if showTranslation || hasTranslation {
+            parts.append(hasTranslation ? "translated" : "translation-requested")
+        }
+        if isManualScrolling {
+            parts.append("manual-scroll")
+        }
+        return parts.joined(separator: ", ")
     }
 
     // ========================================================================
@@ -140,25 +180,14 @@ public class LyricsService: ObservableObject {
         let hasSourceTranslation: Bool
         let isNoLyrics: Bool
         let isUnsynced: Bool
-        let detectedLanguageCode: String?
-        let isPredominantlyChinese: Bool
         let timestamp: Date
 
-        init(
-            lyrics: [LyricLine],
-            firstRealLyricIndex: Int = 1,
-            hasSourceTranslation: Bool = false,
-            isNoLyrics: Bool = false,
-            isUnsynced: Bool = false,
-            languageSummary: LanguageSummary = LanguageSummary(detectedLanguageCode: nil, isPredominantlyChinese: false)
-        ) {
+        init(lyrics: [LyricLine], firstRealLyricIndex: Int = 1, hasSourceTranslation: Bool = false, isNoLyrics: Bool = false, isUnsynced: Bool = false) {
             self.lyrics = lyrics
             self.firstRealLyricIndex = firstRealLyricIndex
             self.hasSourceTranslation = hasSourceTranslation
             self.isNoLyrics = isNoLyrics
             self.isUnsynced = isUnsynced
-            self.detectedLanguageCode = languageSummary.detectedLanguageCode
-            self.isPredominantlyChinese = languageSummary.isPredominantlyChinese
             self.timestamp = Date()
         }
 
@@ -202,6 +231,7 @@ public class LyricsService: ObservableObject {
         }
 
         let songID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
+        let stableSongID = Self.stableSongIdentity(title: title, artist: artist)
 
         // 🔑 STABILITY GUARD: Once good lyrics are loaded, block ALL re-fetches
         // for the same song within a cooldown window. This prevents:
@@ -210,17 +240,25 @@ public class LyricsService: ObservableObject {
         // - updatePlayerState 30s full-sync creating a subtly different songID
         // - Any other path that creates a new songID for the same song
         //
-        // The guard is strict identity-based: same title/artist/album/duration
-        // only. Same title or same artist alone is not safe for lyric reuse.
+        // The guard uses exact identity plus a short title/artist cooldown. The
+        // short stable-ID path absorbs immediate album/duration corrections
+        // after lyrics have already landed without freezing stale lyrics long-term.
         // Only forceRefresh (user-initiated retry button) bypasses this guard.
         if !forceRefresh,
            let lastGoodTime = lastGoodLyricsTime,
            Date().timeIntervalSince(lastGoodTime) < stabilityGuardCooldown,
            !lyrics.isEmpty, error == nil {
-            // Same-song detection must stay strict. Treating same artist or
-            // title-only as same song freezes stale lyrics during fast switches
-            // and same-title catalog collisions.
-            let isSameSong = songID == currentSongID
+            // Same title+artist is acceptable only inside this short cooldown:
+            // it prevents a visible second refresh from metadata corrections,
+            // while later same-title variants can still fetch normally.
+            let isSameSong = songID == currentSongID || Self.isLikelySameSongMetadataCorrection(
+                currentStableSongID: currentStableSongID,
+                requestStableSongID: stableSongID,
+                currentDuration: currentSongDuration,
+                requestDuration: duration,
+                currentAlbum: currentSongAlbum,
+                requestAlbum: album
+            )
             if isSameSong {
                 DebugLogger.log("LyricsService", "⏭️ Stability guard: '\(songID)' blocked (\(String(format: "%.1f", Date().timeIntervalSince(lastGoodTime)))s since good lyrics)")
                 // Silently update stored duration/songID to prevent future mismatches
@@ -242,8 +280,16 @@ public class LyricsService: ObservableObject {
             && !cleanAlbum.isEmpty
             && (cleanCurrentAlbum.isEmpty || cleanCurrentAlbum != cleanAlbum)
             && (lyrics.isEmpty || error != nil || isLoading)
+        let canRetryAfterEmptyCurrentResult = Self.shouldRetryAfterEmptyCurrentResult(
+            currentSongID: currentSongID,
+            requestSongID: songID,
+            isLoading: isLoading,
+            hasDisplayedLyrics: !lyrics.isEmpty,
+            hasError: error != nil,
+            forceRefresh: forceRefresh
+        )
 
-        guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration || canRetryWithBetterAlbum else {
+        guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration || canRetryWithBetterAlbum || canRetryAfterEmptyCurrentResult else {
             DebugLogger.log("LyricsService", "⏭️ 跳过重复获取: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
             return
         }
@@ -254,8 +300,18 @@ public class LyricsService: ObservableObject {
         if canRetryWithBetterAlbum {
             DebugLogger.log("LyricsService", "🔄 album 改善重试: '\(currentSongAlbum)' → '\(album)'")
         }
+        if canRetryAfterEmptyCurrentResult {
+            DebugLogger.log("LyricsService", "🔄 retry empty/error current lyrics: '\(songID)'")
+        }
 
         DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' dur=\(duration) album='\(album)' (forceRefresh=\(forceRefresh), curSongID='\(currentSongID ?? "nil")', curDur=\(currentSongDuration), curAlbum='\(currentSongAlbum)')")
+        recordDiagnosticsLyricsFetchStarted(
+            title: title,
+            artist: artist,
+            album: album,
+            duration: duration,
+            forceRefresh: forceRefresh
+        )
 
         // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
         lastGoodLyricsTime = nil
@@ -289,11 +345,19 @@ public class LyricsService: ObservableObject {
             // 处理 No Lyrics 缓存
             if cached.isNoLyrics {
                 currentSongID = songID
+                currentStableSongID = stableSongID
                 currentSongDuration = duration
                 currentSongAlbum = album
                 isLoading = false
                 error = "No lyrics available"
                 DebugLogger.log("LyricsService", "❌ 使用 No Lyrics 缓存")
+                recordDiagnosticsLyricsMiss(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    duration: duration,
+                    resultCount: 0
+                )
                 return
             }
 
@@ -304,15 +368,15 @@ public class LyricsService: ObservableObject {
                         firstRealLyricIndex: cached.firstRealLyricIndex,
                         hasSourceTranslation: cachedHasActualTranslation,  // 🔑 使用实际翻译状态
                         isUnsynced: cached.isUnsynced,
-                        detectedLanguageCode: cached.detectedLanguageCode,
-                        isPredominantlyChinese: cached.isPredominantlyChinese,
                         songID: songID,
+                        stableSongID: stableSongID,
                         duration: duration,
                         album: album)
             return
         }
 
         currentSongID = songID
+        currentStableSongID = stableSongID
         currentSongDuration = duration
         currentSongAlbum = album
 
@@ -361,6 +425,13 @@ public class LyricsService: ObservableObject {
                 DebugLogger.log("LyricsService", "⏭️ Task cancelled after foreground miss, NOT caching empty results: '\(songID)'")
                 return
             }
+            recordDiagnosticsLyricsMiss(
+                title: title,
+                artist: artist,
+                album: album,
+                duration: duration,
+                resultCount: results.count
+            )
 
             if fetcher.selectInstrumentalResult(from: results) != nil {
                 await MainActor.run {
@@ -369,7 +440,7 @@ public class LyricsService: ObservableObject {
                 return
             }
 
-            await runAuthoritativeBackfill(
+            launchAuthoritativeBackfill(
                 title: title,
                 artist: artist,
                 duration: duration,
@@ -381,7 +452,7 @@ public class LyricsService: ObservableObject {
 
         await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
         if bestResult.kind == .unsynced {
-            await runAuthoritativeBackfill(
+            launchAuthoritativeBackfill(
                 title: title,
                 artist: artist,
                 duration: duration,
@@ -393,6 +464,41 @@ public class LyricsService: ObservableObject {
 
     static func shouldApplyNoLyricsMiss(currentSongID: String?, missSongID: String, hasDisplayedLyrics: Bool) -> Bool {
         currentSongID == missSongID && !hasDisplayedLyrics
+    }
+
+    static func shouldRetryAfterEmptyCurrentResult(
+        currentSongID: String?,
+        requestSongID: String,
+        isLoading: Bool,
+        hasDisplayedLyrics: Bool,
+        hasError: Bool,
+        forceRefresh: Bool
+    ) -> Bool {
+        currentSongID == requestSongID
+            && !forceRefresh
+            && !isLoading
+            && !hasDisplayedLyrics
+            && hasError
+    }
+
+    static func isLikelySameSongMetadataCorrection(
+        currentStableSongID: String?,
+        requestStableSongID: String,
+        currentDuration: TimeInterval,
+        requestDuration: TimeInterval,
+        currentAlbum: String,
+        requestAlbum: String
+    ) -> Bool {
+        guard currentStableSongID == requestStableSongID else { return false }
+
+        let currentAlbumID = MetadataDiskCache.normalize(currentAlbum)
+        let requestAlbumID = MetadataDiskCache.normalize(requestAlbum)
+        let albumCompatible = currentAlbumID.isEmpty || requestAlbumID.isEmpty || currentAlbumID == requestAlbumID
+        let durationCompatible = currentDuration <= 0
+            || requestDuration <= 0
+            || abs(currentDuration - requestDuration) <= 2.0
+
+        return albumCompatible && durationCompatible
     }
 
     @MainActor
@@ -409,44 +515,47 @@ public class LyricsService: ObservableObject {
         error = isInstrumental ? "Instrumental track" : "Lyrics unavailable"
     }
 
-    private func runAuthoritativeBackfill(
+    private func launchAuthoritativeBackfill(
         title: String,
         artist: String,
         duration: TimeInterval,
         album: String,
         songID: String
-    ) async {
+    ) {
         let wantsTranslation = showTranslation
-        guard let backfill = await fetcher.backfillAuthoritativeLyrics(
-            title: title,
-            artist: artist,
-            duration: duration,
-            translationEnabled: wantsTranslation,
-            album: album
-        ) else {
-            DebugLogger.log("LyricsService", "🧭 Authoritative backfill miss: '\(songID)'")
-            await MainActor.run {
-                self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
-            }
-            return
-        }
-        switch backfill {
-        case .lyrics(let backfilled):
-            await applyFetchedLyricsIfCurrent(
-                backfilled,
+        Task { [weak self] in
+            guard let self else { return }
+            guard let backfill = await self.fetcher.backfillAuthoritativeLyrics(
                 title: title,
                 artist: artist,
                 duration: duration,
-                songID: songID,
+                translationEnabled: wantsTranslation,
                 album: album
-            )
-        case .instrumental:
-            await MainActor.run {
-                self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+            ) else {
+                DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                }
+                return
             }
-        case .unavailable:
-            await MainActor.run {
-                self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+            switch backfill {
+            case .lyrics(let backfilled):
+                await self.applyFetchedLyricsIfCurrent(
+                    backfilled,
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    songID: songID,
+                    album: album
+                )
+            case .instrumental:
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+                }
+            case .unavailable:
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                }
             }
         }
     }
@@ -469,7 +578,6 @@ public class LyricsService: ObservableObject {
         let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
         // Parse-time classification — no heuristic re-derivation.
         let isUnsynced = bestResult.kind == .unsynced
-        let languageSummary = Self.languageSummary(for: processed.lyrics)
 
         // 🔑 Cache real lyrics even if song changed or task was cancelled — valid data.
         // (Only "No Lyrics" is unsafe to cache on cancellation.)
@@ -477,11 +585,21 @@ public class LyricsService: ObservableObject {
             lyrics: processed.lyrics,
             firstRealLyricIndex: processed.firstRealLyricIndex,
             hasSourceTranslation: hasSourceTranslation,
-            isUnsynced: isUnsynced,
-            languageSummary: languageSummary
+            isUnsynced: isUnsynced
         )
         lyricsCache.setObject(cacheItem, forKey: songID as NSString)
         DebugLogger.log("LyricsService", "📦 Cached: '\(songID)' (\(processed.lyrics.count) lines, unsynced=\(isUnsynced))")
+        recordDiagnosticsLyricsFetchFinished(
+            title: title,
+            artist: artist,
+            album: album,
+            duration: duration,
+            source: bestResult.source,
+            score: bestResult.score,
+            lineCount: processed.lyrics.count,
+            isUnsynced: isUnsynced,
+            hasSourceTranslation: hasSourceTranslation
+        )
 
         // 🔑 Only apply to UI if this is still the current song
         await MainActor.run {
@@ -493,9 +611,8 @@ public class LyricsService: ObservableObject {
                         firstRealLyricIndex: processed.firstRealLyricIndex,
                         hasSourceTranslation: hasSourceTranslation,
                         isUnsynced: isUnsynced,
-                        detectedLanguageCode: languageSummary.detectedLanguageCode,
-                        isPredominantlyChinese: languageSummary.isPredominantlyChinese,
                         songID: songID,
+                        stableSongID: Self.stableSongIdentity(title: title, artist: artist),
                         duration: duration,
                         album: album)
         }
@@ -506,20 +623,13 @@ public class LyricsService: ObservableObject {
                              firstRealLyricIndex: Int,
                              hasSourceTranslation: Bool,
                              isUnsynced: Bool,
-                             detectedLanguageCode: String?,
-                             isPredominantlyChinese: Bool,
                              songID: String,
+                             stableSongID: String,
                              duration: TimeInterval,
                              album: String = "") {
-        let signpostID = OSSignpostID(log: Self.performanceLog)
-        os_signpost(.begin, log: Self.performanceLog, name: "ApplyLyrics", signpostID: signpostID, "lineCount=%{public}d", newLyrics.count)
-        defer { os_signpost(.end, log: Self.performanceLog, name: "ApplyLyrics", signpostID: signpostID) }
-
         self.lyrics = newLyrics
         self.firstRealLyricIndex = firstRealLyricIndex
         self.translationsAreFromLyricsSource = hasSourceTranslation
-        self.detectedLyricsLanguageCode = detectedLanguageCode
-        self.lyricsPredominantlyChinese = isPredominantlyChinese
         self.isLoading = false
         self.error = nil  // 🔑 歌词成功加载，清除旧 error（防止 duration 竞态导致 retry 残留）
         self.currentLineIndex = nil
@@ -527,6 +637,7 @@ public class LyricsService: ObservableObject {
         // Only lyrics.ovh / Genius (createUnsyncedLyrics) are tagged .unsynced.
         self.isUnsyncedLyrics = isUnsynced
         self.currentSongID = songID
+        self.currentStableSongID = stableSongID
         self.currentSongDuration = duration
         if !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.currentSongAlbum = album
@@ -550,6 +661,70 @@ public class LyricsService: ObservableObject {
                 try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms delay
                 self.translationRequestTrigger += 1
             }
+        }
+    }
+
+    private func diagnosticsTrack(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval
+    ) -> DiagnosticTrackContext {
+        DiagnosticTrackContext(
+            title: title,
+            artist: artist,
+            album: album,
+            duration: duration
+        )
+    }
+
+    private func recordDiagnosticsLyricsFetchStarted(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval,
+        forceRefresh: Bool
+    ) {
+        let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
+        Task { @MainActor in
+            DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: forceRefresh)
+        }
+    }
+
+    private func recordDiagnosticsLyricsFetchFinished(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval,
+        source: String?,
+        score: Double?,
+        lineCount: Int,
+        isUnsynced: Bool,
+        hasSourceTranslation: Bool
+    ) {
+        let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
+        Task { @MainActor in
+            DiagnosticsService.shared.recordLyricsFetchFinished(
+                track: track,
+                source: source,
+                score: score,
+                lineCount: lineCount,
+                isUnsynced: isUnsynced,
+                hadSourceTranslation: hasSourceTranslation
+            )
+        }
+    }
+
+    private func recordDiagnosticsLyricsMiss(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval,
+        resultCount: Int
+    ) {
+        let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
+        Task { @MainActor in
+            DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: resultCount)
         }
     }
 
@@ -579,7 +754,16 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        let bestMatch = lyricIndex(at: time, leadTime: scrollAnimationLeadTime)
+        // 时间匹配
+        var bestMatch: Int? = nil
+        for index in firstRealLyricIndex..<lyrics.count {
+            let triggerTime = lyrics[index].startTime - scrollAnimationLeadTime
+            if time >= triggerTime {
+                bestMatch = index
+            } else {
+                break
+            }
+        }
 
         if let newIndex = bestMatch, currentLineIndex != newIndex {
             if currentLineIndex == nil || newIndex > currentLineIndex! {
@@ -602,45 +786,6 @@ public class LyricsService: ObservableObject {
         // as past (normal blur+dim+scale animation) and centers the
         // three-dot indicator as the focal "current" element.
         updateInterludeAfterIndex(at: time)
-    }
-
-    private func lyricIndex(at time: TimeInterval, leadTime: TimeInterval) -> Int? {
-        guard firstRealLyricIndex < lyrics.count else { return nil }
-
-        if let current = currentLineIndex, current >= firstRealLyricIndex, current < lyrics.count {
-            let currentTrigger = lyrics[current].startTime - leadTime
-            if time >= currentTrigger {
-                var index = current
-                while index + 1 < lyrics.count,
-                      time >= lyrics[index + 1].startTime - leadTime {
-                    index += 1
-                }
-                return index
-            }
-
-            // Preserve the existing backward hysteresis behavior for minor
-            // playback-position jitter around a line boundary.
-            if time >= currentTrigger - 0.8 {
-                return current
-            }
-        }
-
-        var low = firstRealLyricIndex
-        var high = lyrics.count - 1
-        var bestMatch: Int?
-
-        while low <= high {
-            let mid = (low + high) / 2
-            let triggerTime = lyrics[mid].startTime - leadTime
-            if time >= triggerTime {
-                bestMatch = mid
-                low = mid + 1
-            } else {
-                high = mid - 1
-            }
-        }
-
-        return bestMatch
     }
 
     private func updateInterludeAfterIndex(at time: TimeInterval) {
@@ -697,8 +842,8 @@ public class LyricsService: ObservableObject {
         if translationsAreFromLyricsSource && isTargetChinese { return }
 
         // 🔑 歌词内容已经是目标语言 → 跳过
-        if isTargetChinese && lyricsPredominantlyChinese { return }
-        if lyricsMatchTargetLanguage() { return }
+        if isTargetChinese && lyricsArePredominantlyChinese() { return }
+        if lyricsAreInTargetLanguage() { return }
 
         // 检查是否已翻译过（相同歌曲+相同语言）
         let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
@@ -761,39 +906,32 @@ public class LyricsService: ObservableObject {
     // MARK: - 语言检测
     // ========================================================================
 
-    private static func languageSummary(for newLyrics: [LyricLine]) -> LanguageSummary {
-        let validTexts = newLyrics.compactMap { line -> String? in
+    private func lyricsAreInTargetLanguage() -> Bool {
+        guard #available(macOS 15.0, *) else { return false }
+        let validTexts = lyrics.compactMap { line -> String? in
             let t = line.text.trimmingCharacters(in: .whitespaces)
             return (!t.isEmpty && t != "..." && t != "…" && t != "⋯") ? t : nil
         }
-        guard !validTexts.isEmpty else {
-            return LanguageSummary(detectedLanguageCode: nil, isPredominantlyChinese: false)
-        }
-
-        // 任何一行含假名 → 日文歌词，不是中文
-        let hasJapanese = validTexts.contains { LanguageUtils.containsJapanese($0) }
-        let isPredominantlyChinese: Bool
-        if hasJapanese {
-            isPredominantlyChinese = false
-        } else {
-            let chineseCount = validTexts.filter { LanguageUtils.containsChinese($0) }.count
-            isPredominantlyChinese = Double(chineseCount) / Double(validTexts.count) > 0.4
-        }
-
-        guard #available(macOS 15.0, *), validTexts.count >= 3 else {
-            return LanguageSummary(detectedLanguageCode: nil, isPredominantlyChinese: isPredominantlyChinese)
-        }
-        let detectedLanguageCode = TranslationService
-            .detectLanguage(for: validTexts)?
-            .languageCode?
-            .identifier
-        return LanguageSummary(detectedLanguageCode: detectedLanguageCode, isPredominantlyChinese: isPredominantlyChinese)
+        guard validTexts.count >= 3 else { return false }
+        guard let detected = TranslationService.detectLanguage(for: validTexts),
+              let detectedCode = detected.languageCode?.identifier else { return false }
+        let targetPrefix = String(translationLanguage.prefix(2))
+        return detectedCode.hasPrefix(targetPrefix)
     }
 
-    private func lyricsMatchTargetLanguage() -> Bool {
-        guard let detectedLyricsLanguageCode else { return false }
-        let targetPrefix = String(translationLanguage.prefix(2))
-        return detectedLyricsLanguageCode.hasPrefix(targetPrefix)
+    private func lyricsArePredominantlyChinese() -> Bool {
+        let validLines = lyrics.filter {
+            let t = $0.text.trimmingCharacters(in: .whitespaces)
+            return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
+        }
+        guard !validLines.isEmpty else { return false }
+
+        // 任何一行含假名 → 日文歌词，不是中文
+        let hasJapanese = validLines.contains { LanguageUtils.containsJapanese($0.text) }
+        if hasJapanese { return false }
+
+        let chineseCount = validLines.filter { LanguageUtils.containsChinese($0.text) }.count
+        return Double(chineseCount) / Double(validLines.count) > 0.4
     }
 
     // ========================================================================
@@ -808,7 +946,6 @@ public class LyricsService: ObservableObject {
     // MARK: - Public API: Preload
     // ========================================================================
 
-    @MainActor
     public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval, album: String)]) {
         let candidates = tracks
             .prefix(4)
@@ -820,14 +957,8 @@ public class LyricsService: ObservableObject {
 
         guard !candidates.isEmpty else { return }
 
-        os_signpost(.event, log: Self.performanceLog, name: "PreloadLyricsScheduled", "count=%{public}d", candidates.count)
-        preloadTask?.cancel()
-        preloadTask = Task(priority: .utility) { [weak self] in
+        Task.detached(priority: .low) { [weak self] in
             guard let self else { return }
-            let batchSignpostID = OSSignpostID(log: Self.performanceLog)
-            os_signpost(.begin, log: Self.performanceLog, name: "PreloadLyricsBatch", signpostID: batchSignpostID, "count=%{public}d", candidates.count)
-            defer { os_signpost(.end, log: Self.performanceLog, name: "PreloadLyricsBatch", signpostID: batchSignpostID) }
-
             for track in candidates {
                 guard !Task.isCancelled else { return }
                 let songID = Self.songIdentity(
@@ -838,8 +969,6 @@ public class LyricsService: ObservableObject {
                 )
                 if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
 
-                let fetchSignpostID = OSSignpostID(log: Self.performanceLog)
-                os_signpost(.begin, log: Self.performanceLog, name: "PreloadLyricsFetch", signpostID: fetchSignpostID)
                 let results = await self.fetcher.fetchAllSources(
                     title: track.title,
                     artist: track.artist,
@@ -847,12 +976,6 @@ public class LyricsService: ObservableObject {
                     translationEnabled: false,
                     album: track.album
                 )
-                os_signpost(.end, log: Self.performanceLog, name: "PreloadLyricsFetch", signpostID: fetchSignpostID)
-                guard !Task.isCancelled else { return }
-
-                let processSignpostID = OSSignpostID(log: Self.performanceLog)
-                os_signpost(.begin, log: Self.performanceLog, name: "PreloadLyricsProcess", signpostID: processSignpostID)
-                defer { os_signpost(.end, log: Self.performanceLog, name: "PreloadLyricsProcess", signpostID: processSignpostID) }
 
                 var bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration)
                 if bestResult == nil {
@@ -864,21 +987,17 @@ public class LyricsService: ObservableObject {
                         album: track.album
                     )
                 }
-                guard !Task.isCancelled else { return }
                 guard let bestResult, !bestResult.lyrics.isEmpty else { continue }
 
                 let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
                 let processed = self.parser.processLyrics(aligned)
-                guard !Task.isCancelled else { return }
                 let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
-                let languageSummary = Self.languageSummary(for: processed.lyrics)
 
                 let cacheItem = CachedLyricsItem(
                     lyrics: processed.lyrics,
                     firstRealLyricIndex: processed.firstRealLyricIndex,
                     hasSourceTranslation: hasSourceTranslation,
-                    isUnsynced: bestResult.kind == .unsynced,
-                    languageSummary: languageSummary
+                    isUnsynced: bestResult.kind == .unsynced
                 )
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
             }
@@ -891,6 +1010,12 @@ public class LyricsService: ObservableObject {
         let normalizedAlbum = MetadataDiskCache.normalize(album)
         let roundedDuration = duration > 0 ? Int(duration.rounded()) : 0
         return "\(normalizedTitle)|\(normalizedArtist)|\(normalizedAlbum)|\(roundedDuration)"
+    }
+
+    private static func stableSongIdentity(title: String, artist: String) -> String {
+        let normalizedTitle = MetadataDiskCache.normalize(title)
+        let normalizedArtist = MetadataDiskCache.normalize(artist)
+        return "\(normalizedTitle)|\(normalizedArtist)"
     }
 }
 

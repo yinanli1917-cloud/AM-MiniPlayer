@@ -115,12 +115,23 @@ private func writeGammaJSON(results: [VerifyResult], path: String, interSongDela
     let timestamp = ISO8601DateFormatter().string(from: Date())
 
     var songsJSON: [[String: Any]] = []
+    var passCount = 0
+    var overBudget = 0
+    var syncedCount = 0
+    var unsyncedCount = 0
+    var instrumentalCount = 0
     for r in results {
         let pass = r.elapsedMs <= 3000
             && r.classification == "synced"
             && r.lyricsLineCount >= 5
             && (r.selectedSource ?? "none") != "none"
             && r.passed
+        if pass { passCount += 1 }
+        if r.elapsedMs > 3000 { overBudget += 1 }
+        if r.classification == "synced" { syncedCount += 1 }
+        if r.classification == "unsynced" { unsyncedCount += 1 }
+        if r.classification == "instrumental" { instrumentalCount += 1 }
+
         var failReasons: [String] = []
         if r.elapsedMs > 3000 { failReasons.append("latency_\(r.elapsedMs)ms_over_3000") }
         if r.classification != "synced" { failReasons.append("classification_\(r.classification ?? "nil")") }
@@ -152,11 +163,6 @@ private func writeGammaJSON(results: [VerifyResult], path: String, interSongDela
     let median = latencies.isEmpty ? 0 : latencies[latencies.count / 2]
     let p95Index = latencies.isEmpty ? 0 : Int(Double(latencies.count - 1) * 0.95)
     let p95 = latencies.isEmpty ? 0 : latencies[p95Index]
-    let passCount = songsJSON.filter { ($0["pass"] as? Bool) == true }.count
-    let overBudget = results.filter { $0.elapsedMs > 3000 }.count
-    let syncedCount = results.filter { $0.classification == "synced" }.count
-    let unsyncedCount = results.filter { $0.classification == "unsynced" }.count
-    let instrumentalCount = results.filter { $0.classification == "instrumental" }.count
 
     let summary: [String: Any] = [
         "total": results.count,
@@ -216,9 +222,10 @@ private func shellOutput(_ cmd: String) -> String? {
 
 private func runAdHoc(args: [String]) async {
     let dumpMode = args.contains("--dump")
+    let skipFixtureOracle = args.contains("--no-fixture-oracle")
     // --album "专辑" 供候选选择时匹配版本 (可选, 用于多版本歧义消解)
     var albumArg = ""
-    var filtered = args.filter { $0 != "--dump" }
+    var filtered = args.filter { $0 != "--dump" && $0 != "--no-fixture-oracle" }
     if let idx = filtered.firstIndex(of: "--album"), idx + 1 < filtered.count {
         albumArg = filtered[idx + 1]
         filtered.remove(at: idx + 1)
@@ -246,10 +253,20 @@ private func runAdHoc(args: [String]) async {
 
     log("=== check \"\(title)\" - \(artist) (\(Int(dur))s) ===\n")
 
+    let fixture: TestCase? = skipFixtureOracle
+        ? nil
+        : matchingFixture(
+            for: LibraryTrack(title: title, artist: artist, duration: dur, album: albumArg),
+            fixtureIndex: buildFixtureIndex(loadTestCases())
+        )
+    if let fixture {
+        log("Using fixture oracle \(fixture.id) for content identity validation")
+    }
+
     let (r, lyrics) = await testSongWithLyrics(
-        id: "AD-HOC", title: title,
+        id: fixture?.id ?? "AD-HOC", title: title,
         artist: artist, duration: dur,
-        expectation: nil,
+        expectation: fixture?.expectation,
         translationEnabled: true,
         album: albumArg
     )
@@ -292,9 +309,10 @@ private func runLibrary(args: [String]) async {
     log("获取到 \(tracks.count) 首歌曲\n")
 
     let fixtureCases = loadTestCases()
+    let fixtureIndex = buildFixtureIndex(fixtureCases)
     var results: [VerifyResult] = []
     for (i, track) in tracks.enumerated() {
-        let fixture = matchingFixture(for: track, cases: fixtureCases)
+        let fixture = matchingFixture(for: track, fixtureIndex: fixtureIndex)
         let r = await testSong(
             id: "LIB-\(String(format: "%02d", i + 1))",
             title: track.title, artist: track.artist,
@@ -308,14 +326,27 @@ private func runLibrary(args: [String]) async {
     printBatchSummary(results)
 }
 
-private func matchingFixture(for track: LibraryTrack, cases: [TestCase]) -> TestCase? {
+private struct FixtureLookupKey: Hashable {
+    let title: String
+    let artist: String
+}
+
+private func buildFixtureIndex(_ cases: [TestCase]) -> [FixtureLookupKey: [TestCase]] {
+    Dictionary(grouping: cases) { testCase in
+        FixtureLookupKey(
+            title: fixtureKey(testCase.title),
+            artist: fixtureKey(testCase.artist)
+        )
+    }
+}
+
+private func matchingFixture(for track: LibraryTrack, fixtureIndex: [FixtureLookupKey: [TestCase]]) -> TestCase? {
     let title = fixtureKey(track.title)
     let artist = fixtureKey(track.artist)
-    return cases.first { tc in
-        fixtureKey(tc.title) == title &&
-        fixtureKey(tc.artist) == artist &&
-        tc.expectation.shouldFindLyrics &&
-        abs(tc.duration - track.duration) <= 3.0
+    let key = FixtureLookupKey(title: title, artist: artist)
+    return fixtureIndex[key]?.first { testCase in
+        testCase.expectation.shouldFindLyrics &&
+        abs(testCase.duration - track.duration) <= 3.0
     }
 }
 
@@ -456,6 +487,7 @@ private func lookupDuration(title: String, artist: String) async -> Double {
         let artistLower = artist.lowercased()
 
         // Find best match: exact title + artist match, closest to first result
+        var fallbackDuration: Double?
         for result in results {
             guard let trackName = result["trackName"] as? String,
                   let artistName = result["artistName"] as? String,
@@ -464,15 +496,11 @@ private func lookupDuration(title: String, artist: String) async -> Double {
                artistName.lowercased().contains(artistLower) {
                 return Double(millis) / 1000.0
             }
-        }
-        // Fallback: first result with matching artist
-        for result in results {
-            guard let artistName = result["artistName"] as? String,
-                  let millis = result["trackTimeMillis"] as? Int else { continue }
             if artistName.lowercased().contains(artistLower) {
-                return Double(millis) / 1000.0
+                fallbackDuration = fallbackDuration ?? Double(millis) / 1000.0
             }
         }
+        return fallbackDuration ?? 0
     } catch {}
     return 0
 }

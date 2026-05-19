@@ -14,6 +14,12 @@
 	<key>com.apple.security.network.client</key>
 	<true/>
 
+	<!-- Read Apple Music playback session metadata for the original now-playing artwork URL. -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>Library/Application Support/Music/PlaybackSessions/</string>
+	</array>
+
 	<!-- ✅ 指定可控制的 App (App Store 要求) -->
 	<key>com.apple.security.temporary-exception.apple-events</key>
 	<array>

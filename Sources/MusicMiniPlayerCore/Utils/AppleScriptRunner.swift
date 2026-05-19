@@ -21,6 +21,7 @@ struct PlayerStateSnapshot {
     let trackAlbum: String
     let trackDuration: Double
     let persistentID: String
+    let trackClass: String
     let bitRate: Int
     let sampleRate: Int
     /// Wall clock time when position was measured (before AppleScript execution)
@@ -55,13 +56,14 @@ enum AppleScriptRunner {
                 set trackAlbum to album of current track
                 set trackDuration to duration of current track as string
                 set trackID to persistent ID of current track
+                set trackClass to class of current track as string
                 set trackPosition to player position as string
                 set trackBitRate to bit rate of current track as string
                 set trackSampleRate to sample rate of current track as string
 
-                return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate & "|||" & shuffleState & "|||" & repeatState
+                return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackClass & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate & "|||" & shuffleState & "|||" & repeatState
             else
-                return isPlaying & "|||NOT_PLAYING|||||||0||||||0|||0|||0|||" & shuffleState & "|||" & repeatState
+                return isPlaying & "|||NOT_PLAYING|||||||0|||||||||0|||0|||0|||" & shuffleState & "|||" & repeatState
             end if
         on error errMsg
             return "ERROR:" & errMsg
@@ -131,10 +133,10 @@ enum AppleScriptRunner {
     /// 解析 "|||" 分隔的响应字符串
     private static func parseResponse(_ raw: String, measurementTime: Date) -> PlayerStateSnapshot? {
         let parts = raw.components(separatedBy: "|||")
-        guard parts.count >= 11 else { return nil }
+        guard parts.count >= 12 else { return nil }
 
         let repeatMode: Int = {
-            switch parts[10].trimmingCharacters(in: .whitespacesAndNewlines) {
+            switch parts[11].trimmingCharacters(in: .whitespacesAndNewlines) {
             case "one": return 1
             case "all": return 2
             default: return 0
@@ -143,16 +145,17 @@ enum AppleScriptRunner {
 
         return PlayerStateSnapshot(
             isPlaying: parts[0] == "true",
-            position: Double(parts[6]) ?? 0,
-            shuffle: parts[9] == "true",
+            position: Double(parts[7]) ?? 0,
+            shuffle: parts[10] == "true",
             repeatMode: repeatMode,
             trackName: parts[1],
             trackArtist: parts[2],
             trackAlbum: parts[3],
             trackDuration: Double(parts[4]) ?? 0,
             persistentID: parts[5],
-            bitRate: Int(parts[7]) ?? 0,
-            sampleRate: Int(parts[8]) ?? 0,
+            trackClass: parts[6],
+            bitRate: Int(parts[8]) ?? 0,
+            sampleRate: Int(parts[9]) ?? 0,
             measurementTime: measurementTime
         )
     }

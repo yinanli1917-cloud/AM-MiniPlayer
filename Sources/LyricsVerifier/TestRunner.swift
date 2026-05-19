@@ -120,8 +120,12 @@ func testSongWithLyrics(
 
     let elapsed = foregroundElapsedMs
     let knownSources = ["AppleMusic", "AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
+    var firstResultBySource: [String: LyricsFetcher.LyricsFetchResult] = [:]
+    for result in fetchResults where firstResultBySource[result.source] == nil {
+        firstResultBySource[result.source] = result
+    }
     let allSources: [SourceResult] = knownSources.map { name in
-        if let r = fetchResults.first(where: { $0.source == name }) {
+        if let r = firstResultBySource[name] {
             return SourceResult(name: name, found: true, score: round(r.score * 10) / 10, lines: r.lyrics.count)
         }
         return SourceResult(name: name, found: false, score: 0, lines: 0)
@@ -132,10 +136,8 @@ func testSongWithLyrics(
     let rescaled = fetcher.rescaleTimestamps(rawLyrics, duration: duration)
     let processed = LyricsParser.shared.processLyrics(rescaled)
     let lyrics = processed.lyrics
-    let firstReal = lyrics.dropFirst(processed.firstRealLyricIndex).first {
-        let t = $0.text.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
-    }
+    let lyricStats = collectLyricStats(lyrics, firstRealIndex: processed.firstRealLyricIndex)
+    let firstReal = lyricStats.firstReal
 
     var failures: [String] = []
     if let exp = expectation {
@@ -182,21 +184,14 @@ func testSongWithLyrics(
         allResults: fetchResults
     ))
 
-    // Gamma-schema fields
-    let realLines = lyrics.filter {
-        let t = $0.text.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
-    }
-    let translationCount = lyrics.filter { $0.hasTranslation }.count
-
     let result = VerifyResult(
         id: id, title: title, artist: artist,
         duration: Int(duration), passed: failures.isEmpty,
         selectedSource: reportResult?.source,
         selectedScore: reportResult?.score,
         lyricsLineCount: lyrics.count,
-        hasTranslation: lyrics.contains { $0.hasTranslation },
-        hasSyllableSync: lyrics.contains { $0.hasSyllableSync },
+        hasTranslation: lyricStats.hasTranslation,
+        hasSyllableSync: lyricStats.hasSyllableSync,
         firstRealLine: firstReal?.text,
         firstRealLineSHA256: firstReal.map { normalizedFirstLineSHA256($0.text) },
         elapsedMs: elapsed,
@@ -204,13 +199,59 @@ func testSongWithLyrics(
         warnings: warnings,
         allSources: allSources,
         classification: classificationString,
-        realLineCount: realLines.count,
-        translationCount: translationCount,
+        realLineCount: lyricStats.realLines.count,
+        translationCount: lyricStats.translationCount,
         firstRealLineTimeS: firstReal?.startTime,
         lastLineTimeS: lyrics.last?.startTime
     )
 
     return (result, lyrics)
+}
+
+private struct ProcessedLyricStats {
+    let realLines: [LyricLine]
+    let firstReal: LyricLine?
+    let translationCount: Int
+    let hasTranslation: Bool
+    let hasSyllableSync: Bool
+}
+
+private func collectLyricStats(_ lyrics: [LyricLine], firstRealIndex: Int) -> ProcessedLyricStats {
+    let firstRealStart = max(0, min(firstRealIndex, lyrics.count))
+    var realLines: [LyricLine] = []
+    var firstReal: LyricLine?
+    var translationCount = 0
+    var hasTranslation = false
+    var hasSyllableSync = false
+
+    for (index, line) in lyrics.enumerated() {
+        if line.hasTranslation {
+            hasTranslation = true
+            translationCount += 1
+        }
+        if line.hasSyllableSync {
+            hasSyllableSync = true
+        }
+        if isRealLyricText(line.text) {
+            realLines.append(line)
+            if index >= firstRealStart && firstReal == nil {
+                firstReal = line
+            }
+        }
+    }
+
+    return ProcessedLyricStats(
+        realLines: realLines,
+        firstReal: firstReal,
+        translationCount: translationCount,
+        hasTranslation: hasTranslation,
+        hasSyllableSync: hasSyllableSync
+    )
+}
+
+private func isRealLyricText(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmed.isEmpty && trimmed != "..." && trimmed != "…" && trimmed != "⋯"
 }
 
 /// Convenience wrapper when caller doesn't need raw lyrics
@@ -370,10 +411,7 @@ private func validateLiveLyricsContract(
         failures.append("选中 \(classification) 歌词；产品只允许同步/可信静态歌词")
     }
 
-    let realLines = lyrics.filter {
-        let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
-    }
+    let realLines = lyrics.filter { isRealLyricText($0.text) }
     if realLines.count < 5 {
         failures.append("有效歌词行数不足 5 行")
     }
@@ -432,10 +470,7 @@ private func validateContent(
     guard !lyrics.isEmpty, let source = source else { return ContentValidation() }
     var validation = ContentValidation()
 
-    let validLines = lyrics.filter {
-        let t = $0.text.trimmingCharacters(in: .whitespaces)
-        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
-    }
+    let validLines = lyrics.filter { isRealLyricText($0.text) }
     guard !validLines.isEmpty else { return validation }
 
     // ── 1. 首行错配检测 ──
@@ -488,11 +523,11 @@ private func validateContent(
     }
 
     // ── 3. 低质量源标记 ──
+    let sourceTokens = lyricIdentityTokens(lyrics)
     let hasIndependentLyricAgreement = allResults.contains { result in
-        result.source != source &&
-        result.score > 0 &&
-        lyricIdentityTokens(result.lyrics).count >= 6 &&
-        lyricSimilarity(lyrics, result.lyrics) >= 0.34
+        guard result.source != source, result.score > 0 else { return false }
+        let witnessTokens = lyricIdentityTokens(result.lyrics)
+        return witnessTokens.count >= 6 && lyricSimilarity(sourceTokens, witnessTokens) >= 0.34
     }
     if source == "lyrics.ovh" && (score ?? 0) < 55 && !hasIndependentLyricAgreement {
         validation.warnings.append("⚠️ 仅 lyrics.ovh 低分命中（高错配风险）")
@@ -581,27 +616,30 @@ private func validateCrossSourceIdentity(
 ) -> [String] {
     guard let selected, !selected.lyrics.isEmpty else { return [] }
 
-    let candidates = uniqueSourceResults(allResults).filter {
-        $0.score > 0 && !$0.lyrics.isEmpty && lyricIdentityTokens($0.lyrics).count >= 6
+    let candidates = uniqueSourceResults(allResults).compactMap { result -> LyricIdentityCandidate? in
+        let tokens = lyricIdentityTokens(result.lyrics)
+        guard result.score > 0, !result.lyrics.isEmpty, tokens.count >= 6 else { return nil }
+        return LyricIdentityCandidate(result: result, tokens: tokens)
     }
     guard candidates.count >= 3 else { return [] }
 
     let threshold = 0.34
-    let clusters: [[LyricsFetcher.LyricsFetchResult]] = candidates.map { anchor in
-        candidates.filter { lyricSimilarity(anchor.lyrics, $0.lyrics) >= threshold }
+    let clusters: [[LyricIdentityCandidate]] = candidates.map { anchor in
+        candidates.filter { lyricSimilarity(anchor.tokens, $0.tokens) >= threshold }
     }
     guard let bestCluster = clusters.max(by: { lhs, rhs in
         if lhs.count != rhs.count { return lhs.count < rhs.count }
-        let lhsSynced = lhs.filter { $0.kind == .synced }.count
-        let rhsSynced = rhs.filter { $0.kind == .synced }.count
+        let lhsSynced = lhs.filter { $0.result.kind == .synced }.count
+        let rhsSynced = rhs.filter { $0.result.kind == .synced }.count
         return lhsSynced < rhsSynced
     }) else { return [] }
 
     guard bestCluster.count >= 2 else { return [] }
-    guard !bestCluster.contains(where: { $0.source == selected.source }) else { return [] }
-    let clusterHasSynced = bestCluster.contains { $0.kind == .synced }
-    let clusterHasStrongSynced = bestCluster.contains { result in
-        result.kind == .synced
+    guard !bestCluster.contains(where: { $0.result.source == selected.source }) else { return [] }
+    let clusterHasSynced = bestCluster.contains { $0.result.kind == .synced }
+    let clusterHasStrongSynced = bestCluster.contains { candidate in
+        let result = candidate.result
+        return result.kind == .synced
             && (result.score >= 65 || hasWordLevelSync(result))
             && (result.albumMatched || (result.matchedDurationDiff ?? .greatestFiniteMagnitude) < 1.0 || result.titleMatched)
     }
@@ -618,12 +656,13 @@ private func validateCrossSourceIdentity(
         return []
     }
 
+    let selectedTokens = lyricIdentityTokens(selected.lyrics)
     let selectedSimilarity = bestCluster
-        .map { lyricSimilarity(selected.lyrics, $0.lyrics) }
+        .map { lyricSimilarity(selectedTokens, $0.tokens) }
         .max() ?? 0
     guard selectedSimilarity < 0.18 else { return [] }
 
-    let supporters = bestCluster.map { $0.source }.sorted().joined(separator: ",")
+    let supporters = bestCluster.map { $0.result.source }.sorted().joined(separator: ",")
     return ["跨源歌词内容冲突: selected=\(selected.source), consensus=\(supporters)"]
 }
 
@@ -631,17 +670,18 @@ private func hasIndependentLyricAgreement(
     for selected: LyricsFetcher.LyricsFetchResult,
     allResults: [LyricsFetcher.LyricsFetchResult]
 ) -> Bool {
+    let selectedTokens = lyricIdentityTokens(selected.lyrics)
     guard selected.kind == .synced,
           selected.titleMatched,
           (selected.matchedDurationDiff ?? .greatestFiniteMagnitude) < 1.0,
-          lyricIdentityTokens(selected.lyrics).count >= 6 else { return false }
+          selectedTokens.count >= 6 else { return false }
 
     return uniqueSourceResults(allResults).contains { witness in
-        witness.source != selected.source &&
-        witness.score > 0 &&
-        !witness.lyrics.isEmpty &&
-        lyricIdentityTokens(witness.lyrics).count >= 6 &&
-        lyricSimilarity(selected.lyrics, witness.lyrics) >= 0.24
+        guard witness.source != selected.source,
+              witness.score > 0,
+              !witness.lyrics.isEmpty else { return false }
+        let witnessTokens = lyricIdentityTokens(witness.lyrics)
+        return witnessTokens.count >= 6 && lyricSimilarity(selectedTokens, witnessTokens) >= 0.24
     }
 }
 
@@ -683,19 +723,23 @@ private func uniqueSourceResults(_ results: [LyricsFetcher.LyricsFetchResult]) -
     return Array(bestBySource.values)
 }
 
+private struct LyricIdentityCandidate {
+    let result: LyricsFetcher.LyricsFetchResult
+    let tokens: Set<String>
+}
+
 private func lyricSimilarity(_ lhs: [LyricLine], _ rhs: [LyricLine]) -> Double {
-    let a = lyricIdentityTokens(lhs)
-    let b = lyricIdentityTokens(rhs)
-    guard !a.isEmpty, !b.isEmpty else { return 0 }
-    let intersection = a.intersection(b).count
-    return Double(intersection) / Double(min(a.count, b.count))
+    lyricSimilarity(lyricIdentityTokens(lhs), lyricIdentityTokens(rhs))
+}
+
+private func lyricSimilarity(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
+    guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
+    let intersection = lhs.intersection(rhs).count
+    return Double(intersection) / Double(min(lhs.count, rhs.count))
 }
 
 private func lyricIdentityTokens(_ lyrics: [LyricLine]) -> Set<String> {
-    let lines = lyrics.filter {
-        let t = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !t.isEmpty && t != "..." && t != "…" && t != "⋯"
-    }.prefix(24)
+    let lines = lyrics.filter { isRealLyricText($0.text) }.prefix(24)
     let raw = lines.map(\.text).joined(separator: " ")
     let folded = LanguageUtils.toSimplifiedChinese(raw)
         .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
@@ -777,12 +821,22 @@ func printResultLine(_ r: VerifyResult) {
 }
 
 func printBatchSummary(_ results: [VerifyResult]) {
-    let passed = results.filter { $0.passed }.count
-    let warned = results.filter { !$0.warnings.isEmpty }.count
-    let unresolved = results.filter { $0.lyricsLineCount == 0 && $0.classification == "none" }.count
-    let unavailable = results.filter { $0.classification == "unavailable" }.count
-    let instrumental = results.filter { $0.classification == "instrumental" }.count
-    let totalMs = results.reduce(0) { $0 + $1.elapsedMs }
+    var passed = 0
+    var warned = 0
+    var unresolved = 0
+    var unavailable = 0
+    var instrumental = 0
+    var totalMs = 0
+
+    for result in results {
+        if result.passed { passed += 1 }
+        if !result.warnings.isEmpty { warned += 1 }
+        if result.lyricsLineCount == 0 && result.classification == "none" { unresolved += 1 }
+        if result.classification == "unavailable" { unavailable += 1 }
+        if result.classification == "instrumental" { instrumental += 1 }
+        totalMs += result.elapsedMs
+    }
+
     let avg = results.isEmpty ? 0 : totalMs / results.count
 
     log("""

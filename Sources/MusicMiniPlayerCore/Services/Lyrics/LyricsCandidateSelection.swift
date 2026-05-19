@@ -92,6 +92,12 @@ extension LyricsFetcher {
         let hasSameArtistTitleEvidence = candidates.contains { candidate in
             candidate.titleMatch && candidate.artistMatch && !isBackingTrack(candidate)
         }
+        let inputTokens = inputTitle.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        let inputWordCount = inputTokens.count
+        let likelyJapaneseRomaji = LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
+        let inputLooksEnglish = LanguageUtils.isLikelyEnglishTitle(inputTitle)
 
         // 按优先级递减尝试
         let priorities: [(String, Int, (SearchCandidate<ID>) -> Bool)] = [
@@ -183,8 +189,6 @@ extension LyricsFetcher {
             ("P3", 3, { candidate in
                 guard candidate.artistMatch else { return false }
                 guard !inputTitle.isEmpty else { return false }
-                let inputTokens = inputTitle.lowercased()
-                    .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
                 let resultTokens = LanguageUtils.normalizeTrackName(candidate.name).lowercased()
                     .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
                 let hasTokenOverlap = inputTokens.contains { t in
@@ -197,13 +201,10 @@ extension LyricsFetcher {
                 if disableCjkEscape { return false }
                 // 🔑 Romanized→CJK escape
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
-                let wordCount = inputTitle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
-                let looksRomanized = wordCount >= 4 || LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
+                let looksRomanized = inputWordCount >= 4 || likelyJapaneseRomaji
                 // 🔑 English title guard
-                let likelyJapaneseRomaji = LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
-                let inputLooksEnglish = LanguageUtils.isLikelyEnglishTitle(inputTitle)
                 if inputLooksEnglish && !likelyJapaneseRomaji {
-                    if !(aliasConfirmedCJK && wordCount <= 3) { return false }
+                    if !(aliasConfirmedCJK && inputWordCount <= 3) { return false }
                 }
                 let resultTitleHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
                 if resultTitleHasCJK && candidate.albumMatch && aliasConfirmedCJK && candidate.durationDiff < 5.0 {
@@ -214,7 +215,7 @@ extension LyricsFetcher {
                 }
                 if resultTitleHasCJK && candidate.durationDiff < 1.0 {
                     guard looksRomanized || aliasConfirmedCJK || candidate.albumMatch else { return false }
-                    if wordCount <= 1 && !candidate.albumMatch && !hasSameArtistTitleEvidence {
+                    if inputWordCount <= 1 && !candidate.albumMatch && !hasSameArtistTitleEvidence {
                         return false
                     }
                     if hasAlbumHint && !candidate.albumMatch {
@@ -229,17 +230,25 @@ extension LyricsFetcher {
         // 🔑 Cross-tier albumMatch priority
         var tierWinners: [(label: String, rank: Int, candidate: SearchCandidate<ID>)] = []
         for (label, rank, predicate) in priorities {
-            let tierMatches = sorted.filter(predicate)
-            if let best = tierMatches.sorted(by: compositeRank).first {
+            var best: SearchCandidate<ID>?
+            for candidate in sorted where predicate(candidate) {
+                if let current = best {
+                    if compositeRank(candidate, current) { best = candidate }
+                } else {
+                    best = candidate
+                }
+            }
+            if let best {
                 tierWinners.append((label, rank, best))
             }
         }
 
         // If any tier produced an album-matched winner, prefer it.
-        let albumMatched = tierWinners.filter { $0.candidate.albumMatch }
         let chosen: (label: String, rank: Int, candidate: SearchCandidate<ID>)?
-        if !albumMatched.isEmpty {
-            chosen = albumMatched.min(by: { $0.candidate.durationDiff < $1.candidate.durationDiff })
+        if let albumMatched = tierWinners
+            .filter({ $0.candidate.albumMatch })
+            .min(by: { $0.candidate.durationDiff < $1.candidate.durationDiff }) {
+            chosen = albumMatched
         } else {
             chosen = tierWinners.first
         }
@@ -392,7 +401,15 @@ extension LyricsFetcher {
         let disableCjkEscapeInP3: Bool
 
         /// resolved + original + dual-title halves 的标题/艺术家对（供 buildCandidates 匹配）
-        var titlePairs: [(String, String)] {
+        let titlePairs: [(String, String)]
+        let artistPairs: [(String, String)]
+
+        private static func buildTitlePairs(
+            rawTitle: String,
+            rawOriginalTitle: String,
+            simplifiedTitle: String,
+            simplifiedOriginalTitle: String
+        ) -> [(String, String)] {
             var pairs = [(rawTitle, simplifiedTitle), (rawOriginalTitle, simplifiedOriginalTitle)]
             for raw in [rawTitle, rawOriginalTitle] {
                 for variant in LyricsFetcher.englishContractionVariants(raw) {
@@ -411,9 +428,6 @@ extension LyricsFetcher {
             }
             return pairs
         }
-        var artistPairs: [(String, String)] {
-            [(rawArtist, simplifiedArtist), (rawOriginalArtist, simplifiedOriginalArtist)]
-        }
 
         init(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, album: String = "", disableCjkEscapeInP3: Bool = false) {
             let ct = LanguageUtils.normalizeTrackName(title)
@@ -429,6 +443,16 @@ extension LyricsFetcher {
                 LanguageUtils.normalizeTrackName(album)
             ).lowercased().replacingOccurrences(of: "-", with: " ")
             self.disableCjkEscapeInP3 = disableCjkEscapeInP3
+            self.titlePairs = Self.buildTitlePairs(
+                rawTitle: title,
+                rawOriginalTitle: originalTitle,
+                simplifiedTitle: self.simplifiedTitle,
+                simplifiedOriginalTitle: self.simplifiedOriginalTitle
+            )
+            self.artistPairs = [
+                (artist, self.simplifiedArtist),
+                (originalArtist, self.simplifiedOriginalArtist)
+            ]
         }
     }
 
@@ -507,30 +531,30 @@ extension LyricsFetcher {
         var keywords: [(String, String)] = [
             ("\(params.simplifiedTitle) \(params.simplifiedArtist)", "title+artist")
         ]
+        var seenKeywords = Set(keywords.map(\.0))
+        func appendKeyword(_ keyword: String, _ label: String) {
+            if seenKeywords.insert(keyword).inserted {
+                keywords.append((keyword, label))
+            }
+        }
         for variant in Self.englishContractionVariants(params.rawTitle) {
             let normalizedVariant = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(variant))
             let kw = "\(normalizedVariant) \(params.simplifiedArtist)"
-            if !keywords.contains(where: { $0.0 == kw }) {
-                keywords.append((kw, "contraction+artist"))
-            }
+            appendKeyword(kw, "contraction+artist")
         }
         if params.simplifiedOriginalTitle != params.simplifiedTitle ||
            params.simplifiedOriginalArtist != params.simplifiedArtist {
-            keywords.append(("\(params.simplifiedOriginalTitle) \(params.simplifiedOriginalArtist)", "original"))
+            appendKeyword("\(params.simplifiedOriginalTitle) \(params.simplifiedOriginalArtist)", "original")
         }
         for titleVariant in Self.titlePunctuationVariants(params.rawTitle) {
             let simplified = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(titleVariant))
             let kw = "\(simplified) \(params.simplifiedArtist)"
-            if !keywords.contains(where: { $0.0 == kw }) {
-                keywords.append((kw, "punctuation-title+artist"))
-            }
+            appendKeyword(kw, "punctuation-title+artist")
         }
         for variant in Self.englishContractionVariants(params.rawOriginalTitle) {
             let normalizedVariant = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(variant))
             let kw = "\(normalizedVariant) \(params.simplifiedOriginalArtist)"
-            if !keywords.contains(where: { $0.0 == kw }) {
-                keywords.append((kw, "contraction-original"))
-            }
+            appendKeyword(kw, "contraction-original")
         }
         let traditionalPairs = [
             (
@@ -546,18 +570,14 @@ extension LyricsFetcher {
         ]
         for (title, artist, label) in traditionalPairs where LanguageUtils.containsCJK(title + artist) {
             let kw = "\(title) \(artist)"
-            if !keywords.contains(where: { $0.0 == kw }) {
-                keywords.append((kw, label))
-            }
+            appendKeyword(kw, label)
         }
         if params.artistPairs.contains(where: { LanguageUtils.containsCJK($0.0) }) {
             for raw in [params.rawTitle, params.rawOriginalTitle] {
                 guard let stem = japaneseRomanizedParticleStem(raw) else { continue }
                 let simplified = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(stem))
                 let kw = "\(simplified) \(params.simplifiedArtist)"
-                if !keywords.contains(where: { $0.0 == kw }) {
-                    keywords.append((kw, "romaji-stem+artist"))
-                }
+                appendKeyword(kw, "romaji-stem+artist")
             }
         }
         // 🔑 双标题拆分
@@ -566,9 +586,7 @@ extension LyricsFetcher {
                 for (half, label) in [(halves.second, "dual-2nd"), (halves.first, "dual-1st")] {
                     let simplified = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(half))
                     let kw = "\(simplified) \(params.simplifiedArtist)"
-                    if !keywords.contains(where: { $0.0 == kw }) {
-                        keywords.append((kw, label))
-                    }
+                    appendKeyword(kw, label)
                 }
             }
         }
@@ -585,17 +603,15 @@ extension LyricsFetcher {
                 ("\(params.simplifiedTitle) \(params.normalizedAlbum)", "title+album"),
                 ("\(params.simplifiedTitle) \(params.normalizedAlbum) \(params.simplifiedArtist)", "title+album+artist")
             ]
-            for (kw, label) in albumKeywords where !keywords.contains(where: { $0.0 == kw }) {
-                keywords.append((kw, label))
+            for (kw, label) in albumKeywords {
+                appendKeyword(kw, label)
             }
             for (rawArtist, simplifiedArtist) in params.artistPairs {
                 guard LanguageUtils.containsCJK(rawArtist)
                     || LanguageUtils.containsCJK(simplifiedArtist)
                     || LanguageUtils.isPureASCII(rawArtist) else { continue }
                 let albumArtist = "\(params.normalizedAlbum) \(simplifiedArtist)"
-                if !keywords.contains(where: { $0.0 == albumArtist }) {
-                    keywords.append((albumArtist, "album+artist"))
-                }
+                appendKeyword(albumArtist, "album+artist")
             }
         }
         let isResolvedCJKTitleArtist = LanguageUtils.containsCJK(params.rawTitle)

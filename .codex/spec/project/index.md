@@ -14,6 +14,7 @@ Use this folder for rules that should survive conversation compaction:
 
 - `lyrics-pipeline.md`: lyrics result taxonomy, fallback selection, and verifier semantics.
 - `lyrics-renderer-performance.md`: protected lyrics UX, verified performance fixes, and profiling gates.
+- `owner-diagnostics.md`: local owner debug diagnostics boundary, report model, privacy rules, and retention/media policy.
 
 ## Pre-Development Checklist
 
