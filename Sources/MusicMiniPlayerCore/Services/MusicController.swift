@@ -182,7 +182,7 @@ public class MusicController: ObservableObject {
     // MARK: - Timer 管理
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    private var pollingTimer: Timer?          // 1s — lightweight SB position reads
+    private var pollingTimer: Timer?          // 2s — lightweight SB position reads
     private var fullSyncTimer: Timer?          // 30s — full SB state sync safety net
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
@@ -202,6 +202,7 @@ public class MusicController: ObservableObject {
     // Radio tracks don't reliably fire playerInfo notifications.
     // A backward position jump (e.g. 180s→2s while playing) signals a new track.
     private var lastPolledPosition: Double = 0
+    private var sbPositionPollInFlight: Bool = false
 
     // 🔑 Radio track-change backstop: when persistentID is empty (radio/URL track),
     // position-jump detection can miss changes if the user skips before accumulating
@@ -493,7 +494,7 @@ public class MusicController: ObservableObject {
 
             // Local interpolation keeps lyrics smooth; SB polling is now only a
             // drift and external-state safety net.
-            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self.pollingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 self?.pollPositionViaSB()
             }
             RunLoop.main.add(self.pollingTimer!, forMode: .common)
@@ -896,13 +897,17 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - Lightweight SB Position Poll (1s, in-process IPC)
+    // MARK: - Lightweight SB Position Poll (2s, in-process IPC)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     /// Reads only playerPosition + playerState via ScriptingBridge (no process spawn).
-    /// ~0.1ms vs ~15-25ms for osascript. Called at 2Hz for lyrics sync.
+    /// ~0.1ms vs ~15-25ms for osascript. Local interpolation handles smooth lyrics sync.
     private func pollPositionViaSB() {
         guard !isPreview else { return }
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.pollPositionViaSB() }
+            return
+        }
 
         // 🔑 Do NOT recreate musicApp/scriptingBridgeQueue on hang — that triggers
         // ARC dealloc of SBApplication while Apple Event replies are still pending,
@@ -910,11 +915,18 @@ public class MusicController: ObservableObject {
         // currentTrack reads below; stuck AE calls leak a thread but do not crash.
 
         guard let app = musicApp, app.isRunning else { return }
+        guard !sbPositionPollInFlight else { return }
+        sbPositionPollInFlight = true
 
         let pollEnqueueTime = Date()
         scriptingBridgeQueue.async { [weak self] in
             guard let self = self else { return }
-            defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
+            defer {
+                DispatchQueue.main.async {
+                    self.lastSBQueueHeartbeat = Date()
+                    self.sbPositionPollInFlight = false
+                }
+            }
             let queueWait = Date().timeIntervalSince(pollEnqueueTime)
             let measurementTime = Date()
 
