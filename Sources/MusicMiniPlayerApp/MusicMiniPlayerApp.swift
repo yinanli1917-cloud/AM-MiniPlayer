@@ -24,6 +24,7 @@ class AppMain: NSObject, NSApplicationDelegate {
     var menuBarPopover: NSPopover?
     var settingsWindow: NSWindow?
     let musicController = MusicController.shared
+    let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
     private var settingsWindowDelegate: SettingsWindowDelegate?
 
@@ -119,8 +120,34 @@ class AppMain: NSObject, NSApplicationDelegate {
     func handleAppURL(_ url: URL) {
         guard url.scheme?.lowercased() == "nanopod" else { return }
 
-        if url.host?.lowercased() == "page" {
+        switch url.host?.lowercased() {
+        case "page":
             openPage(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        case "settings":
+            openSettingsPage(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        case "diagnostics":
+            showSettingsWindow(selectedTab: .diagnostics)
+        #endif
+        default:
+            break
+        }
+    }
+
+    func openSettingsPage(named pageName: String) {
+        switch pageName.lowercased() {
+        case "", "general":
+            showSettingsWindow(selectedTab: .general)
+        case "appearance":
+            showSettingsWindow(selectedTab: .appearance)
+        case "about":
+            showSettingsWindow(selectedTab: .about)
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        case "diagnostics":
+            showSettingsWindow(selectedTab: .diagnostics)
+        #endif
+        default:
+            showSettingsWindow()
         }
     }
 
@@ -376,7 +403,7 @@ class AppMain: NSObject, NSApplicationDelegate {
     // MARK: - Settings Window (设置窗口)
 
     func createSettingsWindow() {
-        let settingsContent = SettingsWindowView()
+        let settingsContent = SettingsWindowView(state: settingsWindowState)
             .environmentObject(musicController)
 
         let hostingController = NSHostingController(rootView: settingsContent)
@@ -394,8 +421,11 @@ class AppMain: NSObject, NSApplicationDelegate {
         settingsWindow = window
     }
 
-    func showSettingsWindow() {
+    func showSettingsWindow(selectedTab: SettingsTab? = nil) {
         guard let window = settingsWindow else { return }
+        if let selectedTab {
+            settingsWindowState.selectedTab = selectedTab
+        }
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

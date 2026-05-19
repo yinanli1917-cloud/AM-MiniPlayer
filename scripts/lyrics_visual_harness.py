@@ -141,7 +141,10 @@ def launch_app() -> int:
 
 
 def request_page(page: str) -> None:
-    run(["open", f"nanopod://page/{page}"], check=False)
+    if APP.exists():
+        run(["open", "-a", str(APP), f"nanopod://page/{page}"], check=False)
+    else:
+        run(["open", f"nanopod://page/{page}"], check=False)
 
 
 def activate_app() -> None:

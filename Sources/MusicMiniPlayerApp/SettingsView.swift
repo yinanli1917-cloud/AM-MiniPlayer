@@ -109,22 +109,38 @@ struct MenuBarSettingsView: View {
 // MARK: - 设置窗口（独立 NSWindow）
 // ──────────────────────────────────────────────
 
+enum SettingsTab: Hashable {
+    case general
+    case appearance
+    case diagnostics
+    case about
+}
+
+final class SettingsWindowState: ObservableObject {
+    @Published var selectedTab: SettingsTab = .general
+}
+
 struct SettingsWindowView: View {
     @EnvironmentObject var musicController: MusicController
+    @ObservedObject var state: SettingsWindowState
     @StateObject private var lyricsService = LyricsService.shared
 
     var body: some View {
-        TabView {
+        TabView(selection: $state.selectedTab) {
             generalTab
                 .tabItem { Label(L10n.localized("general"), systemImage: "gear") }
+                .tag(SettingsTab.general)
             appearanceTab
                 .tabItem { Label(L10n.localized("appearance"), systemImage: "paintbrush") }
+                .tag(SettingsTab.appearance)
             #if DEBUG || LOCAL_DEVELOPER_BUILD
             DiagnosticsDebugPanel(musicController: musicController)
                 .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
+                .tag(SettingsTab.diagnostics)
             #endif
             aboutTab
                 .tabItem { Label(L10n.localized("about"), systemImage: "info.circle") }
+                .tag(SettingsTab.about)
         }
         .padding(20)
         .frame(minWidth: 450, minHeight: 350)
@@ -440,24 +456,25 @@ struct DiagnosticsDebugPanel: View {
     @State private var exportMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                header
 
-            Divider()
+                Divider()
 
-            reportControls
+                reportControls
 
-            Divider()
+                Divider()
 
-            recentInteractions
+                recentInteractions
 
-            Divider()
+                Divider()
 
-            recentIncidents
-
-            Spacer(minLength: 0)
+                recentIncidents
+            }
+            .padding(4)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -574,7 +591,7 @@ struct DiagnosticsDebugPanel: View {
                         }
                     }
                 }
-                .frame(minHeight: 120)
+                .frame(minHeight: 120, maxHeight: 220)
             }
         }
     }
