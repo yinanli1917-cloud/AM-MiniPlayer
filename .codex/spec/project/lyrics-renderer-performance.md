@@ -34,6 +34,12 @@ Fixes that worked:
 4. Reduce renderer constant-factor churn without changing visual math.
    Snapshot `layout.flattenedRuns` once per draw and precompute shared mask rectangles/paths. Keep the same sweep curve, fade width, opacity values, and emphasis math.
 
+5. Raise lyric sweep cadence only after reducing renderer layer churn.
+   The old 15 Hz active lyric tick is visibly low on word-level lyrics. A verified 30 Hz tick is acceptable when the normal bright sweep is grouped into one masked layer per visual lyric line and emphasized words remain on their separate path. Do not raise cadence by itself.
+
+6. Do not replace the progress bar publisher with a local `TimelineView`.
+   A local progress timeline looked like an isolation win on the lyrics page, but page-cycle soak showed hidden album/playlist overlays becoming expensive. Keep progress time on the scoped `TimePublisher` child path unless a replacement is proven on album, lyrics, and playlist together.
+
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:
@@ -80,6 +86,13 @@ After the verified optimization commits:
 - album page on same fixture: CPU avg `1.763%`;
 - playlist page on same fixture: CPU avg `2.546%`;
 - 5-minute album/lyrics/playlist soak: `0` stalls, RSS max `224.766 MB`.
+
+After the 30 Hz grouped-sweep experiment:
+
+- repeated 45s translated word-level gate: CPU avg `27.885%`, p95 `37.175%`, max `38.9%`;
+- 5-minute album/lyrics/playlist page-cycle soak: overall CPU avg `10.929%`, median `2.2%`, p95 `29.2%`;
+- page breakdown in that soak: album CPU avg `1.863%`, lyrics CPU avg `27.782%`, playlist CPU avg `2.087%`;
+- harness `stallCount` was `6`, but every flagged delay aligned with route/cycle work and had low app CPU, so treat that run as no app-side CPU stall evidence, not as a clean stall-free long-session proof.
 
 ## Remaining Bottleneck
 
