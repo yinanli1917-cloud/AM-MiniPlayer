@@ -710,6 +710,76 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertNil(selected)
     }
 
+    func testSingleWordEnglishTitleUsesOnlyTightNativeArtistAlias() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "坠落",
+                artist: "蔡健雅",
+                album: "天使与魔鬼的对话",
+                durationDiff: 6.1,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 2,
+                resultIndex: 1,
+                searchDescriptor: "alias+title:蔡健雅"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 2,
+                name: "无底洞",
+                artist: "蔡健雅",
+                album: "I Do Believe",
+                durationDiff: 1.3,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 0,
+                searchDescriptor: "alias artist only:蔡健雅"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Deep",
+            inputArtist: "Tanya Chua",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 2)
+    }
+
+    func testCompressedFastLineTimedVersionIsRejected() {
+        let fetcher = LyricsFetcher.shared
+        let fastVersion = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "******Music******",
+                "愛神也有苦惱",
+                "問他可知道",
+                "看看我的心似是醉了櫻桃",
+                "人如熟了櫻桃",
+                "愛情常向窗邊低訴",
+                "恨他不知道",
+                "但願今夕在情人夢里",
+                "寫下痴心記號",
+                "甜蜜是這戀愛預告"
+            ], startingAt: 0.8, gap: 18.0),
+            source: "NetEase",
+            score: 51.6,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        let selected = fetcher.selectBestResult(from: [fastVersion], songDuration: 218.839)
+
+        XCTAssertNil(selected)
+    }
+
     func testAppleCatalogAllowsLocalizedArtistForExactTitleDuration() {
         let fetcher = LyricsFetcher.shared
 

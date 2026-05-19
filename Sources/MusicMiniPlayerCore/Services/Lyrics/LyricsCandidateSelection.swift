@@ -134,6 +134,10 @@ extension LyricsFetcher {
                    !LanguageUtils.isLikelyRomanizedJapanese(inputTitle) {
                     return false
                 }
+                if inputWordCount <= 1 && !candidate.albumMatch {
+                    return candidate.searchDescriptor.hasPrefix("alias artist only")
+                        && candidate.durationDiff < 1.5
+                }
                 return candidate.durationDiff < 20
             }),
             ("P2", 2, { $0.titleMatch && $0.artistMatch && $0.durationDiff < 20 }),
