@@ -762,22 +762,19 @@ private struct LyricsTextRenderer: TextRenderer {
         //
         // Visual-line reset (rect.minX < prevMaxX − 1) handles wrapped
         // lyric lines without backward motion.
-        var lineRect = CGRect.null
-        for run in runs {
-            lineRect = lineRect.union(run.typographicBounds.rect)
-        }
-
         var runMeta: [(sweepStart: CGFloat, sweepEnd: CGFloat, lineIdx: Int)] = []
         runMeta.reserveCapacity(runs.count)
         var lineWavefronts: [CGFloat] = []
+        var lineRect = CGRect.null
         do {
             var prevSweepEnd: CGFloat = -.infinity
             var prevMaxX: CGFloat = -.infinity
             var lineIdx = -1
             var currentLineWavefront: CGFloat = -.infinity
             for run in runs {
-                guard let attr = run[WordTimingAttribute.self] else { continue }
                 let rect = run.typographicBounds.rect
+                lineRect = lineRect.union(rect)
+                guard let attr = run[WordTimingAttribute.self] else { continue }
                 let isNewVisualLine = (prevMaxX == -.infinity) || (rect.minX < prevMaxX - 1)
 
                 // Per-run clamp range — NOT constrained to prevSweepEnd.
@@ -816,6 +813,11 @@ private struct LyricsTextRenderer: TextRenderer {
             if lineIdx >= 0 { lineWavefronts.append(currentLineWavefront) }
         }
 
+        let sweepMaskRect = lineRect.insetBy(dx: -20, dy: -20)
+        let sweepMaskPath = Path(sweepMaskRect)
+        let emphasisMaskRect = lineRect.insetBy(dx: -40, dy: -40)
+        let emphasisMaskPath = Path(emphasisMaskRect)
+
         // ── Pass 2: Bright overlay with gradient mask ──
         var metaIdx = 0
         for run in runs {
@@ -831,7 +833,6 @@ private struct LyricsTextRenderer: TextRenderer {
             guard !fullyAhead || attr.isEmphasis else { continue }
 
             let duration = attr.endTime - attr.startTime
-            let progress = wordProgress(attr, duration)
             let postLineFade = postLineFadeOut(attr)
             if postLineFade <= 0 && !attr.isEmphasis { continue }
 
@@ -839,11 +840,14 @@ private struct LyricsTextRenderer: TextRenderer {
             let sweepX = max(meta.sweepStart, min(lineWave, meta.sweepEnd))
 
             if attr.isEmphasis {
+                let progress = wordProgress(attr, duration)
                 drawEmphasisBright(run: run, attr: attr, progress: progress, floatY: floatY,
-                                   fade: postLineFade, lineRect: lineRect, sweepX: sweepX, in: context)
+                                   fade: postLineFade, maskRect: emphasisMaskRect,
+                                   maskPath: emphasisMaskPath, sweepX: sweepX, in: context)
             } else {
-                drawSweepBright(run: run, attr: attr, progress: progress, floatY: floatY,
-                                fade: postLineFade, lineRect: lineRect, sweepX: sweepX, in: context)
+                drawSweepBright(run: run, floatY: floatY, fade: postLineFade,
+                                maskRect: sweepMaskRect, maskPath: sweepMaskPath,
+                                sweepX: sweepX, in: context)
             }
         }
     }
@@ -873,8 +877,8 @@ private struct LyricsTextRenderer: TextRenderer {
     // word's mask also renders the band's tail using the same sweepX,
     // producing cross-character visible gradient.
     private func drawSweepBright(
-        run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat, floatY: CGFloat,
-        fade: CGFloat, lineRect: CGRect, sweepX: CGFloat, in context: GraphicsContext
+        run: Text.Layout.Run, floatY: CGFloat, fade: CGFloat, maskRect: CGRect,
+        maskPath: Path, sweepX: CGFloat, in context: GraphicsContext
     ) {
         let brightBoost = brightAlpha - dimAlpha
 
@@ -887,14 +891,13 @@ private struct LyricsTextRenderer: TextRenderer {
 
             // Apply gradient mask via destinationIn — sub-pixel smooth sweep
             // Use line-level rect so the gradient is uniform across all words (unibody wipe)
-            let padded = lineRect.insetBy(dx: -20, dy: -20)
-            let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
-            let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+            let leftEdge = (sweepX - fadeHalfPt - maskRect.minX) / maskRect.width
+            let rightEdge = (sweepX + fadeHalfPt - maskRect.minX) / maskRect.width
 
             var maskCtx = layerCtx
             maskCtx.blendMode = .destinationIn
             maskCtx.fill(
-                Path(padded),
+                maskPath,
                 with: .linearGradient(
                     Gradient(stops: [
                         .init(color: .white, location: 0),
@@ -902,8 +905,8 @@ private struct LyricsTextRenderer: TextRenderer {
                         .init(color: .clear, location: min(1, rightEdge)),
                         .init(color: .clear, location: 1),
                     ]),
-                    startPoint: CGPoint(x: padded.minX, y: 0),
-                    endPoint: CGPoint(x: padded.maxX, y: 0)
+                    startPoint: CGPoint(x: maskRect.minX, y: 0),
+                    endPoint: CGPoint(x: maskRect.maxX, y: 0)
                 )
             )
         }
@@ -915,8 +918,8 @@ private struct LyricsTextRenderer: TextRenderer {
     // Glyphs drawn at full opacity, gradient mask controls bright/dim regions.
     private func drawEmphasisBright(
         run: Text.Layout.Run, attr: WordTimingAttribute, progress: CGFloat,
-        floatY: CGFloat, fade: CGFloat, lineRect: CGRect, sweepX: CGFloat,
-        in context: GraphicsContext
+        floatY: CGFloat, fade: CGFloat, maskRect: CGRect, maskPath: Path,
+        sweepX: CGFloat, in context: GraphicsContext
     ) {
         let glyphCount = max(1, run.count)
         // Bright floor = dimAlpha: when fade→0, bright converges to dim → uniform dimAlpha.
@@ -965,8 +968,6 @@ private struct LyricsTextRenderer: TextRenderer {
                 ctx.draw(glyph, options: .disablesSubpixelQuantization)
             }
 
-            let padded = lineRect.insetBy(dx: -40, dy: -40)
-
             var maskCtx = layerCtx
             maskCtx.blendMode = .destinationIn
 
@@ -974,10 +975,10 @@ private struct LyricsTextRenderer: TextRenderer {
             // code path for CJK and non-CJK — the extended sweepX makes
             // single-char runs traverse bright→dim cleanly and the line-
             // level gradient keeps adjacent chars on a shared fade band.
-            let leftEdge = (sweepX - fadeHalfPt - padded.minX) / padded.width
-            let rightEdge = (sweepX + fadeHalfPt - padded.minX) / padded.width
+            let leftEdge = (sweepX - fadeHalfPt - maskRect.minX) / maskRect.width
+            let rightEdge = (sweepX + fadeHalfPt - maskRect.minX) / maskRect.width
             maskCtx.fill(
-                Path(padded),
+                maskPath,
                 with: .linearGradient(
                     Gradient(stops: [
                         .init(color: bright, location: 0),
@@ -985,8 +986,8 @@ private struct LyricsTextRenderer: TextRenderer {
                         .init(color: dim, location: min(1, rightEdge)),
                         .init(color: dim, location: 1),
                     ]),
-                    startPoint: CGPoint(x: padded.minX, y: 0),
-                    endPoint: CGPoint(x: padded.maxX, y: 0)
+                    startPoint: CGPoint(x: maskRect.minX, y: 0),
+                    endPoint: CGPoint(x: maskRect.maxX, y: 0)
                 )
             )
         }
