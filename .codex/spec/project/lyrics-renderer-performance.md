@@ -20,6 +20,12 @@ Do not replace the old layout with fade-based transitions, opacity culling, cade
 
 The largest CPU waste was not the word renderer alone. It was broad SwiftUI invalidation caused by high-frequency playback time observation.
 
+The `nanopod://page/{album,lyrics,playlist}` URL route is the supported manual
+entry point for forcing the player onto the protected lyrics page during checks.
+Visual harnesses should target the local rebuilt bundle with `open -a
+nanoPod.app` when available, so stale LaunchServices registrations cannot route
+checks to an older app.
+
 Fixes that worked:
 
 1. Scope playback-time observation to the smallest view that needs it.
@@ -43,6 +49,19 @@ Fixes that worked:
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:
+
+Visual artifacts must be nonblank. `scripts/lyrics_visual_harness.py` rejects
+effectively blank screenshots so Screen Recording permission, display-sleep, or
+locked-desktop failures do not masquerade as visual parity evidence. They must
+also show the lyrics page itself; album-page screenshots are a route failure, not
+renderer evidence.
+
+When debugging line-to-line latency, enable owner diagnostics and inspect
+`lyrics_line_motion_samples.csv`. The supported signal is sampled rendered
+geometry from `LyricsView`: rendered min/mid Y, target min/mid Y, active/display
+index, per-line wave target index, velocity, inter-line spacing delta, and
+manual-scroll / initial-load suppression flags. Do not diagnose wave timing only
+from playback timestamps or source lyric timing.
 
 ```bash
 python3 scripts/perf_harness.py \

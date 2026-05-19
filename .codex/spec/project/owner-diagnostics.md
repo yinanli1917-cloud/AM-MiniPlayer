@@ -24,9 +24,28 @@ technical causes.
 - The app should attach hidden evidence itself: frame stalls, high CPU, memory
   spikes, ScriptingBridge latency/backlog/timeouts, fallback churn, and related
   incident metrics.
+- Lyrics-page motion diagnostics must sample rendered line geometry directly,
+  not infer it only from playback time. Samples should include rendered and
+  target positions, active/display/target indices, per-line velocity,
+  inter-line spacing error, wave offset, playback time, and manual-scroll /
+  initial-load suppression flags.
 - Track metadata is acceptable in manual reports because wrong-lyrics and timing
   bugs need title, artist, album, duration, selected source, and timing context
   to reproduce.
+- Manual reports must not preserve synthetic placeholder track metadata such as
+  `Wrong Lyrics / Reporter / Debug` when recent credible app evidence exists.
+  Resolve the report track from the latest credible event, incident, or
+  interaction before exporting, and record evidence for the replacement source.
+
+## Diagnostics Review
+
+- Daily diagnostics jobs must enumerate and read the latest local report bundles
+  under `~/Library/Application Support/nanoPod/Diagnostics/Reports` before
+  diagnosing. Treat unreadable reports as a capture/permission bug, not as "no
+  data".
+- Diagnostics jobs should state the model and reasoning configuration they are
+  using. Owner-requested diagnostics should use the strongest available model
+  profile unless explicitly overridden.
 
 ## Interaction Traces
 
@@ -44,6 +63,16 @@ technical causes.
   album-page traces instead of treated as generic UI noise.
 - Trace details belong in exported `report.json`, `summary.md`, and performance
   samples; they are still local-only until manually exported.
+
+## Live Local Artifacts
+
+- Codex/background diagnosis should read exported bundles directly from
+  `~/Library/Application Support/nanoPod/Diagnostics/Reports`.
+- While diagnostics are enabled, lyrics line-motion samples are also appended to
+  `~/Library/Application Support/nanoPod/Diagnostics/Live/lyrics_line_motion_samples.csv`
+  so motion latency can be inspected without waiting for a manual export.
+- Exported report bundles must include the same line-motion data in
+  `report.json`, `summary.md`, and `lyrics_line_motion_samples.csv`.
 
 ## Retention And Media
 

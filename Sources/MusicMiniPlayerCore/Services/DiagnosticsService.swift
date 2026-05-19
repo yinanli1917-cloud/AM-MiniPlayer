@@ -22,6 +22,7 @@ public enum DiagnosticIncidentCategory: String, Codable, CaseIterable, Sendable 
     case uiInteractionSlow
     case uiAnimationIncomplete
     case lyricsPagePerformance
+    case lyricsLineMotion
     case scriptingBridgeLatency
     case scriptingBridgeTimeout
     case scriptingBridgeBacklog
@@ -128,6 +129,15 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
         self.persistentID = persistentID
         self.playbackTime = playbackTime
     }
+
+    public var hasCredibleIdentity: Bool {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty, !cleanArtist.isEmpty else { return false }
+        guard cleanTitle != "Wrong Lyrics" || cleanArtist != "Reporter" || album != "Debug" else { return false }
+        guard cleanTitle != kNotPlayingSentinel else { return false }
+        return true
+    }
 }
 
 public struct DiagnosticIncident: Identifiable, Codable, Equatable, Sendable {
@@ -195,6 +205,94 @@ public struct DiagnosticEvent: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+public struct DiagnosticLyricLineMotionSample: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var timestamp: Date
+    public var page: String
+    public var trackTitle: String
+    public var trackArtist: String
+    public var lineIndex: Int
+    public var lineID: String
+    public var lineStartTime: TimeInterval
+    public var lineEndTime: TimeInterval
+    public var playbackTime: TimeInterval
+    public var activeIndex: Int
+    public var displayIndex: Int
+    public var targetIndex: Int
+    public var renderedMinY: Double
+    public var renderedMidY: Double
+    public var renderedHeight: Double
+    public var targetMinY: Double
+    public var targetMidY: Double
+    public var targetErrorY: Double
+    public var velocityY: Double
+    public var observedInterLineDeltaY: Double?
+    public var expectedInterLineDeltaY: Double?
+    public var interLineDeltaErrorY: Double?
+    public var waveOffsetY: Double
+    public var manualScrollOffsetY: Double
+    public var isManualScrolling: Bool
+    public var isInitialMotionSuppressed: Bool
+
+    public init(
+        id: UUID = UUID(),
+        timestamp: Date = Date(),
+        page: String,
+        trackTitle: String,
+        trackArtist: String,
+        lineIndex: Int,
+        lineID: String,
+        lineStartTime: TimeInterval,
+        lineEndTime: TimeInterval,
+        playbackTime: TimeInterval,
+        activeIndex: Int,
+        displayIndex: Int,
+        targetIndex: Int,
+        renderedMinY: Double,
+        renderedMidY: Double,
+        renderedHeight: Double,
+        targetMinY: Double,
+        targetMidY: Double,
+        targetErrorY: Double,
+        velocityY: Double = 0,
+        observedInterLineDeltaY: Double? = nil,
+        expectedInterLineDeltaY: Double? = nil,
+        interLineDeltaErrorY: Double? = nil,
+        waveOffsetY: Double,
+        manualScrollOffsetY: Double,
+        isManualScrolling: Bool,
+        isInitialMotionSuppressed: Bool
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.page = page
+        self.trackTitle = trackTitle
+        self.trackArtist = trackArtist
+        self.lineIndex = lineIndex
+        self.lineID = lineID
+        self.lineStartTime = lineStartTime
+        self.lineEndTime = lineEndTime
+        self.playbackTime = playbackTime
+        self.activeIndex = activeIndex
+        self.displayIndex = displayIndex
+        self.targetIndex = targetIndex
+        self.renderedMinY = renderedMinY
+        self.renderedMidY = renderedMidY
+        self.renderedHeight = renderedHeight
+        self.targetMinY = targetMinY
+        self.targetMidY = targetMidY
+        self.targetErrorY = targetErrorY
+        self.velocityY = velocityY
+        self.observedInterLineDeltaY = observedInterLineDeltaY
+        self.expectedInterLineDeltaY = expectedInterLineDeltaY
+        self.interLineDeltaErrorY = interLineDeltaErrorY
+        self.waveOffsetY = waveOffsetY
+        self.manualScrollOffsetY = manualScrollOffsetY
+        self.isManualScrolling = isManualScrolling
+        self.isInitialMotionSuppressed = isInitialMotionSuppressed
+    }
+}
+
 public struct DiagnosticReportManifest: Codable, Sendable {
     public var generatedAt: Date
     public var appVersion: String
@@ -207,6 +305,7 @@ public struct DiagnosticReportManifest: Codable, Sendable {
     public var incidents: [DiagnosticIncident]
     public var events: [DiagnosticEvent]
     public var interactions: [DiagnosticInteractionTrace]
+    public var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample]
     public var baseline: [String: Double]
     public var mediaAttachmentNames: [String]
 }
@@ -227,6 +326,7 @@ public final class DiagnosticsService: ObservableObject {
     @Published public private(set) var incidents: [DiagnosticIncident] = []
     @Published public private(set) var events: [DiagnosticEvent] = []
     @Published public private(set) var interactions: [DiagnosticInteractionTrace] = []
+    @Published public private(set) var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample] = []
     @Published public private(set) var activeInteractionCount: Int = 0
     @Published public private(set) var lastExportURL: URL?
     @Published public private(set) var lastWarning: DiagnosticIncident?
@@ -259,7 +359,10 @@ public final class DiagnosticsService: ObservableObject {
     private let maxEvents = 300
     private let maxIncidents = 120
     private let maxInteractions = 120
+    private let maxLyricLineMotionSamples = 2400
     private let retention: TimeInterval = 24 * 60 * 60
+    private var previousLyricLineMotionSamples: [String: (timestamp: Date, renderedMidY: Double)] = [:]
+    private var lastLyricLineMotionIncidentAt: Date?
 
     private init() {
         self.isEnabled = Self.isOwnerDiagnosticsBuild && UserDefaults.standard.bool(forKey: Self.enabledKey)
@@ -292,6 +395,9 @@ public final class DiagnosticsService: ObservableObject {
         activeInteractions.values.forEach { $0.timeoutTask?.cancel() }
         activeInteractions.removeAll()
         interactions.removeAll()
+        lyricLineMotionSamples.removeAll()
+        previousLyricLineMotionSamples.removeAll()
+        lastLyricLineMotionIncidentAt = nil
         activeInteractionCount = 0
         lyricsFetchStarts.removeAll()
         baselineStats.removeAll()
@@ -492,6 +598,48 @@ public final class DiagnosticsService: ObservableObject {
         )
     }
 
+    public func recordLyricsLineMotionSamples(_ samples: [DiagnosticLyricLineMotionSample]) {
+        guard isEnabled, !samples.isEmpty else { return }
+
+        var enriched: [DiagnosticLyricLineMotionSample] = []
+        enriched.reserveCapacity(samples.count)
+        for sample in samples {
+            var next = sample
+            let key = lyricLineMotionKey(for: next)
+            if let previous = previousLyricLineMotionSamples[key] {
+                let dt = next.timestamp.timeIntervalSince(previous.timestamp)
+                if dt > 0.001 {
+                    next.velocityY = (next.renderedMidY - previous.renderedMidY) / dt
+                }
+            }
+            previousLyricLineMotionSamples[key] = (next.timestamp, next.renderedMidY)
+            enriched.append(next)
+        }
+
+        lyricLineMotionSamples.insert(contentsOf: enriched.reversed(), at: 0)
+        if lyricLineMotionSamples.count > maxLyricLineMotionSamples {
+            lyricLineMotionSamples.removeLast(lyricLineMotionSamples.count - maxLyricLineMotionSamples)
+        }
+
+        let maxTargetError = enriched.map { abs($0.targetErrorY) }.max() ?? 0
+        let maxInterLineError = enriched.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
+        let maxVelocity = enriched.map { abs($0.velocityY) }.max() ?? 0
+        updateBaseline("lyrics.lineMotion.targetError.pt", value: maxTargetError)
+        updateBaseline("lyrics.lineMotion.interLineError.pt", value: maxInterLineError)
+        updateBaseline("lyrics.lineMotion.velocity.ptPerSec", value: maxVelocity)
+
+        updateActiveInteractions { trace in
+            incrementMetric("lyricsLineMotionSampleCount", by: Double(enriched.count), in: &trace.metrics)
+            maximizeMetric("maxLyricLineMotionTargetErrorPt", value: maxTargetError, in: &trace.metrics)
+            maximizeMetric("maxLyricLineMotionInterLineErrorPt", value: maxInterLineError, in: &trace.metrics)
+            maximizeMetric("maxLyricLineMotionVelocityPtPerSec", value: maxVelocity, in: &trace.metrics)
+        }
+
+        writeLiveLyricLineMotionSamples(enriched)
+        recordLyricLineMotionIncidentIfNeeded(enriched)
+        trimBuffers()
+    }
+
     public func recordScriptingBridgeTiming(
         operation: String,
         queueWait: TimeInterval,
@@ -541,6 +689,7 @@ public final class DiagnosticsService: ObservableObject {
         track: DiagnosticTrackContext,
         mediaAttachments: [URL] = []
     ) throws -> URL {
+        let resolvedTrack = bestAvailableTrackContext(preferred: track)
         recordIncident(
             category: .lyricsManualReport,
             severity: .warning,
@@ -548,9 +697,10 @@ public final class DiagnosticsService: ObservableObject {
             detail: note.isEmpty ? "User reported \(symptom.rawValue)." : note,
             automaticallyDetected: false,
             userSymptom: symptom,
-            track: track
+            track: resolvedTrack.track,
+            evidence: resolvedTrack.evidence
         )
-        return try exportReportBundle(userSymptom: symptom, userNote: note, track: track, mediaAttachments: mediaAttachments)
+        return try exportReportBundle(userSymptom: symptom, userNote: note, track: resolvedTrack.track, mediaAttachments: mediaAttachments)
     }
 
     @discardableResult
@@ -570,6 +720,7 @@ public final class DiagnosticsService: ObservableObject {
         try FileManager.default.createDirectory(at: reportDir, withIntermediateDirectories: true)
 
         let copiedMedia = try copyMediaAttachments(mediaAttachments, to: reportDir)
+        let resolvedTrack = bestAvailableTrackContext(preferred: track)
         let manifest = DiagnosticReportManifest(
             generatedAt: Date(),
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
@@ -578,10 +729,11 @@ public final class DiagnosticsService: ObservableObject {
             sessionID: sessionID,
             userSymptom: userSymptom,
             userNote: userNote,
-            track: track,
+            track: resolvedTrack.track,
             incidents: incidents,
             events: events,
             interactions: interactions,
+            lyricLineMotionSamples: lyricLineMotionSamples,
             baseline: baselineStats.mapValues(\.average),
             mediaAttachmentNames: copiedMedia
         )
@@ -602,6 +754,11 @@ public final class DiagnosticsService: ObservableObject {
             atomically: true,
             encoding: .utf8
         )
+        try lyricLineMotionCSV(samples: lyricLineMotionSamples.reversed()).write(
+            to: reportDir.appendingPathComponent("lyrics_line_motion_samples.csv"),
+            atomically: true,
+            encoding: .utf8
+        )
         if let logData = try? Data(contentsOf: URL(fileURLWithPath: "/tmp/nanopod_debug.log")) {
             try logData.write(to: reportDir.appendingPathComponent("nanopod_debug.log"))
         }
@@ -619,6 +776,40 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
         recordEvent("diagnostics.session.start", detail: "Owner diagnostics enabled")
+    }
+
+    private func bestAvailableTrackContext(
+        preferred: DiagnosticTrackContext?
+    ) -> (track: DiagnosticTrackContext?, evidence: [String: String]) {
+        if let preferred, preferred.hasCredibleIdentity {
+            return (preferred, ["trackContextSource": "provided"])
+        }
+
+        if let recentEventTrack = events.lazy.compactMap(\.track).first(where: { $0.hasCredibleIdentity }) {
+            var evidence = ["trackContextSource": "recentEvent"]
+            if let preferred {
+                evidence["discardedTrackContext"] = "\(preferred.title) / \(preferred.artist) / \(preferred.album)"
+            }
+            return (recentEventTrack, evidence)
+        }
+
+        if let recentIncidentTrack = incidents.lazy.compactMap(\.track).first(where: { $0.hasCredibleIdentity }) {
+            var evidence = ["trackContextSource": "recentIncident"]
+            if let preferred {
+                evidence["discardedTrackContext"] = "\(preferred.title) / \(preferred.artist) / \(preferred.album)"
+            }
+            return (recentIncidentTrack, evidence)
+        }
+
+        if let recentInteractionTrack = interactions.lazy.compactMap(\.track).first(where: { $0.hasCredibleIdentity }) {
+            var evidence = ["trackContextSource": "recentInteraction"]
+            if let preferred {
+                evidence["discardedTrackContext"] = "\(preferred.title) / \(preferred.artist) / \(preferred.album)"
+            }
+            return (recentInteractionTrack, evidence)
+        }
+
+        return (preferred, ["trackContextSource": preferred == nil ? "missing" : "providedUnverified"])
     }
 
     private func recordIncident(
@@ -775,6 +966,7 @@ public final class DiagnosticsService: ObservableObject {
         events.removeAll { $0.timestamp < cutoff }
         incidents.removeAll { $0.timestamp < cutoff }
         interactions.removeAll { $0.startedAt < cutoff }
+        lyricLineMotionSamples.removeAll { $0.timestamp < cutoff }
         if events.count > maxEvents {
             events.removeLast(events.count - maxEvents)
         }
@@ -783,6 +975,9 @@ public final class DiagnosticsService: ObservableObject {
         }
         if interactions.count > maxInteractions {
             interactions.removeLast(interactions.count - maxInteractions)
+        }
+        if lyricLineMotionSamples.count > maxLyricLineMotionSamples {
+            lyricLineMotionSamples.removeLast(lyricLineMotionSamples.count - maxLyricLineMotionSamples)
         }
     }
 
@@ -952,6 +1147,20 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
         lines.append("")
+        lines.append("## Lyric Line Motion")
+        lines.append("")
+        if report.lyricLineMotionSamples.isEmpty {
+            lines.append("No per-line motion samples captured.")
+        } else {
+            let maxTargetError = report.lyricLineMotionSamples.map { abs($0.targetErrorY) }.max() ?? 0
+            let maxInterLineError = report.lyricLineMotionSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
+            let maxVelocity = report.lyricLineMotionSamples.map { abs($0.velocityY) }.max() ?? 0
+            lines.append("- Samples: \(report.lyricLineMotionSamples.count)")
+            lines.append("- Max target error: \(String(format: "%.1f", maxTargetError))pt")
+            lines.append("- Max inter-line spacing error: \(String(format: "%.1f", maxInterLineError))pt")
+            lines.append("- Max observed line velocity: \(String(format: "%.1f", maxVelocity))pt/s")
+        }
+        lines.append("")
         lines.append("## Baseline")
         lines.append("")
         if report.baseline.isEmpty {
@@ -983,8 +1192,159 @@ public final class DiagnosticsService: ObservableObject {
         return rows.joined(separator: "\n")
     }
 
+    private func lyricLineMotionCSV<S: Sequence>(samples: S) -> String where S.Element == DiagnosticLyricLineMotionSample {
+        var rows = [
+            "timestamp,page,trackTitle,trackArtist,lineIndex,lineID,lineStartTime,lineEndTime,playbackTime,activeIndex,displayIndex,targetIndex,renderedMinY,renderedMidY,renderedHeight,targetMinY,targetMidY,targetErrorY,velocityY,observedInterLineDeltaY,expectedInterLineDeltaY,interLineDeltaErrorY,waveOffsetY,manualScrollOffsetY,isManualScrolling,isInitialMotionSuppressed"
+        ]
+        for sample in samples {
+            rows.append([
+                Self.csvDateFormatter.string(from: sample.timestamp),
+                csv(sample.page),
+                csv(sample.trackTitle),
+                csv(sample.trackArtist),
+                "\(sample.lineIndex)",
+                csv(sample.lineID),
+                csvNumber(sample.lineStartTime),
+                csvNumber(sample.lineEndTime),
+                csvNumber(sample.playbackTime),
+                "\(sample.activeIndex)",
+                "\(sample.displayIndex)",
+                "\(sample.targetIndex)",
+                csvNumber(sample.renderedMinY),
+                csvNumber(sample.renderedMidY),
+                csvNumber(sample.renderedHeight),
+                csvNumber(sample.targetMinY),
+                csvNumber(sample.targetMidY),
+                csvNumber(sample.targetErrorY),
+                csvNumber(sample.velocityY),
+                csvNumber(sample.observedInterLineDeltaY),
+                csvNumber(sample.expectedInterLineDeltaY),
+                csvNumber(sample.interLineDeltaErrorY),
+                csvNumber(sample.waveOffsetY),
+                csvNumber(sample.manualScrollOffsetY),
+                sample.isManualScrolling ? "1" : "0",
+                sample.isInitialMotionSuppressed ? "1" : "0"
+            ].joined(separator: ","))
+        }
+        return rows.joined(separator: "\n")
+    }
+
+    private func writeLiveLyricLineMotionSamples(_ samples: [DiagnosticLyricLineMotionSample]) {
+        guard !samples.isEmpty else { return }
+        do {
+            let url = try liveLyricLineMotionSamplesURL()
+            let fileExists = FileManager.default.fileExists(atPath: url.path)
+            if !fileExists {
+                try lyricLineMotionCSV(samples: []).write(to: url, atomically: true, encoding: .utf8)
+            }
+            let rows = samples.map { sample in
+                [
+                    Self.csvDateFormatter.string(from: sample.timestamp),
+                    csv(sample.page),
+                    csv(sample.trackTitle),
+                    csv(sample.trackArtist),
+                    "\(sample.lineIndex)",
+                    csv(sample.lineID),
+                    csvNumber(sample.lineStartTime),
+                    csvNumber(sample.lineEndTime),
+                    csvNumber(sample.playbackTime),
+                    "\(sample.activeIndex)",
+                    "\(sample.displayIndex)",
+                    "\(sample.targetIndex)",
+                    csvNumber(sample.renderedMinY),
+                    csvNumber(sample.renderedMidY),
+                    csvNumber(sample.renderedHeight),
+                    csvNumber(sample.targetMinY),
+                    csvNumber(sample.targetMidY),
+                    csvNumber(sample.targetErrorY),
+                    csvNumber(sample.velocityY),
+                    csvNumber(sample.observedInterLineDeltaY),
+                    csvNumber(sample.expectedInterLineDeltaY),
+                    csvNumber(sample.interLineDeltaErrorY),
+                    csvNumber(sample.waveOffsetY),
+                    csvNumber(sample.manualScrollOffsetY),
+                    sample.isManualScrolling ? "1" : "0",
+                    sample.isInitialMotionSuppressed ? "1" : "0"
+                ].joined(separator: ",")
+            }.joined(separator: "\n") + "\n"
+            if let data = rows.data(using: .utf8),
+               let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                handle.seekToEndOfFile()
+                handle.write(data)
+            }
+        } catch {
+            recordEvent("diagnostics.liveMotionWriteFailed", detail: error.localizedDescription)
+        }
+    }
+
+    private func recordLyricLineMotionIncidentIfNeeded(_ samples: [DiagnosticLyricLineMotionSample]) {
+        let stableSamples = samples.filter { !$0.isManualScrolling && !$0.isInitialMotionSuppressed }
+        guard !stableSamples.isEmpty else { return }
+
+        let now = Date()
+        if let lastLyricLineMotionIncidentAt,
+           now.timeIntervalSince(lastLyricLineMotionIncidentAt) < 3.0 {
+            return
+        }
+
+        let maxTargetError = stableSamples.map { abs($0.targetErrorY) }.max() ?? 0
+        let maxInterLineError = stableSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
+        let activeSample = stableSamples.first { $0.lineIndex == $0.activeIndex }
+        let activeElapsed = activeSample.map { $0.playbackTime - $0.lineStartTime } ?? 0
+        let laggedNearbyTargets = stableSamples.filter {
+            abs($0.lineIndex - $0.activeIndex) <= 4 && $0.targetIndex != $0.activeIndex
+        }.count
+
+        let hasGeometryDrift = maxInterLineError > 18 || maxTargetError > 32
+        let hasLateWaveTargets = activeElapsed > 0.35 && laggedNearbyTargets >= 4
+        guard hasGeometryDrift || hasLateWaveTargets else { return }
+
+        lastLyricLineMotionIncidentAt = now
+        let sample = activeSample ?? stableSamples[0]
+        recordIncident(
+            category: .lyricsLineMotion,
+            severity: maxInterLineError > 28 || maxTargetError > 48 ? .critical : .warning,
+            title: "Lyrics line motion drift",
+            detail: "Rendered lyric lines diverged from their target motion during playback.",
+            metrics: [
+                "maxTargetErrorPt": maxTargetError,
+                "maxInterLineErrorPt": maxInterLineError,
+                "laggedNearbyTargetCount": Double(laggedNearbyTargets),
+                "activeLineElapsedMs": activeElapsed * 1000
+            ],
+            evidence: [
+                "track": "\(sample.trackTitle) / \(sample.trackArtist)",
+                "activeIndex": "\(sample.activeIndex)",
+                "displayIndex": "\(sample.displayIndex)",
+                "targetIndex": "\(sample.targetIndex)",
+                "page": sample.page
+            ]
+        )
+    }
+
+    private func liveLyricLineMotionSamplesURL() throws -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = base
+            .appendingPathComponent("nanoPod", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+            .appendingPathComponent("Live", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("lyrics_line_motion_samples.csv")
+    }
+
+    private func lyricLineMotionKey(for sample: DiagnosticLyricLineMotionSample) -> String {
+        "\(sample.trackTitle)|\(sample.trackArtist)|\(sample.lineIndex)|\(sample.lineID)"
+    }
+
     private func csv(_ value: String) -> String {
         "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private func csvNumber(_ value: Double?) -> String {
+        guard let value else { return "" }
+        return String(format: "%.4f", value)
     }
 
     private func lyricsKey(for track: DiagnosticTrackContext) -> String {

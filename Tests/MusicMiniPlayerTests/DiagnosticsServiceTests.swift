@@ -47,9 +47,9 @@ final class DiagnosticsServiceTests: XCTestCase {
 
     func testManualReportExportsInspectableBundle() throws {
         let track = DiagnosticTrackContext(
-            title: "Wrong Lyrics",
-            artist: "Reporter",
-            album: "Debug",
+            title: "Reported Song",
+            artist: "Reported Artist",
+            album: "Reported Album",
             duration: 180,
             persistentID: "123",
             playbackTime: 42
@@ -65,6 +65,127 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.appendingPathComponent("summary.md").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.appendingPathComponent("performance_samples.csv").path))
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.userSymptom, .wrongLyrics)
+    }
+
+    func testLyricLineMotionSamplesExportWithReportBundle() throws {
+        let sample = DiagnosticLyricLineMotionSample(
+            page: "lyrics",
+            trackTitle: "Motion Song",
+            trackArtist: "Motion Artist",
+            lineIndex: 3,
+            lineID: "line-3",
+            lineStartTime: 12.0,
+            lineEndTime: 15.0,
+            playbackTime: 12.4,
+            activeIndex: 3,
+            displayIndex: 3,
+            targetIndex: 3,
+            renderedMinY: 120,
+            renderedMidY: 138,
+            renderedHeight: 36,
+            targetMinY: 121,
+            targetMidY: 139,
+            targetErrorY: -1,
+            observedInterLineDeltaY: 42,
+            expectedInterLineDeltaY: 42,
+            interLineDeltaErrorY: 0,
+            waveOffsetY: 0,
+            manualScrollOffsetY: 0,
+            isManualScrolling: false,
+            isInitialMotionSuppressed: false
+        )
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples([sample])
+        let track = DiagnosticTrackContext(
+            title: "Motion Song",
+            artist: "Motion Artist",
+            album: "Motion Album",
+            duration: 180
+        )
+        let url = try DiagnosticsService.shared.exportReportBundle(
+            userSymptom: .lyricsTimingOff,
+            userNote: "motion sample",
+            track: track
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.appendingPathComponent("lyrics_line_motion_samples.csv").path))
+        let data = try Data(contentsOf: url.appendingPathComponent("report.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let report = try decoder.decode(DiagnosticReportManifest.self, from: data)
+        XCTAssertEqual(report.lyricLineMotionSamples.count, 1)
+        XCTAssertEqual(report.lyricLineMotionSamples.first?.lineID, "line-3")
+    }
+
+    func testLyricLineMotionDriftCreatesIncident() {
+        let sample = DiagnosticLyricLineMotionSample(
+            page: "lyrics",
+            trackTitle: "Motion Song",
+            trackArtist: "Motion Artist",
+            lineIndex: 4,
+            lineID: "line-4",
+            lineStartTime: 10.0,
+            lineEndTime: 12.0,
+            playbackTime: 10.8,
+            activeIndex: 4,
+            displayIndex: 4,
+            targetIndex: 4,
+            renderedMinY: 190,
+            renderedMidY: 208,
+            renderedHeight: 36,
+            targetMinY: 140,
+            targetMidY: 158,
+            targetErrorY: 50,
+            observedInterLineDeltaY: 88,
+            expectedInterLineDeltaY: 42,
+            interLineDeltaErrorY: 46,
+            waveOffsetY: 0,
+            manualScrollOffsetY: 0,
+            isManualScrolling: false,
+            isInitialMotionSuppressed: false
+        )
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples([sample])
+
+        XCTAssertTrue(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsLineMotion })
+    }
+
+    func testManualReportReplacesDebugPlaceholderWithRecentTrackContext() throws {
+        let realTrack = DiagnosticTrackContext(
+            title: "戀愛預告",
+            artist: "Sandy Lamb",
+            album: "My Lovely Legend: Teresa Carpio & Sandy Lamb",
+            duration: 218.839
+        )
+        DiagnosticsService.shared.recordLyricsFetchFinished(
+            track: realTrack,
+            source: "NetEase",
+            score: 51.6,
+            lineCount: 26,
+            isUnsynced: false,
+            hadSourceTranslation: false
+        )
+
+        let placeholder = DiagnosticTrackContext(
+            title: "Wrong Lyrics",
+            artist: "Reporter",
+            album: "Debug",
+            duration: 180
+        )
+
+        let url = try DiagnosticsService.shared.recordManualReport(
+            symptom: .wrongLyrics,
+            note: "Selected source appears to be a different song.",
+            track: placeholder
+        )
+        let data = try Data(contentsOf: url.appendingPathComponent("report.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let report = try decoder.decode(DiagnosticReportManifest.self, from: data)
+
+        XCTAssertEqual(report.track?.title, "戀愛預告")
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.track?.title, "戀愛預告")
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.evidence["trackContextSource"], "recentEvent")
     }
 
     func testFrameStallCreatesHiddenCauseIncident() {

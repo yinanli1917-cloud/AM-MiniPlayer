@@ -44,6 +44,16 @@ private struct WaveState {
     var workItems: [DispatchWorkItem] = []
 }
 
+private let lyricLineMotionCoordinateSpace = "nanoPod.lyrics.lineMotion"
+
+private struct LyricLineMotionFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGRect] = [:]
+
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
 // MARK: - LyricsView
 
 public struct LyricsView: View {
@@ -68,6 +78,8 @@ public struct LyricsView: View {
     @State private var controlsOffsetY: CGFloat = 0
     @State private var autoScrollTimer: Timer? = nil
     @State private var pendingTrackLyricsFetchTask: Task<Void, Never>? = nil
+    @State private var suppressInitialLineMotion = false
+    @State private var lastLineMotionSampleAt: Date = .distantPast
 
     // ── 翻译状态 ──
     @State private var translationSessionConfigAny: Any?
@@ -121,6 +133,7 @@ public struct LyricsView: View {
         // ── onAppear + 歌曲切换 ──
         .onAppear {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
+            suppressInitialLineMotion = true
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration,
@@ -145,6 +158,7 @@ public struct LyricsView: View {
             scroll.rawScrollOffset = 0
             scroll.frozenDisplayIndex = nil
             scroll.lockedLineIndex = nil
+            suppressInitialLineMotion = true
             scheduleTrackChangeLyricsFetch()
         }
         .onChange(of: musicController.currentAlbum) { _, newAlbum in
@@ -159,6 +173,11 @@ public struct LyricsView: View {
             if #available(macOS 15.0, *), newCount > 0 { updateTranslationSessionConfig() }
             refreshRenderedIndicesCache()
             cache.heightCacheInvalidated = true
+            if newCount > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                    suppressInitialLineMotion = false
+                }
+            }
         }
         .onChange(of: lyricsService.isLoading) { oldValue, newValue in
             if #available(macOS 15.0, *) {
@@ -329,17 +348,26 @@ public struct LyricsView: View {
                                 .allowsHitTesting(true)
                                 .offset(y: fullOffset)
                                 .animation(
-                                    scroll.isManualScrolling || reduceMotion ? nil : .interpolatingSpring(
+                                    scroll.isManualScrolling || reduceMotion || suppressInitialLineMotion ? nil : .interpolatingSpring(
                                         mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
                                     ),
                                     value: scroll.isManualScrolling ? 0 : fullOffset
                                 )
+                                .background(lineMotionTracker(index: index))
                         }
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .offset(y: scroll.manualScrollOffset)
+            .coordinateSpace(name: lyricLineMotionCoordinateSpace)
+            .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
+                recordLyricLineMotion(
+                    frames: frames,
+                    anchorY: anchorY,
+                    displayIndex: displayIndex
+                )
+            }
         }
         .modifier(BottomFadeMask(isActive: showControls, steepFade: scroll.isManualScrolling))
         .id(lyricsViewID)
@@ -423,6 +451,111 @@ public struct LyricsView: View {
                 }
             }
         }
+    }
+
+    private func lineMotionTracker(index: Int) -> some View {
+        GeometryReader { lineGeo in
+            Color.clear.preference(
+                key: LyricLineMotionFramePreferenceKey.self,
+                value: DiagnosticsService.shared.isEnabled
+                    ? [index: lineGeo.frame(in: .named(lyricLineMotionCoordinateSpace))]
+                    : [:]
+            )
+        }
+    }
+
+    private func recordLyricLineMotion(frames: [Int: CGRect], anchorY: CGFloat, displayIndex: Int) {
+        guard currentPage == .lyrics, DiagnosticsService.shared.isEnabled, !frames.isEmpty else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastLineMotionSampleAt) >= 0.20 else { return }
+        lastLineMotionSampleAt = now
+
+        let lyrics = lyricsService.lyrics
+        guard !lyrics.isEmpty else { return }
+
+        let playbackTime = musicController.lyricRenderTime(at: now)
+        let track = musicController.diagnosticsTrackContext()
+        let activeIndex = lyricsService.currentLineIndex ?? displayIndex
+        let sorted = frames
+            .filter { index, frame in
+                lyrics.indices.contains(index) && frame.height > 0
+            }
+            .sorted { $0.key < $1.key }
+
+        struct MotionPartial {
+            let index: Int
+            let line: LyricLine
+            let frame: CGRect
+            let targetIndex: Int
+            let targetMinY: Double
+            let targetMidY: Double
+            let waveOffsetY: Double
+        }
+
+        let immediateLineOffset = anchorY - calculateAccumulatedHeight(upTo: displayIndex)
+        let partials: [MotionPartial] = sorted.map { index, frame in
+            let line = lyrics[index]
+            let targetIndex = scroll.isManualScrolling
+                ? (scroll.lockedLineIndex ?? displayIndex)
+                : (wave.lineTargetIndices[index] ?? displayIndex)
+            let lineOffset = calculateLineOffset(index: index, currentIndex: displayIndex, anchorY: anchorY)
+            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+            let targetMinY = Double(fullOffset + scroll.manualScrollOffset)
+            let targetMidY = targetMinY + Double(frame.height / 2)
+            return MotionPartial(
+                index: index,
+                line: line,
+                frame: frame,
+                targetIndex: targetIndex,
+                targetMinY: targetMinY,
+                targetMidY: targetMidY,
+                waveOffsetY: Double(lineOffset - immediateLineOffset)
+            )
+        }
+
+        var samples: [DiagnosticLyricLineMotionSample] = []
+        samples.reserveCapacity(partials.count)
+        var previous: MotionPartial?
+        for partial in partials {
+            let renderedMinY = Double(partial.frame.minY)
+            let renderedMidY = Double(partial.frame.midY)
+            let observedDelta = previous.map { renderedMidY - Double($0.frame.midY) }
+            let expectedDelta = previous.map { partial.targetMidY - $0.targetMidY }
+            let deltaError: Double? = {
+                guard let observedDelta, let expectedDelta else { return nil }
+                return observedDelta - expectedDelta
+            }()
+            samples.append(DiagnosticLyricLineMotionSample(
+                timestamp: now,
+                page: "lyrics",
+                trackTitle: track.title,
+                trackArtist: track.artist,
+                lineIndex: partial.index,
+                lineID: partial.line.id.uuidString,
+                lineStartTime: partial.line.startTime,
+                lineEndTime: partial.line.endTime,
+                playbackTime: playbackTime,
+                activeIndex: activeIndex,
+                displayIndex: displayIndex,
+                targetIndex: partial.targetIndex,
+                renderedMinY: renderedMinY,
+                renderedMidY: renderedMidY,
+                renderedHeight: Double(partial.frame.height),
+                targetMinY: partial.targetMinY,
+                targetMidY: partial.targetMidY,
+                targetErrorY: renderedMinY - partial.targetMinY,
+                observedInterLineDeltaY: observedDelta,
+                expectedInterLineDeltaY: expectedDelta,
+                interLineDeltaErrorY: deltaError,
+                waveOffsetY: partial.waveOffsetY,
+                manualScrollOffsetY: Double(scroll.manualScrollOffset),
+                isManualScrolling: scroll.isManualScrolling,
+                isInitialMotionSuppressed: suppressInitialLineMotion
+            ))
+            previous = partial
+        }
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples(samples)
     }
 
     private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
