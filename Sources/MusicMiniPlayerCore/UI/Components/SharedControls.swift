@@ -64,7 +64,7 @@ struct RoundedCornerSlideModifier: ViewModifier {
 // MARK: - Shared Bottom Controls
 struct SharedBottomControls: View {
     @EnvironmentObject var musicController: MusicController
-    @ObservedObject var timePublisher: TimePublisher
+    let timePublisher: TimePublisher
     @Binding var currentPage: PlayerPage
     @Binding var isHovering: Bool
     @Binding var showControls: Bool
@@ -72,7 +72,6 @@ struct SharedBottomControls: View {
     @Binding var dragPosition: CGFloat?
     var onControlsHoverChanged: ((Bool) -> Void)? = nil  // 🔑 可选回调：控件hover状态变化
     var translationButton: AnyView? = nil  // 🔑 可选的翻译按钮
-    @State private var isDraggingProgressBar: Bool = false
     @State private var isControlAreaHovering: Bool = false  // 🔑 整个控件区域的hover状态
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -90,36 +89,17 @@ struct SharedBottomControls: View {
             }
 
             VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
-                // Progress Bar & Time - 🔑 时间显示移到进度条下方
-                VStack(spacing: 2) {  // 🔑 进度条与时间间距=2
-                    // Progress Bar - 放在最上面
-                    progressBar
-
-                    // Time labels - 移到进度条下方，padding与进度条一致
-                    HStack {
-                        Text(formatTime(timePublisher.currentTime))
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(subduedInk)
-                            .shadow(color: controlShadowColor, radius: controlShadowRadius)
-                            .accessibilityHidden(true)
-
-                        Spacer()
-
-                        // Audio quality badge
-                        if let quality = musicController.audioQuality {
-                            qualityBadge(quality)
-                        }
-
-                        Spacer()
-
-                        Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(subduedInk)
-                            .shadow(color: controlShadowColor, radius: controlShadowRadius)
-                            .accessibilityHidden(true)
-                    }
-                    .padding(.horizontal, 20)  // 🔑 与进度条padding一致，对齐端点
-                }
+                PlaybackProgressSection(
+                    timePublisher: timePublisher,
+                    isProgressBarHovering: $isProgressBarHovering,
+                    dragPosition: $dragPosition,
+                    ink: ink,
+                    subduedInk: subduedInk,
+                    shadowColor: controlShadowColor,
+                    shadowRadius: controlShadowRadius,
+                    lightControlSurface: lightControlSurface,
+                    reduceMotion: reduceMotion
+                )
 
                 // Playback Controls
                 HStack(spacing: 10) {
@@ -240,6 +220,64 @@ struct SharedBottomControls: View {
     }
 
 
+    private var lightControlSurface: Bool {
+        false
+    }
+
+    private var controlInk: Color {
+        Color.white
+    }
+
+    private var controlShadowColor: Color {
+        Color.black.opacity(0.35 + 0.28 * musicController.controlAreaLuminance)
+    }
+
+    private var controlShadowRadius: CGFloat {
+        2 + 5 * musicController.controlAreaLuminance
+    }
+}
+
+private struct PlaybackProgressSection: View {
+    @EnvironmentObject var musicController: MusicController
+    @ObservedObject var timePublisher: TimePublisher
+    @Binding var isProgressBarHovering: Bool
+    @Binding var dragPosition: CGFloat?
+    let ink: Color
+    let subduedInk: Color
+    let shadowColor: Color
+    let shadowRadius: CGFloat
+    let lightControlSurface: Bool
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(spacing: 2) {
+            progressBar
+
+            HStack {
+                Text(formatTime(timePublisher.currentTime))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(subduedInk)
+                    .shadow(color: shadowColor, radius: shadowRadius)
+                    .accessibilityHidden(true)
+
+                Spacer()
+
+                if let quality = musicController.audioQuality {
+                    qualityBadge(quality)
+                }
+
+                Spacer()
+
+                Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(subduedInk)
+                    .shadow(color: shadowColor, radius: shadowRadius)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
     private var progressBar: some View {
         let barHeight: CGFloat = isProgressBarHovering ? 12 : 7  // 🔑 hover前7px，hover后12px
 
@@ -261,7 +299,7 @@ struct SharedBottomControls: View {
 
                 // Active Progress
                 Capsule()
-                    .fill(controlInk.opacity(lightControlSurface ? 0.78 : 1.0))
+                    .fill(ink.opacity(lightControlSurface ? 0.78 : 1.0))
                     .frame(height: barHeight)
                     .mask(
                         HStack(spacing: 0) {
@@ -282,7 +320,6 @@ struct SharedBottomControls: View {
             .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged({ value in
-                        isDraggingProgressBar = true
                         let percentage = min(max(0, value.location.x / geo.size.width), 1)
                         dragPosition = percentage
                     })
@@ -291,9 +328,6 @@ struct SharedBottomControls: View {
                         let time = percentage * musicController.duration
                         musicController.seek(to: time)
                         dragPosition = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            isDraggingProgressBar = false
-                        }
                     })
             )
         }
@@ -321,25 +355,9 @@ struct SharedBottomControls: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .modifier(GlassCapsule(fallbackOpacity: 0.15))
-        .foregroundStyle(controlInk.opacity(0.9))
+        .foregroundStyle(ink.opacity(0.9))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("音频质量：\(quality)")
-    }
-
-    private var lightControlSurface: Bool {
-        false
-    }
-
-    private var controlInk: Color {
-        Color.white
-    }
-
-    private var controlShadowColor: Color {
-        Color.black.opacity(0.35 + 0.28 * musicController.controlAreaLuminance)
-    }
-
-    private var controlShadowRadius: CGFloat {
-        2 + 5 * musicController.controlAreaLuminance
     }
 
     private func formatTime(_ time: Double) -> String {
@@ -466,9 +484,7 @@ struct SkipControlButton: View {
         Button {
             playReplacementAnimation(perform: action)
         } label: {
-            TimelineView(.animation) { timeline in
-                skipGlyph(phase: replacementPhase(at: timeline.date))
-            }
+            skipGlyphLabel
         }
         .buttonStyle(SkipPressStyle(reduceMotion: reduceMotion))
         .frame(width: 32, height: 32)
@@ -476,6 +492,17 @@ struct SkipControlButton: View {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
+        }
+    }
+
+    @ViewBuilder
+    private var skipGlyphLabel: some View {
+        if replacementStart != nil {
+            TimelineView(.animation) { timeline in
+                skipGlyph(phase: replacementPhase(at: timeline.date))
+            }
+        } else {
+            skipGlyph(phase: 0)
         }
     }
 
