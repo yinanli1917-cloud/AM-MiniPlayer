@@ -151,10 +151,11 @@ struct LyricLineView: View {
             HStack(spacing: 0) {
                 if line.hasSyllableSync {
                     if #available(macOS 15.0, *) {
+                        let payload = SyllableTextPayload(words: line.words)
                         if isCurrent, let mc = musicController {
                             TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
                                 SyllableSyncedLine(
-                                    words: line.words,
+                                    payload: payload,
                                     currentTime: mc.wordFillTime,
                                     isAnimated: true,
                                     staticOpacity: 0
@@ -162,7 +163,7 @@ struct LyricLineView: View {
                             }
                         } else {
                             SyllableSyncedLine(
-                                words: line.words,
+                                payload: payload,
                                 currentTime: 0,
                                 isAnimated: false,
                                 staticOpacity: textOpacity
@@ -617,19 +618,13 @@ extension Text.Layout {
 /// Builds a single concatenated Text with per-word timing attributes.
 @available(macOS 15.0, *)
 private struct SyllableSyncedLine: View {
-    let words: [LyricWord]
+    let payload: SyllableTextPayload
     let currentTime: TimeInterval
     let isAnimated: Bool           // true for current line, false for past/future
     let staticOpacity: CGFloat     // used when !isAnimated
 
-    private var needsSpaces: Bool {
-        guard !words.isEmpty else { return false }
-        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
-        return avgLen > 2
-    }
-
     var body: some View {
-        buildText()
+        payload.text
             .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
             .foregroundColor(.white)
             .textRenderer(LyricsTextRenderer(
@@ -639,8 +634,14 @@ private struct SyllableSyncedLine: View {
             ))
             .fixedSize(horizontal: false, vertical: true)
     }
+}
 
-    private func buildText() -> Text {
+@available(macOS 15.0, *)
+private struct SyllableTextPayload {
+    let text: Text
+
+    init(words: [LyricWord]) {
+        let needsSpaces = Self.needsSpaces(words)
         let lineEnd = words.last?.endTime ?? 0
         var result = Text("")
         for (index, word) in words.enumerated() {
@@ -671,7 +672,13 @@ private struct SyllableSyncedLine: View {
                     isCJK: isCJK
                 ))
         }
-        return result
+        self.text = result
+    }
+
+    private static func needsSpaces(_ words: [LyricWord]) -> Bool {
+        guard !words.isEmpty else { return false }
+        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
+        return avgLen > 2
     }
 }
 
@@ -711,7 +718,8 @@ private struct LyricsTextRenderer: TextRenderer {
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         // ── Static lines: single pass at staticOpacity ──
         guard isAnimated else {
-            for run in layout.flattenedRuns {
+            let runs = Array(layout.flattenedRuns)
+            for run in runs {
                 var ctx = context
                 ctx.opacity = Double(staticOpacity)
                 ctx.draw(run, options: .disablesSubpixelQuantization)
@@ -719,11 +727,13 @@ private struct LyricsTextRenderer: TextRenderer {
             return
         }
 
+        let runs = Array(layout.flattenedRuns)
+
         // ── Pass 1: Dim base layer (non-emphasis words only) ──
         // Emphasis words are fully handled by drawEmphasisBright (single layer
         // with gradient mask for both bright and dim regions). Drawing them here
         // would create a ghost at the untransformed position — visible 割裂感.
-        for run in layout.flattenedRuns {
+        for run in runs {
             if let attr = run[WordTimingAttribute.self], attr.isEmphasis { continue }
             var ctx = context
             ctx.opacity = Double(dimAlpha)
@@ -753,19 +763,19 @@ private struct LyricsTextRenderer: TextRenderer {
         // Visual-line reset (rect.minX < prevMaxX − 1) handles wrapped
         // lyric lines without backward motion.
         var lineRect = CGRect.null
-        for run in layout.flattenedRuns {
+        for run in runs {
             lineRect = lineRect.union(run.typographicBounds.rect)
         }
 
         var runMeta: [(sweepStart: CGFloat, sweepEnd: CGFloat, lineIdx: Int)] = []
-        runMeta.reserveCapacity(8)
+        runMeta.reserveCapacity(runs.count)
         var lineWavefronts: [CGFloat] = []
         do {
             var prevSweepEnd: CGFloat = -.infinity
             var prevMaxX: CGFloat = -.infinity
             var lineIdx = -1
             var currentLineWavefront: CGFloat = -.infinity
-            for run in layout.flattenedRuns {
+            for run in runs {
                 guard let attr = run[WordTimingAttribute.self] else { continue }
                 let rect = run.typographicBounds.rect
                 let isNewVisualLine = (prevMaxX == -.infinity) || (rect.minX < prevMaxX - 1)
@@ -808,7 +818,7 @@ private struct LyricsTextRenderer: TextRenderer {
 
         // ── Pass 2: Bright overlay with gradient mask ──
         var metaIdx = 0
-        for run in layout.flattenedRuns {
+        for run in runs {
             guard let attr = run[WordTimingAttribute.self] else { continue }
             defer { metaIdx += 1 }
             let meta = runMeta[metaIdx]
