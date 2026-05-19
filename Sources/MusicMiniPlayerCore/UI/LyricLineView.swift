@@ -7,6 +7,8 @@
 import SwiftUI
 import Translation
 
+private let activeLyricFrameInterval: TimeInterval = 1.0 / 30.0
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - LyricMetrics — single source of truth for layout dimensions
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -153,7 +155,7 @@ struct LyricLineView: View {
                     if #available(macOS 15.0, *) {
                         let payload = SyllableTextPayload(words: line.words)
                         if isCurrent, let mc = musicController {
-                            TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
+                            TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
                                 SyllableSyncedLine(
                                     payload: payload,
                                     currentTime: mc.wordFillTime,
@@ -172,7 +174,7 @@ struct LyricLineView: View {
                     } else {
                         // macOS 14 fallback: per-word WordFillSpan
                         if isCurrent, let mc = musicController {
-                            TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
+                            TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
                                 WordByWordText(
                                     words: line.words,
                                     lineText: cleanedText,
@@ -205,7 +207,7 @@ struct LyricLineView: View {
             if internalShowTranslation, let translation = translationText {
                 if line.hasSyllableSync {
                     if isCurrent, let mc = musicController {
-                        TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
+                        TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
                             TranslationSweepText(
                                 text: translation,
                                 words: line.words,
@@ -765,12 +767,14 @@ private struct LyricsTextRenderer: TextRenderer {
         var runMeta: [(sweepStart: CGFloat, sweepEnd: CGFloat, lineIdx: Int)] = []
         runMeta.reserveCapacity(runs.count)
         var lineWavefronts: [CGFloat] = []
+        var lineRects: [CGRect] = []
         var lineRect = CGRect.null
         do {
             var prevSweepEnd: CGFloat = -.infinity
             var prevMaxX: CGFloat = -.infinity
             var lineIdx = -1
             var currentLineWavefront: CGFloat = -.infinity
+            var currentLineRect = CGRect.null
             for run in runs {
                 let rect = run.typographicBounds.rect
                 lineRect = lineRect.union(rect)
@@ -786,9 +790,15 @@ private struct LyricsTextRenderer: TextRenderer {
                 let sweepEnd = rect.maxX + fadeHalfPt
 
                 if isNewVisualLine {
-                    if lineIdx >= 0 { lineWavefronts.append(currentLineWavefront) }
+                    if lineIdx >= 0 {
+                        lineWavefronts.append(currentLineWavefront)
+                        lineRects.append(currentLineRect)
+                    }
                     lineIdx += 1
                     currentLineWavefront = sweepStart
+                    currentLineRect = rect
+                } else {
+                    currentLineRect = currentLineRect.union(rect)
                 }
 
                 // Wavefront advancement: during this run's active time the
@@ -810,15 +820,18 @@ private struct LyricsTextRenderer: TextRenderer {
                 prevSweepEnd = sweepEnd
                 prevMaxX = rect.maxX
             }
-            if lineIdx >= 0 { lineWavefronts.append(currentLineWavefront) }
+            if lineIdx >= 0 {
+                lineWavefronts.append(currentLineWavefront)
+                lineRects.append(currentLineRect)
+            }
         }
 
-        let sweepMaskRect = lineRect.insetBy(dx: -20, dy: -20)
-        let sweepMaskPath = Path(sweepMaskRect)
         let emphasisMaskRect = lineRect.insetBy(dx: -40, dy: -40)
         let emphasisMaskPath = Path(emphasisMaskRect)
 
         // ── Pass 2: Bright overlay with gradient mask ──
+        var sweepRunsByLine: [Int: [(run: Text.Layout.Run, floatY: CGFloat)]] = [:]
+        var sweepFadeByLine: [Int: CGFloat] = [:]
         var metaIdx = 0
         for run in runs {
             guard let attr = run[WordTimingAttribute.self] else { continue }
@@ -845,10 +858,22 @@ private struct LyricsTextRenderer: TextRenderer {
                                    fade: postLineFade, maskRect: emphasisMaskRect,
                                    maskPath: emphasisMaskPath, sweepX: sweepX, in: context)
             } else {
-                drawSweepBright(run: run, floatY: floatY, fade: postLineFade,
-                                maskRect: sweepMaskRect, maskPath: sweepMaskPath,
-                                sweepX: sweepX, in: context)
+                sweepRunsByLine[meta.lineIdx, default: []].append((run: run, floatY: floatY))
+                sweepFadeByLine[meta.lineIdx] = min(sweepFadeByLine[meta.lineIdx] ?? postLineFade, postLineFade)
             }
+        }
+
+        for (lineIdx, sweepRuns) in sweepRunsByLine {
+            guard !sweepRuns.isEmpty else { continue }
+            let lineWave = lineIdx < lineWavefronts.count ? lineWavefronts[lineIdx] : -.infinity
+            let maskBounds = lineIdx < lineRects.count ? lineRects[lineIdx] : lineRect
+            let maskRect = maskBounds.insetBy(dx: -20, dy: -20)
+            drawSweepBright(runs: sweepRuns,
+                            fade: sweepFadeByLine[lineIdx] ?? 1,
+                            maskRect: maskRect,
+                            maskPath: Path(maskRect),
+                            sweepX: lineWave,
+                            in: context)
         }
     }
 
@@ -877,17 +902,19 @@ private struct LyricsTextRenderer: TextRenderer {
     // word's mask also renders the band's tail using the same sweepX,
     // producing cross-character visible gradient.
     private func drawSweepBright(
-        run: Text.Layout.Run, floatY: CGFloat, fade: CGFloat, maskRect: CGRect,
+        runs: [(run: Text.Layout.Run, floatY: CGFloat)], fade: CGFloat, maskRect: CGRect,
         maskPath: Path, sweepX: CGFloat, in context: GraphicsContext
     ) {
         let brightBoost = brightAlpha - dimAlpha
 
         context.drawLayer { layerCtx in
-            // Draw bright text into sublayer
-            var textCtx = layerCtx
-            textCtx.opacity = Double(brightBoost * fade)
-            textCtx.translateBy(x: 0, y: floatY)
-            textCtx.draw(run, options: .disablesSubpixelQuantization)
+            // Draw a whole visual line into one sublayer, then mask once.
+            for item in runs {
+                var textCtx = layerCtx
+                textCtx.opacity = Double(brightBoost * fade)
+                textCtx.translateBy(x: 0, y: item.floatY)
+                textCtx.draw(item.run, options: .disablesSubpixelQuantization)
+            }
 
             // Apply gradient mask via destinationIn — sub-pixel smooth sweep
             // Use line-level rect so the gradient is uniform across all words (unibody wipe)

@@ -157,8 +157,8 @@ public struct LyricsView: View {
         // ── onChange: 翻译相关 ──
         .onChange(of: lyricsService.lyrics.count) { _, newCount in
             if #available(macOS 15.0, *), newCount > 0 { updateTranslationSessionConfig() }
+            refreshRenderedIndicesCache()
             cache.heightCacheInvalidated = true
-            cache.renderedIndicesValid = false
         }
         .onChange(of: lyricsService.isLoading) { oldValue, newValue in
             if #available(macOS 15.0, *) {
@@ -767,9 +767,21 @@ public struct LyricsView: View {
 
     /// Self-caching: computes once, serves from cache until invalidated
     private var renderedIndices: [Int] {
+        if cache.renderedIndicesValid {
+            return cache.renderedIndicesCached
+        }
+        return makeRenderedIndices()
+    }
+
+    private func makeRenderedIndices() -> [Int] {
         lyricsService.lyrics.enumerated()
             .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
             .map { $0.offset }
+    }
+
+    private func refreshRenderedIndicesCache() {
+        cache.renderedIndicesCached = makeRenderedIndices()
+        cache.renderedIndicesValid = true
     }
 
     private func calculateAccumulatedHeight(upTo targetIndex: Int) -> CGFloat {
@@ -816,7 +828,7 @@ public struct LyricsView: View {
     private func updateHeightCache() {
         let spacing: CGFloat = 6
         let defaultHeight: CGFloat = 36
-        let indices = renderedIndices
+        let indices = makeRenderedIndices()
 
         var accumulatedHeight: CGFloat = 0
         var newAccumulatedHeights: [Int: CGFloat] = [:]
@@ -834,6 +846,8 @@ public struct LyricsView: View {
             }
         }
 
+        cache.renderedIndicesCached = indices
+        cache.renderedIndicesValid = true
         cache.cachedAccumulatedHeights = newAccumulatedHeights
         cache.cachedTotalContentHeight = totalHeight
         cache.heightCacheInvalidated = false
