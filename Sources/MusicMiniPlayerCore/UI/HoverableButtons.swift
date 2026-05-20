@@ -33,12 +33,17 @@ struct GlassButtonTexture<S: Shape>: ViewModifier {
     let shape: S
 
     func body(content: Content) -> some View {
-        content.background {
-            shape
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .light)
-                .overlay(shape.fill(Color.white.opacity(0.08)))
-                .overlay(shape.stroke(Color.white.opacity(0.18), lineWidth: 0.5))
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 0) {
+                content.glassEffect(.clear, in: shape)
+            }
+        } else {
+            content.background {
+                shape
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .light)
+                    .overlay(shape.stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+            }
         }
     }
 }
