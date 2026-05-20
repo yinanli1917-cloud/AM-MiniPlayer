@@ -124,6 +124,10 @@ public final class LyricsFetcher {
     private let lyricIdentityValidationSources: Set<String> = [
         "AMLL", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"
     ]
+    private let foregroundLibraryFallbackTimeout: TimeInterval = 2.35
+    private let foregroundAlbumLibraryFallbackTimeout: TimeInterval = 1.7
+    private let foregroundTextFallbackTimeout: TimeInterval = 1.8
+    private let foregroundAlbumTextFallbackTimeout: TimeInterval = 1.0
 
     private func isLibraryFallbackSource(_ source: String) -> Bool {
         source == "LRCLIB" || source == "LRCLIB-Search"
@@ -204,7 +208,7 @@ public final class LyricsFetcher {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                let timeout = alb.isEmpty ? 2.9 : 1.7
+                let timeout = alb.isEmpty ? self.foregroundLibraryFallbackTimeout : self.foregroundAlbumLibraryFallbackTimeout
                 return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromLRCLIB(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {
@@ -212,7 +216,7 @@ public final class LyricsFetcher {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                let timeout = alb.isEmpty ? 2.9 : 1.7
+                let timeout = alb.isEmpty ? self.foregroundLibraryFallbackTimeout : self.foregroundAlbumLibraryFallbackTimeout
                 return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromLRCLIBSearch(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {
@@ -220,7 +224,7 @@ public final class LyricsFetcher {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                let timeout = alb.isEmpty ? 2.0 : 1.0
+                let timeout = alb.isEmpty ? self.foregroundTextFallbackTimeout : self.foregroundAlbumTextFallbackTimeout
                 return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromLyricsOVH(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {
@@ -228,7 +232,7 @@ public final class LyricsFetcher {
                     try? await Task.sleep(nanoseconds: lowTierFallbackDelay)
                     if Task.isCancelled { return nil }
                 }
-                let timeout = alb.isEmpty ? 2.0 : 1.0
+                let timeout = alb.isEmpty ? self.foregroundTextFallbackTimeout : self.foregroundAlbumTextFallbackTimeout
                 return await self.withHardSourceTimeout(seconds: timeout) { await self.fetchFromGenius(title: ot, artist: oa, duration: d, translationEnabled: te) }
             }
             group.addTask {

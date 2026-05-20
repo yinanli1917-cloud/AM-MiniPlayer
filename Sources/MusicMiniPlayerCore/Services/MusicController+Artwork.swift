@@ -150,6 +150,10 @@ extension MusicController {
         }
 
         logToFile("🎨 Cache MISS, starting concurrent fetch (SB + API in parallel)...")
+        if currentArtwork != nil {
+            logToFile("🎨 Cache MISS, clearing stale artwork while fetching current track")
+            setArtwork(nil)
+        }
 
         // ━━━ Path 1: API fetch — starts immediately, no SB queue dependency ━━━
         // API is provisional — if SB already applied for this generation, API result is discarded.

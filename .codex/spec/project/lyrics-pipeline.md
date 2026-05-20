@@ -13,6 +13,10 @@ Do not collapse all empty lyric outcomes into "no lyrics".
 ## Fallback Selection
 
 - Trust synced lyrics first, but allow conservative static fallback from `lyrics.ovh`/Genius only after synced candidates are missing or rejected by timing/identity gates.
+- Low-tier library/text fallbacks belong inside a strict foreground budget.
+  If LRCLIB, LRCLIB-Search, Genius, or lyrics.ovh are slow, let
+  authoritative background backfill finish and cache them instead of holding
+  the visible track switch past the interaction budget.
 - When a same-title provider row returns a compressed or wrong-version
   line-timed lyric (for example: first real lyric or catalog marker appears in
   the first few seconds, no word-level timing, and a large tail gap), reject it

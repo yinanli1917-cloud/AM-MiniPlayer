@@ -137,6 +137,22 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertNil(c.artworkMetadataCacheKey(title: "戀愛預告", artist: "", album: "My Lovely Legend"))
     }
 
+    func testArtworkCacheMissClearsPreviousArtworkForNewTrack() {
+        let c = MusicController(preview: true)
+        c.currentArtwork = NSImage(size: NSSize(width: 12, height: 12))
+        let generation = c.incrementGeneration()
+
+        c.fetchArtwork(
+            for: "Tout tout",
+            artist: "Miel De Montagne & Blasé",
+            album: "Ouin Ouin Ouin (Deluxe Edition)",
+            persistentID: "",
+            generation: generation
+        )
+
+        XCTAssertNil(c.currentArtwork)
+    }
+
     func testArtworkBackgroundToneMapDarkensBrightArtwork() {
         let dark = ArtworkBackgroundToneMap.forLuminance(0.1)
         let mid = ArtworkBackgroundToneMap.forLuminance(0.45)
