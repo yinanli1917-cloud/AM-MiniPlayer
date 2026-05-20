@@ -728,7 +728,7 @@ public struct LyricsView: View {
             MusicButtonView()
                 .accessibilityLabel("打开 Music")
                 .padding(12)
-                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                .transition(.opacity)
         }
     }
 
@@ -745,7 +745,7 @@ public struct LyricsView: View {
                     )
                 }
             }
-            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            .transition(.opacity)
             .padding(12)
         }
     }
@@ -755,7 +755,9 @@ public struct LyricsView: View {
     private func animateControlsIn() {
         controlsBlurAmount = 10
         controlsOffsetY = 30
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+        let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+        let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
+        withAnimation(controlsAnim) {
             showControls = true
             controlsBlurAmount = 0
             controlsOffsetY = 0
@@ -763,7 +765,9 @@ public struct LyricsView: View {
     }
 
     private func animateControlsOut() {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+        let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+        let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
+        withAnimation(controlsAnim) {
             showControls = false
             controlsBlurAmount = 10
             controlsOffsetY = 30
