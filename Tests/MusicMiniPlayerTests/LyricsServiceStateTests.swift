@@ -131,4 +131,34 @@ final class LyricsServiceStateTests: XCTestCase {
             )
         )
     }
+
+    func testPartialSourceTranslationFillTargetsOnlyMissingVisibleLines() {
+        let lyrics = [
+            LyricLine(text: "⋯", startTime: 0, endTime: 10),
+            LyricLine(text: "泣きながら　ちぎった写真を", startTime: 14, endTime: 22, translation: "一边哭着 把撕碎的照片"),
+            LyricLine(text: "悩みなき　きのうのほほえみ", startTime: 29, endTime: 37),
+            LyricLine(text: "la la la", startTime: 38, endTime: 40),
+            LyricLine(text: "伤つける人もないけど", startTime: 160, endTime: 168)
+        ]
+
+        XCTAssertEqual(
+            LyricsService.translationEligibleLineIndices(in: lyrics, onlyMissingTranslations: true),
+            [2, 4]
+        )
+        XCTAssertTrue(LyricsService.hasMissingEligibleTranslations(lyrics))
+    }
+
+    func testCompleteSourceTranslationDoesNotRequestSystemFill() {
+        let lyrics = [
+            LyricLine(text: "⋯", startTime: 0, endTime: 10),
+            LyricLine(text: "あの顷のわたしに戻って", startTime: 60, endTime: 68, translation: "我好想回到那时候"),
+            LyricLine(text: "あなたに会いたい", startTime: 68, endTime: 76, translation: "与你相遇")
+        ]
+
+        XCTAssertEqual(
+            LyricsService.translationEligibleLineIndices(in: lyrics, onlyMissingTranslations: true),
+            []
+        )
+        XCTAssertFalse(LyricsService.hasMissingEligibleTranslations(lyrics))
+    }
 }

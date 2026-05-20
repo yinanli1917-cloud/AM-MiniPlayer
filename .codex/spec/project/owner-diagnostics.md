@@ -54,6 +54,10 @@ technical causes.
 - Track metadata is acceptable in manual reports because wrong-lyrics and timing
   bugs need title, artist, album, duration, selected source, and timing context
   to reproduce.
+- Translation diagnostics must record coverage, not just a boolean. A source
+  with some translated rows and missing visible rows should report translated
+  line count, translatable line count, missing translation count, and a partial
+  translation incident when translation display was requested.
 - Manual reports must not preserve synthetic placeholder track metadata such as
   `Wrong Lyrics / Reporter / Debug` when recent credible app evidence exists.
   Resolve the report track from the latest credible event, incident, or

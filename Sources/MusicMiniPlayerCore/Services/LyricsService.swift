@@ -76,10 +76,17 @@ public class LyricsService: ObservableObject {
     }
 
     public func diagnosticsWorkloadMetrics() -> [String: Double] {
-        [
+        let translationStats = Self.translationCoverageStats(in: lyrics)
+        return [
             "lyricLineCount": Double(lyrics.count),
             "hasSyllableSyncLyrics": hasSyllableSyncLyrics ? 1 : 0,
             "hasTranslation": hasTranslation ? 1 : 0,
+            "translatableLineCount": Double(translationStats.eligible),
+            "translationLineCount": Double(translationStats.translated),
+            "missingTranslationLineCount": Double(translationStats.missing),
+            "translationCoverage": translationStats.eligible > 0
+                ? Double(translationStats.translated) / Double(translationStats.eligible)
+                : 0,
             "showTranslation": showTranslation ? 1 : 0,
             "isUnsyncedLyrics": isUnsyncedLyrics ? 1 : 0,
             "isLoadingLyrics": isLoading ? 1 : 0,
@@ -173,7 +180,12 @@ public class LyricsService: ObservableObject {
             parts.append("line-sync")
         }
         if showTranslation || hasTranslation {
-            parts.append(hasTranslation ? "translated" : "translation-requested")
+            if hasTranslation {
+                let stats = Self.translationCoverageStats(in: lyrics)
+                parts.append(stats.eligible > 0 ? "translated \(stats.translated)/\(stats.eligible)" : "translated")
+            } else {
+                parts.append("translation-requested")
+            }
         }
         if isManualScrolling {
             parts.append("manual-scroll")
@@ -601,6 +613,7 @@ public class LyricsService: ObservableObject {
 
         // 检查是否有歌词源翻译
         let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
+        let translationStats = Self.translationCoverageStats(in: processed.lyrics)
         // Parse-time classification — no heuristic re-derivation.
         let isUnsynced = bestResult.kind == .unsynced
 
@@ -623,7 +636,11 @@ public class LyricsService: ObservableObject {
             score: bestResult.score,
             lineCount: processed.lyrics.count,
             isUnsynced: isUnsynced,
-            hasSourceTranslation: hasSourceTranslation
+            hasSourceTranslation: hasSourceTranslation,
+            translationLineCount: translationStats.translated,
+            translatableLineCount: translationStats.eligible,
+            missingTranslationLineCount: translationStats.missing,
+            translationDisplayRequested: showTranslation
         )
 
         // 🔑 Only apply to UI if this is still the current song
@@ -726,7 +743,11 @@ public class LyricsService: ObservableObject {
         score: Double?,
         lineCount: Int,
         isUnsynced: Bool,
-        hasSourceTranslation: Bool
+        hasSourceTranslation: Bool,
+        translationLineCount: Int,
+        translatableLineCount: Int,
+        missingTranslationLineCount: Int,
+        translationDisplayRequested: Bool
     ) {
         let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
         Task { @MainActor in
@@ -736,7 +757,11 @@ public class LyricsService: ObservableObject {
                 score: score,
                 lineCount: lineCount,
                 isUnsynced: isUnsynced,
-                hadSourceTranslation: hasSourceTranslation
+                hadSourceTranslation: hasSourceTranslation,
+                translationLineCount: translationLineCount,
+                translatableLineCount: translatableLineCount,
+                missingTranslationLineCount: missingTranslationLineCount,
+                translationDisplayRequested: translationDisplayRequested
             )
         }
     }
@@ -865,16 +890,21 @@ public class LyricsService: ObservableObject {
 
         let isTargetChinese = translationLanguage.hasPrefix("zh")
 
-        // 歌词源已有中文翻译且目标也是中文，跳过
-        if translationsAreFromLyricsSource && isTargetChinese { return }
+        let isFillingPartialSourceTranslations = translationsAreFromLyricsSource && isTargetChinese
+        if isTargetChinese && lyricsArePredominantlyChinese() { return }
 
         // 🔑 歌词内容已经是目标语言 → 跳过
-        if isTargetChinese && lyricsArePredominantlyChinese() { return }
-        if lyricsAreInTargetLanguage() { return }
+        if !isFillingPartialSourceTranslations && lyricsAreInTargetLanguage() { return }
 
         // 检查是否已翻译过（相同歌曲+相同语言）
         let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
-        if currentSongTranslationID == translationID && hasTranslation { return }
+        if currentSongTranslationID == translationID {
+            if isFillingPartialSourceTranslations {
+                guard Self.hasMissingEligibleTranslations(lyrics) else { return }
+            } else if hasTranslation {
+                return
+            }
+        }
 
         // 目标语言不是中文，需要系统翻译覆盖
         if translationsAreFromLyricsSource && !isTargetChinese {
@@ -883,10 +913,17 @@ public class LyricsService: ObservableObject {
             refreshTranslationAvailability()
         }
 
-        // 清除旧翻译
-        if hasTranslation {
+        // 清除旧翻译. When filling sparse source translations, preserve existing
+        // source lines and translate only the missing visible rows.
+        if hasTranslation && !isFillingPartialSourceTranslations {
             clearAllTranslations()
         }
+
+        let eligibleIndices = Self.translationEligibleLineIndices(
+            in: lyrics,
+            onlyMissingTranslations: isFillingPartialSourceTranslations
+        )
+        guard !eligibleIndices.isEmpty else { return }
 
         isTranslating = true
         translationFailed = false
@@ -895,16 +932,7 @@ public class LyricsService: ObservableObject {
         // 🔑 Snapshot song identity + lyrics count BEFORE await suspension point
         let songIDBeforeAwait = currentSongID
         let lyricsCountBeforeAwait = lyrics.count
-        debugLogPublic("🔄 开始翻译: \(lyricsCountBeforeAwait) 行")
-
-        // 🔑 Filter out vocable lines BEFORE sending to translation API
-        // Vocables (woo, la la, oh oh) cause hallucinated translations
-        var eligibleIndices: [Int] = []
-        for i in 0..<lyrics.count {
-            if !isVocableLine(lyrics[i].text) {
-                eligibleIndices.append(i)
-            }
-        }
+        debugLogPublic("🔄 开始翻译: \(eligibleIndices.count)/\(lyricsCountBeforeAwait) 行")
 
         let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
@@ -952,6 +980,33 @@ public class LyricsService: ObservableObject {
         let isTargetChinese = translationLanguage.hasPrefix("zh")
         if isTargetChinese && lyricsArePredominantlyChinese(lyrics) { return false }
         return !lyricsAreInTargetLanguage(lyrics, translationLanguage: translationLanguage)
+    }
+
+    static func hasMissingEligibleTranslations(_ lyrics: [LyricLine]) -> Bool {
+        !translationEligibleLineIndices(in: lyrics, onlyMissingTranslations: true).isEmpty
+    }
+
+    static func translationCoverageStats(in lyrics: [LyricLine]) -> (eligible: Int, translated: Int, missing: Int) {
+        let eligible = translationEligibleLineIndices(in: lyrics, onlyMissingTranslations: false)
+        let translated = eligible.filter { lyrics[$0].hasTranslation }.count
+        return (eligible.count, translated, eligible.count - translated)
+    }
+
+    static func translationEligibleLineIndices(
+        in lyrics: [LyricLine],
+        onlyMissingTranslations: Bool
+    ) -> [Int] {
+        lyrics.indices.filter { index in
+            let line = lyrics[index]
+            let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty,
+                  text != "...",
+                  text != "…",
+                  text != "⋯",
+                  !isInstrumentalNotice(text),
+                  !isVocableLine(text) else { return false }
+            return !onlyMissingTranslations || !line.hasTranslation
+        }
     }
 
     private static func lyricsAreInTargetLanguage(_ lyrics: [LyricLine], translationLanguage: String) -> Bool {

@@ -60,6 +60,14 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   translation row on first render for translatable lyrics. Source or system
   translations should populate existing space instead of pushing visible lines
   downward after the page transition.
+- Source translations may be sparse on repeated chorus lines. After metadata
+  and vocable filtering, fill missing translations only when the same normalized
+  lyric text has exactly one unambiguous source translation elsewhere in the
+  same track.
+- Source translations may also be sparse for unique visible lines. Do not treat
+  "some source translation exists" as "the whole song is translated"; when the
+  target language is Chinese, preserve existing source translations and use
+  system translation only to fill missing eligible lyric rows.
 - Lyrics page first-render culling must stay active until enough line heights
   are measured. Do not briefly render the full lyric payload during partial
   measurement; that path causes page-switch frame stalls on translated or

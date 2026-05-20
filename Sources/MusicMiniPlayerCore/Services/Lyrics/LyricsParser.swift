@@ -529,10 +529,56 @@ public final class LyricsParser {
             return LyricLine(text: line.text, startTime: line.startTime, endTime: line.endTime,
                              words: line.words, translation: nil)
         }
+        filteredLyrics = fillMissingRepeatedLineTranslations(filteredLyrics)
 
         // 插入前奏占位符
         let loadingLine = LyricLine(text: "⋯", startTime: 0, endTime: firstRealLyricStartTime)
         return ([loadingLine] + filteredLyrics, 1)
+    }
+
+    private func fillMissingRepeatedLineTranslations(_ lines: [LyricLine]) -> [LyricLine] {
+        var translationsByText: [String: Set<String>] = [:]
+
+        for line in lines {
+            guard let translation = line.translation?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !translation.isEmpty,
+                  !isVocableLine(line.text),
+                  let key = repeatedLineTranslationKey(line.text) else { continue }
+            translationsByText[key, default: []].insert(translation)
+        }
+
+        let unambiguousTranslations = translationsByText.compactMapValues { translations -> String? in
+            translations.count == 1 ? translations.first : nil
+        }
+        guard !unambiguousTranslations.isEmpty else { return lines }
+
+        return lines.map { line in
+            guard !line.hasTranslation,
+                  !isVocableLine(line.text),
+                  let key = repeatedLineTranslationKey(line.text),
+                  let translation = unambiguousTranslations[key] else { return line }
+            return LyricLine(
+                text: line.text,
+                startTime: line.startTime,
+                endTime: line.endTime,
+                words: line.words,
+                translation: translation
+            )
+        }
+    }
+
+    private func repeatedLineTranslationKey(_ text: String) -> String? {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !normalized.isEmpty,
+              normalized != "...",
+              normalized != "…",
+              normalized != "⋯" else { return nil }
+        return normalized
     }
 
     // MARK: - 元信息剥离（merge 前调用）

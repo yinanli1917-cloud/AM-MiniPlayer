@@ -351,6 +351,33 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertGreaterThan(firstLyric.endTime, firstLyric.startTime)
     }
 
+    func testProcessLyrics_fillsMissingRepeatedLineTranslations() {
+        let raw = [
+            LyricLine(text: "You know it's not the same as it was", startTime: 10, endTime: 14, translation: "你也知道已经时过境迁"),
+            LyricLine(text: "In this world, it's just us", startTime: 15, endTime: 19, translation: "在这世界上 只剩下我们"),
+            LyricLine(text: "You know it's not the same as it was", startTime: 20, endTime: 24),
+            LyricLine(text: "As it was", startTime: 25, endTime: 29, translation: "一切都变了 不复从前"),
+        ]
+
+        let (lyrics, _) = parser.processLyrics(raw)
+        let realLines = Array(lyrics.dropFirst())
+
+        XCTAssertEqual(realLines[2].translation, "你也知道已经时过境迁")
+    }
+
+    func testProcessLyrics_doesNotFillConflictingRepeatedTranslations() {
+        let raw = [
+            LyricLine(text: "Same line", startTime: 10, endTime: 14, translation: "第一种翻译"),
+            LyricLine(text: "Same line", startTime: 20, endTime: 24, translation: "第二种翻译"),
+            LyricLine(text: "Same line", startTime: 30, endTime: 34),
+        ]
+
+        let (lyrics, _) = parser.processLyrics(raw)
+        let realLines = Array(lyrics.dropFirst())
+
+        XCTAssertNil(realLines[2].translation)
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - mergeLyricsWithTranslation
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

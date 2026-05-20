@@ -17,6 +17,7 @@ public enum DiagnosticSeverity: String, Codable, CaseIterable, Sendable {
 public enum DiagnosticIncidentCategory: String, Codable, CaseIterable, Sendable {
     case lyricsSlowFetch
     case lyricsFallbackChurn
+    case lyricsPartialTranslation
     case lyricsManualReport
     case uiFrameStall
     case uiInteractionSlow
@@ -610,7 +611,11 @@ public final class DiagnosticsService: ObservableObject {
         score: Double?,
         lineCount: Int,
         isUnsynced: Bool,
-        hadSourceTranslation: Bool
+        hadSourceTranslation: Bool,
+        translationLineCount: Int = 0,
+        translatableLineCount: Int = 0,
+        missingTranslationLineCount: Int = 0,
+        translationDisplayRequested: Bool = false
     ) {
         guard isEnabled else { return }
         let key = lyricsKey(for: track)
@@ -622,7 +627,13 @@ public final class DiagnosticsService: ObservableObject {
             "fetchSeconds": elapsed,
             "lineCount": Double(lineCount),
             "isUnsynced": isUnsynced ? 1 : 0,
-            "hasSourceTranslation": hadSourceTranslation ? 1 : 0
+            "hasSourceTranslation": hadSourceTranslation ? 1 : 0,
+            "translationLineCount": Double(translationLineCount),
+            "translatableLineCount": Double(translatableLineCount),
+            "missingTranslationLineCount": Double(missingTranslationLineCount),
+            "translationCoverage": translatableLineCount > 0
+                ? Double(translationLineCount) / Double(translatableLineCount)
+                : 0
         ]
         if let score { metrics["score"] = score }
 
@@ -658,6 +669,18 @@ public final class DiagnosticsService: ObservableObject {
                 severity: .warning,
                 title: "Low-confidence lyrics result",
                 detail: "The selected lyrics result was unsynced or low confidence.",
+                track: track,
+                metrics: metrics,
+                evidence: ["source": source ?? "unknown"]
+            )
+        }
+
+        if translationDisplayRequested && hadSourceTranslation && missingTranslationLineCount > 0 {
+            recordIncident(
+                category: .lyricsPartialTranslation,
+                severity: .warning,
+                title: "Source translation incomplete",
+                detail: "The selected lyrics source translated \(translationLineCount)/\(max(translatableLineCount, 1)) visible lines.",
                 track: track,
                 metrics: metrics,
                 evidence: ["source": source ?? "unknown"]

@@ -59,6 +59,35 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .scriptingBridgeBacklog)
     }
 
+    func testPartialSourceTranslationCreatesInspectableIncidentWhenTranslationShown() {
+        let track = DiagnosticTrackContext(
+            title: "Anohini Kaeritai",
+            artist: "Miki Imai",
+            album: "Dialogue",
+            duration: 249
+        )
+
+        DiagnosticsService.shared.recordLyricsFetchFinished(
+            track: track,
+            source: "NetEase",
+            score: 93.5,
+            lineCount: 21,
+            isUnsynced: false,
+            hadSourceTranslation: true,
+            translationLineCount: 13,
+            translatableLineCount: 20,
+            missingTranslationLineCount: 7,
+            translationDisplayRequested: true
+        )
+
+        let incident = DiagnosticsService.shared.incidents.first
+        XCTAssertEqual(incident?.category, .lyricsPartialTranslation)
+        XCTAssertEqual(incident?.title, "Source translation incomplete")
+        XCTAssertEqual(incident?.metrics["translationLineCount"], 13)
+        XCTAssertEqual(incident?.metrics["missingTranslationLineCount"], 7)
+        XCTAssertEqual(incident?.metrics["translationCoverage"] ?? -1, 0.65, accuracy: 0.001)
+    }
+
     func testManualReportExportsInspectableBundle() throws {
         let track = DiagnosticTrackContext(
             title: "Reported Song",
