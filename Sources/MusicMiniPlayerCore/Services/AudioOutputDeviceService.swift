@@ -59,6 +59,12 @@ public final class AudioOutputDeviceService: ObservableObject {
             selector: kAudioHardwarePropertyDefaultSystemOutputDevice
         )
 
+        guard Self.waitForDefaultOutputDevice(device.id) else {
+            lastErrorMessage = "Audio output did not change."
+            refresh()
+            return false
+        }
+
         lastErrorMessage = nil
         refresh()
         return true
@@ -153,6 +159,29 @@ public final class AudioOutputDeviceService: ObservableObject {
             &deviceID
         )
         return status == noErr && deviceID != 0 ? deviceID : nil
+    }
+
+    nonisolated static func defaultOutputMatches(
+        targetDeviceID: AudioDeviceID,
+        outputDeviceID: AudioDeviceID?
+    ) -> Bool {
+        outputDeviceID == targetDeviceID
+    }
+
+    private nonisolated static func waitForDefaultOutputDevice(_ deviceID: AudioDeviceID) -> Bool {
+        let attempts = 5
+        for attempt in 0..<attempts {
+            if defaultOutputMatches(
+                targetDeviceID: deviceID,
+                outputDeviceID: readDefaultOutputDeviceID()
+            ) {
+                return true
+            }
+            if attempt < attempts - 1 {
+                Thread.sleep(forTimeInterval: 0.04)
+            }
+        }
+        return false
     }
 
     private nonisolated static func setDefaultDevice(
@@ -261,7 +290,6 @@ public final class AudioOutputDeviceService: ObservableObject {
     }
 
     private nonisolated static func statusMessage(_ prefix: String, status: OSStatus) -> String {
-        _ = status
-        return "\(prefix)."
+        "\(prefix) (OSStatus \(status))."
     }
 }

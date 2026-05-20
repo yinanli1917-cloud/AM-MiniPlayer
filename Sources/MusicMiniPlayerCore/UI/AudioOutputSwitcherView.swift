@@ -7,28 +7,18 @@ struct AudioOutputSwitcherView: View {
     var onMenuPresentedChanged: ((Bool) -> Void)?
 
     @StateObject private var outputService = AudioOutputDeviceService.shared
-    @State private var isMenuPresented = false
-    @State private var failedDeviceID: AudioDeviceID?
     @State private var isTriggerHovering = false
-    @State private var isTriggerPressed = false
+    @State private var selectionPulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var currentDeviceName: String {
-        outputService.devices.first(where: \.isDefault)?.name ?? "No output selected"
-    }
-
     var body: some View {
-        Button(action: triggerMenu) {
-            Image(systemName: "airplayaudio")
-                .font(.system(size: 13, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .scaleEffect(triggerIconScale)
-                .opacity(isMenuPresented ? 1 : 0.94)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .contentShape(Capsule())
-                .modifier(GlassButtonBackground(luminance: artworkBrightness))
+        Menu {
+            menuContent
+        } label: {
+            triggerIcon
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .onHover { hovering in
             if reduceMotion {
@@ -38,312 +28,91 @@ struct AudioOutputSwitcherView: View {
                     isTriggerHovering = hovering
                 }
             }
+            if hovering {
+                outputService.refresh()
+            }
         }
-        .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.24, dampingFraction: 0.72), value: isTriggerPressed)
         .animation(reduceMotion ? .linear(duration: 0.1) : .smooth(duration: 0.18), value: isTriggerHovering)
-        .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.28, dampingFraction: 0.78), value: isMenuPresented)
         .help("Switch audio output")
         .accessibilityLabel("Switch audio output")
         .accessibilityValue(currentDeviceName)
-        .popover(isPresented: $isMenuPresented, arrowEdge: .top) {
-            AudioOutputDeviceMenuContent(
-                outputService: outputService,
-                isPresented: $isMenuPresented,
-                failedDeviceID: $failedDeviceID
-            )
-        }
+        .onAppear { outputService.refresh() }
         .onChange(of: outputService.defaultDeviceID) { _, _ in
-            failedDeviceID = nil
-        }
-        .onChange(of: isMenuPresented) { _, presented in
-            onMenuPresentedChanged?(presented)
-        }
-        .onDisappear {
             onMenuPresentedChanged?(false)
         }
     }
 
+    private var triggerIcon: some View {
+        Image(systemName: currentSymbolName)
+            .font(.system(size: 13, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .contentTransition(.symbolEffect(.replace))
+            .symbolEffect(.bounce, value: selectionPulse)
+            .scaleEffect(triggerIconScale)
+            .opacity(isTriggerHovering ? 1 : 0.94)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .contentShape(Capsule())
+            .modifier(GlassButtonBackground(luminance: artworkBrightness))
+    }
+
+    @ViewBuilder
+    private var menuContent: some View {
+        if outputService.devices.isEmpty {
+            Label("No output devices found", systemImage: "speaker.slash")
+        } else {
+            Picker("Sound Output", selection: selectedDeviceID) {
+                ForEach(outputService.devices) { device in
+                    Label(device.name, systemImage: device.symbolName)
+                        .tag(device.id)
+                        .disabled(!device.canSelect)
+                }
+            }
+            .pickerStyle(.inline)
+        }
+
+        if let error = outputService.lastErrorMessage {
+            Divider()
+            Label(error, systemImage: "exclamationmark.triangle")
+        }
+    }
+
+    private var selectedDeviceID: Binding<AudioDeviceID> {
+        Binding(
+            get: { outputService.defaultDeviceID ?? AudioDeviceID(0) },
+            set: { selectDeviceID($0) }
+        )
+    }
+
+    private var currentDevice: AudioOutputDevice? {
+        outputService.devices.first(where: \.isDefault)
+    }
+
+    private var currentDeviceName: String {
+        currentDevice?.name ?? "No output selected"
+    }
+
+    private var currentSymbolName: String {
+        currentDevice?.symbolName ?? (outputService.devices.isEmpty ? "speaker.slash" : "airplayaudio")
+    }
+
     private var triggerIconScale: CGFloat {
-        if isTriggerPressed { return 0.88 }
-        if isMenuPresented { return 1.08 }
+        if selectionPulse { return 1.08 }
         if isTriggerHovering { return 1.04 }
         return 1.0
     }
 
-    private func triggerMenu() {
-        if !reduceMotion {
-            withAnimation(.spring(response: 0.12, dampingFraction: 0.82)) {
-                isTriggerPressed = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-                withAnimation(.spring(response: 0.26, dampingFraction: 0.7)) {
-                    isTriggerPressed = false
-                }
-            }
-        }
-        toggleMenu()
-    }
+    private func selectDeviceID(_ deviceID: AudioDeviceID) {
+        guard deviceID != outputService.defaultDeviceID else { return }
+        guard let device = outputService.devices.first(where: { $0.id == deviceID }) else { return }
 
-    private func toggleMenu() {
         outputService.clearError()
-        outputService.refresh()
-        failedDeviceID = nil
+        guard outputService.select(device) else { return }
 
-        if reduceMotion {
-            isMenuPresented.toggle()
-        } else {
-            withAnimation(.smooth(duration: 0.18)) {
-                isMenuPresented.toggle()
-            }
+        guard !reduceMotion else { return }
+        withAnimation(.spring(response: 0.18, dampingFraction: 0.78)) {
+            selectionPulse.toggle()
         }
-    }
-}
-
-private struct AudioOutputDeviceMenuContent: View {
-    @ObservedObject var outputService: AudioOutputDeviceService
-    @Binding var isPresented: Bool
-    @Binding var failedDeviceID: AudioDeviceID?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if outputService.devices.isEmpty {
-                unavailableRow
-            } else {
-                ForEach(outputService.devices) { device in
-                    Button {
-                        select(device)
-                    } label: {
-                        AudioOutputDeviceRow(
-                            device: device,
-                            hasError: failedDeviceID == device.id
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!device.canSelect)
-                }
-            }
-
-            if let error = outputService.lastErrorMessage {
-                Text(error)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 3)
-                    .transition(.opacity)
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 7)
-        .frame(width: 252, alignment: .leading)
-        .modifier(AudioOutputMenuSurface())
-        .modifier(ConditionalGlassContainer())
-        .onAppear {
-            outputService.refresh()
-        }
-    }
-
-    private var unavailableRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "speaker.slash")
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 18)
-            Text("No output devices found")
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .frame(height: 34, alignment: .leading)
-    }
-
-    private func select(_ device: AudioOutputDevice) {
-        outputService.clearError()
-
-        guard outputService.select(device) else {
-            failedDeviceID = device.id
-            return
-        }
-
-        failedDeviceID = nil
-        if reduceMotion {
-            isPresented = false
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                withAnimation(.smooth(duration: 0.16)) {
-                    isPresented = false
-                }
-            }
-        }
-    }
-}
-
-private struct AudioOutputMenuSurface: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-
-        if #available(macOS 26.0, *) {
-            content
-                .background {
-                    shape.fill(reduceTransparency ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)) : AnyShapeStyle(.regularMaterial))
-                }
-                .overlay {
-                    shape.fill(surfaceTint)
-                }
-                .overlay {
-                    shape.strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.20 : 0.14), lineWidth: 0.5)
-                }
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.18), radius: 18, x: 0, y: 12)
-                .glassEffect(reduceTransparency ? .identity : .regular, in: shape)
-        } else {
-            content
-                .background {
-                    shape.fill(reduceTransparency ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)) : AnyShapeStyle(.regularMaterial))
-                }
-                .overlay {
-                    shape.fill(surfaceTint)
-                }
-                .overlay {
-                    shape.strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.20 : 0.14), lineWidth: 0.5)
-                }
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.18), radius: 18, x: 0, y: 12)
-        }
-    }
-
-    private var surfaceTint: Color {
-        if reduceTransparency {
-            return Color.primary.opacity(colorScheme == .dark ? 0.04 : 0.02)
-        }
-        return colorScheme == .dark ? Color.black.opacity(0.08) : Color.white.opacity(0.16)
-    }
-}
-
-private struct AudioOutputDeviceRow: View {
-    let device: AudioOutputDevice
-    let hasError: Bool
-
-    @State private var isHovering = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        HStack(spacing: 8) {
-            iconBadge
-
-            Text(device.name)
-                .font(.system(size: 12.5, weight: device.isDefault ? .semibold : .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer(minLength: 4)
-
-            if device.isDefault {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.accentColor)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
-            }
-
-            if hasError {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.orange)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
-            }
-        }
-        .foregroundStyle(rowForeground)
-        .padding(.horizontal, 7)
-        .frame(height: 35)
-        .background(rowBackground)
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .opacity(device.canSelect ? 1 : 0.45)
-        .onHover { hovering in
-            if reduceMotion {
-                isHovering = hovering
-            } else {
-                withAnimation(.smooth(duration: 0.14)) {
-                    isHovering = hovering
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(device.name)
-        .accessibilityValue(device.isDefault ? "Current output" : "")
-        .accessibilityAddTraits(device.isDefault ? [.isSelected] : [])
-    }
-
-    private var iconBadge: some View {
-        Image(systemName: device.symbolName)
-            .font(.system(size: 13, weight: .semibold))
-            .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(iconForeground)
-            .frame(width: 23, height: 23)
-            .background(iconBackground)
-    }
-
-    private var iconBackground: some View {
-        Circle()
-            .fill(iconFill)
-            .overlay {
-                Circle()
-                    .strokeBorder(Color.primary.opacity(device.isDefault ? 0.12 : 0.08), lineWidth: 0.5)
-            }
-    }
-
-    private var rowBackground: some View {
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(backgroundColor)
-            .overlay {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: device.isDefault || isHovering ? 0.75 : 0)
-            }
-    }
-
-    private var backgroundColor: Color {
-        if device.isDefault {
-            return colorScheme == .dark ? Color.white.opacity(0.18) : Color.black.opacity(0.10)
-        }
-        if isHovering {
-            return colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.075)
-        }
-        return Color.clear
-    }
-
-    private var borderColor: Color {
-        if device.isDefault {
-            return Color.primary.opacity(colorScheme == .dark ? 0.22 : 0.16)
-        }
-        if isHovering {
-            return Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.12)
-        }
-        return Color.clear
-    }
-
-    private var rowForeground: Color {
-        device.canSelect ? .primary : .secondary
-    }
-
-    private var iconForeground: Color {
-        if hasError { return .orange }
-        if device.isDefault { return .accentColor }
-        return device.canSelect ? .primary : .secondary
-    }
-
-    private var iconFill: Color {
-        if device.isDefault {
-            return Color.accentColor.opacity(colorScheme == .dark ? 0.22 : 0.16)
-        }
-        if isHovering {
-            return Color.primary.opacity(colorScheme == .dark ? 0.13 : 0.08)
-        }
-        return Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.055)
     }
 }
 

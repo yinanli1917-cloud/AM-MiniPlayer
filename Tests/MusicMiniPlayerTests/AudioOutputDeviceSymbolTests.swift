@@ -23,6 +23,21 @@ final class AudioOutputDeviceSymbolTests: XCTestCase {
         XCTAssertEqual(symbol(for: "Multi-Output Device", transportType: kAudioDeviceTransportTypeAutoAggregate), "hifispeaker.2")
     }
 
+    func testDefaultOutputVerificationRequiresExactDeviceMatch() {
+        XCTAssertTrue(AudioOutputDeviceService.defaultOutputMatches(
+            targetDeviceID: AudioDeviceID(42),
+            outputDeviceID: AudioDeviceID(42)
+        ))
+        XCTAssertFalse(AudioOutputDeviceService.defaultOutputMatches(
+            targetDeviceID: AudioDeviceID(42),
+            outputDeviceID: AudioDeviceID(7)
+        ))
+        XCTAssertFalse(AudioOutputDeviceService.defaultOutputMatches(
+            targetDeviceID: AudioDeviceID(42),
+            outputDeviceID: nil
+        ))
+    }
+
     private func symbol(for name: String, transportType: UInt32) -> String {
         AudioOutputDevice(
             id: AudioDeviceID(1),
