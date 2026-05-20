@@ -378,8 +378,8 @@ public struct PlaylistView: View {
                             .background(
                                 Capsule()
                                     .fill(musicController.shuffleEnabled ? themeBackground : .clear)
-                                    .background(.ultraThinMaterial, in: Capsule())
                             )
+                            .modifier(GlassButtonTexture(shape: Capsule()))
                             .contentShape(Capsule())
                         }
                         .buttonStyle(CapsulePressStyle())
@@ -400,8 +400,8 @@ public struct PlaylistView: View {
                             .background(
                                 Capsule()
                                     .fill(musicController.repeatMode > 0 ? themeBackground : .clear)
-                                    .background(.ultraThinMaterial, in: Capsule())
                             )
+                            .modifier(GlassButtonTexture(shape: Capsule()))
                             .contentShape(Capsule())
                         }
                         .buttonStyle(CapsulePressStyle())

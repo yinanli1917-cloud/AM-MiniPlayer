@@ -398,9 +398,10 @@ extension MiniPlayerView {
                 )
                 .frame(width: 24, height: 24)
                 .background(
-                    Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
-                        .overlay(musicController.shuffleEnabled ? Circle().fill(themeColor.opacity(0.2)) : nil)
+                    Circle()
+                        .fill(musicController.shuffleEnabled ? themeColor.opacity(0.2) : Color.clear)
                 )
+                .modifier(GlassButtonTexture(shape: Circle()))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("随机播放")
@@ -415,9 +416,10 @@ extension MiniPlayerView {
                     .scaleEffect(1 - repeatFlow * 0.1)
                     .frame(width: 24, height: 24)
                     .background(
-                        Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .light)
-                            .overlay(musicController.repeatMode > 0 ? Circle().fill(themeColor.opacity(0.2)) : nil)
+                        Circle()
+                            .fill(musicController.repeatMode > 0 ? themeColor.opacity(0.2) : Color.clear)
                     )
+                    .modifier(GlassButtonTexture(shape: Circle()))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")

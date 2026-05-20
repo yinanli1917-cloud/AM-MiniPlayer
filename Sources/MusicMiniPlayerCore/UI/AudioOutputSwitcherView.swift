@@ -325,7 +325,7 @@ struct AudioOutputSwitcherView: View {
 
     private func routeIconFill(isCurrent: Bool, isHovering: Bool) -> Color {
         if isCurrent { return Color.accentColor.opacity(0.16) }
-        if isHovering { return Color.white.opacity(colorScheme == .dark ? 0.20 : 0.58) }
+        if isHovering { return Color.black.opacity(0.065) }
         return Color.white.opacity(colorScheme == .dark ? 0.10 : 0.34)
     }
 
@@ -339,14 +339,14 @@ struct AudioOutputSwitcherView: View {
     }
 
     private func rowFill(isCurrent: Bool, isHovering: Bool) -> Color {
-        if isCurrent { return Color.white.opacity(colorScheme == .dark ? 0.22 : 0.50) }
-        if isHovering { return Color.white.opacity(colorScheme == .dark ? 0.15 : 0.38) }
+        if isCurrent { return Color.white.opacity(colorScheme == .dark ? 0.22 : 0.54) }
+        if isHovering { return Color.black.opacity(0.07) }
         return Color.clear
     }
 
     private func rowStroke(isCurrent: Bool, isHovering: Bool) -> Color {
         if isCurrent { return Color.white.opacity(colorScheme == .dark ? 0.22 : 0.66) }
-        if isHovering { return Color.white.opacity(colorScheme == .dark ? 0.14 : 0.42) }
+        if isHovering { return Color.black.opacity(0.10) }
         return Color.clear
     }
 }

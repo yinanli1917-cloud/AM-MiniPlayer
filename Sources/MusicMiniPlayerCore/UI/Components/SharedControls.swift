@@ -539,6 +539,11 @@ struct SkipControlButton: View {
                 isHovering = hovering
             }
         }
+        .onDisappear {
+            finishActiveAnimationAsInterrupted(
+                "Skip animation view disappeared before the replacement flow completed."
+            )
+        }
     }
 
     @ViewBuilder
@@ -660,6 +665,18 @@ struct SkipControlButton: View {
                 activeDiagnosticID = nil
             }
         }
+    }
+
+    private func finishActiveAnimationAsInterrupted(_ detail: String) {
+        guard let activeDiagnosticID else { return }
+        animationSerial += 1
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) {
+            replacementStart = nil
+        }
+        finishDiagnostics?(activeDiagnosticID, .interrupted, detail)
+        self.activeDiagnosticID = nil
     }
 
     private func triangle(role: TriangleRole, phase: CGFloat) -> some View {

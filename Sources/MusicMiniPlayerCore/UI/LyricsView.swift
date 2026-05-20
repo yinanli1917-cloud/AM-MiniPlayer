@@ -148,10 +148,10 @@ public struct LyricsView: View {
                 }
             }
         }
+        .overlay(bottomControlsOverlay)
         .overlay(alignment: .topLeading) { musicButtonOverlay }
         .overlay(alignment: .topTrailing) { windowButtonsOverlay }
         .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
-        .overlay(bottomControlsOverlay)
         .onHover { hovering in handleHover(hovering) }
         // ── onChange: 页面切换 ──
         .onChange(of: currentPage) { _, newPage in
@@ -219,6 +219,7 @@ public struct LyricsView: View {
             }
             refreshRenderedIndicesCache()
             cache.heightCacheInvalidated = true
+            updateHeightCache()
             if newCount > 0 {
                 suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
                 startLineMotionSamplingWindow(duration: lyricLineMotionTrackSwitchSampleDuration)
@@ -511,6 +512,7 @@ public struct LyricsView: View {
                 if abs((cache.lineHeights[index] ?? 0) - h) > 2.0 {
                     cache.lineHeights[index] = h
                     cache.heightCacheInvalidated = true
+                    updateHeightCache()
                 }
             }
             .onChange(of: lineGeo.size.height) { _, newHeight in
@@ -518,6 +520,7 @@ public struct LyricsView: View {
                 if abs((cache.lineHeights[index] ?? 0) - newHeight) > 2.0 {
                     cache.lineHeights[index] = newHeight
                     cache.heightCacheInvalidated = true
+                    updateHeightCache()
                 }
             }
         }

@@ -29,6 +29,24 @@ struct GlassButtonBackground: ViewModifier {
     }
 }
 
+struct GlassButtonTexture<S: Shape>: ViewModifier {
+    let shape: S
+    var isEnabled: Bool = true
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(isEnabled ? .clear : .identity, in: shape)
+        } else {
+            content.background {
+                shape
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .light)
+                    .overlay(shape.stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+            }
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - Conditional Glass Modifiers
 // ═══════════════════════════════════════════════════════════════════════════════
