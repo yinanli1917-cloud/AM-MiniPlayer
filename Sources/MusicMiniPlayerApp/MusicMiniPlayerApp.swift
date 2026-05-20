@@ -23,10 +23,16 @@ class AppMain: NSObject, NSApplicationDelegate {
     var floatingWindow: NSPanel?
     var menuBarPopover: NSPopover?
     var settingsWindow: NSWindow?
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    var diagnosticsWindow: NSWindow?
+    #endif
     let musicController = MusicController.shared
     let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
     private var settingsWindowDelegate: SettingsWindowDelegate?
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    private var diagnosticsWindowDelegate: SettingsWindowDelegate?
+    #endif
 
     // 自动隐藏计时器（可取消）
     private var autoHideWorkItem: DispatchWorkItem?
@@ -73,6 +79,9 @@ class AppMain: NSObject, NSApplicationDelegate {
         createFloatingWindow()
         createMenuBarPopover()
         createSettingsWindow()
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        createDiagnosticsWindow()
+        #endif
         setupMainMenu()
         setupURLHandling()
         showFloatingWindow()
@@ -94,6 +103,7 @@ class AppMain: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        DiagnosticsService.shared.prepareForTermination()
         UpdateApplier.applyIfStaged()
     }
 
@@ -127,7 +137,15 @@ class AppMain: NSObject, NSApplicationDelegate {
             openSettingsPage(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         case "diagnostics":
-            showSettingsWindow(selectedTab: .diagnostics)
+            let action = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+            if action == "clear" {
+                Task { @MainActor in
+                    DiagnosticsService.shared.clear(suppressImmediateStandaloneFrameStalls: true)
+                    self.showDiagnosticsWindow()
+                }
+            } else {
+                showDiagnosticsWindow()
+            }
         #endif
         default:
             break
@@ -144,7 +162,7 @@ class AppMain: NSObject, NSApplicationDelegate {
             showSettingsWindow(selectedTab: .about)
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         case "diagnostics":
-            showSettingsWindow(selectedTab: .diagnostics)
+            showDiagnosticsWindow()
         #endif
         default:
             showSettingsWindow()
@@ -421,6 +439,28 @@ class AppMain: NSObject, NSApplicationDelegate {
         settingsWindow = window
     }
 
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    func createDiagnosticsWindow() {
+        let diagnosticsContent = DiagnosticsDebugPanel(musicController: musicController)
+            .frame(minWidth: 680, minHeight: 620)
+
+        let hostingController = NSHostingController(rootView: diagnosticsContent)
+
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "nanoPod Diagnostics"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 760, height: 720))
+        window.minSize = NSSize(width: 620, height: 520)
+        window.center()
+        window.isReleasedWhenClosed = false
+
+        diagnosticsWindowDelegate = SettingsWindowDelegate()
+        window.delegate = diagnosticsWindowDelegate
+
+        diagnosticsWindow = window
+    }
+    #endif
+
     func showSettingsWindow(selectedTab: SettingsTab? = nil) {
         guard let window = settingsWindow else { return }
         if let selectedTab {
@@ -431,9 +471,24 @@ class AppMain: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    func showDiagnosticsWindow() {
+        guard let window = diagnosticsWindow else { return }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    #endif
+
     @objc func openSettings(_ sender: Any?) {
         showSettingsWindow()
     }
+
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    @objc func openDiagnostics(_ sender: Any?) {
+        showDiagnosticsWindow()
+    }
+    #endif
 
     // MARK: - Main Menu (主菜单)
 
@@ -485,6 +540,13 @@ class AppMain: NSObject, NSApplicationDelegate {
         let showSettingsItem = NSMenuItem(title: "Settings", action: #selector(openSettings(_:)), keyEquivalent: ",")
         showSettingsItem.target = self
         windowMenu.addItem(showSettingsItem)
+
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        let showDiagnosticsItem = NSMenuItem(title: "Diagnostics", action: #selector(openDiagnostics(_:)), keyEquivalent: "d")
+        showDiagnosticsItem.keyEquivalentModifierMask = [.command, .option]
+        showDiagnosticsItem.target = self
+        windowMenu.addItem(showDiagnosticsItem)
+        #endif
 
         mainMenu.addItem(windowMenuItem)
 

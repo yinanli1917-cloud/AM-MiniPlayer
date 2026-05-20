@@ -238,9 +238,10 @@ public final class MetadataResolver {
             "\(title) \(cleanAlbum) \(artist)",
             "\(cleanAlbum) \(artist)"
         ]
-        var candidates: [AlbumScopedCandidate] = []
-
-        await withTaskGroup(of: [AlbumScopedCandidate].self) { group in
+        let candidates: [AlbumScopedCandidate] = await withTaskGroup(
+            of: [AlbumScopedCandidate].self,
+            returning: [AlbumScopedCandidate].self
+        ) { group in
             for region in regions {
                 for (termRank, term) in searchTerms.enumerated() {
                     group.addTask {
@@ -282,9 +283,20 @@ public final class MetadataResolver {
                     }
                 }
             }
+            var collected: [AlbumScopedCandidate] = []
             for await local in group {
-                candidates.append(contentsOf: local)
+                collected.append(contentsOf: local)
+                if collected.contains(where: {
+                    $0.artistMatches
+                        && $0.termRank <= 1
+                        && $0.durationDiff < 0.25
+                        && ($0.titleHasCJK || $0.albumHasCJK)
+                }) {
+                    group.cancelAll()
+                    return collected
+                }
             }
+            return collected
         }
 
         guard !candidates.isEmpty else { return nil }

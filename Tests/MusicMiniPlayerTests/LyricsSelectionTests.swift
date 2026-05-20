@@ -40,6 +40,38 @@ final class LyricsSelectionTests: XCTestCase {
         )
     }
 
+    func testOrphanExactTitleFallbackIsBoundedToDistinctiveCJKAndTightDuration() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertTrue(fetcher.isSafeNetEaseOrphanExactTitleCandidate(
+            inputTitle: "忘记有时",
+            originalTitle: "忘记有时",
+            candidateTitle: "忘记有时",
+            durationDiff: 0.11
+        ))
+
+        XCTAssertFalse(fetcher.isSafeNetEaseOrphanExactTitleCandidate(
+            inputTitle: "初恋",
+            originalTitle: "初恋",
+            candidateTitle: "初恋",
+            durationDiff: 0.11
+        ))
+
+        XCTAssertFalse(fetcher.isSafeNetEaseOrphanExactTitleCandidate(
+            inputTitle: "忘记有时",
+            originalTitle: "忘记有时",
+            candidateTitle: "忘记有时",
+            durationDiff: 2.0
+        ))
+
+        XCTAssertFalse(fetcher.isSafeNetEaseOrphanExactTitleCandidate(
+            inputTitle: "忘记有时",
+            originalTitle: "忘记有时",
+            candidateTitle: "我们曾经白头到老",
+            durationDiff: 0.11
+        ))
+    }
+
     func testContentConsensusBeatsWrongWordLevelOutlier() {
         let fetcher = LyricsFetcher.shared
         let wrongWordLevel = LyricsFetcher.LyricsFetchResult(
@@ -449,6 +481,84 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.firstLineText, "原谅我最近在低潮期")
     }
 
+    func testStrongNativeAliasBeatsLowerLibraryTitleEvidence() {
+        let fetcher = LyricsFetcher.shared
+        let nativeAlias = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "一樣在六點 泡一樣的咖啡",
+                "一樣的街道 一樣的天氣",
+                "一樣的心情 一樣的你",
+                "怪天氣裡我還想著你",
+                "雨停之前都不要醒",
+                "城市在窗外慢慢安靜",
+                "我聽見風聲又靠近",
+                "如果明天還是陰雨",
+                "就讓我再等一等你",
+                "等到天晴"
+            ], startingAt: 13, gap: 5),
+            source: "NetEase",
+            score: 74,
+            kind: .synced,
+            titleMatched: false,
+            matchedDurationDiff: 0.4,
+            nativeAliasMatched: true
+        )
+        let libraryTitle = LyricsFetcher.LyricsFetchResult(
+            lyrics: nativeAlias.lyrics,
+            source: "LRCLIB-Search",
+            score: 69,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        let selected = fetcher.selectBestResult(from: [nativeAlias, libraryTitle], songDuration: 70)
+
+        XCTAssertEqual(selected?.source, "NetEase")
+    }
+
+    func testMirroredLibrarySourcesDoNotValidateWeakSyncedHit() {
+        let fetcher = LyricsFetcher.shared
+        let weakLibraryLyrics = makeLines([
+            "Burgundy",
+            "Burgundy red",
+            "Tell me where the story goes",
+            "Underneath the evening glow",
+            "Waiting for another ride",
+            "Surfing through the passing time",
+            "Maybe we could come around",
+            "Maybe we could find it out",
+            "Secrets in the summer sky",
+            "Only we can own tonight",
+            "Burgundy",
+            "Burgundy red"
+        ], startingAt: 37, gap: 8)
+
+        let lrclib = LyricsFetcher.LyricsFetchResult(
+            lyrics: weakLibraryLyrics,
+            source: "LRCLIB",
+            score: 14,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+        let lrclibSearchMirror = LyricsFetcher.LyricsFetchResult(
+            lyrics: weakLibraryLyrics,
+            source: "LRCLIB-Search",
+            score: 13,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        let selected = fetcher.selectBestResult(
+            from: [lrclib, lrclibSearchMirror],
+            songDuration: 378
+        )
+
+        XCTAssertNil(selected)
+    }
+
     func testSevereTailGapFallsBackToStaticConsensusWhenSyncedIsMistimed() {
         let fetcher = LyricsFetcher.shared
         let mistimed = LyricsFetcher.LyricsFetchResult(
@@ -710,6 +820,108 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertNil(selected)
     }
 
+    func testAlbumScopedCompilationArtistDoesNotBecomeSpecificArtistEvidence() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "This Is My Love",
+            artist: "Michelle Chen",
+            originalTitle: "This Is My Love",
+            originalArtist: "Michelle Chen",
+            duration: 312,
+            album: "脫掉制服"
+        )
+        let songs: [[String: Any]] = [
+            [
+                "id": 543656445,
+                "name": "This Is My Love",
+                "artist": "群星",
+                "duration": 312.1,
+                "album": "脱掉制服"
+            ]
+        ]
+
+        let candidates: [LyricsFetcher.SearchCandidate<Int>] = fetcher.buildCandidates(
+            songs: songs,
+            params: params,
+            searchDescriptor: "album+artist",
+            extractSong: { song in
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let artist = song["artist"] as? String,
+                      let duration = song["duration"] as? Double,
+                      let album = song["album"] as? String else { return nil }
+                return (id, name, artist, duration, album)
+            }
+        )
+
+        XCTAssertEqual(candidates.first?.titleMatch, true)
+        XCTAssertEqual(candidates.first?.albumMatch, true)
+        XCTAssertEqual(candidates.first?.artistMatch, false)
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "This Is My Love",
+            inputArtist: "Michelle Chen",
+            hasAlbumHint: true
+        )
+
+        XCTAssertNil(selected)
+
+        let fallbackSelected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "This Is My Love",
+            inputArtist: "Michelle Chen",
+            hasAlbumHint: true,
+            allowCompilationAlbumFallback: true
+        )
+
+        XCTAssertEqual(fallbackSelected?.id, 543656445)
+        XCTAssertEqual(fallbackSelected?.albumMatched, true)
+        XCTAssertEqual(fallbackSelected?.titleMatched, true)
+    }
+
+    func testAlbumScopedCompilationFallbackAcceptsExactAlbumTitleDuration() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "This Is My Love",
+            artist: "Michelle Chen",
+            originalTitle: "This Is My Love",
+            originalArtist: "Michelle Chen",
+            duration: 312,
+            album: "脫掉制服"
+        )
+
+        XCTAssertTrue(fetcher.isSafeCompilationAlbumFallbackCandidate(
+            params: params,
+            candidateTitle: "This Is My Love",
+            candidateArtist: "群星",
+            candidateAlbum: "脱掉制服",
+            candidateDuration: 312.1,
+            resultIndex: 1,
+            searchDescriptor: "compilation album+artist"
+        ))
+        XCTAssertFalse(fetcher.isSafeCompilationAlbumFallbackCandidate(
+            params: params,
+            candidateTitle: "Oriental Love",
+            candidateArtist: "群星",
+            candidateAlbum: "脱掉制服",
+            candidateDuration: 420.4,
+            resultIndex: 0,
+            searchDescriptor: "compilation album+artist"
+        ))
+        XCTAssertFalse(fetcher.isSafeCompilationAlbumFallbackCandidate(
+            params: params,
+            candidateTitle: "This Is My Love",
+            candidateArtist: "群星",
+            candidateAlbum: "Top Pop Europa Plus",
+            candidateDuration: 312.1,
+            resultIndex: 1,
+            searchDescriptor: "compilation album+artist"
+        ))
+    }
+
     func testSingleWordEnglishTitleUsesOnlyTightNativeArtistAlias() {
         let fetcher = LyricsFetcher.shared
         let candidates = [
@@ -751,6 +963,139 @@ final class LyricsSelectionTests: XCTestCase {
         )
 
         XCTAssertEqual(selected?.id, 2)
+    }
+
+    func testMultiWordEnglishTitleCanUseNearExactNativeArtistProbe() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "怪天气",
+                artist: "YELLOW黄宣 / 9m88",
+                album: "怪天气",
+                durationDiff: 0.4,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 0,
+                searchDescriptor: "artist only"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Strange Weather",
+            inputArtist: "YELLOW & 9m88",
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 1)
+        XCTAssertEqual(selected?.nativeAliasMatched, true)
+    }
+
+    func testAlbumHintBlocksLooseEnglishNativeArtistProbeCollision() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "未命名的悲伤",
+                artist: "曾沛慈",
+                album: "我是曾沛慈",
+                durationDiff: 0.4,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 6,
+                resultIndex: 0,
+                searchDescriptor: "artist only"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "QQMusic",
+            inputTitle: "Thinking of Someone",
+            inputArtist: "Pets Tseng",
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertNil(selected)
+    }
+
+    func testJapaneseRomajiTitleEvidenceBeatsCloserArtistOnlyCollision() {
+        let fetcher = LyricsFetcher.shared
+        XCTAssertTrue(
+            fetcher.isTitleMatch(
+                input: "Hatsukoi",
+                result: "初恋",
+                simplifiedInput: "hatsukoi"
+            )
+        )
+
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "少女",
+                artist: "村下孝蔵",
+                album: "七夕夜想曲",
+                durationDiff: 0.7,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 2,
+                resultIndex: 0,
+                searchDescriptor: "alias artist only:村下孝蔵"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 2,
+                name: "初恋",
+                artist: "村下孝蔵",
+                album: "七夕夜想曲",
+                durationDiff: 3.8,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 2,
+                resultIndex: 1,
+                searchDescriptor: "alias artist only:村下孝蔵"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Hatsukoi",
+            inputArtist: "Kozo Murashita",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 2)
+    }
+
+    func testLongSparseExactCatalogLyricsSurviveLargeTailGap() {
+        let fetcher = LyricsFetcher.shared
+        let sparseSynced = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines(
+                (0..<42).map { index in
+                    index == 0 ? "Every time you lie in my place" : "Only you can conquer time"
+                },
+                startingAt: 0.2,
+                gap: 4.5
+            ),
+            source: "QQ",
+            score: 35,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 1.0
+        )
+
+        let selected = fetcher.selectBestResult(from: [sparseSynced], songDuration: 401)
+
+        XCTAssertEqual(selected?.source, "QQ")
     }
 
     func testCompressedFastLineTimedVersionIsRejected() {

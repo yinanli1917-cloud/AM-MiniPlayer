@@ -63,6 +63,20 @@ index, per-line wave target index, velocity, inter-line spacing delta, and
 manual-scroll / initial-load suppression flags. Do not diagnose wave timing only
 from playback timestamps or source lyric timing.
 
+False manual-scroll state is a first-class lyrics stutter cause even when CPU is
+low. Scroll-wheel monitors must not let momentum-only events or events outside
+the lyrics detector bounds start lyrics manual-scroll mode. Momentum may only
+continue an already-owned scroll gesture; out-of-bounds events may only continue
+an already-active gesture. Otherwise auto-follow freezes for the manual-scroll
+timeout and line switches feel stuck while diagnostics show low CPU.
+
+Line-switch fixes must preserve the original AMLL-style staggered wave. Do not
+collapse line switches into an immediate single-target jump to make diagnostics
+quiet. If diagnostics shows target indices staying behind after the intended
+wave has already finished, add a post-wave cleanup that aligns stale target
+state after the visual stagger completes; do not remove the stagger, spring
+parameters, highlight timing, or row layout.
+
 ```bash
 python3 scripts/perf_harness.py \
   --page lyrics \

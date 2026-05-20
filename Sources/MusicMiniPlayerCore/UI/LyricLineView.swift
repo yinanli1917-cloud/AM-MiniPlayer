@@ -71,6 +71,7 @@ struct LyricLineView: View {
     var showTranslation: Bool = false
     var isTranslating: Bool = false
     var translationFailed: Bool = false
+    var reserveTranslationSlot: Bool = false
     /// True when the song is sitting in a ≥5s interlude gap AFTER this line.
     /// LyricLineView treats itself as past (distance effectively -1) so the
     /// normal past-line animation (blur + dim + scale) plays and the view's
@@ -79,7 +80,7 @@ struct LyricLineView: View {
 
     @State private var isHovering: Bool = false
     // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
-    @State private var internalShowTranslation: Bool = false
+    @State private var internalShowTranslation: Bool = true
     // Interlude transition blend (0 = natural current, 1 = fully past).
     // Mirrors `isPrecedingInterlude` but with an explicit slow ease-out
     // animation (see onChange below). Only has visual effect on the
@@ -204,7 +205,7 @@ struct LyricLineView: View {
 
             // Translation line — same view identity in all states (like SyllableSyncedLine)
             // to prevent lag when switching between current/non-current.
-            if internalShowTranslation, let translation = translationText {
+            if showTranslation && internalShowTranslation, let translation = translationText {
                 if line.hasSyllableSync {
                     if isCurrent, let mc = musicController {
                         TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
@@ -247,6 +248,15 @@ struct LyricLineView: View {
                 }
             } else if showTranslation && translationFailed && isCurrent {
                 EmptyView()
+            } else if showTranslation && internalShowTranslation && reserveTranslationSlot && !translationFailed {
+                HStack(spacing: 0) {
+                    Text(" ")
+                        .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
+                        .lineSpacing(LyricMetrics.translationLineSpacing)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 0)
+                }
             }
         }
         // Drive the interlude blend: when the song enters a >=5s gap,

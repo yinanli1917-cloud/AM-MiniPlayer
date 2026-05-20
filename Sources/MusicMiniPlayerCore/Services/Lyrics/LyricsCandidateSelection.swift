@@ -2,7 +2,7 @@
  * [INPUT]: Raw search results from NetEase/QQ APIs
  * [OUTPUT]: selectBestCandidate — unified priority-chain candidate matching with explicit title-evidence state
  * [POS]: Candidate selection sub-module of LyricsFetcher — SearchCandidate + matching + alias resolution
- * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, bounded English-title native aliases, and buildCandidates generic builder
+ * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, bounded English-title native aliases, compilation-artist safety, and buildCandidates generic builder
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -63,7 +63,7 @@ extension LyricsFetcher {
         let matchRank: Int
     }
 
-    func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", inputArtist: String = "", disableCjkEscape: Bool = false, aliasConfirmedCJK: Bool = false, hasAlbumHint: Bool = false, allowNativeTitleAlias: Bool = false) -> SelectedSearchCandidate<ID>? {
+    func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", inputArtist: String = "", disableCjkEscape: Bool = false, aliasConfirmedCJK: Bool = false, hasAlbumHint: Bool = false, allowNativeTitleAlias: Bool = false, allowCompilationAlbumFallback: Bool = false) -> SelectedSearchCandidate<ID>? {
         // Debug view: sorted purely by durationDiff so the log reads naturally.
         let sortedByDelta = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sortedByDelta.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' q='\($0.searchDescriptor)' T=\($0.titleMatch) A=\($0.artistMatch) AL=\($0.albumMatch) L=\($0.normalizedNameLength) Δ\(String(format: "%.1f", $0.durationDiff))s" }
@@ -89,8 +89,27 @@ extension LyricsFetcher {
                 || lower.contains("カラオケ")
                 || lower.contains("オリジナル・カラオケ")
         }
+        let inputArtistIsSpecific = !inputArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isCompilationArtistName(inputArtist)
+        let isUnsafeGenericCompilationArtist: (SearchCandidate<ID>) -> Bool = { candidate in
+            guard inputArtistIsSpecific else { return false }
+            guard candidate.albumMatch || candidate.searchDescriptor.lowercased().contains("album") else { return false }
+            return self.isCompilationArtistName(candidate.artist)
+        }
+        let isSafeCompilationAlbumFallback: (SearchCandidate<ID>) -> Bool = { candidate in
+            guard allowCompilationAlbumFallback else { return false }
+            guard inputArtistIsSpecific else { return false }
+            guard candidate.titleMatch, candidate.albumMatch else { return false }
+            guard candidate.durationDiff < 1.5 else { return false }
+            guard candidate.searchDescriptor.lowercased().contains("album") else { return false }
+            guard self.isCompilationArtistName(candidate.artist) else { return false }
+            return !isBackingTrack(candidate)
+        }
         let hasSameArtistTitleEvidence = candidates.contains { candidate in
-            candidate.titleMatch && candidate.artistMatch && !isBackingTrack(candidate)
+            candidate.titleMatch
+                && candidate.artistMatch
+                && !isBackingTrack(candidate)
+                && !isUnsafeGenericCompilationArtist(candidate)
         }
         let inputTokens = inputTitle.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
@@ -109,6 +128,9 @@ extension LyricsFetcher {
                 guard candidate.durationDiff < 1.5 else { return false }
                 guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
                 return !isBackingTrack(candidate)
+            }),
+            ("P1c", 0, { candidate in
+                isSafeCompilationAlbumFallback(candidate)
             }),
             ("P1b", 1, { candidate in
                 guard allowNativeTitleAlias else { return false }
@@ -132,6 +154,12 @@ extension LyricsFetcher {
                 }
                 if LanguageUtils.isLikelyEnglishTitle(inputTitle),
                    !LanguageUtils.isLikelyRomanizedJapanese(inputTitle) {
+                    if inputWordCount >= 2,
+                       candidate.searchDescriptor == "artist only",
+                       !hasAlbumHint,
+                       candidate.durationDiff < 1.0 {
+                        return true
+                    }
                     return false
                 }
                 if inputWordCount <= 1 && !candidate.albumMatch {
@@ -165,6 +193,8 @@ extension LyricsFetcher {
                 guard aliasConfirmedCJK else { return false }
                 guard hasAlbumHint else { return false }
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
+                guard !LanguageUtils.isLikelyEnglishTitle(inputTitle)
+                    || LanguageUtils.isLikelyRomanizedJapanese(inputTitle) else { return false }
                 guard candidate.searchDescriptor.hasPrefix("alias artist only") else { return false }
                 guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
                 guard candidate.durationDiff < 0.8 else { return false }
@@ -174,6 +204,8 @@ extension LyricsFetcher {
                 guard hasAlbumHint else { return false }
                 guard candidate.searchDescriptor == "artist only" else { return false }
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
+                guard !LanguageUtils.isLikelyEnglishTitle(inputTitle)
+                    || LanguageUtils.isLikelyRomanizedJapanese(inputTitle) else { return false }
                 guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
                 guard candidate.artist.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
                 guard candidate.durationDiff < 1.25 else { return false }
@@ -235,7 +267,7 @@ extension LyricsFetcher {
         var tierWinners: [(label: String, rank: Int, candidate: SearchCandidate<ID>)] = []
         for (label, rank, predicate) in priorities {
             var best: SearchCandidate<ID>?
-            for candidate in sorted where predicate(candidate) {
+            for candidate in sorted where (!isUnsafeGenericCompilationArtist(candidate) || isSafeCompilationAlbumFallback(candidate)) && predicate(candidate) {
                 if let current = best {
                     if compositeRank(candidate, current) { best = candidate }
                 } else {
@@ -290,12 +322,38 @@ extension LyricsFetcher {
         let simplifiedCleanedInput = LanguageUtils.toSimplifiedChinese(cleanedInput)
         let compactInput = compactTitleIdentity(cleanedInput)
         let compactResult = compactTitleIdentity(cleanedResult)
+        let romanizedAliases = japaneseRomanizedTitleAliases(for: compactInput)
+        let hasJapaneseRomanizedAlias = romanizedAliases.contains(compactResult)
 
         return cleanedInput == cleanedResult ||
                simplifiedCleanedInput == simplifiedResult ||
                (!compactInput.isEmpty && compactInput == compactResult) ||
+               hasJapaneseRomanizedAlias ||
                cleanedInput.contains(cleanedResult) || cleanedResult.contains(cleanedInput) ||
                simplifiedCleanedInput.contains(simplifiedResult) || simplifiedResult.contains(simplifiedCleanedInput)
+    }
+
+    private func japaneseRomanizedTitleAliases(for compactInput: String) -> Set<String> {
+        switch compactInput {
+        case "hatsukoi":
+            return ["初恋"]
+        case "koibito", "koibitotachi":
+            return ["恋人", "恋人たち"]
+        case "mayonaka":
+            return ["真夜中"]
+        case "namida":
+            return ["涙", "泪"]
+        case "yumeno", "yume":
+            return ["夢", "梦"]
+        case "sora":
+            return ["空"]
+        case "kaze":
+            return ["風", "风"]
+        case "hoshi":
+            return ["星"]
+        default:
+            return []
+        }
     }
 
     private func compactTitleIdentity(_ value: String) -> String {
@@ -528,6 +586,7 @@ extension LyricsFetcher {
         source: String,
         extraKeywords: [(String, String)] = [],
         enableAliasResolve: Bool = true,
+        allowCompilationAlbumFallback: Bool = false,
         fetchSongs: @escaping (String) async throws -> [[String: Any]]?,
         extractSong: @escaping ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double, album: String)?
     ) async -> SelectedSearchCandidate<ID>? {
@@ -667,7 +726,7 @@ extension LyricsFetcher {
                                 let candidates = self.buildCandidates(
                                     songs: songs, params: aliasParams, searchDescriptor: desc, extractSong: extractSong
                                 )
-                                if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, aliasConfirmedCJK: true, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: true) {
+                                if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, aliasConfirmedCJK: true, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: true, allowCompilationAlbumFallback: allowCompilationAlbumFallback) {
                                     return (m, desc, Self.keywordPriority(desc))
                                 }
                             } catch {
@@ -694,8 +753,9 @@ extension LyricsFetcher {
                             || desc.hasPrefix("original")
                             || desc.hasPrefix("traditional")
                             || desc.hasPrefix("dual-")
+                            || desc == "artist only"
                             || desc.hasPrefix("romaji-stem+artist")
-                        if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: allowNativeTitleAlias) {
+                        if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: allowNativeTitleAlias, allowCompilationAlbumFallback: allowCompilationAlbumFallback) {
                             return (match, desc, Self.keywordPriority(desc))
                         }
                     } catch {
@@ -851,39 +911,22 @@ extension LyricsFetcher {
             let isCrossScriptArtist = (inputArtistIsASCII && resultArtistIsCJK) || (inputArtistIsCJK && resultArtistIsASCII)
 
             let inputHasBothScripts = inputArtistIsASCII && inputArtistIsCJK
+            let inputArtistIsCompilation = params.artistPairs.contains {
+                isCompilationArtistName($0.0) || isCompilationArtistName($0.1)
+            }
+            let resultArtistIsCompilation = isCompilationArtistName(s.artist)
             // 🔑 Album match (fuzzy, contains-either-way)
-            let normalizedAlbum = LanguageUtils.toSimplifiedChinese(
-                LanguageUtils.normalizeTrackName(s.album)
-            ).lowercased().replacingOccurrences(of: "-", with: " ")
-            let albumMatch: Bool = {
-                guard !params.normalizedAlbum.isEmpty, !normalizedAlbum.isEmpty else { return false }
-                if params.normalizedAlbum == normalizedAlbum { return true }
-                if params.normalizedAlbum.contains(normalizedAlbum) { return true }
-                if normalizedAlbum.contains(params.normalizedAlbum) { return true }
-                let inputLatin = LanguageUtils.toLatinLower(params.normalizedAlbum)
-                let resultLatin = LanguageUtils.toLatinLower(normalizedAlbum)
-                if !inputLatin.isEmpty, !resultLatin.isEmpty,
-                   inputLatin.count >= 3, resultLatin.count >= 3 {
-                    if inputLatin == resultLatin { return true }
-                    if inputLatin.contains(resultLatin) { return true }
-                    if resultLatin.contains(inputLatin) { return true }
-                }
-                // 🔑 Pinyin/Romaji album cross-script match
-                let inputHasCJK = LanguageUtils.containsCJK(params.normalizedAlbum)
-                let resultHasCJK = LanguageUtils.containsCJK(normalizedAlbum)
-                if inputHasCJK != resultHasCJK {
-                    guard !inputLatin.isEmpty, !resultLatin.isEmpty,
-                          inputLatin.count >= 3, resultLatin.count >= 3 else { return false }
-                    if inputLatin == resultLatin { return true }
-                    if inputLatin.contains(resultLatin) { return true }
-                    if resultLatin.contains(inputLatin) { return true }
-                }
-                return false
-            }()
+            let albumMatch = providerAlbumMatches(
+                inputNormalizedAlbum: params.normalizedAlbum,
+                resultAlbum: s.album
+            )
 
             // 🔑 Cross-script tolerance tiers
             let resultTitleIsCJK = LanguageUtils.containsCJK(s.name)
-            if !artistMatch && isCrossScriptArtist && !inputHasBothScripts {
+            if !artistMatch,
+               isCrossScriptArtist,
+               !inputHasBothScripts,
+               (!resultArtistIsCompilation || inputArtistIsCompilation) {
                 if (albumMatch && titleMatch) ||
                    (titleMatch && durationDiff < 1.0) ||
                    (compactTitleMatch && searchDescriptor.hasPrefix("title+artist") && durationDiff < 20.0) ||
@@ -892,10 +935,11 @@ extension LyricsFetcher {
                 }
             }
             if !artistMatch,
+               inputArtistIsCompilation,
                albumMatch,
                titleMatch,
                durationDiff < 1.5,
-               isCompilationArtistName(s.artist) {
+               resultArtistIsCompilation {
                 artistMatch = true
             }
             let hasCJKIdentity = params.titlePairs.contains { LanguageUtils.containsCJK($0.0) }
@@ -922,6 +966,72 @@ extension LyricsFetcher {
                 searchDescriptor: searchDescriptor
             )
         }
+    }
+
+    func providerAlbumMatches(inputNormalizedAlbum: String, resultAlbum: String) -> Bool {
+        let normalizedAlbum = LanguageUtils.toSimplifiedChinese(
+            LanguageUtils.normalizeTrackName(resultAlbum)
+        ).lowercased().replacingOccurrences(of: "-", with: " ")
+        guard !inputNormalizedAlbum.isEmpty, !normalizedAlbum.isEmpty else { return false }
+        if inputNormalizedAlbum == normalizedAlbum { return true }
+        if inputNormalizedAlbum.contains(normalizedAlbum) { return true }
+        if normalizedAlbum.contains(inputNormalizedAlbum) { return true }
+
+        let inputLatin = LanguageUtils.toLatinLower(inputNormalizedAlbum)
+        let resultLatin = LanguageUtils.toLatinLower(normalizedAlbum)
+        if !inputLatin.isEmpty, !resultLatin.isEmpty,
+           inputLatin.count >= 3, resultLatin.count >= 3 {
+            if inputLatin == resultLatin { return true }
+            if inputLatin.contains(resultLatin) { return true }
+            if resultLatin.contains(inputLatin) { return true }
+        }
+
+        // Pinyin/Romaji album cross-script match.
+        let inputHasCJK = LanguageUtils.containsCJK(inputNormalizedAlbum)
+        let resultHasCJK = LanguageUtils.containsCJK(normalizedAlbum)
+        if inputHasCJK != resultHasCJK {
+            guard !inputLatin.isEmpty, !resultLatin.isEmpty,
+                  inputLatin.count >= 3, resultLatin.count >= 3 else { return false }
+            if inputLatin == resultLatin { return true }
+            if inputLatin.contains(resultLatin) { return true }
+            if resultLatin.contains(inputLatin) { return true }
+        }
+        return false
+    }
+
+    func isSafeCompilationAlbumFallbackCandidate(
+        params: SearchParams,
+        candidateTitle: String,
+        candidateArtist: String,
+        candidateAlbum: String,
+        candidateDuration: Double,
+        resultIndex: Int,
+        searchDescriptor: String
+    ) -> Bool {
+        guard !params.normalizedAlbum.isEmpty else { return false }
+        guard !isCompilationArtistName(params.rawArtist),
+              !isCompilationArtistName(params.rawOriginalArtist) else { return false }
+        guard isCompilationArtistName(candidateArtist) else { return false }
+        guard resultIndex < 12 else { return false }
+        guard searchDescriptor.lowercased().contains("album") else { return false }
+
+        let lowerTitle = candidateTitle.lowercased()
+        let lowerAlbum = candidateAlbum.lowercased()
+        let backingTrackMarkers = ["karaoke", "instrumental", "伴奏", "カラオケ", "オリジナル・カラオケ"]
+        guard !backingTrackMarkers.contains(where: {
+            lowerTitle.contains($0) || lowerAlbum.contains($0)
+        }) else { return false }
+
+        let durationDiff = abs(candidateDuration - params.duration)
+        guard durationDiff < 1.5 else { return false }
+        let titleOK = params.titlePairs.contains {
+            isTitleMatch(input: $0.0, result: candidateTitle, simplifiedInput: $0.1)
+        }
+        guard titleOK else { return false }
+        return providerAlbumMatches(
+            inputNormalizedAlbum: params.normalizedAlbum,
+            resultAlbum: candidateAlbum
+        )
     }
 
     private func isCompilationArtistName(_ artist: String) -> Bool {

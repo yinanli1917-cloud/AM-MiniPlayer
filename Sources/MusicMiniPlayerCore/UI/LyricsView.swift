@@ -5,6 +5,7 @@
  */
 import SwiftUI
 import AppKit
+import Combine
 import Translation
 
 // MARK: - Accessibility
@@ -45,6 +46,14 @@ private struct WaveState {
 }
 
 private let lyricLineMotionCoordinateSpace = "nanoPod.lyrics.lineMotion"
+private let lyricLineMotionSampleInterval: TimeInterval = 0.12
+private let lyricLineMotionPageSwitchSampleDuration: TimeInterval = 0.95
+private let lyricLineMotionTrackSwitchSampleDuration: TimeInterval = 1.25
+private let lyricLineMotionLineAdvanceSampleDuration: TimeInterval = 0.85
+private let lyricLineLayoutSettleDuration: TimeInterval = 0.65
+private let lyricInitialRenderVisibleRange = 4
+private let lyricSteadyRenderVisibleRange = 6
+private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.55
 
 private struct LyricLineMotionFramePreferenceKey: PreferenceKey {
     static var defaultValue: [Int: CGRect] = [:]
@@ -54,11 +63,25 @@ private struct LyricLineMotionFramePreferenceKey: PreferenceKey {
     }
 }
 
+private struct LyricLineMotionSamplingProbe: View {
+    let interval: TimeInterval
+    let onTick: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onReceive(Timer.publish(every: interval, on: .main, in: .common).autoconnect()) { _ in
+                onTick()
+            }
+    }
+}
+
 // MARK: - LyricsView
 
 public struct LyricsView: View {
     @EnvironmentObject var musicController: MusicController
     @StateObject private var lyricsService = LyricsService.shared
+    @StateObject private var diagnostics = DiagnosticsService.shared
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
@@ -79,11 +102,19 @@ public struct LyricsView: View {
     @State private var autoScrollTimer: Timer? = nil
     @State private var pendingTrackLyricsFetchTask: Task<Void, Never>? = nil
     @State private var suppressInitialLineMotion = false
+    @State private var lineMotionSuppressionGeneration = 0
+    @State private var pendingLineHeightResetForNextPayload = false
     @State private var lastLineMotionSampleAt: Date = .distantPast
+    @State private var latestLineMotionFrames: [Int: CGRect] = [:]
+    @State private var latestLineMotionAnchorY: CGFloat = 0
+    @State private var latestLineMotionDisplayIndex: Int = 0
+    @State private var lineMotionSamplingActive = false
+    @State private var lineMotionSamplingUntil: Date = .distantPast
 
     // ── 翻译状态 ──
     @State private var translationSessionConfigAny: Any?
     @State private var localTranslationTrigger: Int = 0
+    @State private var translationConfigGeneration = 0
 
     // ── 无障碍 ──
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -118,6 +149,7 @@ public struct LyricsView: View {
         }
         .overlay(alignment: .topLeading) { musicButtonOverlay }
         .overlay(alignment: .topTrailing) { windowButtonsOverlay }
+        .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
         .onHover { hovering in handleHover(hovering) }
         // ── onChange: 页面切换 ──
         .onChange(of: currentPage) { _, newPage in
@@ -128,17 +160,21 @@ public struct LyricsView: View {
             if newPage == .lyrics {
                 isHovering = true
                 animateControlsIn()
+                startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
             }
         }
         // ── onAppear + 歌曲切换 ──
         .onAppear {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
-            suppressInitialLineMotion = true
+            suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
+            startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration,
                                       album: musicController.currentAlbum)
-            if #available(macOS 15.0, *) { updateTranslationSessionConfig() }
+            if #available(macOS 15.0, *) {
+                scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
+            }
         }
         .onChange(of: musicController.currentTrackTitle) {
             debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
@@ -147,7 +183,7 @@ public struct LyricsView: View {
             wave.lastCurrentIndex = -1
             cache.heightCacheInvalidated = true
             cache.renderedIndicesValid = false
-            cache.lineHeights.removeAll()
+            pendingLineHeightResetForNextPayload = true
             // 🔑 Reset manual scroll state — prevents stuck isManualScrolling
             // when track changes during a manual scroll (timer would fire on stale state)
             autoScrollTimer?.invalidate()
@@ -158,47 +194,65 @@ public struct LyricsView: View {
             scroll.rawScrollOffset = 0
             scroll.frozenDisplayIndex = nil
             scroll.lockedLineIndex = nil
-            suppressInitialLineMotion = true
+            latestLineMotionFrames.removeAll()
+            suppressLineMotionDuringLayoutSettlement(duration: 0.65)
             scheduleTrackChangeLyricsFetch()
         }
         .onChange(of: musicController.currentAlbum) { _, newAlbum in
             guard currentPage == .lyrics else { return }
             guard !newAlbum.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            pendingLineHeightResetForNextPayload = true
             scheduleTrackChangeLyricsFetch()
         }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
         // ── onChange: 翻译相关 ──
         .onChange(of: lyricsService.lyrics.count) { _, newCount in
-            if #available(macOS 15.0, *), newCount > 0 { updateTranslationSessionConfig() }
+            if #available(macOS 15.0, *), newCount > 0 {
+                scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
+            }
+            if newCount > 0, pendingLineHeightResetForNextPayload {
+                cache.lineHeights.removeAll()
+                pendingLineHeightResetForNextPayload = false
+            }
             refreshRenderedIndicesCache()
             cache.heightCacheInvalidated = true
             if newCount > 0 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                    suppressInitialLineMotion = false
-                }
+                suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
+                startLineMotionSamplingWindow(duration: lyricLineMotionTrackSwitchSampleDuration)
+            }
+        }
+        .onChange(of: diagnostics.isEnabled) { _, isEnabled in
+            if isEnabled {
+                startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
+            } else {
+                lineMotionSamplingActive = false
+                latestLineMotionFrames.removeAll()
             }
         }
         .onChange(of: lyricsService.isLoading) { oldValue, newValue in
             if #available(macOS 15.0, *) {
                 if oldValue && !newValue && !lyricsService.lyrics.isEmpty {
-                    updateTranslationSessionConfig()
+                    scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
                 }
             }
         }
         .onChange(of: lyricsService.translationLanguage) { _, _ in
-            if #available(macOS 15.0, *) { updateTranslationSessionConfig() }
+            if #available(macOS 15.0, *) {
+                scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
+            }
         }
         .onChange(of: lyricsService.showTranslation) { _, newValue in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 cache.heightCacheInvalidated = true
             }
-            if #available(macOS 15.0, *), newValue { updateTranslationSessionConfig() }
+            if #available(macOS 15.0, *), newValue {
+                scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
+            }
         }
         .onChange(of: lyricsService.translationRequestTrigger) { _, newValue in
             if #available(macOS 15.0, *) {
-                updateTranslationSessionConfig()
-                localTranslationTrigger = newValue
+                scheduleTranslationRequest(after: lyricPageSwitchTranslationDeferDuration, trigger: newValue)
             }
         }
         .onChange(of: lyricsService.isTranslating) { _, _ in
@@ -216,6 +270,7 @@ public struct LyricsView: View {
             if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
                 triggerWaveAnimation(from: oldIndex, to: newIndex)
                 wave.lastCurrentIndex = newIndex
+                startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
             }
         }
         .onChange(of: lyricsService.error) { _, newError in
@@ -246,6 +301,16 @@ public struct LyricsView: View {
         Color.clear
             .ignoresSafeArea()
             .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var diagnosticLineMotionProbe: some View {
+        if lineMotionSamplingActive && diagnostics.isEnabled && currentPage == .lyrics {
+            LyricLineMotionSamplingProbe(interval: lyricLineMotionSampleInterval) {
+                recordLatestLyricLineMotion()
+            }
+            .allowsHitTesting(false)
+        }
     }
 
     private var loadingView: some View {
@@ -362,6 +427,9 @@ public struct LyricsView: View {
             .offset(y: scroll.manualScrollOffset)
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
+                latestLineMotionFrames = frames
+                latestLineMotionAnchorY = anchorY
+                latestLineMotionDisplayIndex = displayIndex
                 recordLyricLineMotion(
                     frames: frames,
                     anchorY: anchorY,
@@ -417,6 +485,7 @@ public struct LyricsView: View {
                         showTranslation: lyricsService.showTranslation,
                         isTranslating: lyricsService.isTranslating,
                         translationFailed: lyricsService.translationFailed,
+                        reserveTranslationSlot: lyricsService.showTranslation && lyricsService.canTranslate,
                         isPrecedingInterlude: lyricsService.interludeAfterIndex == index
                     )
                     .padding(.horizontal, 32)
@@ -457,21 +526,69 @@ public struct LyricsView: View {
         GeometryReader { lineGeo in
             Color.clear.preference(
                 key: LyricLineMotionFramePreferenceKey.self,
-                value: DiagnosticsService.shared.isEnabled
+                value: diagnostics.isEnabled
                     ? [index: lineGeo.frame(in: .named(lyricLineMotionCoordinateSpace))]
                     : [:]
             )
         }
     }
 
+    private func recordLatestLyricLineMotion() {
+        guard lineMotionSamplingActive else { return }
+        guard Date() <= lineMotionSamplingUntil else {
+            lineMotionSamplingActive = false
+            return
+        }
+        guard !latestLineMotionFrames.isEmpty else { return }
+
+        recordLyricLineMotion(
+            frames: latestLineMotionFrames,
+            anchorY: latestLineMotionAnchorY,
+            displayIndex: latestLineMotionDisplayIndex
+        )
+    }
+
+    private func startLineMotionSamplingWindow(duration: TimeInterval) {
+        guard diagnostics.isEnabled else { return }
+        let until = Date().addingTimeInterval(duration)
+        if until > lineMotionSamplingUntil {
+            lineMotionSamplingUntil = until
+        }
+        lineMotionSamplingActive = true
+        lastLineMotionSampleAt = .distantPast
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) {
+            if Date() >= lineMotionSamplingUntil {
+                lineMotionSamplingActive = false
+            }
+        }
+    }
+
+    private func suppressLineMotionDuringLayoutSettlement(duration: TimeInterval) {
+        lineMotionSuppressionGeneration += 1
+        let generation = lineMotionSuppressionGeneration
+        suppressInitialLineMotion = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard lineMotionSuppressionGeneration == generation else { return }
+            suppressInitialLineMotion = false
+        }
+    }
+
     private func recordLyricLineMotion(frames: [Int: CGRect], anchorY: CGFloat, displayIndex: Int) {
-        guard currentPage == .lyrics, DiagnosticsService.shared.isEnabled, !frames.isEmpty else { return }
+        guard currentPage == .lyrics, diagnostics.isEnabled, !frames.isEmpty else { return }
         let now = Date()
         guard now.timeIntervalSince(lastLineMotionSampleAt) >= 0.20 else { return }
         lastLineMotionSampleAt = now
 
         let lyrics = lyricsService.lyrics
         guard !lyrics.isEmpty else { return }
+        guard lyricsService.displayedLyricsBelongTo(
+            title: musicController.currentTrackTitle,
+            artist: musicController.currentArtist,
+            duration: musicController.duration,
+            album: musicController.currentAlbum
+        ) else { return }
 
         let playbackTime = musicController.lyricRenderTime(at: now)
         let track = musicController.diagnosticsTrackContext()
@@ -487,6 +604,7 @@ public struct LyricsView: View {
             let line: LyricLine
             let frame: CGRect
             let targetIndex: Int
+            let appliedOffsetY: Double
             let targetMinY: Double
             let targetMidY: Double
             let waveOffsetY: Double
@@ -500,13 +618,15 @@ public struct LyricsView: View {
                 : (wave.lineTargetIndices[index] ?? displayIndex)
             let lineOffset = calculateLineOffset(index: index, currentIndex: displayIndex, anchorY: anchorY)
             let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
-            let targetMinY = Double(fullOffset + scroll.manualScrollOffset)
+            let appliedOffsetY = Double(fullOffset + scroll.manualScrollOffset)
+            let targetMinY = Double(frame.minY) + appliedOffsetY
             let targetMidY = targetMinY + Double(frame.height / 2)
             return MotionPartial(
                 index: index,
                 line: line,
                 frame: frame,
                 targetIndex: targetIndex,
+                appliedOffsetY: appliedOffsetY,
                 targetMinY: targetMinY,
                 targetMidY: targetMidY,
                 waveOffsetY: Double(lineOffset - immediateLineOffset)
@@ -515,12 +635,13 @@ public struct LyricsView: View {
 
         var samples: [DiagnosticLyricLineMotionSample] = []
         samples.reserveCapacity(partials.count)
-        var previous: MotionPartial?
+        var previousRenderedMidY: Double?
+        var previousTargetMidY: Double?
         for partial in partials {
-            let renderedMinY = Double(partial.frame.minY)
-            let renderedMidY = Double(partial.frame.midY)
-            let observedDelta = previous.map { renderedMidY - Double($0.frame.midY) }
-            let expectedDelta = previous.map { partial.targetMidY - $0.targetMidY }
+            let renderedMinY = Double(partial.frame.minY) + partial.appliedOffsetY
+            let renderedMidY = Double(partial.frame.midY) + partial.appliedOffsetY
+            let observedDelta = previousRenderedMidY.map { renderedMidY - $0 }
+            let expectedDelta = previousTargetMidY.map { partial.targetMidY - $0 }
             let deltaError: Double? = {
                 guard let observedDelta, let expectedDelta else { return nil }
                 return observedDelta - expectedDelta
@@ -552,10 +673,11 @@ public struct LyricsView: View {
                 isManualScrolling: scroll.isManualScrolling,
                 isInitialMotionSuppressed: suppressInitialLineMotion
             ))
-            previous = partial
+            previousRenderedMidY = renderedMidY
+            previousTargetMidY = partial.targetMidY
         }
 
-        DiagnosticsService.shared.recordLyricsLineMotionSamples(samples)
+        diagnostics.recordLyricsLineMotionSamples(samples)
     }
 
     private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
@@ -862,6 +984,27 @@ public struct LyricsView: View {
         }
     }
 
+    private func scheduleTranslationSessionConfigUpdate(after delay: TimeInterval) {
+        translationConfigGeneration += 1
+        let generation = translationConfigGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard translationConfigGeneration == generation else { return }
+            guard currentPage == .lyrics, lyricsService.showTranslation else { return }
+            updateTranslationSessionConfig()
+        }
+    }
+
+    private func scheduleTranslationRequest(after delay: TimeInterval, trigger: Int) {
+        translationConfigGeneration += 1
+        let generation = translationConfigGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard translationConfigGeneration == generation else { return }
+            guard currentPage == .lyrics, lyricsService.showTranslation else { return }
+            updateTranslationSessionConfig()
+            localTranslationTrigger = trigger
+        }
+    }
+
     // MARK: - 工具函数
 
     private func isPreludeEllipsis(_ text: String) -> Bool {
@@ -926,6 +1069,9 @@ public struct LyricsView: View {
         var totalHeight: CGFloat = 0
         let indices = renderedIndices
         guard let targetPosition = indices.firstIndex(of: targetIndex) else { return 0 }
+        if cache.lineHeights.isEmpty {
+            return CGFloat(targetPosition) * (defaultHeight + spacing)
+        }
         for i in 0..<targetPosition {
             totalHeight += (cache.lineHeights[indices[i]] ?? defaultHeight) + spacing
         }
@@ -1045,6 +1191,23 @@ public struct LyricsView: View {
             // AMLL tail acceleration: lines past current get progressively faster
             if lineIndex >= newIndex { baseDelay /= 1.05 }
         }
+
+        let finalSettleDelay = delay + 0.20
+        let settleWorkItem = DispatchWorkItem { [self] in
+            guard !scroll.isManualScrolling else { return }
+            guard wave.lastCurrentIndex == newIndex else { return }
+
+            var keep = Set<Int>()
+            for idx in renderedIndices where abs(idx - newIndex) <= 18 {
+                keep.insert(idx)
+                if wave.lineTargetIndices[idx] != newIndex {
+                    wave.lineTargetIndices[idx] = newIndex
+                }
+            }
+            wave.lineTargetIndices = wave.lineTargetIndices.filter { keep.contains($0.key) }
+        }
+        wave.workItems.append(settleWorkItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + finalSettleDelay, execute: settleWorkItem)
     }
 
     private func cancelWaveAnimations() {

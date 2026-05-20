@@ -92,4 +92,43 @@ final class LyricsServiceStateTests: XCTestCase {
             )
         )
     }
+
+    func testTranslationAvailabilitySkipsChineseLyricsForChineseTarget() {
+        let lyrics = [
+            LyricLine(text: "我们一起走过雨天", startTime: 0, endTime: 2),
+            LyricLine(text: "风吹过旧街边", startTime: 2, endTime: 4),
+            LyricLine(text: "留下温柔的画面", startTime: 4, endTime: 6)
+        ]
+
+        XCTAssertFalse(
+            LyricsService.translationAvailability(
+                lyrics: lyrics,
+                translationLanguage: "zh-Hans",
+                translationsAreFromLyricsSource: false
+            )
+        )
+    }
+
+    func testTranslationAvailabilityAllowsNonTargetLyricsAndSourceTranslations() {
+        let lyrics = [
+            LyricLine(text: "Every time you call my name", startTime: 0, endTime: 2),
+            LyricLine(text: "I can hear it through the rain", startTime: 2, endTime: 4),
+            LyricLine(text: "Waiting on the other side", startTime: 4, endTime: 6)
+        ]
+
+        XCTAssertTrue(
+            LyricsService.translationAvailability(
+                lyrics: lyrics,
+                translationLanguage: "zh-Hans",
+                translationsAreFromLyricsSource: false
+            )
+        )
+        XCTAssertTrue(
+            LyricsService.translationAvailability(
+                lyrics: lyrics,
+                translationLanguage: "zh-Hans",
+                translationsAreFromLyricsSource: true
+            )
+        )
+    }
 }

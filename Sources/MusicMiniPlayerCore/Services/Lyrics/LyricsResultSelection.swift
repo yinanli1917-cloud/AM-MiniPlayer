@@ -61,7 +61,7 @@ extension LyricsFetcher {
             switch $0.source {
             case "LRCLIB-Search":
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 10
+                    return $0.score >= 28
                 }
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 3.0 } ?? false) {
                     return $0.score >= 45
@@ -69,7 +69,7 @@ extension LyricsFetcher {
                 return $0.score >= 50
             case "LRCLIB":
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 10
+                    return $0.score >= 28
                 }
                 if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 5.0 } ?? false) {
                     return $0.score >= 20 && $0.lyrics.count >= 10
@@ -262,13 +262,22 @@ extension LyricsFetcher {
               lyricIdentityTokens(result.lyrics).count >= 6 else { return false }
 
         return uniqueSourceResults(allResults).contains { witness in
-            witness.source != result.source
+            areIndependentLyricSources(result.source, witness.source)
                 && witness.score > 0
                 && !witness.lyrics.isEmpty
                 && lyricIdentityTokens(witness.lyrics).count >= 6
                 && (lyricSimilarity(result.lyrics, witness.lyrics) >= 0.18
                     || firstComparableLyricLine(result.lyrics) == firstComparableLyricLine(witness.lyrics))
         }
+    }
+
+    private func areIndependentLyricSources(_ lhs: String, _ rhs: String) -> Bool {
+        guard lhs != rhs else { return false }
+        let mirroredLibrarySources: Set<String> = ["LRCLIB", "LRCLIB-Search"]
+        if mirroredLibrarySources.contains(lhs), mirroredLibrarySources.contains(rhs) {
+            return false
+        }
+        return true
     }
 
     /// Use independent source agreement as an output-side identity oracle.
@@ -388,6 +397,24 @@ extension LyricsFetcher {
             return (lastStart - songDuration) > max(10.0, songDuration * 0.05)
         }
         let tailGap = songDuration - lastStart
+        let realLines = result.lyrics.filter {
+            let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+        }
+        let firstText = realLines.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let startsWithCatalogMarker = firstText.contains("******")
+            || firstText.localizedCaseInsensitiveContains("music")
+        let isExactSparseLongTail = result.titleMatched
+            && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true)
+            && realLines.count >= 35
+            && !startsWithCatalogMarker
+        if result.score < 65,
+           !hasWordLevelSync(result),
+           tailGap > max(42.0, songDuration * 0.20) {
+            if !isExactSparseLongTail && (firstRealStart < 4.0 || startsWithCatalogMarker) {
+                return true
+            }
+        }
         if result.albumMatched,
            result.titleMatched,
            result.score >= 30,
@@ -399,6 +426,9 @@ extension LyricsFetcher {
            result.lyrics.count >= 20,
            result.matchedDurationDiff.map({ $0 < 2.0 }) ?? false,
            tailGap <= max(160.0, songDuration * 0.55) {
+            return false
+        }
+        if isExactSparseLongTail {
             return false
         }
         if result.score < 50,
@@ -552,7 +582,12 @@ extension LyricsFetcher {
 
             // Direct title evidence beats a small score lead from a loose
             // cross-script duration escape.
+            let topHasStrongNativeAlias = top.nativeAliasMatched
+                && top.kind == .synced
+                && top.score >= 60
+                && (top.matchedDurationDiff.map { $0 < 3.0 } ?? false)
             if !top.titleMatched,
+               !topHasStrongNativeAlias,
                let titleMatched = workingPool.first(where: { $0.titleMatched }),
                titleMatched.score + 20 >= top.score {
                 DebugLogger.log("🏆 Title-evidence preferred: \(titleMatched.source) (\(String(format: "%.1f", titleMatched.score))) over loose \(top.source) (\(String(format: "%.1f", top.score)))")

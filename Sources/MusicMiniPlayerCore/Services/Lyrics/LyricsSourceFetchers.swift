@@ -64,6 +64,436 @@ extension LyricsFetcher {
         return firstReal.startTime < 2.0
     }
 
+    private func isSuspiciousCompressedLineTiming(_ result: LyricsFetchResult, duration: TimeInterval) -> Bool {
+        guard duration >= 180,
+              result.kind == .synced,
+              result.score < 65,
+              !result.lyrics.isEmpty else { return false }
+
+        let syllableCount = result.lyrics.filter { $0.hasSyllableSync }.count
+        if Double(syllableCount) / Double(result.lyrics.count) >= 0.3 {
+            return false
+        }
+
+        let realLines = result.lyrics.filter { line in
+            let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+        }
+        guard let firstReal = realLines.first,
+              let lastStart = result.lyrics.last?.startTime else { return false }
+
+        let firstText = firstReal.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startsWithCatalogMarker = firstText.contains("******") || firstText.localizedCaseInsensitiveContains("music")
+        let startsTooEarly = firstReal.startTime < 4.0
+        let tailGap = duration - lastStart
+        let leavesLargeTail = tailGap > max(42.0, duration * 0.20)
+        return leavesLargeTail && (startsTooEarly || startsWithCatalogMarker)
+    }
+
+    private struct NetEaseSiblingQualityCandidate: Sendable {
+        let id: Int
+        let name: String
+        let artist: String
+        let durationDiff: Double
+        let keywordPriority: Int
+        let resultIndex: Int
+    }
+
+    private struct NetEaseCompilationAlbumCandidate: Sendable {
+        let id: Int
+        let name: String
+        let artist: String
+        let album: String
+        let durationDiff: Double
+        let keywordPriority: Int
+        let resultIndex: Int
+    }
+
+    private func fetchNetEaseSiblingQualityFallback(
+        params: SearchParams,
+        headers: [String: String],
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        excludingSongID: Int?,
+        catalogTitle: String? = nil,
+        catalogArtist: String? = nil,
+        skipAliasResolution: Bool = false
+    ) async -> LyricsFetchResult? {
+        var artistEvidence = params.artistPairs.map(\.0)
+        if let catalogArtist {
+            artistEvidence.insert(catalogArtist, at: 0)
+        }
+        if !skipAliasResolution, LanguageUtils.isPureASCII(params.rawArtist) {
+            artistEvidence.append(contentsOf: await resolveArtistCJKAliases(
+                asciiArtist: params.rawArtist,
+                allowUnconfirmedCatalogMatches: true
+            ))
+        }
+        if params.rawOriginalArtist != params.rawArtist,
+           !skipAliasResolution,
+           LanguageUtils.isPureASCII(params.rawOriginalArtist) {
+            artistEvidence.append(contentsOf: await resolveArtistCJKAliases(
+                asciiArtist: params.rawOriginalArtist,
+                allowUnconfirmedCatalogMatches: true
+            ))
+        }
+        artistEvidence = Array(Set(artistEvidence.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        })).filter { !$0.isEmpty }
+
+        let titleVariants = Array(Set([
+            catalogTitle ?? "",
+            params.rawTitle,
+            params.rawOriginalTitle,
+            params.simplifiedTitle,
+            params.simplifiedOriginalTitle,
+            LanguageUtils.toTraditionalChinese(params.rawTitle),
+            LanguageUtils.toTraditionalChinese(params.rawOriginalTitle)
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).filter { !$0.isEmpty }
+
+        var keywordPairs: [(String, Int)] = []
+        func addKeyword(_ keyword: String, priority: Int) {
+            let clean = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty, !keywordPairs.contains(where: { $0.0 == clean }) else { return }
+            keywordPairs.append((clean, priority))
+        }
+        if let catalogTitle,
+           let catalogArtist,
+           !catalogTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !catalogArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            addKeyword("\(catalogTitle) \(catalogArtist)", priority: -1)
+            addKeyword("\(LanguageUtils.toSimplifiedChinese(catalogTitle)) \(catalogArtist)", priority: -1)
+        }
+        addKeyword("\(params.rawTitle) \(params.rawArtist)", priority: 0)
+        addKeyword("\(params.simplifiedTitle) \(params.rawArtist)", priority: 0)
+        addKeyword("\(LanguageUtils.toTraditionalChinese(params.rawTitle)) \(params.rawArtist)", priority: 1)
+        for alias in artistEvidence where LanguageUtils.containsCJK(alias) {
+            addKeyword("\(params.simplifiedTitle) \(alias)", priority: 1)
+            addKeyword("\(LanguageUtils.toTraditionalChinese(params.rawTitle)) \(alias)", priority: 1)
+        }
+        addKeyword(params.simplifiedTitle, priority: 2)
+
+        var candidatesByID: [Int: NetEaseSiblingQualityCandidate] = [:]
+        await withTaskGroup(of: [NetEaseSiblingQualityCandidate].self) { group in
+            for (keyword, priority) in keywordPairs.prefix(6) {
+                group.addTask {
+                    guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+                        "s": keyword, "type": "1", "limit": "20"
+                    ]) else { return [] }
+                    guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 2.4, retry: false),
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let result = json["result"] as? [String: Any],
+                          let songs = result["songs"] as? [[String: Any]] else { return [] }
+                    return songs.enumerated().compactMap { index, song -> NetEaseSiblingQualityCandidate? in
+                        guard let id = song["id"] as? Int,
+                              id != excludingSongID,
+                              let name = song["name"] as? String,
+                              let durMS = song["duration"] as? Double else { return nil }
+                        let artistName = (song["artists"] as? [[String: Any]]).map { self.joinedProviderArtists($0) } ?? ""
+                        let delta = abs((durMS / 1000.0) - duration)
+                        guard delta < 5.0 else { return nil }
+                        let titleOK = titleVariants.contains { title in
+                            self.isTitleMatch(input: title, result: name, simplifiedInput: LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(title)))
+                        }
+                        guard titleOK else { return nil }
+                        let artistOK = artistEvidence.contains { artist in
+                            self.isArtistMatch(
+                                input: artist,
+                                result: artistName,
+                                simplifiedInput: LanguageUtils.toSimplifiedChinese(artist)
+                            )
+                        }
+                        guard artistOK else { return nil }
+                        let lowerName = name.lowercased()
+                        let looksBackingTrack = lowerName.contains("karaoke")
+                            || lowerName.contains("instrumental")
+                            || lowerName.contains("伴奏")
+                            || lowerName.contains("オリジナル・カラオケ")
+                        guard !looksBackingTrack else { return nil }
+                        return NetEaseSiblingQualityCandidate(
+                            id: id,
+                            name: name,
+                            artist: artistName,
+                            durationDiff: delta,
+                            keywordPriority: priority,
+                            resultIndex: index
+                        )
+                    }
+                }
+            }
+            for await batch in group {
+                for candidate in batch {
+                    if let existing = candidatesByID[candidate.id] {
+                        if existing.keywordPriority < candidate.keywordPriority { continue }
+                        if existing.keywordPriority == candidate.keywordPriority,
+                           existing.resultIndex <= candidate.resultIndex { continue }
+                    }
+                    candidatesByID[candidate.id] = candidate
+                }
+            }
+        }
+
+        let candidates = candidatesByID.values.sorted {
+            if $0.keywordPriority != $1.keywordPriority { return $0.keywordPriority < $1.keywordPriority }
+            if $0.resultIndex != $1.resultIndex { return $0.resultIndex < $1.resultIndex }
+            return $0.durationDiff < $1.durationDiff
+        }
+        guard !candidates.isEmpty else { return nil }
+        DebugLogger.log("NetEase", "🔁 sibling quality fallback: \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
+
+        var scoredResults: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            for candidate in candidates.prefix(8) {
+                group.addTask {
+                    guard let fetched = await self.fetchNetEaseLyrics(
+                        songId: candidate.id,
+                        duration: duration,
+                        expectedTitle: candidate.name,
+                        expectedArtist: candidate.artist
+                    ), !fetched.lyrics.isEmpty, fetched.lyrics.count >= 5 else {
+                        return nil
+                    }
+                    let candidateLyrics = self.removingLeadingCatalogCreditLines(
+                        fetched.lyrics,
+                        title: candidate.name,
+                        artist: candidate.artist
+                    )
+                    let rawScore = self.scorer.calculateScore(
+                        candidateLyrics,
+                        source: "NetEase",
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        kind: fetched.kind
+                    )
+                    let score = self.scoreWithCatalogEvidence(
+                        baseScore: rawScore,
+                        lyrics: candidateLyrics,
+                        kind: fetched.kind,
+                        albumMatched: false,
+                        titleMatched: true,
+                        durationDiff: candidate.durationDiff
+                    )
+                    let result = LyricsFetchResult(
+                        lyrics: candidateLyrics,
+                        source: "NetEase",
+                        score: score,
+                        kind: fetched.kind,
+                        albumMatched: false,
+                        titleMatched: true,
+                        matchedDurationDiff: candidate.durationDiff,
+                        nativeAliasMatched: true
+                    )
+                    guard !self.isSuspiciousCompressedLineTiming(result, duration: duration) else { return nil }
+                    return result
+                }
+            }
+            for await result in group {
+                if let result, result.kind == .synced, result.score >= 35 {
+                    scoredResults.append(result)
+                }
+            }
+        }
+
+        guard let best = scoredResults.sorted(by: { lhs, rhs in
+            if lhs.lyrics.contains(where: { $0.hasSyllableSync }) != rhs.lyrics.contains(where: { $0.hasSyllableSync }) {
+                return lhs.lyrics.contains(where: { $0.hasSyllableSync })
+            }
+            return lhs.score > rhs.score
+        }).first else { return nil }
+        DebugLogger.log("NetEase", "✅ sibling quality fallback hit: score=\(String(format: "%.1f", best.score)) lines=\(best.lyrics.count)")
+        return best
+    }
+
+    private func fetchNetEaseCompilationAlbumFallback(
+        params: SearchParams,
+        headers: [String: String],
+        duration: TimeInterval,
+        translationEnabled: Bool
+    ) async -> LyricsFetchResult? {
+        guard !params.normalizedAlbum.isEmpty else { return nil }
+
+        var artistEvidence = params.artistPairs.map(\.0)
+        if LanguageUtils.isPureASCII(params.rawArtist) {
+            artistEvidence.append(contentsOf: await resolveArtistCJKAliases(
+                asciiArtist: params.rawArtist,
+                allowUnconfirmedCatalogMatches: true
+            ))
+        }
+        if params.rawOriginalArtist != params.rawArtist,
+           LanguageUtils.isPureASCII(params.rawOriginalArtist) {
+            artistEvidence.append(contentsOf: await resolveArtistCJKAliases(
+                asciiArtist: params.rawOriginalArtist,
+                allowUnconfirmedCatalogMatches: true
+            ))
+        }
+        artistEvidence = Array(Set(artistEvidence.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        })).filter { !$0.isEmpty }
+
+        let albumVariants = Array(Set([
+            params.normalizedAlbum,
+            LanguageUtils.toTraditionalChinese(params.normalizedAlbum)
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }))
+            .filter { !$0.isEmpty }
+        let titleVariants = Array(Set([
+            params.simplifiedTitle,
+            params.simplifiedOriginalTitle,
+            params.rawTitle,
+            params.rawOriginalTitle
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }))
+            .filter { !$0.isEmpty }
+
+        var keywordPairs: [(String, String, Int)] = []
+        func addKeyword(_ keyword: String, descriptor: String, priority: Int) {
+            let clean = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty,
+                  !keywordPairs.contains(where: { $0.0 == clean && $0.1 == descriptor }) else { return }
+            keywordPairs.append((clean, descriptor, priority))
+        }
+
+        for album in albumVariants {
+            for artist in artistEvidence {
+                addKeyword("\(album) \(artist)", descriptor: "compilation album+artist", priority: LanguageUtils.containsCJK(artist) ? 0 : 1)
+            }
+            for title in titleVariants.prefix(3) {
+                addKeyword("\(title) \(album)", descriptor: "compilation title+album", priority: 2)
+                for artist in artistEvidence.prefix(4) {
+                    addKeyword("\(title) \(album) \(artist)", descriptor: "compilation title+album+artist", priority: 3)
+                }
+            }
+        }
+
+        var candidatesByID: [Int: NetEaseCompilationAlbumCandidate] = [:]
+        await withTaskGroup(of: [NetEaseCompilationAlbumCandidate].self) { group in
+            for (keyword, descriptor, priority) in keywordPairs.prefix(10) {
+                group.addTask {
+                    guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+                        "s": keyword, "type": "1", "limit": "30"
+                    ]) else { return [] }
+                    guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 2.4, retry: false),
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let result = json["result"] as? [String: Any],
+                          let songs = result["songs"] as? [[String: Any]] else { return [] }
+
+                    return songs.enumerated().compactMap { index, song -> NetEaseCompilationAlbumCandidate? in
+                        guard let id = song["id"] as? Int,
+                              let name = song["name"] as? String,
+                              let durMS = song["duration"] as? Double else { return nil }
+                        let artistName = (song["artists"] as? [[String: Any]]).map { self.joinedProviderArtists($0) } ?? ""
+                        var albumName = ""
+                        if let album = song["album"] as? [String: Any] {
+                            var albumParts: [String] = []
+                            if let n = album["name"] as? String { albumParts.append(n) }
+                            if let aliases = album["alia"] as? [String] { albumParts.append(contentsOf: aliases) }
+                            albumName = albumParts.joined(separator: " ")
+                        }
+                        let songDuration = durMS / 1000.0
+                        guard self.isSafeCompilationAlbumFallbackCandidate(
+                            params: params,
+                            candidateTitle: name,
+                            candidateArtist: artistName,
+                            candidateAlbum: albumName,
+                            candidateDuration: songDuration,
+                            resultIndex: index,
+                            searchDescriptor: descriptor
+                        ) else { return nil }
+                        return NetEaseCompilationAlbumCandidate(
+                            id: id,
+                            name: name,
+                            artist: artistName,
+                            album: albumName,
+                            durationDiff: abs(songDuration - duration),
+                            keywordPriority: priority,
+                            resultIndex: index
+                        )
+                    }
+                }
+            }
+
+            for await batch in group {
+                for candidate in batch {
+                    if let existing = candidatesByID[candidate.id] {
+                        if existing.keywordPriority < candidate.keywordPriority { continue }
+                        if existing.keywordPriority == candidate.keywordPriority,
+                           existing.resultIndex <= candidate.resultIndex { continue }
+                    }
+                    candidatesByID[candidate.id] = candidate
+                }
+            }
+        }
+
+        let candidates = candidatesByID.values.sorted {
+            if $0.keywordPriority != $1.keywordPriority { return $0.keywordPriority < $1.keywordPriority }
+            if $0.resultIndex != $1.resultIndex { return $0.resultIndex < $1.resultIndex }
+            return $0.durationDiff < $1.durationDiff
+        }
+        guard !candidates.isEmpty else { return nil }
+        DebugLogger.log("NetEase", "🔁 compilation album fallback: \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
+
+        var scoredResults: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            for candidate in candidates.prefix(3) {
+                group.addTask {
+                    guard let fetched = await self.fetchNetEaseLyrics(
+                        songId: candidate.id,
+                        duration: duration,
+                        expectedTitle: candidate.name,
+                        expectedArtist: candidate.artist
+                    ), !fetched.lyrics.isEmpty, fetched.lyrics.count >= 8 else {
+                        return nil
+                    }
+                    let candidateLyrics = self.removingLeadingCatalogCreditLines(
+                        fetched.lyrics,
+                        title: candidate.name,
+                        artist: candidate.artist
+                    )
+                    guard candidateLyrics.count >= 8 else { return nil }
+                    let rawScore = self.scorer.calculateScore(
+                        candidateLyrics,
+                        source: "NetEase",
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        kind: fetched.kind
+                    )
+                    var score = self.scoreWithCatalogEvidence(
+                        baseScore: rawScore,
+                        lyrics: candidateLyrics,
+                        kind: fetched.kind,
+                        albumMatched: true,
+                        titleMatched: true,
+                        durationDiff: candidate.durationDiff
+                    )
+                    if fetched.kind == .synced {
+                        score = max(score, 45)
+                    }
+                    let result = LyricsFetchResult(
+                        lyrics: candidateLyrics,
+                        source: "NetEase",
+                        score: score,
+                        kind: fetched.kind,
+                        albumMatched: true,
+                        titleMatched: true,
+                        matchedDurationDiff: candidate.durationDiff
+                    )
+                    guard !self.isSuspiciousCompressedLineTiming(result, duration: duration) else { return nil }
+                    return result
+                }
+            }
+            for await result in group {
+                if let result, result.kind == .synced, result.score >= 35 {
+                    scoredResults.append(result)
+                }
+            }
+        }
+
+        guard let best = scoredResults.sorted(by: { lhs, rhs in
+            if lhs.lyrics.count != rhs.lyrics.count { return lhs.lyrics.count > rhs.lyrics.count }
+            return lhs.score > rhs.score
+        }).first else { return nil }
+        DebugLogger.log("NetEase", "✅ compilation album fallback hit: score=\(String(format: "%.1f", best.score)) lines=\(best.lyrics.count)")
+        return best
+    }
+
     private func hasCJKLyricOverlap(_ lhs: [LyricLine], _ rhs: [LyricLine]) -> Bool {
         func grams(_ lines: [LyricLine]) -> Set<String> {
             let compact = lines.prefix(24).map(\.text).joined()
@@ -358,6 +788,7 @@ extension LyricsFetcher {
 
         let match: SelectedSearchCandidate<Int>? = await searchAndSelectCandidate(
             params: params, source: "NetEase",
+            allowCompilationAlbumFallback: true,
             fetchSongs: { keyword in
                 guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
                     "s": keyword, "type": "1", "limit": "20"
@@ -395,13 +826,49 @@ extension LyricsFetcher {
                 let rawScore = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
                 let score = scoreWithCatalogEvidence(baseScore: rawScore, lyrics: lyrics, kind: kind, albumMatched: match.albumMatched, titleMatched: match.titleMatched, durationDiff: match.durationDiff, nativeAliasMatched: match.nativeAliasMatched)
                 let fetched = LyricsFetchResult(lyrics: lyrics, source: "NetEase", score: score, kind: kind, albumMatched: match.albumMatched, titleMatched: match.titleMatched, matchedDurationDiff: match.durationDiff, nativeAliasMatched: match.nativeAliasMatched)
+                let shouldProbeSiblingRows = isSuspiciousCompressedLineTiming(fetched, duration: duration)
+                if shouldProbeSiblingRows {
+                    primaryResult = fetched
+                    DebugLogger.log("NetEase", "⚠️ Primary lyrics look like a compressed line-timed version (score=\(String(format: "%.1f", score))) — probing sibling catalog rows")
+                    if let siblingResult = await fetchNetEaseSiblingQualityFallback(
+                        params: params,
+                        headers: headers,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        excludingSongID: match.id,
+                        catalogTitle: match.title,
+                        catalogArtist: match.artist,
+                        skipAliasResolution: true
+                    ) {
+                        return siblingResult
+                    }
+                }
                 if score >= 35
+                    || (params.normalizedAlbum.isEmpty && result.kind == .synced && match.matchRank == 0 && match.titleMatched && match.durationDiff < 1.0 && lyrics.count >= 8 && score >= 30)
                     || (result.kind == .synced && match.albumMatched && (match.titleMatched || match.nativeAliasMatched) && match.durationDiff < 2.0 && score >= 30)
                     || result.kind == .synced && result.lyrics.contains(where: { $0.hasSyllableSync }) {
-                    return fetched
+                    if !shouldProbeSiblingRows {
+                        return fetched
+                    }
                 }
                 primaryResult = fetched
                 DebugLogger.log("NetEase", "⚠️ Primary lyrics low quality (score=\(String(format: "%.1f", score))) — probing sibling catalog rows")
+                if result.kind == .synced,
+                   match.titleMatched,
+                   match.durationDiff < 3.0,
+                   score < 35,
+                   let siblingResult = await fetchNetEaseSiblingQualityFallback(
+                        params: params,
+                        headers: headers,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        excludingSongID: match.id,
+                        catalogTitle: match.title,
+                        catalogArtist: match.artist,
+                        skipAliasResolution: true
+                   ) {
+                    return siblingResult
+                }
             }
         } else {
             DebugLogger.log("NetEase", "❌ 未找到歌曲 — trying artist-discography fallback")
@@ -414,6 +881,22 @@ extension LyricsFetcher {
             translationEnabled: translationEnabled
         ) {
             return titleFallback
+        }
+        if let exactTitleFallback = await fetchNetEaseOrphanExactTitleFallback(
+            params: params,
+            headers: headers,
+            duration: duration,
+            translationEnabled: translationEnabled
+        ) {
+            return exactTitleFallback
+        }
+        if let compilationAlbumFallback = await fetchNetEaseCompilationAlbumFallback(
+            params: params,
+            headers: headers,
+            duration: duration,
+            translationEnabled: translationEnabled
+        ) {
+            return compilationAlbumFallback
         }
         // 🔑 Empty-lyrics fallback
         let cjkArtistForFallback = await resolveArtistCJKAliases(asciiArtist: params.rawArtist).first
@@ -663,6 +1146,176 @@ extension LyricsFetcher {
         let normalizedNameLength: Int
         let durationDiff: Double
         let resultIndex: Int
+    }
+
+    func isSafeNetEaseOrphanExactTitleCandidate(
+        inputTitle: String,
+        originalTitle: String,
+        candidateTitle: String,
+        durationDiff: Double
+    ) -> Bool {
+        guard durationDiff < 1.25 else { return false }
+        let normalizedTitle = LanguageUtils.normalizeTrackName(inputTitle)
+        let normalizedOriginalTitle = LanguageUtils.normalizeTrackName(originalTitle)
+        let inputHasCJK = LanguageUtils.containsCJK(normalizedTitle)
+            || LanguageUtils.containsCJK(normalizedOriginalTitle)
+        guard inputHasCJK else { return false }
+
+        let distinctiveCJKCount = [normalizedTitle, normalizedOriginalTitle]
+            .map { title in
+                LanguageUtils.toSimplifiedChinese(title)
+                    .unicodeScalars
+                    .filter { LanguageUtils.isCJKScalar($0) }
+                    .count
+            }
+            .max() ?? 0
+        guard distinctiveCJKCount >= 4 else { return false }
+
+        return isTitleMatch(
+            input: inputTitle,
+            result: candidateTitle,
+            simplifiedInput: LanguageUtils.toSimplifiedChinese(normalizedTitle)
+        ) || isTitleMatch(
+            input: originalTitle,
+            result: candidateTitle,
+            simplifiedInput: LanguageUtils.toSimplifiedChinese(normalizedOriginalTitle)
+        )
+    }
+
+    private struct NetEaseOrphanExactTitleCandidate: Sendable {
+        let id: Int
+        let name: String
+        let artist: String
+        let durationDiff: Double
+        let resultIndex: Int
+    }
+
+    private func fetchNetEaseOrphanExactTitleFallback(
+        params: SearchParams,
+        headers: [String: String],
+        duration: TimeInterval,
+        translationEnabled: Bool
+    ) async -> LyricsFetchResult? {
+        let titleTerms = Array(Set([
+            params.simplifiedTitle,
+            params.simplifiedOriginalTitle,
+            LanguageUtils.toTraditionalChinese(params.rawTitle),
+            LanguageUtils.toTraditionalChinese(params.rawOriginalTitle)
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }))
+            .filter { !$0.isEmpty }
+
+        var candidates: [NetEaseOrphanExactTitleCandidate] = []
+        for term in titleTerms {
+            guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+                "s": term, "type": "1", "limit": "20"
+            ]) else { continue }
+            guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 2.4, retry: false),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let result = json["result"] as? [String: Any],
+                  let songs = result["songs"] as? [[String: Any]] else { continue }
+
+            for (index, song) in songs.enumerated() {
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let durMS = song["duration"] as? Double else { continue }
+                let artistName = (song["artists"] as? [[String: Any]]).map { joinedProviderArtists($0) } ?? ""
+                let lowerName = name.lowercased()
+                let looksBackingTrack = lowerName.contains("karaoke")
+                    || lowerName.contains("instrumental")
+                    || lowerName.contains("伴奏")
+                    || lowerName.contains("オリジナル・カラオケ")
+                guard !looksBackingTrack else { continue }
+
+                let delta = abs((durMS / 1000.0) - duration)
+                guard isSafeNetEaseOrphanExactTitleCandidate(
+                    inputTitle: params.rawTitle,
+                    originalTitle: params.rawOriginalTitle,
+                    candidateTitle: name,
+                    durationDiff: delta
+                ) else { continue }
+                candidates.append(NetEaseOrphanExactTitleCandidate(
+                    id: id,
+                    name: name,
+                    artist: artistName,
+                    durationDiff: delta,
+                    resultIndex: index
+                ))
+            }
+        }
+
+        let uniqueCandidates = candidates.reduce(into: [Int: NetEaseOrphanExactTitleCandidate]()) { partial, candidate in
+            if let existing = partial[candidate.id], existing.durationDiff <= candidate.durationDiff { return }
+            partial[candidate.id] = candidate
+        }
+        .values
+        .sorted {
+            if $0.resultIndex != $1.resultIndex { return $0.resultIndex < $1.resultIndex }
+            return $0.durationDiff < $1.durationDiff
+        }
+        guard !uniqueCandidates.isEmpty else { return nil }
+        DebugLogger.log("NetEase", "🔁 orphan exact-title fallback: \(uniqueCandidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
+
+        var fallbackResults: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            for candidate in uniqueCandidates.prefix(3) {
+                group.addTask {
+                    guard let fetched = await self.fetchNetEaseLyrics(
+                        songId: candidate.id,
+                        duration: duration,
+                        expectedTitle: candidate.name,
+                        expectedArtist: candidate.artist
+                    ) else {
+                        return nil
+                    }
+                    let lyrics = self.removingLeadingCatalogCreditLines(
+                        fetched.lyrics,
+                        title: candidate.name,
+                        artist: candidate.artist
+                    )
+                    guard fetched.kind == .synced,
+                          lyrics.count >= 8,
+                          lyrics.contains(where: { LanguageUtils.containsCJK($0.text) }) else {
+                        return nil
+                    }
+                    let rawScore = self.scorer.calculateScore(
+                        lyrics,
+                        source: "NetEase",
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        kind: fetched.kind
+                    )
+                    var score = self.scoreWithCatalogEvidence(
+                        baseScore: rawScore,
+                        lyrics: lyrics,
+                        kind: fetched.kind,
+                        albumMatched: false,
+                        titleMatched: true,
+                        durationDiff: candidate.durationDiff
+                    )
+                    score = max(score, 45)
+                    let result = LyricsFetchResult(
+                        lyrics: lyrics,
+                        source: "NetEase",
+                        score: score,
+                        kind: fetched.kind,
+                        albumMatched: false,
+                        titleMatched: true,
+                        matchedDurationDiff: candidate.durationDiff
+                    )
+                    if self.isSuspiciousCompressedLineTiming(result, duration: duration) {
+                        return nil
+                    }
+                    return result
+                }
+            }
+            for await result in group {
+                if let result { fallbackResults.append(result) }
+            }
+        }
+
+        guard let best = fallbackResults.sorted(by: { $0.score > $1.score }).first else { return nil }
+        DebugLogger.log("NetEase", "✅ orphan exact-title fallback hit: score=\(String(format: "%.1f", best.score)) Δ\(String(format: "%.1f", best.matchedDurationDiff ?? 0))s")
+        return best
     }
 
     private func fetchNetEaseTitleOnlyAliasFallback(

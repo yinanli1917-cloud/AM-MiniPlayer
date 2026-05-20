@@ -1,6 +1,16 @@
 import SwiftUI
 import AppKit
 
+enum ScrollEventPolicy {
+    static func shouldDropMomentumOnlyEvent(isMomentum: Bool, isAlreadyScrolling: Bool) -> Bool {
+        isMomentum && !isAlreadyScrolling
+    }
+
+    static func shouldDropOutOfBoundsEvent(isInsideDetectorBounds: Bool, isAlreadyScrolling: Bool) -> Bool {
+        !isInsideDetectorBounds && !isAlreadyScrolling
+    }
+}
+
 // MARK: - Scroll Event Monitor (Works with any ScrollView)
 // 🔑 使用全局事件监听 + 防抖节流确保稳定性
 
@@ -102,6 +112,16 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             // 检查事件是否发生在当前窗口内
             guard let window = self.window, event.window == window else { return }
 
+            let localPoint = convert(event.locationInWindow, from: nil)
+            let detectorBounds = bounds.insetBy(dx: -4, dy: -4)
+            let isInsideDetectorBounds = bounds.isEmpty || detectorBounds.contains(localPoint)
+            if ScrollEventPolicy.shouldDropOutOfBoundsEvent(
+                isInsideDetectorBounds: isInsideDetectorBounds,
+                isAlreadyScrolling: coordinator.isScrolling
+            ) {
+                return
+            }
+
             // 🔑 过滤横向主导事件（由 SnappablePanel 处理贴边隐藏，避免冲突导致抽搐）
             let absX = abs(event.scrollingDeltaX)
             let absY = abs(event.scrollingDeltaY)
@@ -109,6 +129,16 @@ struct ScrollEventRepresentable: NSViewRepresentable {
 
             // 🔑 动量阶段感知：macOS 触控板在手指抬起后继续发送 momentum events
             let isMomentum = event.momentumPhase != []
+
+            // Momentum should only continue a gesture that this detector already
+            // owns. A momentum-only event can otherwise freeze lyrics in manual
+            // scroll mode during ordinary line changes.
+            if ScrollEventPolicy.shouldDropMomentumOnlyEvent(
+                isMomentum: isMomentum,
+                isAlreadyScrolling: coordinator.isScrolling
+            ) {
+                return
+            }
 
             // 🔑 动量结束 → 立即触发 scrollEnd（不等定时器）
             if event.momentumPhase == .ended {
@@ -135,15 +165,16 @@ struct ScrollEventRepresentable: NSViewRepresentable {
                 }
             }
 
-            coordinator.lastScrollTime = currentTime
-            coordinator.accumulatedDeltaY += deltaY
-
             // 检测滚动开始
             // 🔑 性能优化：NSEvent 监听器已在主线程，直接调用回调避免延迟
             if !coordinator.isScrolling {
                 coordinator.isScrolling = true
+                coordinator.accumulatedDeltaY = 0
+                coordinator.lastCallbackTime = 0
                 onScrollStarted?()
             }
+            coordinator.lastScrollTime = currentTime
+            coordinator.accumulatedDeltaY += deltaY
 
             // 🔑 节流回调
             let shouldCallback = (currentTime - coordinator.lastCallbackTime) >= coordinator.callbackThrottleInterval
@@ -173,6 +204,8 @@ struct ScrollEventRepresentable: NSViewRepresentable {
             if coordinator.isScrolling {
                 coordinator.isScrolling = false
                 coordinator.lastScrollTime = 0
+                coordinator.accumulatedDeltaY = 0
+                coordinator.lastCallbackTime = 0
                 // 🔑 Timer 回调已在主线程，直接调用
                 onScrollEnded?()
             }

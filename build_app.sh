@@ -48,6 +48,32 @@ assert_local_build_identity() {
     fi
 }
 
+assert_build_marker_hash_matches_release_binary() {
+    local marker_hash
+    local release_hash
+    marker_hash="$(tr ' ' '\n' < nanoPod.app/Contents/Resources/BuildInfo.txt | awk -F= '$1 == "release_sha256" { print $2 }')"
+    release_hash="$(shasum -a 256 .build/release/MusicMiniPlayer | awk '{print $1}')"
+
+    if [ -z "$marker_hash" ]; then
+        echo "❌ BuildInfo.txt does not include release_sha256"
+        exit 1
+    fi
+
+    if [ "$marker_hash" != "$release_hash" ]; then
+        echo "❌ BuildInfo.txt release_sha256 does not match unsigned release binary"
+        echo "   marker:  $marker_hash"
+        echo "   release: $release_hash"
+        exit 1
+    fi
+}
+
+write_signed_hash_manifest() {
+    local bundle_hash
+    bundle_hash="$(shasum -a 256 nanoPod.app/Contents/MacOS/nanoPod | awk '{print $1}')"
+    echo "$bundle_hash  nanoPod.app/Contents/MacOS/nanoPod" > nanoPod.app.sha256
+    echo "🧾 Signed executable SHA256: $bundle_hash"
+}
+
 cleanup_local_update_staging() {
     pkill -f "nanoPod/updates/apply.sh" >/dev/null 2>&1 || true
     rm -rf "$UPDATE_DIR/staged.app" \
@@ -112,7 +138,14 @@ fi
 echo "✅ Bundle executable matches freshly built release binary ($BUNDLE_HASH)"
 BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 GIT_REV="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-BUILD_MARKER="version=$VERSION build_time=$BUILD_TIME git=$GIT_REV release_sha256=$SOURCE_HASH auto_update=disabled"
+
+write_build_marker() {
+    local build_marker="version=$VERSION build_time=$BUILD_TIME git=$GIT_REV release_sha256=$SOURCE_HASH auto_update=disabled"
+    cat > nanoPod.app/Contents/Resources/BuildInfo.txt << BUILDINFO
+$build_marker
+BUILDINFO
+    echo "🧾 Build marker: $build_marker"
+}
 
 # Create Info.plist with ALL required permissions and icon configuration
 # 🔑 使用新的 Bundle Identifier (com.yinanli.nanoPod) 避免和旧版本冲突
@@ -168,10 +201,7 @@ cat > nanoPod.app/Contents/Info.plist << PLIST
 </plist>
 PLIST
 
-cat > nanoPod.app/Contents/Resources/BuildInfo.txt << BUILDINFO
-$BUILD_MARKER
-BUILDINFO
-echo "🧾 Build marker: $BUILD_MARKER"
+write_build_marker
 
 # Create entitlements file for code signing
 cat > nanoPod.entitlements << 'ENTITLEMENTS'
@@ -220,13 +250,19 @@ assert_no_appledouble
 
 # Ad-hoc code sign with entitlements (required for AppleScript automation on modern macOS)
 echo "🔏 Code signing with entitlements..."
-codesign --force --deep --sign - --entitlements nanoPod.entitlements nanoPod.app
+sign_bundle() {
+    codesign --force --deep --sign - --entitlements nanoPod.entitlements nanoPod.app
+}
+
+sign_bundle
 
 cleanup_bundle_metadata
 assert_no_appledouble
-codesign --force --deep --sign - --entitlements nanoPod.entitlements nanoPod.app
+sign_bundle
 assert_codesign_valid
 assert_local_build_identity
+assert_build_marker_hash_matches_release_binary
+write_signed_hash_manifest
 echo "✅ Code signature verified"
 
 # Clean up entitlements file

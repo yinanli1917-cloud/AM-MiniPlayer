@@ -525,7 +525,7 @@ private func validateContent(
     // ── 3. 低质量源标记 ──
     let sourceTokens = lyricIdentityTokens(lyrics)
     let hasIndependentLyricAgreement = allResults.contains { result in
-        guard result.source != source, result.score > 0 else { return false }
+        guard areIndependentLyricSources(source, result.source), result.score > 0 else { return false }
         let witnessTokens = lyricIdentityTokens(result.lyrics)
         return witnessTokens.count >= 6 && lyricSimilarity(sourceTokens, witnessTokens) >= 0.34
     }
@@ -677,12 +677,21 @@ private func hasIndependentLyricAgreement(
           selectedTokens.count >= 6 else { return false }
 
     return uniqueSourceResults(allResults).contains { witness in
-        guard witness.source != selected.source,
+        guard areIndependentLyricSources(selected.source, witness.source),
               witness.score > 0,
               !witness.lyrics.isEmpty else { return false }
         let witnessTokens = lyricIdentityTokens(witness.lyrics)
         return witnessTokens.count >= 6 && lyricSimilarity(selectedTokens, witnessTokens) >= 0.24
     }
+}
+
+private func areIndependentLyricSources(_ lhs: String, _ rhs: String) -> Bool {
+    guard lhs != rhs else { return false }
+    let mirroredLibrarySources: Set<String> = ["LRCLIB", "LRCLIB-Search"]
+    if mirroredLibrarySources.contains(lhs), mirroredLibrarySources.contains(rhs) {
+        return false
+    }
+    return true
 }
 
 private func hasStrongCatalogIdentity(

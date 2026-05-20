@@ -49,6 +49,7 @@ public class LyricsService: ObservableObject {
     @Published public var translationLanguage: String {
         didSet {
             UserDefaults.standard.set(translationLanguage, forKey: translationLanguageKey)
+            refreshTranslationAvailability()
             translationRequestTrigger += 1
         }
     }
@@ -56,6 +57,7 @@ public class LyricsService: ObservableObject {
     @Published public var translationRequestTrigger: Int = 0
     @Published public var isTranslating: Bool = false
     @Published public var translationFailed: Bool = false
+    @Published public private(set) var canTranslate: Bool = false
     @Published public var isManualScrolling: Bool = false
 
     // 🔧 第一句真正歌词的索引
@@ -71,14 +73,6 @@ public class LyricsService: ObservableObject {
 
     public var hasTranslation: Bool {
         lyrics.contains { $0.hasTranslation }
-    }
-
-    public var canTranslate: Bool {
-        guard !lyrics.isEmpty else { return false }
-        if translationsAreFromLyricsSource { return true }
-        let isTargetChinese = translationLanguage.hasPrefix("zh")
-        if isTargetChinese && lyricsArePredominantlyChinese() { return false }
-        return !lyricsAreInTargetLanguage()
     }
 
     public func diagnosticsWorkloadMetrics() -> [String: Double] {
@@ -109,6 +103,26 @@ public class LyricsService: ObservableObject {
         return evidence
     }
 
+    @MainActor
+    public func displayedLyricsBelongTo(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String
+    ) -> Bool {
+        guard !lyrics.isEmpty else { return false }
+        let requestSongID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
+        if currentSongID == requestSongID { return true }
+        return Self.isLikelySameSongMetadataCorrection(
+            currentStableSongID: currentStableSongID,
+            requestStableSongID: Self.stableSongIdentity(title: title, artist: artist),
+            currentDuration: currentSongDuration,
+            requestDuration: duration,
+            currentAlbum: currentSongAlbum,
+            requestAlbum: album
+        )
+    }
+
     // ========================================================================
     // MARK: - Private State
     // ========================================================================
@@ -135,6 +149,14 @@ public class LyricsService: ObservableObject {
     /// 清除所有歌词行的翻译数据
     private func clearAllTranslations() {
         for i in lyrics.indices { lyrics[i].translation = nil }
+    }
+
+    private func refreshTranslationAvailability() {
+        canTranslate = Self.translationAvailability(
+            lyrics: lyrics,
+            translationLanguage: translationLanguage,
+            translationsAreFromLyricsSource: translationsAreFromLyricsSource
+        )
     }
 
     private func diagnosticsWorkloadDescription() -> String {
@@ -327,6 +349,7 @@ public class LyricsService: ObservableObject {
 
         // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
         clearAllTranslations()
+        refreshTranslationAvailability()
 
         // 🔑 Cancel old fetch task early — before cache check.
         // Even on cache hit, the old task should stop to avoid wasted network I/O.
@@ -341,6 +364,7 @@ public class LyricsService: ObservableObject {
             // 🔑 先清空旧歌词，避免切歌时新旧歌词重叠
             lyrics = []
             currentLineIndex = nil
+            refreshTranslationAvailability()
 
             // 处理 No Lyrics 缓存
             if cached.isNoLyrics {
@@ -385,6 +409,7 @@ public class LyricsService: ObservableObject {
         lyrics = []  // 立即清空旧歌词
         currentLineIndex = nil
         error = nil
+        refreshTranslationAvailability()
 
         DebugLogger.log("LyricsService", "🔄 开始异步获取...")
 
@@ -645,6 +670,7 @@ public class LyricsService: ObservableObject {
 
         // canTranslate guards translation attempts; don't reset showTranslation
         // so the user's preference is preserved across same-language songs
+        refreshTranslationAvailability()
 
         // 🔑 Diagnostic: log first real lyric line so we can verify content correctness
         let firstReal = newLyrics.dropFirst(firstRealLyricIndex).first { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty && $0.text != "⋯" }
@@ -816,6 +842,7 @@ public class LyricsService: ObservableObject {
         translationsAreFromLyricsSource = false
 
         clearAllTranslations()
+        refreshTranslationAvailability()
 
         translationRequestTrigger += 1
     }
@@ -853,6 +880,7 @@ public class LyricsService: ObservableObject {
         if translationsAreFromLyricsSource && !isTargetChinese {
             clearAllTranslations()
             translationsAreFromLyricsSource = false
+            refreshTranslationAvailability()
         }
 
         // 清除旧翻译
@@ -907,6 +935,26 @@ public class LyricsService: ObservableObject {
     // ========================================================================
 
     private func lyricsAreInTargetLanguage() -> Bool {
+        Self.lyricsAreInTargetLanguage(lyrics, translationLanguage: translationLanguage)
+    }
+
+    private func lyricsArePredominantlyChinese() -> Bool {
+        Self.lyricsArePredominantlyChinese(lyrics)
+    }
+
+    static func translationAvailability(
+        lyrics: [LyricLine],
+        translationLanguage: String,
+        translationsAreFromLyricsSource: Bool
+    ) -> Bool {
+        guard !lyrics.isEmpty else { return false }
+        if translationsAreFromLyricsSource { return true }
+        let isTargetChinese = translationLanguage.hasPrefix("zh")
+        if isTargetChinese && lyricsArePredominantlyChinese(lyrics) { return false }
+        return !lyricsAreInTargetLanguage(lyrics, translationLanguage: translationLanguage)
+    }
+
+    private static func lyricsAreInTargetLanguage(_ lyrics: [LyricLine], translationLanguage: String) -> Bool {
         guard #available(macOS 15.0, *) else { return false }
         let validTexts = lyrics.compactMap { line -> String? in
             let t = line.text.trimmingCharacters(in: .whitespaces)
@@ -919,7 +967,7 @@ public class LyricsService: ObservableObject {
         return detectedCode.hasPrefix(targetPrefix)
     }
 
-    private func lyricsArePredominantlyChinese() -> Bool {
+    private static func lyricsArePredominantlyChinese(_ lyrics: [LyricLine]) -> Bool {
         let validLines = lyrics.filter {
             let t = $0.text.trimmingCharacters(in: .whitespaces)
             return !t.isEmpty && t != "..." && t != "…" && t != "⋯"

@@ -493,11 +493,12 @@ struct DiagnosticsDebugPanel: View {
                 }
             }
 
-            HStack(spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
                 diagnosticsMetric("Incidents", "\(diagnostics.incidentCount)")
                 diagnosticsMetric("Events", "\(diagnostics.events.count)")
                 diagnosticsMetric("Active", "\(diagnostics.activeInteractionCount)")
                 diagnosticsMetric("Traces", "\(diagnostics.interactions.count)")
+                diagnosticsMetric("Line Motion", "\(diagnostics.lyricLineMotionSampleCount)")
                 diagnosticsMetric("Latest", diagnostics.latestIncident?.category.rawValue ?? diagnostics.latestInteraction?.type.rawValue ?? "none")
             }
 
@@ -514,7 +515,7 @@ struct DiagnosticsDebugPanel: View {
                 .disabled(!diagnostics.isEnabled)
 
                 Button("Clear Diagnostics") {
-                    diagnostics.clear()
+                    diagnostics.clear(suppressImmediateStandaloneFrameStalls: true)
                     exportMessage = "Diagnostics cleared"
                 }
                 .disabled(!diagnostics.isEnabled)

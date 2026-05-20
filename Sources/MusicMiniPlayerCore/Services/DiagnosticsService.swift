@@ -138,6 +138,27 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
         guard cleanTitle != kNotPlayingSentinel else { return false }
         return true
     }
+
+    fileprivate func matchesReportTrack(_ other: DiagnosticTrackContext) -> Bool {
+        if let lhsID = persistentID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let rhsID = other.persistentID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !lhsID.isEmpty,
+           !rhsID.isEmpty {
+            return lhsID == rhsID
+        }
+
+        let lhsTitle = MetadataDiskCache.normalize(title)
+        let rhsTitle = MetadataDiskCache.normalize(other.title)
+        let lhsArtist = MetadataDiskCache.normalize(artist)
+        let rhsArtist = MetadataDiskCache.normalize(other.artist)
+        guard !lhsTitle.isEmpty, !rhsTitle.isEmpty, lhsTitle == rhsTitle else { return false }
+        guard !lhsArtist.isEmpty, !rhsArtist.isEmpty, lhsArtist == rhsArtist else { return false }
+
+        if duration > 0, other.duration > 0, abs(duration - other.duration) > 2.0 {
+            return false
+        }
+        return true
+    }
 }
 
 public struct DiagnosticIncident: Identifiable, Codable, Equatable, Sendable {
@@ -326,7 +347,8 @@ public final class DiagnosticsService: ObservableObject {
     @Published public private(set) var incidents: [DiagnosticIncident] = []
     @Published public private(set) var events: [DiagnosticEvent] = []
     @Published public private(set) var interactions: [DiagnosticInteractionTrace] = []
-    @Published public private(set) var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample] = []
+    public private(set) var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample] = []
+    @Published public private(set) var lyricLineMotionSampleCount: Int = 0
     @Published public private(set) var activeInteractionCount: Int = 0
     @Published public private(set) var lastExportURL: URL?
     @Published public private(set) var lastWarning: DiagnosticIncident?
@@ -338,6 +360,9 @@ public final class DiagnosticsService: ObservableObject {
             }
             UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey)
             if isEnabled {
+                if incidents.isEmpty, events.isEmpty, interactions.isEmpty, lyricLineMotionSamples.isEmpty {
+                    restorePersistedSnapshotIfAvailable()
+                }
                 startSessionIfNeeded()
             } else {
                 healthSampler?.invalidate()
@@ -345,6 +370,7 @@ public final class DiagnosticsService: ObservableObject {
                 activeInteractions.values.forEach { $0.timeoutTask?.cancel() }
                 activeInteractions.removeAll()
                 activeInteractionCount = 0
+                schedulePersistenceSave()
             }
         }
     }
@@ -353,6 +379,7 @@ public final class DiagnosticsService: ObservableObject {
 
     private var sessionStartedAt: Date
     private var lyricsFetchStarts: [String: Date] = [:]
+    private var activeLyricsRefreshInteractions: [String: UUID] = [:]
     private var baselineStats: [String: RunningStat] = [:]
     private var activeInteractions: [UUID: ActiveDiagnosticInteraction] = [:]
     private var healthSampler: Timer?
@@ -360,15 +387,31 @@ public final class DiagnosticsService: ObservableObject {
     private let maxIncidents = 120
     private let maxInteractions = 120
     private let maxLyricLineMotionSamples = 2400
+    private let standaloneFrameStallCoalesceWindow: TimeInterval = 60
     private let retention: TimeInterval = 24 * 60 * 60
     private var previousLyricLineMotionSamples: [String: (timestamp: Date, renderedMidY: Double)] = [:]
+    private var lastLyricLineMotionActiveStateKey: String?
+    private var lastLyricLineMotionActiveStateSince: Date?
     private var lastLyricLineMotionIncidentAt: Date?
+    private var lastLyricLineMotionIncidentSignature: String?
+    private var recentCPUSamples: [(timestamp: Date, cpu: Double)] = []
+    private var lastHighCPUIncidentAt: Date?
+    private var suppressStandaloneFrameStallsUntil: Date = .distantPast
+    private var storageBaseDirectoryForTesting: URL?
+    private var debugLogURLForTesting: URL?
+    private var persistenceSaveTask: Task<Void, Never>?
+    private var lastLyricLineMotionCountPublishAt: Date = .distantPast
+    private let liveMotionWriteQueue = DispatchQueue(
+        label: "com.nanopod.diagnostics.live-line-motion-writes",
+        qos: .utility
+    )
 
     private init() {
         self.isEnabled = Self.isOwnerDiagnosticsBuild && UserDefaults.standard.bool(forKey: Self.enabledKey)
         self.sessionID = UUID()
         self.sessionStartedAt = Date()
         if isEnabled {
+            restorePersistedSnapshotIfAvailable()
             startSessionIfNeeded()
         }
     }
@@ -389,21 +432,66 @@ public final class DiagnosticsService: ObservableObject {
         return nil
     }
 
-    public func clear() {
+    public func clear(suppressImmediateStandaloneFrameStalls: Bool = false) {
         incidents.removeAll()
         events.removeAll()
         activeInteractions.values.forEach { $0.timeoutTask?.cancel() }
         activeInteractions.removeAll()
         interactions.removeAll()
         lyricLineMotionSamples.removeAll()
+        lyricLineMotionSampleCount = 0
         previousLyricLineMotionSamples.removeAll()
+        lastLyricLineMotionActiveStateKey = nil
+        lastLyricLineMotionActiveStateSince = nil
         lastLyricLineMotionIncidentAt = nil
+        lastLyricLineMotionIncidentSignature = nil
+        recentCPUSamples.removeAll()
+        lastHighCPUIncidentAt = nil
+        suppressStandaloneFrameStallsUntil = suppressImmediateStandaloneFrameStalls
+            ? Date().addingTimeInterval(1.5)
+            : .distantPast
         activeInteractionCount = 0
         lyricsFetchStarts.removeAll()
+        activeLyricsRefreshInteractions.removeAll()
         baselineStats.removeAll()
         lastExportURL = nil
         lastWarning = nil
         sessionStartedAt = Date()
+        persistenceSaveTask?.cancel()
+        persistenceSaveTask = nil
+        removePersistedSnapshot()
+        removeLiveLyricLineMotionSamples()
+    }
+
+    func setStorageBaseDirectoryForTesting(_ url: URL?) {
+        storageBaseDirectoryForTesting = url
+    }
+
+    func setDebugLogURLForTesting(_ url: URL?) {
+        debugLogURLForTesting = url
+    }
+
+    func flushPersistenceForTesting() {
+        persistSnapshotSynchronously()
+    }
+
+    func simulateProcessRestartForTesting() {
+        resetInMemoryBuffersForRestore()
+        restorePersistedSnapshotIfAvailable()
+    }
+
+    func persistedSnapshotExistsForTesting() -> Bool {
+        guard let url = try? diagnosticsStateSnapshotURL() else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    public func prepareForTermination() {
+        guard isEnabled else { return }
+        interruptActiveInteractionsForShutdown()
+        trimBuffers()
+        persistenceSaveTask?.cancel()
+        persistenceSaveTask = nil
+        persistSnapshotSynchronously()
     }
 
     public func recordEvent(
@@ -415,6 +503,7 @@ public final class DiagnosticsService: ObservableObject {
         guard isEnabled else { return }
         events.insert(DiagnosticEvent(name: name, detail: detail, track: track, metrics: metrics), at: 0)
         trimBuffers()
+        schedulePersistenceSave()
     }
 
     @discardableResult
@@ -453,6 +542,7 @@ public final class DiagnosticsService: ObservableObject {
 
         activeInteractions[trace.id] = ActiveDiagnosticInteraction(trace: trace, timeoutTask: timeoutTask)
         activeInteractionCount = activeInteractions.count
+        schedulePersistenceSave()
         recordEvent(
             "interaction.start",
             detail: "\(type.displayName) started on \(page)",
@@ -489,6 +579,7 @@ public final class DiagnosticsService: ObservableObject {
         )
         recordInteractionIncidentIfNeeded(active.trace, detail: detail)
         trimBuffers()
+        schedulePersistenceSave()
     }
 
     public func recordLyricsFetchStarted(track: DiagnosticTrackContext, forceRefresh: Bool) {
@@ -501,6 +592,16 @@ public final class DiagnosticsService: ObservableObject {
             track: track,
             metrics: ["duration": track.duration]
         )
+        if forceRefresh {
+            activeLyricsRefreshInteractions[key] = beginInteraction(
+                type: .lyricsRefresh,
+                page: "lyrics",
+                expectedDuration: 3.0,
+                track: track,
+                metrics: ["trackDuration": track.duration],
+                evidence: ["trigger": "forceRefresh"]
+            )
+        }
     }
 
     public func recordLyricsFetchFinished(
@@ -530,6 +631,13 @@ public final class DiagnosticsService: ObservableObject {
             detail: source.map { "Selected \($0)" } ?? "Lyrics fetch finished",
             track: track,
             metrics: metrics
+        )
+        completeLyricsRefreshInteraction(
+            key: key,
+            track: track,
+            detail: source.map { "Lyrics refresh selected \($0)." } ?? "Lyrics refresh finished.",
+            metrics: metrics,
+            evidence: ["source": source ?? "unknown"]
         )
 
         if elapsed > 3.0 {
@@ -562,19 +670,49 @@ public final class DiagnosticsService: ObservableObject {
         let key = lyricsKey(for: track)
         let elapsed = Date().timeIntervalSince(lyricsFetchStarts[key] ?? Date())
         lyricsFetchStarts.removeValue(forKey: key)
+        let hasRejectedCandidates = resultCount > 0
+        completeLyricsRefreshInteraction(
+            key: key,
+            track: track,
+            detail: hasRejectedCandidates
+                ? "Lyrics refresh ended without a trusted result."
+                : "Lyrics refresh ended unresolved with no source candidates.",
+            metrics: ["fetchSeconds": elapsed, "resultCount": Double(resultCount)],
+            evidence: ["result": hasRejectedCandidates ? "miss" : "unresolved"]
+        )
         recordIncident(
             category: .lyricsFallbackChurn,
-            severity: .warning,
-            title: "Lyrics search returned no trusted result",
-            detail: "No trusted lyrics were selected after \(formatSeconds(elapsed)).",
+            severity: hasRejectedCandidates ? .warning : .info,
+            title: hasRejectedCandidates ? "Lyrics search returned no trusted result" : "Lyrics unresolved",
+            detail: hasRejectedCandidates
+                ? "No trusted lyrics were selected after \(formatSeconds(elapsed))."
+                : "No trusted lyrics source was resolved after \(formatSeconds(elapsed)); this is not automatically treated as a regression.",
             track: track,
-            metrics: ["fetchSeconds": elapsed, "resultCount": Double(resultCount)]
+            metrics: ["fetchSeconds": elapsed, "resultCount": Double(resultCount)],
+            evidence: ["result": hasRejectedCandidates ? "miss" : "unresolved"]
+        )
+    }
+
+    private func completeLyricsRefreshInteraction(
+        key: String,
+        track: DiagnosticTrackContext,
+        detail: String,
+        metrics: [String: Double],
+        evidence: [String: String]
+    ) {
+        guard let id = activeLyricsRefreshInteractions.removeValue(forKey: key) else { return }
+        completeInteraction(
+            id,
+            detail: detail,
+            metrics: metrics,
+            evidence: evidence.merging(["pageAtFinish": "lyrics"]) { current, _ in current }
         )
     }
 
     public func recordFrameTick(delta: TimeInterval, page: String) {
         guard isEnabled else { return }
         updateBaseline("frame.delta.ms", value: delta * 1000)
+        let hasActiveInteractions = !activeInteractions.isEmpty
         updateActiveInteractions { trace in
             incrementMetric("frameSampleCount", in: &trace.metrics)
             maximizeMetric("maxFrameDeltaMs", value: delta * 1000, in: &trace.metrics)
@@ -588,13 +726,56 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
         guard delta > 0.125 else { return }
-        recordIncident(
+        guard !hasActiveInteractions else { return }
+        guard Date() >= suppressStandaloneFrameStallsUntil else { return }
+        recordStandaloneFrameStall(page: page, delta: delta)
+    }
+
+    private func recordStandaloneFrameStall(page: String, delta: TimeInterval) {
+        let pageName = page.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : page
+        let incoming = DiagnosticIncident(
             category: .uiFrameStall,
             severity: delta > 0.250 ? .critical : .warning,
             title: "UI frame stall",
-            detail: "\(page) frame interval reached \(formatMilliseconds(delta)).",
+            detail: "\(pageName) frame interval reached \(formatMilliseconds(delta)).",
+            automaticallyDetected: true,
             metrics: ["deltaMs": delta * 1000],
-            evidence: ["page": page]
+            evidence: ["page": pageName]
+        )
+
+        guard let signature = standaloneFrameStallCoalesceSignature(for: incoming) else {
+            recordIncident(
+                category: incoming.category,
+                severity: incoming.severity,
+                title: incoming.title,
+                detail: incoming.detail,
+                metrics: incoming.metrics,
+                evidence: incoming.evidence
+            )
+            return
+        }
+
+        if let index = incidents.firstIndex(where: { standaloneFrameStallCoalesceSignature(for: $0) == signature }) {
+            let merged = mergeFrameStallIncident(incoming, into: incidents[index])
+            incidents[index] = merged
+            if merged.severity == .critical {
+                lastWarning = merged
+            } else if let severe = severeOrRepeatedIssue {
+                lastWarning = severe
+            }
+            trimBuffers()
+            schedulePersistenceSave()
+            return
+        }
+
+        let normalized = normalizedFrameStallIncident(incoming, signature: signature)
+        recordIncident(
+            category: normalized.category,
+            severity: normalized.severity,
+            title: normalized.title,
+            detail: normalized.detail,
+            metrics: normalized.metrics,
+            evidence: normalized.evidence
         )
     }
 
@@ -620,6 +801,7 @@ public final class DiagnosticsService: ObservableObject {
         if lyricLineMotionSamples.count > maxLyricLineMotionSamples {
             lyricLineMotionSamples.removeLast(lyricLineMotionSamples.count - maxLyricLineMotionSamples)
         }
+        updateLyricLineMotionSampleCount()
 
         let maxTargetError = enriched.map { abs($0.targetErrorY) }.max() ?? 0
         let maxInterLineError = enriched.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
@@ -638,6 +820,7 @@ public final class DiagnosticsService: ObservableObject {
         writeLiveLyricLineMotionSamples(enriched)
         recordLyricLineMotionIncidentIfNeeded(enriched)
         trimBuffers()
+        scheduleHighFrequencyPersistenceSave()
     }
 
     public func recordScriptingBridgeTiming(
@@ -721,8 +904,17 @@ public final class DiagnosticsService: ObservableObject {
 
         let copiedMedia = try copyMediaAttachments(mediaAttachments, to: reportDir)
         let resolvedTrack = bestAvailableTrackContext(preferred: track)
+        let reportGeneratedAt = Date()
+        let reportIncidents = scopedIncidents(for: resolvedTrack.track)
+        let reportEvents = scopedEvents(for: resolvedTrack.track)
+        let reportInteractions = scopedInteractions(for: resolvedTrack.track)
+        let reportLineMotionSamples = scopedLyricLineMotionSamples(for: resolvedTrack.track)
+        let reportBaseline = scopedBaseline(
+            for: resolvedTrack.track,
+            lineMotionSamples: reportLineMotionSamples
+        )
         let manifest = DiagnosticReportManifest(
-            generatedAt: Date(),
+            generatedAt: reportGeneratedAt,
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
             buildVersion: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown",
             osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
@@ -730,11 +922,11 @@ public final class DiagnosticsService: ObservableObject {
             userSymptom: userSymptom,
             userNote: userNote,
             track: resolvedTrack.track,
-            incidents: incidents,
-            events: events,
-            interactions: interactions,
-            lyricLineMotionSamples: lyricLineMotionSamples,
-            baseline: baselineStats.mapValues(\.average),
+            incidents: reportIncidents,
+            events: reportEvents,
+            interactions: reportInteractions,
+            lyricLineMotionSamples: reportLineMotionSamples,
+            baseline: reportBaseline,
             mediaAttachmentNames: copiedMedia
         )
 
@@ -749,19 +941,17 @@ public final class DiagnosticsService: ObservableObject {
             atomically: true,
             encoding: .utf8
         )
-        try performanceCSV().write(
+        try performanceCSV(events: reportEvents, interactions: reportInteractions).write(
             to: reportDir.appendingPathComponent("performance_samples.csv"),
             atomically: true,
             encoding: .utf8
         )
-        try lyricLineMotionCSV(samples: lyricLineMotionSamples.reversed()).write(
+        try lyricLineMotionCSV(samples: reportLineMotionSamples.reversed()).write(
             to: reportDir.appendingPathComponent("lyrics_line_motion_samples.csv"),
             atomically: true,
             encoding: .utf8
         )
-        if let logData = try? Data(contentsOf: URL(fileURLWithPath: "/tmp/nanopod_debug.log")) {
-            try logData.write(to: reportDir.appendingPathComponent("nanopod_debug.log"))
-        }
+        try writeDebugLogAttachment(to: reportDir)
 
         lastExportURL = reportDir
         return reportDir
@@ -775,6 +965,7 @@ public final class DiagnosticsService: ObservableObject {
                 }
             }
         }
+        repairLiveLyricLineMotionCSVIfNeeded()
         recordEvent("diagnostics.session.start", detail: "Owner diagnostics enabled")
     }
 
@@ -812,6 +1003,76 @@ public final class DiagnosticsService: ObservableObject {
         return (preferred, ["trackContextSource": preferred == nil ? "missing" : "providedUnverified"])
     }
 
+    private func scopedIncidents(for track: DiagnosticTrackContext?) -> [DiagnosticIncident] {
+        guard let track, track.hasCredibleIdentity else { return incidents }
+        return incidents.filter { incident in
+            if let incidentTrack = incident.track {
+                return incidentTrack.matchesReportTrack(track)
+            }
+            if let evidenceTrack = incident.evidence["track"], evidenceTrack.contains(" / ") {
+                return evidenceTrackContext(evidenceTrack)?.matchesReportTrack(track) == true
+            }
+            if incident.category == .lyricsLineMotion {
+                return false
+            }
+            return true
+        }
+    }
+
+    private func scopedEvents(for track: DiagnosticTrackContext?) -> [DiagnosticEvent] {
+        guard let track, track.hasCredibleIdentity else { return events }
+        return events.filter { event in
+            guard let eventTrack = event.track else { return true }
+            return eventTrack.matchesReportTrack(track)
+        }
+    }
+
+    private func scopedInteractions(for track: DiagnosticTrackContext?) -> [DiagnosticInteractionTrace] {
+        guard let track, track.hasCredibleIdentity else { return interactions }
+        return interactions.filter { interaction in
+            guard let interactionTrack = interaction.track else { return true }
+            return interactionTrack.matchesReportTrack(track)
+        }
+    }
+
+    private func scopedLyricLineMotionSamples(for track: DiagnosticTrackContext?) -> [DiagnosticLyricLineMotionSample] {
+        guard let track, track.hasCredibleIdentity else { return lyricLineMotionSamples }
+        return lyricLineMotionSamples.filter { sample in
+            MetadataDiskCache.normalize(sample.trackTitle) == MetadataDiskCache.normalize(track.title)
+                && MetadataDiskCache.normalize(sample.trackArtist) == MetadataDiskCache.normalize(track.artist)
+        }
+    }
+
+    private func scopedBaseline(
+        for track: DiagnosticTrackContext?,
+        lineMotionSamples reportLineMotionSamples: [DiagnosticLyricLineMotionSample]
+    ) -> [String: Double] {
+        var values = baselineStats.mapValues(\.average)
+        guard track?.hasCredibleIdentity == true else { return values }
+
+        for key in Array(values.keys) where key.hasPrefix("lyrics.lineMotion.") {
+            values.removeValue(forKey: key)
+        }
+        guard !reportLineMotionSamples.isEmpty else { return values }
+
+        values["lyrics.lineMotion.targetError.pt"] = average(reportLineMotionSamples.map { abs($0.targetErrorY) })
+        values["lyrics.lineMotion.interLineError.pt"] = average(reportLineMotionSamples.compactMap { $0.interLineDeltaErrorY.map(abs) })
+        values["lyrics.lineMotion.velocity.ptPerSec"] = average(reportLineMotionSamples.map { abs($0.velocityY) })
+        return values
+    }
+
+    private func evidenceTrackContext(_ value: String) -> DiagnosticTrackContext? {
+        let parts = value.components(separatedBy: " / ")
+        guard parts.count >= 2, let artist = parts.last else { return nil }
+        let title = parts.dropLast().joined(separator: " / ")
+        return DiagnosticTrackContext(title: title, artist: artist, album: "", duration: 0)
+    }
+
+    private func average(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
     private func recordIncident(
         category: DiagnosticIncidentCategory,
         severity: DiagnosticSeverity,
@@ -840,6 +1101,7 @@ public final class DiagnosticsService: ObservableObject {
             lastWarning = severe
         }
         trimBuffers()
+        schedulePersistenceSave()
     }
 
     private func interruptOverlappingInteractions(type: DiagnosticInteractionType, page: String) {
@@ -914,7 +1176,7 @@ public final class DiagnosticsService: ObservableObject {
         let isSlow = durationMs > expectedMs + 250
         let hasFrameIssue = frameStalls > 0 || maxFrameDelta > 125
         let hasBridgeIssue = bridgeTimeouts > 0 || bridgeQueueWait > 250 || bridgeRead > 100
-        let hasCPUIssue = maxCPU > 70
+        let hasCPUIssue = maxCPU > 120
         guard isSlow || hasFrameIssue || hasBridgeIssue || hasCPUIssue else { return }
 
         let severity: DiagnosticSeverity = (durationMs > expectedMs + 600 || maxFrameDelta > 250 || bridgeTimeouts > 0 || maxCPU > 120)
@@ -967,6 +1229,9 @@ public final class DiagnosticsService: ObservableObject {
         incidents.removeAll { $0.timestamp < cutoff }
         interactions.removeAll { $0.startedAt < cutoff }
         lyricLineMotionSamples.removeAll { $0.timestamp < cutoff }
+        normalizeLegacyHighCPUIncidents()
+        coalesceStandaloneFrameStallIncidents()
+        coalesceLyricLineMotionIncidents()
         if events.count > maxEvents {
             events.removeLast(events.count - maxEvents)
         }
@@ -979,6 +1244,410 @@ public final class DiagnosticsService: ObservableObject {
         if lyricLineMotionSamples.count > maxLyricLineMotionSamples {
             lyricLineMotionSamples.removeLast(lyricLineMotionSamples.count - maxLyricLineMotionSamples)
         }
+        updateLyricLineMotionSampleCount(force: true)
+        refreshLastWarningAfterIncidentNormalization()
+    }
+
+    private func coalesceStandaloneFrameStallIncidents() {
+        guard incidents.count > 1 else { return }
+
+        var compacted: [DiagnosticIncident] = []
+        var bucketIndexBySignature: [String: Int] = [:]
+        compacted.reserveCapacity(incidents.count)
+
+        for incident in incidents {
+            guard let signature = standaloneFrameStallCoalesceSignature(for: incident) else {
+                compacted.append(incident)
+                continue
+            }
+
+            if let index = bucketIndexBySignature[signature] {
+                compacted[index] = mergeFrameStallIncident(incident, into: compacted[index])
+            } else {
+                bucketIndexBySignature[signature] = compacted.count
+                compacted.append(normalizedFrameStallIncident(incident, signature: signature))
+            }
+        }
+
+        incidents = compacted
+    }
+
+    private func coalesceLyricLineMotionIncidents() {
+        guard incidents.count > 1 else { return }
+
+        var compacted: [DiagnosticIncident] = []
+        var bucketIndexBySignature: [String: Int] = [:]
+        compacted.reserveCapacity(incidents.count)
+
+        for incident in incidents {
+            guard let signature = lyricLineMotionCoalesceSignature(for: incident) else {
+                compacted.append(incident)
+                continue
+            }
+
+            if let index = bucketIndexBySignature[signature] {
+                compacted[index] = mergeLyricLineMotionIncident(incident, into: compacted[index])
+            } else {
+                bucketIndexBySignature[signature] = compacted.count
+                compacted.append(normalizedLyricLineMotionIncident(incident, signature: signature))
+            }
+        }
+
+        incidents = compacted
+    }
+
+    private func refreshLastWarningAfterIncidentNormalization() {
+        guard let lastWarning else { return }
+        if let current = incidents.first(where: { $0.id == lastWarning.id }) {
+            self.lastWarning = current
+        } else {
+            self.lastWarning = severeOrRepeatedIssue
+        }
+    }
+
+    private func standaloneFrameStallCoalesceSignature(for incident: DiagnosticIncident) -> String? {
+        guard incident.category == .uiFrameStall,
+              incident.automaticallyDetected,
+              incident.track == nil,
+              incident.evidence["interactionID"] == nil else {
+            return nil
+        }
+
+        let page = normalizedFrameStallPage(for: incident)
+        let bucket = floor(incident.timestamp.timeIntervalSince1970 / standaloneFrameStallCoalesceWindow)
+        return "uiFrameStall|\(page)|\(Int(bucket))"
+    }
+
+    private func normalizedFrameStallPage(for incident: DiagnosticIncident) -> String {
+        let rawPage = incident.evidence["page"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let rawPage, !rawPage.isEmpty {
+            return rawPage
+        }
+        return "unknown"
+    }
+
+    private func lyricLineMotionCoalesceSignature(for incident: DiagnosticIncident) -> String? {
+        guard incident.category == .lyricsLineMotion,
+              incident.automaticallyDetected else {
+            return nil
+        }
+
+        if let track = incident.track, track.hasCredibleIdentity {
+            return [
+                "lyricsLineMotion",
+                MetadataDiskCache.normalize(track.title),
+                MetadataDiskCache.normalize(track.artist)
+            ].joined(separator: "|")
+        }
+        if let evidenceTrack = incident.evidence["track"],
+           let track = evidenceTrackContext(evidenceTrack),
+           track.hasCredibleIdentity {
+            return [
+                "lyricsLineMotion",
+                MetadataDiskCache.normalize(track.title),
+                MetadataDiskCache.normalize(track.artist)
+            ].joined(separator: "|")
+        }
+        return "lyricsLineMotion|unknown"
+    }
+
+    private func normalizedFrameStallIncident(
+        _ incident: DiagnosticIncident,
+        signature: String
+    ) -> DiagnosticIncident {
+        var normalized = incident
+        normalized.metrics["occurrenceCount"] = max(normalized.metrics["occurrenceCount"] ?? 1, 1)
+        let delta = normalized.metrics["deltaMs"] ?? normalized.metrics["maxDeltaMs"] ?? 0
+        normalized.metrics["maxDeltaMs"] = max(delta, normalized.metrics["maxDeltaMs"] ?? 0)
+        normalized.metrics["firstTimestampEpoch"] = normalized.timestamp.timeIntervalSince1970
+        normalized.metrics["lastTimestampEpoch"] = normalized.timestamp.timeIntervalSince1970
+        normalized.evidence["signature"] = signature
+        normalized.evidence["coalescedWindowSeconds"] = "\(Int(standaloneFrameStallCoalesceWindow))"
+        return normalized
+    }
+
+    private func mergeFrameStallIncident(
+        _ incoming: DiagnosticIncident,
+        into representative: DiagnosticIncident
+    ) -> DiagnosticIncident {
+        var merged = representative
+        let incomingDelta = incoming.metrics["deltaMs"] ?? incoming.metrics["maxDeltaMs"] ?? 0
+        let existingMaxDelta = merged.metrics["maxDeltaMs"] ?? merged.metrics["deltaMs"] ?? 0
+        let maxDelta = max(existingMaxDelta, incomingDelta)
+        let count = (merged.metrics["occurrenceCount"] ?? 1) + (incoming.metrics["occurrenceCount"] ?? 1)
+        let firstTimestamp = min(
+            merged.metrics["firstTimestampEpoch"] ?? merged.timestamp.timeIntervalSince1970,
+            incoming.timestamp.timeIntervalSince1970
+        )
+        let lastTimestamp = max(
+            merged.metrics["lastTimestampEpoch"] ?? merged.timestamp.timeIntervalSince1970,
+            incoming.timestamp.timeIntervalSince1970
+        )
+
+        merged.metrics["occurrenceCount"] = count
+        merged.metrics["deltaMs"] = maxDelta
+        merged.metrics["maxDeltaMs"] = maxDelta
+        merged.metrics["firstTimestampEpoch"] = firstTimestamp
+        merged.metrics["lastTimestampEpoch"] = lastTimestamp
+        if incoming.severity == .critical {
+            merged.severity = .critical
+        }
+        let page = normalizedFrameStallPage(for: merged)
+        if merged.evidence["signature"] == nil,
+           let signature = standaloneFrameStallCoalesceSignature(for: merged) {
+            merged.evidence["signature"] = signature
+        }
+        merged.evidence["coalescedWindowSeconds"] = "\(Int(standaloneFrameStallCoalesceWindow))"
+        merged.title = "UI frame stall burst"
+        merged.detail = "\(page) had \(Int(count)) standalone frame stalls in \(Int(standaloneFrameStallCoalesceWindow))s; max interval \(String(format: "%.0f", maxDelta))ms."
+        return merged
+    }
+
+    private func normalizedLyricLineMotionIncident(
+        _ incident: DiagnosticIncident,
+        signature: String
+    ) -> DiagnosticIncident {
+        var normalized = incident
+        normalized.metrics["occurrenceCount"] = max(normalized.metrics["occurrenceCount"] ?? 1, 1)
+        normalized.metrics["firstTimestampEpoch"] = normalized.timestamp.timeIntervalSince1970
+        normalized.metrics["lastTimestampEpoch"] = normalized.timestamp.timeIntervalSince1970
+        normalized.evidence["signature"] = signature
+        return normalized
+    }
+
+    private func mergeLyricLineMotionIncident(
+        _ incoming: DiagnosticIncident,
+        into representative: DiagnosticIncident
+    ) -> DiagnosticIncident {
+        var merged = representative
+        let count = (merged.metrics["occurrenceCount"] ?? 1) + (incoming.metrics["occurrenceCount"] ?? 1)
+        let firstTimestamp = min(
+            merged.metrics["firstTimestampEpoch"] ?? merged.timestamp.timeIntervalSince1970,
+            incoming.timestamp.timeIntervalSince1970
+        )
+        let lastTimestamp = max(
+            merged.metrics["lastTimestampEpoch"] ?? merged.timestamp.timeIntervalSince1970,
+            incoming.timestamp.timeIntervalSince1970
+        )
+
+        merged.metrics["occurrenceCount"] = count
+        merged.metrics["firstTimestampEpoch"] = firstTimestamp
+        merged.metrics["lastTimestampEpoch"] = lastTimestamp
+        for key in [
+            "maxTargetErrorPt",
+            "maxInterLineErrorPt",
+            "laggedNearbyTargetCount",
+            "activeLineElapsedMs",
+            "activeTargetLagged"
+        ] {
+            if let incomingValue = incoming.metrics[key] {
+                merged.metrics[key] = max(merged.metrics[key] ?? incomingValue, incomingValue)
+            }
+        }
+        if incoming.severity == .critical {
+            merged.severity = .critical
+        }
+        if merged.evidence["signature"] == nil,
+           let signature = lyricLineMotionCoalesceSignature(for: merged) {
+            merged.evidence["signature"] = signature
+        }
+        let maxTarget = merged.metrics["maxTargetErrorPt"] ?? 0
+        let maxInterLine = merged.metrics["maxInterLineErrorPt"] ?? 0
+        merged.title = "Lyrics line motion drift burst"
+        merged.detail = "\(Int(count)) line-motion drift samples for this track; max target error \(String(format: "%.0f", maxTarget))pt, max spacing error \(String(format: "%.0f", maxInterLine))pt."
+        return merged
+    }
+
+    private func normalizeLegacyHighCPUIncidents() {
+        for index in incidents.indices where incidents[index].category == .highCPU {
+            guard incidents[index].metrics["maxRecentCPUPercent"] == nil else { continue }
+            let currentCPU = incidents[index].metrics["cpuPercent"]
+            let reportedCPU = highCPUPercentFromDetail(incidents[index].detail)
+            guard let maxCPU = [currentCPU, reportedCPU].compactMap({ $0 }).max(), maxCPU > 0 else {
+                continue
+            }
+
+            incidents[index].metrics["currentCPUPercent"] = currentCPU ?? maxCPU
+            incidents[index].metrics["maxRecentCPUPercent"] = maxCPU
+            incidents[index].metrics["cpuPercent"] = maxCPU
+            incidents[index].metrics["highCPUSampleCount"] = incidents[index].metrics["highCPUSampleCount"] ?? 1
+            incidents[index].evidence["migratedLegacyHighCPUMetrics"] = "true"
+        }
+    }
+
+    private func highCPUPercentFromDetail(_ detail: String) -> Double? {
+        let prefix = "Process CPU reached "
+        guard detail.hasPrefix(prefix),
+              let percentIndex = detail[prefix.endIndex...].firstIndex(of: "%") else {
+            return nil
+        }
+        return Double(detail[prefix.endIndex..<percentIndex])
+    }
+
+    private func schedulePersistenceSave() {
+        guard isEnabled else { return }
+        guard persistenceSaveTask == nil else { return }
+        persistenceSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            self?.performScheduledPersistenceSave()
+        }
+    }
+
+    private func scheduleHighFrequencyPersistenceSave() {
+        guard isEnabled else { return }
+        guard persistenceSaveTask == nil else { return }
+        persistenceSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.performScheduledPersistenceSave()
+        }
+    }
+
+    private func performScheduledPersistenceSave() {
+        persistenceSaveTask = nil
+        persistSnapshotImmediately()
+    }
+
+    private func persistSnapshotImmediately() {
+        guard isEnabled else { return }
+        let snapshot = makePersistenceSnapshot()
+        guard let url = try? diagnosticsStateSnapshotURL() else { return }
+        Task.detached(priority: .utility) {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                let data = try encoder.encode(snapshot)
+                try data.write(to: url, options: [.atomic])
+            } catch {
+                // Persistence is best-effort local diagnostics state; avoid
+                // recursively recording diagnostics while writing diagnostics.
+            }
+        }
+    }
+
+    private func persistSnapshotSynchronously() {
+        guard isEnabled else { return }
+        let snapshot = makePersistenceSnapshot()
+        guard let url = try? diagnosticsStateSnapshotURL() else { return }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(snapshot)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            // Best-effort on shutdown; do not block app termination on local diagnostics.
+        }
+    }
+
+    private func restorePersistedSnapshotIfAvailable() {
+        guard isEnabled else { return }
+        guard let url = try? diagnosticsStateSnapshotURL(),
+              let data = try? Data(contentsOf: url) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let snapshot = try? decoder.decode(DiagnosticPersistenceSnapshot.self, from: data) else { return }
+
+        incidents = snapshot.incidents
+        events = snapshot.events
+        interactions = snapshot.interactions.map { trace in
+            guard trace.status == .active else { return trace }
+            var interrupted = trace
+            interrupted.status = .interrupted
+            interrupted.completedAt = snapshot.savedAt
+            interrupted.evidence["restoredAfterRestart"] = "true"
+            return interrupted
+        }
+        lyricLineMotionSamples = snapshot.lyricLineMotionSamples
+        updateLyricLineMotionSampleCount(force: true)
+        baselineStats = snapshot.baselineStats
+        lastWarning = snapshot.lastWarning ?? severeOrRepeatedIssue
+        if let lastExportPath = snapshot.lastExportPath {
+            lastExportURL = URL(fileURLWithPath: lastExportPath)
+        }
+
+        trimBuffers()
+        activeInteractions.values.forEach { $0.timeoutTask?.cancel() }
+        activeInteractions.removeAll()
+        activeInteractionCount = 0
+        previousLyricLineMotionSamples.removeAll()
+        persistSnapshotImmediately()
+    }
+
+    private func makePersistenceSnapshot() -> DiagnosticPersistenceSnapshot {
+        DiagnosticPersistenceSnapshot(
+            savedAt: Date(),
+            sessionID: sessionID,
+            sessionStartedAt: sessionStartedAt,
+            incidents: incidents,
+            events: events,
+            interactions: interactions + activeInteractions.values.map(\.trace),
+            lyricLineMotionSamples: lyricLineMotionSamples,
+            baselineStats: baselineStats,
+            lastWarning: lastWarning,
+            lastExportPath: lastExportURL?.path
+        )
+    }
+
+    private func interruptActiveInteractionsForShutdown() {
+        guard !activeInteractions.isEmpty else { return }
+        let interruptedCount = activeInteractions.count
+        let now = Date()
+        for id in Array(activeInteractions.keys) {
+            guard var active = activeInteractions.removeValue(forKey: id) else { continue }
+            active.timeoutTask?.cancel()
+            active.trace.completedAt = now
+            active.trace.status = .interrupted
+            active.trace.metrics["durationMs"] = now.timeIntervalSince(active.trace.startedAt) * 1000
+            active.trace.evidence["shutdownFlush"] = "true"
+            interactions.insert(active.trace, at: 0)
+        }
+        activeInteractionCount = 0
+        events.insert(
+            DiagnosticEvent(
+                name: "diagnostics.session.flush",
+                detail: "Persisted diagnostics before app termination.",
+                metrics: ["interruptedInteractionCount": Double(interruptedCount)]
+            ),
+            at: 0
+        )
+    }
+
+    private func resetInMemoryBuffersForRestore() {
+        incidents.removeAll()
+        events.removeAll()
+        interactions.removeAll()
+        lyricLineMotionSamples.removeAll()
+        lyricLineMotionSampleCount = 0
+        previousLyricLineMotionSamples.removeAll()
+        baselineStats.removeAll()
+        activeInteractions.values.forEach { $0.timeoutTask?.cancel() }
+        activeInteractions.removeAll()
+        activeLyricsRefreshInteractions.removeAll()
+        activeInteractionCount = 0
+        lastExportURL = nil
+        lastWarning = nil
+    }
+
+    private func removePersistedSnapshot() {
+        guard let url = try? diagnosticsStateSnapshotURL() else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func removeLiveLyricLineMotionSamples() {
+        guard let url = try? liveLyricLineMotionSamplesURL() else { return }
+        liveMotionWriteQueue.async {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func updateLyricLineMotionSampleCount(force: Bool = false) {
+        let now = Date()
+        guard force || now.timeIntervalSince(lastLyricLineMotionCountPublishAt) >= 0.75 else { return }
+        lastLyricLineMotionCountPublishAt = now
+        lyricLineMotionSampleCount = lyricLineMotionSamples.count
     }
 
     private func updateBaseline(_ key: String, value: Double) {
@@ -1014,16 +1683,45 @@ public final class DiagnosticsService: ObservableObject {
         guard !metrics.isEmpty else { return }
         recordEvent("process.health.sample", detail: "CPU/RSS sample", metrics: metrics)
 
-        if let cpu, cpu > 70 {
-            recordIncident(
-                category: .highCPU,
-                severity: cpu > 120 ? .critical : .warning,
-                title: "High CPU detected",
-                detail: "Process CPU reached \(String(format: "%.0f", cpu))%.",
-                metrics: metrics
-            )
+        if let cpu {
+            recordHighCPUIncidentIfNeeded(cpu: cpu, metrics: metrics)
         }
-        if let rss, rss > 600 {
+        if let rss {
+            recordMemoryIncidentIfNeeded(rss: rss, metrics: metrics)
+        }
+    }
+
+    private func recordHighCPUIncidentIfNeeded(cpu: Double, metrics: [String: Double]) {
+        let now = Date()
+        recentCPUSamples.append((timestamp: now, cpu: cpu))
+        recentCPUSamples.removeAll { now.timeIntervalSince($0.timestamp) > 20 }
+
+        let highSamples = recentCPUSamples.filter { $0.cpu > 70 }
+        let maxRecentCPU = highSamples.map(\.cpu).max() ?? cpu
+        let isSustainedHighCPU = (highSamples.count >= 2 && maxRecentCPU >= 90) || highSamples.count >= 3
+        let isCriticalSpike = cpu > 150
+        guard isCriticalSpike || isSustainedHighCPU else { return }
+        if let lastHighCPUIncidentAt, now.timeIntervalSince(lastHighCPUIncidentAt) < 30 {
+            return
+        }
+        lastHighCPUIncidentAt = now
+        var incidentMetrics = metrics
+        incidentMetrics["currentCPUPercent"] = cpu
+        incidentMetrics["maxRecentCPUPercent"] = maxRecentCPU
+        incidentMetrics["highCPUSampleCount"] = Double(highSamples.count)
+        incidentMetrics["cpuPercent"] = maxRecentCPU
+
+        recordIncident(
+            category: .highCPU,
+            severity: isCriticalSpike ? .critical : .warning,
+            title: "High CPU detected",
+            detail: "Process CPU reached \(String(format: "%.0f", maxRecentCPU))%.",
+            metrics: incidentMetrics
+        )
+    }
+
+    private func recordMemoryIncidentIfNeeded(rss: Double, metrics: [String: Double]) {
+        if rss > 600 {
             recordIncident(
                 category: .memorySpike,
                 severity: rss > 900 ? .critical : .warning,
@@ -1076,14 +1774,31 @@ public final class DiagnosticsService: ObservableObject {
     }
 
     private func diagnosticsReportsDirectory() throws -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let base = diagnosticsStorageBaseDirectory()
         let dir = base
             .appendingPathComponent("nanoPod", isDirectory: true)
             .appendingPathComponent("Diagnostics", isDirectory: true)
             .appendingPathComponent("Reports", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    private func diagnosticsStateSnapshotURL() throws -> URL {
+        let base = diagnosticsStorageBaseDirectory()
+        let dir = base
+            .appendingPathComponent("nanoPod", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+            .appendingPathComponent("State", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("rolling_state.json")
+    }
+
+    private func diagnosticsStorageBaseDirectory() -> URL {
+        if let storageBaseDirectoryForTesting {
+            return storageBaseDirectoryForTesting
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
     }
 
     private func copyMediaAttachments(_ urls: [URL], to reportDir: URL) throws -> [String] {
@@ -1173,7 +1888,10 @@ public final class DiagnosticsService: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
-    private func performanceCSV() -> String {
+    private func performanceCSV(
+        events: [DiagnosticEvent],
+        interactions: [DiagnosticInteractionTrace]
+    ) -> String {
         var rows = ["timestamp,name,detail,metrics"]
         for event in events.reversed() {
             let metrics = event.metrics
@@ -1192,10 +1910,13 @@ public final class DiagnosticsService: ObservableObject {
         return rows.joined(separator: "\n")
     }
 
-    private func lyricLineMotionCSV<S: Sequence>(samples: S) -> String where S.Element == DiagnosticLyricLineMotionSample {
-        var rows = [
+    private func lyricLineMotionCSV<S: Sequence>(
+        samples: S,
+        includeHeader: Bool = true
+    ) -> String where S.Element == DiagnosticLyricLineMotionSample {
+        var rows = includeHeader ? [
             "timestamp,page,trackTitle,trackArtist,lineIndex,lineID,lineStartTime,lineEndTime,playbackTime,activeIndex,displayIndex,targetIndex,renderedMinY,renderedMidY,renderedHeight,targetMinY,targetMidY,targetErrorY,velocityY,observedInterLineDeltaY,expectedInterLineDeltaY,interLineDeltaErrorY,waveOffsetY,manualScrollOffsetY,isManualScrolling,isInitialMotionSuppressed"
-        ]
+        ] : []
         for sample in samples {
             rows.append([
                 Self.csvDateFormatter.string(from: sample.timestamp),
@@ -1231,87 +1952,147 @@ public final class DiagnosticsService: ObservableObject {
 
     private func writeLiveLyricLineMotionSamples(_ samples: [DiagnosticLyricLineMotionSample]) {
         guard !samples.isEmpty else { return }
+        let header = lyricLineMotionCSV(samples: [])
+        let rows = lyricLineMotionCSV(samples: samples, includeHeader: false)
+        guard let data = (rows + "\n").data(using: .utf8) else { return }
+
         do {
             let url = try liveLyricLineMotionSamplesURL()
-            let fileExists = FileManager.default.fileExists(atPath: url.path)
-            if !fileExists {
-                try lyricLineMotionCSV(samples: []).write(to: url, atomically: true, encoding: .utf8)
-            }
-            let rows = samples.map { sample in
-                [
-                    Self.csvDateFormatter.string(from: sample.timestamp),
-                    csv(sample.page),
-                    csv(sample.trackTitle),
-                    csv(sample.trackArtist),
-                    "\(sample.lineIndex)",
-                    csv(sample.lineID),
-                    csvNumber(sample.lineStartTime),
-                    csvNumber(sample.lineEndTime),
-                    csvNumber(sample.playbackTime),
-                    "\(sample.activeIndex)",
-                    "\(sample.displayIndex)",
-                    "\(sample.targetIndex)",
-                    csvNumber(sample.renderedMinY),
-                    csvNumber(sample.renderedMidY),
-                    csvNumber(sample.renderedHeight),
-                    csvNumber(sample.targetMinY),
-                    csvNumber(sample.targetMidY),
-                    csvNumber(sample.targetErrorY),
-                    csvNumber(sample.velocityY),
-                    csvNumber(sample.observedInterLineDeltaY),
-                    csvNumber(sample.expectedInterLineDeltaY),
-                    csvNumber(sample.interLineDeltaErrorY),
-                    csvNumber(sample.waveOffsetY),
-                    csvNumber(sample.manualScrollOffsetY),
-                    sample.isManualScrolling ? "1" : "0",
-                    sample.isInitialMotionSuppressed ? "1" : "0"
-                ].joined(separator: ",")
-            }.joined(separator: "\n") + "\n"
-            if let data = rows.data(using: .utf8),
-               let handle = try? FileHandle(forWritingTo: url) {
-                defer { try? handle.close() }
-                handle.seekToEndOfFile()
-                handle.write(data)
+            liveMotionWriteQueue.async {
+                do {
+                    let fileExists = FileManager.default.fileExists(atPath: url.path)
+                    if !fileExists {
+                        try (header + "\n").write(to: url, atomically: true, encoding: .utf8)
+                    }
+                    let handle = try FileHandle(forWritingTo: url)
+                    defer { try? handle.close() }
+                    try handle.seekToEnd()
+                    handle.write(data)
+                } catch {
+                    Task { @MainActor in
+                        DiagnosticsService.shared.recordEvent("diagnostics.liveMotionWriteFailed", detail: error.localizedDescription)
+                    }
+                }
             }
         } catch {
             recordEvent("diagnostics.liveMotionWriteFailed", detail: error.localizedDescription)
         }
     }
 
+    private func repairLiveLyricLineMotionCSVIfNeeded() {
+        let header = lyricLineMotionCSV(samples: [])
+        do {
+            let url = try liveLyricLineMotionSamplesURL()
+            liveMotionWriteQueue.async {
+                do {
+                    try Self.repairLiveLyricLineMotionCSV(at: url, header: header)
+                } catch {
+                    Task { @MainActor in
+                        DiagnosticsService.shared.recordEvent("diagnostics.liveMotionRepairFailed", detail: error.localizedDescription)
+                    }
+                }
+            }
+        } catch {
+            recordEvent("diagnostics.liveMotionRepairFailed", detail: error.localizedDescription)
+        }
+    }
+
+    nonisolated private static func repairLiveLyricLineMotionCSV(at url: URL, header: String) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let repaired = repairedLiveLyricLineMotionCSV(text, header: header)
+        guard repaired != text else { return }
+        try repaired.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    nonisolated private static func repairedLiveLyricLineMotionCSV(_ text: String, header: String) -> String {
+        let hasTrailingNewline = text.hasSuffix("\n")
+        let rows = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var repairedRows = [header]
+        for row in rows where !isLiveLyricLineMotionHeader(row, expectedHeader: header) {
+            repairedRows.append(row)
+        }
+        return repairedRows.joined(separator: "\n") + (hasTrailingNewline ? "\n" : "")
+    }
+
+    nonisolated private static func isLiveLyricLineMotionHeader(_ row: String, expectedHeader: String) -> Bool {
+        row == expectedHeader || row.hasPrefix("timestamp,page,trackTitle,trackArtist,lineIndex,lineID")
+    }
+
     private func recordLyricLineMotionIncidentIfNeeded(_ samples: [DiagnosticLyricLineMotionSample]) {
         let stableSamples = samples.filter { !$0.isManualScrolling && !$0.isInitialMotionSuppressed }
         guard !stableSamples.isEmpty else { return }
 
-        let now = Date()
-        if let lastLyricLineMotionIncidentAt,
-           now.timeIntervalSince(lastLyricLineMotionIncidentAt) < 3.0 {
-            return
-        }
-
         let maxTargetError = stableSamples.map { abs($0.targetErrorY) }.max() ?? 0
         let maxInterLineError = stableSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
         let activeSample = stableSamples.first { $0.lineIndex == $0.activeIndex }
-        let activeElapsed = activeSample.map { $0.playbackTime - $0.lineStartTime } ?? 0
+        let activeLineElapsed = activeSample.map { $0.playbackTime - $0.lineStartTime } ?? 0
+        let activeVisualElapsed = activeSample.map { visualElapsedForActiveState(sample: $0) } ?? 0
         let laggedNearbyTargets = stableSamples.filter {
             abs($0.lineIndex - $0.activeIndex) <= 4 && $0.targetIndex != $0.activeIndex
         }.count
+        let activeTargetLagged = activeSample.map { $0.targetIndex != $0.activeIndex } ?? false
+
+        if isCollapsedLyricLineMotionGeometry(
+            stableSamples,
+            maxTargetError: maxTargetError,
+            laggedNearbyTargets: laggedNearbyTargets
+        ) {
+            recordEvent(
+                "diagnostics.lyricsLineMotionGeometryDiscarded",
+                detail: "Ignored collapsed line-motion geometry sample.",
+                metrics: [
+                    "sampleCount": Double(stableSamples.count),
+                    "maxTargetErrorPt": maxTargetError,
+                    "maxInterLineErrorPt": maxInterLineError
+                ]
+            )
+            return
+        }
 
         let hasGeometryDrift = maxInterLineError > 18 || maxTargetError > 32
-        let hasLateWaveTargets = activeElapsed > 0.35 && laggedNearbyTargets >= 4
+        let hasLateWaveTargets = activeVisualElapsed > 0.55 && activeTargetLagged && laggedNearbyTargets >= 4
         guard hasGeometryDrift || hasLateWaveTargets else { return }
 
-        lastLyricLineMotionIncidentAt = now
         let sample = activeSample ?? stableSamples[0]
+        let signature = [
+            sample.trackTitle,
+            sample.trackArtist,
+            String(sample.activeIndex),
+            String(sample.displayIndex),
+            String(sample.targetIndex),
+            String(Int(maxTargetError / 10)),
+            String(Int(maxInterLineError / 10))
+        ].joined(separator: "|")
+        let now = Date()
+        let cooldown: TimeInterval = signature == lastLyricLineMotionIncidentSignature ? 30.0 : 3.0
+        if let lastLyricLineMotionIncidentAt,
+           now.timeIntervalSince(lastLyricLineMotionIncidentAt) < cooldown {
+            return
+        }
+
+        lastLyricLineMotionIncidentAt = now
+        lastLyricLineMotionIncidentSignature = signature
+        let track = DiagnosticTrackContext(
+            title: sample.trackTitle,
+            artist: sample.trackArtist,
+            album: "",
+            duration: 0,
+            playbackTime: sample.playbackTime
+        )
         recordIncident(
             category: .lyricsLineMotion,
             severity: maxInterLineError > 28 || maxTargetError > 48 ? .critical : .warning,
             title: "Lyrics line motion drift",
             detail: "Rendered lyric lines diverged from their target motion during playback.",
+            track: track,
             metrics: [
                 "maxTargetErrorPt": maxTargetError,
                 "maxInterLineErrorPt": maxInterLineError,
                 "laggedNearbyTargetCount": Double(laggedNearbyTargets),
-                "activeLineElapsedMs": activeElapsed * 1000
+                "activeLineElapsedMs": activeLineElapsed * 1000,
+                "activeVisualElapsedMs": activeVisualElapsed * 1000,
+                "activeTargetLagged": activeTargetLagged ? 1 : 0
             ],
             evidence: [
                 "track": "\(sample.trackTitle) / \(sample.trackArtist)",
@@ -1323,9 +2104,79 @@ public final class DiagnosticsService: ObservableObject {
         )
     }
 
+    private func visualElapsedForActiveState(sample: DiagnosticLyricLineMotionSample) -> TimeInterval {
+        let key = [
+            sample.trackTitle,
+            sample.trackArtist,
+            sample.lineID,
+            String(sample.activeIndex),
+            String(sample.displayIndex)
+        ].joined(separator: "|")
+        if key != lastLyricLineMotionActiveStateKey {
+            lastLyricLineMotionActiveStateKey = key
+            lastLyricLineMotionActiveStateSince = sample.timestamp
+            return 0
+        }
+        let since = lastLyricLineMotionActiveStateSince ?? sample.timestamp
+        return max(0, sample.timestamp.timeIntervalSince(since))
+    }
+
+    private func isCollapsedLyricLineMotionGeometry(
+        _ samples: [DiagnosticLyricLineMotionSample],
+        maxTargetError: Double,
+        laggedNearbyTargets: Int
+    ) -> Bool {
+        guard samples.count >= 4, maxTargetError > 120, laggedNearbyTargets == 0 else { return false }
+        guard let minRendered = samples.map(\.renderedMidY).min(),
+              let maxRendered = samples.map(\.renderedMidY).max(),
+              let minTarget = samples.map(\.targetMidY).min(),
+              let maxTarget = samples.map(\.targetMidY).max() else {
+            return false
+        }
+
+        let renderedSpan = maxRendered - minRendered
+        let targetSpan = maxTarget - minTarget
+        guard targetSpan > 120, renderedSpan < max(24, targetSpan * 0.20) else { return false }
+
+        let renderedBuckets = Set(samples.map { Int(($0.renderedMidY / 4).rounded()) })
+        return renderedBuckets.count <= max(3, samples.count / 3)
+    }
+
+    func shouldAttachDebugLog(modifiedAt: Date) -> Bool {
+        modifiedAt >= sessionStartedAt.addingTimeInterval(-1)
+    }
+
+    private func writeDebugLogAttachment(to reportDir: URL) throws {
+        if let debugLogURL = currentSessionDebugLogURL(),
+           let logData = try? Data(contentsOf: debugLogURL) {
+            let destination = reportDir.appendingPathComponent("nanopod_debug.log")
+            try logData.write(to: destination)
+            return
+        }
+
+        let status = [
+            "No current-session nanoPod debug log was available for this report.",
+            "Stale /tmp/nanopod_debug.log content is not attached."
+        ].joined(separator: "\n") + "\n"
+        try status.write(
+            to: reportDir.appendingPathComponent("debug_log_status.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func currentSessionDebugLogURL() -> URL? {
+        let url = debugLogURLForTesting ?? URL(fileURLWithPath: "/tmp/nanopod_debug.log")
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modifiedAt = attributes[.modificationDate] as? Date,
+              shouldAttachDebugLog(modifiedAt: modifiedAt) else {
+            return nil
+        }
+        return url
+    }
+
     private func liveLyricLineMotionSamplesURL() throws -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let base = diagnosticsStorageBaseDirectory()
         let dir = base
             .appendingPathComponent("nanoPod", isDirectory: true)
             .appendingPathComponent("Diagnostics", isDirectory: true)
@@ -1393,6 +2244,20 @@ public enum DiagnosticsError: LocalizedError {
 private struct ActiveDiagnosticInteraction {
     var trace: DiagnosticInteractionTrace
     var timeoutTask: Task<Void, Never>?
+}
+
+private struct DiagnosticPersistenceSnapshot: Codable, Sendable {
+    var schemaVersion: Int = 1
+    var savedAt: Date
+    var sessionID: UUID
+    var sessionStartedAt: Date
+    var incidents: [DiagnosticIncident]
+    var events: [DiagnosticEvent]
+    var interactions: [DiagnosticInteractionTrace]
+    var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample]
+    var baselineStats: [String: RunningStat]
+    var lastWarning: DiagnosticIncident?
+    var lastExportPath: String?
 }
 
 private struct RunningStat: Codable, Equatable, Sendable {
