@@ -462,6 +462,7 @@ final class DiagnosticsServiceTests: XCTestCase {
             let savedAt: Date
             let sessionID: UUID
             let sessionStartedAt: Date
+            let appBuildSignature: String?
             let incidents: [DiagnosticIncident]
             var events: [DiagnosticEvent] = []
             var interactions: [DiagnosticInteractionTrace] = []
@@ -527,6 +528,7 @@ final class DiagnosticsServiceTests: XCTestCase {
             savedAt: base,
             sessionID: UUID(),
             sessionStartedAt: base.addingTimeInterval(-300),
+            appBuildSignature: DiagnosticsService.shared.currentAppBuildSignatureForTesting(),
             incidents: [legacyHighCPU] + lineMotionIncidents + incidents,
             lastWarning: incidents[0]
         )

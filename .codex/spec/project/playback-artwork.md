@@ -21,6 +21,17 @@ cover on a new track.
   before applying. SB and Apple catalog artwork remain authoritative over web
   fallbacks.
 
+## ScriptingBridge Lanes
+
+- Lightweight playback-position polling must use its own `SBApplication`, serial
+  queue, and timeout-runner lane. Lyrics timing depends on position updates not
+  waiting behind playlist scans, metadata backfills, or artwork extraction.
+- Heavyweight playlist/current-track/artwork ScriptingBridge reads may remain
+  serial within their own proxy lane, but a hang in one lane must not starve an
+  independent proxy lane.
+- After a position-poll timeout, skip a short cooldown window and preserve the
+  local interpolation clock. Do not substitute zero position/state values.
+
 ## Diagnostics Gap
 
 Owner reports can currently say "artwork not updated", but diagnostics do not

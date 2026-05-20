@@ -11,10 +11,13 @@ not public telemetry and should not be presented as release analytics.
 - Collection is opt-in, sticky once enabled, and local-only by default.
 - Automatic incidents may be collected in the rolling local buffer, but export
   is always an explicit user action.
-- The rolling local buffer must survive app restart and local rebuilds. Persist
-  incidents, events, completed/interrupted interaction traces, line-motion
-  samples, baseline values, and last warning/export references under local
-  diagnostics state, and flush active traces before termination.
+- The rolling local buffer must survive app restart within the same app build.
+  Persist incidents, events, completed/interrupted interaction traces,
+  line-motion samples, baseline values, and last warning/export references
+  under local diagnostics state, and flush active traces before termination.
+  Bind restored rolling state to the current app build signature; when the
+  bundle changes, drop stale active counts so fixed historical incidents do not
+  look like fresh regressions. Exported report bundles remain available.
 - Public telemetry is separate scope and requires privacy review, explicit
   opt-in, user preview before sending, and no automatic upload.
 
@@ -33,6 +36,11 @@ technical causes.
   target positions, active/display/target indices, per-line velocity,
   inter-line spacing error, wave offset, playback time, and manual-scroll /
   initial-load suppression flags.
+- Lyrics-page motion probes must not record diagnostics directly from every
+  SwiftUI geometry preference update. Preference updates may cache the latest
+  frames, but actual recording belongs on the bounded sampling clock so the
+  diagnostics verifier cannot add main-thread work during the animation it is
+  measuring.
 - Late wave-target detection must use elapsed wall-clock time since the UI first
   observed the active/display line state, not only `playbackTime - lineStart`.
   Seeking or skipping can land in the middle of a lyric line; that must not be

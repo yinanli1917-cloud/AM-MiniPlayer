@@ -119,6 +119,11 @@ public class MusicController: ObservableObject {
     // Each SBApplication is an independent Apple Event proxy, safe on its own serial queue.
     // 🔑 var — recreated on hang recovery (same pattern as artworkQueue).
     var scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
+    // 🔑 Dedicated SB instance for playback position polling. Lyrics sync depends
+    // on this staying independent from playlist scans, metadata backfills, and
+    // artwork extraction. Keep it on its own queue and SBTimeoutRunner lane.
+    var positionApp: SBApplication?
+    let positionPollQueue = DispatchQueue(label: "com.nanoPod.positionPoll", qos: .userInitiated)
     // 🔑 Dedicated SB instance for artwork extraction — runs in parallel with
     // position polling and metadata reads. Without this, artwork extraction (1-3s)
     // blocks position polls, causing the serial-queue starvation that made osascript faster.
@@ -203,6 +208,7 @@ public class MusicController: ObservableObject {
     // A backward position jump (e.g. 180s→2s while playing) signals a new track.
     private var lastPolledPosition: Double = 0
     private var sbPositionPollInFlight: Bool = false
+    private var positionPollCooldownUntil: Date = .distantPast
 
     // 🔑 Radio track-change backstop: when persistentID is empty (radio/URL track),
     // position-jump detection can miss changes if the user skips before accumulating
@@ -360,6 +366,7 @@ public class MusicController: ObservableObject {
         }
 
         self.musicApp = app
+        self.positionApp = SBApplication(bundleIdentifier: "com.apple.Music")
         self.artworkApp = SBApplication(bundleIdentifier: "com.apple.Music")
         self.controlApp = SBApplication(bundleIdentifier: "com.apple.Music")
         debugPrint("✅ [MusicController] SBApplication created successfully\n")
@@ -914,12 +921,13 @@ public class MusicController: ObservableObject {
         // causing EXC_BAD_ACCESS in AEProcessMessage. SBTimeoutRunner wraps the
         // currentTrack reads below; stuck AE calls leak a thread but do not crash.
 
-        guard let app = musicApp, app.isRunning else { return }
+        guard Date() >= positionPollCooldownUntil else { return }
+        guard let app = positionApp, app.isRunning else { return }
         guard !sbPositionPollInFlight else { return }
         sbPositionPollInFlight = true
 
         let pollEnqueueTime = Date()
-        scriptingBridgeQueue.async { [weak self] in
+        positionPollQueue.async { [weak self] in
             guard let self = self else { return }
             defer {
                 DispatchQueue.main.async {
@@ -938,13 +946,16 @@ public class MusicController: ObservableObject {
             // detection for radio tracks (the ONLY way we catch radio song changes
             // when playerInfo notifications are skipped).
             typealias PollSnap = (position: Double, stateRaw: Int)
-            guard let snap: PollSnap = SBTimeoutRunner.run(timeout: 1.5, { () -> PollSnap? in
+            guard let snap: PollSnap = SBTimeoutRunner.run(timeout: 1.5, lane: "positionPoll", { () -> PollSnap? in
                 let p = app.value(forKey: "playerPosition") as? Double ?? 0
                 let s = app.value(forKey: "playerState") as? Int ?? 0
                 return (p, s)
             }) else {
                 DebugLogger.log("Poll", "⏳ pollPositionViaSB timed out — skipping cycle, preserving state")
                 let timedOutAfter = Date().timeIntervalSince(measurementTime)
+                DispatchQueue.main.async {
+                    self.positionPollCooldownUntil = Date().addingTimeInterval(4.0)
+                }
                 Task { @MainActor in
                     DiagnosticsService.shared.recordScriptingBridgeTiming(
                         operation: "pollPositionViaSB",

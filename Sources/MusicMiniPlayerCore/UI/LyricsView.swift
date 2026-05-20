@@ -46,7 +46,7 @@ private struct WaveState {
 }
 
 private let lyricLineMotionCoordinateSpace = "nanoPod.lyrics.lineMotion"
-private let lyricLineMotionSampleInterval: TimeInterval = 0.12
+private let lyricLineMotionSampleInterval: TimeInterval = 0.20
 private let lyricLineMotionPageSwitchSampleDuration: TimeInterval = 0.95
 private let lyricLineMotionTrackSwitchSampleDuration: TimeInterval = 1.25
 private let lyricLineMotionLineAdvanceSampleDuration: TimeInterval = 0.85
@@ -427,14 +427,17 @@ public struct LyricsView: View {
             .offset(y: scroll.manualScrollOffset)
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
-                latestLineMotionFrames = frames
+                guard lineMotionSamplingActive else {
+                    if !latestLineMotionFrames.isEmpty {
+                        latestLineMotionFrames.removeAll()
+                    }
+                    return
+                }
+                if latestLineMotionFrames != frames {
+                    latestLineMotionFrames = frames
+                }
                 latestLineMotionAnchorY = anchorY
                 latestLineMotionDisplayIndex = displayIndex
-                recordLyricLineMotion(
-                    frames: frames,
-                    anchorY: anchorY,
-                    displayIndex: displayIndex
-                )
             }
         }
         .modifier(BottomFadeMask(isActive: showControls, steepFade: scroll.isManualScrolling))
@@ -526,7 +529,7 @@ public struct LyricsView: View {
         GeometryReader { lineGeo in
             Color.clear.preference(
                 key: LyricLineMotionFramePreferenceKey.self,
-                value: diagnostics.isEnabled
+                value: diagnostics.isEnabled && lineMotionSamplingActive
                     ? [index: lineGeo.frame(in: .named(lyricLineMotionCoordinateSpace))]
                     : [:]
             )

@@ -61,7 +61,9 @@ When debugging line-to-line latency, enable owner diagnostics and inspect
 geometry from `LyricsView`: rendered min/mid Y, target min/mid Y, active/display
 index, per-line wave target index, velocity, inter-line spacing delta, and
 manual-scroll / initial-load suppression flags. Do not diagnose wave timing only
-from playback timestamps or source lyric timing.
+from playback timestamps or source lyric timing. The geometry preference path
+may update cached frames, but must not write diagnostics on every layout pass;
+line-motion recording should happen only from the bounded sampling timer.
 
 False manual-scroll state is a first-class lyrics stutter cause even when CPU is
 low. Scroll-wheel monitors must not let momentum-only events or events outside

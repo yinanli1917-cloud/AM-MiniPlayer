@@ -486,6 +486,10 @@ public final class DiagnosticsService: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path)
     }
 
+    func currentAppBuildSignatureForTesting() -> String {
+        Self.currentAppBuildSignature()
+    }
+
     public func prepareForTermination() {
         guard isEnabled else { return }
         interruptActiveInteractionsForShutdown()
@@ -1572,6 +1576,17 @@ public final class DiagnosticsService: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let snapshot = try? decoder.decode(DiagnosticPersistenceSnapshot.self, from: data) else { return }
+        let currentBuildSignature = Self.currentAppBuildSignature()
+        guard snapshot.appBuildSignature == currentBuildSignature else {
+            resetInMemoryBuffersForRestore()
+            removePersistedSnapshot()
+            recordEvent(
+                "diagnostics.session.resetForBuild",
+                detail: "Dropped stale rolling diagnostics from a previous app build.",
+                metrics: ["hadPreviousBuildSignature": snapshot.appBuildSignature == nil ? 0 : 1]
+            )
+            return
+        }
 
         incidents = snapshot.incidents
         events = snapshot.events
@@ -1604,6 +1619,7 @@ public final class DiagnosticsService: ObservableObject {
             savedAt: Date(),
             sessionID: sessionID,
             sessionStartedAt: sessionStartedAt,
+            appBuildSignature: Self.currentAppBuildSignature(),
             incidents: incidents,
             events: events,
             interactions: interactions + activeInteractions.values.map(\.trace),
@@ -1612,6 +1628,21 @@ public final class DiagnosticsService: ObservableObject {
             lastWarning: lastWarning,
             lastExportPath: lastExportURL?.path
         )
+    }
+
+    private static func currentAppBuildSignature() -> String {
+        if let buildInfoURL = Bundle.main.url(forResource: "BuildInfo", withExtension: "txt"),
+           let buildInfo = try? String(contentsOf: buildInfoURL, encoding: .utf8) {
+            let trimmed = buildInfo.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+
+        let bundleID = Bundle.main.bundleIdentifier ?? "unknown-bundle"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown-version"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown-build"
+        return "\(bundleID)|\(version)|\(build)|ownerDiagnostics=\(isOwnerDiagnosticsBuild)"
     }
 
     private func interruptActiveInteractionsForShutdown() {
@@ -2274,6 +2305,7 @@ private struct DiagnosticPersistenceSnapshot: Codable, Sendable {
     var savedAt: Date
     var sessionID: UUID
     var sessionStartedAt: Date
+    var appBuildSignature: String?
     var incidents: [DiagnosticIncident]
     var events: [DiagnosticEvent]
     var interactions: [DiagnosticInteractionTrace]

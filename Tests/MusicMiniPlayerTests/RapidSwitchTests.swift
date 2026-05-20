@@ -81,6 +81,27 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(results.sorted(), Array(0..<10))
     }
 
+    /// A hung metadata lane must not block an independent position-poll lane.
+    /// This protects lyric timing from playlist/artwork ScriptingBridge stalls.
+    func testTimeoutRunnerLaneIsolationBypassesHungLane() {
+        DispatchQueue.global().async {
+            let _: Int? = SBTimeoutRunner.run(timeout: 0.2, lane: "test-hung-metadata") {
+                Thread.sleep(forTimeInterval: 3.0)
+                return 1
+            }
+        }
+
+        Thread.sleep(forTimeInterval: 0.05)
+        let start = Date()
+        let result: Int? = SBTimeoutRunner.run(timeout: 0.5, lane: "test-position-poll") {
+            return 2
+        }
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(result, 2)
+        XCTAssertLessThan(elapsed, 0.2, "independent lanes should not wait behind a hung lane")
+    }
+
     // ------------------------------------------------------------------
     // MARK: - OBJCCatch
     // ------------------------------------------------------------------

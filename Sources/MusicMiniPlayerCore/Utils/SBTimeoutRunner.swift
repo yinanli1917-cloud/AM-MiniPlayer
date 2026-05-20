@@ -14,16 +14,16 @@
  * poll, artwork fetch, and backfill behind that one stuck call.
  *
  * SBTimeoutRunner bounds the wait:
- *   - Dispatch `block` onto a private serial queue.
+ *   - Dispatch `block` onto a private serial queue for the selected lane.
  *   - Wait on a semaphore with `timeout`.
  *   - On timeout, return nil. The underlying call keeps running on its own
  *     thread and will eventually finish (or be killed by Music.app); it just
  *     no longer blocks the caller. The serial queue avoids concurrent Apple
  *     Event calls against the same ScriptingBridge proxy.
  *
- * This complements — does not replace — the queue heartbeat recovery in
- * MusicController (recreates the queue after 5 s of silence). Timeout is
- * fine-grained; heartbeat is a backstop.
+ * Lanes are intentionally explicit: different SBApplication proxies can use
+ * different lanes, so a slow playlist/artwork metadata read does not starve the
+ * lightweight playback-position lane that keeps lyrics aligned.
  */
 
 import Foundation
@@ -35,6 +35,12 @@ public enum SBTimeoutRunner {
         var signaled = false
         var canceled = false
     }
+
+    private static let defaultLane = "shared"
+    private static let queuesLock = NSLock()
+    private static var workerQueues: [String: DispatchQueue] = [
+        defaultLane: DispatchQueue(label: "com.nanoPod.sbTimeout.worker.shared", qos: .utility)
+    ]
 
     /// Dedicated SERIAL worker queue for bounded SB calls.
     ///
@@ -48,19 +54,33 @@ public enum SBTimeoutRunner {
     ///
     /// The timeout semantic still protects callers: `run()` returns `nil`
     /// after its deadline even if the block is still executing. The block
-    /// keeps running on this queue and completes later (or gets killed by
-    /// the 5s heartbeat-recovery in MusicController), but NEW callers
-    /// submitted during that hang get queued — they do NOT race into
-    /// concurrent AE dispatch.
+    /// keeps running on this lane and completes later, but NEW callers
+    /// submitted to the same lane during that hang get queued — they do NOT
+    /// race into concurrent AE dispatch.
     ///
-    /// Trade-off: when one block is hung, subsequent calls wait behind it
-    /// on this queue. Each caller's own timeout limits its wait. The
-    /// queue-heartbeat backstop in MusicController recreates the queue
-    /// (and the shared SBApplication) after 5 s of silence.
-    private static let workerQueue = DispatchQueue(
-        label: "com.nanoPod.sbTimeout.worker",
-        qos: .utility
-    )
+    /// Trade-off: when one block is hung, subsequent calls wait behind it on
+    /// that lane. Independent SBApplication proxies should use distinct lanes
+    /// so heavyweight metadata work cannot starve lightweight position polling.
+    private static func workerQueue(for lane: String) -> DispatchQueue {
+        let normalizedLane = lane.isEmpty ? defaultLane : lane
+        queuesLock.lock()
+        defer { queuesLock.unlock() }
+        if let queue = workerQueues[normalizedLane] {
+            return queue
+        }
+        let sanitized = normalizedLane
+            .map { character -> Character in
+                character.isLetter || character.isNumber || character == "." || character == "-" || character == "_"
+                    ? character
+                    : "-"
+            }
+        let queue = DispatchQueue(
+            label: "com.nanoPod.sbTimeout.worker.\(String(sanitized))",
+            qos: .utility
+        )
+        workerQueues[normalizedLane] = queue
+        return queue
+    }
 
     /// Execute `block` with a wall-clock deadline. Returns the block's value
     /// on success, or nil on timeout.
@@ -76,9 +96,14 @@ public enum SBTimeoutRunner {
     /// Note: the FIRST hung block (the one currently mid-AE) cannot be
     /// canceled — Apple Events have no abort. It keeps running until
     /// Music.app responds. But every subsequent queued block exits cleanly.
-    public static func run<T>(timeout: TimeInterval, _ block: @escaping () -> T?) -> T? {
+    public static func run<T>(
+        timeout: TimeInterval,
+        lane: String = "shared",
+        _ block: @escaping () -> T?
+    ) -> T? {
         let sem = DispatchSemaphore(value: 0)
         let state = TimeoutState<T>()
+        let workerQueue = workerQueue(for: lane)
 
         workerQueue.async {
             // Skip the SB call entirely if the caller already gave up.
