@@ -1138,6 +1138,7 @@ public final class MetadataResolver {
                 [
                     "trackName": song.title as Any,
                     "artistName": song.artistName as Any,
+                    "collectionName": (song.albumTitle ?? "") as Any,
                     "trackTimeMillis": Int((song.duration ?? 0) * 1000) as Any
                 ]
             }

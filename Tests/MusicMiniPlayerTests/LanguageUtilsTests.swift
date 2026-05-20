@@ -18,7 +18,15 @@ final class LanguageUtilsTests: XCTestCase {
     func testLikelyEnglishTitleDetectsShortCommonTitleWords() {
         XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Second Love"))
         XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Tough Days"))
+        XCTAssertTrue(LanguageUtils.isLikelyEnglishTitle("Gentle Wave"))
         XCTAssertFalse(LanguageUtils.isLikelyRomanizedJapanese("Second Love"))
+    }
+
+    func testContainsEnglishFunctionWordUsesAsciiFunctionTokens() {
+        XCTAssertTrue(LanguageUtils.containsEnglishFunctionWord("Dance Around the Fire"))
+        XCTAssertTrue(LanguageUtils.containsEnglishFunctionWord("Why These Coyotes"))
+        XCTAssertFalse(LanguageUtils.containsEnglishFunctionWord("SE SO NEON"))
+        XCTAssertFalse(LanguageUtils.containsEnglishFunctionWord("一見鍾情"))
     }
 
     func testNormalizeTrackNameFoldsCurlyApostrophes() {

@@ -148,6 +148,24 @@ final class LyricsServiceStateTests: XCTestCase {
         XCTAssertTrue(LyricsService.hasMissingEligibleTranslations(lyrics))
     }
 
+    func testTranslationCoverageSkipsRoleMarkersAndAdlibs() {
+        let lyrics = [
+            LyricLine(text: "⋯", startTime: 0, endTime: 2),
+            LyricLine(text: "Snoh Aalegra：", startTime: 2.3, endTime: 2.5),
+            LyricLine(text: "Somethin' 'bout the way that you talk to me", startTime: 2.6, endTime: 13.6, translation: "你谈吐的样子如此优雅"),
+            LyricLine(text: "Oh I I", startTime: 114.4, endTime: 115.4),
+            LyricLine(text: "Choir/Snoh Aalegra：", startTime: 157.5, endTime: 158.1),
+            LyricLine(text: "I've been waitin' my whole life to find someone like you", startTime: 158.1, endTime: 163.5, translation: "我穷尽一生去找寻像你这样的人")
+        ]
+
+        XCTAssertEqual(
+            LyricsService.translationEligibleLineIndices(in: lyrics, onlyMissingTranslations: true),
+            []
+        )
+        XCTAssertEqual(LyricsService.translationCoverageStats(in: lyrics).eligible, 2)
+        XCTAssertFalse(LyricsService.hasMissingEligibleTranslations(lyrics))
+    }
+
     func testCompleteSourceTranslationDoesNotRequestSystemFill() {
         let lyrics = [
             LyricLine(text: "⋯", startTime: 0, endTime: 10),

@@ -55,9 +55,9 @@ public final class LyricsScorer {
         translationEnabled: Bool,
         kind: LyricsKind = .synced
     ) -> Double {
-        guard !lyrics.isEmpty else { return 0 }
         if kind == .instrumental { return -100 }
         if kind == .unavailable { return -80 }
+        guard !lyrics.isEmpty else { return 0 }
 
         var score: Double = 0
 

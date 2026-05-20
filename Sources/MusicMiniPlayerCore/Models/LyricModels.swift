@@ -3,7 +3,7 @@
 //  MusicMiniPlayer
 //
 //  [INPUT]: 无外部依赖
-//  [OUTPUT]: LyricWord, LyricLine, CachedLyricsItem, kInstrumentalPatterns
+//  [OUTPUT]: LyricWord, LyricLine, CachedLyricsItem, lyric kind/non-translatable line helpers
 //  [POS]: Models 模块的歌词数据结构，供 LyricsService 和 UI 层使用
 //
 
@@ -132,6 +132,8 @@ private let kVocableSyllables: Set<String> = [
     "ooo", "aah", "ohh", "shh", "mmm",
 ]
 
+private let kSustainedSingleLetterVocableTokens: Set<String> = ["i", "a"]
+
 /// Detect vocable/onomatopoeia lines — translations of these are hallucinated nonsense
 /// e.g., "Woo woo woo woo ooh", "La la la", "Oh oh oh oh"
 public func isVocableLine(_ text: String) -> Bool {
@@ -148,13 +150,61 @@ public func isVocableLine(_ text: String) -> Bool {
     let words = cleaned.split(separator: " ").map { String($0) }.filter { !$0.isEmpty }
     guard !words.isEmpty else { return false }
 
+    let hasCoreVocable = words.contains { isCoreVocableToken($0) }
     return words.allSatisfy { word in
-        if kVocableSyllables.contains(word) { return true }
-        // Repeated single vowel/consonant: "ooooh", "aaah", "mmmm"
-        // 🔑 ASCII only — Korean 2-syllable words (거기, 숨지) have unique.count=2 but are real words
-        guard word.allSatisfy({ $0.isASCII }) else { return false }
-        let unique = Set(word)
-        return unique.count <= 2 && word.count >= 2
+        isCoreVocableToken(word)
+            || (hasCoreVocable && kSustainedSingleLetterVocableTokens.contains(word))
+    }
+}
+
+private func isCoreVocableToken(_ word: String) -> Bool {
+    if kVocableSyllables.contains(word) { return true }
+    // Repeated single vowel/consonant: "ooooh", "aaah", "mmmm"
+    // ASCII only — Korean 2-syllable words (거기, 숨지) have unique.count=2 but are real words.
+    guard word.allSatisfy({ $0.isASCII }) else { return false }
+    let unique = Set(word)
+    return unique.count <= 2 && word.count >= 2
+}
+
+/// Standalone singer/speaker markers from providers, e.g. "Snoh Aalegra:",
+/// "Choir/Snoh Aalegra:", or "合唱：". These are useful display context but
+/// should not consume or require source translations.
+public func isStandaloneLyricsRoleMarker(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count >= 2,
+          trimmed.count <= 64,
+          trimmed.hasSuffix(":") || trimmed.hasSuffix("：") else { return false }
+
+    let label = trimmed
+        .trimmingCharacters(in: CharacterSet(charactersIn: ":："))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !label.isEmpty else { return false }
+
+    let allowed = CharacterSet.alphanumerics
+        .union(.whitespaces)
+        .union(CharacterSet(charactersIn: "/&.,'’\\-+"))
+    let hasDisallowedScalar = label.unicodeScalars.contains { scalar in
+        !allowed.contains(scalar) && !LanguageUtils.isCJKScalar(scalar)
+    }
+    guard !hasDisallowedScalar else { return false }
+
+    let lower = label.lowercased()
+    let roleKeywords = [
+        "choir", "chorus", "vocal", "vocals", "lead", "solo", "duet",
+        "all", "both", "male", "female", "men", "women", "boy", "girl",
+        "rap", "singer", "artist", "合唱", "和声", "独唱", "男声", "女声"
+    ]
+    if roleKeywords.contains(where: { lower.contains($0) }) { return true }
+    if label.contains("/") || label.contains("&") { return true }
+
+    let parts = label.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    guard !parts.isEmpty, parts.count <= 5 else { return false }
+    return parts.allSatisfy { part in
+        let letters = part.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        guard let first = letters.first else { return true }
+        if LanguageUtils.isCJKScalar(first) { return true }
+        if CharacterSet.uppercaseLetters.contains(first) { return true }
+        return part == part.uppercased() && part.count <= 8
     }
 }
 

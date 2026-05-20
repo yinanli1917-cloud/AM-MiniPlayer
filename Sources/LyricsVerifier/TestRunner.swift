@@ -60,8 +60,8 @@ func testSongWithLyrics(
     album: String = "",
     enforceExpectationIdentityOracle: Bool = true
 ) async -> (result: VerifyResult, lyrics: [LyricLine]) {
-    let start = CFAbsoluteTimeGetCurrent()
     let fetcher = LyricsFetcher.shared
+    let start = CFAbsoluteTimeGetCurrent()
 
     var fetchResults = await fetcher.fetchAllSources(
         title: title, artist: artist,
@@ -72,7 +72,15 @@ func testSongWithLyrics(
     var selectedResult = fetcher.selectBestResult(from: fetchResults, songDuration: duration)
     let foregroundElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
     var backfillElapsedMs: Int? = nil
+    let foregroundTerminalResult: LyricsFetcher.LyricsFetchResult?
+    if selectedResult == nil {
+        foregroundTerminalResult = fetcher.selectInstrumentalResult(from: fetchResults)
+            ?? fetcher.selectUnavailableResult(from: fetchResults)
+    } else {
+        foregroundTerminalResult = nil
+    }
     if (selectedResult == nil || selectedResult?.kind == .unsynced),
+       foregroundTerminalResult == nil,
        expectation?.shouldFindLyrics != false {
         if let backfill = await fetcher.backfillAuthoritativeLyrics(
             title: title,
@@ -99,10 +107,10 @@ func testSongWithLyrics(
         }
     }
     let instrumentalResult = selectedResult == nil
-        ? fetcher.selectInstrumentalResult(from: fetchResults)
+        ? (foregroundTerminalResult?.kind == .instrumental ? foregroundTerminalResult : fetcher.selectInstrumentalResult(from: fetchResults))
         : nil
     let unavailableResult = selectedResult == nil && instrumentalResult == nil
-        ? fetcher.selectUnavailableResult(from: fetchResults)
+        ? (foregroundTerminalResult?.kind == .unavailable ? foregroundTerminalResult : fetcher.selectUnavailableResult(from: fetchResults))
         : nil
     let reportResult = selectedResult ?? instrumentalResult ?? unavailableResult
     let bestLyrics = selectedResult?.lyrics
@@ -584,7 +592,22 @@ private func validateTimelineSanity(lines: [LyricLine], duration: TimeInterval) 
     let firstStart = lines[0].startTime
     let firstStartLimit = min(90.0, max(45.0, duration * 0.30))
     if firstStart > firstStartLimit {
-        failures.append("首行时间过晚: \(String(format: "%.1f", firstStart))s > \(String(format: "%.1f", firstStartLimit))s")
+        let realLines = lines.filter { line in
+            let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+        }
+        let lastStart = lines.last?.startTime ?? 0
+        let tailGap = duration - lastStart
+        let maxGap = zip(lines, lines.dropFirst()).map { $1.startTime - $0.startTime }.max() ?? 0
+        let longIntroLimit = min(115.0, max(firstStartLimit, duration * 0.34))
+        let boundedLongIntro = duration >= 300
+            && firstStart <= longIntroLimit
+            && realLines.count >= 12
+            && tailGap <= max(65.0, duration * 0.20)
+            && maxGap <= max(55.0, duration * 0.16)
+        if !boundedLongIntro {
+            failures.append("首行时间过晚: \(String(format: "%.1f", firstStart))s > \(String(format: "%.1f", firstStartLimit))s")
+        }
     }
 
     let lastStart = lines.last?.startTime ?? 0

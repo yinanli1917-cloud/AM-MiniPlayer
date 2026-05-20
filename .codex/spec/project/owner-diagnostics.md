@@ -31,6 +31,27 @@ technical causes.
 - The app should attach hidden evidence itself: frame stalls, high CPU, memory
   spikes, ScriptingBridge latency/backlog/timeouts, fallback churn, and related
   incident metrics.
+- Artwork reports need source/cache/generation evidence, not generic frame
+  events. Record `artwork.fetch.start`, `artwork.cache.miss`, `artwork.apply`,
+  and `artwork.drop` with track context, generation, cache eligibility, source,
+  apply time, and drop reason so cover lag/blackout can be verified from the
+  rolling state and daily brief.
+- ScriptingBridge timeout guards must use explicit lanes that match one
+  SBApplication proxy per operation family. Full player-state sync, queue
+  snapshots, current-track metadata backfill, artwork extraction, and position
+  polling must not share the default timeout lane. If full player-state sync
+  times out, enter a short cooldown and use the bounded AppleScript snapshot
+  fallback instead of retrying the same stuck ScriptingBridge lane every timer
+  tick.
+- Repeated ScriptingBridge latency/timeout incidents for the same operation
+  should be coalesced into a burst record with occurrence count and max read /
+  queue-wait metrics. This keeps the monitor readable while preserving the
+  root-cause evidence.
+- Isolated ScriptingBridge reads below the severe standalone threshold
+  (currently 1000ms) are baseline evidence, not monitor incidents, unless they
+  overlap an active interaction trace or back up the queue. Low queue-wait reads
+  around 100-900ms are expected Apple Event jitter and should not make the owner
+  monitor look stuck.
 - Lyrics-page motion diagnostics must sample rendered line geometry directly,
   not infer it only from playback time. Samples should include rendered and
   target positions, active/display/target indices, per-line velocity,
@@ -50,6 +71,18 @@ technical causes.
   interactions should summarize overlapping stalls in the interaction trace;
   standalone frame-stall incidents must be rate-limited instead of appended on
   every slow frame while the diagnostics window is visible.
+- A few standalone warning-level frame intervals during idle playback are
+  detector noise, not user-visible incidents. Record a standalone warning burst
+  only after six stalls with the same page/window signature inside the
+  coalescing window. Critical standalone bursts can surface after three
+  occurrences, and a severe standalone hang (currently 500ms or higher) still
+  records immediately. Preserve all frame-stall counts inside active interaction
+  traces so user-visible switch/animation stalls are still captured.
+- Standalone frame-stall incidents should ignore the short app/session startup
+  settlement window, currently 5 seconds. Cold launch, rebuild relaunch, or diagnostics session
+  initialization can produce an unscoped first-frame delay that should not count
+  as a recurring user-visible interaction bug; stalls during active interactions
+  must still be captured in the trace.
 - Clearing diagnostics from the owner UI should suppress immediate standalone
   frame-stall noise from the clear/window-refresh action itself. The clear
   operation should leave a genuinely clean monitor unless a new issue occurs
@@ -74,12 +107,41 @@ technical causes.
   motion samples, incidents, interactions, and line-motion baseline values to
   that track. Keep untracked system signals such as CPU and ScriptingBridge
   samples only when they are not tied to a different song.
-- Exported reports must not attach stale `/tmp/nanopod_debug.log` content from
-  an older CLI or app session. Attach the debug log only when it was modified
-  during the current diagnostics session.
+- Exported reports must not attach stale or unrelated debug logs from an older
+  CLI or app session. App diagnostics debug logs belong under the diagnostics
+  live directory; `/tmp/nanopod_debug.log` may be used by CLI verifier runs and
+  must not be treated as report evidence for the app.
 - A zero-candidate lyrics miss is an unresolved state, not automatically a
-  regression. Surface it as informational diagnostics unless rejected candidate
-  evidence shows fallback churn.
+  regression. Surface it as an informational event, not an incident, unless
+  rejected candidate evidence shows fallback churn.
+- A lyrics miss where every foreground candidate is a terminal
+  `instrumental`/`unavailable` candidate is pending authoritative availability
+  classification, not fallback churn. Keep it as a local event and let
+  authoritative backfill record the final unavailable/instrumental state.
+- If foreground lyrics search records a rejected-candidate miss and background
+  backfill later returns a low-confidence result for the same track, keep one
+  fallback incident and attach the low-confidence evidence as an event instead
+  of double-counting the same root cause.
+- If foreground lyrics search records a zero-candidate unresolved entry and
+  authoritative backfill later classifies the same track as instrumental or
+  source-unavailable, retain an event instead. If authoritative backfill proves
+  an instrumental track after a rejected-candidate miss, clear that miss because
+  the source has proven there are no visible lyrics. Non-instrumental rejected
+  misses must stay visible until the selector/source bug is resolved.
+- Lyrics low-confidence diagnostics must stay aligned with the source-specific
+  result-selection thresholds. Exact LRCLIB synced results with enough lyric
+  lines can be trusted below the generic 30-point threshold, while weak sparse
+  LRCLIB rows, unsynced results, and generic low-score sources should still
+  surface as fallback churn.
+- Authoritative instrumental classifications should clear same-track fallback
+  incidents and then be cached as terminal availability. Trusted unavailable
+  classifications may also be cached with a short TTL. Repeat visits should
+  produce a fast availability event/state instead of another slow-fetch or
+  fallback-churn monitor entry.
+- A trusted successful lyrics result must also clear an earlier same-track
+  fallback incident. Keep the cleanup visible as a local event so the monitor
+  reflects the current state instead of showing an unresolved incident after a
+  later `lyrics.fetch.finish` has selected high-confidence synced lyrics.
 - Unit tests that export diagnostics bundles or live diagnostics CSVs must
   isolate storage under a temporary test directory. Tests must never pollute the
   owner's real `~/Library/Application Support/nanoPod/Diagnostics` folder.
@@ -104,10 +166,28 @@ technical causes.
   samples.
 - If another interaction replaces a still-active animation, record the first
   trace as `interrupted` and create a local animation-incomplete incident.
+- If a skip/previous replacement animation view disappears before its natural
+  completion window, record the trace as `interrupted`. Track changes and lyrics
+  loading may replace the control subtree; diagnostics must capture that as an
+  incomplete visible animation instead of reporting a false completed state.
 - If a completed interaction overlaps frame stalls, bridge delays, high CPU, or
   late completion, create a correlated local incident. Lyrics-page incidents
   should use a lyrics-page-specific category so they can be compared against
   album-page traces instead of treated as generic UI noise.
+- A page switch into the lyrics page while lyrics are still an empty loading
+  state (`lyricLineCount == 0`, no current active line) is not evidence of a
+  broken lyric-line animation. Record it as a baseline loading-page-switch
+  event unless it also overlaps bridge timeouts/backlog or high CPU.
+- Standalone ScriptingBridge slow reads are baseline evidence until they either
+  overlap an active interaction, back up the queue, time out, or cross a severe
+  threshold. Local playback interpolation preserves lyric timing across
+  isolated position-poll hiccups, and isolated subsecond full-state reads also
+  must not refill the incident monitor without user-visible correlation.
+- Repeated `pollPositionViaSB` timeouts are a lane-health problem, not a reason
+  to keep hammering Music.app every timer tick. Position polling must enter
+  progressive cooldown after timeouts and use a bounded AppleScript state
+  fallback at a low rate; local playback interpolation should keep lyrics moving
+  while the ScriptingBridge position lane recovers.
 - Low-context standalone frame-stall ticks must not be allowed to fill the
   incident buffer. Coalesce repeated standalone stalls by page and short time
   window into a burst incident that preserves occurrence count, max interval,
@@ -143,6 +223,12 @@ technical causes.
   Exported report bundles are retained until explicitly deleted.
 - Exported report bundles must include the same line-motion data in
   `report.json`, `summary.md`, and `lyrics_line_motion_samples.csv`.
+- Motion/stutter reports are allowed to fall back to recent lyrics-page
+  line-motion samples by report time when exact current-track samples are
+  absent. This covers next/previous track switches where the visible broken
+  animation still belongs to the outgoing track. Non-motion reports such as
+  wrong-lyrics or missing-lyrics must keep strict track scoping so unrelated
+  old samples do not contaminate the bundle.
 
 ## Retention And Media
 

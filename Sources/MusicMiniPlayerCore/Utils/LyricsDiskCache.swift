@@ -11,6 +11,7 @@ public struct LyricsDiskCacheEntry: Codable, Equatable {
     public let source: String
     public let syncedLyrics: String
     public let lines: [CachedLyricLine]?
+    public let kind: LyricsKind?
     public let ts: TimeInterval
     public let duration: TimeInterval
     public let album: String?
@@ -37,8 +38,9 @@ private struct LyricsDiskCacheFile: Codable {
 }
 
 public final class LyricsDiskCache {
-    public static let schemaVersion = 23
+    public static let schemaVersion = 26
     public static let ttlSeconds: TimeInterval = 30 * 86400
+    public static let unavailableTTLSeconds: TimeInterval = 24 * 3600
 
     private let fileURL: URL
     private let queue = DispatchQueue(label: "com.yinanli.MusicMiniPlayer.lyrics-disk-cache")
@@ -61,18 +63,24 @@ public final class LyricsDiskCache {
     }
 
     public func get(title: String, artist: String, duration: TimeInterval, album: String = "") -> LyricsDiskCacheEntry? {
+        candidates(title: title, artist: artist, duration: duration, album: album).first
+    }
+
+    public func candidates(title: String, artist: String, duration: TimeInterval, album: String = "") -> [LyricsDiskCacheEntry] {
         let keys = Self.cacheKeys(title: title, artist: artist, duration: duration, album: album)
         return queue.sync {
             ensureLoaded()
+            var entries: [LyricsDiskCacheEntry] = []
             for key in keys {
                 guard let entry = memory[key] else { continue }
-                if Date().timeIntervalSince1970 - entry.ts > Self.ttlSeconds {
+                let ttl = entry.kind == .unavailable ? Self.unavailableTTLSeconds : Self.ttlSeconds
+                if Date().timeIntervalSince1970 - entry.ts > ttl {
                     memory.removeValue(forKey: key)
                     continue
                 }
-                return entry
+                entries.append(entry)
             }
-            return nil
+            return entries
         }
     }
 
@@ -81,6 +89,7 @@ public final class LyricsDiskCache {
             source: source,
             syncedLyrics: syncedLyrics,
             lines: nil,
+            kind: .synced,
             ts: Date().timeIntervalSince1970,
             duration: duration,
             album: album.isEmpty ? nil : album,
@@ -103,6 +112,40 @@ public final class LyricsDiskCache {
             source: source,
             syncedLyrics: "",
             lines: cachedLines,
+            kind: .synced,
+            ts: Date().timeIntervalSince1970,
+            duration: duration,
+            album: album.isEmpty ? nil : album,
+            matchedDurationDiff: matchedDurationDiff
+        )
+        setEntry(entry, title: title, artist: artist, duration: duration, album: album)
+    }
+
+    public func setAvailability(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String = "",
+        source: String,
+        kind: LyricsKind,
+        lines: [LyricLine],
+        matchedDurationDiff: TimeInterval?
+    ) {
+        guard kind == .instrumental || kind == .unavailable else { return }
+        let cachedLines = lines.map { line in
+            CachedLyricLine(
+                text: line.text,
+                startTime: line.startTime,
+                endTime: line.endTime,
+                words: line.words.map { CachedLyricWord(word: $0.word, startTime: $0.startTime, endTime: $0.endTime) },
+                translation: line.translation
+            )
+        }
+        let entry = LyricsDiskCacheEntry(
+            source: source,
+            syncedLyrics: "",
+            lines: cachedLines,
+            kind: kind,
             ts: Date().timeIntervalSince1970,
             duration: duration,
             album: album.isEmpty ? nil : album,

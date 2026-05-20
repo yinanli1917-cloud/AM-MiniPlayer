@@ -2,7 +2,7 @@
  * [INPUT]: Raw search results from NetEase/QQ APIs
  * [OUTPUT]: selectBestCandidate — unified priority-chain candidate matching with explicit title-evidence state
  * [POS]: Candidate selection sub-module of LyricsFetcher — SearchCandidate + matching + alias resolution
- * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, bounded English-title native aliases, compilation-artist safety, and buildCandidates generic builder
+ * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, bounded English-title/native pinyin aliases, compilation-artist safety, and buildCandidates generic builder
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -117,6 +117,14 @@ extension LyricsFetcher {
         let inputWordCount = inputTokens.count
         let likelyJapaneseRomaji = LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
         let inputLooksEnglish = LanguageUtils.isLikelyEnglishTitle(inputTitle)
+        let sourceIsQQ = source.range(of: "qq", options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        let isRiskyUnscopedNativeTitleOnly: (SearchCandidate<ID>) -> Bool = { candidate in
+            guard sourceIsQQ else { return false }
+            guard candidate.searchDescriptor == "title only" else { return false }
+            guard !candidate.albumMatch else { return false }
+            guard LanguageUtils.isPureASCII(inputTitle), inputWordCount >= 4 else { return false }
+            return candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
+        }
 
         // 按优先级递减尝试
         let priorities: [(String, Int, (SearchCandidate<ID>) -> Bool)] = [
@@ -165,6 +173,10 @@ extension LyricsFetcher {
                 if inputWordCount <= 1 && !candidate.albumMatch {
                     return candidate.searchDescriptor.hasPrefix("alias artist only")
                         && candidate.durationDiff < 1.5
+                }
+                if hasAlbumHint, !candidate.albumMatch {
+                    return candidate.searchDescriptor.hasPrefix("alias artist only")
+                        && candidate.durationDiff < 1.25
                 }
                 return candidate.durationDiff < 20
             }),
@@ -255,6 +267,8 @@ extension LyricsFetcher {
                         return false
                     }
                     if hasAlbumHint && !candidate.albumMatch {
+                        guard candidate.searchDescriptor == "artist only"
+                            || candidate.searchDescriptor.hasPrefix("alias artist only") else { return false }
                         guard looksRomanized || aliasConfirmedCJK else { return false }
                     }
                     return true
@@ -267,7 +281,7 @@ extension LyricsFetcher {
         var tierWinners: [(label: String, rank: Int, candidate: SearchCandidate<ID>)] = []
         for (label, rank, predicate) in priorities {
             var best: SearchCandidate<ID>?
-            for candidate in sorted where (!isUnsafeGenericCompilationArtist(candidate) || isSafeCompilationAlbumFallback(candidate)) && predicate(candidate) {
+            for candidate in sorted where (!isUnsafeGenericCompilationArtist(candidate) || isSafeCompilationAlbumFallback(candidate)) && !isRiskyUnscopedNativeTitleOnly(candidate) && predicate(candidate) {
                 if let current = best {
                     if compositeRank(candidate, current) { best = candidate }
                 } else {
@@ -324,13 +338,51 @@ extension LyricsFetcher {
         let compactResult = compactTitleIdentity(cleanedResult)
         let romanizedAliases = japaneseRomanizedTitleAliases(for: compactInput)
         let hasJapaneseRomanizedAlias = romanizedAliases.contains(compactResult)
+        let hasNativePinyinAlias = nativePinyinTitleAliasesMatch(
+            input: cleanedInput,
+            result: cleanedResult,
+            compactInput: compactInput,
+            compactResult: compactResult
+        )
 
         return cleanedInput == cleanedResult ||
                simplifiedCleanedInput == simplifiedResult ||
                (!compactInput.isEmpty && compactInput == compactResult) ||
                hasJapaneseRomanizedAlias ||
+               hasNativePinyinAlias ||
                cleanedInput.contains(cleanedResult) || cleanedResult.contains(cleanedInput) ||
                simplifiedCleanedInput.contains(simplifiedResult) || simplifiedResult.contains(simplifiedCleanedInput)
+    }
+
+    private func nativePinyinTitleAliasesMatch(
+        input: String,
+        result: String,
+        compactInput: String,
+        compactResult: String
+    ) -> Bool {
+        let inputHasCJK = LanguageUtils.containsCJK(input)
+        let resultHasCJK = LanguageUtils.containsCJK(result)
+        guard inputHasCJK != resultHasCJK else { return false }
+
+        let latinInput = LanguageUtils.toLatinLower(input)
+        let latinResult = LanguageUtils.toLatinLower(result)
+        let asciiCompact = inputHasCJK ? compactResult : compactInput
+        let nativeLatin = inputHasCJK ? latinInput : latinResult
+        guard asciiCompact.count >= 4,
+              nativeLatin.count >= 4,
+              asciiCompact == nativeLatin else { return false }
+
+        let cjkText = inputHasCJK ? input : result
+        let cjkCount = cjkText.unicodeScalars.filter { LanguageUtils.isCJKScalar($0) }.count
+        guard cjkCount >= 2 else { return false }
+
+        let asciiText = inputHasCJK ? result : input
+        let asciiWordCount = asciiText.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
+        let nativeHasKana = cjkText.unicodeScalars.contains { LanguageUtils.isJapaneseKana($0) }
+        if nativeHasKana {
+            return asciiWordCount >= 1 && cjkCount <= 8
+        }
+        return asciiWordCount >= 2 || cjkCount <= 3
     }
 
     private func japaneseRomanizedTitleAliases(for compactInput: String) -> Set<String> {
@@ -656,6 +708,7 @@ extension LyricsFetcher {
         // 🔑 Title-only keyword
         let titleHasCJK = LanguageUtils.containsCJK(params.rawTitle)
         let artistIsASCII = LanguageUtils.isPureASCII(params.rawArtist)
+        let originalArtistIsASCII = LanguageUtils.isPureASCII(params.rawOriginalArtist)
         if titleHasCJK {
             keywords.append((params.simplifiedTitle, "title only"))
         }
@@ -690,10 +743,95 @@ extension LyricsFetcher {
         keywords.append(contentsOf: extraKeywords)
         DebugLogger.log(source, "🔑 关键词: \(keywords.map(\.0))")
 
+        // Fast path before parallel fan-out. A strict title+artist+duration hit
+        // should not wait for slower album/title/artist-only probes to cancel.
+        if let (keyword, desc) = keywords.first {
+            DebugLogger.log(source, "🔎 \(desc): '\(keyword)'")
+            do {
+                if let songs = try await fetchSongs(keyword) {
+                    DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
+                    let candidates = self.buildCandidates(
+                        songs: songs, params: params, searchDescriptor: desc, extractSong: extractSong
+                    )
+                    if let match = self.selectBestCandidate(
+                        candidates,
+                        source: source,
+                        inputTitle: params.simplifiedTitle,
+                        inputArtist: params.rawArtist,
+                        disableCjkEscape: params.disableCjkEscapeInP3,
+                        hasAlbumHint: !params.normalizedAlbum.isEmpty,
+                        allowNativeTitleAlias: true,
+                        allowCompilationAlbumFallback: allowCompilationAlbumFallback
+                    ), match.matchRank == 0,
+                       match.titleMatched,
+                       match.durationDiff < 1.5 {
+                        DebugLogger.log(source, "⚡ Preflight exact match via '\(desc)' (albumMatch=\(match.albumMatched), Δ\(String(format: "%.1f", match.durationDiff))s)")
+                        return match
+                    }
+                } else {
+                    DebugLogger.log(source, "⚠️ \(desc): fetchSongs returned nil (parse failure)")
+                }
+            } catch {
+                DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
+            }
+        }
+
+        if enableAliasResolve,
+           LanguageUtils.isPureASCII(params.rawTitle),
+           !LanguageUtils.isLikelyEnglishTitle(params.rawTitle),
+           (artistIsASCII || originalArtistIsASCII) {
+            let asciiProbe = artistIsASCII ? params.rawArtist : params.rawOriginalArtist
+            let aliases = await self.resolveArtistCJKAliases(
+                asciiArtist: asciiProbe,
+                allowUnconfirmedCatalogMatches: false
+            )
+            for cjkArtist in aliases.prefix(3) {
+                let aliasParams = SearchParams(
+                    title: params.rawTitle,
+                    artist: cjkArtist,
+                    originalTitle: params.rawOriginalTitle,
+                    originalArtist: params.rawOriginalArtist,
+                    duration: params.duration,
+                    album: params.normalizedAlbum,
+                    disableCjkEscapeInP3: params.disableCjkEscapeInP3
+                )
+                let probes = [
+                    ("\(params.simplifiedTitle) \(cjkArtist)", "alias+title:\(cjkArtist)"),
+                    (cjkArtist, "alias artist only:\(cjkArtist)")
+                ]
+                for (keyword, desc) in probes {
+                    DebugLogger.log(source, "🔎 \(desc): '\(keyword)'")
+                    do {
+                        guard let songs = try await fetchSongs(keyword) else { continue }
+                        DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
+                        let candidates = self.buildCandidates(
+                            songs: songs, params: aliasParams, searchDescriptor: desc, extractSong: extractSong
+                        )
+                        if let match = self.selectBestCandidate(
+                            candidates,
+                            source: source,
+                            inputTitle: params.simplifiedTitle,
+                            inputArtist: params.rawArtist,
+                            disableCjkEscape: params.disableCjkEscapeInP3,
+                            aliasConfirmedCJK: true,
+                            hasAlbumHint: !params.normalizedAlbum.isEmpty,
+                            allowNativeTitleAlias: true,
+                            allowCompilationAlbumFallback: allowCompilationAlbumFallback
+                        ), match.titleMatched,
+                           match.durationDiff < 1.5 {
+                            DebugLogger.log(source, "⚡ Preflight alias exact match via '\(desc)' (albumMatch=\(match.albumMatched), Δ\(String(format: "%.1f", match.durationDiff))s)")
+                            return match
+                        }
+                    } catch {
+                        DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
+                    }
+                }
+            }
+        }
+
         // 🔑 Parallel keyword search — fire ALL rounds simultaneously.
         return await withTaskGroup(of: (SelectedSearchCandidate<ID>, String, Int)?.self) { group in
             // 🔑 Alias-resolved keyword
-            let originalArtistIsASCII = LanguageUtils.isPureASCII(params.rawOriginalArtist)
             if enableAliasResolve && (artistIsASCII || originalArtistIsASCII) {
                 group.addTask {
                     let asciiProbe = artistIsASCII ? params.rawArtist : params.rawOriginalArtist
@@ -768,10 +906,22 @@ extension LyricsFetcher {
             var allResults: [(SelectedSearchCandidate<ID>, String, Int)] = []
             for await result in group {
                 guard let r = result else { continue }
+                let nativeScriptTitleMatch = r.0.title.unicodeScalars.contains {
+                    LanguageUtils.isCJKScalar($0) || LanguageUtils.isJapaneseKana($0)
+                }
+                let exactNativeAliasMatch = LanguageUtils.isPureASCII(params.rawTitle)
+                    && nativeScriptTitleMatch
+                    && (
+                        r.1 == "artist only"
+                        || r.1.hasPrefix("alias artist only")
+                        || r.1.hasPrefix("alias+title")
+                        || r.1.hasPrefix("album+artist")
+                        || r.1.hasPrefix("alias album+artist")
+                    )
                 if r.0.matchRank == 0,
                    r.0.titleMatched,
                    r.0.durationDiff < 1.5,
-                   (r.2 <= 1 || r.0.albumMatched) {
+                   (r.2 <= 1 || r.0.albumMatched || exactNativeAliasMatch) {
                     DebugLogger.log(source, "⚡ Fast exact match via '\(r.1)' (albumMatch=\(r.0.albumMatched), Δ\(String(format: "%.1f", r.0.durationDiff))s)")
                     group.cancelAll()
                     return r.0
@@ -1168,6 +1318,10 @@ extension LyricsFetcher {
             var batches: [(Int, [String], [String])] = []
             for await batch in group {
                 batches.append(batch)
+                if !batch.1.isEmpty {
+                    group.cancelAll()
+                    break
+                }
             }
             return batches.sorted { lhs, rhs in
                 if lhs.0 == -1 { return false }

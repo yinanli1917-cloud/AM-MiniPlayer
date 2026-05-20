@@ -109,6 +109,38 @@ final class LyricsKindTests: XCTestCase {
             "Kind gating should open up more than ~20 points of spread (auth ±15 + duration/coverage)")
     }
 
+    func testScorerKeepsTerminalAvailabilityScoresWithoutLines() {
+        XCTAssertEqual(
+            scorer.calculateScore([], source: "QQ", duration: 220, translationEnabled: false, kind: .instrumental),
+            -100
+        )
+        XCTAssertEqual(
+            scorer.calculateScore([], source: "NetEase", duration: 220, translationEnabled: false, kind: .unavailable),
+            -80
+        )
+    }
+
+    func testImmediateCacheAllowsCJKLyricsForRomanizedTitleOnly() {
+        let fetcher = LyricsFetcher.shared
+        let cjkLines = [
+            LyricLine(text: "也许我可以用一种最温柔的想象", startTime: 28, endTime: 32),
+            LyricLine(text: "在转眼的时间里", startTime: 34, endTime: 38)
+        ]
+
+        XCTAssertTrue(fetcher.canUseImmediateCachedLyrics(
+            cjkLines,
+            source: "QQ",
+            title: "Yi Jian Zhong Qing",
+            artist: "Pauline Lan"
+        ))
+        XCTAssertFalse(fetcher.canUseImmediateCachedLyrics(
+            cjkLines,
+            source: "NetEase",
+            title: "Dance Around the Fire",
+            artist: "Why These Coyotes"
+        ))
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - (d) Gamma speculative latency envelope (env-gated live test)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

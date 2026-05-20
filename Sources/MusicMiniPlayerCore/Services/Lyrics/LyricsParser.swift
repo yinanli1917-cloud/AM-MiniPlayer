@@ -522,10 +522,12 @@ public final class LyricsParser {
             )
         }
 
-        // 🔑 Strip translations from vocable lines — source translations (NetEase tlyric)
-        // hallucinate meaningful text for "woo woo", "la la la", etc.
+        // Strip translations from non-lyric display markers. Providers often
+        // attach the next real line's translation to standalone singer labels
+        // and hallucinate meaning for ad-libs such as "ooh" / "yeah".
         filteredLyrics = filteredLyrics.map { line in
-            guard line.hasTranslation, isVocableLine(line.text) else { return line }
+            guard line.hasTranslation,
+                  isVocableLine(line.text) || isStandaloneLyricsRoleMarker(line.text) else { return line }
             return LyricLine(text: line.text, startTime: line.startTime, endTime: line.endTime,
                              words: line.words, translation: nil)
         }
@@ -543,6 +545,7 @@ public final class LyricsParser {
             guard let translation = line.translation?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !translation.isEmpty,
                   !isVocableLine(line.text),
+                  !isStandaloneLyricsRoleMarker(line.text),
                   let key = repeatedLineTranslationKey(line.text) else { continue }
             translationsByText[key, default: []].insert(translation)
         }
@@ -555,6 +558,7 @@ public final class LyricsParser {
         return lines.map { line in
             guard !line.hasTranslation,
                   !isVocableLine(line.text),
+                  !isStandaloneLyricsRoleMarker(line.text),
                   let key = repeatedLineTranslationKey(line.text),
                   let translation = unambiguousTranslations[key] else { return line }
             return LyricLine(
@@ -586,27 +590,43 @@ public final class LyricsParser {
     /// 剥离任意位置的元信息行（作词/作曲/编曲/演唱等）
     /// 🔑 必须在 mergeLyricsWithTranslation 之前调用，否则元信息行会吃掉翻译时间戳
     public func stripMetadataLines(_ lines: [LyricLine]) -> [LyricLine] {
-        let basicFiltered = lines.filter { line in
+        let basicFiltered = lines.enumerated().compactMap { index, line -> LyricLine? in
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty { return false }
+            if trimmed.isEmpty { return nil }
+            // Provider catalog rows can be timestamped like lyrics, e.g.
+            // "专辑：Then Was Then Now Is Now!". Treat them as metadata so
+            // translation coverage and rendered lyrics are not polluted.
+            if isProviderCatalogMetadataLine(trimmed) { return nil }
             // 高置信度关键词匹配（任意位置生效）
-            if isMetadataKeywordLine(trimmed) { return false }
+            if isMetadataKeywordLine(trimmed) { return nil }
             // 标题/信用分隔符行（"Song - Artist" 或 "Song -Artist"）
             // QQ/NetEase 常在开头放 "Song Title (ver.) - Artist" 元信息行
             // 🔑 Widened: " -" without trailing space (e.g. "You Belong to Me -Norman Wisdom")
             //    and startTime ≤ 5s (title cards can appear at 1-3s, not just ≤1s)
-            if isTitleSeparatorLine(trimmed) && line.startTime <= 5.0 { return false }
+            if isTitleSeparatorLine(trimmed) && line.startTime <= 5.0 { return nil }
             // 信用行（"Mastering by X @ Y"）无冒号但有明确 role keyword + @/by
-            if isByCreditLine(trimmed) { return false }
+            if isByCreditLine(trimmed) { return nil }
+            // Source editor credits sometimes appear as boundary timed rows:
+            // "edit morrison tsai". Keep this boundary-scoped so a real lyric
+            // containing "edit ..." in the middle of a song is not stripped.
+            if isLeadingRoleCreditLine(trimmed) && isBoundaryCreditLine(at: index, line: line, totalCount: lines.count) {
+                return nil
+            }
             // 装饰标记（"——=END=——"、"==END=="、"---end---"）
-            if isDecorativeMarker(trimmed) { return false }
+            if isDecorativeMarker(trimmed) { return nil }
             // 结构标签（"[副歌]"、"[Chorus]"、"[Verse]"、"[Bridge]"）
-            if isSectionTagLine(trimmed) { return false }
+            if isSectionTagLine(trimmed) { return nil }
             // 纯符号行
-            if isPureSymbols(trimmed) { return false }
-            return true
+            if isPureSymbols(trimmed) { return nil }
+            return line
         }
         return stripOpeningTitleCardCluster(stripOpeningSourceIntroCluster(basicFiltered))
+    }
+
+    private func isBoundaryCreditLine(at index: Int, line: LyricLine, totalCount: Int) -> Bool {
+        guard totalCount > 0 else { return false }
+        if index < 3 && line.startTime <= 45.0 { return true }
+        return index >= max(totalCount - 3, 0)
     }
 
     private func stripOpeningSourceIntroCluster(_ lines: [LyricLine]) -> [LyricLine] {
@@ -649,6 +669,31 @@ public final class LyricsParser {
         let hasCJK = LanguageUtils.containsCJK(trimmed)
         let prosePunctuation = ["，", "。", "；", "：", "、"]
         return hasCJK && prosePunctuation.contains { trimmed.contains($0) }
+    }
+
+    private func isProviderCatalogMetadataLine(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        for separator in ["：", ":"] {
+            guard let range = normalized.range(of: separator) else { continue }
+            let label = String(normalized[..<range.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let value = String(normalized[range.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty, !value.isEmpty, label.count <= 24 else { continue }
+            let catalogLabels: Set<String> = [
+                "专辑", "專輯", "专辑名", "專輯名", "所属专辑", "所屬專輯",
+                "歌曲", "歌名", "曲名", "标题", "標題",
+                "发行", "發行", "发行时间", "發行時間", "发行日期", "發行日期",
+                "唱片公司", "厂牌", "廠牌",
+                "album", "album title", "album name", "title", "song", "song title",
+                "release", "released", "release date", "label", "copyright"
+            ]
+            if catalogLabels.contains(label) { return true }
+        }
+        return false
     }
 
     private func stripOpeningTitleCardCluster(_ lines: [LyricLine]) -> [LyricLine] {
@@ -699,6 +744,32 @@ public final class LyricsParser {
         // Or the value is short and name-like (≤40 chars, no end punctuation)
         let isShortName = afterBy.count <= 40 && !afterBy.hasSuffix(".")
         return hasLocationMarker || isShortName
+    }
+
+    private func isLeadingRoleCreditLine(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let lower = normalized.lowercased()
+        let tokens = lower.split(separator: " ").map(String.init)
+        guard (2...6).contains(tokens.count) else { return false }
+
+        let leadingRoles: Set<String> = [
+            "edit", "edited", "editor", "editing",
+            "校对", "校對", "编辑", "編輯"
+        ]
+        guard leadingRoles.contains(tokens[0]) else { return false }
+        guard !lower.contains(":"),
+              !lower.contains("："),
+              !lower.contains("@") else { return true }
+
+        let nameTokens = tokens.dropFirst()
+        guard nameTokens.allSatisfy({ token in
+            token.range(of: #"^[\p{L}][\p{L}'’.-]*$"#, options: .regularExpression) != nil
+        }) else {
+            return false
+        }
+        return true
     }
 
     /// Decorative markers: "——=END=——", "==END==", "---", "***", "=====".
@@ -962,6 +1033,10 @@ public final class LyricsParser {
             return original
         }
 
+        if let corrected = mergeOneLineDelayedTranslationsIfSupported(original: original, translated: translated) {
+            return corrected
+        }
+
         // 按 startTime 建立索引，O(n) 查找
         let translationMap = Dictionary(
             translated.map { (Int($0.startTime * 10), $0.text) },
@@ -982,6 +1057,70 @@ public final class LyricsParser {
                 text: line.text, startTime: line.startTime, endTime: line.endTime,
                 words: line.words, translation: text
             )
+        }
+    }
+
+    private func mergeOneLineDelayedTranslationsIfSupported(original: [LyricLine], translated: [LyricLine]) -> [LyricLine]? {
+        guard original.count >= 8, translated.count == original.count - 1 else { return nil }
+        guard translated.first.map({ abs($0.startTime - original[0].startTime) > 0.75 }) == true else { return nil }
+
+        let shiftedTimestampMatches = translated.enumerated().filter { index, line in
+            abs(line.startTime - original[index + 1].startTime) <= 0.75
+        }.count
+        guard Double(shiftedTimestampMatches) / Double(translated.count) >= 0.85 else { return nil }
+
+        let currentMap = Dictionary(
+            translated.map { (Int($0.startTime * 10), $0.text) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let currentScore = repeatedTranslationConsistencyScore(original: original) { index in
+            let key = Int(original[index].startTime * 10)
+            for offset in 0...5 {
+                if let text = currentMap[key + offset] { return text }
+                if offset > 0, let text = currentMap[key - offset] { return text }
+            }
+            return nil
+        }
+        let shiftedScore = repeatedTranslationConsistencyScore(original: original) { index in
+            guard index < translated.count else { return nil }
+            return translated[index].text
+        }
+        guard shiftedScore >= currentScore + 2 else { return nil }
+
+        return original.enumerated().map { index, line in
+            guard index < translated.count else { return line }
+            let text = translated[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return line }
+            return LyricLine(
+                text: line.text,
+                startTime: line.startTime,
+                endTime: line.endTime,
+                words: line.words,
+                translation: text
+            )
+        }
+    }
+
+    private func repeatedTranslationConsistencyScore(
+        original: [LyricLine],
+        translationForIndex: (Int) -> String?
+    ) -> Int {
+        var groups: [String: [Int]] = [:]
+        for (index, line) in original.enumerated() {
+            guard let key = repeatedLineTranslationKey(line.text) else { continue }
+            groups[key, default: []].append(index)
+        }
+
+        return groups.values.reduce(0) { score, indices in
+            guard indices.count >= 2 else { return score }
+            let values = indices.compactMap { index -> String? in
+                guard let text = translationForIndex(index)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !text.isEmpty else { return nil }
+                return text
+            }
+            guard values.count >= 2 else { return score }
+            let uniqueCount = Set(values).count
+            return uniqueCount == 1 ? score + values.count : score - uniqueCount
         }
     }
 

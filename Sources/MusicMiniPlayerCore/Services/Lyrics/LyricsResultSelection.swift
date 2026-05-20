@@ -55,6 +55,7 @@ extension LyricsFetcher {
         // identity/timing gates can still reject them.
         var syncedResults = results.filter {
             guard $0.kind == .synced else { return false }
+            if $0.scriptMismatchSuspected { return false }
             if isLikelyRomanizedCJKLyricsCandidate($0) { return false }
             if hasWordLevelSync($0) && $0.score > 0 { return true }
             if hasIndependentLyricAgreement(for: $0, allResults: results) { return true }
@@ -389,10 +390,6 @@ extension LyricsFetcher {
             let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
         }?.startTime ?? result.lyrics.first?.startTime ?? 0
-        let firstStartLimit = min(90.0, max(45.0, songDuration * 0.30))
-        if firstRealStart > firstStartLimit {
-            return true
-        }
         if lastStart > songDuration {
             return (lastStart - songDuration) > max(10.0, songDuration * 0.05)
         }
@@ -404,6 +401,20 @@ extension LyricsFetcher {
         let firstText = realLines.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let startsWithCatalogMarker = firstText.contains("******")
             || firstText.localizedCaseInsensitiveContains("music")
+        let isExactLongIntro = result.titleMatched
+            && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true)
+            && result.score >= 45
+            && realLines.count >= 12
+            && !startsWithCatalogMarker
+            && tailGap <= max(65.0, songDuration * 0.20)
+            && maxInternalGap(result.lyrics) <= max(55.0, songDuration * 0.16)
+        let firstStartLimit = min(90.0, max(45.0, songDuration * 0.30))
+        if firstRealStart > firstStartLimit {
+            let longIntroLimit = min(115.0, max(firstStartLimit, songDuration * 0.34))
+            if !(isExactLongIntro && firstRealStart <= longIntroLimit) {
+                return true
+            }
+        }
         let isExactSparseLongTail = result.titleMatched
             && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true)
             && realLines.count >= 35

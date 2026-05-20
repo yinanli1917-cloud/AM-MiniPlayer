@@ -16,7 +16,9 @@ public enum DebugLogger {
 
     // ── 配置 ──
 
-    private static let logPath = "/tmp/nanopod_debug.log"
+    private static let defaultLogURL = URL(fileURLWithPath: "/tmp/nanopod_debug.log")
+    private static let logURLLock = NSLock()
+    private static var configuredLogURL = defaultLogURL
 
     // Opt-in diagnostic logging. Playback and animation paths can call this
     // frequently, so normal app runs must avoid file I/O and date formatting.
@@ -52,24 +54,46 @@ public enum DebugLogger {
         writeToFile(logLine)
     }
 
+    public static func setLogURL(_ url: URL) {
+        logURLLock.lock()
+        configuredLogURL = url
+        logURLLock.unlock()
+    }
+
+    public static func resetLogURL() {
+        setLogURL(defaultLogURL)
+    }
+
     // ── 内部实现 ──
 
     private static func writeToFile(_ line: String) {
         guard let data = line.data(using: .utf8) else { return }
+        let url = currentLogURL()
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
 
-        if FileManager.default.fileExists(atPath: logPath) {
-            if let handle = FileHandle(forWritingAtPath: logPath) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = FileHandle(forWritingAtPath: url.path) {
                 handle.seekToEndOfFile()
                 handle.write(data)
                 handle.closeFile()
             }
         } else {
-            FileManager.default.createFile(atPath: logPath, contents: data)
+            FileManager.default.createFile(atPath: url.path, contents: data)
         }
     }
 
     /// 清空日志文件
     public static func clearLog() {
-        try? FileManager.default.removeItem(atPath: logPath)
+        try? FileManager.default.removeItem(at: currentLogURL())
+    }
+
+    private static func currentLogURL() -> URL {
+        logURLLock.lock()
+        let url = configuredLogURL
+        logURLLock.unlock()
+        return url
     }
 }

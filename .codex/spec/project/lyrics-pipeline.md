@@ -28,16 +28,83 @@ Do not collapse all empty lyric outcomes into "no lyrics".
 - Long sparse songs can legitimately leave a large instrumental tail. Do not
   reject an exact title/duration synced hit only for tail gap when it has
   substantial lyric content and no catalog-credit marker.
+- Long intros can legitimately push the first real vocal slightly past 90s.
+  Keep the normal late-first-vocal rejection, but allow bounded exact-catalog
+  synced hits when title/duration evidence is tight, lyric content is
+  substantial, internal gaps are sane, tail gap is bounded, and there is no
+  catalog-credit marker.
 - Same-artist CJK duration escapes must require strong romanization/translation evidence; single ambiguous words such as `Hatsukoi` or `Deep` cannot globally bypass title identity.
 - English-title to native-title fallbacks belong in the guarded source alias path, not in broad language detection, so short ambiguous English words do not break romanization lookups.
+- English-title detection must include structural English evidence such as
+  internal consonant clusters (`gentle`) so ordinary English unresolved tracks
+  exit inside the foreground budget. Preserve the ambiguous single-word guard
+  (`Escape`, `Deep`) so romanized/native alias lookups still work.
 - Romanized Japanese title evidence should be explicit and title-scoped. If a
   known romaji title maps to a native CJK title, treat that as title evidence
   so a closer-duration same-artist song cannot win only because its runtime is
   nearer.
+- Short kana native titles can be valid romanized Japanese aliases even when the
+  ASCII input is one word. Accept that alias only when the kana title and ASCII
+  title share the same Latin key and the native title is compact; do not let it
+  become a broad artist-only duration escape.
+- For non-English ASCII/romanized titles with a confirmed CJK artist alias, a
+  foreground provider branch may fetch the exact native-artist catalog row
+  directly when the provider title matches the ASCII title by the same
+  romanization key and duration is tight. This is a latency optimization only:
+  it must preserve the same title/duration/native-script gates as normal
+  candidate selection and must not apply to ordinary English titles.
+- Pinyin/native Chinese title evidence is also title-scoped. When an ASCII
+  title and a CJK provider title normalize to the same Latin key, use that only
+  as alias evidence and re-query with a confirmed CJK artist alias; do not
+  directly accept the unrelated catalog row that exposed the alias.
+- If the confirmed CJK artist alias is Traditional Chinese, probe the
+  Traditional title variant before the Simplified variant. TW/HK catalogs often
+  return lyrics only for the Traditional title even when another provider row
+  exposed the Simplified alias.
 - Provider search rows with multiple artists must preserve the full artist list for matching; alias evidence can belong to a non-first duet artist.
 - Native-title alias tiers must not outrank explicit same-artist title evidence unless album evidence or sub-second catalog evidence is present. A short CJK title with a nearby duration is not enough to beat a direct title hit.
+- When an album hint is present for a romanized Japanese title, alias+title or
+  alias+album searches must not accept a different CJK title only because the
+  artist and duration are close. Require native title evidence, an actual album
+  match, or a tight artist-only probe so same-album covers cannot select a
+  neighboring song.
+- QQ title-only native matches for long romanized Japanese titles are not enough
+  identity evidence by themselves. Require artist-scoped, album-scoped, or other
+  corroborated source evidence; otherwise leave the result unresolved instead of
+  showing a plausible same-artist wrong lyric payload.
 - English-title tracks must not use artist-only native-title aliases; require stronger title, album, or Apple catalog evidence to avoid same-English-name artist collisions.
 - If an album hint is available, do not accept a loose artist-only native-title alias for an English title. Use album-scoped witness probes or direct title evidence so same-artist duration collisions cannot win.
+- English storefront title tracks whose title and album are the same normalized
+  phrase may use a confirmed CJK artist alias plus an exact native
+  title==album catalog row as a native-title bridge. The bridge must require a
+  tight duration match, CJK artist match, no live/remix/backing markers, and
+  must fetch the provider row directly instead of relying on loose artist-only
+  selection.
+- Natural English title/artist metadata must not let a high-scoring provider
+  row with CJK-dominant lyric text beat a lower-scored synced English library
+  row unless the provider result has native-alias evidence. Mark such provider
+  rows as script-mismatch suspects and remove them from selection.
+- Verified disk-cache hits may bypass network for romanized/native-alias
+  tracks. CJK cached lyrics are allowed for pure-ASCII metadata only when the
+  visible title is not likely English; ordinary English titles must still block
+  immediate CJK cache reuse so stale wrong-script rows cannot reappear.
+- Parser changes that affect persisted line text, metadata stripping, source
+  translation alignment, or translation eligibility must bump the lyrics
+  disk-cache schema. Old merged lines do not contain enough raw source context
+  to be safely repaired on read.
+- Provider catalog rows such as `专辑：...`, `Album: ...`, `Title: ...`, release
+  date, label, or copyright fields can arrive as timed lyric rows. Strip these
+  as metadata before source-translation merging so they do not render, shift
+  lyric timing, or create partial-translation diagnostics.
+- If several nearby-duration cache keys exist for the same metadata, read them
+  as candidates and use the first result that passes current script/identity
+  guards. A stale wrong-script cache row must not block a later verified
+  correct cache row for the same track.
+- Provider-confirmed terminal availability is reusable evidence. Cache
+  instrumental rows with their kind and source identity; cache unavailable
+  rows only with a short TTL so repeated visits do not re-run slow provider
+  checks or refill fallback-churn diagnostics, while still allowing sources to
+  recover later.
 - Album-scoped provider rows whose artist is a generic compilation bucket
   (`群星`, `Various Artists`, `VA`, soundtrack-style labels, etc.) must not
   satisfy normal artist evidence for a specific requested artist.
@@ -53,6 +120,10 @@ Do not collapse all empty lyric outcomes into "no lyrics".
 - Ad hoc and library runs may pass with `unresolved`, `unavailable`, or `instrumental` classification when no fixture explicitly expects lyrics.
 - Fixtures with `shouldFindLyrics: true` must still fail if the pipeline cannot return trusted lyrics.
 - Library summaries should report unresolved, unavailable, and instrumental counts separately.
+- The verifier must not launch authoritative backfill when the foreground pass
+  already returned a trusted terminal classification (`instrumental` or
+  `unavailable`). That wastes automation time and can make fixed terminal
+  cases look slow even though the app foreground path is done.
 
 ## Lyrics Page UI
 
@@ -64,10 +135,32 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   and vocable filtering, fill missing translations only when the same normalized
   lyric text has exactly one unambiguous source translation elsewhere in the
   same track.
+- Standalone performer/speaker rows such as `Snoh Aalegra:`, `Choir:`, and
+  `Choir/Snoh Aalegra:` are visible context markers, not translatable lyric
+  content. Keep them displayable, but strip any source translation attached to
+  those rows and exclude them from partial-translation coverage. Do the same
+  for ad-lib/vocable rows such as `Ooh ooh`, `Yeah`, `Uh huh`, and sustained
+  `Oh I` fragments so diagnostics do not treat non-lyric sounds as missing
+  translations.
+- Timed source-editor credits such as `edit <name>` are metadata, not visible
+  lyrics. Strip them only when they appear in the opening or trailing metadata
+  boundary of a lyric payload so a real mid-song lyric containing `edit` is not
+  removed.
+- Some provider translation tracks can be structurally delayed by one lyric row:
+  the first original timestamp has an empty translation and every non-empty
+  translation timestamp then matches the next original line. Correct this only
+  when timestamp structure and repeated-lyric consistency both support the
+  shift; otherwise keep timestamp matching to avoid moving a legitimately
+  untranslated first line.
 - Source translations may also be sparse for unique visible lines. Do not treat
   "some source translation exists" as "the whole song is translated"; when the
   target language is Chinese, preserve existing source translations and use
   system translation only to fill missing eligible lyric rows.
+- Diagnostics must keep source-translation gaps actionable without letting
+  fixed gaps stay stale. A partial source translation may create an incident at
+  fetch time; when system translation fills the missing eligible rows for the
+  same track, clear the matching `lyricsPartialTranslation` incident and record
+  a fill event instead of leaving the monitor dirty.
 - Lyrics page first-render culling must stay active until enough line heights
   are measured. Do not briefly render the full lyric payload during partial
   measurement; that path causes page-switch frame stalls on translated or

@@ -195,7 +195,7 @@
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "Genius"],
       "firstLineContains": null,
       "firstLineSHA256": "2e9b12c2b0badcec47b2ac20b9fd9685f539301fe1640573f7a1f243c46bb65b",
-      "acceptableFirstLineSHA256": ["6f0ffa95460fa7fb59be935e02710a068576a3cbb1736b9fdde888623df1c70d", "ae0661cb1799b24e1c65a175644c57b1a5474285f9280c9349b5c61dd2593c87"]
+      "acceptableFirstLineSHA256": ["6f0ffa95460fa7fb59be935e02710a068576a3cbb1736b9fdde888623df1c70d", "ae0661cb1799b24e1c65a175644c57b1a5474285f9280c9349b5c61dd2593c87", "06c1f6bbfafb8379c6dbeea6887a7b8fb4e3e328f52f946ae8f0eb17266c51a1"]
     }
   },
   {
@@ -904,6 +904,55 @@
       "acceptableSources": ["QQ", "NetEase"],
       "firstLineContains": "你離開",
       "expectedClassification": "synced",
+      "maxTailGapS": 40
+    }
+  },
+  {
+    "id": "X28_pinyin_title_native_artist_bridge",
+    "title": "Yi Jian Zhong Qing",
+    "artist": "Pauline Lan",
+    "duration": 258,
+    "album": "Falling In Love At First Sight",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineSHA256": "879fe1980e6dd6f6e546b99fdde5d56c688fa61bc8749e4a0a0b745d839cf9e9",
+      "acceptableFirstLineSHA256": ["6849e10d22193738946fd62697e6b74ea6144c4c25be6b1f862b5ca65f6536af"],
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 20,
+      "firstLineStartMaxS": 40,
+      "maxTailGapS": 40
+    }
+  },
+  {
+    "id": "X29_exact_catalog_long_intro_timeline_bridge",
+    "title": "Fureai",
+    "artist": "Yoshie Kashiwabara",
+    "duration": 340,
+    "album": "Encore",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase"],
+      "firstLineSHA256": "678d4a97f009f12a27b7a619ace25a7100398471a15e2836cfb69584887f73e0",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 85,
+      "firstLineStartMaxS": 100,
+      "maxTailGapS": 45
+    }
+  },
+  {
+    "id": "X30_album_title_echo_native_bridge",
+    "title": "Love You More & More",
+    "artist": "Rene Liu",
+    "duration": 283,
+    "album": "Love You More & More",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase"],
+      "firstLineSHA256": "7dbd0ab1a529e142c3057df24f8073bb34d67d548190178947b0936d72d1bfcf",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 10,
+      "firstLineStartMaxS": 15,
       "maxTailGapS": 40
     }
   }

@@ -182,8 +182,9 @@ public enum LanguageUtils {
     ///   1. Function word ("the", "my", "with", ...)
     ///   2. Morphology suffix/prefix ("tion", "un-", ...)
     ///   3. Consonant clusters — English allows multi-consonant codas
-    ///      ("tough" → -gh, "heart" → -rt, "world" → -rld) and onsets
-    ///      ("dream" → dr-, "break" → br-) that violate CJK phonotactics.
+    ///      ("tough" → -gh, "heart" → -rt, "world" → -rld), onsets
+    ///      ("dream" → dr-, "break" → br-), and internal clusters
+    ///      ("gentle" → -ntl-) that violate CJK phonotactics.
     ///      Pinyin codas: -n, -ng only. Romaji codas: -n only.
     ///      Jyutping codas: -m, -n, -ng, -p, -t, -k (all single).
     ///      So any word with 2+ trailing consonants (excl. "ng") or 2+
@@ -204,6 +205,14 @@ public enum LanguageUtils {
             if hasEnglishConsonantCluster(word) { return true }
         }
         return false
+    }
+
+    public static func containsEnglishFunctionWord(_ text: String) -> Bool {
+        guard isPureASCII(text) else { return false }
+        let words = text.lowercased()
+            .split(whereSeparator: { !$0.isLetter })
+            .map(String.init)
+        return words.contains { englishFunctionWords.contains($0) }
     }
 
     private static func hasEnglishConsonantCluster(_ word: String) -> Bool {
@@ -227,6 +236,20 @@ public enum LanguageUtils {
         if leadingConsonants >= 2 {
             let head = String(chars.prefix(leadingConsonants))
             if !validPinyinOnsets.contains(head) { return true }
+        }
+        var run: [Character] = []
+        for ch in chars {
+            if vowels.contains(ch) {
+                run.removeAll(keepingCapacity: true)
+                continue
+            }
+            run.append(ch)
+            if run.count >= 3 {
+                let cluster = String(run)
+                if cluster != "ngh" {
+                    return true
+                }
+            }
         }
         return false
     }

@@ -40,10 +40,17 @@ Fixes that worked:
 4. Reduce renderer constant-factor churn without changing visual math.
    Snapshot `layout.flattenedRuns` once per draw and precompute shared mask rectangles/paths. Keep the same sweep curve, fade width, opacity values, and emphasis math.
 
-5. Raise lyric sweep cadence only after reducing renderer layer churn.
+5. Keep manual row-layout height caches hot.
+   `LyricsView.calculateAccumulatedHeight(upTo:)` is on the per-line layout
+   path. Refresh the rendered-index and accumulated-height cache whenever the
+   lyrics payload or measured row heights change; leaving
+   `heightCacheInvalidated` true makes each visible line rescan previous rows
+   during SwiftUI layout and can turn page switches into O(N²) CPU spikes.
+
+6. Raise lyric sweep cadence only after reducing renderer layer churn.
    The old 15 Hz active lyric tick is visibly low on word-level lyrics. A verified 30 Hz tick is acceptable when the normal bright sweep is grouped into one masked layer per visual lyric line and emphasized words remain on their separate path. Do not raise cadence by itself.
 
-6. Do not replace the progress bar publisher with a local `TimelineView`.
+7. Do not replace the progress bar publisher with a local `TimelineView`.
    A local progress timeline looked like an isolation win on the lyrics page, but page-cycle soak showed hidden album/playlist overlays becoming expensive. Keep progress time on the scoped `TimePublisher` child path unless a replacement is proven on album, lyrics, and playlist together.
 
 ## Verification Pattern
@@ -71,6 +78,10 @@ the lyrics detector bounds start lyrics manual-scroll mode. Momentum may only
 continue an already-owned scroll gesture; out-of-bounds events may only continue
 an already-active gesture. Otherwise auto-follow freezes for the manual-scroll
 timeout and line switches feel stuck while diagnostics show low CPU.
+
+Lyrics controls must stay mounted across loading/error/empty/rendered lyric
+content states. A next/previous click starts a protected replacement animation;
+track-change lyric loading must not swap out the control subtree mid-animation.
 
 Line-switch fixes must preserve the original AMLL-style staggered wave. Do not
 collapse line switches into an immediate single-target jump to make diagnostics

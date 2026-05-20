@@ -559,6 +559,52 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertNil(selected)
     }
 
+    func testScriptMismatchSourceDoesNotBeatLowerScoredEnglishLibraryHit() {
+        let fetcher = LyricsFetcher.shared
+        let wrongCJKDominant = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "Long gone every time",
+                "I close my eyes see you one more time",
+                "움직일 수 없어 너의 모습앞에 너무도 달라진 표정",
+                "차가운 말투와 날 피하는 눈빛 예전에 니가 아니야",
+                "이유라도 대봐 내가 알 수 있게 왜 나를 떠나려는지",
+                "마음 약한 내가 쓰러져 울것을 누구보다 알면서",
+                "단한번만 나의 모습을 되돌아봐 줘",
+                "멈춰버린 내 가슴은 또 어떻게 해"
+            ]),
+            source: "NetEase",
+            score: 87,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2,
+            scriptMismatchSuspected: true
+        )
+        let lowerScoredEnglish = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "Long gone every time",
+                "I close my eyes see you one more time",
+                "So long say goodbye come on",
+                "Dance around the fire",
+                "Hold the night a little higher",
+                "We keep moving through the smoke",
+                "Every spark is getting brighter",
+                "Take me where the embers glow"
+            ], startingAt: 10, gap: 22),
+            source: "LRCLIB",
+            score: 29,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        let selected = fetcher.selectBestResult(
+            from: [wrongCJKDominant, lowerScoredEnglish],
+            songDuration: 200
+        )
+
+        XCTAssertEqual(selected?.source, "LRCLIB")
+    }
+
     func testSevereTailGapFallsBackToStaticConsensusWhenSyncedIsMistimed() {
         let fetcher = LyricsFetcher.shared
         let mistimed = LyricsFetcher.LyricsFetchResult(
@@ -633,6 +679,47 @@ final class LyricsSelectionTests: XCTestCase {
         let selected = fetcher.selectBestResult(from: [lateSynced], songDuration: 248)
 
         XCTAssertNil(selected)
+    }
+
+    func testExactCatalogLongIntroJapaneseLyricsSurviveTimelineGate() {
+        let fetcher = LyricsFetcher.shared
+        let lines = [
+            (92.89, "悲しみに　出会うたび"),
+            (101.20, "あの人を　思い出す"),
+            (135.00, "悲しみに　出会うたび"),
+            (142.65, "あの人を　思い出す"),
+            (150.30, "こんな時　そばにいて"),
+            (156.50, "肩を抱いてほしいと"),
+            (165.63, "なぐさめも　涙もいらないさ"),
+            (172.38, "ぬくもりが　ほしいだけ"),
+            (180.93, "ひとはみな　一人では"),
+            (187.10, "生きてゆけない　ものだから"),
+            (211.82, "空しさに　悩む日は"),
+            (219.44, "あの人を　誘いたい"),
+            (227.08, "ひとことも　語らずに"),
+            (233.34, "おなじ歌　歌おうと"),
+            (242.50, "何気ない　心のふれあいが"),
+            (249.04, "幸せを　連れてくる"),
+            (257.75, "ひとはみな　一人では"),
+            (263.82, "生きてゆけない　ものだから"),
+            (288.67, "ひとはみな　一人では"),
+            (294.90, "生きてゆけない　ものだから"),
+            (302.67, "生きてゆけない　ものだから")
+        ].map { start, text in
+            LyricLine(text: text, startTime: start, endTime: start + 5.0)
+        }
+        let exactLongIntro = LyricsFetcher.LyricsFetchResult(
+            lyrics: lines,
+            source: "NetEase",
+            score: 48.6,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.1
+        )
+
+        let selected = fetcher.selectBestResult(from: [exactLongIntro], songDuration: 340.133)
+
+        XCTAssertEqual(selected?.source, "NetEase")
     }
 
     func testEnglishContractionVariantsCoverApostropheMissingTitles() {
@@ -1076,6 +1163,97 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.id, 2)
     }
 
+    func testPinyinTitleMatchesNativeChineseCandidateForResolvedArtistAlias() {
+        let fetcher = LyricsFetcher.shared
+        XCTAssertTrue(
+            fetcher.isTitleMatch(
+                input: "Yi Jian Zhong Qing",
+                result: "一見鍾情",
+                simplifiedInput: "yi jian zhong qing"
+            )
+        )
+
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "Yi Jian Zhong Qing",
+                artist: "藍心湄",
+                album: "夏日撒糖情歌",
+                durationDiff: 0.0,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 18,
+                resultIndex: 0,
+                searchDescriptor: "title+artist"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 2,
+                name: "一見鍾情",
+                artist: "藍心湄",
+                album: "一見鍾情",
+                durationDiff: 0.0,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 4,
+                resultIndex: 1,
+                searchDescriptor: "alias artist only:藍心湄"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Yi Jian Zhong Qing",
+            inputArtist: "Pauline Lan",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 2)
+    }
+
+    func testRomanizedShortKanaTitleMatchesNativeJapaneseCandidate() {
+        let fetcher = LyricsFetcher.shared
+        XCTAssertTrue(
+            fetcher.isTitleMatch(
+                input: "Fureai",
+                result: "ふれあい",
+                simplifiedInput: "fureai"
+            )
+        )
+
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 598367,
+                name: "ふれあい",
+                artist: "柏原芳恵",
+                album: "アンコール",
+                durationDiff: 0.1,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 4,
+                resultIndex: 0,
+                searchDescriptor: "title+artist"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Fureai",
+            inputArtist: "Yoshie Kashiwabara",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 598367)
+        XCTAssertTrue(selected?.titleMatched == true)
+    }
+
     func testLongSparseExactCatalogLyricsSurviveLargeTailGap() {
         let fetcher = LyricsFetcher.shared
         let sparseSynced = LyricsFetcher.LyricsFetchResult(
@@ -1199,6 +1377,156 @@ final class LyricsSelectionTests: XCTestCase {
 
         XCTAssertEqual(selected?.id, 2)
         XCTAssertEqual(selected?.matchRank, 2)
+    }
+
+    func testAlbumHintBlocksLooseAliasTitleCollisionForRomanizedJapaneseTitle() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "駅",
+                artist: "中森明菜",
+                album: "CRIMSON",
+                durationDiff: 8.4,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 1,
+                resultIndex: 0,
+                searchDescriptor: "alias+title:中森明菜"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 2,
+                name: "雪の華",
+                artist: "中森明菜",
+                album: "歌姫4 -My Eggs Benedict-",
+                durationDiff: 0.0,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 1,
+                searchDescriptor: "artist only"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Yuki No Hana",
+            inputArtist: "Akina Nakamori",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 2)
+        XCTAssertEqual(selected?.title, "雪の華")
+    }
+
+    func testAlbumHintBlocksLooseAliasAlbumCollisionForRomanizedJapaneseTitle() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "接吻",
+                artist: "中森明菜",
+                album: "歌姫4 -My Eggs Benedict-",
+                durationDiff: 0.2,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 2,
+                resultIndex: 0,
+                searchDescriptor: "alias album+artist:中森明菜"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 2,
+                name: "雪の華",
+                artist: "中森明菜",
+                album: "歌姫4 -My Eggs Benedict-",
+                durationDiff: 0.0,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 1,
+                searchDescriptor: "artist only"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Yuki No Hana",
+            inputArtist: "Akina Nakamori",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 2)
+        XCTAssertEqual(selected?.title, "雪の華")
+    }
+
+    func testQQRejectsUnscopedNativeTitleOnlyForLongRomanizedJapaneseTitle() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "ドリーム・ボートが出る夜に",
+                artist: "菊池桃子",
+                album: "Eternal Best",
+                durationDiff: 0.0,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 13,
+                resultIndex: 0,
+                searchDescriptor: "title only"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "QQMusic",
+            inputTitle: "Dream Boat ga Deru Yoru ni",
+            inputArtist: "Momoko Kikuchi",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertNil(selected)
+    }
+
+    func testQQKeepsArtistScopedNativeTitleForLongRomanizedJapaneseTitle() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1,
+                name: "ドリーム・ボートが出る夜に",
+                artist: "菊池桃子",
+                album: "Miroir",
+                durationDiff: 0.1,
+                titleMatch: true,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 13,
+                resultIndex: 0,
+                searchDescriptor: "title+artist"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "QQMusic",
+            inputTitle: "Dream Boat ga Deru Yoru ni",
+            inputArtist: "Momoko Kikuchi",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 1)
     }
 
     func testCJKExactTitleArtistCanUseBoundedLooseDuration() {

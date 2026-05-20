@@ -138,6 +138,8 @@ public class LyricsService: ObservableObject {
     private let translationLanguageKey = "translationLanguage"
 
     private var currentSongID: String?
+    private var currentSongTitle: String = ""
+    private var currentSongArtist: String = ""
     private var currentSongDuration: TimeInterval = 0
     private var currentSongAlbum: String = ""
     private var currentSongTranslationID: String?
@@ -381,6 +383,8 @@ public class LyricsService: ObservableObject {
             // 处理 No Lyrics 缓存
             if cached.isNoLyrics {
                 currentSongID = songID
+                currentSongTitle = title
+                currentSongArtist = artist
                 currentStableSongID = stableSongID
                 currentSongDuration = duration
                 currentSongAlbum = album
@@ -405,6 +409,8 @@ public class LyricsService: ObservableObject {
                         hasSourceTranslation: cachedHasActualTranslation,  // 🔑 使用实际翻译状态
                         isUnsynced: cached.isUnsynced,
                         songID: songID,
+                        title: title,
+                        artist: artist,
                         stableSongID: stableSongID,
                         duration: duration,
                         album: album)
@@ -412,6 +418,8 @@ public class LyricsService: ObservableObject {
         }
 
         currentSongID = songID
+        currentSongTitle = title
+        currentSongArtist = artist
         currentStableSongID = stableSongID
         currentSongDuration = duration
         currentSongAlbum = album
@@ -462,15 +470,26 @@ public class LyricsService: ObservableObject {
                 DebugLogger.log("LyricsService", "⏭️ Task cancelled after foreground miss, NOT caching empty results: '\(songID)'")
                 return
             }
+            let terminalCandidateOnly = !results.isEmpty && results.allSatisfy {
+                $0.kind == .instrumental || $0.kind == .unavailable
+            }
             recordDiagnosticsLyricsMiss(
                 title: title,
                 artist: artist,
                 album: album,
                 duration: duration,
-                resultCount: results.count
+                resultCount: results.count,
+                terminalCandidateOnly: terminalCandidateOnly
             )
 
             if fetcher.selectInstrumentalResult(from: results) != nil {
+                recordDiagnosticsLyricsUnavailable(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    duration: duration,
+                    classification: "instrumental"
+                )
                 await MainActor.run {
                     self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
                 }
@@ -586,10 +605,24 @@ public class LyricsService: ObservableObject {
                     album: album
                 )
             case .instrumental:
+                self.recordDiagnosticsLyricsUnavailable(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    duration: duration,
+                    classification: "instrumental"
+                )
                 await MainActor.run {
                     self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
                 }
             case .unavailable:
+                self.recordDiagnosticsLyricsUnavailable(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    duration: duration,
+                    classification: "unavailable"
+                )
                 await MainActor.run {
                     self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
                 }
@@ -654,6 +687,8 @@ public class LyricsService: ObservableObject {
                         hasSourceTranslation: hasSourceTranslation,
                         isUnsynced: isUnsynced,
                         songID: songID,
+                        title: title,
+                        artist: artist,
                         stableSongID: Self.stableSongIdentity(title: title, artist: artist),
                         duration: duration,
                         album: album)
@@ -666,6 +701,8 @@ public class LyricsService: ObservableObject {
                              hasSourceTranslation: Bool,
                              isUnsynced: Bool,
                              songID: String,
+                             title: String,
+                             artist: String,
                              stableSongID: String,
                              duration: TimeInterval,
                              album: String = "") {
@@ -679,6 +716,8 @@ public class LyricsService: ObservableObject {
         // Only lyrics.ovh / Genius (createUnsyncedLyrics) are tagged .unsynced.
         self.isUnsyncedLyrics = isUnsynced
         self.currentSongID = songID
+        self.currentSongTitle = title
+        self.currentSongArtist = artist
         self.currentStableSongID = stableSongID
         self.currentSongDuration = duration
         if !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -718,6 +757,18 @@ public class LyricsService: ObservableObject {
             artist: artist,
             album: album,
             duration: duration
+        )
+    }
+
+    private func currentDiagnosticsTrack() -> DiagnosticTrackContext? {
+        let title = currentSongTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let artist = currentSongArtist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !artist.isEmpty else { return nil }
+        return diagnosticsTrack(
+            title: title,
+            artist: artist,
+            album: currentSongAlbum,
+            duration: currentSongDuration
         )
     }
 
@@ -771,11 +822,29 @@ public class LyricsService: ObservableObject {
         artist: String,
         album: String,
         duration: TimeInterval,
-        resultCount: Int
+        resultCount: Int,
+        terminalCandidateOnly: Bool = false
     ) {
         let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
         Task { @MainActor in
-            DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: resultCount)
+            DiagnosticsService.shared.recordLyricsFetchMiss(
+                track: track,
+                resultCount: resultCount,
+                terminalCandidateOnly: terminalCandidateOnly
+            )
+        }
+    }
+
+    private func recordDiagnosticsLyricsUnavailable(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval,
+        classification: String
+    ) {
+        let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
+        Task { @MainActor in
+            DiagnosticsService.shared.recordLyricsFetchUnavailable(track: track, classification: classification)
         }
     }
 
@@ -951,10 +1020,23 @@ public class LyricsService: ObservableObject {
         for (translationIdx, lyricsIdx) in eligibleIndices.enumerated() where translationIdx < translatedTexts.count {
             lyrics[lyricsIdx].translation = translatedTexts[translationIdx]
         }
+        let filledLineCount = min(eligibleIndices.count, translatedTexts.count)
+        let statsAfterTranslation = Self.translationCoverageStats(in: lyrics)
 
         currentSongTranslationID = translationID
         lastSystemTranslationLanguage = translationLanguage
         translationsAreFromLyricsSource = false
+        if isFillingPartialSourceTranslations,
+           statsAfterTranslation.missing == 0,
+           let track = currentDiagnosticsTrack() {
+            DiagnosticsService.shared.recordLyricsPartialTranslationFilled(
+                track: track,
+                filledLineCount: filledLineCount,
+                translationLineCount: statsAfterTranslation.translated,
+                translatableLineCount: statsAfterTranslation.eligible,
+                translationLanguage: translationLanguage
+            )
+        }
         debugLogPublic("✅ 翻译完成: \(translatedTexts.count) 行")
     }
 
@@ -1004,7 +1086,8 @@ public class LyricsService: ObservableObject {
                   text != "…",
                   text != "⋯",
                   !isInstrumentalNotice(text),
-                  !isVocableLine(text) else { return false }
+                  !isVocableLine(text),
+                  !isStandaloneLyricsRoleMarker(text) else { return false }
             return !onlyMissingTranslations || !line.hasTranslation
         }
     }

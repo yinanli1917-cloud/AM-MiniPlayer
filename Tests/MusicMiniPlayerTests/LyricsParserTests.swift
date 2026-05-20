@@ -378,6 +378,27 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertNil(realLines[2].translation)
     }
 
+    func testProcessLyrics_stripsTranslationsFromRoleMarkersAndAdlibs() {
+        let raw = [
+            LyricLine(text: "Snoh Aalegra：", startTime: 2.3, endTime: 2.5, translation: "你谈吐的样子如此优雅"),
+            LyricLine(text: "Somethin' 'bout the way that you talk to me", startTime: 2.6, endTime: 13.6, translation: "你谈吐的样子如此优雅"),
+            LyricLine(text: "Oh I I", startTime: 114.4, endTime: 115.4, translation: "我想要"),
+            LyricLine(text: "Choir/Snoh Aalegra：", startTime: 157.5, endTime: 158.1, translation: "我穷尽一生去找寻像你这样的人"),
+            LyricLine(text: "I've been waitin' my whole life to find someone like you", startTime: 158.1, endTime: 163.5, translation: "我穷尽一生去找寻像你这样的人"),
+        ]
+
+        let (lyrics, _) = parser.processLyrics(raw)
+        let realLines = Array(lyrics.dropFirst())
+
+        XCTAssertNil(realLines[0].translation)
+        XCTAssertEqual(realLines[1].translation, "你谈吐的样子如此优雅")
+        XCTAssertNil(realLines[2].translation)
+        XCTAssertNil(realLines[3].translation)
+        XCTAssertEqual(realLines[4].translation, "我穷尽一生去找寻像你这样的人")
+        XCTAssertTrue(isVocableLine("Oh I I"))
+        XCTAssertTrue(isStandaloneLyricsRoleMarker("Choir/Snoh Aalegra："))
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - mergeLyricsWithTranslation
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -402,6 +423,65 @@ final class LyricsParserTests: XCTestCase {
         let original = [LyricLine(text: "你好", startTime: 10, endTime: 15)]
         let merged = parser.mergeLyricsWithTranslation(original: original, translated: [])
         XCTAssertNil(merged[0].translation)
+    }
+
+    func testMergeLyricsWithTranslation_correctsOneLineDelayedSourceTranslationWithRepeatedEvidence() {
+        let original = [
+            LyricLine(text: "Alpha opening line", startTime: 5, endTime: 9),
+            LyricLine(text: "Bravo second line", startTime: 10, endTime: 14),
+            LyricLine(text: "Repeated A", startTime: 15, endTime: 19),
+            LyricLine(text: "Repeated B", startTime: 20, endTime: 24),
+            LyricLine(text: "Repeated C", startTime: 25, endTime: 29),
+            LyricLine(text: "Repeated A", startTime: 30, endTime: 34),
+            LyricLine(text: "Repeated B", startTime: 35, endTime: 39),
+            LyricLine(text: "Repeated C", startTime: 40, endTime: 44),
+            LyricLine(text: "Repeated A", startTime: 45, endTime: 49),
+        ]
+        let translated = [
+            LyricLine(text: "T Alpha", startTime: 10, endTime: 14),
+            LyricLine(text: "T Bravo", startTime: 15, endTime: 19),
+            LyricLine(text: "T A", startTime: 20, endTime: 24),
+            LyricLine(text: "T B", startTime: 25, endTime: 29),
+            LyricLine(text: "T C", startTime: 30, endTime: 34),
+            LyricLine(text: "T A", startTime: 35, endTime: 39),
+            LyricLine(text: "T B", startTime: 40, endTime: 44),
+            LyricLine(text: "T C", startTime: 45, endTime: 49),
+        ]
+
+        let merged = parser.mergeLyricsWithTranslation(original: original, translated: translated)
+
+        XCTAssertEqual(merged[0].translation, "T Alpha")
+        XCTAssertEqual(merged[2].translation, "T A")
+        XCTAssertEqual(merged[5].translation, "T A")
+        XCTAssertNil(merged[8].translation)
+    }
+
+    func testMergeLyricsWithTranslation_doesNotShiftUniqueFirstLineGapWithoutRepeatedEvidence() {
+        let original = [
+            LyricLine(text: "Line one", startTime: 5, endTime: 9),
+            LyricLine(text: "Line two", startTime: 10, endTime: 14),
+            LyricLine(text: "Line three", startTime: 15, endTime: 19),
+            LyricLine(text: "Line four", startTime: 20, endTime: 24),
+            LyricLine(text: "Line five", startTime: 25, endTime: 29),
+            LyricLine(text: "Line six", startTime: 30, endTime: 34),
+            LyricLine(text: "Line seven", startTime: 35, endTime: 39),
+            LyricLine(text: "Line eight", startTime: 40, endTime: 44),
+        ]
+        let translated = [
+            LyricLine(text: "T two", startTime: 10, endTime: 14),
+            LyricLine(text: "T three", startTime: 15, endTime: 19),
+            LyricLine(text: "T four", startTime: 20, endTime: 24),
+            LyricLine(text: "T five", startTime: 25, endTime: 29),
+            LyricLine(text: "T six", startTime: 30, endTime: 34),
+            LyricLine(text: "T seven", startTime: 35, endTime: 39),
+            LyricLine(text: "T eight", startTime: 40, endTime: 44),
+        ]
+
+        let merged = parser.mergeLyricsWithTranslation(original: original, translated: translated)
+
+        XCTAssertNil(merged[0].translation)
+        XCTAssertEqual(merged[1].translation, "T two")
+        XCTAssertEqual(merged[7].translation, "T eight")
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -644,6 +724,35 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(stripped[1].text, "妳会否哭诉后找我做靠倚")
     }
 
+    /// Real data: You Are the Sunshine of My Life by Perry Como — NetEase
+    /// appends a timed source-editor credit, "edit morrison tsai", after the
+    /// final lyric. It is metadata and must not count as a missing translation.
+    func testStripMetadataLines_trailingEditorCredit() {
+        let lines = [
+            LyricLine(text: "You are the apple of my eye", startTime: 129.4, endTime: 132.6, translation: "你是我眼中的珍宝"),
+            LyricLine(text: "Forever you'll stay in my heart.", startTime: 132.6, endTime: 141.3, translation: "永远驻留在我心房"),
+            LyricLine(text: "edit morrison tsai", startTime: 141.3, endTime: 150.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.map(\.text), [
+            "You are the apple of my eye",
+            "Forever you'll stay in my heart."
+        ])
+    }
+
+    func testStripMetadataLines_preservesMidSongEditLyric() {
+        let lines = [
+            LyricLine(text: "first real lyric", startTime: 10.0, endTime: 14.0),
+            LyricLine(text: "Edit your life before the night is over", startTime: 48.0, endTime: 52.0),
+            LyricLine(text: "last real lyric", startTime: 58.0, endTime: 62.0),
+            LyricLine(text: "one more real lyric", startTime: 64.0, endTime: 68.0),
+        ]
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.map(\.text), lines.map(\.text))
+    }
+
     /// Real verifier data: 起风了 / Strange Weather exposed credits with
     /// compact labels ("鼓：...", "SP: ...") as the rendered first lyric.
     func testStripMetadataLines_instrumentAndPublisherCredits() {
@@ -706,6 +815,27 @@ final class LyricsParserTests: XCTestCase {
         let stripped = parser.stripMetadataLines(lines)
 
         XCTAssertEqual(stripped.map(\.text), ["一滩死水", "慢慢地流向我"])
+    }
+
+    /// Real data: NetEase can timestamp catalog metadata between an opening
+    /// title card and the first lyric. It must not render or count as a
+    /// missing source translation.
+    func testStripMetadataLines_providerCatalogAlbumRows() {
+        let lines = [
+            LyricLine(text: "I Go To Sleep", startTime: 0.7, endTime: 1.7, translation: "我入睡"),
+            LyricLine(text: "专辑：Then Was Then Now Is Now!", startTime: 1.7, endTime: 7.6),
+            LyricLine(text: "When I look up from my pillow", startTime: 7.6, endTime: 10.1, translation: "当我从枕边抬头"),
+            LyricLine(text: "Album: Quiet Night", startTime: 10.1, endTime: 11.0),
+            LyricLine(text: "And I dream you are there with me", startTime: 11.0, endTime: 14.0, translation: "梦见你在我身旁"),
+        ]
+
+        let stripped = parser.stripMetadataLines(lines)
+
+        XCTAssertEqual(stripped.map(\.text), [
+            "When I look up from my pillow",
+            "And I dream you are there with me",
+        ])
+        XCTAssertEqual(stripped.compactMap(\.translation).count, 2)
     }
 
     /// Real data: 戀愛預告 by Sandy Lamb (NetEase id=5258725) — the title card

@@ -73,8 +73,21 @@ public final class LyricsFetcher {
         /// confirmed artist/album/duration evidence, but the returned title did
         /// not directly match the user's visible title.
         public let nativeAliasMatched: Bool
+        /// True when the source catalog matched, but the lyric script is
+        /// incompatible with the visible metadata evidence.
+        public let scriptMismatchSuspected: Bool
 
-        public init(lyrics: [LyricLine], source: String, score: Double, kind: LyricsKind, albumMatched: Bool = false, titleMatched: Bool = true, matchedDurationDiff: Double? = nil, nativeAliasMatched: Bool = false) {
+        public init(
+            lyrics: [LyricLine],
+            source: String,
+            score: Double,
+            kind: LyricsKind,
+            albumMatched: Bool = false,
+            titleMatched: Bool = true,
+            matchedDurationDiff: Double? = nil,
+            nativeAliasMatched: Bool = false,
+            scriptMismatchSuspected: Bool = false
+        ) {
             self.lyrics = lyrics
             self.source = source
             self.score = score
@@ -83,6 +96,7 @@ public final class LyricsFetcher {
             self.albumMatched = albumMatched
             self.matchedDurationDiff = matchedDurationDiff
             self.nativeAliasMatched = nativeAliasMatched
+            self.scriptMismatchSuspected = scriptMismatchSuspected
         }
     }
 
@@ -161,13 +175,24 @@ public final class LyricsFetcher {
         let alb = cleanAlbum
 
         let canUseImmediateDiskLyrics = !LanguageUtils.containsCJK(ot) && !LanguageUtils.containsCJK(oa)
-        if canUseImmediateDiskLyrics,
-           let cached = lyricsDiskCache.get(title: ot, artist: oa, duration: d, album: alb)
-                ?? (!alb.isEmpty ? lyricsDiskCache.get(title: ot, artist: oa, duration: d) : nil) {
+        if canUseImmediateDiskLyrics {
+            let cachedCandidates = lyricsDiskCache.candidates(title: ot, artist: oa, duration: d, album: alb)
+                + (!alb.isEmpty ? lyricsDiskCache.candidates(title: ot, artist: oa, duration: d) : [])
+            for cached in cachedCandidates {
             let lyrics = cached.lines.map { LyricsDiskCache.lyricLines(from: $0) } ?? parser.parseLRC(cached.syncedLyrics)
-            if !lyrics.isEmpty,
-               !lyrics.contains(where: { LanguageUtils.containsCJK($0.text) }),
-               !isLikelyRomanizedCJKLyrics(lyrics, source: cached.source) {
+            if cached.kind == .instrumental || cached.kind == .unavailable {
+                let kind = cached.kind ?? .unavailable
+                return [LyricsFetchResult(
+                    lyrics: lyrics,
+                    source: cached.source,
+                    score: scorer.calculateScore(lyrics, source: cached.source, duration: d, translationEnabled: te, kind: kind),
+                    kind: kind,
+                    albumMatched: cached.album != nil && MetadataDiskCache.normalize(cached.album ?? "") == MetadataDiskCache.normalize(alb),
+                    titleMatched: true,
+                    matchedDurationDiff: cached.matchedDurationDiff
+                )]
+            }
+            if canUseImmediateCachedLyrics(lyrics, source: cached.source, title: ot, artist: oa) {
                 let score = scorer.calculateScore(lyrics, source: cached.source, duration: d, translationEnabled: te)
                 let cachedResult = LyricsFetchResult(
                     lyrics: lyrics,
@@ -181,6 +206,7 @@ public final class LyricsFetcher {
                 if selectBestResult(from: [cachedResult], songDuration: d) != nil {
                     return [cachedResult]
                 }
+            }
             }
         }
 
@@ -197,6 +223,15 @@ public final class LyricsFetcher {
         let branch3Landed = Box(false)
         let lowTierFallbackDelay: UInt64 = alb.isEmpty ? 0 : 700_000_000
         let albumScopedLandingDeadline: TimeInterval = 3.60
+        let shouldProtectAsciiNativeAlias = titleIsASCII && !LanguageUtils.isLikelyEnglishTitle(ot)
+        let shouldProbeAlbumTitleEchoNativeAlias = !alb.isEmpty
+            && LanguageUtils.isLikelyEnglishTitle(ot)
+            && latinEvidenceKey(ot) == latinEvidenceKey(alb)
+            && latinEvidenceKey(ot).count >= 4
+        let emptyResultDeadline: TimeInterval = shouldProtectAsciiNativeAlias
+            ? 2.8
+            : (shouldProbeAlbumTitleEchoNativeAlias ? 3.45 : 2.2)
+        let nativeProviderTimeout: TimeInterval = shouldProtectAsciiNativeAlias ? 2.8 : 2.2
 
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
             // ───────────────────────────────────────────────────────────────
@@ -240,7 +275,7 @@ public final class LyricsFetcher {
                     await self.fetchFromAppleMusic(title: ot, artist: oa, duration: d, translationEnabled: te, album: alb)
                 }
             }
-            group.addTask { await self.withHardSourceTimeout(seconds: 2.2) { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) } }
+            group.addTask { await self.withHardSourceTimeout(seconds: nativeProviderTimeout) { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) } }
             group.addTask { await self.withHardSourceTimeout(seconds: 2.2) { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) } }
 
             // ───────────────────────────────────────────────────────────────
@@ -257,6 +292,24 @@ public final class LyricsFetcher {
                                 artist: oa,
                                 originalTitle: ot,
                                 originalArtist: oa,
+                                duration: d,
+                                translationEnabled: te,
+                                album: alb
+                            )
+                        }) else { return nil }
+                        branch2Landed.value = true
+                        return best
+                    }
+                }
+
+                if shouldProtectAsciiNativeAlias && LanguageUtils.isPureASCII(oa) {
+                    group.addTask {
+                        branch2Fired.value = true
+                        DebugLogger.log("⚡ Branch-2 native artist alias foreground: '\(ot)' by '\(oa)'")
+                        guard let best = await self.withHardSourceTimeout(seconds: 2.75, operation: {
+                            await self.fetchAsciiNativeArtistAliasForeground(
+                                title: ot,
+                                artist: oa,
                                 duration: d,
                                 translationEnabled: te,
                                 album: alb
@@ -292,6 +345,28 @@ public final class LyricsFetcher {
                                 duration: d,
                                 translationEnabled: te,
                                 album: localized.album
+                            )
+                        }) else {
+                            albumScopedBranchLanded.value = true
+                            return nil
+                        }
+                        branch2Landed.value = true
+                        albumScopedBranchLanded.value = true
+                        return best
+                    }
+                }
+
+                if shouldProbeAlbumTitleEchoNativeAlias {
+                    group.addTask {
+                        branch2Fired.value = true
+                        albumScopedBranchFired.value = true
+                        guard let best = await self.withHardSourceTimeout(seconds: 2.9, operation: {
+                            await self.fetchAlbumTitleEchoNativeNetEase(
+                                title: ot,
+                                artist: oa,
+                                duration: d,
+                                translationEnabled: te,
+                                album: alb
                             )
                         }) else {
                             albumScopedBranchLanded.value = true
@@ -520,7 +595,7 @@ public final class LyricsFetcher {
                     if branch3Fired.value && !branch3Landed.value && elapsed < 2.35 {
                         continue
                     }
-                    if elapsed >= 2.2 {
+                    if elapsed >= emptyResultDeadline {
                         DebugLogger.log("⏱️ No synced candidate within \(String(format: "%.1f", elapsed))s")
                         group.cancelAll()
                         break
@@ -552,6 +627,16 @@ public final class LyricsFetcher {
                             || exactLRCLIBCanFastExit
                             || (lrclibCanFastExit && ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") && $0.score >= 50)
                         )
+                }
+                let hasTrustedExactSyncedResult = results.contains {
+                    guard $0.kind == .synced,
+                          $0.titleMatched,
+                          ($0.matchedDurationDiff.map { $0 < 1.5 } ?? false),
+                          $0.score >= 40,
+                          !($0.nativeAliasMatched && !self.selectedHasStrongNativeAliasIdentity($0)) else {
+                        return false
+                    }
+                    return self.selectBestResult(from: [$0], songDuration: d) != nil
                 }
                 let hasAlbumMatchedSyncedResult = results.contains {
                     $0.kind == .synced && $0.albumMatched && $0.score >= 30
@@ -593,7 +678,7 @@ public final class LyricsFetcher {
                     && elapsed < 2.2
                 let albumScopedBranchNeedsLandingWindow = albumScopedBranchFired.value
                     && !albumScopedBranchLanded.value
-                    && (!hasFastExitSyncedResult || !hasAlbumMatchedSyncedResult)
+                    && (!hasFastExitSyncedResult || (!hasAlbumMatchedSyncedResult && !hasTrustedExactSyncedResult))
                     && elapsed < albumScopedLandingDeadline
                 if albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
@@ -685,9 +770,72 @@ public final class LyricsFetcher {
                 lines: selected.lyrics,
                 matchedDurationDiff: selected.matchedDurationDiff
             )
+        } else if let instrumental = selectInstrumentalResult(from: finalResults) {
+            lyricsDiskCache.setAvailability(
+                title: ot,
+                artist: oa,
+                duration: d,
+                album: alb,
+                source: instrumental.source,
+                kind: .instrumental,
+                lines: instrumental.lyrics,
+                matchedDurationDiff: instrumental.matchedDurationDiff
+            )
+        } else if let unavailable = selectUnavailableResult(from: finalResults) {
+            lyricsDiskCache.setAvailability(
+                title: ot,
+                artist: oa,
+                duration: d,
+                album: alb,
+                source: unavailable.source,
+                kind: .unavailable,
+                lines: unavailable.lyrics,
+                matchedDurationDiff: unavailable.matchedDurationDiff
+            )
         }
 
         return finalResults.sorted { $0.score > $1.score }
+    }
+
+    private func fetchAsciiNativeArtistAliasForeground(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String
+    ) async -> LyricsFetchResult? {
+        guard LanguageUtils.isPureASCII(title),
+              LanguageUtils.isPureASCII(artist),
+              !LanguageUtils.isLikelyEnglishTitle(title) else {
+            return nil
+        }
+        var results: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 2.05) {
+                    await self.fetchNativeArtistAliasNetEaseDirect(
+                        title: title,
+                        artist: artist,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        album: album
+                    )
+                }
+            }
+            for await result in group {
+                guard let result else { continue }
+                results.append(result)
+                if result.kind == .synced,
+                   result.score >= earlyReturnThreshold,
+                   earlyReturnSources.contains(result.source),
+                   result.titleMatched,
+                   (result.matchedDurationDiff.map { $0 < 1.5 } ?? true) {
+                    group.cancelAll()
+                    break
+                }
+            }
+        }
+        return selectBestResult(from: results, songDuration: duration)
     }
 
     /// Slow-path authoritative lookup used after the interactive budget is
@@ -770,6 +918,20 @@ public final class LyricsFetcher {
         }
 
         var selected = selectBestResult(from: results, songDuration: duration)
+
+        if (selected == nil || selected.map { !selectedHasPersistentIdentity($0) } == true),
+           let echoNative = await withHardSourceTimeout(seconds: 2.9, operation: {
+               await self.fetchAlbumTitleEchoNativeNetEase(
+                   title: cleanTitle,
+                   artist: cleanArtist,
+                   duration: duration,
+                   translationEnabled: translationEnabled,
+                   album: cleanAlbum
+               )
+           }) {
+            results.append(echoNative)
+            selected = selectBestResult(from: results, songDuration: duration)
+        }
 
         if (selected == nil || selected.map { !selectedHasPersistentIdentity($0) } == true),
            !cleanAlbum.isEmpty,
@@ -955,10 +1117,30 @@ public final class LyricsFetcher {
               !selected.lyrics.isEmpty,
               selectedHasReturnableIdentity(selected) else {
             if let instrumental = selectInstrumentalResult(from: results) {
+                lyricsDiskCache.setAvailability(
+                    title: cleanTitle,
+                    artist: cleanArtist,
+                    duration: duration,
+                    album: cleanAlbum,
+                    source: instrumental.source,
+                    kind: .instrumental,
+                    lines: instrumental.lyrics,
+                    matchedDurationDiff: instrumental.matchedDurationDiff
+                )
                 DebugLogger.log("🧭 Authoritative lyrics backfill INSTRUMENTAL: \(instrumental.source) in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
                 return .instrumental(instrumental)
             }
             if let unavailable = selectUnavailableResult(from: results) {
+                lyricsDiskCache.setAvailability(
+                    title: cleanTitle,
+                    artist: cleanArtist,
+                    duration: duration,
+                    album: cleanAlbum,
+                    source: unavailable.source,
+                    kind: .unavailable,
+                    lines: unavailable.lyrics,
+                    matchedDurationDiff: unavailable.matchedDurationDiff
+                )
                 DebugLogger.log("🧭 Authoritative lyrics backfill UNAVAILABLE: \(unavailable.source) in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
                 return .unavailable(unavailable)
             }
@@ -1006,7 +1188,9 @@ public final class LyricsFetcher {
                 album: album
             )
             for alias in aliases.prefix(3) where !probes.contains(where: { $0.title == alias && $0.artist == cjkArtist }) {
-                probes.append((alias, cjkArtist))
+                for variant in nativeTitleAliasVariants(alias, artist: cjkArtist) where !probes.contains(where: { $0.title == variant && $0.artist == cjkArtist }) {
+                    probes.append((variant, cjkArtist))
+                }
             }
         }
         guard !probes.isEmpty else { return nil }
@@ -1040,8 +1224,8 @@ public final class LyricsFetcher {
                         await self.fetchFromQQMusic(
                             title: probe.title,
                             artist: probe.artist,
-                            originalTitle: title,
-                            originalArtist: artist,
+                            originalTitle: probe.title,
+                            originalArtist: probe.artist,
                             duration: duration,
                             translationEnabled: translationEnabled,
                             album: album
@@ -1053,8 +1237,8 @@ public final class LyricsFetcher {
                         await self.fetchFromNetEase(
                             title: probe.title,
                             artist: probe.artist,
-                            originalTitle: title,
-                            originalArtist: artist,
+                            originalTitle: probe.title,
+                            originalArtist: probe.artist,
                             duration: duration,
                             translationEnabled: translationEnabled,
                             album: album
@@ -1068,7 +1252,8 @@ public final class LyricsFetcher {
                 results.append(result)
                 if result.kind == .synced,
                    selectedHasReturnableIdentity(result),
-                   result.score >= 45 {
+                   result.score >= 45,
+                   earlyReturnSources.contains(result.source) {
                     group.cancelAll()
                     break
                 }
@@ -1097,12 +1282,17 @@ public final class LyricsFetcher {
         let normalizedAlbum = LanguageUtils.toSimplifiedChinese(
             LanguageUtils.normalizeTrackName(album)
         ).lowercased()
-        var searches: [(query: String, albumScoped: Bool)] = [
-            ("\(title) \(cjkArtist)", false)
+        var searches: [(query: String, albumScoped: Bool, requiresTitleAlbumEcho: Bool)] = [
+            ("\(title) \(cjkArtist)", false, false)
         ]
         if !normalizedAlbum.isEmpty {
-            searches.append(("\(normalizedAlbum) \(cjkArtist)", true))
-            searches.append(("\(title) \(normalizedAlbum) \(cjkArtist)", true))
+            searches.append(("\(normalizedAlbum) \(cjkArtist)", true, false))
+            searches.append(("\(title) \(normalizedAlbum) \(cjkArtist)", true, false))
+            if LanguageUtils.isLikelyEnglishTitle(title),
+               latinEvidenceKey(title) == latinEvidenceKey(album),
+               latinEvidenceKey(title).count >= 4 {
+                searches.insert((cjkArtist, true, true), at: 0)
+            }
         }
 
         var aliases: [String] = []
@@ -1121,6 +1311,10 @@ public final class LyricsFetcher {
                    !aliases.contains(alias) {
                     aliases.append(alias)
                 }
+                if let alias = nativePinyinTitleAlias(fromCatalogName: name, inputTitle: title, resultIndex: index),
+                   !aliases.contains(alias) {
+                    aliases.append(alias)
+                }
 
                 if !album.isEmpty,
                    !search.albumScoped,
@@ -1134,6 +1328,7 @@ public final class LyricsFetcher {
                     cjkArtist: cjkArtist,
                     duration: duration,
                     albumScoped: search.albumScoped,
+                    requiresTitleAlbumEcho: search.requiresTitleAlbumEcho,
                     resultIndex: index
                 ) else { continue }
                 if !aliases.contains(catalogAlias) {
@@ -1144,15 +1339,67 @@ public final class LyricsFetcher {
         return aliases
     }
 
+    private func nativeTitleAliasVariants(_ alias: String, artist: String) -> [String] {
+        var ordered: [String] = []
+        func add(_ value: String) {
+            let normalized = LanguageUtils.normalizeTrackName(value)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty, !ordered.contains(normalized) else { return }
+            ordered.append(normalized)
+        }
+
+        let traditional = LanguageUtils.toTraditionalChinese(alias)
+        let simplified = LanguageUtils.toSimplifiedChinese(alias)
+        if LanguageUtils.containsTraditionalOnlyChars(artist) {
+            add(traditional)
+            add(alias)
+            add(simplified)
+        } else {
+            add(alias)
+            add(traditional)
+            add(simplified)
+        }
+        return ordered
+    }
+
+    private func nativePinyinTitleAlias(
+        fromCatalogName name: String,
+        inputTitle: String,
+        resultIndex: Int
+    ) -> String? {
+        guard LanguageUtils.isPureASCII(inputTitle),
+              resultIndex < 12 else { return nil }
+        let normalized = LanguageUtils.normalizeTrackName(name)
+        let cjkCount = normalized.unicodeScalars.filter { LanguageUtils.isCJKScalar($0) }.count
+        guard cjkCount >= 2, cjkCount <= 14 else { return nil }
+
+        let lower = normalized.lowercased()
+        let disallowedMarkers = [
+            "live", "dj", "remix", "cover", "instrumental", "伴奏",
+            "翻唱", "翻自", "翻奏", "现场", "現場", "演唱会", "演唱會",
+            "纯音乐", "純音樂", "カラオケ"
+        ]
+        guard !disallowedMarkers.contains(where: { lower.contains($0) }) else { return nil }
+
+        let inputLatin = latinEvidenceKey(inputTitle)
+        let candidateLatin = latinEvidenceKey(normalized)
+        guard inputLatin.count >= 4,
+              candidateLatin.count >= 4,
+              inputLatin == candidateLatin else { return nil }
+        return normalized
+    }
+
     private func nativeTitleAlias(
         fromCatalogSong song: [String: Any],
         inputTitle: String,
         cjkArtist: String,
         duration: TimeInterval,
         albumScoped: Bool,
+        requiresTitleAlbumEcho: Bool,
         resultIndex: Int
     ) -> String? {
         guard let name = song["name"] as? String else { return nil }
+        let albumName = (song["album"] as? [String: Any])?["name"] as? String ?? ""
         let artistName = (song["artists"] as? [[String: Any]])?
             .compactMap { ($0["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -1171,6 +1418,11 @@ public final class LyricsFetcher {
         let normalized = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(name))
         let cjkCount = normalized.unicodeScalars.filter { LanguageUtils.isCJKScalar($0) }.count
         guard cjkCount >= 2, cjkCount <= 14 else { return nil }
+        if requiresTitleAlbumEcho {
+            let normalizedAlbumName = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(albumName))
+            guard !normalizedAlbumName.isEmpty,
+                  normalized == normalizedAlbumName else { return nil }
+        }
 
         let lower = normalized.lowercased()
         let disallowedMarkers = [
@@ -1216,7 +1468,7 @@ public final class LyricsFetcher {
         return simplified
     }
 
-    private func latinEvidenceKey(_ value: String) -> String {
+    func latinEvidenceKey(_ value: String) -> String {
         LanguageUtils.toLatinLower(value)
             .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .filter { $0.isLetter || $0.isNumber }
@@ -1404,6 +1656,22 @@ public final class LyricsFetcher {
         operation: @escaping @Sendable () async -> LyricsFetchResult?
     ) async -> LyricsFetchResult? {
         await withHardTimeout(seconds: seconds, operation: operation)
+    }
+
+    func canUseImmediateCachedLyrics(
+        _ lyrics: [LyricLine],
+        source: String,
+        title: String,
+        artist: String
+    ) -> Bool {
+        guard !lyrics.isEmpty else { return false }
+        let containsCJKLyrics = lyrics.contains { LanguageUtils.containsCJK($0.text) }
+        if containsCJKLyrics {
+            return LanguageUtils.isPureASCII(title)
+                && LanguageUtils.isPureASCII(artist)
+                && !LanguageUtils.isLikelyEnglishTitle(title)
+        }
+        return !isLikelyRomanizedCJKLyrics(lyrics, source: source)
     }
 
     func withHardMetadataTimeout<T: Sendable>(
