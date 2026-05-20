@@ -228,7 +228,7 @@ if [ -d "AppIcon.icon" ] && command -v xcrun &> /dev/null && xcrun --find actool
     xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
     if [ -f "partial_info.plist" ]; then
         echo "✅ AppIcon compiled successfully"
-        rm partial_info.plist
+        rm -f partial_info.plist
     else
         echo "⚠️  actool failed, falling back to icns"
         [ -f "Resources/AppIcon.icns" ] && COPYFILE_DISABLE=1 cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/

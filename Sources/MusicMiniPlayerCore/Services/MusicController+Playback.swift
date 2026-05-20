@@ -382,9 +382,9 @@ extension MusicController {
 
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
     private func fetchUpNextViaBridge(requestQueueGeneration: UInt64) async {
-        debugPrint("📋 [fetchUpNextViaBridge] Called, musicApp=\(musicApp != nil)\n")
-        guard let app = musicApp, app.isRunning else {
-            debugPrint("⚠️ [fetchUpNextViaBridge] musicApp not available\n")
+        debugPrint("📋 [fetchUpNextViaBridge] Called, queueApp=\(queueApp != nil)\n")
+        guard let app = queueApp, app.isRunning else {
+            debugPrint("⚠️ [fetchUpNextViaBridge] queueApp not available\n")
             return
         }
 
@@ -437,7 +437,7 @@ extension MusicController {
         // Music.app hangs the playlist IPC. Previously the heartbeat recovery
         // recreated the SBApplication, which caused EXC_BAD_ACCESS in
         // AEProcessMessage (ARC-freed app with pending AE replies).
-        return SBTimeoutRunner.run(timeout: 3.0) { [weak self] () -> [(String, String, String, String, Double)]? in
+        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
             guard let self else { return nil }
             var result: [(String, String, String, String, Double)] = []
 
@@ -524,7 +524,7 @@ extension MusicController {
 
     /// 使用 ScriptingBridge 获取播放历史（使用自己的 musicApp 实例）
     private func fetchRecentHistoryViaBridge() {
-        guard let app = musicApp, app.isRunning else { return }
+        guard let app = queueApp, app.isRunning else { return }
 
         if MusicAuthorization.currentStatus == .authorized {
             Task { [weak self] in
@@ -621,7 +621,7 @@ extension MusicController {
     /// playlist IPC — which previously triggered the removed heartbeat-recreate path
     /// and the EXC_BAD_ACCESS in AEProcessMessage.
     private func getRecentTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
-        return SBTimeoutRunner.run(timeout: 3.0) { [weak self] () -> [(String, String, String, String, Double)]? in
+        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
             guard let self else { return nil }
             var recentList: [(String, String, String, String, Double)] = []
 

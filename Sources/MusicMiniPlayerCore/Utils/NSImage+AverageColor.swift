@@ -62,6 +62,66 @@ extension NSImage {
         )
     }
 
+    func artworkBrightnessRegions(sampleSize: Int = 24) -> (overall: CGFloat, topLeft: CGFloat, topRight: CGFloat) {
+        guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return (0.5, 0.5, 0.5)
+        }
+
+        let width = max(sampleSize, 4)
+        let height = max(sampleSize, 4)
+        var pixelData = [UInt8](repeating: 0, count: width * height * 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return (0.5, 0.5, 0.5)
+        }
+
+        ctx.interpolationQuality = .low
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let topRows = max(1, Int(Double(height) * 0.25))
+        let sideColumns = max(1, Int(Double(width) * 0.35))
+        var overallSum: CGFloat = 0
+        var topLeftSum: CGFloat = 0
+        var topRightSum: CGFloat = 0
+        var topLeftCount: CGFloat = 0
+        var topRightCount: CGFloat = 0
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = (y * width + x) * 4
+                let r = CGFloat(pixelData[offset]) / 255.0
+                let g = CGFloat(pixelData[offset + 1]) / 255.0
+                let b = CGFloat(pixelData[offset + 2]) / 255.0
+                let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+
+                overallSum += luminance
+                if y < topRows && x < sideColumns {
+                    topLeftSum += luminance
+                    topLeftCount += 1
+                }
+                if y < topRows && x >= width - sideColumns {
+                    topRightSum += luminance
+                    topRightCount += 1
+                }
+            }
+        }
+
+        let totalCount = CGFloat(width * height)
+        return (
+            overallSum / max(totalCount, 1),
+            topLeftSum / max(topLeftCount, 1),
+            topRightSum / max(topRightCount, 1)
+        )
+    }
+
     func dominantColor() -> NSColor? {
         // 🔑 减小采样尺寸：50x50 -> 30x30（减少 64% 像素计算）
         let size = CGSize(width: 30, height: 30)

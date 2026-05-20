@@ -52,9 +52,10 @@ extension MusicController {
     func setArtwork(_ image: NSImage?) {
         self.currentArtwork = image
         if let img = image {
-            self.artworkLuminance = img.perceivedBrightness()
-            self.topLeftArtworkLuminance = img.topLeftBrightness()
-            self.topRightArtworkLuminance = img.topRightBrightness()
+            let metrics = img.artworkBrightnessRegions()
+            self.artworkLuminance = metrics.overall
+            self.topLeftArtworkLuminance = metrics.topLeft
+            self.topRightArtworkLuminance = metrics.topRight
         } else {
             self.artworkLuminance = 0.5
             self.topLeftArtworkLuminance = 0.5
@@ -76,14 +77,14 @@ extension MusicController {
     }
 
     /// Secondary cache key for the notification path, before ScriptingBridge
-    /// backfills persistentID. This restores instant artwork on rapid switching
-    /// without weakening the persistentID cache used once Music.app responds.
+    /// backfills persistentID. Require album as disambiguation so Apple Music
+    /// subscription URL tracks can still hit cache without reviving the old
+    /// radio title/artist stale-artwork bug.
     func artworkMetadataCacheKey(title: String, artist: String, album: String) -> NSString? {
-        guard !currentTrackIsURLTrack else { return nil }
         let t = Self.normalizeForArtworkMatching(title)
         let a = Self.normalizeForArtworkMatching(artist)
         let al = Self.normalizeForArtworkMatching(album)
-        guard !t.isEmpty, !a.isEmpty else { return nil }
+        guard !t.isEmpty, !a.isEmpty, !al.isEmpty else { return nil }
         return "meta:\(t)|\(a)|\(al)" as NSString
     }
 
@@ -137,23 +138,52 @@ extension MusicController {
 
         // Check cache first — radio tracks use "radio:title|artist" stable key
         let cacheKey = artworkCacheKey(persistentID: persistentID, title: title, artist: artist)
+        let metadataKey = artworkMetadataCacheKey(title: title, artist: artist, album: album)
+        let trackContext = diagnosticsArtworkTrack(title: title, artist: artist, album: album, persistentID: persistentID)
+        let heldPreviousArtwork = currentArtwork != nil && appliedArtworkGeneration != generation
+        recordDiagnosticsArtworkFetchStarted(
+            track: trackContext,
+            generation: generation,
+            persistentIDPresent: !persistentID.isEmpty,
+            metadataCacheEligible: metadataKey != nil,
+            heldPreviousArtwork: heldPreviousArtwork
+        )
         if let key = cacheKey, let cached = artworkCache.object(forKey: key) {
             logToFile("🎨 Cache HIT (\(key))")
+            let applyStart = CFAbsoluteTimeGetCurrent()
             self.setArtwork(cached)
+            self.appliedArtworkGeneration = generation
+            recordDiagnosticsArtworkApplied(
+                track: trackContext,
+                generation: generation,
+                source: "cache.persistentID",
+                applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+            )
             return
         }
-        let metadataKey = artworkMetadataCacheKey(title: title, artist: artist, album: album)
         if let key = metadataKey, let cached = artworkCache.object(forKey: key) {
             logToFile("🎨 Metadata cache HIT (\(key))")
+            let applyStart = CFAbsoluteTimeGetCurrent()
             self.setArtwork(cached)
+            self.appliedArtworkGeneration = generation
+            recordDiagnosticsArtworkApplied(
+                track: trackContext,
+                generation: generation,
+                source: "cache.metadata",
+                applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+            )
             return
         }
 
         logToFile("🎨 Cache MISS, starting concurrent fetch (SB + API in parallel)...")
-        if currentArtwork != nil {
-            logToFile("🎨 Cache MISS, clearing stale artwork while fetching current track")
-            setArtwork(nil)
+        if heldPreviousArtwork {
+            logToFile("🎨 Cache MISS, retaining previous artwork until replacement is ready")
         }
+        recordDiagnosticsArtworkCacheMiss(
+            track: trackContext,
+            generation: generation,
+            heldPreviousArtwork: heldPreviousArtwork
+        )
 
         // ━━━ Path 1: API fetch — starts immediately, no SB queue dependency ━━━
         // API is provisional — if SB already applied for this generation, API result is discarded.
@@ -164,7 +194,6 @@ extension MusicController {
             if let result = await self.fetchArtworkResult(title: title, artist: artist, album: album) {
                 self.logToFile("🎨 [API] SUCCESS! Got \(result.source) image \(result.image.size)")
                 await MainActor.run {
-                    guard self.artworkFetchGeneration == generation else { return }
                     self.applyArtworkIfCurrent(result.image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: result.source)
                 }
             } else {
@@ -184,8 +213,16 @@ extension MusicController {
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
                     if self.isStillCurrentTrack(persistentID: persistentID, title: title, artist: artist)
-                        && self.currentArtwork == nil {
+                        && self.appliedArtworkGeneration != generation {
+                        let applyStart = CFAbsoluteTimeGetCurrent()
                         self.setArtwork(self.createPlaceholder())
+                        self.appliedArtworkGeneration = generation
+                        self.recordDiagnosticsArtworkApplied(
+                            track: trackContext,
+                            generation: generation,
+                            source: "placeholder",
+                            applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+                        )
                     }
                 }
             }
@@ -208,6 +245,12 @@ extension MusicController {
                   app.isRunning else { return }
             guard self.artworkFetchGeneration == generation else {
                 self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
+                self.recordDiagnosticsArtworkDropped(
+                    track: trackContext,
+                    generation: generation,
+                    source: ArtworkSource.sb.diagnosticName,
+                    reason: "generationMismatchBeforeFetch"
+                )
                 return
             }
 
@@ -215,7 +258,6 @@ extension MusicController {
             if let image = self.getArtworkImageFromApp(app) {
                 self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
                 DispatchQueue.main.async {
-                    guard self.artworkFetchGeneration == generation else { return }
                     self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .sb)
                 }
             }
@@ -229,7 +271,7 @@ extension MusicController {
     /// timeout releases the caller so artworkQueue drains other requests promptly;
     /// the existing 5s heartbeat remains as a queue-recovery backstop.
     func getArtworkImageFromApp(_ app: SBApplication) -> NSImage? {
-        return SBTimeoutRunner.run(timeout: 1.5) { [weak self] in
+        return SBTimeoutRunner.run(timeout: 1.5, lane: "artwork") { [weak self] in
             guard let self else { return nil }
             guard let track = app.value(forKey: "currentTrack") as? NSObject else { return nil }
             return self.extractArtwork(from: track)
@@ -328,7 +370,10 @@ extension MusicController {
                     if !graceStarted {
                         graceStarted = true
                         group.addTask {
-                            try? await Task.sleep(nanoseconds: 650_000_000)
+                            // Keep a short Apple grace window for cover fidelity, but
+                            // do not hold a proven web fallback long enough for the
+                            // switch to feel one track late.
+                            try? await Task.sleep(nanoseconds: 250_000_000)
                             return .appleGraceExpired
                         }
                     }
@@ -614,7 +659,97 @@ extension MusicController {
         return artworkCache.object(forKey: persistentID as NSString)
     }
 
-    enum ArtworkSource { case sb, apple, web }
+    enum ArtworkSource {
+        case sb, apple, web
+
+        var diagnosticName: String {
+            switch self {
+            case .sb: return "scriptingBridge"
+            case .apple: return "apple"
+            case .web: return "web"
+            }
+        }
+    }
+
+    private func diagnosticsArtworkTrack(
+        title: String,
+        artist: String,
+        album: String,
+        persistentID: String
+    ) -> DiagnosticTrackContext {
+        DiagnosticTrackContext(
+            title: title,
+            artist: artist,
+            album: album,
+            duration: duration,
+            persistentID: persistentID.isEmpty ? currentPersistentID : persistentID,
+            playbackTime: currentTime
+        )
+    }
+
+    private func recordDiagnosticsArtworkFetchStarted(
+        track: DiagnosticTrackContext,
+        generation: Int,
+        persistentIDPresent: Bool,
+        metadataCacheEligible: Bool,
+        heldPreviousArtwork: Bool
+    ) {
+        Task { @MainActor in
+            DiagnosticsService.shared.recordArtworkFetchStarted(
+                track: track,
+                generation: generation,
+                persistentIDPresent: persistentIDPresent,
+                metadataCacheEligible: metadataCacheEligible,
+                heldPreviousArtwork: heldPreviousArtwork
+            )
+        }
+    }
+
+    private func recordDiagnosticsArtworkCacheMiss(
+        track: DiagnosticTrackContext,
+        generation: Int,
+        heldPreviousArtwork: Bool
+    ) {
+        Task { @MainActor in
+            DiagnosticsService.shared.recordArtworkCacheMiss(
+                track: track,
+                generation: generation,
+                heldPreviousArtwork: heldPreviousArtwork
+            )
+        }
+    }
+
+    private func recordDiagnosticsArtworkApplied(
+        track: DiagnosticTrackContext,
+        generation: Int,
+        source: String,
+        applyMilliseconds: Double
+    ) {
+        Task { @MainActor in
+            DiagnosticsService.shared.recordArtworkApplied(
+                track: track,
+                generation: generation,
+                source: source,
+                applyMilliseconds: applyMilliseconds
+            )
+        }
+    }
+
+    private func recordDiagnosticsArtworkDropped(
+        track: DiagnosticTrackContext,
+        generation: Int,
+        source: String,
+        reason: String
+    ) {
+        Task { @MainActor in
+            DiagnosticsService.shared.recordArtworkDropped(
+                track: track,
+                generation: generation,
+                source: source,
+                reason: reason
+            )
+        }
+    }
 
     /// 封面获取成功后统一处理：验证当前歌曲 → 源优先级 → 设置封面 → 缓存
     /// 🔑 SB / Apple playback-session/catalog artwork are authoritative.
@@ -622,17 +757,48 @@ extension MusicController {
     /// release/crop when Apple Music is merely slower.
     @MainActor
     func applyArtworkIfCurrent(_ image: NSImage, persistentID: String, title: String, artist: String, album: String, generation: Int, source: ArtworkSource) {
-        guard isStillCurrentTrack(persistentID: persistentID, title: title, artist: artist) else { return }
-        guard artworkFetchGeneration == generation else { return }
+        let track = diagnosticsArtworkTrack(title: title, artist: artist, album: album, persistentID: persistentID)
+        guard isStillCurrentTrack(persistentID: persistentID, title: title, artist: artist) else {
+            recordDiagnosticsArtworkDropped(
+                track: track,
+                generation: generation,
+                source: source.diagnosticName,
+                reason: "trackMismatch"
+            )
+            return
+        }
+        guard artworkFetchGeneration == generation else {
+            recordDiagnosticsArtworkDropped(
+                track: track,
+                generation: generation,
+                source: source.diagnosticName,
+                reason: "generationMismatch"
+            )
+            return
+        }
 
         // ScriptingBridge is the exact Music.app current-track image when it is available.
         if source != .sb && sbAppliedForGeneration == generation {
             logToFile("🎨 [\(source)] SB already applied for gen \(generation), discarding later result")
+            recordDiagnosticsArtworkDropped(
+                track: track,
+                generation: generation,
+                source: source.diagnosticName,
+                reason: "authoritativeArtworkAlreadyApplied"
+            )
             return
         }
 
+        let applyStart = CFAbsoluteTimeGetCurrent()
         setArtwork(image)
+        appliedArtworkGeneration = generation
         if source == .sb || source == .apple { sbAppliedForGeneration = generation }
+        recordDiagnosticsArtworkApplied(
+            track: track,
+            generation: generation,
+            source: source.diagnosticName,
+            applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+        )
 
         if source == .sb || source == .apple {
             if let key = artworkCacheKey(persistentID: persistentID, title: title, artist: currentArtist) {
@@ -710,7 +876,7 @@ extension MusicController {
         // transitioning playlists. Without this, the enclosing serial queue
         // backs up and (previously) tripped the now-removed heartbeat
         // recreation that crashed in AEProcessMessage.
-        return SBTimeoutRunner.run(timeout: 3.0) { [weak self] () -> NSImage? in
+        return SBTimeoutRunner.run(timeout: 3.0, lane: "artwork") { [weak self] () -> NSImage? in
             guard let self else { return nil }
             var result: NSImage?
 

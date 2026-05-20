@@ -94,6 +94,9 @@ public class MusicController: ObservableObject {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     var musicApp: SBApplication?
+    var stateApp: SBApplication?
+    var metadataApp: SBApplication?
+    var queueApp: SBApplication?
     var internalCurrentTime: Double = 0
     var isPreview: Bool = false
     var seekPending = false
@@ -117,8 +120,11 @@ public class MusicController: ObservableObject {
 
     // ScriptingBridge queues — separate instances for parallelism.
     // Each SBApplication is an independent Apple Event proxy, safe on its own serial queue.
-    // 🔑 var — recreated on hang recovery (same pattern as artworkQueue).
+    // Keep each proxy on exactly one queue/lane pair; concurrent Apple Events against
+    // the same SBApplication have caused AEProcessMessage crashes.
     var scriptingBridgeQueue = DispatchQueue(label: "com.nanoPod.scriptingBridge", qos: .userInitiated)
+    let stateSyncQueue = DispatchQueue(label: "com.nanoPod.stateSync", qos: .userInitiated)
+    let metadataBridgeQueue = DispatchQueue(label: "com.nanoPod.trackMetadata", qos: .userInitiated)
     // 🔑 Dedicated SB instance for playback position polling. Lyrics sync depends
     // on this staying independent from playlist scans, metadata backfills, and
     // artwork extraction. Keep it on its own queue and SBTimeoutRunner lane.
@@ -145,6 +151,9 @@ public class MusicController: ObservableObject {
 
     /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
     var sbAppliedForGeneration: Int = -1
+    /// 当前屏幕上的封面属于哪一次切歌请求。切歌时不再清空旧封面，
+    /// 但失败兜底需要知道是否已经为当前 generation 应用过新封面。
+    var appliedArtworkGeneration: Int = -1
     /// artworkQueue 最近一次响应时间 — 超过 5s 未响应视为卡死，需重建
     var lastArtworkQueueHeartbeat = Date()
     /// scriptingBridgeQueue 最近一次响应时间 — 同样的心跳保护
@@ -209,6 +218,8 @@ public class MusicController: ObservableObject {
     private var lastPolledPosition: Double = 0
     private var sbPositionPollInFlight: Bool = false
     private var positionPollCooldownUntil: Date = .distantPast
+    private var positionPollTimeoutStreak: Int = 0
+    private var lastPositionPollFallbackAt: Date = .distantPast
 
     // 🔑 Radio track-change backstop: when persistentID is empty (radio/URL track),
     // position-jump detection can miss changes if the user skips before accumulating
@@ -216,6 +227,18 @@ public class MusicController: ObservableObject {
     // metadata via AppleScriptRunner (subprocess, 0.5s kill) — cheap and reliable.
     private var lastRadioTrackCheckTime: Date = .distantPast
     private var radioTrackCheckInFlight: Bool = false
+    private var fullStateSBCooldownUntil: Date = .distantPast
+    private var appleScriptStateFallbackInFlight = false
+    private static let fullStateSBTimeoutCooldown: TimeInterval = 90.0
+    static let positionPollFallbackMinInterval: TimeInterval = 20.0
+
+    static func positionPollTimeoutCooldown(forStreak streak: Int) -> TimeInterval {
+        switch max(streak, 1) {
+        case 1: return 12.0
+        case 2: return 30.0
+        default: return 90.0
+        }
+    }
 
     // Queue sync state
     private var lastQueueHash: String = ""
@@ -366,6 +389,9 @@ public class MusicController: ObservableObject {
         }
 
         self.musicApp = app
+        self.stateApp = SBApplication(bundleIdentifier: "com.apple.Music")
+        self.metadataApp = SBApplication(bundleIdentifier: "com.apple.Music")
+        self.queueApp = SBApplication(bundleIdentifier: "com.apple.Music")
         self.positionApp = SBApplication(bundleIdentifier: "com.apple.Music")
         self.artworkApp = SBApplication(bundleIdentifier: "com.apple.Music")
         self.controlApp = SBApplication(bundleIdentifier: "com.apple.Music")
@@ -474,6 +500,9 @@ public class MusicController: ObservableObject {
         debugPrint("🎬 [MusicController] PREVIEW mode - returning early\n")
         logger.info("Initializing MusicController in PREVIEW mode")
         self.musicApp = nil
+        self.stateApp = nil
+        self.metadataApp = nil
+        self.queueApp = nil
         self.isPlaying = false
         self.currentTrackTitle = "Preview Track"
         self.currentArtist = "Preview Artist"
@@ -591,7 +620,7 @@ public class MusicController: ObservableObject {
         guard !isPreview else { return }
 
         scriptingBridgeQueue.async { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+            guard let self = self, let app = self.queueApp, app.isRunning else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard let hash = self.getQueueHashFromApp(app) else { return }
 
@@ -608,7 +637,7 @@ public class MusicController: ObservableObject {
     private func getQueueHashFromApp(_ app: SBApplication) -> String? {
         // 🔑 Hard 1.5s timeout — SB queue hash reads can hang alongside playlist
         // transitions. Timeout → nil → caller silently skips this hash check tick.
-        return SBTimeoutRunner.run(timeout: 1.5) { () -> String? in
+        return SBTimeoutRunner.run(timeout: 1.5, lane: "queueSnapshot") { () -> String? in
             guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
                   let playlistName = playlist.value(forKey: "name") as? String,
                   let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
@@ -791,8 +820,8 @@ public class MusicController: ObservableObject {
         }
 
         // ━━━ PARALLEL: persistentID + duration + queue refresh on SB queue ━━━
-        scriptingBridgeQueue.async { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+        metadataBridgeQueue.async { [weak self] in
+            guard let self = self, let app = self.metadataApp, app.isRunning else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard self.artworkFetchGeneration == generation else { return }
 
@@ -801,7 +830,7 @@ public class MusicController: ObservableObject {
             // backfill once Music.app responds. Without this, scriptingBridgeQueue
             // stalls for every downstream block until 5s heartbeat recovery kicks in.
             typealias SBFields = (persistentID: String, duration: Double, trackName: String?)
-            let fields: SBFields = SBTimeoutRunner.run(timeout: 1.5) { () -> SBFields? in
+            let fields: SBFields = SBTimeoutRunner.run(timeout: 1.5, lane: "trackMetadata") { () -> SBFields? in
                 guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject else {
                     return (persistentID: "", duration: 0, trackName: nil)
                 }
@@ -873,12 +902,12 @@ public class MusicController: ObservableObject {
     }
 
     private func retryDurationFetch(name: String, generation: Int) {
-        scriptingBridgeQueue.async { [weak self] in
-            guard let self = self, let app = self.musicApp, app.isRunning else { return }
+        metadataBridgeQueue.async { [weak self] in
+            guard let self = self, let app = self.metadataApp, app.isRunning else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard self.artworkFetchGeneration == generation else { return }
             // 🔑 Hard 1.5s timeout on currentTrack metadata IPC (radio URL tracks hang).
-            let dur: Double? = SBTimeoutRunner.run(timeout: 1.5) { () -> Double? in
+            let dur: Double? = SBTimeoutRunner.run(timeout: 1.5, lane: "trackMetadata") { () -> Double? in
                 guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
                       let sbName = currentTrack.value(forKey: "name") as? String,
                       sbName == name,
@@ -954,7 +983,26 @@ public class MusicController: ObservableObject {
                 DebugLogger.log("Poll", "⏳ pollPositionViaSB timed out — skipping cycle, preserving state")
                 let timedOutAfter = Date().timeIntervalSince(measurementTime)
                 DispatchQueue.main.async {
-                    self.positionPollCooldownUntil = Date().addingTimeInterval(4.0)
+                    let now = Date()
+                    self.positionPollTimeoutStreak += 1
+                    let cooldown = Self.positionPollTimeoutCooldown(forStreak: self.positionPollTimeoutStreak)
+                    self.positionPollCooldownUntil = now.addingTimeInterval(cooldown)
+                    let shouldRunFallback = now.timeIntervalSince(self.lastPositionPollFallbackAt) >= Self.positionPollFallbackMinInterval
+                    if shouldRunFallback {
+                        self.lastPositionPollFallbackAt = now
+                        self.updatePlayerStateViaAppleScriptFallback(reason: "positionPollTimeout")
+                    }
+                    Task { @MainActor in
+                        DiagnosticsService.shared.recordEvent(
+                            "scriptingBridge.positionPoll.cooldown",
+                            detail: "Position polling entered cooldown after ScriptingBridge timeout.",
+                            metrics: [
+                                "cooldownSeconds": cooldown,
+                                "timeoutStreak": Double(self.positionPollTimeoutStreak),
+                                "fallbackStarted": shouldRunFallback ? 1 : 0
+                            ]
+                        )
+                    }
                 }
                 Task { @MainActor in
                     DiagnosticsService.shared.recordScriptingBridgeTiming(
@@ -1041,6 +1089,9 @@ public class MusicController: ObservableObject {
             }
 
             DispatchQueue.main.async {
+                self.positionPollTimeoutStreak = 0
+                self.positionPollCooldownUntil = .distantPast
+
                 // Update playing state (respect user action lock)
                 if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
                     if self.isPlaying != playing { self.isPlaying = playing }
@@ -1083,8 +1134,49 @@ public class MusicController: ObservableObject {
     private static let sbRepeatOne: Int = 0x6B527031  // 'kRp1'
     private static let sbRepeatAll: Int = 0x6B416C6C  // 'kAll'
 
+    private func updatePlayerStateViaAppleScriptFallback(reason: String) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.updatePlayerStateViaAppleScriptFallback(reason: reason)
+            }
+            return
+        }
+
+        guard !appleScriptStateFallbackInFlight else { return }
+        appleScriptStateFallbackInFlight = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let startedAt = Date()
+            let snapshot = AppleScriptRunner.fetchPlayerState(timeout: 0.7)
+            let elapsed = Date().timeIntervalSince(startedAt)
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.appleScriptStateFallbackInFlight = false
+                let trackContext = self.diagnosticsTrackContext()
+                Task { @MainActor in
+                    DiagnosticsService.shared.recordEvent(
+                        "playerState.fallback",
+                        detail: snapshot == nil
+                            ? "AppleScript player-state fallback failed after ScriptingBridge \(reason)."
+                            : "AppleScript player-state fallback succeeded after ScriptingBridge \(reason).",
+                        track: trackContext,
+                        metrics: ["fallbackMs": elapsed * 1000]
+                    )
+                }
+                guard let snapshot else { return }
+                self.processPlayerState(snapshot)
+            }
+        }
+    }
+
     func updatePlayerState() {
         guard !isPreview else { return }
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.updatePlayerState() }
+            return
+        }
+        guard musicApp != nil || stateApp != nil else { return }
 
         // 🔑 NO heartbeat-recreate. Replacing musicApp/scriptingBridgeQueue while
         // an AE reply is still pending for the OLD SBApplication causes ARC to
@@ -1095,14 +1187,22 @@ public class MusicController: ObservableObject {
         // blocks skip their SB calls outright, so a single hang clears in O(timeout)
         // instead of O(queue-depth × per-call-time). No app-level recreate needed.
 
-        guard let app = musicApp, app.isRunning else { return }
+        if Date() < fullStateSBCooldownUntil {
+            updatePlayerStateViaAppleScriptFallback(reason: "cooldown")
+            return
+        }
+
+        guard let app = stateApp, app.isRunning else {
+            updatePlayerStateViaAppleScriptFallback(reason: "unavailable")
+            return
+        }
 
         // 超时节流
         let now = Date()
         guard now.timeIntervalSince(lastUpdateTime) >= updateTimeout else { return }
         lastUpdateTime = now
 
-        scriptingBridgeQueue.async { [weak self] in
+        stateSyncQueue.async { [weak self] in
             guard let self = self else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             let measurementTime = Date()
@@ -1112,7 +1212,7 @@ public class MusicController: ObservableObject {
             // stall until the (removed, crash-prone) heartbeat-recreate kicked in.
             // Now the block returns nil on timeout → we just skip this update cycle;
             // the next 30s tick (or poll) tries again.
-            let bundle = SBTimeoutRunner.run(timeout: 2.0) { () -> (position: Double, stateRaw: Int, shuffle: Bool, repeatRaw: Int, track: NSObject?)? in
+            let bundle = SBTimeoutRunner.run(timeout: 2.0, lane: "stateSync") { () -> (position: Double, stateRaw: Int, shuffle: Bool, repeatRaw: Int, track: NSObject?)? in
                 let p = app.value(forKey: "playerPosition") as? Double ?? 0
                 let s = app.value(forKey: "playerState") as? Int ?? 0
                 let sh = app.value(forKey: "shuffleEnabled") as? Bool ?? false
@@ -1125,12 +1225,14 @@ public class MusicController: ObservableObject {
                 DebugLogger.log("PlayerState", "⏳ updatePlayerState SB read timed out, skipping cycle")
                 let timedOutAfter = Date().timeIntervalSince(measurementTime)
                 Task { @MainActor in
+                    self.fullStateSBCooldownUntil = Date().addingTimeInterval(Self.fullStateSBTimeoutCooldown)
                     DiagnosticsService.shared.recordScriptingBridgeTiming(
                         operation: "updatePlayerState",
                         queueWait: 0,
                         readTime: timedOutAfter,
                         timedOut: true
                     )
+                    self.updatePlayerStateViaAppleScriptFallback(reason: "timeout")
                 }
                 return
             }
@@ -1165,7 +1267,7 @@ public class MusicController: ObservableObject {
                 return
             }
 
-            let trackFields = SBTimeoutRunner.run(timeout: 1.5) { () -> (name: String, artist: String, album: String, duration: Double, pid: String, bitRate: Int, sampleRate: Int)? in
+            let trackFields = SBTimeoutRunner.run(timeout: 1.5, lane: "stateSync") { () -> (name: String, artist: String, album: String, duration: Double, pid: String, bitRate: Int, sampleRate: Int)? in
                 let n = track.value(forKey: "name") as? String ?? ""
                 let a = track.value(forKey: "artist") as? String ?? ""
                 let al = track.value(forKey: "album") as? String ?? ""

@@ -1,12 +1,18 @@
 import Foundation
 import AppKit
 import Compression
+import SQLite3
 
 enum PlaybackSessionArtworkFetcher {
     private static let maxArchives = 8
 
     static func fetchArtwork(title: String, artist: String, album: String) async -> NSImage? {
         guard let url = latestArtworkURL(title: title, artist: artist, album: album) else { return nil }
+        if let cached = cachedArtworkData(for: url),
+           let image = NSImage(data: cached) {
+            DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI cache hit: \(url.absoluteString)")
+            return image
+        }
         do {
             let (data, _) = try await HTTPClient.getData(url: url, timeout: 1.0, retry: false)
             DebugLogger.log("Artwork", "🎨 [PlaybackSession] original Music artwork: \(url.absoluteString)")
@@ -80,7 +86,7 @@ enum PlaybackSessionArtworkFetcher {
 
     static func firstAppleArtworkURL(in text: String) -> URL? {
         let normalizedText = text.replacingOccurrences(of: "\\/", with: "/")
-        let pattern = #"https://is\d-ssl\.mzstatic\.com/image/thumb/[^"'\s]+"#
+        let pattern = #"https://is\d-ssl\.mzstatic\.com/image/thumb/[^"'\s]+?(?:\{w\}x\{h\}[a-z]*\.\{f\}|[0-9]+x[0-9]+[a-z]*\.(?:jpg|jpeg|png|heic|webp))"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
         let range = NSRange(normalizedText.startIndex..<normalizedText.endIndex, in: normalizedText)
         guard let match = regex.firstMatch(in: normalizedText, range: range),
@@ -95,6 +101,50 @@ enum PlaybackSessionArtworkFetcher {
             .replacingOccurrences(of: "{c}", with: "bb")
             .replacingOccurrences(of: "{f}", with: "jpg")
         return URL(string: raw)
+    }
+
+    static func cachedArtworkData(for artworkURL: URL) -> Data? {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Caches/com.apple.Music/MusicUIArtworkCache")
+        return cachedArtworkData(for: artworkURL, cacheRoot: root)
+    }
+
+    static func cachedArtworkData(for artworkURL: URL, cacheRoot: URL) -> Data? {
+        let dbURL = cacheRoot.appendingPathComponent("Cache.db")
+        let dataRoot = cacheRoot.appendingPathComponent("fsCachedData")
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbURL.path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
+            return nil
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        SELECT d.isDataOnFS, d.receiver_data
+        FROM cfurl_cache_response r
+        JOIN cfurl_cache_receiver_data d ON r.entry_ID = d.entry_ID
+        WHERE r.request_key = ?
+        LIMIT 1
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(statement, 1, artworkURL.absoluteString, -1, transient)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+
+        let isDataOnFS = sqlite3_column_int(statement, 0) != 0
+        guard let bytes = sqlite3_column_blob(statement, 1) else { return nil }
+        let count = Int(sqlite3_column_bytes(statement, 1))
+        guard count > 0 else { return nil }
+        let rowData = Data(bytes: bytes, count: count)
+
+        if isDataOnFS {
+            guard let fileName = String(data: rowData, encoding: .utf8),
+                  !fileName.isEmpty else { return nil }
+            return try? Data(contentsOf: dataRoot.appendingPathComponent(fileName))
+        }
+        return rowData
     }
 
     private static func gunzip(_ data: Data) -> Data? {

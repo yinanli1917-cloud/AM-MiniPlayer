@@ -11,6 +11,7 @@
 
 import XCTest
 import Foundation
+import SQLite3
 @testable import MusicMiniPlayerCore
 import ObjCSupport
 
@@ -102,6 +103,41 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertLessThan(elapsed, 0.2, "independent lanes should not wait behind a hung lane")
     }
 
+    func testPositionPollTimeoutCooldownBacksOffRepeatedTimeouts() {
+        XCTAssertEqual(MusicController.positionPollTimeoutCooldown(forStreak: 1), 12.0)
+        XCTAssertEqual(MusicController.positionPollTimeoutCooldown(forStreak: 2), 30.0)
+        XCTAssertEqual(MusicController.positionPollTimeoutCooldown(forStreak: 3), 90.0)
+        XCTAssertEqual(MusicController.positionPollTimeoutCooldown(forStreak: 10), 90.0)
+        XCTAssertEqual(MusicController.positionPollFallbackMinInterval, 20.0)
+    }
+
+    func testProductionScriptingBridgeTimeoutCallsUseExplicitLanes() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let files = [
+            "Sources/MusicMiniPlayerCore/Services/MusicController.swift",
+            "Sources/MusicMiniPlayerCore/Services/MusicController+Playback.swift",
+            "Sources/MusicMiniPlayerCore/Services/MusicController+Artwork.swift"
+        ]
+
+        var offenders: [String] = []
+        for path in files {
+            let url = repoRoot.appendingPathComponent(path)
+            let text = try String(contentsOf: url, encoding: .utf8)
+            for (lineIndex, line) in text.components(separatedBy: .newlines).enumerated()
+            where line.contains("SBTimeoutRunner.run(timeout:") && !line.contains("lane:") {
+                offenders.append("\(path):\(lineIndex + 1): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+
+        XCTAssertTrue(
+            offenders.isEmpty,
+            "Production ScriptingBridge calls must choose an explicit timeout lane to avoid shared-lane starvation: \(offenders.joined(separator: "; "))"
+        )
+    }
+
     // ------------------------------------------------------------------
     // MARK: - OBJCCatch
     // ------------------------------------------------------------------
@@ -156,11 +192,23 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(key, "meta:恋爱预告|sandy lamb|my lovely legend" as NSString)
         XCTAssertNil(c.artworkMetadataCacheKey(title: "", artist: "Sandy Lamb", album: "My Lovely Legend"))
         XCTAssertNil(c.artworkMetadataCacheKey(title: "戀愛預告", artist: "", album: "My Lovely Legend"))
+        XCTAssertNil(c.artworkMetadataCacheKey(title: "戀愛預告", artist: "Sandy Lamb", album: ""))
     }
 
-    func testArtworkCacheMissClearsPreviousArtworkForNewTrack() {
+    func testMetadataArtworkCacheKeyAllowsURLTracksWhenAlbumDisambiguates() {
+        let c = MusicController(preview: true)
+        c.currentTrackIsURLTrack = true
+
+        let key = c.artworkMetadataCacheKey(title: "Warm On a Cold Night", artist: "HONNE", album: "Warm On a Cold Night")
+
+        XCTAssertEqual(key, "meta:warm on a cold night|honne|warm on a cold night" as NSString)
+        XCTAssertNil(c.artworkMetadataCacheKey(title: "Warm On a Cold Night", artist: "HONNE", album: ""))
+    }
+
+    func testArtworkCacheMissKeepsPreviousArtworkUntilReplacement() {
         let c = MusicController(preview: true)
         c.currentArtwork = NSImage(size: NSSize(width: 12, height: 12))
+        c.appliedArtworkGeneration = 0
         let generation = c.incrementGeneration()
 
         c.fetchArtwork(
@@ -171,7 +219,75 @@ final class RapidSwitchTests: XCTestCase {
             generation: generation
         )
 
-        XCTAssertNil(c.currentArtwork)
+        XCTAssertNotNil(c.currentArtwork)
+        XCTAssertNotEqual(c.appliedArtworkGeneration, generation)
+    }
+
+    func testPlaybackSessionArtworkURLTrimsBinaryTailAfterConcreteImagePath() {
+        let text = "title Unforgettable artist Nat King Cole https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/4e/92/0b/4e920b65-26fe-c608-d4a0-605cb1cfeca9/16UMGIM31150.rgb.jpg/800x800bb.jpg\u{fffd}\u{0005}more"
+
+        let url = PlaybackSessionArtworkFetcher.firstAppleArtworkURL(in: text)
+
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/4e/92/0b/4e920b65-26fe-c608-d4a0-605cb1cfeca9/16UMGIM31150.rgb.jpg/800x800bb.jpg"
+        )
+    }
+
+    func testPlaybackSessionArtworkURLNormalizesTemplatePath() {
+        let text = #"{"artwork":{"url":"https:\/\/is1-ssl.mzstatic.com\/image\/thumb\/Music115\/v4\/3c\/0f\/75\/cover.jpg\/{w}x{h}bb.{f}"}}"#
+
+        let url = PlaybackSessionArtworkFetcher.firstAppleArtworkURL(in: text)
+
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/3c/0f/75/cover.jpg/800x800bb.jpg"
+        )
+    }
+
+    func testPlaybackSessionArtworkCacheReadsFilesystemBackedMusicUICache() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nanopod-artwork-cache-\(UUID().uuidString)")
+        let fsRoot = root.appendingPathComponent("fsCachedData")
+        try FileManager.default.createDirectory(at: fsRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let dbURL = root.appendingPathComponent("Cache.db")
+        let fileName = "9E680B2E-C61A-459C-9D11-A3300AE98EE8"
+        let expected = Data([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43])
+        try expected.write(to: fsRoot.appendingPathComponent(fileName))
+        try createMusicUICacheFixture(
+            dbURL: dbURL,
+            requestKey: "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/4e/92/0b/cover.rgb.jpg/800x800bb.jpg",
+            fileName: fileName
+        )
+
+        let data = PlaybackSessionArtworkFetcher.cachedArtworkData(
+            for: URL(string: "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/4e/92/0b/cover.rgb.jpg/800x800bb.jpg")!,
+            cacheRoot: root
+        )
+
+        XCTAssertEqual(data, expected)
+    }
+
+    private func createMusicUICacheFixture(dbURL: URL, requestKey: String, fileName: String) throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let schema = """
+        CREATE TABLE cfurl_cache_response(entry_ID INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, version INTEGER, hash_value INTEGER, storage_policy INTEGER, request_key TEXT UNIQUE, time_stamp NOT NULL DEFAULT CURRENT_TIMESTAMP, partition TEXT);
+        CREATE TABLE cfurl_cache_receiver_data(entry_ID INTEGER PRIMARY KEY, isDataOnFS INTEGER, receiver_data BLOB);
+        INSERT INTO cfurl_cache_response(entry_ID, request_key) VALUES (1, '\(requestKey)');
+        INSERT INTO cfurl_cache_receiver_data(entry_ID, isDataOnFS, receiver_data) VALUES (1, 1, '\(fileName)');
+        """
+        var error: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(db, schema, nil, nil, &error)
+        if result != SQLITE_OK {
+            let message = error.map { String(cString: $0) } ?? "unknown sqlite error"
+            sqlite3_free(error)
+            XCTFail(message)
+        }
     }
 
     func testArtworkBackgroundToneMapDarkensBrightArtwork() {

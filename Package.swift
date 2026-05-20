@@ -33,6 +33,9 @@ let package = Package(
             resources: [
                 .process("Resources"),
                 .process("Shaders")
+            ],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
             ]
         ),
         .executableTarget(
