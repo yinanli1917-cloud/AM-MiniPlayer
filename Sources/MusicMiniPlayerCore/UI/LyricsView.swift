@@ -99,6 +99,7 @@ public struct LyricsView: View {
     @State private var showControls = true
     @State private var controlsBlurAmount: CGFloat = 0
     @State private var controlsOffsetY: CGFloat = 0
+    @State private var isAudioOutputMenuPresented = false
     @State private var autoScrollTimer: Timer? = nil
     @State private var pendingTrackLyricsFetchTask: Task<Void, Never>? = nil
     @State private var suppressInitialLineMotion = false
@@ -150,6 +151,7 @@ public struct LyricsView: View {
         .overlay(alignment: .topLeading) { musicButtonOverlay }
         .overlay(alignment: .topTrailing) { windowButtonsOverlay }
         .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
+        .overlay(bottomControlsOverlay)
         .onHover { hovering in handleHover(hovering) }
         // ── onChange: 页面切换 ──
         .onChange(of: currentPage) { _, newPage in
@@ -318,7 +320,6 @@ public struct LyricsView: View {
             .accessibilityLabel("加载歌词中")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .foregroundColor(.white)
-            .overlay(Group { if showControls { controlBar } })
     }
 
     private func errorView(_ error: String) -> some View {
@@ -359,7 +360,6 @@ public struct LyricsView: View {
             .accessibilityHint("点击重新获取歌词")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .overlay(Group { if showControls { controlBar } })
     }
 
     private var emptyStateView: some View {
@@ -374,7 +374,6 @@ public struct LyricsView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("暂无歌词")
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .overlay(Group { if showControls { controlBar } })
     }
 
     private var scrollableLyricsContent: some View {
@@ -449,7 +448,6 @@ public struct LyricsView: View {
             onScrollWithVelocity: { deltaY, velocity in handleScrollDelta(deltaY, velocity: velocity) },
             isEnabled: currentPage == .lyrics
         )
-        .overlay(bottomControlsOverlay)
     }
 
     // MARK: - Lyric Line Helpers
@@ -724,28 +722,9 @@ public struct LyricsView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsOffsetY)
     }
 
-    private var controlBar: some View {
-        VStack {
-            Spacer()
-            ZStack(alignment: .bottom) {
-                Color.clear.frame(height: 1).allowsHitTesting(false)
-                SharedBottomControls(
-                    timePublisher: musicController.timePublisher,
-                    currentPage: $currentPage,
-                    isHovering: $isHovering,
-                    showControls: $showControls,
-                    isProgressBarHovering: $isProgressBarHovering,
-                    dragPosition: $dragPosition
-                )
-                .padding(.bottom, 0)
-            }
-        }
-        .transition(.opacity.combined(with: .offset(y: 20)))
-    }
-
     @ViewBuilder
     private var musicButtonOverlay: some View {
-        if showControls && currentPage == .lyrics {
+        if (showControls || isAudioOutputMenuPresented) && currentPage == .lyrics {
             MusicButtonView()
                 .accessibilityLabel("打开 Music")
                 .padding(12)
@@ -755,17 +734,15 @@ public struct LyricsView: View {
 
     @ViewBuilder
     private var windowButtonsOverlay: some View {
-        if showControls && currentPage == .lyrics {
-            let hideAction: () -> Void = onHide ?? {
-                NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel })?.orderOut(nil)
-            }
+        if (showControls || isAudioOutputMenuPresented) && currentPage == .lyrics {
             HStack(spacing: 8) {
                 if onExpand != nil {
                     ExpandButtonView(onExpand: onExpand!)
                         .accessibilityLabel("展开")
                 } else {
-                    HideButtonView(onHide: hideAction)
-                        .accessibilityLabel("返回")
+                    AudioOutputSwitcherView(
+                        onMenuPresentedChanged: handleAudioOutputMenuPresentation
+                    )
                 }
             }
             .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -796,10 +773,17 @@ public struct LyricsView: View {
     private func handleHover(_ hovering: Bool) {
         isHovering = hovering
         if !hovering {
+            if isAudioOutputMenuPresented { return }
             animateControlsOut()
         } else if !scroll.isManualScrolling {
             animateControlsIn()
         }
+    }
+
+    private func handleAudioOutputMenuPresentation(_ presented: Bool) {
+        isAudioOutputMenuPresented = presented
+        guard !presented, !isHovering else { return }
+        animateControlsOut()
     }
 
     private func handleLineTap(line: LyricLine) {

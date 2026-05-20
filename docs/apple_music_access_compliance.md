@@ -1,6 +1,6 @@
 # Apple Music Access Compliance Notes
 
-Last reviewed: 2026-05-03
+Last reviewed: 2026-05-20
 
 ## Current Finding
 
@@ -19,6 +19,14 @@ Apple's public MusicKit and Apple Music API surface supports user-authorized cat
 - Request Apple Events automation only for controlling or mirroring the user's active Music.app session, not for unrelated library profiling.
 - Avoid private frameworks, private selectors, injected accessibility scraping, or reverse-engineered Music.app storage.
 
+## Audio Output Switcher Compliance
+
+- The output switcher is source-agnostic: it must work in the GitHub multi-source build and remain portable to the Apple Music-only App Store build.
+- It changes the system-wide default output device through public Core Audio APIs only.
+- It does not require microphone/audio-input, Bluetooth, Accessibility, helper tools, shell automation, System Settings automation, private frameworks, or private selectors.
+- It should list macOS-exposed output-capable devices and follow macOS silently when the default output changes elsewhere or a selected route disconnects.
+- App Review notes for the Apple Music-only build can describe this as a user-initiated sound output selector built on public Core Audio. No additional privacy entitlement is expected for this feature.
+
 ## Implementation Implications
 
 - Recent history should prefer Apple Music API where possible. `GET /v1/me/recent/played/tracks?types=songs,library-songs&limit=10` is user-authorized, documented, and now used when MusicKit authorization is available. It returns Apple Music account history, not necessarily the exact local queue history before the current item, so the ScriptingBridge path remains as a fallback.
@@ -28,6 +36,7 @@ Apple's public MusicKit and Apple Music API surface supports user-authorized cat
 ## Local Entitlement Audit
 
 - `Sources/MusicMiniPlayerApp/MusicMiniPlayer.entitlements` has App Sandbox enabled, network client access for MusicKit/Apple Music API, Apple Events automation enabled, and the temporary Apple Events target scoped to `com.apple.Music`.
+- The local `build_app.sh` GitHub bundle currently generates its own ad-hoc signing entitlements with `com.apple.security.app-sandbox` set to `false`; verify the signed bundle entitlements before treating any build as App Store-ready.
 - `Sources/MusicMiniPlayerApp/Info.plist` includes `NSAppleMusicUsageDescription` and `NSAppleEventsUsageDescription`.
 - App Store Connect sandbox information should explain the temporary Apple Events exception narrowly: nanoPod uses it to control and mirror the user's visible Music.app playback session on macOS, including playback controls, current-track state, artwork, and live queue display. It is not used for private storage access, hidden scraping, or unrelated library profiling.
 

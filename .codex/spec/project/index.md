@@ -16,6 +16,7 @@ Use this folder for rules that should survive conversation compaction:
 - `lyrics-renderer-performance.md`: protected lyrics UX, verified performance fixes, and profiling gates.
 - `playback-artwork.md`: current-track artwork fetching, cache boundaries, and stale-cover prevention.
 - `owner-diagnostics.md`: local owner debug diagnostics boundary, report model, privacy rules, and retention/media policy.
+- `distribution-and-compliance.md`: GitHub/App Store product variant boundaries and shared App Store-safe system feature rules.
 
 ## Pre-Development Checklist
 

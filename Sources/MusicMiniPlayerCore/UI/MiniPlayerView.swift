@@ -38,6 +38,7 @@ public struct MiniPlayerView: View {
 
     // 🔑 页面切换后短暂锁定 hover 状态，防止 onHover(false) 覆盖
     @State private var hoverLocked: Bool = false
+    @State private var isAudioOutputMenuPresented: Bool = false
 
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
@@ -122,7 +123,7 @@ public struct MiniPlayerView: View {
                 .allowsHitTesting(false)
         )
         .overlay(alignment: .topLeading) {
-            if showControls && musicController.currentPage == .album {
+            if (showControls || isAudioOutputMenuPresented) && musicController.currentPage == .album {
                 let lum = topLeftLuminance
                 MusicButtonView(artworkBrightness: lum, isAlbumPage: true)
                     .padding(12)
@@ -130,24 +131,20 @@ public struct MiniPlayerView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if showControls && musicController.currentPage == .album {
+            if (showControls || isAudioOutputMenuPresented) && musicController.currentPage == .album {
                 let lum = topRightLuminance
                 if onExpand != nil {
                     ExpandButtonView(onExpand: onExpand!, artworkBrightness: lum, isAlbumPage: true)
                         .padding(12)
                         .transition(.opacity)
-                } else if onHide != nil {
-                    HideButtonView(onHide: onHide!, artworkBrightness: lum, isAlbumPage: true)
+                } else {
+                    AudioOutputSwitcherView(
+                        artworkBrightness: lum,
+                        isAlbumPage: true,
+                        onMenuPresentedChanged: { isAudioOutputMenuPresented = $0 }
+                    )
                         .padding(12)
                         .transition(.opacity)
-                } else {
-                    HideButtonView(onHide: {
-                        if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0 is NSPanel }) {
-                            window.orderOut(nil)
-                        }
-                    }, artworkBrightness: lum, isAlbumPage: true)
-                    .padding(12)
-                    .transition(.opacity)
                 }
             }
         }
@@ -173,6 +170,7 @@ public struct MiniPlayerView: View {
                 let controlsAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)
                 let hoverAnim: Animation = reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.3, dampingFraction: 0.82)
                 withAnimation(hoverAnim) { isHovering = false }
+                if isAudioOutputMenuPresented { return }
                 withAnimation(controlsAnim) {
                     showOverlayContent = false
                     controlsBlurAmount = 10
@@ -206,6 +204,16 @@ public struct MiniPlayerView: View {
         }
         .onChange(of: musicController.artworkLuminance) { _, _ in
             syncArtworkLuminance()
+        }
+        .onChange(of: isAudioOutputMenuPresented) { _, presented in
+            guard !presented, !isHovering, musicController.currentPage == .album else { return }
+            let animationDuration = fullscreenAlbumCover ? 0.5 : 0.4
+            withAnimation(reduceMotion ? .linear(duration: 0.1) : .spring(response: animationDuration, dampingFraction: 0.85)) {
+                showOverlayContent = false
+                controlsBlurAmount = 10
+                controlsOffsetY = 30
+                showControls = false
+            }
         }
         .onChange(of: musicController.topLeftArtworkLuminance) { _, _ in
             syncArtworkLuminance()
