@@ -5,6 +5,7 @@
  */
 
 import Foundation
+import CryptoKit
 @preconcurrency import ScriptingBridge
 import SwiftUI
 import MusicKit
@@ -161,6 +162,20 @@ extension MusicController {
             )
             return
         }
+        if let key = cacheKey, let cached = getDiskCachedArtwork(for: key) {
+            logToFile("🎨 Disk cache HIT (\(key))")
+            artworkCache.setObject(cached, forKey: key, cost: Self.imageCacheCost(cached))
+            let applyStart = CFAbsoluteTimeGetCurrent()
+            self.setArtwork(cached)
+            self.appliedArtworkGeneration = generation
+            recordDiagnosticsArtworkApplied(
+                track: trackContext,
+                generation: generation,
+                source: "cache.disk.persistentID",
+                applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+            )
+            return
+        }
         if let key = metadataKey, let cached = artworkCache.object(forKey: key) {
             logToFile("🎨 Metadata cache HIT (\(key))")
             let applyStart = CFAbsoluteTimeGetCurrent()
@@ -170,6 +185,20 @@ extension MusicController {
                 track: trackContext,
                 generation: generation,
                 source: "cache.metadata",
+                applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+            )
+            return
+        }
+        if let key = metadataKey, let cached = getDiskCachedArtwork(for: key) {
+            logToFile("🎨 Metadata disk cache HIT (\(key))")
+            artworkCache.setObject(cached, forKey: key, cost: Self.imageCacheCost(cached))
+            let applyStart = CFAbsoluteTimeGetCurrent()
+            self.setArtwork(cached)
+            self.appliedArtworkGeneration = generation
+            recordDiagnosticsArtworkApplied(
+                track: trackContext,
+                generation: generation,
+                source: "cache.disk.metadata",
                 applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
             )
             return
@@ -203,9 +232,10 @@ extension MusicController {
                 // an in-between track gets cancelled before completing. We must NOT
                 // flash the music-note placeholder in those cases. The placeholder
                 // is only valid IF (a) we're still the current generation after the
-                // 1s wait AND (b) no other artwork has been applied since AND (c)
+                // short retry wait AND (b) no other artwork has been applied since AND (c)
                 // there's no existing artwork to display. Drop on cancellation.
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let retryDelay: UInt64 = heldPreviousArtwork ? 150_000_000 : 250_000_000
+                try? await Task.sleep(nanoseconds: retryDelay)
                 guard !Task.isCancelled else { return }
                 await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
                 // After retry returns, if still nothing, fall back to placeholder.
@@ -214,6 +244,15 @@ extension MusicController {
                     guard self.artworkFetchGeneration == generation else { return }
                     if self.isStillCurrentTrack(persistentID: persistentID, title: title, artist: artist)
                         && self.appliedArtworkGeneration != generation {
+                        guard self.currentArtwork == nil else {
+                            self.recordDiagnosticsArtworkDropped(
+                                track: trackContext,
+                                generation: generation,
+                                source: "placeholder",
+                                reason: "existingArtworkRetained"
+                            )
+                            return
+                        }
                         let applyStart = CFAbsoluteTimeGetCurrent()
                         self.setArtwork(self.createPlaceholder())
                         self.appliedArtworkGeneration = generation
@@ -318,8 +357,10 @@ extension MusicController {
 
         return await withTaskGroup(of: ArtworkRaceEvent?.self) { group in
             group.addTask {
-                if let img = await PlaybackSessionArtworkFetcher.fetchArtwork(title: title, artist: artist, album: album) {
-                    return .image(img, .apple)
+                if let img = await self.withArtworkTimeout(seconds: 1.5, operation: {
+                    await PlaybackSessionArtworkFetcher.fetchArtwork(title: title, artist: artist, album: album)
+                }) {
+                    return .image(img, .playbackSession)
                 }
                 return nil
             }
@@ -327,14 +368,14 @@ extension MusicController {
                 group.addTask {
                     if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
                         await self.fetchArtworkViaMusicKit(title: title, artist: artist, album: album)
-                    }) { return .image(img, .apple) }
+                    }) { return .image(img, .musicKit) }
                     return nil
                 }
             }
             group.addTask {
                 if let img = await self.withArtworkTimeout(seconds: 1.4, operation: {
                     await self.fetchArtworkViaITunesAPI(title: title, artist: artist, album: album)
-                }) { return .image(img, .apple) }
+                }) { return .image(img, .iTunes) }
                 return nil
             }
             group.addTask {
@@ -359,9 +400,9 @@ extension MusicController {
                 case .image(_, .sb):
                     continue
 
-                case let .image(image, .apple):
+                case let .image(image, source) where source.isAppleAuthoritative:
                     group.cancelAll()
-                    return ArtworkFetchResult(image: image, source: .apple)
+                    return ArtworkFetchResult(image: image, source: source)
 
                 case let .image(image, .web):
                     if webFallback == nil {
@@ -383,6 +424,9 @@ extension MusicController {
                         group.cancelAll()
                         return ArtworkFetchResult(image: webFallback, source: .web)
                     }
+
+                default:
+                    continue
                 }
             }
 
@@ -659,13 +703,62 @@ extension MusicController {
         return artworkCache.object(forKey: persistentID as NSString)
     }
 
+    private func getDiskCachedArtwork(for key: NSString) -> NSImage? {
+        guard let url = artworkDiskCacheURL(for: key),
+              let data = try? Data(contentsOf: url),
+              let image = NSImage(data: data) else {
+            return nil
+        }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+        return image
+    }
+
+    private func storeDiskCachedArtwork(_ image: NSImage, for key: NSString) {
+        guard let data = image.tiffRepresentation,
+              let url = artworkDiskCacheURL(for: key) else {
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let directory = url.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+                pruneArtworkDiskCache(in: directory)
+            } catch {
+                DebugLogger.log("Artwork", "🎨 [DiskCache] write failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func artworkDiskCacheURL(for key: NSString) -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let digest = SHA256.hash(data: Data((key as String).utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return appSupport
+            .appendingPathComponent("nanoPod", isDirectory: true)
+            .appendingPathComponent("ArtworkCache", isDirectory: true)
+            .appendingPathComponent("\(digest).tiff")
+    }
+
     enum ArtworkSource {
-        case sb, apple, web
+        case sb, playbackSession, musicKit, iTunes, web
+
+        var isAppleAuthoritative: Bool {
+            switch self {
+            case .sb, .playbackSession, .musicKit, .iTunes: return true
+            case .web: return false
+            }
+        }
 
         var diagnosticName: String {
             switch self {
             case .sb: return "scriptingBridge"
-            case .apple: return "apple"
+            case .playbackSession: return "apple.playbackSession"
+            case .musicKit: return "apple.musicKit"
+            case .iTunes: return "apple.iTunes"
             case .web: return "web"
             }
         }
@@ -677,13 +770,18 @@ extension MusicController {
         album: String,
         persistentID: String
     ) -> DiagnosticTrackContext {
-        DiagnosticTrackContext(
+        let sameCurrentTrack = title == currentTrackTitle && artist == currentArtist
+        return DiagnosticTrackContext(
             title: title,
             artist: artist,
             album: album,
             duration: duration,
-            persistentID: persistentID.isEmpty ? currentPersistentID : persistentID,
-            playbackTime: currentTime
+            persistentID: persistentID.isEmpty && sameCurrentTrack ? currentPersistentID : persistentID,
+            playbackTime: currentTime,
+            trackClass: currentTrackClass.isEmpty ? nil : currentTrackClass,
+            playlistName: currentPlaylistName.isEmpty ? nil : currentPlaylistName,
+            playbackContext: diagnosticsTrackContext().playbackContext,
+            playerPage: String(describing: currentPage)
         )
     }
 
@@ -792,7 +890,7 @@ extension MusicController {
         let applyStart = CFAbsoluteTimeGetCurrent()
         setArtwork(image)
         appliedArtworkGeneration = generation
-        if source == .sb || source == .apple { sbAppliedForGeneration = generation }
+        if source.isAppleAuthoritative { sbAppliedForGeneration = generation }
         recordDiagnosticsArtworkApplied(
             track: track,
             generation: generation,
@@ -800,12 +898,14 @@ extension MusicController {
             applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
         )
 
-        if source == .sb || source == .apple {
+        if source.isAppleAuthoritative {
             if let key = artworkCacheKey(persistentID: persistentID, title: title, artist: currentArtist) {
                 artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
+                storeDiskCachedArtwork(image, for: key)
             }
             if let key = artworkMetadataCacheKey(title: title, artist: artist, album: album) {
                 artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
+                storeDiskCachedArtwork(image, for: key)
             }
         }
     }
@@ -970,5 +1070,24 @@ private final class ArtworkContinuationBox: @unchecked Sendable {
         guard !didResume else { return }
         didResume = true
         continuation.resume(returning: value)
+    }
+}
+
+private func pruneArtworkDiskCache(in directory: URL) {
+    guard let files = try? FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: [.contentModificationDateKey],
+        options: [.skipsHiddenFiles]
+    ), files.count > 128 else {
+        return
+    }
+
+    let sorted = files.sorted { lhs, rhs in
+        let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        return lhsDate > rhsDate
+    }
+    for file in sorted.dropFirst(96) {
+        try? FileManager.default.removeItem(at: file)
     }
 }

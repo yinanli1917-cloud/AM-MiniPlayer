@@ -21,7 +21,23 @@ enum AppleEventCode {
     static let paused: Int    = 0x6B507073
     static let repeatOff: Int = 0x6B52704F
     static let repeatOne: Int = 0x6B527031
-    static let repeatAll: Int = 0x6B52416C
+    static let repeatAll: Int = 0x6B416C6C
+
+    static func repeatMode(from rawValue: Int) -> Int {
+        switch rawValue {
+        case repeatOne: return 1
+        case repeatAll: return 2
+        default: return 0
+        }
+    }
+
+    static func songRepeatValue(for repeatMode: Int) -> Int {
+        switch repeatMode {
+        case 1: return repeatOne
+        case 2: return repeatAll
+        default: return repeatOff
+        }
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -264,12 +280,7 @@ extension MusicController {
 
         let newMode = (repeatMode + 1) % 3
         markQueueMayHaveChanged()
-        let repeatValue: Int
-        switch newMode {
-        case 1: repeatValue = AppleEventCode.repeatOne
-        case 2: repeatValue = AppleEventCode.repeatAll
-        default: repeatValue = AppleEventCode.repeatOff
-        }
+        let repeatValue = AppleEventCode.songRepeatValue(for: newMode)
 
         // Optimistic UI update
         self.repeatMode = newMode

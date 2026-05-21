@@ -18,6 +18,12 @@ cover on a new track.
   read `~/Library/Caches/com.apple.Music/MusicUIArtworkCache` by exact URL
   before issuing a network request. This is the correct local source for the
   artwork Music.app is already showing.
+- Apple-authoritative artwork from ScriptingBridge, MusicKit, iTunes Search, or
+  the playback-session/UI-cache path should be persisted into nanoPod's own
+  `Application Support/nanoPod/ArtworkCache` by persistent ID and by the
+  album-disambiguated metadata key. On restart or rebuild, check this disk cache
+  before async fetches so previously seen tracks do not briefly black out while
+  local Apple caches or web fallbacks warm up.
 - Do not scan Apple Music's `SubscriptionPlayCache` on app startup or on the
   interactive artwork-fetch path. Parsing local `.m4p` metadata with
   AVFoundation is too expensive for track switches and can starve the UI even
@@ -42,6 +48,11 @@ cover on a new track.
   decompressed playback-session files contain binary bytes after strings; a
   whitespace-only URL regex can swallow that tail and force a slower web
   fallback.
+- Playback-session metadata matching must not normalize the entire binary
+  playback-session payload. Match bounded text fields by case/diacritic
+  insensitive substring checks, then normalize only the small needle variants.
+  Whole-blob normalization is slow enough to lose the race to web fallback and
+  makes Music's already-local artwork look one track late.
 
 ## ScriptingBridge Lanes
 
@@ -62,3 +73,13 @@ cache miss/hit behavior, apply source, apply time, and drop reason. Slow
 same-generation apply work should surface as `artworkBlocking`; stale async
 results should remain `artwork.drop` events with the reason instead of silently
 disappearing from the evidence trail.
+
+Manual artwork-stale reports should export exact-track artwork evidence when it
+exists. When a switch makes the relevant artwork event belong to the outgoing or
+incoming track, report export may include recent artwork events/incidents by
+time, but it must mark that fallback explicitly so the daily brief can separate
+track-scoped evidence from switch-window evidence.
+
+Manual blackout-during-switching reports should use the same artwork time
+fallback because a temporary black background is usually a failed retain/apply
+window, even when the active track has already advanced.

@@ -138,6 +138,13 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testMusicTrackClassNameMapsAppleEventDescriptorCodes() {
+        XCTAssertEqual(MusicController.musicTrackClassName(fromObjectClassDescription: "<NSAppleEventDescriptor: 'cURL'>"), "URL track")
+        XCTAssertEqual(MusicController.musicTrackClassName(fromObjectClassDescription: "<NSAppleEventDescriptor: 'cFlT'>"), "file track")
+        XCTAssertEqual(MusicController.musicTrackClassName(fromObjectClassDescription: "<NSAppleEventDescriptor: 'cShT'>"), "shared track")
+        XCTAssertEqual(MusicController.musicTrackClassName(fromObjectClassDescription: "<NSAppleEventDescriptor: 'abcd'>"), "")
+    }
+
     // ------------------------------------------------------------------
     // MARK: - OBJCCatch
     // ------------------------------------------------------------------
@@ -242,6 +249,20 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(
             url?.absoluteString,
             "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/3c/0f/75/cover.jpg/800x800bb.jpg"
+        )
+    }
+
+    func testPlaybackSessionArtworkTextMatchHandlesBinaryPayloadWithoutWholeBlobNormalization() {
+        let binaryTail = String(repeating: "\u{fffd}\u{0005}\u{0000}", count: 2000)
+        let text = "Plastic Love \u{0000} Palette:eillB https://is1-ssl.mzstatic.com/image/thumb/Music116/v4/ef/ea/df/cover.jpg/800x800bb.jpg\(binaryTail)"
+
+        XCTAssertTrue(
+            PlaybackSessionArtworkFetcher.textMatches(
+                text,
+                title: "Plastic Love",
+                artist: "eill",
+                album: "Palette"
+            )
         )
     }
 

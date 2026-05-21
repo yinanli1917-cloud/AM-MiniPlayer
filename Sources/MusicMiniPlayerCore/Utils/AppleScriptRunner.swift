@@ -22,6 +22,7 @@ struct PlayerStateSnapshot {
     let trackDuration: Double
     let persistentID: String
     let trackClass: String
+    let playlistName: String
     let bitRate: Int
     let sampleRate: Int
     /// Wall clock time when position was measured (before AppleScript execution)
@@ -51,6 +52,12 @@ enum AppleScriptRunner {
             set repeatState to song repeat as string
 
             if exists current track then
+                set playlistName to ""
+                try
+                    if exists current playlist then
+                        set playlistName to name of current playlist
+                    end if
+                end try
                 set trackName to name of current track
                 set trackArtist to artist of current track
                 set trackAlbum to album of current track
@@ -61,9 +68,9 @@ enum AppleScriptRunner {
                 set trackBitRate to bit rate of current track as string
                 set trackSampleRate to sample rate of current track as string
 
-                return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackClass & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate & "|||" & shuffleState & "|||" & repeatState
+                return isPlaying & "|||" & trackName & "|||" & trackArtist & "|||" & trackAlbum & "|||" & trackDuration & "|||" & trackID & "|||" & trackClass & "|||" & trackPosition & "|||" & trackBitRate & "|||" & trackSampleRate & "|||" & shuffleState & "|||" & repeatState & "|||" & playlistName
             else
-                return isPlaying & "|||NOT_PLAYING|||||||0|||||||||0|||0|||0|||" & shuffleState & "|||" & repeatState
+                return isPlaying & "|||NOT_PLAYING|||||||0|||||||||0|||0|||0|||" & shuffleState & "|||" & repeatState & "|||"
             end if
         on error errMsg
             return "ERROR:" & errMsg
@@ -154,6 +161,7 @@ enum AppleScriptRunner {
             trackDuration: Double(parts[4]) ?? 0,
             persistentID: parts[5],
             trackClass: parts[6],
+            playlistName: parts.count > 12 ? parts[12] : "",
             bitRate: Int(parts[8]) ?? 0,
             sampleRate: Int(parts[9]) ?? 0,
             measurementTime: measurementTime

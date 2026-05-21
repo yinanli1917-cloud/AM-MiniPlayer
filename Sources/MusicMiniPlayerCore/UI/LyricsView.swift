@@ -116,6 +116,7 @@ public struct LyricsView: View {
     @State private var translationSessionConfigAny: Any?
     @State private var localTranslationTrigger: Int = 0
     @State private var translationConfigGeneration = 0
+    @State private var translationPreflightTask: Task<Void, Never>?
 
     // ── 无障碍 ──
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -158,6 +159,9 @@ public struct LyricsView: View {
             if newPage != .lyrics {
                 pendingTrackLyricsFetchTask?.cancel()
                 pendingTrackLyricsFetchTask = nil
+                translationPreflightTask?.cancel()
+                translationPreflightTask = nil
+                translationSessionConfigAny = nil
             }
             if newPage == .lyrics {
                 isHovering = true
@@ -966,15 +970,21 @@ public struct LyricsView: View {
 
     // MARK: - 翻译
 
-    private func updateTranslationSessionConfig() {
+    private func updateTranslationSessionConfig(trigger: Int? = nil) {
         if #available(macOS 15.0, *) {
-            let targetLang = Locale.Language(identifier: lyricsService.translationLanguage)
-            // Always let Apple's Translation framework auto-detect source language.
-            // NLLanguageRecognizer misclassifies short English lines as Danish/Slovak,
-            // causing unsupported language pair failures (e.g. da→zh).
-            translationSessionConfigAny = TranslationSession.Configuration(
-                source: nil, target: targetLang
-            )
+            let generation = translationConfigGeneration
+            translationPreflightTask?.cancel()
+            translationSessionConfigAny = nil
+            translationPreflightTask = Task { @MainActor in
+                guard currentPage == .lyrics, lyricsService.showTranslation else { return }
+                guard let config = await lyricsService.silentSystemTranslationConfiguration() else { return }
+                guard !Task.isCancelled, translationConfigGeneration == generation else { return }
+
+                translationSessionConfigAny = config
+                if let trigger {
+                    localTranslationTrigger = trigger
+                }
+            }
         }
     }
 
@@ -994,8 +1004,7 @@ public struct LyricsView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             guard translationConfigGeneration == generation else { return }
             guard currentPage == .lyrics, lyricsService.showTranslation else { return }
-            updateTranslationSessionConfig()
-            localTranslationTrigger = trigger
+            updateTranslationSessionConfig(trigger: trigger)
         }
     }
 

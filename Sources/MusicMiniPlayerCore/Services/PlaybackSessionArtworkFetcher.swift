@@ -5,19 +5,34 @@ import SQLite3
 
 enum PlaybackSessionArtworkFetcher {
     private static let maxArchives = 8
+    private static let fileQueue = DispatchQueue(
+        label: "com.nanopod.playback-session-artwork",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+    private static let urlCacheLock = NSLock()
+    private static let urlCacheTTL: TimeInterval = 10 * 60
+    private static var urlCache: [String: (timestamp: Date, url: URL)] = [:]
 
     static func fetchArtwork(title: String, artist: String, album: String) async -> NSImage? {
-        guard let url = latestArtworkURL(title: title, artist: artist, album: album) else { return nil }
-        if let cached = cachedArtworkData(for: url),
+        guard let url = await latestArtworkURLOnFileQueue(title: title, artist: artist, album: album) else {
+            DebugLogger.log("Artwork", "🎨 [PlaybackSession] no matching artwork URL for '\(title)' by '\(artist)'")
+            return nil
+        }
+        guard !Task.isCancelled else { return nil }
+        if let cached = await cachedArtworkDataOnFileQueue(for: url),
            let image = NSImage(data: cached) {
             DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI cache hit: \(url.absoluteString)")
             return image
         }
+        DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI cache miss: \(url.absoluteString)")
+        guard !Task.isCancelled else { return nil }
         do {
             let (data, _) = try await HTTPClient.getData(url: url, timeout: 1.0, retry: false)
             DebugLogger.log("Artwork", "🎨 [PlaybackSession] original Music artwork: \(url.absoluteString)")
             return NSImage(data: data)
         } catch {
+            DebugLogger.log("Artwork", "🎨 [PlaybackSession] original Music artwork failed: \(error.localizedDescription)")
             return nil
         }
     }
@@ -28,7 +43,22 @@ enum PlaybackSessionArtworkFetcher {
         return latestArtworkURL(title: title, artist: artist, album: album, root: root)
     }
 
+    private static func latestArtworkURLOnFileQueue(title: String, artist: String, album: String) async -> URL? {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Music/PlaybackSessions")
+        return await withCheckedContinuation { continuation in
+            fileQueue.async {
+                continuation.resume(returning: latestArtworkURL(title: title, artist: artist, album: album, root: root))
+            }
+        }
+    }
+
     static func latestArtworkURL(title: String, artist: String, album: String, root: URL) -> URL? {
+        let key = urlCacheKey(title: title, artist: artist, album: album, root: root)
+        if let cached = cachedURL(for: key) {
+            return cached
+        }
+
         guard let archives = try? FileManager.default.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -53,10 +83,53 @@ enum PlaybackSessionArtworkFetcher {
                 guard let text = decompressedText(at: file),
                       textMatches(text, title: title, artist: artist, album: album),
                       let url = firstAppleArtworkURL(in: text) else { continue }
+                storeCachedURL(url, for: key)
                 return url
             }
         }
         return nil
+    }
+
+    private static func cachedArtworkDataOnFileQueue(for artworkURL: URL) async -> Data? {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Caches/com.apple.Music/MusicUIArtworkCache")
+        return await withCheckedContinuation { continuation in
+            fileQueue.async {
+                continuation.resume(returning: cachedArtworkData(for: artworkURL, cacheRoot: root))
+            }
+        }
+    }
+
+    private static func urlCacheKey(title: String, artist: String, album: String, root: URL) -> String {
+        [
+            root.path,
+            normalize(title),
+            normalize(artist),
+            normalize(album)
+        ].joined(separator: "|")
+    }
+
+    private static func cachedURL(for key: String) -> URL? {
+        urlCacheLock.lock()
+        defer { urlCacheLock.unlock() }
+        guard let cached = urlCache[key] else { return nil }
+        guard Date().timeIntervalSince(cached.timestamp) <= urlCacheTTL else {
+            urlCache.removeValue(forKey: key)
+            return nil
+        }
+        return cached.url
+    }
+
+    private static func storeCachedURL(_ url: URL, for key: String) {
+        urlCacheLock.lock()
+        urlCache[key] = (Date(), url)
+        if urlCache.count > 128 {
+            let sorted = urlCache.sorted { $0.value.timestamp < $1.value.timestamp }
+            for (oldKey, _) in sorted.prefix(urlCache.count - 96) {
+                urlCache.removeValue(forKey: oldKey)
+            }
+        }
+        urlCacheLock.unlock()
     }
 
     private static func decompressedText(at url: URL) -> String? {
@@ -65,15 +138,24 @@ enum PlaybackSessionArtworkFetcher {
         return String(decoding: inflated, as: UTF8.self)
     }
 
-    private static func textMatches(_ text: String, title: String, artist: String, album: String) -> Bool {
-        let normalizedText = normalize(text)
-        let normalizedTitle = normalize(title)
-        let normalizedArtist = normalize(artist)
-        let normalizedAlbum = normalize(album)
+    static func textMatches(_ text: String, title: String, artist: String, album: String) -> Bool {
+        guard textContainsPlaybackField(text, title) else { return false }
+        if textContainsPlaybackField(text, artist) { return true }
+        if textContainsPlaybackField(text, album) { return true }
+        return false
+    }
 
-        guard !normalizedTitle.isEmpty, normalizedText.contains(normalizedTitle) else { return false }
-        if !normalizedArtist.isEmpty, normalizedText.contains(normalizedArtist) { return true }
-        if !normalizedAlbum.isEmpty, normalizedText.contains(normalizedAlbum) { return true }
+    private static func textContainsPlaybackField(_ text: String, _ field: String) -> Bool {
+        let trimmed = field.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        if text.range(of: trimmed, options: options) != nil { return true }
+
+        let simplified = LanguageUtils.toSimplifiedChinese(trimmed)
+        if simplified != trimmed,
+           text.range(of: simplified, options: options) != nil {
+            return true
+        }
         return false
     }
 

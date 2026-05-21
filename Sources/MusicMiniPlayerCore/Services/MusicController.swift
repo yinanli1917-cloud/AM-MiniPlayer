@@ -10,6 +10,7 @@ import Combine
 import SwiftUI
 import MusicKit
 import os
+import ObjCSupport
 
 // MARK: - 窗口移动通知（SnappablePanel ↔ MusicController）
 public extension Notification.Name {
@@ -88,6 +89,8 @@ public class MusicController: ObservableObject {
     @Published public var currentPersistentID: String?
     @Published public var currentTrackIsURLTrack: Bool = false
     @Published public var musicKitAuthorized: Bool = false
+    public private(set) var currentTrackClass: String = ""
+    public private(set) var currentPlaylistName: String = ""
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - 内部状态
@@ -327,8 +330,27 @@ public class MusicController: ObservableObject {
             album: currentAlbum,
             duration: duration,
             persistentID: currentPersistentID,
-            playbackTime: currentTime
+            playbackTime: currentTime,
+            trackClass: currentTrackClass.isEmpty ? nil : currentTrackClass,
+            playlistName: currentPlaylistName.isEmpty ? nil : currentPlaylistName,
+            playbackContext: diagnosticsPlaybackContext(),
+            playerPage: String(describing: currentPage)
         )
+    }
+
+    private func diagnosticsPlaybackContext() -> String {
+        let trackClass = currentTrackClass.lowercased()
+        let playlist = currentPlaylistName.lowercased()
+        if currentTrackIsURLTrack || trackClass.contains("url") {
+            return "radio-or-stream"
+        }
+        if playlist.contains("radio") || playlist.contains("station") || playlist.contains("电台") {
+            return "radio-or-station-playlist"
+        }
+        if !currentPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "playlist-or-library"
+        }
+        return "unknown"
     }
 
     public func diagnosticsLyricsWorkloadMetrics() -> [String: Double] {
@@ -804,6 +826,9 @@ public class MusicController: ObservableObject {
         logToFile("🎵 Track changed: \(name) - \(artist)")
 
         lastPolledPosition = 0  // Reset so position-jump detection doesn't false-trigger
+        currentPersistentID = nil
+        currentTrackClass = ""
+        currentTrackIsURLTrack = false
         let generation = incrementGeneration()
 
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
@@ -829,24 +854,33 @@ public class MusicController: ObservableObject {
             // On timeout, leave fields at defaults — subsequent polls / retries will
             // backfill once Music.app responds. Without this, scriptingBridgeQueue
             // stalls for every downstream block until 5s heartbeat recovery kicks in.
-            typealias SBFields = (persistentID: String, duration: Double, trackName: String?)
+            typealias SBFields = (persistentID: String, duration: Double, trackName: String?, trackClass: String, playlistName: String)
             let fields: SBFields = SBTimeoutRunner.run(timeout: 1.5, lane: "trackMetadata") { () -> SBFields? in
                 guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject else {
-                    return (persistentID: "", duration: 0, trackName: nil)
+                    return (persistentID: "", duration: 0, trackName: nil, trackClass: "", playlistName: "")
                 }
                 let pid = currentTrack.value(forKey: "persistentID") as? String ?? ""
                 let sbName = currentTrack.value(forKey: "name") as? String
+                let trackClass = Self.musicTrackClassName(from: currentTrack)
+                var playlistName = ""
+                _ = OBJCCatch {
+                    if let playlist = app.value(forKey: "currentPlaylist") as? NSObject {
+                        playlistName = playlist.value(forKey: "name") as? String ?? ""
+                    }
+                }
                 var dur: Double = 0
                 if let n = sbName, n == name,
                    let d = currentTrack.value(forKey: "duration") as? Double, d > 0 {
                     dur = d
                 }
-                return (persistentID: pid, duration: dur, trackName: sbName)
-            } ?? (persistentID: "", duration: 0, trackName: nil)
+                return (persistentID: pid, duration: dur, trackName: sbName, trackClass: trackClass, playlistName: playlistName)
+            } ?? (persistentID: "", duration: 0, trackName: nil, trackClass: "", playlistName: "")
 
             let persistentID = fields.persistentID
             let sbDuration = fields.duration
             let sbTrackName = fields.trackName
+            let trackClass = fields.trackClass
+            let playlistName = fields.playlistName
 
             // 🔑 SB reports a DIFFERENT track than the notification said — Music.app
             // moved faster than the notification (common during rapid switching).
@@ -861,6 +895,14 @@ public class MusicController: ObservableObject {
 
             DispatchQueue.main.async {
                 self.currentPersistentID = persistentID
+                if !trackClass.isEmpty {
+                    self.currentTrackClass = trackClass
+                    self.currentTrackIsURLTrack = trackClass == "URL track"
+                }
+                if !playlistName.isEmpty {
+                    self.currentPlaylistName = playlistName
+                }
+                DiagnosticsService.shared.enrichTrackContext(self.diagnosticsTrackContext())
 
                 // Backfill cache: if artwork already arrived, cache it under persistentID
                 if !persistentID.isEmpty, let artwork = self.currentArtwork,
@@ -1128,11 +1170,9 @@ public class MusicController: ObservableObject {
     // MARK: - Full State Sync (10s safety net, pure SB — no process spawn)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // SB FourCC codes (verified empirically — differ from AppleEventCode constants)
+    // SB FourCC codes (verified empirically)
     private static let sbPlaying: Int  = 0x6B505350  // 'kPSP'
     private static let sbStopped: Int  = 0x6B505353  // 'kPSS'
-    private static let sbRepeatOne: Int = 0x6B527031  // 'kRp1'
-    private static let sbRepeatAll: Int = 0x6B416C6C  // 'kAll'
 
     private func updatePlayerStateViaAppleScriptFallback(reason: String) {
         if !Thread.isMainThread {
@@ -1212,13 +1252,19 @@ public class MusicController: ObservableObject {
             // stall until the (removed, crash-prone) heartbeat-recreate kicked in.
             // Now the block returns nil on timeout → we just skip this update cycle;
             // the next 30s tick (or poll) tries again.
-            let bundle = SBTimeoutRunner.run(timeout: 2.0, lane: "stateSync") { () -> (position: Double, stateRaw: Int, shuffle: Bool, repeatRaw: Int, track: NSObject?)? in
+            let bundle = SBTimeoutRunner.run(timeout: 2.0, lane: "stateSync") { () -> (position: Double, stateRaw: Int, shuffle: Bool, repeatRaw: Int, track: NSObject?, playlistName: String)? in
                 let p = app.value(forKey: "playerPosition") as? Double ?? 0
                 let s = app.value(forKey: "playerState") as? Int ?? 0
                 let sh = app.value(forKey: "shuffleEnabled") as? Bool ?? false
                 let r = app.value(forKey: "songRepeat") as? Int ?? 0
                 let t = app.value(forKey: "currentTrack") as? NSObject
-                return (p, s, sh, r, t)
+                var playlistName = ""
+                _ = OBJCCatch {
+                    if let playlist = app.value(forKey: "currentPlaylist") as? NSObject {
+                        playlistName = playlist.value(forKey: "name") as? String ?? ""
+                    }
+                }
+                return (p, s, sh, r, t, playlistName)
             }
 
             guard let bundle else {
@@ -1252,12 +1298,9 @@ public class MusicController: ObservableObject {
             let stateRaw = bundle.stateRaw
             let shuffle = bundle.shuffle
             let repeatRaw = bundle.repeatRaw
+            let playlistName = bundle.playlistName
 
-            let repeatMode: Int = {
-                if repeatRaw == Self.sbRepeatOne { return 1 }
-                if repeatRaw == Self.sbRepeatAll { return 2 }
-                return 0
-            }()
+            let repeatMode = AppleEventCode.repeatMode(from: repeatRaw)
 
             guard let track = bundle.track else {
                 DispatchQueue.main.async {
@@ -1267,22 +1310,24 @@ public class MusicController: ObservableObject {
                 return
             }
 
-            let trackFields = SBTimeoutRunner.run(timeout: 1.5, lane: "stateSync") { () -> (name: String, artist: String, album: String, duration: Double, pid: String, bitRate: Int, sampleRate: Int)? in
+            let trackFields = SBTimeoutRunner.run(timeout: 1.5, lane: "stateSync") { () -> (name: String, artist: String, album: String, duration: Double, pid: String, trackClass: String, bitRate: Int, sampleRate: Int)? in
                 let n = track.value(forKey: "name") as? String ?? ""
                 let a = track.value(forKey: "artist") as? String ?? ""
                 let al = track.value(forKey: "album") as? String ?? ""
                 let d = track.value(forKey: "duration") as? Double ?? 0
                 let pid = track.value(forKey: "persistentID") as? String ?? ""
+                let cls = Self.musicTrackClassName(from: track)
                 let br = track.value(forKey: "bitRate") as? Int ?? 0
                 let sr = track.value(forKey: "sampleRate") as? Int ?? 0
-                return (n, a, al, d, pid, br, sr)
-            } ?? (name: "", artist: "", album: "", duration: 0, pid: "", bitRate: 0, sampleRate: 0)
+                return (n, a, al, d, pid, cls, br, sr)
+            } ?? (name: "", artist: "", album: "", duration: 0, pid: "", trackClass: "", bitRate: 0, sampleRate: 0)
 
             let trackName = trackFields.name
             let trackArtist = trackFields.artist
             let trackAlbum = trackFields.album
             let trackDuration = trackFields.duration
             let persistentID = trackFields.pid
+            let trackClass = trackFields.trackClass
             let bitRate = trackFields.bitRate
             let sampleRate = trackFields.sampleRate
 
@@ -1296,13 +1341,43 @@ public class MusicController: ObservableObject {
                 trackAlbum: trackAlbum,
                 trackDuration: trackDuration,
                 persistentID: persistentID,
-                trackClass: "",
+                trackClass: trackClass,
+                playlistName: playlistName,
                 bitRate: bitRate,
                 sampleRate: sampleRate,
                 measurementTime: measurementTime
             )
             self.processPlayerState(snapshot)
         }
+    }
+
+    static func musicTrackClassName(from track: NSObject) -> String {
+        var objectClassDescription = ""
+        let ex = OBJCCatch {
+            if let descriptor = track.value(forKey: "objectClass") as? NSAppleEventDescriptor {
+                objectClassDescription = descriptor.description
+            } else if let value = track.value(forKey: "objectClass") {
+                objectClassDescription = String(describing: value)
+            }
+        }
+        if let ex {
+            DebugLogger.log("PlayerState", "⚠️ [trackClass] objectClass read failed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
+        }
+        return musicTrackClassName(fromObjectClassDescription: objectClassDescription)
+    }
+
+    static func musicTrackClassName(fromObjectClassDescription description: String) -> String {
+        let normalized = description.lowercased()
+        if normalized.contains("'curl'") || normalized.contains("curl") {
+            return "URL track"
+        }
+        if normalized.contains("'cflt'") || normalized.contains("cflt") {
+            return "file track"
+        }
+        if normalized.contains("'csht'") || normalized.contains("csht") {
+            return "shared track"
+        }
+        return ""
     }
 
     /// 处理播放器状态更新（共用逻辑）
@@ -1317,7 +1392,7 @@ public class MusicController: ObservableObject {
 
         // 切歌检测
         let isFirstTrack = self.currentPersistentID == nil && !s.persistentID.isEmpty
-        let isURLTrack = s.trackClass == "URL track"
+        let isURLTrack = s.trackClass == "URL track" || (s.trackClass.isEmpty && s.persistentID.isEmpty)
         let trackChangedByID = !isURLTrack && !s.persistentID.isEmpty && s.persistentID != self.currentPersistentID
         let trackChangedByTitle = (isURLTrack || s.persistentID.isEmpty)
             && (s.trackName != self.currentTrackTitle || s.trackArtist != self.currentArtist || s.trackAlbum != self.currentAlbum)
@@ -1347,8 +1422,14 @@ public class MusicController: ObservableObject {
         if currentTrackTitle != s.trackName { currentTrackTitle = s.trackName }
         if currentArtist != s.trackArtist { currentArtist = s.trackArtist }
         if currentAlbum != s.trackAlbum { currentAlbum = s.trackAlbum }
-        if currentTrackIsURLTrack != (s.trackClass == "URL track") { currentTrackIsURLTrack = (s.trackClass == "URL track") }
+        let snapshotIsURLTrack = s.trackClass == "URL track" || (s.trackClass.isEmpty && s.persistentID.isEmpty)
+        if currentTrackIsURLTrack != snapshotIsURLTrack { currentTrackIsURLTrack = snapshotIsURLTrack }
+        if currentTrackClass != s.trackClass { currentTrackClass = s.trackClass }
+        if currentPlaylistName != s.playlistName { currentPlaylistName = s.playlistName }
         if duration != s.trackDuration { duration = s.trackDuration }
+        Task { @MainActor in
+            DiagnosticsService.shared.enrichTrackContext(self.diagnosticsTrackContext())
+        }
 
         // 时间同步
         // 🔑 Use measurementTime (captured before AppleScript ran) instead of Date()
@@ -1401,6 +1482,9 @@ public class MusicController: ObservableObject {
         internalCurrentTime = 0
         syncPlaybackClock(to: 0, playing: false)
         audioQuality = nil
+        currentTrackClass = ""
+        currentPlaylistName = ""
+        currentTrackIsURLTrack = false
         setArtwork(nil)
     }
 }
