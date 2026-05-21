@@ -26,8 +26,12 @@ not public telemetry and should not be presented as release analytics.
 Reports should separate user-visible symptoms from automatically detected
 technical causes.
 
-- User labels should describe what the owner can see: wrong lyrics, timing off,
-  stale lyrics, translation wrong, slow loading, visible stutter, or other.
+- User labels should describe what the owner can see: wrong lyrics, missing
+  lyrics, resolver mismatch, timing off, stale lyrics, missing/wrong
+  translation, slow loading, missing/late/stale artwork, interrupted switching
+  animation, playback context mismatch, ScriptingBridge delay, high CPU,
+  visible stutter, or other. Freeform manual-report notes may override the
+  selected menu label when the note clearly names one of those symptoms.
 - The app should attach hidden evidence itself: frame stalls, high CPU, memory
   spikes, ScriptingBridge latency/backlog/timeouts, fallback churn, and related
   incident metrics.
@@ -36,6 +40,13 @@ technical causes.
   and `artwork.drop` with track context, generation, cache eligibility, source,
   apply time, and drop reason so cover lag/blackout can be verified from the
   rolling state and daily brief.
+- Apple Music playback-session artwork is local filesystem/cache work and must
+  not run on Swift's cooperative executor or behind stale serial file reads.
+  Dispatch playback-session archive/cache reads onto a dedicated concurrent
+  utility queue, cache parsed artwork URLs briefly by title/artist/album/root,
+  and retry quickly after a miss while retaining the previous cover. A fixed
+  one-second retry delay makes successful local Apple cache hits look one track
+  late.
 - ScriptingBridge timeout guards must use explicit lanes that match one
   SBApplication proxy per operation family. Full player-state sync, queue
   snapshots, current-track metadata backfill, artwork extraction, and position
@@ -95,10 +106,23 @@ technical causes.
 - Track metadata is acceptable in manual reports because wrong-lyrics and timing
   bugs need title, artist, album, duration, selected source, and timing context
   to reproduce.
+- Manual reports and scoped diagnostics should include Music.app playback
+  context when public Apple Events expose it: track class, current playlist
+  name, inferred playback context, and nanoPod page. Public ScriptingBridge can
+  distinguish library/shared/file/URL-track style state and current playlist
+  name, but it cannot fully expose private Music.app navigation origins such as
+  the exact search result page.
 - Translation diagnostics must record coverage, not just a boolean. A source
   with some translated rows and missing visible rows should report translated
-  line count, translatable line count, missing translation count, and a partial
-  translation incident when translation display was requested.
+  line count, translatable line count, and missing translation count as a local
+  event first. Do not create a user-visible partial-translation incident merely
+  because the provider source is sparse; create the incident only after the
+  system-fill path is requested and fails or is unavailable.
+- Translation manual reports must be able to distinguish three states:
+  provider lyrics with source translations, provider lyrics that need system
+  translation, and system translation skipped/failed. Record the target
+  language and skip/failure reason, then clear the incident when system
+  translation fills the same track.
 - Manual reports must not preserve synthetic placeholder track metadata such as
   `Wrong Lyrics / Reporter / Debug` when recent credible app evidence exists.
   Resolve the report track from the latest credible event, incident, or
@@ -107,6 +131,12 @@ technical causes.
   motion samples, incidents, interactions, and line-motion baseline values to
   that track. Keep untracked system signals such as CPU and ScriptingBridge
   samples only when they are not tied to a different song.
+- Artwork-stale reports are switch-bound and the useful evidence may belong to
+  the outgoing or incoming track rather than the exact current report track. If
+  exact-track artwork rows are absent, include recent `artwork.*` events and
+  `artworkBlocking` incidents by report time, with an explicit fallback marker,
+  instead of exporting a manual artwork report with no source/cache/apply
+  evidence.
 - Exported reports must not attach stale or unrelated debug logs from an older
   CLI or app session. App diagnostics debug logs belong under the diagnostics
   live directory; `/tmp/nanopod_debug.log` may be used by CLI verifier runs and
@@ -229,6 +259,17 @@ technical causes.
   animation still belongs to the outgoing track. Non-motion reports such as
   wrong-lyrics or missing-lyrics must keep strict track scoping so unrelated
   old samples do not contaminate the bundle.
+- Manual symptom selection should expose the recurring user-visible categories
+  directly, including missing translation, resolver mismatch, ScriptingBridge
+  delay, playback context wrong, artwork stale after switching, animation
+  interrupted, and blackout during switching. When the owner types a note before
+  manually choosing a different symptom, diagnostics may infer and select the
+  matching category so reports are not silently stored as the default
+  `wrong lyrics` bucket.
+- A blackout-during-switching report is both a motion report and an artwork
+  report for export scoping: include recent lyrics line-motion samples and
+  artwork apply/drop/cache evidence by report time when exact current-track rows
+  are absent, and mark both fallbacks explicitly.
 
 ## Retention And Media
 

@@ -22,6 +22,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.isEnabled = false
         DiagnosticsService.shared.setStorageBaseDirectoryForTesting(nil)
         DiagnosticsService.shared.setDebugLogURLForTesting(nil)
+        DebugLogger.resetLogURL()
         if let diagnosticsStorageRoot {
             try? FileManager.default.removeItem(at: diagnosticsStorageRoot)
         }
@@ -57,6 +58,43 @@ final class DiagnosticsServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .scriptingBridgeBacklog)
+    }
+
+    func testTrackContextEnrichmentBackfillsPlaylistAndClass() {
+        let earlyTrack = DiagnosticTrackContext(
+            title: "Distance (feat. deca joins)",
+            artist: "Enno Cheng",
+            album: "Mercury Retrograde",
+            duration: 246.546,
+            persistentID: "STALE_PREVIOUS_ID",
+            playbackContext: "unknown",
+            playerPage: "lyrics"
+        )
+        DiagnosticsService.shared.recordEvent(
+            "artwork.fetch.start",
+            detail: "Artwork fetch started before bridge context arrived.",
+            track: earlyTrack
+        )
+        DiagnosticsService.shared.recordLyricsFetchMiss(track: earlyTrack, resultCount: 0)
+
+        let enriched = DiagnosticTrackContext(
+            title: "Distance (feat. deca joins)",
+            artist: "Enno Cheng",
+            album: "Mercury Retrograde",
+            duration: 246.546,
+            persistentID: "CURRENT_ID",
+            trackClass: "shared track",
+            playlistName: "Music",
+            playbackContext: "playlist-or-library",
+            playerPage: "lyrics"
+        )
+        DiagnosticsService.shared.enrichTrackContext(enriched)
+
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.persistentID, "CURRENT_ID")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.trackClass, "shared track")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.playlistName, "Music")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.playbackContext, "playlist-or-library")
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.track?.persistentID, "CURRENT_ID")
     }
 
     func testStandaloneMinorScriptingBridgeReadStaysInBaselineOnly() {
@@ -154,7 +192,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(incident?.evidence["operation"], "updatePlayerState")
     }
 
-    func testPartialSourceTranslationCreatesInspectableIncidentWhenTranslationShown() {
+    func testPartialSourceTranslationCreatesEventUntilSystemFillFails() {
         let track = DiagnosticTrackContext(
             title: "Anohini Kaeritai",
             artist: "Miki Imai",
@@ -175,15 +213,14 @@ final class DiagnosticsServiceTests: XCTestCase {
             translationDisplayRequested: true
         )
 
-        let incident = DiagnosticsService.shared.incidents.first
-        XCTAssertEqual(incident?.category, .lyricsPartialTranslation)
-        XCTAssertEqual(incident?.title, "Source translation incomplete")
-        XCTAssertEqual(incident?.metrics["translationLineCount"], 13)
-        XCTAssertEqual(incident?.metrics["missingTranslationLineCount"], 7)
-        XCTAssertEqual(incident?.metrics["translationCoverage"] ?? -1, 0.65, accuracy: 0.001)
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsPartialTranslation })
+        let event = DiagnosticsService.shared.events.first { $0.name == "lyrics.translation.partialSource" }
+        XCTAssertEqual(event?.metrics["translationLineCount"], 13)
+        XCTAssertEqual(event?.metrics["missingTranslationLineCount"], 7)
+        XCTAssertEqual(event?.metrics["translationCoverage"] ?? -1, 0.65, accuracy: 0.001)
     }
 
-    func testSystemFillClearsPartialSourceTranslationIncident() {
+    func testSystemFillClearsPartialSourceTranslationGapIncident() {
         let track = DiagnosticTrackContext(
             title: "The Way We Were",
             artist: "Teresa Teng",
@@ -191,17 +228,12 @@ final class DiagnosticsServiceTests: XCTestCase {
             duration: 207.773
         )
 
-        DiagnosticsService.shared.recordLyricsFetchFinished(
+        DiagnosticsService.shared.recordLyricsSystemTranslationGap(
             track: track,
-            source: "NetEase",
-            score: 76.6,
-            lineCount: 17,
-            isUnsynced: false,
-            hadSourceTranslation: true,
+            reason: "translation task failed",
+            translationLanguage: "zh-Hant",
             translationLineCount: 15,
-            translatableLineCount: 16,
-            missingTranslationLineCount: 1,
-            translationDisplayRequested: true
+            translatableLineCount: 16
         )
 
         XCTAssertEqual(
@@ -223,6 +255,42 @@ final class DiagnosticsServiceTests: XCTestCase {
         }
         XCTAssertEqual(event?.track, track)
         XCTAssertEqual(event?.metrics["filledLineCount"], 1)
+        XCTAssertEqual(event?.metrics["clearedPartialTranslationIncidentCount"], 1)
+    }
+
+    func testSystemTranslationGapIsInspectableAndClearedBySystemFill() {
+        let track = DiagnosticTrackContext(
+            title: "Voyage",
+            artist: "MUNYA",
+            album: "Voyage to Mars",
+            duration: 186.5
+        )
+
+        DiagnosticsService.shared.recordLyricsSystemTranslationGap(
+            track: track,
+            reason: "language pair supported but not installed",
+            translationLanguage: "zh-Hans",
+            translationLineCount: 0,
+            translatableLineCount: 36
+        )
+
+        let incident = DiagnosticsService.shared.incidents.first
+        XCTAssertEqual(incident?.category, .lyricsPartialTranslation)
+        XCTAssertEqual(incident?.title, "System translation unavailable")
+        XCTAssertEqual(incident?.metrics["missingTranslationLineCount"], 36)
+        XCTAssertEqual(incident?.evidence["translationLanguage"], "zh-Hans")
+
+        DiagnosticsService.shared.recordLyricsSystemTranslationFilled(
+            track: track,
+            filledLineCount: 36,
+            translationLineCount: 36,
+            translatableLineCount: 36,
+            translationLanguage: "zh-Hans"
+        )
+
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsPartialTranslation })
+        let event = DiagnosticsService.shared.events.first { $0.name == "lyrics.translation.filledSystem" }
+        XCTAssertEqual(event?.metrics["filledLineCount"], 36)
         XCTAssertEqual(event?.metrics["clearedPartialTranslationIncidentCount"], 1)
     }
 
@@ -300,6 +368,78 @@ final class DiagnosticsServiceTests: XCTestCase {
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathComponent("nanopod_debug.log").path))
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.userSymptom, .wrongLyrics)
+    }
+
+    func testManualReportInfersMissingLyricsArtworkAndContext() throws {
+        let lyricsTrack = DiagnosticTrackContext(
+            title: "I Don't Belong Anywhere",
+            artist: "Zitan Qi",
+            album: "I Don't Belong Anywhere",
+            duration: 333,
+            persistentID: "65C30E3EB6270257",
+            playbackTime: 12,
+            trackClass: "URL track",
+            playlistName: "Discovery Station",
+            playbackContext: "radio-or-stream",
+            playerPage: "lyrics"
+        )
+
+        let lyricsURL = try DiagnosticsService.shared.recordManualReport(
+            symptom: .wrongLyrics,
+            note: "missing lyrics",
+            track: lyricsTrack
+        )
+        let lyricsReportData = try Data(contentsOf: lyricsURL.appendingPathComponent("report.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let lyricsReport = try decoder.decode(DiagnosticReportManifest.self, from: lyricsReportData)
+        XCTAssertEqual(lyricsReport.userSymptom, .missingLyrics)
+        XCTAssertEqual(lyricsReport.track?.trackClass, "URL track")
+        XCTAssertEqual(lyricsReport.track?.playlistName, "Discovery Station")
+        XCTAssertEqual(lyricsReport.track?.playbackContext, "radio-or-stream")
+        XCTAssertEqual(lyricsReport.track?.playerPage, "lyrics")
+
+        let summary = try String(contentsOf: lyricsURL.appendingPathComponent("summary.md"), encoding: .utf8)
+        XCTAssertTrue(summary.contains("Music track class: URL track"))
+        XCTAssertTrue(summary.contains("Playback context: radio-or-stream"))
+        XCTAssertTrue(summary.contains("Current playlist: Discovery Station"))
+        XCTAssertTrue(summary.contains("nanoPod page: lyrics"))
+
+        DiagnosticsService.shared.clear()
+        let artworkURL = try DiagnosticsService.shared.recordManualReport(
+            symptom: .other,
+            note: "missing artwork",
+            track: lyricsTrack
+        )
+        let artworkReportData = try Data(contentsOf: artworkURL.appendingPathComponent("report.json"))
+        let artworkReport = try decoder.decode(DiagnosticReportManifest.self, from: artworkReportData)
+        XCTAssertEqual(artworkReport.userSymptom, .artworkMissing)
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.title, "Manual report: missing artwork")
+
+        XCTAssertEqual(
+            DiagnosticUserSymptom.inferred(from: .other, note: "resolver mismatch, 找错歌词"),
+            .lyricsResolverProblem
+        )
+        XCTAssertEqual(
+            DiagnosticUserSymptom.inferred(from: .wrongLyrics, note: "切歌动画被打断，不完整"),
+            .switchingAnimationInterrupted
+        )
+        XCTAssertEqual(
+            DiagnosticUserSymptom.inferred(from: .other, note: "next track goes black / 黑屏"),
+            .switchingBlackout
+        )
+        XCTAssertEqual(
+            DiagnosticUserSymptom.inferred(from: .other, note: "radio playlist context 看不到"),
+            .playbackContextWrong
+        )
+        XCTAssertEqual(
+            DiagnosticUserSymptom.inferred(from: .other, note: "Script Bridge delay makes next track slow"),
+            .scriptingBridgeDelay
+        )
+        XCTAssertEqual(
+            DiagnosticUserSymptom.inferred(from: .other, note: "system translation doesn't translate to the target language Chinese"),
+            .missingTranslation
+        )
     }
 
     func testLyricLineMotionSamplesExportWithReportBundle() throws {
@@ -621,7 +761,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertFalse(report.events.contains { $0.name == "diagnostics.lyricsLineMotionTimeScopedFallback" })
     }
 
-    func testNoSourceLyricsMissIsInformational() {
+    func testNoSourceLyricsMissCreatesDeduplicatedMissingLyricsIncident() {
         let track = DiagnosticTrackContext(
             title: "Missing Song",
             artist: "Missing Artist",
@@ -632,16 +772,22 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: false)
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 0)
 
-        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsMissing)
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.severity, .warning)
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.evidence["result"], "unresolved")
         let unresolvedEvent = DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.unresolved" }
         XCTAssertEqual(unresolvedEvent?.track, track)
         XCTAssertEqual(unresolvedEvent?.metrics["resultCount"] ?? -1, 0, accuracy: 0.001)
+
+        DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 0)
+        XCTAssertEqual(DiagnosticsService.shared.incidents.filter { $0.category == .lyricsMissing }.count, 1)
+        XCTAssertTrue(DiagnosticsService.shared.events.contains { $0.name == "lyrics.fetch.missingRepeated" })
 
         DiagnosticsService.shared.clear()
         DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: false)
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 2)
 
-        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsFallbackChurn)
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsMissing)
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.severity, .warning)
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.evidence["result"], "miss")
     }
@@ -665,9 +811,9 @@ final class DiagnosticsServiceTests: XCTestCase {
             hadSourceTranslation: false
         )
 
-        let fallbackIncidents = DiagnosticsService.shared.incidents.filter { $0.category == .lyricsFallbackChurn }
-        XCTAssertEqual(fallbackIncidents.count, 1)
-        XCTAssertEqual(fallbackIncidents.first?.evidence["result"], "miss")
+        let missingIncidents = DiagnosticsService.shared.incidents.filter { $0.category == .lyricsMissing }
+        XCTAssertEqual(missingIncidents.count, 1)
+        XCTAssertEqual(missingIncidents.first?.evidence["result"], "miss")
         XCTAssertTrue(DiagnosticsService.shared.events.contains { $0.name == "lyrics.fetch.lowConfidenceAfterMiss" })
     }
 
@@ -681,7 +827,7 @@ final class DiagnosticsServiceTests: XCTestCase {
 
         DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: false)
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 1)
-        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsFallbackChurn)
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsMissing)
 
         DiagnosticsService.shared.recordLyricsFetchFinished(
             track: track,
@@ -693,6 +839,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         )
 
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
         let resolvedEvent = DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.resolvedAfterMiss" }
         XCTAssertEqual(resolvedEvent?.track, track)
         XCTAssertEqual(resolvedEvent?.metrics["clearedFallbackIncidentCount"] ?? -1, 1, accuracy: 0.001)
@@ -709,13 +856,15 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: false)
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 0)
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+        XCTAssertTrue(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
 
         DiagnosticsService.shared.recordLyricsFetchUnavailable(track: track, classification: "unavailable")
 
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
         let event = DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.unavailable" }
         XCTAssertEqual(event?.track, track)
-        XCTAssertEqual(event?.metrics["clearedUnresolvedIncidentCount"] ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(event?.metrics["clearedUnresolvedIncidentCount"] ?? -1, 1, accuracy: 0.001)
     }
 
     func testFastSingleCandidateLyricsMissStaysPendingForAuthoritativeClassification() {
@@ -730,12 +879,14 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 1, terminalCandidateOnly: true)
 
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
         let pendingEvent = DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.terminalMissPendingBackfill" }
         XCTAssertEqual(pendingEvent?.track, track)
 
         DiagnosticsService.shared.recordLyricsFetchUnavailable(track: track, classification: "unavailable")
 
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
         XCTAssertNotNil(DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.unavailable" })
     }
 
@@ -751,7 +902,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 2)
         DiagnosticsService.shared.recordLyricsFetchUnavailable(track: track, classification: "unavailable")
 
-        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsFallbackChurn)
+        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsMissing)
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.evidence["result"], "miss")
     }
 
@@ -768,6 +919,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsFetchUnavailable(track: track, classification: "instrumental")
 
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
         let event = DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.unavailable" }
         XCTAssertEqual(event?.metrics["clearedUnresolvedIncidentCount"] ?? -1, 1, accuracy: 0.001)
     }
@@ -778,9 +930,7 @@ final class DiagnosticsServiceTests: XCTestCase {
     }
 
     func testCurrentSessionDebugLogIsAttachedToReportBundle() throws {
-        let debugLogURL = try XCTUnwrap(diagnosticsStorageRoot?.appendingPathComponent("nanopod_debug.log"))
-        try "current diagnostics log\n".write(to: debugLogURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: debugLogURL.path)
+        DebugLogger.log("diagnostics attachment test")
 
         let url = try DiagnosticsService.shared.exportReportBundle(
             userSymptom: .visibleStutter,
@@ -790,7 +940,7 @@ final class DiagnosticsServiceTests: XCTestCase {
 
         let attachedLog = url.appendingPathComponent("nanopod_debug.log")
         XCTAssertTrue(FileManager.default.fileExists(atPath: attachedLog.path))
-        XCTAssertEqual(try String(contentsOf: attachedLog, encoding: .utf8), "current diagnostics log\n")
+        XCTAssertTrue(try String(contentsOf: attachedLog, encoding: .utf8).contains("diagnostics attachment test"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathComponent("debug_log_status.txt").path))
     }
 
@@ -1628,5 +1778,113 @@ final class DiagnosticsServiceTests: XCTestCase {
         let event = DiagnosticsService.shared.events.first { $0.name == "artwork.cache.miss" }
         XCTAssertEqual(event?.metrics["heldPreviousArtwork"], 1)
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .artworkBlocking })
+    }
+
+    func testArtworkReportFallsBackToRecentArtworkEventsWhenTrackSwitched() throws {
+        let outgoingTrack = DiagnosticTrackContext(
+            title: "Previous Cover",
+            artist: "Diagnostics",
+            album: "Old Album",
+            duration: 181
+        )
+        let currentTrack = DiagnosticTrackContext(
+            title: "Current Cover",
+            artist: "Diagnostics",
+            album: "New Album",
+            duration: 202
+        )
+
+        DiagnosticsService.shared.recordArtworkFetchStarted(
+            track: outgoingTrack,
+            generation: 11,
+            persistentIDPresent: false,
+            metadataCacheEligible: true,
+            heldPreviousArtwork: true
+        )
+        DiagnosticsService.shared.recordArtworkApplied(
+            track: outgoingTrack,
+            generation: 11,
+            source: "web",
+            applyMilliseconds: 75
+        )
+
+        let url = try DiagnosticsService.shared.recordManualReport(
+            symptom: .artworkStaleAfterSwitch,
+            note: "",
+            track: currentTrack
+        )
+        let reportData = try Data(contentsOf: url.appendingPathComponent("report.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let report = try decoder.decode(DiagnosticReportManifest.self, from: reportData)
+
+        XCTAssertTrue(report.incidents.contains { $0.category == .artworkBlocking })
+        XCTAssertTrue(report.events.contains { $0.name == "diagnostics.artworkTimeScopedFallback" })
+        XCTAssertTrue(report.events.contains { $0.name == "artwork.apply" && $0.track?.title == "Previous Cover" })
+    }
+
+    func testBlackoutReportFallsBackToRecentMotionAndArtworkEvidence() throws {
+        let previousTrack = DiagnosticTrackContext(
+            title: "Blackout Previous",
+            artist: "Diagnostics",
+            album: "Old Album",
+            duration: 181
+        )
+        let currentTrack = DiagnosticTrackContext(
+            title: "Blackout Current",
+            artist: "Diagnostics",
+            album: "New Album",
+            duration: 202
+        )
+
+        DiagnosticsService.shared.recordArtworkFetchStarted(
+            track: previousTrack,
+            generation: 18,
+            persistentIDPresent: false,
+            metadataCacheEligible: true,
+            heldPreviousArtwork: true
+        )
+        DiagnosticsService.shared.recordLyricsLineMotionSamples([
+            DiagnosticLyricLineMotionSample(
+                page: "lyrics",
+                trackTitle: previousTrack.title,
+                trackArtist: previousTrack.artist,
+                lineIndex: 2,
+                lineID: "blackout-line-2",
+                lineStartTime: 12,
+                lineEndTime: 16,
+                playbackTime: 13,
+                activeIndex: 2,
+                displayIndex: 1,
+                targetIndex: 3,
+                renderedMinY: 110,
+                renderedMidY: 125,
+                renderedHeight: 30,
+                targetMinY: 82,
+                targetMidY: 90,
+                targetErrorY: 35,
+                observedInterLineDeltaY: 36,
+                expectedInterLineDeltaY: 36,
+                interLineDeltaErrorY: 0,
+                waveOffsetY: 4,
+                manualScrollOffsetY: 14,
+                isManualScrolling: false,
+                isInitialMotionSuppressed: false
+            )
+        ])
+
+        let url = try DiagnosticsService.shared.recordManualReport(
+            symptom: .switchingBlackout,
+            note: "",
+            track: currentTrack
+        )
+        let reportData = try Data(contentsOf: url.appendingPathComponent("report.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let report = try decoder.decode(DiagnosticReportManifest.self, from: reportData)
+
+        XCTAssertTrue(report.events.contains { $0.name == "diagnostics.artworkTimeScopedFallback" })
+        XCTAssertTrue(report.events.contains { $0.name == "diagnostics.lyricsLineMotionTimeScopedFallback" })
+        XCTAssertTrue(report.lyricLineMotionSamples.contains { $0.trackTitle == "Blackout Previous" })
     }
 }

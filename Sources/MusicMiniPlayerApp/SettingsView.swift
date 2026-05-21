@@ -451,6 +451,8 @@ struct DiagnosticsDebugPanel: View {
     @StateObject private var diagnostics = DiagnosticsService.shared
 
     @State private var selectedSymptom: DiagnosticUserSymptom = .wrongLyrics
+    @State private var applyingInferredSymptom = false
+    @State private var userOverrodeSymptom = false
     @State private var note: String = ""
     @State private var mediaAttachments: [URL] = []
     @State private var exportMessage: String?
@@ -549,9 +551,17 @@ struct DiagnosticsDebugPanel: View {
                 }
             }
             .pickerStyle(.menu)
+            .onChange(of: selectedSymptom) { _, _ in
+                if !applyingInferredSymptom {
+                    userOverrodeSymptom = true
+                }
+            }
 
             TextField("Optional note", text: $note, axis: .vertical)
                 .lineLimit(2...4)
+                .onChange(of: note) { _, newNote in
+                    inferSymptomFromNote(newNote)
+                }
 
             HStack {
                 Button("Attach Media...") {
@@ -733,8 +743,23 @@ struct DiagnosticsDebugPanel: View {
             exportMessage = "Report exported: \(url.path)"
             note = ""
             mediaAttachments = []
+            applyingInferredSymptom = false
+            userOverrodeSymptom = false
+            selectedSymptom = .wrongLyrics
         } catch {
             exportMessage = "Report failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func inferSymptomFromNote(_ note: String) {
+        guard !userOverrodeSymptom || selectedSymptom == .other else { return }
+        let inferred = DiagnosticUserSymptom.inferred(from: selectedSymptom, note: note)
+        guard inferred != selectedSymptom else { return }
+
+        applyingInferredSymptom = true
+        selectedSymptom = inferred
+        DispatchQueue.main.async {
+            applyingInferredSymptom = false
         }
     }
 

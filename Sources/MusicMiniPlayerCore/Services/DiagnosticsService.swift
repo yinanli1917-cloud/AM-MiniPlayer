@@ -16,6 +16,7 @@ public enum DiagnosticSeverity: String, Codable, CaseIterable, Sendable {
 
 public enum DiagnosticIncidentCategory: String, Codable, CaseIterable, Sendable {
     case lyricsSlowFetch
+    case lyricsMissing
     case lyricsFallbackChurn
     case lyricsPartialTranslation
     case lyricsManualReport
@@ -60,14 +61,76 @@ public enum DiagnosticInteractionStatus: String, Codable, CaseIterable, Sendable
 
 public enum DiagnosticUserSymptom: String, Codable, CaseIterable, Identifiable, Sendable {
     case wrongLyrics = "wrong lyrics"
+    case missingLyrics = "missing lyrics"
+    case lyricsResolverProblem = "lyrics resolver problem"
     case lyricsTimingOff = "lyrics timing off"
     case staleLyrics = "stale lyrics after switching"
+    case missingTranslation = "missing translation"
     case translationWrong = "translation wrong"
     case lyricsLoadingTooSlow = "lyrics loading too slow"
+    case artworkMissing = "missing artwork"
+    case artworkLateOrWrong = "artwork late or wrong"
+    case artworkStaleAfterSwitch = "artwork stale after switching"
+    case switchingBlackout = "blackout during switching"
+    case switchingAnimationInterrupted = "switching animation interrupted"
+    case playbackContextWrong = "playback context wrong"
+    case scriptingBridgeDelay = "ScriptingBridge delay"
+    case controlsSlow = "controls slow or stuck"
+    case highCPU = "high CPU"
     case visibleStutter = "visible stutter"
     case other = "other"
 
     public var id: String { rawValue }
+
+    public static func inferred(from selected: DiagnosticUserSymptom, note: String) -> DiagnosticUserSymptom {
+        let normalized = note.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return selected }
+        if normalized.contains("missing artwork") || normalized.contains("no artwork") || normalized.contains("cover missing") || normalized.contains("封面") {
+            return .artworkMissing
+        }
+        if normalized.contains("blackout")
+            || normalized.contains("black screen")
+            || normalized.contains("blank screen")
+            || normalized.contains("goes black")
+            || normalized.contains("turned black")
+            || normalized.contains("黑屏")
+            || normalized.contains("黑掉")
+            || normalized.contains("变黑")
+            || normalized.contains("變黑") {
+            return .switchingBlackout
+        }
+        if normalized.contains("artwork") || normalized.contains("cover") {
+            if normalized.contains("late") || normalized.contains("slow") || normalized.contains("stale") || normalized.contains("wrong") || normalized.contains("慢") || normalized.contains("旧") || normalized.contains("晚") || normalized.contains("慢一步") {
+                return .artworkStaleAfterSwitch
+            }
+            return .artworkLateOrWrong
+        }
+        if normalized.contains("resolver") || normalized.contains("mismatch") || normalized.contains("wrong match") || normalized.contains("错配") || normalized.contains("匹配错") || normalized.contains("找错") {
+            return .lyricsResolverProblem
+        }
+        if normalized.contains("missing translation") || normalized.contains("no translation") || normalized.contains("doesn't translate") || normalized.contains("does not translate") || normalized.contains("not translate") || normalized.contains("target language") || normalized.contains("缺翻译") || normalized.contains("缺少翻译") || normalized.contains("没翻译") || normalized.contains("沒有翻譯") || normalized.contains("不翻译") || normalized.contains("不翻譯") {
+            return .missingTranslation
+        }
+        if normalized.contains("missing lyrics") || normalized.contains("no lyrics") || normalized.contains("unresolved") || normalized.contains("找不到歌词") || normalized.contains("缺歌词") {
+            return .missingLyrics
+        }
+        if normalized.contains("animation") || normalized.contains("switching line") || normalized.contains("line switch") || normalized.contains("切换动画") || normalized.contains("切歌动画") || normalized.contains("打断") || normalized.contains("不完整") {
+            return .switchingAnimationInterrupted
+        }
+        if normalized.contains("context") || normalized.contains("radio") || normalized.contains("playlist") || normalized.contains("search") || normalized.contains("上下文") || normalized.contains("电台") || normalized.contains("播放列表") || normalized.contains("搜索") {
+            return .playbackContextWrong
+        }
+        if normalized.contains("scripting bridge") || normalized.contains("script bridge") || normalized.contains("sb delay") || normalized.contains("apple event") {
+            return .scriptingBridgeDelay
+        }
+        if normalized.contains("cpu") {
+            return .highCPU
+        }
+        if normalized.contains("control") || normalized.contains("下一首") || normalized.contains("卡住") {
+            return .controlsSlow
+        }
+        return selected
+    }
 }
 
 public struct DiagnosticInteractionTrace: Identifiable, Codable, Equatable, Sendable {
@@ -114,6 +177,10 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
     public var duration: TimeInterval
     public var persistentID: String?
     public var playbackTime: TimeInterval?
+    public var trackClass: String?
+    public var playlistName: String?
+    public var playbackContext: String?
+    public var playerPage: String?
 
     public init(
         title: String,
@@ -121,7 +188,11 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
         album: String,
         duration: TimeInterval,
         persistentID: String? = nil,
-        playbackTime: TimeInterval? = nil
+        playbackTime: TimeInterval? = nil,
+        trackClass: String? = nil,
+        playlistName: String? = nil,
+        playbackContext: String? = nil,
+        playerPage: String? = nil
     ) {
         self.title = title
         self.artist = artist
@@ -129,6 +200,10 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
         self.duration = duration
         self.persistentID = persistentID
         self.playbackTime = playbackTime
+        self.trackClass = trackClass
+        self.playlistName = playlistName
+        self.playbackContext = playbackContext
+        self.playerPage = playerPage
     }
 
     public var hasCredibleIdentity: Bool {
@@ -155,6 +230,19 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
         guard !lhsTitle.isEmpty, !rhsTitle.isEmpty, lhsTitle == rhsTitle else { return false }
         guard !lhsArtist.isEmpty, !rhsArtist.isEmpty, lhsArtist == rhsArtist else { return false }
 
+        if duration > 0, other.duration > 0, abs(duration - other.duration) > 2.0 {
+            return false
+        }
+        return true
+    }
+
+    fileprivate func matchesReportTrackByTitleArtist(_ other: DiagnosticTrackContext) -> Bool {
+        let lhsTitle = MetadataDiskCache.normalize(title)
+        let rhsTitle = MetadataDiskCache.normalize(other.title)
+        let lhsArtist = MetadataDiskCache.normalize(artist)
+        let rhsArtist = MetadataDiskCache.normalize(other.artist)
+        guard !lhsTitle.isEmpty, !rhsTitle.isEmpty, lhsTitle == rhsTitle else { return false }
+        guard !lhsArtist.isEmpty, !rhsArtist.isEmpty, lhsArtist == rhsArtist else { return false }
         if duration > 0, other.duration > 0, abs(duration - other.duration) > 2.0 {
             return false
         }
@@ -368,6 +456,7 @@ public final class DiagnosticsService: ObservableObject {
             } else {
                 healthSampler?.invalidate()
                 healthSampler = nil
+                DebugLogger.setDiagnosticsFileLoggingEnabled(false)
                 activeInteractions.values.forEach { $0.timeoutTask?.cancel() }
                 activeInteractions.removeAll()
                 activeInteractionCount = 0
@@ -522,6 +611,32 @@ public final class DiagnosticsService: ObservableObject {
         events.insert(DiagnosticEvent(name: name, detail: detail, track: track, metrics: metrics), at: 0)
         trimBuffers()
         schedulePersistenceSave()
+    }
+
+    public func enrichTrackContext(_ context: DiagnosticTrackContext) {
+        guard isEnabled, context.hasCredibleIdentity else { return }
+        var changed = false
+
+        for index in incidents.indices {
+            changed = enrichTrackContext(&incidents[index].track, with: context) || changed
+        }
+        for index in events.indices {
+            changed = enrichTrackContext(&events[index].track, with: context) || changed
+        }
+        for index in interactions.indices {
+            changed = enrichTrackContext(&interactions[index].track, with: context) || changed
+        }
+        for id in Array(activeInteractions.keys) {
+            guard var active = activeInteractions[id] else { continue }
+            if enrichTrackContext(&active.trace.track, with: context) {
+                activeInteractions[id] = active
+                changed = true
+            }
+        }
+
+        if changed {
+            schedulePersistenceSave()
+        }
     }
 
     @discardableResult
@@ -712,14 +827,11 @@ public final class DiagnosticsService: ObservableObject {
         }
 
         if translationDisplayRequested && hadSourceTranslation && missingTranslationLineCount > 0 {
-            recordIncident(
-                category: .lyricsPartialTranslation,
-                severity: .warning,
-                title: "Source translation incomplete",
-                detail: "The selected lyrics source translated \(translationLineCount)/\(max(translatableLineCount, 1)) visible lines.",
+            recordEvent(
+                "lyrics.translation.partialSource",
+                detail: "The selected lyrics source translated \(translationLineCount)/\(max(translatableLineCount, 1)) visible lines before system fill.",
                 track: track,
-                metrics: metrics,
-                evidence: ["source": source ?? "unknown"]
+                metrics: metrics
             )
         }
     }
@@ -756,10 +868,93 @@ public final class DiagnosticsService: ObservableObject {
         )
     }
 
+    public func recordLyricsSystemTranslationGap(
+        track: DiagnosticTrackContext,
+        reason: String,
+        translationLanguage: String,
+        translationLineCount: Int,
+        translatableLineCount: Int
+    ) {
+        guard isEnabled else { return }
+        let missingLineCount = max(translatableLineCount - translationLineCount, 0)
+        guard translatableLineCount > 0, missingLineCount > 0 else { return }
+
+        let metrics: [String: Double] = [
+            "translationLineCount": Double(translationLineCount),
+            "translatableLineCount": Double(translatableLineCount),
+            "missingTranslationLineCount": Double(missingLineCount),
+            "translationCoverage": Double(translationLineCount) / Double(translatableLineCount)
+        ]
+        let evidence = [
+            "translationLanguage": translationLanguage,
+            "reason": reason,
+            "source": "system"
+        ]
+
+        if let existingIndex = incidents.firstIndex(where: { incident in
+            guard incident.category == .lyricsPartialTranslation,
+                  let incidentTrack = incident.track else {
+                return false
+            }
+            return incidentTrack.matchesReportTrack(track)
+        }) {
+            incidents[existingIndex].timestamp = Date()
+            incidents[existingIndex].title = "System translation unavailable"
+            incidents[existingIndex].detail = "System translation did not fill \(missingLineCount)/\(translatableLineCount) visible line(s): \(reason)."
+            merge(metrics, into: &incidents[existingIndex].metrics)
+            merge(evidence, into: &incidents[existingIndex].evidence)
+            trimBuffers()
+            schedulePersistenceSave()
+            return
+        }
+
+        recordIncident(
+            category: .lyricsPartialTranslation,
+            severity: .warning,
+            title: "System translation unavailable",
+            detail: "System translation did not fill \(missingLineCount)/\(translatableLineCount) visible line(s): \(reason).",
+            track: track,
+            metrics: metrics,
+            evidence: evidence
+        )
+    }
+
+    public func recordLyricsSystemTranslationFilled(
+        track: DiagnosticTrackContext,
+        filledLineCount: Int,
+        translationLineCount: Int,
+        translatableLineCount: Int,
+        translationLanguage: String
+    ) {
+        guard isEnabled else { return }
+        let before = incidents.count
+        incidents.removeAll { incident in
+            guard incident.category == .lyricsPartialTranslation,
+                  let incidentTrack = incident.track else {
+                return false
+            }
+            return incidentTrack.matchesReportTrack(track)
+        }
+        let cleared = before - incidents.count
+        let metrics: [String: Double] = [
+            "filledLineCount": Double(filledLineCount),
+            "translationLineCount": Double(translationLineCount),
+            "translatableLineCount": Double(translatableLineCount),
+            "missingTranslationLineCount": Double(max(translatableLineCount - translationLineCount, 0)),
+            "clearedPartialTranslationIncidentCount": Double(cleared)
+        ]
+        recordEvent(
+            "lyrics.translation.filledSystem",
+            detail: "System translation (\(translationLanguage)) filled \(filledLineCount) line(s).",
+            track: track,
+            metrics: metrics
+        )
+    }
+
     private func clearLyricsFallbackIncidentAfterResolvedFetch(track: DiagnosticTrackContext, metrics: [String: Double]) {
         let before = incidents.count
         incidents.removeAll { incident in
-            guard incident.category == .lyricsFallbackChurn,
+            guard (incident.category == .lyricsFallbackChurn || incident.category == .lyricsMissing),
                   let incidentTrack = incident.track else {
                 return false
             }
@@ -798,7 +993,7 @@ public final class DiagnosticsService: ObservableObject {
 
     private func hasExistingLyricsFallbackIncident(for track: DiagnosticTrackContext) -> Bool {
         incidents.contains { incident in
-            guard incident.category == .lyricsFallbackChurn,
+            guard (incident.category == .lyricsFallbackChurn || incident.category == .lyricsMissing),
                   let incidentTrack = incident.track else {
                 return false
             }
@@ -832,6 +1027,12 @@ public final class DiagnosticsService: ObservableObject {
                 track: track,
                 metrics: ["fetchSeconds": elapsed, "resultCount": Double(resultCount)]
             )
+            recordLyricsMissingIncidentIfNeeded(
+                track: track,
+                elapsed: elapsed,
+                resultCount: resultCount,
+                result: "unresolved"
+            )
             return
         }
         if terminalCandidateOnly {
@@ -843,14 +1044,46 @@ public final class DiagnosticsService: ObservableObject {
             )
             return
         }
+        recordLyricsMissingIncidentIfNeeded(
+            track: track,
+            elapsed: elapsed,
+            resultCount: resultCount,
+            result: "miss"
+        )
+    }
+
+    private func recordLyricsMissingIncidentIfNeeded(
+        track: DiagnosticTrackContext,
+        elapsed: TimeInterval,
+        resultCount: Int,
+        result: String
+    ) {
+        guard track.hasCredibleIdentity else { return }
+        if incidents.contains(where: { incident in
+            guard (incident.category == .lyricsMissing || incident.category == .lyricsFallbackChurn),
+                  let incidentTrack = incident.track else {
+                return false
+            }
+            return incidentTrack.matchesReportTrack(track)
+        }) {
+            recordEvent(
+                "lyrics.fetch.missingRepeated",
+                detail: "Repeated missing-lyrics result was coalesced with the existing incident.",
+                track: track,
+                metrics: ["fetchSeconds": elapsed, "resultCount": Double(resultCount)]
+            )
+            return
+        }
         recordIncident(
-            category: .lyricsFallbackChurn,
+            category: .lyricsMissing,
             severity: .warning,
-            title: "Lyrics search returned no trusted result",
-            detail: "No trusted lyrics were selected after \(formatSeconds(elapsed)).",
+            title: result == "miss" ? "Lyrics search returned no trusted result" : "Lyrics missing",
+            detail: result == "miss"
+                ? "No trusted lyrics were selected after \(formatSeconds(elapsed))."
+                : "No trusted lyrics source was resolved after \(formatSeconds(elapsed)).",
             track: track,
             metrics: ["fetchSeconds": elapsed, "resultCount": Double(resultCount)],
-            evidence: ["result": "miss"]
+            evidence: ["result": result]
         )
     }
 
@@ -858,7 +1091,7 @@ public final class DiagnosticsService: ObservableObject {
         guard isEnabled else { return }
         let removedCount = incidents.count
         incidents.removeAll { incident in
-            guard incident.category == .lyricsFallbackChurn,
+            guard (incident.category == .lyricsFallbackChurn || incident.category == .lyricsMissing),
                   let incidentTrack = incident.track,
                   incidentTrack.matchesReportTrack(track) else {
                 return false
@@ -1203,18 +1436,19 @@ public final class DiagnosticsService: ObservableObject {
         track: DiagnosticTrackContext,
         mediaAttachments: [URL] = []
     ) throws -> URL {
+        let resolvedSymptom = DiagnosticUserSymptom.inferred(from: symptom, note: note)
         let resolvedTrack = bestAvailableTrackContext(preferred: track)
         recordIncident(
             category: .lyricsManualReport,
             severity: .warning,
-            title: "Manual report: \(symptom.rawValue)",
-            detail: note.isEmpty ? "User reported \(symptom.rawValue)." : note,
+            title: "Manual report: \(resolvedSymptom.rawValue)",
+            detail: note.isEmpty ? "User reported \(resolvedSymptom.rawValue)." : note,
             automaticallyDetected: false,
-            userSymptom: symptom,
+            userSymptom: resolvedSymptom,
             track: resolvedTrack.track,
             evidence: resolvedTrack.evidence
         )
-        return try exportReportBundle(userSymptom: symptom, userNote: note, track: resolvedTrack.track, mediaAttachments: mediaAttachments)
+        return try exportReportBundle(userSymptom: resolvedSymptom, userNote: note, track: resolvedTrack.track, mediaAttachments: mediaAttachments)
     }
 
     @discardableResult
@@ -1236,7 +1470,12 @@ public final class DiagnosticsService: ObservableObject {
         let copiedMedia = try copyMediaAttachments(mediaAttachments, to: reportDir)
         let resolvedTrack = bestAvailableTrackContext(preferred: track)
         let reportGeneratedAt = Date()
-        let reportIncidents = scopedIncidents(for: resolvedTrack.track)
+        let reportIncidents = scopedIncidents(
+            for: resolvedTrack.track,
+            userSymptom: userSymptom,
+            userNote: userNote,
+            generatedAt: reportGeneratedAt
+        )
         let reportInteractions = scopedInteractions(for: resolvedTrack.track)
         let reportLineMotionSamples = scopedLyricLineMotionSamples(
             for: resolvedTrack.track,
@@ -1350,9 +1589,66 @@ public final class DiagnosticsService: ObservableObject {
         return (preferred, ["trackContextSource": preferred == nil ? "missing" : "providedUnverified"])
     }
 
-    private func scopedIncidents(for track: DiagnosticTrackContext?) -> [DiagnosticIncident] {
+    @discardableResult
+    private func enrichTrackContext(
+        _ existing: inout DiagnosticTrackContext?,
+        with context: DiagnosticTrackContext
+    ) -> Bool {
+        guard var current = existing,
+              current.hasCredibleIdentity,
+              (current.matchesReportTrack(context) || current.matchesReportTrackByTitleArtist(context)) else {
+            return false
+        }
+
+        let original = current
+        let sameTitleArtist = current.matchesReportTrackByTitleArtist(context)
+        let incomingPID = context.persistentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let currentPID = current.persistentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !incomingPID.isEmpty && (currentPID.isEmpty || sameTitleArtist) {
+            current.persistentID = incomingPID
+        }
+        if current.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !context.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.album = context.album
+        }
+        if current.duration <= 0, context.duration > 0 {
+            current.duration = context.duration
+        }
+        if (current.trackClass ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let trackClass = context.trackClass,
+           !trackClass.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.trackClass = trackClass
+        }
+        if (current.playlistName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let playlistName = context.playlistName,
+           !playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.playlistName = playlistName
+        }
+        let currentPlaybackContext = (current.playbackContext ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if currentPlaybackContext.isEmpty || currentPlaybackContext == "unknown",
+           let playbackContext = context.playbackContext,
+           !playbackContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.playbackContext = playbackContext
+        }
+        if (current.playerPage ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let playerPage = context.playerPage,
+           !playerPage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.playerPage = playerPage
+        }
+
+        guard current != original else { return false }
+        existing = current
+        return true
+    }
+
+    private func scopedIncidents(
+        for track: DiagnosticTrackContext?,
+        userSymptom: DiagnosticUserSymptom?,
+        userNote: String,
+        generatedAt: Date
+    ) -> [DiagnosticIncident] {
         guard let track, track.hasCredibleIdentity else { return incidents }
-        return incidents.filter { incident in
+        var scoped = incidents.filter { incident in
             if let incidentTrack = incident.track {
                 return incidentTrack.matchesReportTrack(track)
             }
@@ -1364,6 +1660,17 @@ public final class DiagnosticsService: ObservableObject {
             }
             return true
         }
+        if shouldUseTimeScopedArtworkFallback(userSymptom: userSymptom, userNote: userNote),
+           !scoped.contains(where: { $0.category == .artworkBlocking }) {
+            let existingIDs = Set(scoped.map(\.id))
+            let recentArtworkIncidents = incidents.filter { incident in
+                incident.category == .artworkBlocking
+                    && !existingIDs.contains(incident.id)
+                    && abs(generatedAt.timeIntervalSince(incident.timestamp)) <= artworkReportFallbackLookback
+            }
+            scoped.append(contentsOf: recentArtworkIncidents)
+        }
+        return scoped
     }
 
     private func scopedEvents(
@@ -1395,6 +1702,31 @@ public final class DiagnosticsService: ObservableObject {
                 ),
                 at: 0
             )
+        }
+        if shouldUseTimeScopedArtworkFallback(userSymptom: userSymptom, userNote: userNote),
+           !scoped.contains(where: { $0.name.hasPrefix("artwork.") }) {
+            let existingIDs = Set(scoped.map(\.id))
+            let recentArtworkEvents = events.filter { event in
+                event.name.hasPrefix("artwork.")
+                    && !existingIDs.contains(event.id)
+                    && abs(generatedAt.timeIntervalSince(event.timestamp)) <= artworkReportFallbackLookback
+            }
+            if !recentArtworkEvents.isEmpty {
+                scoped.insert(
+                    DiagnosticEvent(
+                        timestamp: generatedAt,
+                        name: "diagnostics.artworkTimeScopedFallback",
+                        detail: "Included recent artwork events by report time because no exact current-track artwork rows were available.",
+                        track: track,
+                        metrics: [
+                            "eventCount": Double(recentArtworkEvents.count),
+                            "lookbackSeconds": artworkReportFallbackLookback
+                        ]
+                    ),
+                    at: 0
+                )
+                scoped.append(contentsOf: recentArtworkEvents)
+            }
         }
         return scoped
     }
@@ -1428,12 +1760,16 @@ public final class DiagnosticsService: ObservableObject {
     }
 
     private let lineMotionReportFallbackLookback: TimeInterval = 90
+    private let artworkReportFallbackLookback: TimeInterval = 150
 
     private func shouldUseTimeScopedLineMotionFallback(
         userSymptom: DiagnosticUserSymptom?,
         userNote: String
     ) -> Bool {
-        if userSymptom == .visibleStutter || userSymptom == .lyricsTimingOff {
+        if userSymptom == .visibleStutter
+            || userSymptom == .lyricsTimingOff
+            || userSymptom == .switchingAnimationInterrupted
+            || userSymptom == .switchingBlackout {
             return true
         }
 
@@ -1444,6 +1780,25 @@ public final class DiagnosticsService: ObservableObject {
             "动画", "动效", "卡顿", "卡住", "卡", "切换", "下一首", "上一首", "掉帧", "不丝滑"
         ]
         return motionKeywords.contains { normalizedNote.contains($0) }
+    }
+
+    private func shouldUseTimeScopedArtworkFallback(
+        userSymptom: DiagnosticUserSymptom?,
+        userNote: String
+    ) -> Bool {
+        if userSymptom == .artworkMissing
+            || userSymptom == .artworkLateOrWrong
+            || userSymptom == .artworkStaleAfterSwitch
+            || userSymptom == .switchingBlackout {
+            return true
+        }
+
+        let normalizedNote = userNote.lowercased()
+        let artworkKeywords = [
+            "artwork", "cover", "album art", "stale cover", "late cover",
+            "封面", "专辑图", "專輯圖", "慢一步", "黑掉", "变黑", "變黑"
+        ]
+        return artworkKeywords.contains { normalizedNote.contains($0) }
     }
 
     private func lineMotionSample(
@@ -2413,6 +2768,18 @@ public final class DiagnosticsService: ObservableObject {
             lines.append("- Album: \(track.album)")
             lines.append("- Duration: \(String(format: "%.1f", track.duration))s")
             lines.append("- Playback time: \(track.playbackTime.map { String(format: "%.1f", $0) + "s" } ?? "unknown")")
+            if let trackClass = track.trackClass, !trackClass.isEmpty {
+                lines.append("- Music track class: \(trackClass)")
+            }
+            if let playbackContext = track.playbackContext, !playbackContext.isEmpty {
+                lines.append("- Playback context: \(playbackContext)")
+            }
+            if let playlistName = track.playlistName, !playlistName.isEmpty {
+                lines.append("- Current playlist: \(playlistName)")
+            }
+            if let playerPage = track.playerPage, !playerPage.isEmpty {
+                lines.append("- nanoPod page: \(playerPage)")
+            }
             lines.append("")
         }
         lines.append("## Recent Incidents")
@@ -2755,6 +3122,7 @@ public final class DiagnosticsService: ObservableObject {
     private func configureDebugLoggerForCurrentSession() {
         guard let url = debugLogURLForTesting ?? (try? liveDebugLogURL()) else { return }
         DebugLogger.setLogURL(url)
+        DebugLogger.setDiagnosticsFileLoggingEnabled(true)
     }
 
     private func liveDebugLogURL() throws -> URL {
