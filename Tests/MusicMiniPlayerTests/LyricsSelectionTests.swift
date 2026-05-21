@@ -1157,6 +1157,118 @@ final class LyricsSelectionTests: XCTestCase {
         ))
     }
 
+    func testForegroundCatalogDiscoveryRequiresDistinctiveExactTitle() {
+        let fetcher = LyricsFetcher.shared
+        let distinctive = LyricsFetcher.SearchParams(
+            title: "This Is My Love",
+            artist: "Michelle Chen",
+            originalTitle: "This Is My Love",
+            originalArtist: "Michelle Chen",
+            duration: 312,
+            album: "Young Stars"
+        )
+        XCTAssertTrue(fetcher.shouldForegroundNetEaseCatalogExactTitleDiscovery(params: distinctive))
+
+        let generic = LyricsFetcher.SearchParams(
+            title: "Love",
+            artist: "Michelle Chen",
+            originalTitle: "Love",
+            originalArtist: "Michelle Chen",
+            duration: 312,
+            album: "Young Stars"
+        )
+        XCTAssertFalse(fetcher.shouldForegroundNetEaseCatalogExactTitleDiscovery(params: generic))
+        XCTAssertFalse(fetcher.isSafeCompilationAlbumDiscoveryCandidate(
+            params: generic,
+            candidateTitle: "Love",
+            candidateArtist: "群星",
+            candidateAlbum: "脱掉制服",
+            candidateDuration: 312.052,
+            resultIndex: 10
+        ))
+    }
+
+    func testCatalogExactTitleCandidateCanWinExistingSearchRoundWithoutDeepProbe() {
+        let fetcher = LyricsFetcher.shared
+        let candidate = LyricsFetcher.SearchCandidate(
+            id: 543_656_445,
+            name: "This Is My Love",
+            artist: "群星",
+            album: "脱掉制服",
+            durationDiff: 0.052,
+            titleMatch: true,
+            artistMatch: false,
+            albumMatch: false,
+            normalizedNameLength: 12,
+            resultIndex: 19,
+            searchDescriptor: "title+artist"
+        )
+
+        let selected = fetcher.selectBestCandidate(
+            [candidate],
+            source: "NetEase",
+            inputTitle: "This Is My Love",
+            inputArtist: "Michelle Chen",
+            hasAlbumHint: true,
+            allowCompilationAlbumFallback: true
+        )
+        XCTAssertEqual(selected?.id, 543_656_445)
+        XCTAssertTrue(selected?.titleMatched == true)
+
+        XCTAssertNil(fetcher.selectBestCandidate(
+            [candidate],
+            source: "NetEase",
+            inputTitle: "Love",
+            inputArtist: "Michelle Chen",
+            hasAlbumHint: true,
+            allowCompilationAlbumFallback: true
+        ))
+    }
+
+    func testForegroundArtistDiscographyAliasUsesGeneralTitleShape() {
+        let fetcher = LyricsFetcher.shared
+        XCTAssertTrue(fetcher.shouldForegroundNetEaseArtistDiscographyAliasFallback(
+            title: "Ocean",
+            artist: "Tanya Chua",
+            originalTitle: "Ocean",
+            originalArtist: "Tanya Chua",
+            duration: 244,
+            album: ""
+        ))
+        XCTAssertTrue(fetcher.shouldForegroundNetEaseArtistDiscographyAliasFallback(
+            title: "Deep",
+            artist: "Tanya Chua",
+            originalTitle: "Deep",
+            originalArtist: "Tanya Chua",
+            duration: 244,
+            album: ""
+        ))
+        XCTAssertFalse(fetcher.shouldForegroundNetEaseArtistDiscographyAliasFallback(
+            title: "Ai",
+            artist: "Tanya Chua",
+            originalTitle: "Ai",
+            originalArtist: "Tanya Chua",
+            duration: 244,
+            album: ""
+        ))
+        XCTAssertFalse(fetcher.shouldForegroundNetEaseArtistDiscographyAliasFallback(
+            title: "All The Things You Never Knew",
+            artist: "Wang Leehom",
+            originalTitle: "All The Things You Never Knew",
+            originalArtist: "Wang Leehom",
+            duration: 279,
+            album: ""
+        ))
+        XCTAssertFalse(fetcher.shouldForegroundNetEaseArtistDiscographyAliasFallback(
+            title: "Ocean",
+            artist: "Tanya Chua",
+            originalTitle: "Ocean",
+            originalArtist: "Tanya Chua",
+            duration: 244,
+            album: "Known Album"
+        ))
+    }
+
     func testDirectProviderLocalizedTitleAliasRequiresExactArtistTopResultAndTightDuration() {
         let fetcher = LyricsFetcher.shared
         let matching = LyricsFetcher.SearchCandidate(

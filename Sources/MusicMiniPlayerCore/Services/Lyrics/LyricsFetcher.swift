@@ -69,7 +69,7 @@ public final class LyricsFetcher {
         /// Duration delta between the source catalog candidate and the
         /// requested track, when the source exposes candidate duration.
         public let matchedDurationDiff: Double?
-        /// True when a provider matched a native/localized catalog title through
+        /// True when a provider matched an alternate catalog title through
         /// confirmed artist/album/duration evidence, but the returned title did
         /// not directly match the user's visible title.
         public let nativeAliasMatched: Bool
@@ -219,6 +219,8 @@ public final class LyricsFetcher {
         let branch2Landed = Box(false)
         let albumScopedBranchFired = Box(false)
         let albumScopedBranchLanded = Box(false)
+        let catalogExactTitleBranchFired = Box(false)
+        let catalogExactTitleBranchLanded = Box(false)
         let branch3Fired = Box(false)
         let branch3Landed = Box(false)
         let lowTierFallbackDelay: UInt64 = alb.isEmpty ? 0 : 700_000_000
@@ -228,9 +230,26 @@ public final class LyricsFetcher {
             && LanguageUtils.isLikelyEnglishTitle(ot)
             && latinEvidenceKey(ot) == latinEvidenceKey(alb)
             && latinEvidenceKey(ot).count >= 4
+        let shouldProbeCatalogExactTitle = self.shouldForegroundNetEaseCatalogExactTitleDiscovery(
+            title: ot,
+            artist: oa,
+            originalTitle: ot,
+            originalArtist: oa,
+            duration: d,
+            album: alb
+        )
+        let shouldProbeArtistDiscographyAlias = self.shouldForegroundNetEaseArtistDiscographyAliasFallback(
+            title: ot,
+            artist: oa,
+            originalTitle: ot,
+            originalArtist: oa,
+            duration: d,
+            album: alb
+        )
+        let catalogExactTitleLandingDeadline: TimeInterval = shouldProbeCatalogExactTitle ? 2.95 : 0
         let emptyResultDeadline: TimeInterval = shouldProtectAsciiNativeAlias
             ? 2.55
-            : (shouldProbeAlbumTitleEchoNativeAlias ? 2.60 : 2.2)
+            : (shouldProbeCatalogExactTitle ? catalogExactTitleLandingDeadline : (shouldProbeAlbumTitleEchoNativeAlias ? 2.60 : 2.2))
         let nativeProviderTimeout: TimeInterval = shouldProtectAsciiNativeAlias ? 2.55 : 2.2
 
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
@@ -338,6 +357,26 @@ public final class LyricsFetcher {
                     }
                 }
 
+                if shouldProbeArtistDiscographyAlias {
+                    group.addTask {
+                        branch2Fired.value = true
+                        DebugLogger.log("⚡ Branch-2 artist-discography alias foreground: '\(ot)' by '\(oa)'")
+                        guard let best = await self.withHardSourceTimeout(seconds: 2.75, operation: {
+                            await self.fetchForegroundNetEaseArtistDiscographyAliasFallback(
+                                title: ot,
+                                artist: oa,
+                                originalTitle: ot,
+                                originalArtist: oa,
+                                duration: d,
+                                translationEnabled: te,
+                                album: alb
+                            )
+                        }) else { return nil }
+                        branch2Landed.value = true
+                        return best
+                    }
+                }
+
                 if !alb.isEmpty {
                     group.addTask {
                         branch2Fired.value = true
@@ -370,6 +409,33 @@ public final class LyricsFetcher {
                         }
                         branch2Landed.value = true
                         albumScopedBranchLanded.value = true
+                        return best
+                    }
+                }
+
+                if shouldProbeCatalogExactTitle {
+                    group.addTask {
+                        branch2Fired.value = true
+                        albumScopedBranchFired.value = true
+                        catalogExactTitleBranchFired.value = true
+                        DebugLogger.log("⚡ Branch-2 catalog exact-title foreground: '\(ot)' album='\(alb)'")
+                        guard let best = await self.withHardSourceTimeout(seconds: catalogExactTitleLandingDeadline, operation: {
+                            await self.fetchForegroundNetEaseCatalogExactTitleDiscovery(
+                                title: ot,
+                                artist: oa,
+                                originalTitle: ot,
+                                originalArtist: oa,
+                                duration: d,
+                                translationEnabled: te,
+                                album: alb
+                            )
+                        }) else {
+                            catalogExactTitleBranchLanded.value = true
+                            return nil
+                        }
+                        branch2Landed.value = true
+                        albumScopedBranchLanded.value = true
+                        catalogExactTitleBranchLanded.value = true
                         return best
                     }
                 }
@@ -564,6 +630,7 @@ public final class LyricsFetcher {
                         || (r.titleMatched && (r.matchedDurationDiff.map { $0 < 1.5 } ?? false))
                         || (r.nativeAliasMatched && (r.matchedDurationDiff.map { $0 < 1.5 } ?? false))
                         || self.selectedHasStrongNativeAliasIdentity(r)
+                        || self.selectedHasTightCatalogAliasIdentity(r)
                     let hasAlbumExactSyncedResult = r.kind == .synced
                         && r.albumMatched
                         && r.titleMatched
@@ -587,10 +654,16 @@ public final class LyricsFetcher {
                         && albumScopedBranchFired.value
                         && !albumScopedBranchLanded.value
                         && elapsed < albumScopedLandingDeadline
+                    let catalogExactTitleEvidencePending = hasAlbumHint
+                        && !r.albumMatched
+                        && catalogExactTitleBranchFired.value
+                        && !catalogExactTitleBranchLanded.value
+                        && elapsed < catalogExactTitleLandingDeadline
                     if r.score >= self.earlyReturnThreshold
                         && self.earlyReturnSources.contains(r.source)
                         && albumGate
                         && !albumScopedEvidencePending
+                        && !catalogExactTitleEvidencePending
                         && (!needsIdentityWitness || hasIdentityWitness) {
                         DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold)) albumMatch=\(r.albumMatched)")
                         group.cancelAll()
@@ -600,6 +673,12 @@ public final class LyricsFetcher {
                         && hasAlbumExactSyncedResult
                         && self.earlyReturnSources.contains(r.source) {
                         DebugLogger.log("⚡ 早期返回: \(r.source) album-exact synced score=\(String(format: "%.1f", r.score))")
+                        group.cancelAll()
+                        break
+                    }
+                    if self.selectedHasTightCatalogAliasIdentity(r),
+                       self.earlyReturnSources.contains(r.source) {
+                        DebugLogger.log("⚡ 早期返回: \(r.source) tight catalog-alias score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
                     }
@@ -614,6 +693,9 @@ public final class LyricsFetcher {
                 }
 
                 if results.isEmpty {
+                    if catalogExactTitleBranchFired.value && !catalogExactTitleBranchLanded.value && elapsed < catalogExactTitleLandingDeadline {
+                        continue
+                    }
                     if albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed < min(albumScopedLandingDeadline, emptyResultDeadline) {
                         continue
                     }
@@ -639,29 +721,32 @@ public final class LyricsFetcher {
                         && !LanguageUtils.containsCJK(oa)
                         && !$0.lyrics.contains(where: { LanguageUtils.containsCJK($0.text) })
                         && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)
-                    let exactLRCLIBCanFastExit = $0.source == "LRCLIB"
-                        && !LanguageUtils.containsCJK(ot)
-                        && !LanguageUtils.containsCJK(oa)
+                    let exactLibraryCanFastExit = self.isLibraryFallbackSource($0.source)
                         && $0.titleMatched
+                        && !$0.nativeAliasMatched
                         && ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false)
-                        && $0.score >= 60
-                        && $0.score < 70
+                        && $0.score >= 50
+                        && self.hasSaneForegroundTimeline($0.lyrics, duration: d)
+                    let tightCatalogAliasCanFastExit = self.selectedHasTightCatalogAliasIdentity($0)
                     return $0.kind == .synced
                         && !looseNativeAlias
-                        && $0.score >= 40
                         && (
-                            self.earlyReturnSources.contains($0.source)
-                            || (!self.isLibraryFallbackSource($0.source) && $0.score >= self.earlyReturnThreshold)
-                            || exactLRCLIBCanFastExit
-                            || (lrclibCanFastExit && ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") && $0.score >= 50)
+                            tightCatalogAliasCanFastExit
+                            || ($0.score >= 40 && (
+                                self.earlyReturnSources.contains($0.source)
+                                || (!self.isLibraryFallbackSource($0.source) && $0.score >= self.earlyReturnThreshold)
+                                || exactLibraryCanFastExit
+                                || (lrclibCanFastExit && ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") && $0.score >= 50)
+                            ))
                         )
                 }
                 let hasTrustedExactSyncedResult = results.contains {
+                    let tightCatalogAlias = self.selectedHasTightCatalogAliasIdentity($0)
                     guard $0.kind == .synced,
                           $0.titleMatched,
                           ($0.matchedDurationDiff.map { $0 < 1.5 } ?? false),
-                          $0.score >= 40,
-                          !($0.nativeAliasMatched && !self.selectedHasStrongNativeAliasIdentity($0)) else {
+                          ($0.score >= 40 || tightCatalogAlias),
+                          !($0.nativeAliasMatched && !self.selectedHasStrongNativeAliasIdentity($0) && !tightCatalogAlias) else {
                         return false
                     }
                     return self.selectBestResult(from: [$0], songDuration: d) != nil
@@ -686,6 +771,7 @@ public final class LyricsFetcher {
                         && !$0.titleMatched
                         && !$0.albumMatched
                         && !self.selectedHasStrongNativeAliasIdentity($0)
+                        && !self.selectedHasTightCatalogAliasIdentity($0)
                     )
                 }
                 let hasAnyPotentiallyUsableSyncedResult = results.contains {
@@ -708,7 +794,11 @@ public final class LyricsFetcher {
                     && !albumScopedBranchLanded.value
                     && (!hasFastExitSyncedResult || (!hasAlbumMatchedSyncedResult && !hasTrustedExactSyncedResult))
                     && elapsed < albumScopedLandingDeadline
-                if albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
+                let catalogExactTitleNeedsLandingWindow = catalogExactTitleBranchFired.value
+                    && !catalogExactTitleBranchLanded.value
+                    && (!hasFastExitSyncedResult || (!hasAlbumMatchedSyncedResult && !hasTrustedExactSyncedResult))
+                    && elapsed < catalogExactTitleLandingDeadline
+                if catalogExactTitleNeedsLandingWindow || albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
                 }
                 let hasHighConfidenceResult = results.contains {
@@ -723,6 +813,7 @@ public final class LyricsFetcher {
                 if (hasHighConfidenceResult && elapsed >= 1.5)
                     || (hasFastExitSyncedResult && elapsed >= 0.15)
                     || (!branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.2)
+                    || (!protectNativeProviderRace && catalogExactTitleBranchFired.value && !catalogExactTitleBranchLanded.value && elapsed >= catalogExactTitleLandingDeadline)
                     || (!protectNativeProviderRace && albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed >= albumScopedLandingDeadline)
                     || (!protectNativeProviderRace && branch2Fired.value && !branch2Landed.value && elapsed >= 2.2)
                     || (!protectNativeProviderRace && branch3Fired.value && !branch3Landed.value && elapsed >= 2.2)
@@ -1709,6 +1800,7 @@ public final class LyricsFetcher {
     private func selectedHasReturnableIdentity(_ result: LyricsFetchResult) -> Bool {
         selectedHasPersistentIdentity(result)
             || selectedHasStrongNativeAliasIdentity(result)
+            || selectedHasTightCatalogAliasIdentity(result)
             || (result.nativeAliasMatched
                 && result.kind == .synced
                 && result.score >= 45
@@ -1720,6 +1812,14 @@ public final class LyricsFetcher {
             && result.kind == .synced
             && result.score >= 60
             && (result.matchedDurationDiff.map { $0 < 3.0 } ?? false)
+    }
+
+    private func selectedHasTightCatalogAliasIdentity(_ result: LyricsFetchResult) -> Bool {
+        result.nativeAliasMatched
+            && result.titleMatched
+            && result.kind == .synced
+            && result.score >= 30
+            && (result.matchedDurationDiff.map { $0 < 0.35 } ?? false)
     }
 
     private func selectedHasInstrumentalIdentity(_ result: LyricsFetchResult) -> Bool {
@@ -1799,6 +1899,7 @@ public final class LyricsFetcher {
                     || (result.titleMatched && (result.matchedDurationDiff.map { $0 < 1.5 } ?? false))
                     || (result.nativeAliasMatched && (result.matchedDurationDiff.map { $0 < 1.5 } ?? false))
                     || self.selectedHasStrongNativeAliasIdentity(result)
+                    || self.selectedHasTightCatalogAliasIdentity(result)
                 let hasAlbumExactSyncedResult = result.kind == .synced
                     && result.albumMatched
                     && result.titleMatched
@@ -1825,6 +1926,11 @@ public final class LyricsFetcher {
                     return result
                 }
                 if hasAlbumExactSyncedResult && self.earlyReturnSources.contains(result.source) {
+                    group.cancelAll()
+                    return result
+                }
+                if self.selectedHasTightCatalogAliasIdentity(result),
+                   self.earlyReturnSources.contains(result.source) {
                     group.cancelAll()
                     return result
                 }
@@ -1873,6 +1979,24 @@ public final class LyricsFetcher {
                 && !LanguageUtils.isLikelyEnglishTitle(title)
         }
         return !isLikelyRomanizedCJKLyrics(lyrics, source: source)
+    }
+
+    private func hasSaneForegroundTimeline(_ lyrics: [LyricLine], duration: TimeInterval) -> Bool {
+        let realLines = lyrics.filter {
+            let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+        }
+        guard realLines.count >= 8,
+              let first = realLines.first,
+              let last = realLines.last else {
+            return false
+        }
+        let firstStartLimit = min(90.0, max(45.0, duration * 0.30))
+        guard first.startTime <= firstStartLimit else { return false }
+        let tailGap = duration - last.startTime
+        guard tailGap <= max(90.0, duration * 0.35) else { return false }
+        let maxGap = zip(realLines, realLines.dropFirst()).map { max(0, $1.startTime - $0.startTime) }.max() ?? 0
+        return maxGap <= max(60.0, duration * 0.25)
     }
 
     func withHardMetadataTimeout<T: Sendable>(

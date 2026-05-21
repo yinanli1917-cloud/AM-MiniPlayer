@@ -1,7 +1,7 @@
 /**
  * [INPUT]: Song metadata (title, artist, duration) + SearchParams from candidate selection
  * [OUTPUT]: LyricsFetchResult from each source (AMLL, NetEase, QQ, LRCLIB, lyrics.ovh, Genius, Apple Music)
- * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 7 lyric sources; native-title aliases are returned as separate evidence, not direct title matches
+ * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 7 lyric sources; provider catalog aliases stay behind strict title/artist/duration/context evidence
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -382,6 +382,77 @@ extension LyricsFetcher {
         let resultIndex: Int
     }
 
+    func shouldForegroundNetEaseCatalogExactTitleDiscovery(
+        title: String,
+        artist: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        album: String
+    ) -> Bool {
+        let params = SearchParams(
+            title: title,
+            artist: artist,
+            originalTitle: originalTitle,
+            originalArtist: originalArtist,
+            duration: duration,
+            album: album
+        )
+        return shouldForegroundNetEaseCatalogExactTitleDiscovery(params: params)
+    }
+
+    func shouldForegroundNetEaseCatalogExactTitleDiscovery(params: SearchParams) -> Bool {
+        guard !params.normalizedAlbum.isEmpty else { return false }
+        guard !isCompilationArtistName(params.rawArtist),
+              !isCompilationArtistName(params.rawOriginalArtist) else { return false }
+        guard LanguageUtils.isPureASCII(params.rawTitle),
+              LanguageUtils.isPureASCII(params.rawArtist),
+              LanguageUtils.isPureASCII(params.rawOriginalArtist),
+              LanguageUtils.isLikelyEnglishTitle(params.rawTitle) else {
+            return false
+        }
+        guard latinEvidenceKey(params.rawTitle) != latinEvidenceKey(params.normalizedAlbum) else {
+            return false
+        }
+        return isDistinctiveCatalogExactTitleInput(params)
+    }
+
+    func fetchForegroundNetEaseCatalogExactTitleDiscovery(
+        title: String,
+        artist: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String
+    ) async -> LyricsFetchResult? {
+        let params = SearchParams(
+            title: title,
+            artist: artist,
+            originalTitle: originalTitle,
+            originalArtist: originalArtist,
+            duration: duration,
+            album: album
+        )
+        guard shouldForegroundNetEaseCatalogExactTitleDiscovery(params: params) else { return nil }
+
+        let headers = [
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+            "Referer": "https://music.163.com"
+        ]
+        let candidates = await discoverNetEaseCompilationAlbumCandidates(
+            params: params,
+            headers: headers,
+            duration: duration
+        )
+        return await fetchBestNetEaseCompilationAlbumResult(
+            candidates: candidates,
+            duration: duration,
+            translationEnabled: translationEnabled,
+            logLabel: "foreground catalog exact-title discovery"
+        )
+    }
+
     private func fetchNetEaseSiblingQualityFallback(
         params: SearchParams,
         headers: [String: String],
@@ -711,9 +782,27 @@ extension LyricsFetcher {
             if $0.resultIndex != $1.resultIndex { return $0.resultIndex < $1.resultIndex }
             return $0.durationDiff < $1.durationDiff
         }
-        guard !candidates.isEmpty else { return nil }
-        DebugLogger.log("NetEase", "🔁 compilation album fallback: \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
+        return await fetchBestNetEaseCompilationAlbumResult(
+            candidates: candidates,
+            duration: duration,
+            translationEnabled: translationEnabled,
+            logLabel: "compilation album fallback"
+        )
+    }
 
+    private func fetchBestNetEaseCompilationAlbumResult(
+        candidates: [NetEaseCompilationAlbumCandidate],
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        logLabel: String = "compilation album fallback"
+    ) async -> LyricsFetchResult? {
+        let candidates = candidates.sorted {
+            if $0.keywordPriority != $1.keywordPriority { return $0.keywordPriority < $1.keywordPriority }
+            if $0.resultIndex != $1.resultIndex { return $0.resultIndex < $1.resultIndex }
+            return $0.durationDiff < $1.durationDiff
+        }
+        guard !candidates.isEmpty else { return nil }
+        DebugLogger.log("NetEase", "🔁 \(logLabel): \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
         var scoredResults: [LyricsFetchResult] = []
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
             for candidate in candidates.prefix(3) {
@@ -774,7 +863,7 @@ extension LyricsFetcher {
             if lhs.lyrics.count != rhs.lyrics.count { return lhs.lyrics.count > rhs.lyrics.count }
             return lhs.score > rhs.score
         }).first else { return nil }
-        DebugLogger.log("NetEase", "✅ compilation album fallback hit: score=\(String(format: "%.1f", best.score)) lines=\(best.lyrics.count)")
+        DebugLogger.log("NetEase", "✅ \(logLabel) hit: score=\(String(format: "%.1f", best.score)) lines=\(best.lyrics.count)")
         return best
     }
 
@@ -955,9 +1044,8 @@ extension LyricsFetcher {
             }
 
             // Title-only AMLL index matches are unsafe for short/ASCII titles
-            // ("If", "Deep", etc.) because the global index has many exact
-            // title collisions. Require artist evidence unless the title is
-            // distinctive CJK/non-ASCII text.
+            // because the global index has many exact-title collisions. Require
+            // artist evidence unless the title is distinctive CJK/non-ASCII text.
             if !artistMatched {
                 guard score >= 100,
                       title.count >= 4,
@@ -1289,7 +1377,100 @@ extension LyricsFetcher {
         ) {
             return exactTitleFallback
         }
-        // 🔑 Empty-lyrics fallback
+        if let artistFallback = await fetchNetEaseArtistDiscographyFallback(
+                params: params,
+                headers: headers,
+                duration: duration,
+                translationEnabled: translationEnabled,
+                primaryResult: primaryResult,
+                match: match
+        ) {
+            return artistFallback
+        }
+        if primaryResult == nil, let match {
+            return catalogUnavailableResult(
+                source: "NetEase",
+                albumMatched: match.albumMatched,
+                titleMatched: match.titleMatched,
+                durationDiff: match.durationDiff
+            )
+        }
+        return primaryResult
+    }
+
+    func shouldForegroundNetEaseArtistDiscographyAliasFallback(
+        title: String,
+        artist: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        album: String
+    ) -> Bool {
+        let params = SearchParams(
+            title: title,
+            artist: artist,
+            originalTitle: originalTitle,
+            originalArtist: originalArtist,
+            duration: duration,
+            album: album
+        )
+        return shouldRaceNetEaseArtistDiscographyFallback(params: params)
+    }
+
+    func fetchForegroundNetEaseArtistDiscographyAliasFallback(
+        title: String,
+        artist: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String
+    ) async -> LyricsFetchResult? {
+        let params = SearchParams(
+            title: title,
+            artist: artist,
+            originalTitle: originalTitle,
+            originalArtist: originalArtist,
+            duration: duration,
+            album: album
+        )
+        guard shouldRaceNetEaseArtistDiscographyFallback(params: params) else { return nil }
+        let headers = [
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+            "Referer": "https://music.163.com"
+        ]
+        return await fetchNetEaseArtistDiscographyFallback(
+            params: params,
+            headers: headers,
+            duration: duration,
+            translationEnabled: translationEnabled,
+            primaryResult: nil,
+            match: nil
+        )
+    }
+
+    private func shouldRaceNetEaseArtistDiscographyFallback(params: SearchParams) -> Bool {
+        guard params.normalizedAlbum.isEmpty else { return false }
+        guard LanguageUtils.isPureASCII(params.rawTitle),
+              LanguageUtils.isPureASCII(params.rawArtist),
+              !isCompilationArtistName(params.rawArtist),
+              !isCompilationArtistName(params.rawOriginalArtist) else {
+            return false
+        }
+        return isPotentialSingleWordEnglishCatalogAlias(params.rawTitle)
+            || isPotentialSingleWordEnglishCatalogAlias(params.rawOriginalTitle)
+    }
+
+    private func fetchNetEaseArtistDiscographyFallback(
+        params: SearchParams,
+        headers: [String: String],
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        primaryResult: LyricsFetchResult?,
+        match: SelectedSearchCandidate<Int>?
+    ) async -> LyricsFetchResult? {
+        // Empty-lyrics fallback: same-artist discography rescue for provider
+        // catalogs that expose the real track under an alternate native title.
         let cjkArtistForFallback = await resolveArtistCJKAliases(asciiArtist: params.rawArtist).first
             ?? (LanguageUtils.containsCJK(params.rawArtist) ? params.rawArtist : params.rawOriginalArtist)
         guard !cjkArtistForFallback.isEmpty else { return nil }
@@ -1525,8 +1706,29 @@ extension LyricsFetcher {
     private func inputLooksEnglishTranslationAlias(_ params: SearchParams) -> Bool {
         let title = params.rawTitle
         guard LanguageUtils.isPureASCII(title) else { return false }
-        if LanguageUtils.normalizeTrackName(title).lowercased() == "deep" { return true }
-        return LanguageUtils.isLikelyEnglishTitle(title)
+        if LanguageUtils.isLikelyEnglishTitle(title) { return true }
+        return isPotentialSingleWordEnglishCatalogAlias(title)
+    }
+
+    private func isPotentialSingleWordEnglishCatalogAlias(_ title: String) -> Bool {
+        let normalized = LanguageUtils.normalizeTrackName(title)
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+        let words = normalized
+            .split(whereSeparator: { !$0.isLetter })
+            .map(String.init)
+        guard words.count == 1,
+              let word = words.first,
+              word.count >= 4,
+              word.count <= 12,
+              !LanguageUtils.isLikelyRomanizedJapanese(title) else {
+            return false
+        }
+        let letters = word.filter(\.isLetter)
+        let vowels = Set("aeiouy")
+        let vowelCount = letters.filter { vowels.contains($0) }.count
+        let consonantCount = letters.count - vowelCount
+        return vowelCount >= 1 && consonantCount >= 2
     }
 
     private struct NetEaseLooseTitleCandidate: Sendable {

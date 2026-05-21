@@ -105,6 +105,16 @@ extension LyricsFetcher {
             guard self.isCompilationArtistName(candidate.artist) else { return false }
             return !isBackingTrack(candidate)
         }
+        let isSafeCatalogExactTitleFallback: (SearchCandidate<ID>) -> Bool = { candidate in
+            guard allowCompilationAlbumFallback else { return false }
+            guard hasAlbumHint, inputArtistIsSpecific else { return false }
+            guard candidate.titleMatch else { return false }
+            guard candidate.durationDiff < 1.5 else { return false }
+            guard candidate.resultIndex < 24 else { return false }
+            guard self.isCompilationArtistName(candidate.artist) else { return false }
+            guard self.isDistinctiveCatalogExactTitle([inputTitle]) else { return false }
+            return !isBackingTrack(candidate)
+        }
         let hasSameArtistTitleEvidence = candidates.contains { candidate in
             candidate.titleMatch
                 && candidate.artistMatch
@@ -171,6 +181,9 @@ extension LyricsFetcher {
             }),
             ("P1c", 0, { candidate in
                 isSafeCompilationAlbumFallback(candidate)
+            }),
+            ("P1e", 0, { candidate in
+                isSafeCatalogExactTitleFallback(candidate)
             }),
             ("P1d", 0, { candidate in
                 providerLocalizedTitleAlias(candidate)
@@ -328,7 +341,7 @@ extension LyricsFetcher {
         var tierWinners: [(label: String, rank: Int, candidate: SearchCandidate<ID>)] = []
         for (label, rank, predicate) in priorities {
             var best: SearchCandidate<ID>?
-            for candidate in sorted where (!isUnsafeGenericCompilationArtist(candidate) || isSafeCompilationAlbumFallback(candidate)) && !isRiskyUnscopedNativeTitleOnly(candidate) && predicate(candidate) {
+            for candidate in sorted where (!isUnsafeGenericCompilationArtist(candidate) || isSafeCompilationAlbumFallback(candidate) || isSafeCatalogExactTitleFallback(candidate)) && !isRiskyUnscopedNativeTitleOnly(candidate) && predicate(candidate) {
                 if let current = best {
                     if compositeRank(candidate, current) { best = candidate }
                 } else {
@@ -1276,6 +1289,7 @@ extension LyricsFetcher {
         guard !params.normalizedAlbum.isEmpty else { return false }
         guard !isCompilationArtistName(params.rawArtist),
               !isCompilationArtistName(params.rawOriginalArtist) else { return false }
+        guard isDistinctiveCatalogExactTitleInput(params) else { return false }
         guard isCompilationArtistName(candidateArtist) else { return false }
         guard resultIndex < 80 else { return false }
 
@@ -1300,7 +1314,56 @@ extension LyricsFetcher {
         }
     }
 
-    private func isCompilationArtistName(_ artist: String) -> Bool {
+    func isDistinctiveCatalogExactTitleInput(_ params: SearchParams) -> Bool {
+        isDistinctiveCatalogExactTitle([
+            params.rawTitle,
+            params.rawOriginalTitle,
+            params.simplifiedTitle,
+            params.simplifiedOriginalTitle
+        ])
+    }
+
+    func isDistinctiveCatalogExactTitle(_ titleVariants: [String]) -> Bool {
+        for title in titleVariants {
+            let normalized = LanguageUtils.normalizeTrackName(title)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else { continue }
+
+            let simplified = LanguageUtils.toSimplifiedChinese(normalized)
+            let cjkCount = simplified.unicodeScalars.filter {
+                LanguageUtils.isCJKScalar($0)
+            }.count
+            if cjkCount >= 4 { return true }
+
+            let tokens = normalized.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+            let compact = tokens.joined()
+            let lower = normalized.lowercased()
+            let hasFeaturedArtistMarker = [
+                " feat. ", " feat ", " featuring ", " ft. ", " ft ",
+                "(feat.", "(feat ", "(featuring ", "(ft.", "(ft "
+            ].contains { lower.contains($0) }
+            if LanguageUtils.isPureASCII(normalized),
+               tokens.count >= 4,
+               compact.count >= 10,
+               !hasFeaturedArtistMarker {
+                return true
+            }
+
+            let compactNonASCII = simplified.unicodeScalars.filter {
+                CharacterSet.alphanumerics.contains($0) || LanguageUtils.isCJKScalar($0)
+            }
+            if !LanguageUtils.isPureASCII(normalized),
+               compactNonASCII.count >= 6 {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    func isCompilationArtistName(_ artist: String) -> Bool {
         let normalized = LanguageUtils.normalizeArtistName(artist)
             .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .lowercased()

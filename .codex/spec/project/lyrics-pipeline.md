@@ -38,6 +38,11 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   nearest metadata duration.
 - Weak library fallbacks such as low-score LRCLIB/LRCLIB-Search must not end the
   source race while native-provider sibling rescue is still plausible.
+- Exact LRCLIB/LRCLIB-Search synced hits may end the foreground race only when
+  structured title identity, duration delta, score, and a lightweight timeline
+  sanity check all pass. Do not run the full selector repeatedly inside the
+  source-race hot path; it adds latency after the correct result has already
+  landed.
 - Long sparse songs can legitimately leave a large instrumental tail. Do not
   reject an exact title/duration synced hit only for tail gap when it has
   substantial lyric content and no catalog-credit marker.
@@ -98,23 +103,34 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   guarded bridge/background authoritative lookup available, but cut off the
   empty foreground path before 3s so source-unavailable tracks do not feel
   stuck.
-- When an album hint exists but localized album metadata is unavailable,
-  English-title/native-title alias selection may accept an unscoped CJK title
-  only with confirmed CJK artist identity, tight duration, alias-title search
-  provenance, and conservative semantic title evidence. Generic English token
-  overlap is not enough.
+- When an album hint exists but direct album-catalog identity is unavailable,
+  English-title/native-title alias selection may accept an unscoped provider
+  alternate CJK title only with confirmed CJK artist identity, tight duration,
+  alias-title search provenance, and conservative semantic title evidence.
+  Generic English token overlap is not enough.
 - A full provider `title+artist` query may bridge an ordinary English title to
-  a provider-localized CJK title only when the provider artist is the same
-  non-compilation ASCII identity, the row is ranked at the top of the query,
-  the duration differs by less than 0.35s, no direct same-artist title row
-  exists, and the row is not live/remix/backing material. This is direct
+  a provider alternate CJK catalog title only when the provider artist is the
+  same non-compilation ASCII identity, the row is ranked at the top of the
+  query, the duration differs by less than 0.35s, no direct same-artist title
+  row exists, and the row is not live/remix/backing material. This is direct
   provider alias evidence, not a loose artist-only escape.
-- If an English storefront album name has no localized match but the provider
-  has an exact-title, exact-duration row under a localized CJK compilation
-  album, use it only as an orphan exact-title fallback when the provider artist
-  is a compilation identity, the title is distinctive, the localized album is
-  CJK, and the duration/result-rank bounds are tight. Do not let generic
-  compilation artists become normal specific-artist evidence.
+- Provider catalog exact-title foreground discovery is a generalized identity
+  path, not a whitelist. It may run for any distinctive exact title with a
+  specific requested artist, an album hint, tight duration/rank bounds, and a
+  provider compilation/grouping artist; it must reject live/remix/backing rows
+  and must not contain song, artist, or source-ID exceptions.
+- Same-artist provider discography rescue may run in the foreground for short
+  ASCII titles only through general title-shape evidence, not a fixed title
+  list. It still requires a specific ASCII artist, no album hint, a confirmed
+  CJK provider artist alias, a CJK alternate catalog title by that same artist,
+  tight duration evidence, a non-backing synced lyric payload, and normal
+  selection scoring before it can win.
+- If an English storefront album name has no direct provider album match but
+  the provider has an exact-title, exact-duration row under a catalog
+  compilation album, use it only as an orphan exact-title fallback when the
+  provider artist is a compilation identity, the title is distinctive, and the
+  duration/result-rank bounds are tight. Do not let generic compilation artists
+  become normal specific-artist evidence.
 - Natural English title/artist metadata must not let a high-scoring provider
   row with CJK-dominant lyric text beat a lower-scored synced English library
   row unless the provider result has native-alias evidence. Mark such provider
@@ -144,10 +160,11 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   (`群星`, `Various Artists`, `VA`, soundtrack-style labels, etc.) must not
   satisfy normal artist evidence for a specific requested artist.
 - A generic-compilation provider row may be recovered only through the explicit
-  compilation-album fallback: exact title match, album-scoped catalog/native
-  album match, duration delta under 1.5s, album-backed search provenance, and a
-  synced lyric payload. This protects normal artist matching while preserving
-  soundtrack/compilation albums where providers credit track rows to `群星`.
+  compilation-album fallback: distinctive exact title match, album-scoped
+  catalog/native album evidence, duration delta under 1.5s, bounded result
+  rank, album-backed search provenance, and a synced lyric payload. This
+  protects normal artist matching while preserving soundtrack/compilation
+  albums where providers credit track rows to `群星`.
 - iTunes catalog searches must stay song-scoped (`entity=song`) so storefront bridge lookups do not depend on broad `media=music` behavior, which can be throttled or rejected differently by region.
 
 ## Verifier Semantics
