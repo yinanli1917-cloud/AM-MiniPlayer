@@ -1112,6 +1112,121 @@ final class LyricsSelectionTests: XCTestCase {
         ))
     }
 
+    func testProviderNativeCompilationAlbumDiscoveryIsTightlyGuarded() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "This Is My Love",
+            artist: "Michelle Chen",
+            originalTitle: "This Is My Love",
+            originalArtist: "Michelle Chen",
+            duration: 312,
+            album: "Young Stars"
+        )
+
+        XCTAssertTrue(fetcher.isSafeCompilationAlbumDiscoveryCandidate(
+            params: params,
+            candidateTitle: "This Is My Love",
+            candidateArtist: "群星",
+            candidateAlbum: "脱掉制服",
+            candidateDuration: 312.052,
+            resultIndex: 47
+        ))
+        XCTAssertFalse(fetcher.isSafeCompilationAlbumDiscoveryCandidate(
+            params: params,
+            candidateTitle: "Oriental Love",
+            candidateArtist: "群星",
+            candidateAlbum: "脱掉制服",
+            candidateDuration: 420.397,
+            resultIndex: 2
+        ))
+        XCTAssertFalse(fetcher.isSafeCompilationAlbumDiscoveryCandidate(
+            params: params,
+            candidateTitle: "This Is My Love",
+            candidateArtist: "Walter Lanza",
+            candidateAlbum: "This Is My Love",
+            candidateDuration: 330.5,
+            resultIndex: 0
+        ))
+        XCTAssertFalse(fetcher.isSafeCompilationAlbumDiscoveryCandidate(
+            params: params,
+            candidateTitle: "This Is My Love",
+            candidateArtist: "群星",
+            candidateAlbum: "Top Pop Europa Plus",
+            candidateDuration: 312.052,
+            resultIndex: 4
+        ))
+    }
+
+    func testDirectProviderLocalizedTitleAliasRequiresExactArtistTopResultAndTightDuration() {
+        let fetcher = LyricsFetcher.shared
+        let matching = LyricsFetcher.SearchCandidate(
+            id: 1_805_380_249,
+            name: "多完美的一天",
+            artist: "deca joins",
+            album: "鸟鸟鸟 Bird and Reflections",
+            durationDiff: 0.107,
+            titleMatch: false,
+            artistMatch: true,
+            albumMatch: false,
+            normalizedNameLength: 6,
+            resultIndex: 0,
+            searchDescriptor: "title+artist"
+        )
+        let selected = fetcher.selectBestCandidate(
+            [matching],
+            source: "NetEase",
+            inputTitle: "Such a Perfect Day",
+            inputArtist: "deca joins",
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 1_805_380_249)
+        XCTAssertTrue(selected?.titleMatched == true)
+        XCTAssertTrue(selected?.nativeAliasMatched == true)
+
+        let looseDuration = LyricsFetcher.SearchCandidate(
+            id: 2,
+            name: "多完美的一天",
+            artist: "deca joins",
+            album: "鸟鸟鸟 Bird and Reflections",
+            durationDiff: 0.6,
+            titleMatch: false,
+            artistMatch: true,
+            albumMatch: false,
+            normalizedNameLength: 6,
+            resultIndex: 0,
+            searchDescriptor: "title+artist"
+        )
+        XCTAssertNil(fetcher.selectBestCandidate(
+            [looseDuration],
+            source: "NetEase",
+            inputTitle: "Such a Perfect Day",
+            inputArtist: "deca joins",
+            allowNativeTitleAlias: true
+        ))
+
+        let lowerRanked = LyricsFetcher.SearchCandidate(
+            id: 3,
+            name: "多完美的一天",
+            artist: "deca joins",
+            album: "鸟鸟鸟 Bird and Reflections",
+            durationDiff: 0.107,
+            titleMatch: false,
+            artistMatch: true,
+            albumMatch: false,
+            normalizedNameLength: 6,
+            resultIndex: 3,
+            searchDescriptor: "title+artist"
+        )
+        XCTAssertNil(fetcher.selectBestCandidate(
+            [lowerRanked],
+            source: "NetEase",
+            inputTitle: "Such a Perfect Day",
+            inputArtist: "deca joins",
+            allowNativeTitleAlias: true
+        ))
+    }
+
     func testSingleWordEnglishTitleUsesOnlyTightNativeArtistAlias() {
         let fetcher = LyricsFetcher.shared
         let candidates = [

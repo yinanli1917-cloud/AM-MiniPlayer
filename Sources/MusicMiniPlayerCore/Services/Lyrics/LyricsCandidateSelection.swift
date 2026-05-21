@@ -125,6 +125,38 @@ extension LyricsFetcher {
             guard LanguageUtils.isPureASCII(inputTitle), inputWordCount >= 4 else { return false }
             return candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
         }
+        let normalizedInputArtist = LanguageUtils.normalizeArtistName(inputArtist)
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+        let directASCIIArtistMatch: (SearchCandidate<ID>) -> Bool = { candidate in
+            guard !normalizedInputArtist.isEmpty,
+                  LanguageUtils.isPureASCII(inputArtist),
+                  LanguageUtils.isPureASCII(candidate.artist),
+                  !self.isCompilationArtistName(candidate.artist) else { return false }
+            let normalizedCandidate = LanguageUtils.normalizeArtistName(candidate.artist)
+                .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .lowercased()
+            let artistParts = normalizedCandidate
+                .split(whereSeparator: { "/,&".contains($0) })
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            return normalizedCandidate == normalizedInputArtist || artistParts.contains(normalizedInputArtist)
+        }
+        let providerLocalizedTitleAlias: (SearchCandidate<ID>) -> Bool = { candidate in
+            guard allowNativeTitleAlias,
+                  inputLooksEnglish,
+                  !likelyJapaneseRomaji,
+                  candidate.artistMatch,
+                  directASCIIArtistMatch(candidate),
+                  candidate.searchDescriptor.hasPrefix("title+artist"),
+                  candidate.resultIndex <= 1,
+                  candidate.durationDiff < 0.35,
+                  candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }),
+                  !hasSameArtistTitleEvidence,
+                  !isBackingTrack(candidate) else {
+                return false
+            }
+            return true
+        }
 
         // 按优先级递减尝试
         let priorities: [(String, Int, (SearchCandidate<ID>) -> Bool)] = [
@@ -139,6 +171,9 @@ extension LyricsFetcher {
             }),
             ("P1c", 0, { candidate in
                 isSafeCompilationAlbumFallback(candidate)
+            }),
+            ("P1d", 0, { candidate in
+                providerLocalizedTitleAlias(candidate)
             }),
             ("P1b", 1, { candidate in
                 guard allowNativeTitleAlias else { return false }
@@ -322,9 +357,10 @@ extension LyricsFetcher {
                 title: winner.candidate.name,
                 artist: winner.candidate.artist,
                 albumMatched: winner.candidate.albumMatch,
-                titleMatched: winner.candidate.titleMatch || winner.candidate.albumMatch,
+                titleMatched: winner.candidate.titleMatch || winner.candidate.albumMatch || winner.label == "P1d",
                 nativeAliasMatched: !winner.candidate.titleMatch && (
                     (winner.rank == 1 && !winner.candidate.albumMatch)
+                        || winner.label == "P1d"
                         || winner.label == "P2d"
                         || winner.candidate.searchDescriptor.hasPrefix("alias artist only")
                         || winner.candidate.searchDescriptor.hasPrefix("alias album+artist")
@@ -1227,6 +1263,41 @@ extension LyricsFetcher {
             inputNormalizedAlbum: params.normalizedAlbum,
             resultAlbum: candidateAlbum
         )
+    }
+
+    func isSafeCompilationAlbumDiscoveryCandidate(
+        params: SearchParams,
+        candidateTitle: String,
+        candidateArtist: String,
+        candidateAlbum: String,
+        candidateDuration: Double,
+        resultIndex: Int
+    ) -> Bool {
+        guard !params.normalizedAlbum.isEmpty else { return false }
+        guard !isCompilationArtistName(params.rawArtist),
+              !isCompilationArtistName(params.rawOriginalArtist) else { return false }
+        guard isCompilationArtistName(candidateArtist) else { return false }
+        guard resultIndex < 80 else { return false }
+
+        let cleanAlbum = candidateAlbum.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanAlbum.isEmpty,
+              LanguageUtils.containsCJK(cleanAlbum) else { return false }
+        guard !providerAlbumMatches(inputNormalizedAlbum: params.normalizedAlbum, resultAlbum: cleanAlbum) else {
+            return false
+        }
+
+        let lowerTitle = candidateTitle.lowercased()
+        let lowerAlbum = cleanAlbum.lowercased()
+        let backingTrackMarkers = ["karaoke", "instrumental", "伴奏", "カラオケ", "オリジナル・カラオケ"]
+        guard !backingTrackMarkers.contains(where: {
+            lowerTitle.contains($0) || lowerAlbum.contains($0)
+        }) else { return false }
+
+        let durationDiff = abs(candidateDuration - params.duration)
+        guard durationDiff < 1.5 else { return false }
+        return params.titlePairs.contains {
+            isTitleMatch(input: $0.0, result: candidateTitle, simplifiedInput: $0.1)
+        }
     }
 
     private func isCompilationArtistName(_ artist: String) -> Bool {
