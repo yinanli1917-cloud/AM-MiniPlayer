@@ -90,31 +90,44 @@ extension MusicController {
     }
 
     func preloadArtwork(for tracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)]) {
-        let candidates = tracks.prefix(4).compactMap { track -> (key: NSString, title: String, artist: String, album: String)? in
-            guard let key = artworkCacheKey(
+        let candidates = tracks.prefix(4).compactMap { track -> (title: String, artist: String, album: String, persistentID: String)? in
+            guard !track.title.isEmpty, !track.artist.isEmpty else { return nil }
+            guard !isArtworkAlreadyCached(
                 persistentID: track.persistentID,
                 title: track.title,
-                artist: track.artist
-            ), artworkCache.object(forKey: key) == nil else {
+                artist: track.artist,
+                album: track.album
+            ) else {
                 return nil
             }
-            return (key, track.title, track.artist, track.album)
+            return (track.title, track.artist, track.album, track.persistentID)
         }
         guard !candidates.isEmpty else { return }
 
         Task.detached(priority: .utility) { [weak self] in
             for candidate in candidates {
-                guard let image = await PlaybackSessionArtworkFetcher.fetchArtwork(
+                guard let self, !Task.isCancelled else { return }
+                guard let result = await self.fetchArtworkResult(
                     title: candidate.title,
                     artist: candidate.artist,
                     album: candidate.album
                 ) else { continue }
-                self?.artworkCache.setObject(
-                    image,
-                    forKey: candidate.key,
-                    cost: Self.imageCacheCost(image)
+                self.cacheArtwork(
+                    result.image,
+                    persistentID: candidate.persistentID,
+                    title: candidate.title,
+                    artist: candidate.artist,
+                    album: candidate.album,
+                    persistToDisk: result.source.isAppleAuthoritative
                 )
             }
+        }
+    }
+
+    private func isArtworkAlreadyCached(persistentID: String, title: String, artist: String, album: String) -> Bool {
+        let keys = artworkCacheKeys(persistentID: persistentID, title: title, artist: artist, album: album)
+        return keys.contains { key in
+            artworkCache.object(forKey: key) != nil || getDiskCachedArtwork(for: key) != nil
         }
     }
 
@@ -213,6 +226,17 @@ extension MusicController {
             generation: generation,
             heldPreviousArtwork: heldPreviousArtwork
         )
+        if !heldPreviousArtwork {
+            let applyStart = CFAbsoluteTimeGetCurrent()
+            setArtwork(createPlaceholder())
+            appliedArtworkGeneration = generation
+            recordDiagnosticsArtworkApplied(
+                track: trackContext,
+                generation: generation,
+                source: "placeholder.initial",
+                applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+            )
+        }
 
         // ━━━ Path 1: API fetch — starts immediately, no SB queue dependency ━━━
         // API is provisional — if SB already applied for this generation, API result is discarded.
@@ -743,6 +767,39 @@ extension MusicController {
             .appendingPathComponent("\(digest).tiff")
     }
 
+    private func artworkCacheKeys(
+        persistentID: String,
+        title: String,
+        artist: String,
+        album: String
+    ) -> [NSString] {
+        var keys: [NSString] = []
+        if let key = artworkCacheKey(persistentID: persistentID, title: title, artist: artist) {
+            keys.append(key)
+        }
+        if let key = artworkMetadataCacheKey(title: title, artist: artist, album: album),
+           !keys.contains(key) {
+            keys.append(key)
+        }
+        return keys
+    }
+
+    private func cacheArtwork(
+        _ image: NSImage,
+        persistentID: String,
+        title: String,
+        artist: String,
+        album: String,
+        persistToDisk: Bool
+    ) {
+        for key in artworkCacheKeys(persistentID: persistentID, title: title, artist: artist, album: album) {
+            artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
+            if persistToDisk {
+                storeDiskCachedArtwork(image, for: key)
+            }
+        }
+    }
+
     enum ArtworkSource {
         case sb, playbackSession, musicKit, iTunes, web
 
@@ -899,14 +956,14 @@ extension MusicController {
         )
 
         if source.isAppleAuthoritative {
-            if let key = artworkCacheKey(persistentID: persistentID, title: title, artist: currentArtist) {
-                artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
-                storeDiskCachedArtwork(image, for: key)
-            }
-            if let key = artworkMetadataCacheKey(title: title, artist: artist, album: album) {
-                artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
-                storeDiskCachedArtwork(image, for: key)
-            }
+            cacheArtwork(
+                image,
+                persistentID: persistentID,
+                title: title,
+                artist: artist,
+                album: album,
+                persistToDisk: true
+            )
         }
     }
 

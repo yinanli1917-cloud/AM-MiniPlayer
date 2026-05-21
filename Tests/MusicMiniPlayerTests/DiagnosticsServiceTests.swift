@@ -75,7 +75,7 @@ final class DiagnosticsServiceTests: XCTestCase {
             detail: "Artwork fetch started before bridge context arrived.",
             track: earlyTrack
         )
-        DiagnosticsService.shared.recordLyricsFetchMiss(track: earlyTrack, resultCount: 0)
+        DiagnosticsService.shared.recordLyricsFetchMiss(track: earlyTrack, resultCount: 1)
 
         let enriched = DiagnosticTrackContext(
             title: "Distance (feat. deca joins)",
@@ -761,7 +761,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertFalse(report.events.contains { $0.name == "diagnostics.lyricsLineMotionTimeScopedFallback" })
     }
 
-    func testNoSourceLyricsMissCreatesDeduplicatedMissingLyricsIncident() {
+    func testNoSourceLyricsMissStaysEventUntilAuthoritativeClassification() {
         let track = DiagnosticTrackContext(
             title: "Missing Song",
             artist: "Missing Artist",
@@ -772,16 +772,14 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: false)
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 0)
 
-        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .lyricsMissing)
-        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.severity, .warning)
-        XCTAssertEqual(DiagnosticsService.shared.incidents.first?.evidence["result"], "unresolved")
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
         let unresolvedEvent = DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.unresolved" }
         XCTAssertEqual(unresolvedEvent?.track, track)
         XCTAssertEqual(unresolvedEvent?.metrics["resultCount"] ?? -1, 0, accuracy: 0.001)
 
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 0)
-        XCTAssertEqual(DiagnosticsService.shared.incidents.filter { $0.category == .lyricsMissing }.count, 1)
-        XCTAssertTrue(DiagnosticsService.shared.events.contains { $0.name == "lyrics.fetch.missingRepeated" })
+        XCTAssertEqual(DiagnosticsService.shared.incidents.filter { $0.category == .lyricsMissing }.count, 0)
+        XCTAssertEqual(DiagnosticsService.shared.events.filter { $0.name == "lyrics.fetch.unresolved" }.count, 2)
 
         DiagnosticsService.shared.clear()
         DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: false)
@@ -856,7 +854,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsFetchStarted(track: track, forceRefresh: false)
         DiagnosticsService.shared.recordLyricsFetchMiss(track: track, resultCount: 0)
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
-        XCTAssertTrue(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
 
         DiagnosticsService.shared.recordLyricsFetchUnavailable(track: track, classification: "unavailable")
 
@@ -864,7 +862,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsMissing })
         let event = DiagnosticsService.shared.events.first { $0.name == "lyrics.fetch.unavailable" }
         XCTAssertEqual(event?.track, track)
-        XCTAssertEqual(event?.metrics["clearedUnresolvedIncidentCount"] ?? -1, 1, accuracy: 0.001)
+        XCTAssertEqual(event?.metrics["clearedUnresolvedIncidentCount"] ?? -1, 0, accuracy: 0.001)
     }
 
     func testFastSingleCandidateLyricsMissStaysPendingForAuthoritativeClassification() {

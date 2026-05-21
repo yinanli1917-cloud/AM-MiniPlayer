@@ -24,6 +24,13 @@ cover on a new track.
   album-disambiguated metadata key. On restart or rebuild, check this disk cache
   before async fetches so previously seen tracks do not briefly black out while
   local Apple caches or web fallbacks warm up.
+- Nearby queue artwork prewarming should use the same bounded artwork race as
+  current-track fetches, not only playback-session reads. Some Apple Music URL
+  tracks have no ScriptingBridge artwork and no current playback-session archive
+  even while Music.app displays a cover from process/UI state; prewarming the
+  next few playlist/up-next tracks with Apple/iTunes fallback on a utility task
+  turns the later switch into a cache hit without putting network work on the
+  interactive switch path.
 - Do not scan Apple Music's `SubscriptionPlayCache` on app startup or on the
   interactive artwork-fetch path. Parsing local `.m4p` metadata with
   AVFoundation is too expensive for track switches and can starve the UI even
@@ -40,6 +47,10 @@ cover on a new track.
   run. Do not drop to a black/empty background during the switch. If the current
   generation exhausts its fetch/retry path without applying artwork, replace the
   retained previous cover with the neutral placeholder.
+- When there is no previous artwork to retain, apply the neutral placeholder
+  immediately on cache miss and replace it later if a current-generation artwork
+  result arrives. Do not leave the view black while waiting for all artwork
+  sources to fail.
 - Async artwork results must still pass generation and current-track checks
   before applying. SB and Apple catalog artwork remain authoritative over web
   fallbacks.

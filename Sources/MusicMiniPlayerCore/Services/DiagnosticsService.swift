@@ -1027,12 +1027,6 @@ public final class DiagnosticsService: ObservableObject {
                 track: track,
                 metrics: ["fetchSeconds": elapsed, "resultCount": Double(resultCount)]
             )
-            recordLyricsMissingIncidentIfNeeded(
-                track: track,
-                elapsed: elapsed,
-                resultCount: resultCount,
-                result: "unresolved"
-            )
             return
         }
         if terminalCandidateOnly {
