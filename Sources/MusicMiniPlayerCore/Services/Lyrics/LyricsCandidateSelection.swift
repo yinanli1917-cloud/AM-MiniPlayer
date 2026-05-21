@@ -158,6 +158,12 @@ extension LyricsFetcher {
                    !LanguageUtils.isLikelyRomanizedJapanese(inputTitle),
                    candidate.durationDiff < 3.0,
                    candidate.searchDescriptor.hasPrefix("alias+title") {
+                    if hasAlbumHint, !candidate.albumMatch {
+                        guard self.localizedEnglishTitleAliasMatches(
+                            inputTitle: inputTitle,
+                            nativeTitle: candidate.name
+                        ) else { return false }
+                    }
                     return true
                 }
                 if LanguageUtils.isLikelyEnglishTitle(inputTitle),
@@ -239,9 +245,15 @@ extension LyricsFetcher {
                 guard !inputTitle.isEmpty else { return false }
                 let resultTokens = LanguageUtils.normalizeTrackName(candidate.name).lowercased()
                     .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+                let genericTitleTokens: Set<String> = [
+                    "the", "and", "with", "feat", "featuring", "from", "to",
+                    "a", "an", "of", "in", "on", "for", "me", "my", "you"
+                ]
                 let hasTokenOverlap = inputTokens.contains { t in
-                    t.count >= 3 && resultTokens.contains(where: { r in
-                        r.count >= 3 && (r.contains(t) || t.contains(r))
+                    guard !genericTitleTokens.contains(t) else { return false }
+                    return t.count >= 3 && resultTokens.contains(where: { r in
+                        guard !genericTitleTokens.contains(r) else { return false }
+                        return r.count >= 3 && (r.contains(t) || t.contains(r))
                     })
                 }
                 // 🔑 Token-overlap path
@@ -416,6 +428,39 @@ extension LyricsFetcher {
         return String(normalized.unicodeScalars.filter {
             CharacterSet.alphanumerics.contains($0) || LanguageUtils.isCJKScalar($0)
         })
+    }
+
+    private func localizedEnglishTitleAliasMatches(inputTitle: String, nativeTitle: String) -> Bool {
+        guard LanguageUtils.isPureASCII(inputTitle),
+              LanguageUtils.isLikelyEnglishTitle(inputTitle),
+              nativeTitle.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else {
+            return false
+        }
+        let genericTitleTokens: Set<String> = [
+            "the", "and", "with", "feat", "featuring", "from", "to",
+            "a", "an", "of", "in", "on", "for", "me", "my", "you"
+        ]
+        let meaningfulTokens = inputTitle.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .filter { !genericTitleTokens.contains($0) && $0.count >= 3 }
+        guard !meaningfulTokens.isEmpty, meaningfulTokens.count <= 3 else { return false }
+
+        let simplifiedNative = LanguageUtils.toSimplifiedChinese(nativeTitle)
+        let traditionalNative = LanguageUtils.toTraditionalChinese(nativeTitle)
+        let semanticTokens: [String: [String]] = [
+            "key": ["关键", "關鍵", "钥匙", "鑰匙"],
+            "keyword": ["关键词", "關鍵詞", "关键", "關鍵"],
+            "keywords": ["关键词", "關鍵詞", "关键", "關鍵"],
+            "distance": ["距离", "距離"]
+        ]
+        return meaningfulTokens.allSatisfy { token in
+            guard let aliases = semanticTokens[token] else { return false }
+            return aliases.contains { alias in
+                simplifiedNative.contains(LanguageUtils.toSimplifiedChinese(alias))
+                    || traditionalNative.contains(LanguageUtils.toTraditionalChinese(alias))
+            }
+        }
     }
 
     /// 统一艺术家匹配（简繁体 + CJK 跨语言 + normalized 去后缀）
@@ -1219,7 +1264,15 @@ extension LyricsFetcher {
 
     /// Generate plausible Pinyin-style probe strings from an ASCII artist name.
     func artistProbeVariants(_ input: String) -> [String] {
-        var probes: [String] = [input]
+        var probes: [String] = []
+        func addProbe(_ value: String) {
+            let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty else { return }
+            guard !probes.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) else { return }
+            probes.append(clean)
+        }
+
+        addProbe(input)
         // 🔑 Multi-artist splitting
         let multiArtistSeparators = [" & ", ", ", " feat. ", " feat ", " featuring ", " Feat. ", " with ", " and ", " x ", " X "]
         for sep in multiArtistSeparators {
@@ -1227,15 +1280,17 @@ extension LyricsFetcher {
                 let parts = input.components(separatedBy: sep)
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
-                for part in parts where part != input && !probes.contains(part) {
-                    probes.append(part)
+                for part in parts where part != input {
+                    addProbe(part)
                 }
             }
         }
-        let lower = " " + input.lowercased() + " "
+
         let rules: [(String, String)] = [
             // HK/TW surname variants
             (" lee ", " li "),
+            (" chang ", " zhang "),
+            (" hung ", " hong "),
             // Wade-Giles → Pinyin syllable bodies
             ("chih", "zhi"), ("chieh", "jie"), ("chien", "jian"),
             ("ching", "qin"), ("chung", "zhong"), ("chiang", "jiang"),
@@ -1247,13 +1302,20 @@ extension LyricsFetcher {
             ("eung", "iang"), ("oeng", "iang"), ("yuen", "yuan"),
             ("cheung", "zhang"), ("leung", "liang"), ("wong", "wang"),
         ]
-        var variant = lower
-        for (a, b) in rules { variant = variant.replacingOccurrences(of: a, with: b) }
-        variant = variant.trimmingCharacters(in: .whitespaces)
-        if variant != input.lowercased() { probes.append(variant) }
-        // Also try a no-space compact form
-        let compact = variant.replacingOccurrences(of: " ", with: "")
-        if compact != variant && !compact.isEmpty { probes.append(compact) }
+        let baseProbes = probes
+        for probe in baseProbes {
+            var variant = " " + probe.lowercased() + " "
+            for (a, b) in rules { variant = variant.replacingOccurrences(of: a, with: b) }
+            variant = variant.trimmingCharacters(in: .whitespaces)
+            if variant != probe.lowercased() {
+                addProbe(variant)
+            }
+            // Also try a no-space compact form
+            let compact = variant.replacingOccurrences(of: " ", with: "")
+            if compact != variant {
+                addProbe(compact)
+            }
+        }
         return probes
     }
 
@@ -1294,13 +1356,17 @@ extension LyricsFetcher {
                             guard let cjkName = artist["name"] as? String,
                                   LanguageUtils.containsCJK(cjkName) else { continue }
                             let aliasList = artist["alias"] as? [String] ?? []
-                            let isConfirmed = Self.isConfirmedArtistAlias(asciiArtist: inputLower, providerAliases: aliasList)
+                            let isConfirmed = Self.isConfirmedArtistAlias(asciiArtist: probe.lowercased(), providerAliases: aliasList)
+                                || Self.isConfirmedArtistAlias(asciiArtist: inputLower, providerAliases: aliasList)
                             if isConfirmed {
                                 confirmed.append(cjkName)
                             } else if allowUnconfirmedCatalogMatches,
                                       probe.lowercased() != inputLower {
                                 catalog.append(cjkName)
                             }
+                        }
+                        if !confirmed.isEmpty {
+                            catalog.removeAll()
                         }
                         return (index, confirmed, catalog)
                     } catch {
@@ -1318,7 +1384,7 @@ extension LyricsFetcher {
             var batches: [(Int, [String], [String])] = []
             for await batch in group {
                 batches.append(batch)
-                if !batch.1.isEmpty {
+                if !allowUnconfirmedCatalogMatches, !batch.1.isEmpty {
                     group.cancelAll()
                     break
                 }

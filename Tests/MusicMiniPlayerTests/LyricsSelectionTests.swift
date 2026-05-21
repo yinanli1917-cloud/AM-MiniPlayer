@@ -736,6 +736,15 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertTrue(probes.contains("lizhiqin"))
     }
 
+    func testArtistProbeVariantsSplitAndConvertCollaborations() {
+        let probes = LyricsFetcher.shared.artistProbeVariants("Hung Liang Chang & Karen Mok")
+
+        XCTAssertTrue(probes.contains("Hung Liang Chang"))
+        XCTAssertTrue(probes.contains("Karen Mok"))
+        XCTAssertTrue(probes.contains("hong liang zhang"))
+        XCTAssertTrue(probes.contains("hongliangzhang"))
+    }
+
     func testCJKArtistDoesNotMatchFanSuffix() {
         let fetcher = LyricsFetcher.shared
 
@@ -899,6 +908,100 @@ final class LyricsSelectionTests: XCTestCase {
             source: "NetEase",
             inputTitle: "This Is My Love",
             inputArtist: "Michelle Chen",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertNil(selected)
+    }
+
+    func testAlbumHintBlocksUnscopedEnglishAliasDurationCollision() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1898256676,
+                name: "一定会",
+                artist: "林俊杰",
+                album: "一定会/After The Rain",
+                durationDiff: 0.7,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 1,
+                searchDescriptor: "alias+title:林俊杰"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "The Key",
+            inputArtist: "JJ Lin",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertNil(selected)
+    }
+
+    func testAlbumHintAllowsSemanticEnglishNativeTitleAlias() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 4001,
+                name: "关键词",
+                artist: "林俊杰",
+                album: "和自己对话",
+                durationDiff: 2.3,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 0,
+                searchDescriptor: "alias+title:林俊杰"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "The Key",
+            inputArtist: "JJ Lin",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 4001)
+        XCTAssertEqual(selected?.nativeAliasMatched, true)
+    }
+
+    func testGenericEnglishTokenDoesNotCreateAliasTitleOverlap() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 2046796566,
+                name: "The Show (with JJ Lin)",
+                artist: "Steve Aoki / 林俊杰",
+                album: "The Show",
+                durationDiff: 0.4,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 8,
+                resultIndex: 0,
+                searchDescriptor: "alias+title:林俊杰"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "The Key",
+            inputArtist: "JJ Lin",
             aliasConfirmedCJK: true,
             hasAlbumHint: true,
             allowNativeTitleAlias: true

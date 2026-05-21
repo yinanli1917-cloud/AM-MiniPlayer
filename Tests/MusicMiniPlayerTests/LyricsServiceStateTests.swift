@@ -132,6 +132,11 @@ final class LyricsServiceStateTests: XCTestCase {
         )
     }
 
+    func testBareChineseTranslationLanguageUsesConcreteSystemTarget() {
+        XCTAssertEqual(LyricsService.normalizedSystemTranslationLanguage("zh"), "zh-Hans")
+        XCTAssertEqual(LyricsService.normalizedSystemTranslationLanguage("zh-Hant"), "zh-Hant")
+    }
+
     func testPartialSourceTranslationFillTargetsOnlyMissingVisibleLines() {
         let lyrics = [
             LyricLine(text: "⋯", startTime: 0, endTime: 10),
@@ -178,5 +183,45 @@ final class LyricsServiceStateTests: XCTestCase {
             []
         )
         XCTAssertFalse(LyricsService.hasMissingEligibleTranslations(lyrics))
+    }
+
+    func testSystemTranslationSampleUsesOnlyMissingSourceTranslationLines() {
+        let lyrics = [
+            LyricLine(text: "⋯", startTime: 0, endTime: 10),
+            LyricLine(text: "泣きながら　ちぎった写真を", startTime: 14, endTime: 22, translation: "一边哭着 把撕碎的照片"),
+            LyricLine(text: "悩みなき　きのうのほほえみ", startTime: 29, endTime: 37),
+            LyricLine(text: "la la la", startTime: 38, endTime: 40),
+            LyricLine(text: "伤つける人もないけど", startTime: 160, endTime: 168)
+        ]
+
+        let sample = LyricsService.systemTranslationSampleText(
+            in: lyrics,
+            onlyMissingTranslations: true
+        )
+
+        XCTAssertEqual(sample, "悩みなき　きのうのほほえみ\n伤つける人もないけど")
+    }
+
+    func testSystemTranslationSampleRejectsUnstableShortText() {
+        let lyrics = [
+            LyricLine(text: "⋯", startTime: 0, endTime: 10),
+            LyricLine(text: "la", startTime: 10, endTime: 12),
+            LyricLine(text: "oh", startTime: 12, endTime: 14)
+        ]
+
+        XCTAssertNil(
+            LyricsService.systemTranslationSampleText(
+                in: lyrics,
+                onlyMissingTranslations: false
+            )
+        )
+    }
+
+    func testSystemTranslationSourceLanguageUsesStableSample() {
+        let source = LyricsService.systemTranslationSourceLanguage(
+            for: "泣きながら　ちぎった写真を\n悩みなき　きのうのほほえみ\nあなたに会いたい"
+        )
+
+        XCTAssertEqual(source?.languageCode?.identifier, "ja")
     }
 }

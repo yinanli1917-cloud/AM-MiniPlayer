@@ -195,7 +195,7 @@
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "Genius"],
       "firstLineContains": null,
       "firstLineSHA256": "2e9b12c2b0badcec47b2ac20b9fd9685f539301fe1640573f7a1f243c46bb65b",
-      "acceptableFirstLineSHA256": ["6f0ffa95460fa7fb59be935e02710a068576a3cbb1736b9fdde888623df1c70d", "ae0661cb1799b24e1c65a175644c57b1a5474285f9280c9349b5c61dd2593c87", "06c1f6bbfafb8379c6dbeea6887a7b8fb4e3e328f52f946ae8f0eb17266c51a1"]
+      "acceptableFirstLineSHA256": ["6f0ffa95460fa7fb59be935e02710a068576a3cbb1736b9fdde888623df1c70d", "ae0661cb1799b24e1c65a175644c57b1a5474285f9280c9349b5c61dd2593c87", "06c1f6bbfafb8379c6dbeea6887a7b8fb4e3e328f52f946ae8f0eb17266c51a1", "50185f1422b57951338bd8f218e1fc43e36453732cf8479c04e98aefc9a2a1fc"]
     }
   },
   {
@@ -249,8 +249,11 @@
     "artist": "deca joins",
     "duration": 318,
     "expectation": {
-      "shouldFindLyrics": false,
-      "allowMissingLyrics": true
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineContains": "闲适的生活",
+      "expectedClassification": "synced",
+      "maxTailGapS": 90
     }
   },
   {
@@ -289,7 +292,8 @@
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "AMLL", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": null,
-      "firstLineSHA256": "dff78bf5b4f25fcf57a840c39dff83fe435e2d61ed4f8507d65bf5b30a160035"
+      "firstLineSHA256": "dff78bf5b4f25fcf57a840c39dff83fe435e2d61ed4f8507d65bf5b30a160035",
+      "acceptableFirstLineSHA256": ["3fcb769bac68c4887d4dc448c5ae2a934e6fbbd940b84792b8406f1a5b4c078b"]
     }
   },
   {
@@ -953,6 +957,50 @@
       "expectedClassification": "synced",
       "firstLineStartMinS": 10,
       "firstLineStartMaxS": 15,
+      "maxTailGapS": 40
+    }
+  },
+  {
+    "id": "X31_english_title_collaboration_native_bridge",
+    "title": "Hiroshima Mon Amour",
+    "artist": "Hung Liang Chang & Karen Mok",
+    "duration": 320,
+    "album": "The Manhattan Bridge",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search"],
+      "firstLineSHA256": "0b007f897ec4d15b20b03f0357f3832059b7f9a753fed5680e52067f12acc319",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 20,
+      "firstLineStartMaxS": 30,
+      "maxTailGapS": 40
+    }
+  },
+  {
+    "id": "X32_album_echo_no_candidate_latency_budget",
+    "title": "She & Me",
+    "artist": "Ciacia Ho",
+    "duration": 343,
+    "album": "She & Me",
+    "expectation": {
+      "shouldFindLyrics": false,
+      "allowMissingLyrics": true,
+      "expectedClassification": "none"
+    }
+  },
+  {
+    "id": "X33_featured_title_native_artist_bridge",
+    "title": "Distance (feat. deca joins)",
+    "artist": "Enno Cheng",
+    "duration": 247,
+    "album": "Mercury Retrograde",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "QQ"],
+      "firstLineSHA256": "a6bcd422d014baa3178682f59076483f6f45d4a71b15a7f13fca5a09394585ea",
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 20,
+      "firstLineStartMaxS": 30,
       "maxTailGapS": 40
     }
   }

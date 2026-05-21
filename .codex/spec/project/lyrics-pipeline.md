@@ -10,6 +10,19 @@ Do not collapse all empty lyric outcomes into "no lyrics".
 - `unavailable`: a provider catalog row matches the requested title/artist/duration, but the provider returns no lyric payload. The app should report lyrics unavailable, not no lyrics.
 - `none`: no trusted source or catalog identity was resolved. Keep the state unresolved and do not cache it as no lyrics.
 
+## System Translation Fill
+
+- Local ML translation is a supplemental lyrics feature, not a blocking fetch
+  dependency. It must not show Apple's language selection or download UI during
+  normal lyric rendering.
+- Before mounting SwiftUI `.translationTask`, detect a stable source language
+  from the current eligible lyric sample and preflight that explicit source /
+  target pair with `LanguageAvailability`. Start the task only when the pair is
+  already `installed`; treat `supported`, `unsupported`, or unidentified samples
+  as a silent skip for that song/language until the user explicitly retries.
+- Partial source translations should preserve provider translations and sample
+  only the missing eligible visible lyric lines for the local fill.
+
 ## Fallback Selection
 
 - Trust synced lyrics first, but allow conservative static fallback from `lyrics.ovh`/Genius only after synced candidates are missing or rejected by timing/identity gates.
@@ -80,6 +93,16 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   tight duration match, CJK artist match, no live/remix/backing markers, and
   must fetch the provider row directly instead of relying on loose artist-only
   selection.
+- That album-title echo bridge must still respect the foreground interaction
+  budget when every foreground source returns no usable candidate. Keep the
+  guarded bridge/background authoritative lookup available, but cut off the
+  empty foreground path before 3s so source-unavailable tracks do not feel
+  stuck.
+- When an album hint exists but localized album metadata is unavailable,
+  English-title/native-title alias selection may accept an unscoped CJK title
+  only with confirmed CJK artist identity, tight duration, alias-title search
+  provenance, and conservative semantic title evidence. Generic English token
+  overlap is not enough.
 - Natural English title/artist metadata must not let a high-scoring provider
   row with CJK-dominant lyric text beat a lower-scored synced English library
   row unless the provider result has native-alias evidence. Mark such provider
@@ -161,6 +184,14 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   fetch time; when system translation fills the missing eligible rows for the
   same track, clear the matching `lyricsPartialTranslation` incident and record
   a fill event instead of leaving the monitor dirty.
+- System translation gaps need the same lifecycle even when the selected lyrics
+  source has no provider translation at all. If translation display is
+  requested and the local translation preflight/task cannot fill eligible
+  lines, record the reason and target language as diagnostics evidence; when
+  the system translation later fills the rows, clear the incident and emit a
+  `lyrics.translation.filledSystem` event. Use a concrete Chinese target such
+  as `zh-Hans` for bare `zh`, and let the Translation session auto-detect the
+  source language after the silent availability preflight.
 - Lyrics page first-render culling must stay active until enough line heights
   are measured. Do not briefly render the full lyric payload during partial
   measurement; that path causes page-switch frame stalls on translated or

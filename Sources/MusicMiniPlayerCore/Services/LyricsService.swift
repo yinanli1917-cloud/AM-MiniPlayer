@@ -848,6 +848,22 @@ public class LyricsService: ObservableObject {
         }
     }
 
+    @MainActor
+    private func recordDiagnosticsSystemTranslationGap(
+        reason: String,
+        translationLanguage: String
+    ) {
+        guard let track = currentDiagnosticsTrack() else { return }
+        let stats = Self.translationCoverageStats(in: lyrics)
+        DiagnosticsService.shared.recordLyricsSystemTranslationGap(
+            track: track,
+            reason: reason,
+            translationLanguage: translationLanguage,
+            translationLineCount: stats.translated,
+            translatableLineCount: stats.eligible
+        )
+    }
+
     // ========================================================================
     // MARK: - Public API: Update Time
     // ========================================================================
@@ -949,6 +965,99 @@ public class LyricsService: ObservableObject {
         // 实际翻译由 SwiftUI .translationTask() 完成
     }
 
+    /// 检查本机已安装的翻译语言包；不允许系统弹出语言选择/下载窗口。
+    @available(macOS 15.0, *)
+    @MainActor
+    public func silentSystemTranslationConfiguration() async -> TranslationSession.Configuration? {
+        guard !isTranslating else { return nil }
+        guard !lyrics.isEmpty, showTranslation, !isLoading else { return nil }
+
+        let isTargetChinese = translationLanguage.hasPrefix("zh")
+        let isFillingPartialSourceTranslations = translationsAreFromLyricsSource && isTargetChinese
+        if isTargetChinese && lyricsArePredominantlyChinese() { return nil }
+        if !isFillingPartialSourceTranslations && lyricsAreInTargetLanguage() { return nil }
+
+        let targetLanguageID = Self.normalizedSystemTranslationLanguage(translationLanguage)
+        let translationID = "\(currentSongID ?? "")-\(targetLanguageID)"
+        if currentSongTranslationID == translationID {
+            if isFillingPartialSourceTranslations {
+                guard Self.hasMissingEligibleTranslations(lyrics) else { return nil }
+            } else if hasTranslation {
+                return nil
+            }
+        }
+
+        guard let sampleText = Self.systemTranslationSampleText(
+            in: lyrics,
+            onlyMissingTranslations: isFillingPartialSourceTranslations
+        ) else {
+            currentSongTranslationID = translationID
+            translationFailed = true
+            recordDiagnosticsSystemTranslationGap(
+                reason: "no stable language sample",
+                translationLanguage: targetLanguageID
+            )
+            DebugLogger.log("Translation", "Skipping local translation: no stable language sample")
+            return nil
+        }
+
+        guard let sourceLanguage = Self.systemTranslationSourceLanguage(for: sampleText) else {
+            currentSongTranslationID = translationID
+            translationFailed = true
+            recordDiagnosticsSystemTranslationGap(
+                reason: "source language not identifiable",
+                translationLanguage: targetLanguageID
+            )
+            DebugLogger.log("Translation", "Skipping local translation: source language not identifiable")
+            return nil
+        }
+
+        let songIDBeforeAwait = currentSongID
+        let languageBeforeAwait = translationLanguage
+        let lyricsCountBeforeAwait = lyrics.count
+        let targetLanguage = Locale.Language(identifier: targetLanguageID)
+
+        let status = await LanguageAvailability().status(from: sourceLanguage, to: targetLanguage)
+        guard currentSongID == songIDBeforeAwait,
+              translationLanguage == languageBeforeAwait,
+              lyrics.count == lyricsCountBeforeAwait else {
+            return nil
+        }
+
+        switch status {
+        case .installed:
+            translationFailed = false
+            return TranslationSession.Configuration(source: nil, target: targetLanguage)
+        case .supported:
+            currentSongTranslationID = translationID
+            translationFailed = true
+            recordDiagnosticsSystemTranslationGap(
+                reason: "language pair supported but not installed",
+                translationLanguage: targetLanguageID
+            )
+            DebugLogger.log("Translation", "Skipping local translation: language pair supported but not installed")
+            return nil
+        case .unsupported:
+            currentSongTranslationID = translationID
+            translationFailed = true
+            recordDiagnosticsSystemTranslationGap(
+                reason: "unsupported language pair",
+                translationLanguage: targetLanguageID
+            )
+            DebugLogger.log("Translation", "Skipping local translation: unsupported language pair")
+            return nil
+        @unknown default:
+            currentSongTranslationID = translationID
+            translationFailed = true
+            recordDiagnosticsSystemTranslationGap(
+                reason: "unknown language availability status",
+                translationLanguage: targetLanguageID
+            )
+            DebugLogger.log("Translation", "Skipping local translation: unknown language availability status")
+            return nil
+        }
+    }
+
     /// 执行系统翻译（由 SwiftUI .translationTask() 调用）
     @available(macOS 15.0, *)
     @MainActor
@@ -966,7 +1075,8 @@ public class LyricsService: ObservableObject {
         if !isFillingPartialSourceTranslations && lyricsAreInTargetLanguage() { return }
 
         // 检查是否已翻译过（相同歌曲+相同语言）
-        let translationID = "\(currentSongID ?? "")-\(translationLanguage)"
+        let targetLanguageID = Self.normalizedSystemTranslationLanguage(translationLanguage)
+        let translationID = "\(currentSongID ?? "")-\(targetLanguageID)"
         if currentSongTranslationID == translationID {
             if isFillingPartialSourceTranslations {
                 guard Self.hasMissingEligibleTranslations(lyrics) else { return }
@@ -1007,6 +1117,11 @@ public class LyricsService: ObservableObject {
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
             debugLogPublic("❌ 翻译失败 — 保留用户偏好，下首歌重试")
             currentSongTranslationID = translationID
+            translationFailed = true
+            recordDiagnosticsSystemTranslationGap(
+                reason: "translation task failed",
+                translationLanguage: targetLanguageID
+            )
             return
         }
 
@@ -1024,18 +1139,37 @@ public class LyricsService: ObservableObject {
         let statsAfterTranslation = Self.translationCoverageStats(in: lyrics)
 
         currentSongTranslationID = translationID
-        lastSystemTranslationLanguage = translationLanguage
+        lastSystemTranslationLanguage = targetLanguageID
         translationsAreFromLyricsSource = false
-        if isFillingPartialSourceTranslations,
-           statsAfterTranslation.missing == 0,
-           let track = currentDiagnosticsTrack() {
-            DiagnosticsService.shared.recordLyricsPartialTranslationFilled(
-                track: track,
-                filledLineCount: filledLineCount,
-                translationLineCount: statsAfterTranslation.translated,
-                translatableLineCount: statsAfterTranslation.eligible,
-                translationLanguage: translationLanguage
-            )
+        translationFailed = statsAfterTranslation.missing > 0
+        if let track = currentDiagnosticsTrack() {
+            if statsAfterTranslation.missing == 0 {
+                if isFillingPartialSourceTranslations {
+                    DiagnosticsService.shared.recordLyricsPartialTranslationFilled(
+                        track: track,
+                        filledLineCount: filledLineCount,
+                        translationLineCount: statsAfterTranslation.translated,
+                        translatableLineCount: statsAfterTranslation.eligible,
+                        translationLanguage: targetLanguageID
+                    )
+                } else {
+                    DiagnosticsService.shared.recordLyricsSystemTranslationFilled(
+                        track: track,
+                        filledLineCount: filledLineCount,
+                        translationLineCount: statsAfterTranslation.translated,
+                        translatableLineCount: statsAfterTranslation.eligible,
+                        translationLanguage: targetLanguageID
+                    )
+                }
+            } else {
+                DiagnosticsService.shared.recordLyricsSystemTranslationGap(
+                    track: track,
+                    reason: "partial system translation result",
+                    translationLanguage: targetLanguageID,
+                    translationLineCount: statsAfterTranslation.translated,
+                    translatableLineCount: statsAfterTranslation.eligible
+                )
+            }
         }
         debugLogPublic("✅ 翻译完成: \(translatedTexts.count) 行")
     }
@@ -1074,6 +1208,11 @@ public class LyricsService: ObservableObject {
         return (eligible.count, translated, eligible.count - translated)
     }
 
+    static func normalizedSystemTranslationLanguage(_ language: String) -> String {
+        if language == "zh" { return "zh-Hans" }
+        return language
+    }
+
     static func translationEligibleLineIndices(
         in lyrics: [LyricLine],
         onlyMissingTranslations: Bool
@@ -1090,6 +1229,39 @@ public class LyricsService: ObservableObject {
                   !isStandaloneLyricsRoleMarker(text) else { return false }
             return !onlyMissingTranslations || !line.hasTranslation
         }
+    }
+
+    static func systemTranslationSampleText(
+        in lyrics: [LyricLine],
+        onlyMissingTranslations: Bool
+    ) -> String? {
+        let eligibleIndices = translationEligibleLineIndices(
+            in: lyrics,
+            onlyMissingTranslations: onlyMissingTranslations
+        )
+        let fragments = eligibleIndices
+            .map { lyrics[$0].text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(12)
+
+        let sample = fragments.joined(separator: "\n")
+        let letterCount = sample.unicodeScalars.filter {
+            CharacterSet.letters.contains($0)
+        }.count
+        guard letterCount >= 6 else { return nil }
+        return sample
+    }
+
+    static func systemTranslationSourceLanguage(for sampleText: String) -> Locale.Language? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sampleText)
+        let hypotheses = recognizer.languageHypotheses(withMaximum: 2)
+            .sorted { $0.value > $1.value }
+        guard let best = hypotheses.first, best.value >= 0.35 else { return nil }
+        if hypotheses.count > 1, best.value - hypotheses[1].value < 0.15 {
+            return nil
+        }
+        return Locale.Language(identifier: best.key.rawValue)
     }
 
     private static func lyricsAreInTargetLanguage(_ lyrics: [LyricLine], translationLanguage: String) -> Bool {

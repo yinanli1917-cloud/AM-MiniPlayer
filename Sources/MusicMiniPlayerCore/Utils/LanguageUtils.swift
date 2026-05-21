@@ -151,7 +151,7 @@ public enum LanguageUtils {
         "love", "loved", "lover", "baby", "heart", "dream", "dreams",
         "day", "days", "night", "nights", "time", "world", "life",
         "second", "first", "last", "good", "bad", "blue", "sweet",
-        "song", "dance", "dancer", "light", "dark", "rain", "fire",
+        "song", "dance", "dancer", "distance", "light", "dark", "rain", "fire",
         "moon", "sun", "star", "stars", "home", "lonely", "alone"
     ]
 
