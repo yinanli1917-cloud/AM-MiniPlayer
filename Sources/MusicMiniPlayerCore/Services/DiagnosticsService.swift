@@ -787,7 +787,10 @@ public final class DiagnosticsService: ObservableObject {
             source: source,
             score: score,
             lineCount: lineCount,
-            isUnsynced: isUnsynced
+            isUnsynced: isUnsynced,
+            hadSourceTranslation: hadSourceTranslation,
+            translationLineCount: translationLineCount,
+            translatableLineCount: translatableLineCount
         )
         if !isLowConfidence && lineCount > 0 {
             clearLyricsFallbackIncidentAfterResolvedFetch(track: track, metrics: metrics)
@@ -976,11 +979,24 @@ public final class DiagnosticsService: ObservableObject {
         source: String?,
         score: Double?,
         lineCount: Int,
-        isUnsynced: Bool
+        isUnsynced: Bool,
+        hadSourceTranslation: Bool,
+        translationLineCount: Int,
+        translatableLineCount: Int
     ) -> Bool {
         if isUnsynced { return true }
         guard let score else { return false }
         let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if isTrustedTranslatedSyncedResult(
+            source: normalizedSource,
+            score: score,
+            lineCount: lineCount,
+            hadSourceTranslation: hadSourceTranslation,
+            translationLineCount: translationLineCount,
+            translatableLineCount: translatableLineCount
+        ) {
+            return false
+        }
         switch normalizedSource {
         case "lrclib":
             return !(score >= 20 && lineCount >= 10)
@@ -989,6 +1005,25 @@ public final class DiagnosticsService: ObservableObject {
         default:
             return score < 30
         }
+    }
+
+    private func isTrustedTranslatedSyncedResult(
+        source: String,
+        score: Double,
+        lineCount: Int,
+        hadSourceTranslation: Bool,
+        translationLineCount: Int,
+        translatableLineCount: Int
+    ) -> Bool {
+        guard hadSourceTranslation,
+              ["netease", "qq"].contains(source),
+              score >= 25,
+              lineCount >= 12,
+              translatableLineCount > 0 else {
+            return false
+        }
+        let coverage = Double(translationLineCount) / Double(translatableLineCount)
+        return coverage >= 0.8
     }
 
     private func hasExistingLyricsFallbackIncident(for track: DiagnosticTrackContext) -> Bool {

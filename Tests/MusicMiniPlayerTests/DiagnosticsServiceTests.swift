@@ -338,6 +338,30 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertTrue(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
     }
 
+    func testTranslatedSyncedProviderResultNearThresholdDoesNotCreateFallbackNoise() {
+        let track = DiagnosticTrackContext(
+            title: "Moon (feat. Bon Iver)",
+            artist: "Daniel Caesar",
+            album: "Son Of Spergy",
+            duration: 317.043
+        )
+
+        DiagnosticsService.shared.recordLyricsFetchFinished(
+            track: track,
+            source: "NetEase",
+            score: 28.1,
+            lineCount: 19,
+            isUnsynced: false,
+            hadSourceTranslation: true,
+            translationLineCount: 18,
+            translatableLineCount: 18,
+            missingTranslationLineCount: 0,
+            translationDisplayRequested: true
+        )
+
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsFallbackChurn })
+    }
+
     func testManualReportExportsInspectableBundle() throws {
         let track = DiagnosticTrackContext(
             title: "Reported Song",
