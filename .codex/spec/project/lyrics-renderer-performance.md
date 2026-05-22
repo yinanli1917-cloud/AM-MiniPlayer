@@ -1,6 +1,6 @@
 # Lyrics Renderer Performance
 
-Last updated: 2026-05-19
+Last updated: 2026-05-21
 
 ## Protected UX
 
@@ -15,6 +15,12 @@ The old smooth lyrics page is the behavioral reference. Preserve:
 - line spacing, wrapping, CJK behavior, interlude/prelude dots, and rapid page/song transitions.
 
 Do not replace the old layout with fade-based transitions, opacity culling, cadence reduction, or simplified lyric effects. Those may lower implementation complexity but break the perceived continuity.
+
+Missing translation rows must not leave invisible spacer rows for lines that are
+not eligible for translation, such as `Yeah`/`Oh` vocables or role markers. Only
+show translation loading affordances for the specific eligible lines currently
+being filled. Transparent translation placeholders make line heights look random
+and break the perceived cadence of the protected wave animation.
 
 ## What Fixed The May 2026 CPU Regression
 
@@ -89,6 +95,12 @@ quiet. If diagnostics shows target indices staying behind after the intended
 wave has already finished, add a post-wave cleanup that aligns stale target
 state after the visual stagger completes; do not remove the stagger, spring
 parameters, highlight timing, or row layout.
+
+The line-motion verifier must distinguish intended short stagger from lingering
+backlog. A single sample where nearby rows still point at the prior target is
+normal during the wave. If the active/display state has been stable for about a
+second and four or more nearby rows still target the old index, record it as
+line-motion drift even when rendered geometry is otherwise aligned.
 
 ```bash
 python3 scripts/perf_harness.py \

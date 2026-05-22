@@ -171,6 +171,44 @@ final class LyricsServiceStateTests: XCTestCase {
         XCTAssertFalse(LyricsService.hasMissingEligibleTranslations(lyrics))
     }
 
+    func testVisibleVocableGapCanBeHiddenByAggregateTranslationCoverage() {
+        let lyrics = [
+            LyricLine(text: "Yeah, yeah", startTime: 42, endTime: 44),
+            LyricLine(text: "Yeah I walked right in", startTime: 44, endTime: 48, translation: "Yeah 我径直走入"),
+            LyricLine(text: "I found the door", startTime: 48, endTime: 52, translation: "我找到了那扇门")
+        ]
+
+        XCTAssertTrue(isVocableLine("Yeah, yeah"))
+        XCTAssertEqual(LyricsService.translationCoverageStats(in: lyrics).eligible, 2)
+        XCTAssertEqual(LyricsService.translationCoverageStats(in: lyrics).missing, 0)
+        XCTAssertFalse(LyricsService.hasMissingEligibleTranslations(lyrics))
+    }
+
+    func testTranslationPendingLayoutDoesNotReserveBlankRowsForVocableLines() {
+        let lyrics = [
+            LyricLine(text: "Yeah, yeah", startTime: 42, endTime: 44),
+            LyricLine(text: "I walked right in", startTime: 44, endTime: 48)
+        ]
+        let pending = LyricLineTranslationLayoutPolicy.pendingLineIndices(in: lyrics)
+
+        XCTAssertFalse(
+            LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
+                index: 0,
+                line: lyrics[0],
+                pendingLineIndices: pending,
+                isTranslating: true
+            )
+        )
+        XCTAssertTrue(
+            LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
+                index: 1,
+                line: lyrics[1],
+                pendingLineIndices: pending,
+                isTranslating: true
+            )
+        )
+    }
+
     func testCompleteSourceTranslationDoesNotRequestSystemFill() {
         let lyrics = [
             LyricLine(text: "⋯", startTime: 0, endTime: 10),

@@ -37,16 +37,35 @@ technical causes.
   incident metrics.
 - Artwork reports need source/cache/generation evidence, not generic frame
   events. Record `artwork.fetch.start`, `artwork.cache.miss`, `artwork.apply`,
-  and `artwork.drop` with track context, generation, cache eligibility, source,
-  apply time, and drop reason so cover lag/blackout can be verified from the
-  rolling state and daily brief.
+  `artwork.placeholder`, and `artwork.drop` with track context, generation,
+  cache eligibility, source, apply time, placeholder reason, and drop reason so
+  cover lag/blackout can be verified from the rolling state and daily brief.
+- A retained-previous cover expiring into a current-track placeholder is a
+  user-visible artwork failure, not just a debug event. Emit an
+  `artworkBlocking` incident with the placeholder reason so missing/stale cover
+  reports can be verified even when `currentArtwork` is non-nil.
+- Retaining the previous cover on a cache miss is a handoff affordance, not a
+  valid final state for the new track. Do not replace a retained real cover with
+  a timer-driven placeholder while bounded Apple/web lanes are still running;
+  that creates the visible black/empty flash immediately before a valid result
+  lands. Only show a current-track placeholder after the bounded fetch/retry path
+  has confirmed failure, and emit an `artworkBlocking` incident for that reason.
 - Apple Music playback-session artwork is local filesystem/cache work and must
   not run on Swift's cooperative executor or behind stale serial file reads.
-  Dispatch playback-session archive/cache reads onto a dedicated concurrent
-  utility queue, cache parsed artwork URLs briefly by title/artist/album/root,
-  and retry quickly after a miss while retaining the previous cover. A fixed
-  one-second retry delay makes successful local Apple cache hits look one track
-  late.
+  Dispatch playback-session archive reads onto a dedicated concurrent utility
+  queue, cache parsed artwork URLs briefly by title/artist/album/root, and poll
+  briefly after a miss while retaining the previous cover. Once an exact Apple
+  artwork URL is found, fetch that URL directly on the bounded artwork lane; do
+  not block the visual switch path on MusicUIArtworkCache database/file reads.
+  Music.app can write the playback-session archive shortly after the
+  track-change notification; a single immediate scan misclassifies the local
+  Apple cover as missing and makes the app fall through to placeholder/web
+  paths.
+- Playback-session archive matching should tolerate localized Apple Music
+  metadata such as ASCII artist display names paired with CJK artist names in
+  Music's cache. Use bounded Latinized token matching after exact title evidence;
+  also match percent-encoded native titles inside Apple Music URLs. Do not scan
+  unrelated private app state or weaken title identity.
 - ScriptingBridge timeout guards must use explicit lanes that match one
   SBApplication proxy per operation family. Full player-state sync, queue
   snapshots, current-track metadata backfill, artwork extraction, and position
@@ -69,15 +88,34 @@ technical causes.
   inter-line spacing error, wave offset, playback time, and manual-scroll /
   initial-load suppression flags.
 - Lyrics-page motion probes must not record diagnostics directly from every
-  SwiftUI geometry preference update. Preference updates may cache the latest
-  frames, but actual recording belongs on the bounded sampling clock so the
-  diagnostics verifier cannot add main-thread work during the animation it is
-  measuring.
+  SwiftUI geometry preference update, and they must not keep per-line geometry
+  readers active continuously. The bounded sampling clock should request a
+  one-frame geometry capture only when a sample is due; recording happens from
+  that capture. This keeps continuous monitoring from becoming the animation
+  workload it is trying to measure.
+- While the lyrics page is visible and diagnostics are enabled, line-motion
+  tracking must keep a low-duty heartbeat instead of relying only on page-switch
+  or track-switch windows. Near each lyric line boundary, sampling should
+  temporarily use the focused interval so intermittent line-to-line animation
+  drift is captured. Diagnostic `activeIndex` should be derived from playback
+  time, not only from the UI's current displayed index, so a stuck highlighter
+  or stale target can be detected as drift instead of hidden by its own state.
 - Late wave-target detection must use elapsed wall-clock time since the UI first
   observed the active/display line state, not only `playbackTime - lineStart`.
   Seeking or skipping can land in the middle of a lyric line; that must not be
   reported as a several-second stuck animation unless the rendered target stays
   behind for the visual timeout after the switch is observed.
+- Lyrics line-motion diagnostics must also detect lingering wave backlog: if
+  the active/display state has been stable for roughly a second while four or
+  more nearby rendered rows still target an older lyric index, report
+  `lyricsLineMotion` even when `targetErrorY` and inter-line spacing are zero.
+  Otherwise a visually delayed stagger can hide behind perfectly aligned
+  geometry.
+- Lyrics wave animation timing must be bounded by the current lyric line's
+  timing window. Preserve the default AMLL-style stagger for long lines, but
+  adapt the per-line delay downward for dense lyrics so one wave settles before
+  the next line advance cancels it. Layout-settlement suppression must not
+  disable an already-active wave animation.
 - Frame-stall capture must not create a diagnostics feedback loop. Active
   interactions should summarize overlapping stalls in the interaction trace;
   standalone frame-stall incidents must be rate-limited instead of appended on
@@ -118,6 +156,13 @@ technical causes.
   event first. Do not create a user-visible partial-translation incident merely
   because the provider source is sparse; create the incident only after the
   system-fill path is requested and fails or is unavailable.
+- Translation coverage is not enough to verify the visible UI. When translation
+  display is enabled and visible neighboring lyric lines have translations, a
+  current highlighted/displayed line with no translation must emit a
+  `lyricsPartialTranslation` incident with display/active line index, visible
+  translated/missing counts, playback time, and whether the line was excluded
+  from aggregate coverage as a vocable/ad-lib. This catches "current line lacks
+  translation" screenshots without requiring the owner to attach a screenshot.
 - Translation manual reports must be able to distinguish three states:
   provider lyrics with source translations, provider lyrics that need system
   translation, and system translation skipped/failed. Record the target
@@ -158,6 +203,16 @@ technical causes.
   an instrumental track after a rejected-candidate miss, clear that miss because
   the source has proven there are no visible lyrics. Non-instrumental rejected
   misses must stay visible until the selector/source bug is resolved.
+- Authoritative lyrics backfill must have its own diagnostics, not be hidden
+  behind the foreground `lyrics.fetch.finish` duration. Record
+  `lyrics.backfill.start` and `lyrics.backfill.finish` with foreground fetch
+  seconds, backfill seconds, total resolver seconds, result, source, score, and
+  line count. If backfill exceeds the slow threshold or foreground+backfill
+  exceeds the visible resolver budget, emit a `lyricsSlowFetch` incident titled
+  `Slow lyrics authoritative backfill`. Daily diagnostics must include this even
+  when the foreground resolver was under 3s, because English-title CJK/native
+  rescue can otherwise look fast in the monitor while the app keeps working for
+  7-10 seconds in the background.
 - Lyrics low-confidence diagnostics must stay aligned with the source-specific
   result-selection thresholds. Exact LRCLIB synced results with enough lyric
   lines can be trusted below the generic 30-point threshold, while weak sparse

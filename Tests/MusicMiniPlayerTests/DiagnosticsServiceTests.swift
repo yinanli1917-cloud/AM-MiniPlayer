@@ -60,6 +60,36 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.category, .scriptingBridgeBacklog)
     }
 
+    func testSlowAuthoritativeBackfillCreatesResolverIncident() {
+        let track = DiagnosticTrackContext(
+            title: "The Key",
+            artist: "JJ Lin",
+            album: "From M.E. To Myself",
+            duration: 207
+        )
+
+        DiagnosticsService.shared.recordLyricsBackfillStarted(
+            track: track,
+            foregroundFetchSeconds: 6.2,
+            foregroundResultCount: 0
+        )
+        DiagnosticsService.shared.recordLyricsBackfillFinished(
+            track: track,
+            result: "lyrics",
+            source: "NetEase",
+            score: 84,
+            lineCount: 36
+        )
+
+        let event = DiagnosticsService.shared.events.first { $0.name == "lyrics.backfill.finish" }
+        XCTAssertTrue(event?.detail.contains("NetEase") ?? false)
+        let incident = DiagnosticsService.shared.incidents.first
+        XCTAssertEqual(incident?.category, .lyricsSlowFetch)
+        XCTAssertEqual(incident?.title, "Slow lyrics authoritative backfill")
+        XCTAssertEqual(incident?.evidence["source"], "NetEase")
+        XCTAssertGreaterThanOrEqual(incident?.metrics["totalResolverSeconds"] ?? 0, 6.2)
+    }
+
     func testTrackContextEnrichmentBackfillsPlaylistAndClass() {
         let earlyTrack = DiagnosticTrackContext(
             title: "Distance (feat. deca joins)",
@@ -292,6 +322,84 @@ final class DiagnosticsServiceTests: XCTestCase {
         let event = DiagnosticsService.shared.events.first { $0.name == "lyrics.translation.filledSystem" }
         XCTAssertEqual(event?.metrics["filledLineCount"], 36)
         XCTAssertEqual(event?.metrics["clearedPartialTranslationIncidentCount"], 1)
+    }
+
+    func testVisibleLineTranslationGapCreatesInspectableIncidentWhenAggregateCoverageLooksComplete() {
+        let track = DiagnosticTrackContext(
+            title: "Visible Gap",
+            artist: "Diagnostics",
+            album: "Fixture",
+            duration: 180,
+            playbackTime: 42,
+            playerPage: "lyrics"
+        )
+
+        DiagnosticsService.shared.recordLyricsFetchFinished(
+            track: track,
+            source: "NetEase",
+            score: 97,
+            lineCount: 3,
+            isUnsynced: false,
+            hadSourceTranslation: true,
+            translationLineCount: 2,
+            translatableLineCount: 2,
+            missingTranslationLineCount: 0,
+            translationDisplayRequested: true
+        )
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsPartialTranslation })
+
+        DiagnosticsService.shared.recordLyricsVisibleTranslationGap(
+            track: track,
+            lineIndex: 1,
+            displayIndex: 1,
+            activeIndex: 1,
+            playbackTime: 42.2,
+            lineStartTime: 42,
+            lineEndTime: 44,
+            totalLineCount: 3,
+            visibleLineCount: 3,
+            visibleTranslatedLineCount: 2,
+            visibleMissingTranslationLineCount: 1,
+            lineIsTranslationEligible: false,
+            lineIsVocable: true,
+            showTranslation: true,
+            canTranslate: true,
+            translationFailed: false
+        )
+        DiagnosticsService.shared.recordLyricsVisibleTranslationGap(
+            track: track,
+            lineIndex: 1,
+            displayIndex: 1,
+            activeIndex: 1,
+            playbackTime: 42.4,
+            lineStartTime: 42,
+            lineEndTime: 44,
+            totalLineCount: 3,
+            visibleLineCount: 3,
+            visibleTranslatedLineCount: 2,
+            visibleMissingTranslationLineCount: 1,
+            lineIsTranslationEligible: false,
+            lineIsVocable: true,
+            showTranslation: true,
+            canTranslate: true,
+            translationFailed: false
+        )
+
+        let incidents = DiagnosticsService.shared.incidents.filter { $0.category == .lyricsPartialTranslation }
+        XCTAssertEqual(incidents.count, 1)
+        let incident = incidents.first
+        XCTAssertEqual(incident?.title, "Visible lyric line missing translation")
+        XCTAssertEqual(incident?.userSymptom, .missingTranslation)
+        XCTAssertEqual(incident?.metrics["lineIndex"], 1)
+        XCTAssertEqual(incident?.metrics["visibleTranslatedLineCount"], 2)
+        XCTAssertEqual(incident?.metrics["visibleMissingTranslationLineCount"], 1)
+        XCTAssertEqual(incident?.metrics["lineIsVocable"], 1)
+        XCTAssertEqual(incident?.metrics["occurrenceCount"], 2)
+        XCTAssertEqual(incident?.evidence["source"], "visibleLine")
+        XCTAssertEqual(
+            incident?.evidence["reason"],
+            "visible vocable line excluded from aggregate translation coverage"
+        )
     }
 
     func testTrustedExactLRCLIBSyncedResultDoesNotCreateFallbackChurnNoise() {
@@ -1525,6 +1633,52 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(incident?.metrics["activeVisualElapsedMs"] ?? -1, 700, accuracy: 0.001)
     }
 
+    func testLingeringNearbyWaveBacklogCreatesMotionIncidentEvenWhenActiveTargetAligned() {
+        let base = Date()
+        func samples(at timestamp: Date) -> [DiagnosticLyricLineMotionSample] {
+            (6...14).map { index in
+                let targetMinY = Double(index - 10) * 78.0
+                return DiagnosticLyricLineMotionSample(
+                    timestamp: timestamp,
+                    page: "lyrics",
+                    trackTitle: "Wave Song",
+                    trackArtist: "Wave Artist",
+                    lineIndex: index,
+                    lineID: "line-\(index)",
+                    lineStartTime: Double(index * 3),
+                    lineEndTime: Double(index * 3 + 2),
+                    playbackTime: 31.0,
+                    activeIndex: 10,
+                    displayIndex: 10,
+                    targetIndex: index == 10 ? 10 : 9,
+                    renderedMinY: targetMinY,
+                    renderedMidY: targetMinY + 22,
+                    renderedHeight: 44,
+                    targetMinY: targetMinY,
+                    targetMidY: targetMinY + 22,
+                    targetErrorY: 0,
+                    observedInterLineDeltaY: index == 6 ? nil : 78,
+                    expectedInterLineDeltaY: index == 6 ? nil : 78,
+                    interLineDeltaErrorY: index == 6 ? nil : 0,
+                    waveOffsetY: 0,
+                    manualScrollOffsetY: 0,
+                    isManualScrolling: false,
+                    isInitialMotionSuppressed: false
+                )
+            }
+        }
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples(samples(at: base))
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsLineMotion })
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples(samples(at: base.addingTimeInterval(1.00)))
+
+        let incident = DiagnosticsService.shared.incidents.first { $0.category == .lyricsLineMotion }
+        XCTAssertEqual(incident?.metrics["activeTargetLagged"], 0)
+        XCTAssertEqual(incident?.metrics["lingeringWaveBacklog"], 1)
+        XCTAssertEqual(incident?.metrics["activeVisualElapsedMs"] ?? -1, 1000, accuracy: 0.001)
+    }
+
     func testManualReportReplacesDebugPlaceholderWithRecentTrackContext() throws {
         let realTrack = DiagnosticTrackContext(
             title: "戀愛預告",
@@ -1800,6 +1954,56 @@ final class DiagnosticsServiceTests: XCTestCase {
         let event = DiagnosticsService.shared.events.first { $0.name == "artwork.cache.miss" }
         XCTAssertEqual(event?.metrics["heldPreviousArtwork"], 1)
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .artworkBlocking })
+    }
+
+    func testArtworkPlaceholderIsInspectableWithoutCompletingFetch() {
+        let track = DiagnosticTrackContext(
+            title: "Fallback Cover",
+            artist: "Diagnostics",
+            album: "Debug Album",
+            duration: 201
+        )
+
+        DiagnosticsService.shared.recordArtworkFetchStarted(
+            track: track,
+            generation: 8,
+            persistentIDPresent: false,
+            metadataCacheEligible: true,
+            heldPreviousArtwork: true
+        )
+        DiagnosticsService.shared.recordArtworkPlaceholderShown(
+            track: track,
+            generation: 8,
+            reason: "retainedPreviousExpired",
+            applyMilliseconds: 2
+        )
+
+        let event = DiagnosticsService.shared.events.first { $0.name == "artwork.placeholder" }
+        XCTAssertTrue(event?.detail.contains("retainedPreviousExpired") == true)
+        let incident = DiagnosticsService.shared.incidents.first { $0.category == .artworkBlocking }
+        XCTAssertEqual(incident?.title, "Artwork missing for current track")
+        XCTAssertEqual(incident?.evidence["reason"], "retainedPreviousExpired")
+    }
+
+    func testArtworkFetchFailedPlaceholderIsCriticalIncident() {
+        let track = DiagnosticTrackContext(
+            title: "Missing Cover",
+            artist: "Diagnostics",
+            album: "Debug Album",
+            duration: 201
+        )
+
+        DiagnosticsService.shared.recordArtworkPlaceholderShown(
+            track: track,
+            generation: 9,
+            reason: "fetchFailed",
+            applyMilliseconds: 2
+        )
+
+        let incident = DiagnosticsService.shared.incidents.first { $0.category == .artworkBlocking }
+        XCTAssertEqual(incident?.title, "Artwork missing for current track")
+        XCTAssertEqual(incident?.severity, .critical)
+        XCTAssertEqual(incident?.evidence["reason"], "fetchFailed")
     }
 
     func testArtworkReportFallsBackToRecentArtworkEventsWhenTrackSwitched() throws {

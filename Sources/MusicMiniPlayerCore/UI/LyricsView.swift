@@ -46,7 +46,9 @@ private struct WaveState {
 }
 
 private let lyricLineMotionCoordinateSpace = "nanoPod.lyrics.lineMotion"
-private let lyricLineMotionSampleInterval: TimeInterval = 0.20
+private let lyricLineMotionSampleInterval: TimeInterval = 0.25
+private let lyricLineMotionBoundarySampleInterval: TimeInterval = 0.40
+private let lyricLineMotionIdleSampleInterval: TimeInterval = 2.50
 private let lyricLineMotionPageSwitchSampleDuration: TimeInterval = 0.95
 private let lyricLineMotionTrackSwitchSampleDuration: TimeInterval = 1.25
 private let lyricLineMotionLineAdvanceSampleDuration: TimeInterval = 0.85
@@ -54,6 +56,141 @@ private let lyricLineLayoutSettleDuration: TimeInterval = 0.65
 private let lyricInitialRenderVisibleRange = 4
 private let lyricSteadyRenderVisibleRange = 6
 private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.55
+
+struct LyricWaveTiming {
+    static let defaultBaseDelay: TimeInterval = 0.08
+    static let minimumBaseDelay: TimeInterval = 0.024
+    static let settlePadding: TimeInterval = 0.20
+    static let maxLineIntervalFraction: TimeInterval = 0.72
+    static let tailAccelerationFactor: TimeInterval = 1.05
+
+    static func baseDelay(
+        for indices: [Int],
+        startPosition: Int,
+        newIndex: Int,
+        lineInterval: TimeInterval?
+    ) -> TimeInterval {
+        guard indices.indices.contains(startPosition) else { return defaultBaseDelay }
+        guard let lineInterval, lineInterval.isFinite, lineInterval > 0 else {
+            return defaultBaseDelay
+        }
+
+        let defaultDuration = waveDuration(
+            for: indices,
+            startPosition: startPosition,
+            newIndex: newIndex,
+            baseDelay: defaultBaseDelay
+        )
+        let targetDuration = max(minimumBaseDelay, lineInterval * maxLineIntervalFraction)
+        guard defaultDuration > targetDuration else { return defaultBaseDelay }
+
+        let scalableDuration = max(defaultDuration - settlePadding, minimumBaseDelay)
+        let targetScalableDuration = max(targetDuration - settlePadding, minimumBaseDelay)
+        let scale = targetScalableDuration / scalableDuration
+        return max(minimumBaseDelay, defaultBaseDelay * scale)
+    }
+
+    static func waveDuration(
+        for indices: [Int],
+        startPosition: Int,
+        newIndex: Int,
+        baseDelay: TimeInterval
+    ) -> TimeInterval {
+        guard indices.indices.contains(startPosition) else { return settlePadding }
+
+        var delay: TimeInterval = 0
+        var nextDelay = baseDelay
+        for i in startPosition..<indices.count {
+            delay += nextDelay
+            if indices[i] >= newIndex {
+                nextDelay /= tailAccelerationFactor
+            }
+        }
+        return delay + settlePadding
+    }
+}
+
+struct LyricMotionSamplingPolicy {
+    static let focusedInterval = lyricLineMotionSampleInterval
+    static let boundaryInterval = lyricLineMotionBoundarySampleInterval
+    static let idleInterval = lyricLineMotionIdleSampleInterval
+    static let boundaryLead: TimeInterval = 0.10
+    static let boundaryTrail: TimeInterval = 0.75
+
+    static func activeIndex(
+        at playbackTime: TimeInterval,
+        lyrics: [LyricLine],
+        firstRealIndex: Int
+    ) -> Int? {
+        guard !lyrics.isEmpty else { return nil }
+        let boundedFirstRealIndex = min(max(firstRealIndex, 0), lyrics.count - 1)
+        if playbackTime < lyrics[boundedFirstRealIndex].startTime {
+            return 0
+        }
+
+        var result: Int?
+        for index in boundedFirstRealIndex..<lyrics.count {
+            if playbackTime >= lyrics[index].startTime {
+                result = index
+            } else {
+                break
+            }
+        }
+        return result
+    }
+
+    static func isNearLineBoundary(
+        playbackTime: TimeInterval,
+        lyrics: [LyricLine],
+        firstRealIndex: Int
+    ) -> Bool {
+        guard !lyrics.isEmpty else { return false }
+        let start = min(max(firstRealIndex, 0), lyrics.count - 1)
+        for index in start..<lyrics.count {
+            let delta = playbackTime - lyrics[index].startTime
+            if delta >= -boundaryLead && delta <= boundaryTrail {
+                return true
+            }
+            if delta < -boundaryLead {
+                return false
+            }
+        }
+        return false
+    }
+
+    static func sampleInterval(
+        focusedWindowActive: Bool,
+        playbackTime: TimeInterval,
+        lyrics: [LyricLine],
+        firstRealIndex: Int
+    ) -> TimeInterval {
+        if focusedWindowActive { return focusedInterval }
+        if isNearLineBoundary(playbackTime: playbackTime, lyrics: lyrics, firstRealIndex: firstRealIndex) {
+            return boundaryInterval
+        }
+        return idleInterval
+    }
+}
+
+enum LyricLineTranslationLayoutPolicy {
+    static func pendingLineIndices(in lyrics: [LyricLine]) -> Set<Int> {
+        Set(LyricsService.translationEligibleLineIndices(in: lyrics, onlyMissingTranslations: true))
+    }
+
+    static func isAwaitingTranslation(
+        index: Int,
+        line: LyricLine,
+        pendingLineIndices: Set<Int>,
+        isTranslating: Bool
+    ) -> Bool {
+        isTranslating && !line.hasTranslation && pendingLineIndices.contains(index)
+    }
+}
+
+private struct LyricLineMotionCaptureRequest: Equatable {
+    let requestedAt: Date
+    let playbackTime: TimeInterval
+}
 
 private struct LyricLineMotionFramePreferenceKey: PreferenceKey {
     static var defaultValue: [Int: CGRect] = [:]
@@ -111,6 +248,8 @@ public struct LyricsView: View {
     @State private var latestLineMotionDisplayIndex: Int = 0
     @State private var lineMotionSamplingActive = false
     @State private var lineMotionSamplingUntil: Date = .distantPast
+    @State private var lineMotionFrameCaptureActive = false
+    @State private var pendingLineMotionCapture: LyricLineMotionCaptureRequest?
 
     // ── 翻译状态 ──
     @State private var translationSessionConfigAny: Any?
@@ -162,6 +301,9 @@ public struct LyricsView: View {
                 translationPreflightTask?.cancel()
                 translationPreflightTask = nil
                 translationSessionConfigAny = nil
+                lineMotionFrameCaptureActive = false
+                pendingLineMotionCapture = nil
+                latestLineMotionFrames.removeAll()
             }
             if newPage == .lyrics {
                 isHovering = true
@@ -201,6 +343,8 @@ public struct LyricsView: View {
             scroll.frozenDisplayIndex = nil
             scroll.lockedLineIndex = nil
             latestLineMotionFrames.removeAll()
+            lineMotionFrameCaptureActive = false
+            pendingLineMotionCapture = nil
             suppressLineMotionDuringLayoutSettlement(duration: 0.65)
             scheduleTrackChangeLyricsFetch()
         }
@@ -234,6 +378,8 @@ public struct LyricsView: View {
                 startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
             } else {
                 lineMotionSamplingActive = false
+                lineMotionFrameCaptureActive = false
+                pendingLineMotionCapture = nil
                 latestLineMotionFrames.removeAll()
             }
         }
@@ -312,9 +458,9 @@ public struct LyricsView: View {
 
     @ViewBuilder
     private var diagnosticLineMotionProbe: some View {
-        if lineMotionSamplingActive && diagnostics.isEnabled && currentPage == .lyrics {
+        if lineMotionMonitoringEnabled {
             LyricLineMotionSamplingProbe(interval: lyricLineMotionSampleInterval) {
-                recordLatestLyricLineMotion()
+                requestLatestLyricLineMotionCapture()
             }
             .allowsHitTesting(false)
         }
@@ -381,6 +527,10 @@ public struct LyricsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
+    private var lineMotionMonitoringEnabled: Bool {
+        diagnostics.isEnabled && currentPage == .lyrics && !lyricsService.lyrics.isEmpty
+    }
+
     private var scrollableLyricsContent: some View {
         let lyricsViewID = "\(musicController.currentTrackTitle)-\(musicController.currentArtist)"
 
@@ -392,8 +542,12 @@ public struct LyricsView: View {
             let displayIndex = scroll.isManualScrolling
                 ? (scroll.frozenDisplayIndex ?? liveIndex)
                 : liveIndex
+            let isLineWaveActive = !wave.workItems.isEmpty
             let _ = updateLyricsContainerHeight(containerHeight)
             let anchorY = (containerHeight - controlBarHeight) * 0.24
+            let pendingTranslationLineIndices = lyricsService.showTranslation
+                ? LyricLineTranslationLayoutPolicy.pendingLineIndices(in: lyricsService.lyrics)
+                : []
 
             // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12
@@ -412,12 +566,22 @@ public struct LyricsView: View {
                             )
                             let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
 
-                            lyricLineContent(line: line, index: index, currentIndex: displayIndex)
+                            lyricLineContent(
+                                line: line,
+                                index: index,
+                                currentIndex: displayIndex,
+                                isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
+                                    index: index,
+                                    line: line,
+                                    pendingLineIndices: pendingTranslationLineIndices,
+                                    isTranslating: lyricsService.isTranslating
+                                )
+                            )
                                 .background(lineHeightTracker(index: index))
                                 .allowsHitTesting(true)
                                 .offset(y: fullOffset)
                                 .animation(
-                                    scroll.isManualScrolling || reduceMotion || suppressInitialLineMotion ? nil : .interpolatingSpring(
+                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
                                         mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
                                     ),
                                     value: scroll.isManualScrolling ? 0 : fullOffset
@@ -431,7 +595,7 @@ public struct LyricsView: View {
             .offset(y: scroll.manualScrollOffset)
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
-                guard lineMotionSamplingActive else {
+                guard lineMotionFrameCaptureActive else {
                     if !latestLineMotionFrames.isEmpty {
                         latestLineMotionFrames.removeAll()
                     }
@@ -442,6 +606,20 @@ public struct LyricsView: View {
                 }
                 latestLineMotionAnchorY = anchorY
                 latestLineMotionDisplayIndex = displayIndex
+                guard !frames.isEmpty else { return }
+                guard let capture = pendingLineMotionCapture else { return }
+                pendingLineMotionCapture = nil
+                recordLyricLineMotion(
+                    frames: frames,
+                    anchorY: anchorY,
+                    displayIndex: displayIndex,
+                    playbackTime: capture.playbackTime,
+                    timestamp: capture.requestedAt
+                )
+                DispatchQueue.main.async {
+                    lineMotionFrameCaptureActive = false
+                    latestLineMotionFrames.removeAll()
+                }
             }
         }
         .modifier(BottomFadeMask(isActive: showControls, steepFade: scroll.isManualScrolling))
@@ -458,7 +636,12 @@ public struct LyricsView: View {
     // MARK: - Lyric Line Helpers
 
     @ViewBuilder
-    private func lyricLineContent(line: LyricLine, index: Int, currentIndex: Int) -> some View {
+    private func lyricLineContent(
+        line: LyricLine,
+        index: Int,
+        currentIndex: Int,
+        isAwaitingTranslation: Bool
+    ) -> some View {
             if isPreludeEllipsis(line.text) {
                 let nextLineStartTime: TimeInterval = {
                     if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
@@ -489,9 +672,8 @@ public struct LyricsView: View {
                         musicController: musicController,
                         onTap: { handleLineTap(line: line) },
                         showTranslation: lyricsService.showTranslation,
-                        isTranslating: lyricsService.isTranslating,
-                        translationFailed: lyricsService.translationFailed,
-                        reserveTranslationSlot: lyricsService.showTranslation && lyricsService.canTranslate,
+                        isTranslating: isAwaitingTranslation,
+                        translationFailed: lyricsService.translationFailed && isAwaitingTranslation,
                         isPrecedingInterlude: lyricsService.interludeAfterIndex == index
                     )
                     .padding(.horizontal, 32)
@@ -530,30 +712,44 @@ public struct LyricsView: View {
         }
     }
 
+    @ViewBuilder
     private func lineMotionTracker(index: Int) -> some View {
-        GeometryReader { lineGeo in
-            Color.clear.preference(
-                key: LyricLineMotionFramePreferenceKey.self,
-                value: diagnostics.isEnabled && lineMotionSamplingActive
-                    ? [index: lineGeo.frame(in: .named(lyricLineMotionCoordinateSpace))]
-                    : [:]
-            )
+        if lineMotionFrameCaptureActive {
+            GeometryReader { lineGeo in
+                Color.clear.preference(
+                    key: LyricLineMotionFramePreferenceKey.self,
+                    value: [index: lineGeo.frame(in: .named(lyricLineMotionCoordinateSpace))]
+                )
+            }
         }
     }
 
-    private func recordLatestLyricLineMotion() {
-        guard lineMotionSamplingActive else { return }
-        guard Date() <= lineMotionSamplingUntil else {
+    private func requestLatestLyricLineMotionCapture() {
+        let now = Date()
+        if lineMotionSamplingActive && now > lineMotionSamplingUntil {
             lineMotionSamplingActive = false
-            return
         }
-        guard !latestLineMotionFrames.isEmpty else { return }
-
-        recordLyricLineMotion(
-            frames: latestLineMotionFrames,
-            anchorY: latestLineMotionAnchorY,
-            displayIndex: latestLineMotionDisplayIndex
+        guard lineMotionMonitoringEnabled else { return }
+        let playbackTime = musicController.lyricRenderTime(at: now)
+        let sampleInterval = LyricMotionSamplingPolicy.sampleInterval(
+            focusedWindowActive: lineMotionSamplingActive,
+            playbackTime: playbackTime,
+            lyrics: lyricsService.lyrics,
+            firstRealIndex: lyricsService.firstRealLyricIndex
         )
+        guard now.timeIntervalSince(lastLineMotionSampleAt) >= sampleInterval else { return }
+        lastLineMotionSampleAt = now
+
+        let capture = LyricLineMotionCaptureRequest(requestedAt: now, playbackTime: playbackTime)
+        pendingLineMotionCapture = capture
+        lineMotionFrameCaptureActive = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+            guard pendingLineMotionCapture == capture else { return }
+            pendingLineMotionCapture = nil
+            lineMotionFrameCaptureActive = false
+            latestLineMotionFrames.removeAll()
+        }
     }
 
     private func startLineMotionSamplingWindow(duration: TimeInterval) {
@@ -583,11 +779,14 @@ public struct LyricsView: View {
         }
     }
 
-    private func recordLyricLineMotion(frames: [Int: CGRect], anchorY: CGFloat, displayIndex: Int) {
+    private func recordLyricLineMotion(
+        frames: [Int: CGRect],
+        anchorY: CGFloat,
+        displayIndex: Int,
+        playbackTime: TimeInterval,
+        timestamp: Date
+    ) {
         guard currentPage == .lyrics, diagnostics.isEnabled, !frames.isEmpty else { return }
-        let now = Date()
-        guard now.timeIntervalSince(lastLineMotionSampleAt) >= 0.20 else { return }
-        lastLineMotionSampleAt = now
 
         let lyrics = lyricsService.lyrics
         guard !lyrics.isEmpty else { return }
@@ -598,9 +797,12 @@ public struct LyricsView: View {
             album: musicController.currentAlbum
         ) else { return }
 
-        let playbackTime = musicController.lyricRenderTime(at: now)
         let track = musicController.diagnosticsTrackContext()
-        let activeIndex = lyricsService.currentLineIndex ?? displayIndex
+        let activeIndex = LyricMotionSamplingPolicy.activeIndex(
+            at: playbackTime,
+            lyrics: lyrics,
+            firstRealIndex: lyricsService.firstRealLyricIndex
+        ) ?? lyricsService.currentLineIndex ?? displayIndex
         let sorted = frames
             .filter { index, frame in
                 lyrics.indices.contains(index) && frame.height > 0
@@ -655,7 +857,7 @@ public struct LyricsView: View {
                 return observedDelta - expectedDelta
             }()
             samples.append(DiagnosticLyricLineMotionSample(
-                timestamp: now,
+                timestamp: timestamp,
                 page: "lyrics",
                 trackTitle: track.title,
                 trackArtist: track.artist,
@@ -686,6 +888,50 @@ public struct LyricsView: View {
         }
 
         diagnostics.recordLyricsLineMotionSamples(samples)
+
+        let visibleTranslationPartials = partials.filter {
+            shouldConsiderVisibleTranslationLine($0.line.text)
+        }
+        if lyricsService.showTranslation,
+           !lyricsService.isTranslating,
+           let currentPartial = visibleTranslationPartials.first(where: { $0.index == displayIndex }),
+           !currentPartial.line.hasTranslation {
+            let visibleTranslatedLineCount = visibleTranslationPartials.filter { $0.line.hasTranslation }.count
+            let visibleMissingTranslationLineCount = visibleTranslationPartials.count - visibleTranslatedLineCount
+            let eligibleLineIndices = Set(LyricsService.translationEligibleLineIndices(
+                in: lyrics,
+                onlyMissingTranslations: false
+            ))
+            diagnostics.recordLyricsVisibleTranslationGap(
+                track: track,
+                lineIndex: currentPartial.index,
+                displayIndex: displayIndex,
+                activeIndex: activeIndex,
+                playbackTime: playbackTime,
+                lineStartTime: currentPartial.line.startTime,
+                lineEndTime: currentPartial.line.endTime,
+                totalLineCount: lyrics.count,
+                visibleLineCount: visibleTranslationPartials.count,
+                visibleTranslatedLineCount: visibleTranslatedLineCount,
+                visibleMissingTranslationLineCount: visibleMissingTranslationLineCount,
+                lineIsTranslationEligible: eligibleLineIndices.contains(currentPartial.index),
+                lineIsVocable: isVocableLine(currentPartial.line.text),
+                showTranslation: lyricsService.showTranslation,
+                canTranslate: lyricsService.canTranslate,
+                translationFailed: lyricsService.translationFailed
+            )
+        }
+    }
+
+    private func shouldConsiderVisibleTranslationLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !isPreludeEllipsis(trimmed),
+              !isInstrumentalNotice(trimmed),
+              !isStandaloneLyricsRoleMarker(trimmed) else {
+            return false
+        }
+        return true
     }
 
     private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
@@ -1166,8 +1412,14 @@ public struct LyricsView: View {
         let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
-        var delay: Double = 0
-        var baseDelay: Double = 0.08
+        let lineInterval = estimatedLineInterval(around: newIndex, in: lyrics)
+        var delay: TimeInterval = 0
+        var baseDelay = LyricWaveTiming.baseDelay(
+            for: indices,
+            startPosition: startPosition,
+            newIndex: newIndex,
+            lineInterval: lineInterval
+        )
 
         // Above visible top: instant update
         for i in 0..<startPosition {
@@ -1192,13 +1444,14 @@ public struct LyricsView: View {
 
             delay += baseDelay
             // AMLL tail acceleration: lines past current get progressively faster
-            if lineIndex >= newIndex { baseDelay /= 1.05 }
+            if lineIndex >= newIndex { baseDelay /= LyricWaveTiming.tailAccelerationFactor }
         }
 
-        let finalSettleDelay = delay + 0.20
+        let finalSettleDelay = delay + LyricWaveTiming.settlePadding
         let settleWorkItem = DispatchWorkItem { [self] in
-            guard !scroll.isManualScrolling else { return }
             guard wave.lastCurrentIndex == newIndex else { return }
+            wave.workItems.removeAll()
+            guard !scroll.isManualScrolling else { return }
 
             var keep = Set<Int>()
             for idx in renderedIndices where abs(idx - newIndex) <= 18 {
@@ -1211,6 +1464,20 @@ public struct LyricsView: View {
         }
         wave.workItems.append(settleWorkItem)
         DispatchQueue.main.asyncAfter(deadline: .now() + finalSettleDelay, execute: settleWorkItem)
+    }
+
+    private func estimatedLineInterval(around index: Int, in lyrics: [LyricLine]) -> TimeInterval? {
+        guard lyrics.indices.contains(index) else { return nil }
+
+        if index + 1 < lyrics.count {
+            let nextGap = lyrics[index + 1].startTime - lyrics[index].startTime
+            if nextGap.isFinite, nextGap > 0 {
+                return nextGap
+            }
+        }
+
+        let ownDuration = lyrics[index].endTime - lyrics[index].startTime
+        return ownDuration.isFinite && ownDuration > 0 ? ownDuration : nil
     }
 
     private func cancelWaveAnimations() {

@@ -71,7 +71,6 @@ struct LyricLineView: View {
     var showTranslation: Bool = false
     var isTranslating: Bool = false
     var translationFailed: Bool = false
-    var reserveTranslationSlot: Bool = false
     /// True when the song is sitting in a ≥5s interlude gap AFTER this line.
     /// LyricLineView treats itself as past (distance effectively -1) so the
     /// normal past-line animation (blur + dim + scale) plays and the view's
@@ -248,15 +247,6 @@ struct LyricLineView: View {
                 }
             } else if showTranslation && translationFailed && isCurrent {
                 EmptyView()
-            } else if showTranslation && internalShowTranslation && reserveTranslationSlot && !translationFailed {
-                HStack(spacing: 0) {
-                    Text(" ")
-                        .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
-                        .lineSpacing(LyricMetrics.translationLineSpacing)
-                        .opacity(0)
-                        .accessibilityHidden(true)
-                    Spacer(minLength: 0)
-                }
             }
         }
         // Drive the interlude blend: when the song enters a >=5s gap,

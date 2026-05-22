@@ -469,6 +469,8 @@ public final class DiagnosticsService: ObservableObject {
 
     private var sessionStartedAt: Date
     private var lyricsFetchStarts: [String: Date] = [:]
+    private var lyricsBackfillStarts: [String: Date] = [:]
+    private var lyricsBackfillForegroundSeconds: [String: TimeInterval] = [:]
     private var artworkFetchStarts: [Int: Date] = [:]
     private var activeLyricsRefreshInteractions: [String: UUID] = [:]
     private var baselineStats: [String: RunningStat] = [:]
@@ -554,6 +556,8 @@ public final class DiagnosticsService: ObservableObject {
             : .distantPast
         activeInteractionCount = 0
         lyricsFetchStarts.removeAll()
+        lyricsBackfillStarts.removeAll()
+        lyricsBackfillForegroundSeconds.removeAll()
         artworkFetchStarts.removeAll()
         activeLyricsRefreshInteractions.removeAll()
         baselineStats.removeAll()
@@ -839,6 +843,74 @@ public final class DiagnosticsService: ObservableObject {
         }
     }
 
+    public func recordLyricsBackfillStarted(
+        track: DiagnosticTrackContext,
+        foregroundFetchSeconds: TimeInterval,
+        foregroundResultCount: Int
+    ) {
+        guard isEnabled else { return }
+        let key = lyricsKey(for: track)
+        lyricsBackfillStarts[key] = Date()
+        lyricsBackfillForegroundSeconds[key] = foregroundFetchSeconds
+        recordEvent(
+            "lyrics.backfill.start",
+            detail: "Authoritative lyrics backfill started after foreground resolver did not return a trusted result.",
+            track: track,
+            metrics: [
+                "foregroundFetchSeconds": foregroundFetchSeconds,
+                "foregroundResultCount": Double(foregroundResultCount)
+            ]
+        )
+        schedulePersistenceSave()
+    }
+
+    public func recordLyricsBackfillFinished(
+        track: DiagnosticTrackContext,
+        result: String,
+        source: String?,
+        score: Double?,
+        lineCount: Int
+    ) {
+        guard isEnabled else { return }
+        let key = lyricsKey(for: track)
+        let elapsed = Date().timeIntervalSince(lyricsBackfillStarts[key] ?? Date())
+        let foregroundElapsed = lyricsBackfillForegroundSeconds[key] ?? 0
+        lyricsBackfillStarts.removeValue(forKey: key)
+        lyricsBackfillForegroundSeconds.removeValue(forKey: key)
+        let totalElapsed = foregroundElapsed + elapsed
+
+        var metrics: [String: Double] = [
+            "backfillSeconds": elapsed,
+            "foregroundFetchSeconds": foregroundElapsed,
+            "totalResolverSeconds": totalElapsed,
+            "lineCount": Double(lineCount)
+        ]
+        if let score { metrics["score"] = score }
+
+        recordEvent(
+            "lyrics.backfill.finish",
+            detail: "Authoritative lyrics backfill finished with \(result) from \(source ?? "unknown") after \(formatSeconds(elapsed)).",
+            track: track,
+            metrics: metrics
+        )
+
+        if elapsed > 4.0 || totalElapsed > 6.0 {
+            recordIncident(
+                category: .lyricsSlowFetch,
+                severity: totalElapsed > 8.0 ? .critical : .warning,
+                title: "Slow lyrics authoritative backfill",
+                detail: "Authoritative lyrics backfill took \(formatSeconds(elapsed)); total resolver time was \(formatSeconds(totalElapsed)).",
+                track: track,
+                metrics: metrics,
+                evidence: [
+                    "phase": "authoritativeBackfill",
+                    "result": result,
+                    "source": source ?? "unknown"
+                ]
+            )
+        }
+    }
+
     public func recordLyricsPartialTranslationFilled(
         track: DiagnosticTrackContext,
         filledLineCount: Int,
@@ -918,6 +990,92 @@ public final class DiagnosticsService: ObservableObject {
             detail: "System translation did not fill \(missingLineCount)/\(translatableLineCount) visible line(s): \(reason).",
             track: track,
             metrics: metrics,
+            evidence: evidence
+        )
+    }
+
+    public func recordLyricsVisibleTranslationGap(
+        track: DiagnosticTrackContext,
+        lineIndex: Int,
+        displayIndex: Int,
+        activeIndex: Int,
+        playbackTime: TimeInterval,
+        lineStartTime: TimeInterval,
+        lineEndTime: TimeInterval,
+        totalLineCount: Int,
+        visibleLineCount: Int,
+        visibleTranslatedLineCount: Int,
+        visibleMissingTranslationLineCount: Int,
+        lineIsTranslationEligible: Bool,
+        lineIsVocable: Bool,
+        showTranslation: Bool,
+        canTranslate: Bool,
+        translationFailed: Bool
+    ) {
+        guard isEnabled, showTranslation else { return }
+        guard totalLineCount > 0, visibleLineCount > 0 else { return }
+        guard visibleTranslatedLineCount > 0, visibleMissingTranslationLineCount > 0 else { return }
+
+        let reason: String = {
+            if lineIsTranslationEligible { return "visible eligible line missing translation" }
+            if lineIsVocable { return "visible vocable line excluded from aggregate translation coverage" }
+            return "visible line excluded from aggregate translation coverage"
+        }()
+        let metrics: [String: Double] = [
+            "lineIndex": Double(lineIndex),
+            "displayIndex": Double(displayIndex),
+            "activeIndex": Double(activeIndex),
+            "playbackTime": playbackTime,
+            "lineStartTime": lineStartTime,
+            "lineEndTime": lineEndTime,
+            "lineDuration": max(lineEndTime - lineStartTime, 0),
+            "totalLineCount": Double(totalLineCount),
+            "visibleLineCount": Double(visibleLineCount),
+            "visibleTranslatedLineCount": Double(visibleTranslatedLineCount),
+            "visibleMissingTranslationLineCount": Double(visibleMissingTranslationLineCount),
+            "lineIsTranslationEligible": lineIsTranslationEligible ? 1 : 0,
+            "lineIsVocable": lineIsVocable ? 1 : 0,
+            "canTranslate": canTranslate ? 1 : 0,
+            "translationFailed": translationFailed ? 1 : 0
+        ]
+        let evidence = [
+            "source": "visibleLine",
+            "reason": reason,
+            "lineIndex": String(lineIndex),
+            "displayIndex": String(displayIndex),
+            "activeIndex": String(activeIndex)
+        ]
+
+        if let existingIndex = incidents.firstIndex(where: { incident in
+            guard incident.category == .lyricsPartialTranslation,
+                  incident.evidence["source"] == "visibleLine",
+                  incident.evidence["lineIndex"] == String(lineIndex),
+                  let incidentTrack = incident.track else {
+                return false
+            }
+            return incidentTrack.matchesReportTrack(track)
+        }) {
+            incidents[existingIndex].timestamp = Date()
+            incidents[existingIndex].title = "Visible lyric line missing translation"
+            incidents[existingIndex].detail = "The highlighted lyric line has no translation while nearby visible lines do."
+            merge(metrics, into: &incidents[existingIndex].metrics)
+            merge(evidence, into: &incidents[existingIndex].evidence)
+            incrementMetric("occurrenceCount", in: &incidents[existingIndex].metrics)
+            trimBuffers()
+            schedulePersistenceSave()
+            return
+        }
+
+        var newMetrics = metrics
+        newMetrics["occurrenceCount"] = 1
+        recordIncident(
+            category: .lyricsPartialTranslation,
+            severity: .warning,
+            title: "Visible lyric line missing translation",
+            detail: "The highlighted lyric line has no translation while nearby visible lines do.",
+            userSymptom: .missingTranslation,
+            track: track,
+            metrics: newMetrics,
             evidence: evidence
         )
     }
@@ -1215,6 +1373,40 @@ public final class DiagnosticsService: ObservableObject {
                 track: track,
                 metrics: metrics,
                 evidence: ["source": source]
+            )
+        }
+    }
+
+    public func recordArtworkPlaceholderShown(
+        track: DiagnosticTrackContext,
+        generation: Int,
+        reason: String,
+        applyMilliseconds: Double
+    ) {
+        guard isEnabled else { return }
+        updateBaseline("artwork.placeholder.apply.ms", value: applyMilliseconds)
+        recordEvent(
+            "artwork.placeholder",
+            detail: "Current-track artwork placeholder shown because \(reason).",
+            track: track,
+            metrics: [
+                "generation": Double(generation),
+                "applyMilliseconds": applyMilliseconds
+            ]
+        )
+
+        if reason != "initial" {
+            recordIncident(
+                category: .artworkBlocking,
+                severity: reason == "fetchFailed" ? .critical : .warning,
+                title: "Artwork missing for current track",
+                detail: "Current-track artwork did not arrive before the fallback placeholder was shown.",
+                track: track,
+                metrics: [
+                    "generation": Double(generation),
+                    "applyMilliseconds": applyMilliseconds
+                ],
+                evidence: ["reason": reason]
             )
         }
     }
@@ -3022,8 +3214,9 @@ public final class DiagnosticsService: ObservableObject {
         }
 
         let hasGeometryDrift = maxInterLineError > 18 || maxTargetError > 32
-        let hasLateWaveTargets = activeVisualElapsed > 0.55 && activeTargetLagged && laggedNearbyTargets >= 4
-        guard hasGeometryDrift || hasLateWaveTargets else { return }
+        let hasLateActiveTarget = activeVisualElapsed > 0.55 && activeTargetLagged && laggedNearbyTargets >= 4
+        let hasLingeringWaveBacklog = activeVisualElapsed > 0.90 && laggedNearbyTargets >= 4
+        guard hasGeometryDrift || hasLateActiveTarget || hasLingeringWaveBacklog else { return }
 
         let sample = activeSample ?? stableSamples[0]
         let signature = [
@@ -3063,7 +3256,8 @@ public final class DiagnosticsService: ObservableObject {
                 "laggedNearbyTargetCount": Double(laggedNearbyTargets),
                 "activeLineElapsedMs": activeLineElapsed * 1000,
                 "activeVisualElapsedMs": activeVisualElapsed * 1000,
-                "activeTargetLagged": activeTargetLagged ? 1 : 0
+                "activeTargetLagged": activeTargetLagged ? 1 : 0,
+                "lingeringWaveBacklog": hasLingeringWaveBacklog ? 1 : 0
             ],
             evidence: [
                 "track": "\(sample.trackTitle) / \(sample.trackArtist)",
