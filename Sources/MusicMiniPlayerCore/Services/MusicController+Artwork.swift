@@ -16,6 +16,7 @@ import ObjCSupport
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 extension MusicController {
+    static let retainedArtworkPlaceholderGraceNanoseconds: UInt64 = 1_200_000_000
 
     /// 从 ScriptingBridge track 对象提取封面图片
     /// 🔑 复用于队列遍历和单独封面获取，避免重复代码
@@ -50,8 +51,9 @@ extension MusicController {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     /// 🔑 设置封面并自动计算亮度
-    func setArtwork(_ image: NSImage?) {
+    func setArtwork(_ image: NSImage?, isPlaceholder: Bool = false) {
         self.currentArtwork = image
+        self.currentArtworkIsPlaceholder = image == nil ? false : isPlaceholder
         if let img = image {
             let metrics = img.artworkBrightnessRegions()
             self.artworkLuminance = metrics.overall
@@ -141,6 +143,10 @@ extension MusicController {
         return currentTrackTitle == title && currentArtist == artist
     }
 
+    func hasAppliedRealArtwork(for generation: Int) -> Bool {
+        currentArtwork != nil && appliedArtworkGeneration == generation && !currentArtworkIsPlaceholder
+    }
+
     /// 🔑 generation 由调用方提供（handleTrackChange / applySnapshot 各自 incrementGeneration）
     /// 不再内部递增 — 修复了双递增导致 handleTrackChange SB 块永远 stale 的 bug
     /// 🔑 去重统一依赖 generation + Task cancellation：
@@ -154,7 +160,9 @@ extension MusicController {
         let cacheKey = artworkCacheKey(persistentID: persistentID, title: title, artist: artist)
         let metadataKey = artworkMetadataCacheKey(title: title, artist: artist, album: album)
         let trackContext = diagnosticsArtworkTrack(title: title, artist: artist, album: album, persistentID: persistentID)
-        let heldPreviousArtwork = currentArtwork != nil && appliedArtworkGeneration != generation
+        let heldPreviousArtwork = currentArtwork != nil
+            && !currentArtworkIsPlaceholder
+            && !hasAppliedRealArtwork(for: generation)
         recordDiagnosticsArtworkFetchStarted(
             track: trackContext,
             generation: generation,
@@ -228,14 +236,37 @@ extension MusicController {
         )
         if !heldPreviousArtwork {
             let applyStart = CFAbsoluteTimeGetCurrent()
-            setArtwork(createPlaceholder())
+            setArtwork(createPlaceholder(), isPlaceholder: true)
             appliedArtworkGeneration = generation
-            recordDiagnosticsArtworkApplied(
+            recordDiagnosticsArtworkPlaceholderShown(
                 track: trackContext,
                 generation: generation,
-                source: "placeholder.initial",
+                reason: "initial",
                 applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
             )
+        } else {
+            // Keep the old real cover visible while bounded fetch/retry lanes run.
+            // A timer-driven placeholder here caused a visible black/empty flash
+            // moments before a valid web/Apple fallback arrived.
+        }
+
+        // ━━━ Path 0: Music.app UI cache — exact local cover, may arrive after the notification ━━━
+        Task { [weak self] in
+            guard let self else { return }
+            guard let image = await self.withArtworkTimeout(seconds: 1.6, operation: {
+                await PlaybackSessionArtworkFetcher.fetchArtwork(title: title, artist: artist, album: album)
+            }) else { return }
+            await MainActor.run {
+                self.applyArtworkIfCurrent(
+                    image,
+                    persistentID: persistentID,
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    generation: generation,
+                    source: .playbackSession
+                )
+            }
         }
 
         // ━━━ Path 1: API fetch — starts immediately, no SB queue dependency ━━━
@@ -258,7 +289,9 @@ extension MusicController {
                 // is only valid IF (a) we're still the current generation after the
                 // short retry wait AND (b) no other artwork has been applied since AND (c)
                 // there's no existing artwork to display. Drop on cancellation.
-                let retryDelay: UInt64 = heldPreviousArtwork ? 150_000_000 : 250_000_000
+                let retryDelay: UInt64 = heldPreviousArtwork
+                    ? Self.retainedArtworkPlaceholderGraceNanoseconds
+                    : 250_000_000
                 try? await Task.sleep(nanoseconds: retryDelay)
                 guard !Task.isCancelled else { return }
                 await self.retryArtworkFetch(persistentID: persistentID, title: title, artist: artist, album: album, generation: generation)
@@ -267,24 +300,11 @@ extension MusicController {
                 await MainActor.run {
                     guard self.artworkFetchGeneration == generation else { return }
                     if self.isStillCurrentTrack(persistentID: persistentID, title: title, artist: artist)
-                        && self.appliedArtworkGeneration != generation {
-                        guard self.currentArtwork == nil else {
-                            self.recordDiagnosticsArtworkDropped(
-                                track: trackContext,
-                                generation: generation,
-                                source: "placeholder",
-                                reason: "existingArtworkRetained"
-                            )
-                            return
-                        }
-                        let applyStart = CFAbsoluteTimeGetCurrent()
-                        self.setArtwork(self.createPlaceholder())
-                        self.appliedArtworkGeneration = generation
-                        self.recordDiagnosticsArtworkApplied(
+                        && !self.hasAppliedRealArtwork(for: generation) {
+                        self.applyArtworkPlaceholder(
                             track: trackContext,
                             generation: generation,
-                            source: "placeholder",
-                            applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+                            reason: "fetchFailed"
                         )
                     }
                 }
@@ -380,14 +400,6 @@ extension MusicController {
         }
 
         return await withTaskGroup(of: ArtworkRaceEvent?.self) { group in
-            group.addTask {
-                if let img = await self.withArtworkTimeout(seconds: 1.5, operation: {
-                    await PlaybackSessionArtworkFetcher.fetchArtwork(title: title, artist: artist, album: album)
-                }) {
-                    return .image(img, .playbackSession)
-                }
-                return nil
-            }
             if MusicAuthorization.currentStatus == .authorized {
                 group.addTask {
                     if let img = await self.withArtworkTimeout(seconds: 1.2, operation: {
@@ -890,6 +902,22 @@ extension MusicController {
         }
     }
 
+    private func recordDiagnosticsArtworkPlaceholderShown(
+        track: DiagnosticTrackContext,
+        generation: Int,
+        reason: String,
+        applyMilliseconds: Double
+    ) {
+        Task { @MainActor in
+            DiagnosticsService.shared.recordArtworkPlaceholderShown(
+                track: track,
+                generation: generation,
+                reason: reason,
+                applyMilliseconds: applyMilliseconds
+            )
+        }
+    }
+
     private func recordDiagnosticsArtworkDropped(
         track: DiagnosticTrackContext,
         generation: Int,
@@ -904,6 +932,23 @@ extension MusicController {
                 reason: reason
             )
         }
+    }
+
+    @MainActor
+    private func applyArtworkPlaceholder(
+        track: DiagnosticTrackContext,
+        generation: Int,
+        reason: String
+    ) {
+        let applyStart = CFAbsoluteTimeGetCurrent()
+        setArtwork(createPlaceholder(), isPlaceholder: true)
+        appliedArtworkGeneration = generation
+        recordDiagnosticsArtworkPlaceholderShown(
+            track: track,
+            generation: generation,
+            reason: reason,
+            applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
+        )
     }
 
     /// 封面获取成功后统一处理：验证当前歌曲 → 源优先级 → 设置封面 → 缓存
@@ -955,16 +1000,14 @@ extension MusicController {
             applyMilliseconds: (CFAbsoluteTimeGetCurrent() - applyStart) * 1000
         )
 
-        if source.isAppleAuthoritative {
-            cacheArtwork(
-                image,
-                persistentID: persistentID,
-                title: title,
-                artist: artist,
-                album: album,
-                persistToDisk: true
-            )
-        }
+        cacheArtwork(
+            image,
+            persistentID: persistentID,
+            title: title,
+            artist: artist,
+            album: album,
+            persistToDisk: source.isAppleAuthoritative
+        )
     }
 
     /// 延迟重试封面获取（电台首歌特殊处理）

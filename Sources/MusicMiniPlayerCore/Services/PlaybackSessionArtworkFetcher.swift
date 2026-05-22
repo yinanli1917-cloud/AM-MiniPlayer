@@ -15,20 +15,23 @@ enum PlaybackSessionArtworkFetcher {
     private static var urlCache: [String: (timestamp: Date, url: URL)] = [:]
 
     static func fetchArtwork(title: String, artist: String, album: String) async -> NSImage? {
-        guard let url = await latestArtworkURLOnFileQueue(title: title, artist: artist, album: album) else {
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Music/PlaybackSessions")
+        guard let url = await latestArtworkURLPolling(
+            title: title,
+            artist: artist,
+            album: album,
+            root: root,
+            retryFor: 1.2,
+            pollInterval: 0.08
+        ) else {
             DebugLogger.log("Artwork", "🎨 [PlaybackSession] no matching artwork URL for '\(title)' by '\(artist)'")
             return nil
         }
-        guard !Task.isCancelled else { return nil }
-        if let cached = await cachedArtworkDataOnFileQueue(for: url),
-           let image = NSImage(data: cached) {
-            DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI cache hit: \(url.absoluteString)")
-            return image
-        }
-        DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI cache miss: \(url.absoluteString)")
+        DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI artwork URL hit: \(url.absoluteString)")
         guard !Task.isCancelled else { return nil }
         do {
-            let (data, _) = try await HTTPClient.getData(url: url, timeout: 1.0, retry: false)
+            let (data, _) = try await HTTPClient.getData(url: url, timeout: 0.9, retry: false)
             DebugLogger.log("Artwork", "🎨 [PlaybackSession] original Music artwork: \(url.absoluteString)")
             return NSImage(data: data)
         } catch {
@@ -43,9 +46,30 @@ enum PlaybackSessionArtworkFetcher {
         return latestArtworkURL(title: title, artist: artist, album: album, root: root)
     }
 
-    private static func latestArtworkURLOnFileQueue(title: String, artist: String, album: String) async -> URL? {
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Music/PlaybackSessions")
+    static func latestArtworkURLPolling(
+        title: String,
+        artist: String,
+        album: String,
+        root: URL,
+        retryFor: TimeInterval,
+        pollInterval: TimeInterval
+    ) async -> URL? {
+        let deadline = Date().addingTimeInterval(max(0, retryFor))
+        let interval = max(0.02, pollInterval)
+
+        while !Task.isCancelled {
+            if let url = await latestArtworkURLOnFileQueue(title: title, artist: artist, album: album, root: root) {
+                return url
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return nil }
+            let sleepSeconds = min(interval, remaining)
+            try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+        }
+        return nil
+    }
+
+    private static func latestArtworkURLOnFileQueue(title: String, artist: String, album: String, root: URL) async -> URL? {
         return await withCheckedContinuation { continuation in
             fileQueue.async {
                 continuation.resume(returning: latestArtworkURL(title: title, artist: artist, album: album, root: root))
@@ -142,6 +166,8 @@ enum PlaybackSessionArtworkFetcher {
         guard textContainsPlaybackField(text, title) else { return false }
         if textContainsPlaybackField(text, artist) { return true }
         if textContainsPlaybackField(text, album) { return true }
+        if latinizedFieldTokensMatch(text, field: artist) { return true }
+        if latinizedFieldTokensMatch(text, field: album) { return true }
         return false
     }
 
@@ -156,7 +182,42 @@ enum PlaybackSessionArtworkFetcher {
            text.range(of: simplified, options: options) != nil {
             return true
         }
+        let encodedFields = [trimmed, simplified]
+            .filter { !$0.isEmpty }
+            .compactMap { $0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) }
+        if encodedFields.contains(where: { encoded in
+            text.range(of: encoded, options: [.caseInsensitive]) != nil
+        }) {
+            return true
+        }
         return false
+    }
+
+    private static func latinizedFieldTokensMatch(_ text: String, field: String) -> Bool {
+        let tokens = latinSearchTokens(for: field)
+        guard !tokens.isEmpty else { return false }
+        let boundedText = text.count > 120_000 ? String(text.prefix(120_000)) : text
+        let latinText = LanguageUtils.toLatinLower(LanguageUtils.toSimplifiedChinese(boundedText))
+        let compactText = latinText.filter { $0.isLetter || $0.isNumber }
+        guard !latinText.isEmpty || !compactText.isEmpty else { return false }
+        return tokens.allSatisfy { token in
+            latinText.range(of: token, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                || compactText.contains(token)
+        }
+    }
+
+    private static func latinSearchTokens(for field: String) -> [String] {
+        let rawTokens = LanguageUtils.normalizeUnicode(field)
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { $0.count >= 3 }
+        if rawTokens.count >= 2 {
+            return rawTokens
+        }
+
+        let latin = LanguageUtils.toLatinLower(LanguageUtils.toSimplifiedChinese(field))
+        return latin.count >= 3 ? [latin] : []
     }
 
     private static func normalize(_ value: String) -> String {

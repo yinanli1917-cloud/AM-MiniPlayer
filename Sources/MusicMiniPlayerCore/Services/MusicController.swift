@@ -157,6 +157,9 @@ public class MusicController: ObservableObject {
     /// 当前屏幕上的封面属于哪一次切歌请求。切歌时不再清空旧封面，
     /// 但失败兜底需要知道是否已经为当前 generation 应用过新封面。
     var appliedArtworkGeneration: Int = -1
+    /// 当前封面是否只是兜底占位图。占位图不能算作“当前 generation 已拿到封面”，
+    /// 否则后续 fetch failure 会被误判为已解决，诊断也看不到缺失封面。
+    var currentArtworkIsPlaceholder = false
     /// artworkQueue 最近一次响应时间 — 超过 5s 未响应视为卡死，需重建
     var lastArtworkQueueHeartbeat = Date()
     /// scriptingBridgeQueue 最近一次响应时间 — 同样的心跳保护

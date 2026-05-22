@@ -212,9 +212,12 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertNil(c.artworkMetadataCacheKey(title: "Warm On a Cold Night", artist: "HONNE", album: ""))
     }
 
-    func testArtworkCacheMissKeepsPreviousArtworkUntilReplacement() {
+    func testArtworkCacheMissKeepsPreviousArtworkBrieflyUntilReplacement() async throws {
         let c = MusicController(preview: true)
+        c.currentTrackTitle = "Tout tout"
+        c.currentArtist = "Miel De Montagne & Blasé"
         c.currentArtwork = NSImage(size: NSSize(width: 12, height: 12))
+        c.currentArtworkIsPlaceholder = false
         c.appliedArtworkGeneration = 0
         let generation = c.incrementGeneration()
 
@@ -228,6 +231,96 @@ final class RapidSwitchTests: XCTestCase {
 
         XCTAssertNotNil(c.currentArtwork)
         XCTAssertNotEqual(c.appliedArtworkGeneration, generation)
+
+        try await Task.sleep(nanoseconds: MusicController.retainedArtworkPlaceholderGraceNanoseconds + 250_000_000)
+
+        XCTAssertNotNil(c.currentArtwork)
+        XCTAssertEqual(c.appliedArtworkGeneration, generation)
+        XCTAssertTrue(c.currentArtworkIsPlaceholder)
+        XCTAssertFalse(c.hasAppliedRealArtwork(for: generation))
+    }
+
+    func testInitialPlaceholderDoesNotCountAsRealArtworkForGeneration() async throws {
+        let c = MusicController(preview: true)
+        c.currentTrackTitle = "Missing Cover"
+        c.currentArtist = "Diagnostics"
+        c.currentAlbum = "Debug Album"
+        c.currentArtwork = nil
+        c.currentArtworkIsPlaceholder = false
+        let generation = c.incrementGeneration()
+
+        c.fetchArtwork(
+            for: "Missing Cover",
+            artist: "Diagnostics",
+            album: "Debug Album",
+            persistentID: "",
+            generation: generation
+        )
+
+        XCTAssertNotNil(c.currentArtwork)
+        XCTAssertEqual(c.appliedArtworkGeneration, generation)
+        XCTAssertTrue(c.currentArtworkIsPlaceholder)
+        XCTAssertFalse(c.hasAppliedRealArtwork(for: generation))
+
+        try await Task.sleep(nanoseconds: 600_000_000)
+
+        XCTAssertTrue(c.currentArtworkIsPlaceholder)
+        XCTAssertFalse(c.hasAppliedRealArtwork(for: generation))
+    }
+
+    func testWebArtworkApplyCachesMetadataKeyInMemory() async {
+        let c = MusicController(preview: true)
+        c.currentTrackTitle = "Airport in 10:30"
+        c.currentArtist = "David Tao"
+        c.currentAlbum = "David Tao"
+        let generation = c.incrementGeneration()
+        let image = NSImage(size: NSSize(width: 80, height: 80))
+
+        await c.applyArtworkIfCurrent(
+            image,
+            persistentID: "",
+            title: "Airport in 10:30",
+            artist: "David Tao",
+            album: "David Tao",
+            generation: generation,
+            source: .web
+        )
+
+        let key = c.artworkMetadataCacheKey(title: "Airport in 10:30", artist: "David Tao", album: "David Tao")
+        XCTAssertNotNil(key)
+        XCTAssertNotNil(c.artworkCache.object(forKey: key!))
+    }
+
+    func testAppleAuthoritativeArtworkCanReplaceWebFallbackForSameGeneration() async {
+        let c = MusicController(preview: true)
+        c.currentTrackTitle = "Late Apple Cover"
+        c.currentArtist = "Diagnostics"
+        c.currentAlbum = "Debug Album"
+        let generation = c.incrementGeneration()
+        let web = NSImage(size: NSSize(width: 80, height: 80))
+        let apple = NSImage(size: NSSize(width: 120, height: 120))
+
+        await c.applyArtworkIfCurrent(
+            web,
+            persistentID: "",
+            title: "Late Apple Cover",
+            artist: "Diagnostics",
+            album: "Debug Album",
+            generation: generation,
+            source: .web
+        )
+        await c.applyArtworkIfCurrent(
+            apple,
+            persistentID: "",
+            title: "Late Apple Cover",
+            artist: "Diagnostics",
+            album: "Debug Album",
+            generation: generation,
+            source: .playbackSession
+        )
+
+        XCTAssertEqual(c.currentArtwork?.size, NSSize(width: 120, height: 120))
+        XCTAssertEqual(c.appliedArtworkGeneration, generation)
     }
 
     func testPlaybackSessionArtworkURLTrimsBinaryTailAfterConcreteImagePath() {
@@ -266,6 +359,62 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testPlaybackSessionArtworkTextMatchUsesLatinizedCJKArtistAlias() {
+        let text = "REALIZE 孫燕姿 https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/4e/92/0b/cover.rgb.jpg/800x800bb.jpg"
+
+        XCTAssertTrue(
+            PlaybackSessionArtworkFetcher.textMatches(
+                text,
+                title: "Realize",
+                artist: "Yanzi Sun",
+                album: "My Desired Happiness"
+            )
+        )
+    }
+
+    func testPlaybackSessionArtworkTextMatchUsesPercentEncodedNativeTitle() {
+        let text = #"{"url":"https:\/\/music.apple.com\/cn\/album\/%E9%9B%A8%E7%88%B1\/347295255?i=347295290","albumName":"Rainie & Love?","artistName":"Rainie Yang","artwork":{"url":"https:\/\/is1-ssl.mzstatic.com\/image\/thumb\/Music\/bc\/e0\/e5\/mzi.mzfgcpgj.jpg\/{w}x{h}bb.{f}"}}"#
+
+        XCTAssertTrue(
+            PlaybackSessionArtworkFetcher.textMatches(
+                text,
+                title: "雨愛",
+                artist: "Rainie Yang",
+                album: "Rainie & Love?"
+            )
+        )
+    }
+
+    func testPlaybackSessionArtworkPollsUntilArchiveAppears() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nanopod-playback-session-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let lookup = Task {
+            await PlaybackSessionArtworkFetcher.latestArtworkURLPolling(
+                title: "Lovers",
+                artist: "Li Ronghao",
+                album: "Lovers - Single",
+                root: root,
+                retryFor: 0.6,
+                pollInterval: 0.05
+            )
+        }
+
+        try await Task.sleep(nanoseconds: 120_000_000)
+        try writePlaybackSessionArchive(
+            root: root,
+            payload: "Lovers Lovers - Single Li Ronghao https://is1-ssl.mzstatic.com/image/thumb/Music221/v4/4d/96/d6/cover.jpg/800x800bb.jpg"
+        )
+
+        let url = await lookup.value
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://is1-ssl.mzstatic.com/image/thumb/Music221/v4/4d/96/d6/cover.jpg/800x800bb.jpg"
+        )
+    }
+
     func testPlaybackSessionArtworkCacheReadsFilesystemBackedMusicUICache() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("nanopod-artwork-cache-\(UUID().uuidString)")
@@ -289,6 +438,26 @@ final class RapidSwitchTests: XCTestCase {
         )
 
         XCTAssertEqual(data, expected)
+    }
+
+    private func writePlaybackSessionArchive(root: URL, payload: String) throws {
+        let archive = root.appendingPathComponent("IT-999999.playbackSessionArchive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        let rawURL = archive.appendingPathComponent("contentItem.protobuf")
+        try Data(payload.utf8).write(to: rawURL)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = ["-c", rawURL.path]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+
+        let gzipped = output.fileHandleForReading.readDataToEndOfFile()
+        try gzipped.write(to: archive.appendingPathComponent("contentItem.protobuf.gz"))
+        try? FileManager.default.removeItem(at: rawURL)
     }
 
     private func createMusicUICacheFixture(dbURL: URL, requestKey: String, fileName: String) throws {
@@ -515,5 +684,112 @@ final class RapidSwitchTests: XCTestCase {
             recentlyCompletedQueue: true,
             completedCurrentQueueGeneration: false
         ))
+    }
+
+    func testLyricWaveTimingKeepsProtectedDefaultForLongLineInterval() {
+        let indices = Array(0...18)
+        let delay = LyricWaveTiming.baseDelay(
+            for: indices,
+            startPosition: 0,
+            newIndex: 3,
+            lineInterval: 4.0
+        )
+
+        XCTAssertEqual(delay, LyricWaveTiming.defaultBaseDelay, accuracy: 0.0001)
+    }
+
+    func testLyricWaveTimingCompressesShortLineIntervalBeforeNextLyric() {
+        let indices = Array(0...18)
+        let defaultDuration = LyricWaveTiming.waveDuration(
+            for: indices,
+            startPosition: 0,
+            newIndex: 3,
+            baseDelay: LyricWaveTiming.defaultBaseDelay
+        )
+        let delay = LyricWaveTiming.baseDelay(
+            for: indices,
+            startPosition: 0,
+            newIndex: 3,
+            lineInterval: 1.2
+        )
+        let adjustedDuration = LyricWaveTiming.waveDuration(
+            for: indices,
+            startPosition: 0,
+            newIndex: 3,
+            baseDelay: delay
+        )
+
+        XCTAssertLessThan(delay, LyricWaveTiming.defaultBaseDelay)
+        XCTAssertLessThan(adjustedDuration, defaultDuration)
+        XCTAssertLessThanOrEqual(adjustedDuration, 1.2 * LyricWaveTiming.maxLineIntervalFraction + 0.001)
+    }
+
+    func testLyricWaveTimingHonorsMinimumDelayForVeryDenseLyrics() {
+        let indices = Array(0...30)
+        let delay = LyricWaveTiming.baseDelay(
+            for: indices,
+            startPosition: 0,
+            newIndex: 2,
+            lineInterval: 0.25
+        )
+
+        XCTAssertEqual(delay, LyricWaveTiming.minimumBaseDelay, accuracy: 0.0001)
+    }
+
+    func testLyricMotionSamplingUsesPlaybackDerivedActiveIndex() {
+        let lyrics = [
+            LyricLine(text: "...", startTime: 0, endTime: 10),
+            LyricLine(text: "first", startTime: 10, endTime: 14),
+            LyricLine(text: "second", startTime: 14, endTime: 18),
+            LyricLine(text: "third", startTime: 21, endTime: 25)
+        ]
+
+        XCTAssertEqual(
+            LyricMotionSamplingPolicy.activeIndex(at: 9.5, lyrics: lyrics, firstRealIndex: 1),
+            0
+        )
+        XCTAssertEqual(
+            LyricMotionSamplingPolicy.activeIndex(at: 15.0, lyrics: lyrics, firstRealIndex: 1),
+            2
+        )
+    }
+
+    func testLyricMotionSamplingElevatesNearLineBoundaryOnly() {
+        let lyrics = [
+            LyricLine(text: "...", startTime: 0, endTime: 10),
+            LyricLine(text: "first", startTime: 10, endTime: 14),
+            LyricLine(text: "second", startTime: 14, endTime: 18)
+        ]
+
+        XCTAssertEqual(
+            LyricMotionSamplingPolicy.sampleInterval(
+                focusedWindowActive: false,
+                playbackTime: 9.95,
+                lyrics: lyrics,
+                firstRealIndex: 1
+            ),
+            LyricMotionSamplingPolicy.boundaryInterval,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            LyricMotionSamplingPolicy.sampleInterval(
+                focusedWindowActive: false,
+                playbackTime: 12.0,
+                lyrics: lyrics,
+                firstRealIndex: 1
+            ),
+            LyricMotionSamplingPolicy.idleInterval,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            LyricMotionSamplingPolicy.sampleInterval(
+                focusedWindowActive: true,
+                playbackTime: 12.0,
+                lyrics: lyrics,
+                firstRealIndex: 1
+            ),
+            LyricMotionSamplingPolicy.focusedInterval,
+            accuracy: 0.0001
+        )
     }
 }
