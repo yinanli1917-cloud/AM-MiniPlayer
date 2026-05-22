@@ -765,6 +765,9 @@ public final class LyricsFetcher {
                     || LanguageUtils.containsCJK(oa)
                     || LanguageUtils.containsCJK(alb)
                 let protectNativeProviderRace = hasOnlyWeakLibraryFallbackSyncedResults && shouldProtectNativeProviderRace
+                let trustedExactSyncedCanShortCircuit = hasTrustedExactSyncedResult
+                    && !shouldProtectNativeProviderRace
+                    && !shouldProtectAsciiNativeAlias
                 let hasOnlyLooseNativeAliasSyncedResults = hasAnySyncedResult && results.allSatisfy {
                     $0.kind != .synced || (
                         $0.nativeAliasMatched
@@ -785,18 +788,20 @@ public final class LyricsFetcher {
                 let branch3NeedsLandingWindow = branch3Fired.value
                     && !branch3Landed.value
                     && !hasFastExitSyncedResult
+                    && !trustedExactSyncedCanShortCircuit
                     && elapsed < 2.35
                 let branch2NeedsLandingWindow = branch2Fired.value
                     && !branch2Landed.value
                     && !hasFastExitSyncedResult
+                    && !trustedExactSyncedCanShortCircuit
                     && elapsed < 2.2
                 let albumScopedBranchNeedsLandingWindow = albumScopedBranchFired.value
                     && !albumScopedBranchLanded.value
-                    && (!hasFastExitSyncedResult || (!hasAlbumMatchedSyncedResult && !hasTrustedExactSyncedResult))
+                    && (!hasFastExitSyncedResult || (!hasAlbumMatchedSyncedResult && !trustedExactSyncedCanShortCircuit))
                     && elapsed < albumScopedLandingDeadline
                 let catalogExactTitleNeedsLandingWindow = catalogExactTitleBranchFired.value
                     && !catalogExactTitleBranchLanded.value
-                    && (!hasFastExitSyncedResult || (!hasAlbumMatchedSyncedResult && !hasTrustedExactSyncedResult))
+                    && (!hasFastExitSyncedResult || (!hasAlbumMatchedSyncedResult && !trustedExactSyncedCanShortCircuit))
                     && elapsed < catalogExactTitleLandingDeadline
                 if catalogExactTitleNeedsLandingWindow || albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
@@ -812,6 +817,7 @@ public final class LyricsFetcher {
                 }
                 if (hasHighConfidenceResult && elapsed >= 1.5)
                     || (hasFastExitSyncedResult && elapsed >= 0.15)
+                    || (trustedExactSyncedCanShortCircuit && elapsed >= 0.15)
                     || (!branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.2)
                     || (!protectNativeProviderRace && catalogExactTitleBranchFired.value && !catalogExactTitleBranchLanded.value && elapsed >= catalogExactTitleLandingDeadline)
                     || (!protectNativeProviderRace && albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed >= albumScopedLandingDeadline)
@@ -1022,14 +1028,80 @@ public final class LyricsFetcher {
                                                 album: cleanAlbum)
                 }
             }
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 2.9, operation: {
+                    await self.fetchAlbumTitleEchoNativeNetEase(
+                        title: cleanTitle,
+                        artist: cleanArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        album: cleanAlbum
+                    )
+                })
+            }
+            if !cleanAlbum.isEmpty {
+                group.addTask {
+                    guard let localized = await self.withHardMetadataTimeout(seconds: 3.2, operation: {
+                        await self.metadataResolver.resolveAlbumScopedMetadata(
+                            title: cleanTitle,
+                            artist: cleanArtist,
+                            duration: duration,
+                            album: cleanAlbum
+                        )
+                    }), localized.title != cleanTitle || localized.artist != cleanArtist || localized.album != cleanAlbum else {
+                        return nil
+                    }
+                    DebugLogger.log("🧭 Authoritative lyrics backfill album-scoped probe: '\(localized.title)' by '\(localized.artist)' album='\(localized.album)'")
+                    return await self.bestAlbumScopedAuthoritativeBackfillResult(
+                        localizedTitle: localized.title,
+                        localizedArtist: localized.artist,
+                        localizedAlbum: localized.album,
+                        originalTitle: cleanTitle,
+                        originalArtist: cleanArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled
+                    )
+                }
+            }
+            group.addTask {
+                guard let resolved = await self.withHardMetadataTimeout(seconds: 2.8, operation: {
+                    await self.metadataResolver.resolveSearchMetadata(
+                        title: cleanTitle,
+                        artist: cleanArtist,
+                        duration: duration
+                    )
+                }), resolved.title != cleanTitle || resolved.artist != cleanArtist else {
+                    return nil
+                }
+                DebugLogger.log("🧭 Authoritative lyrics backfill resolved probe: '\(resolved.title)' by '\(resolved.artist)'")
+                return await self.bestResolvedAuthoritativeBackfillResult(
+                    resolvedTitle: resolved.title,
+                    resolvedArtist: resolved.artist,
+                    originalTitle: cleanTitle,
+                    originalArtist: cleanArtist,
+                    duration: duration,
+                    translationEnabled: translationEnabled,
+                    album: cleanAlbum
+                )
+            }
+            group.addTask {
+                await self.fetchNativeTitleAliasWitnessBackfill(
+                    title: cleanTitle,
+                    artist: cleanArtist,
+                    duration: duration,
+                    translationEnabled: translationEnabled,
+                    album: cleanAlbum
+                )
+            }
 
             for await result in group {
                 guard let result else { continue }
                 results.append(result)
                 if result.kind == .synced,
-                   result.titleMatched,
-                   result.score >= 45,
-                   (result.matchedDurationDiff.map { $0 < 2.0 } ?? true) {
+                   (
+                    (result.titleMatched && result.score >= 45 && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
+                        || (result.score >= 70 && selectedHasPersistentIdentity(result))
+                   ) {
                     group.cancelAll()
                     break
                 }
@@ -1038,197 +1110,12 @@ public final class LyricsFetcher {
 
         var selected = selectBestResult(from: results, songDuration: duration)
 
-        if (selected == nil || selected.map { !selectedHasPersistentIdentity($0) } == true),
-           let echoNative = await withHardSourceTimeout(seconds: 2.9, operation: {
-               await self.fetchAlbumTitleEchoNativeNetEase(
-                   title: cleanTitle,
-                   artist: cleanArtist,
-                   duration: duration,
-                   translationEnabled: translationEnabled,
-                   album: cleanAlbum
-               )
-           }) {
-            results.append(echoNative)
-            selected = selectBestResult(from: results, songDuration: duration)
-        }
-
-        if (selected == nil || selected.map { !selectedHasPersistentIdentity($0) } == true),
-           !cleanAlbum.isEmpty,
-           let localized = await withHardMetadataTimeout(seconds: 3.2, operation: {
-               await self.metadataResolver.resolveAlbumScopedMetadata(
-                   title: cleanTitle,
-                   artist: cleanArtist,
-                   duration: duration,
-                   album: cleanAlbum
-               )
-           }),
-           localized.title != cleanTitle || localized.artist != cleanArtist || localized.album != cleanAlbum {
-            DebugLogger.log("🧭 Authoritative lyrics backfill album-scoped probe: '\(localized.title)' by '\(localized.artist)' album='\(localized.album)'")
-            await withTaskGroup(of: LyricsFetchResult?.self) { group in
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 4.5) {
-                        await self.fetchResolvedTitleKeyedSources(
-                            title: localized.title,
-                            artist: localized.artist,
-                            originalTitle: cleanTitle,
-                            originalArtist: cleanArtist,
-                            duration: duration,
-                            translationEnabled: translationEnabled,
-                            album: localized.album
-                        )
-                    }
-                }
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 4.5) {
-                        await self.fetchFromLRCLIB(
-                            title: localized.title,
-                            artist: localized.artist,
-                            duration: duration,
-                            translationEnabled: translationEnabled
-                        )
-                    }
-                }
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 4.5) {
-                        await self.fetchFromLRCLIBSearch(
-                            title: localized.title,
-                            artist: localized.artist,
-                            duration: duration,
-                            translationEnabled: translationEnabled
-                        )
-                    }
-                }
-
-                for await result in group {
-                    guard let result else { continue }
-                    results.append(result)
-                    if result.kind == .synced,
-                       result.score >= 45,
-                       selectedHasPersistentIdentity(result) {
-                        group.cancelAll()
-                        break
-                    }
-                }
-            }
-            selected = selectBestResult(from: results, songDuration: duration)
-        }
-
-        if (selected == nil || selected.map { !selectedHasPersistentIdentity($0) } == true),
-           let resolved = await withHardMetadataTimeout(seconds: 2.8, operation: {
-               await self.metadataResolver.resolveSearchMetadata(
-                   title: cleanTitle,
-                   artist: cleanArtist,
-                   duration: duration
-               )
-           }),
-           resolved.title != cleanTitle || resolved.artist != cleanArtist {
-            DebugLogger.log("🧭 Authoritative lyrics backfill resolved probe: '\(resolved.title)' by '\(resolved.artist)'")
-            await withTaskGroup(of: LyricsFetchResult?.self) { group in
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 3.2) {
-                        await self.fetchResolvedTitleKeyedSources(
-                            title: resolved.title,
-                            artist: resolved.artist,
-                            originalTitle: cleanTitle,
-                            originalArtist: cleanArtist,
-                            duration: duration,
-                            translationEnabled: translationEnabled,
-                            album: cleanAlbum
-                        )
-                    }
-                }
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 3.2) {
-                        await self.fetchFromNetEase(
-                            title: resolved.title,
-                            artist: resolved.artist,
-                            originalTitle: cleanTitle,
-                            originalArtist: cleanArtist,
-                            duration: duration,
-                            translationEnabled: translationEnabled,
-                            album: cleanAlbum
-                        )
-                    }
-                }
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 3.2) {
-                        await self.fetchFromQQMusic(
-                            title: resolved.title,
-                            artist: resolved.artist,
-                            originalTitle: cleanTitle,
-                            originalArtist: cleanArtist,
-                            duration: duration,
-                            translationEnabled: translationEnabled,
-                            album: cleanAlbum
-                        )
-                    }
-                }
-
-                for await result in group {
-                    guard let result else { continue }
-                    results.append(result)
-                    if result.kind == .synced,
-                       result.score >= 45,
-                       selectedHasPersistentIdentity(result) {
-                        group.cancelAll()
-                        break
-                    }
-                }
-            }
-            selected = selectBestResult(from: results, songDuration: duration)
-        }
-
-        if selected == nil || selected.map({ !selectedHasReturnableIdentity($0) }) == true {
-            if let nativeAliasResult = await fetchNativeTitleAliasWitnessBackfill(
-                title: cleanTitle,
-                artist: cleanArtist,
-                duration: duration,
-                translationEnabled: translationEnabled,
-                album: cleanAlbum
-            ) {
-                results.append(nativeAliasResult)
-                selected = selectBestResult(from: results, songDuration: duration)
-            }
-        }
-
         if selected.map({ !selectedHasPersistentIdentity($0) }) == true {
             let persistentResults = results.filter { selectedHasPersistentIdentity($0) }
             if let persistentSelected = selectBestResult(from: persistentResults, songDuration: duration) {
                 DebugLogger.log("🧭 Authoritative lyrics backfill persistent candidate preferred: \(persistentSelected.source)")
                 selected = persistentSelected
             }
-        }
-
-        if selected == nil {
-            DebugLogger.log("🧭 Authoritative lyrics backfill secondary LRCLIB probe")
-            await withTaskGroup(of: LyricsFetchResult?.self) { group in
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 2.0) {
-                        await self.fetchFromLRCLIBSearch(
-                            title: cleanTitle,
-                            artist: cleanArtist,
-                            duration: duration,
-                            translationEnabled: translationEnabled
-                        )
-                    }
-                }
-                group.addTask {
-                    await self.withHardSourceTimeout(seconds: 2.0) {
-                        await self.fetchFromLRCLIB(
-                            title: cleanTitle,
-                            artist: cleanArtist,
-                            duration: duration,
-                            translationEnabled: translationEnabled
-                        )
-                    }
-                }
-
-                for await result in group {
-                    guard let result else { continue }
-                    results.append(result)
-                }
-            }
-            selected = selectBestResult(from: results, songDuration: duration)
         }
 
         guard let selected,
@@ -1280,6 +1167,130 @@ public final class LyricsFetcher {
         }
         DebugLogger.log("🧭 Authoritative lyrics backfill HIT: \(selected.source) \(selected.lyrics.count)L in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
         return .lyrics(selected)
+    }
+
+    private func bestAlbumScopedAuthoritativeBackfillResult(
+        localizedTitle: String,
+        localizedArtist: String,
+        localizedAlbum: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool
+    ) async -> LyricsFetchResult? {
+        var probeResults: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 4.5) {
+                    await self.fetchResolvedTitleKeyedSources(
+                        title: localizedTitle,
+                        artist: localizedArtist,
+                        originalTitle: originalTitle,
+                        originalArtist: originalArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        album: localizedAlbum
+                    )
+                }
+            }
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 4.5) {
+                    await self.fetchFromLRCLIB(
+                        title: localizedTitle,
+                        artist: localizedArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled
+                    )
+                }
+            }
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 4.5) {
+                    await self.fetchFromLRCLIBSearch(
+                        title: localizedTitle,
+                        artist: localizedArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled
+                    )
+                }
+            }
+
+            for await result in group {
+                guard let result else { continue }
+                probeResults.append(result)
+                if result.kind == .synced,
+                   result.score >= 70,
+                   selectedHasPersistentIdentity(result) {
+                    group.cancelAll()
+                    break
+                }
+            }
+        }
+        return selectBestResult(from: probeResults, songDuration: duration)
+    }
+
+    private func bestResolvedAuthoritativeBackfillResult(
+        resolvedTitle: String,
+        resolvedArtist: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String
+    ) async -> LyricsFetchResult? {
+        var probeResults: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 3.2) {
+                    await self.fetchResolvedTitleKeyedSources(
+                        title: resolvedTitle,
+                        artist: resolvedArtist,
+                        originalTitle: originalTitle,
+                        originalArtist: originalArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        album: album
+                    )
+                }
+            }
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 3.2) {
+                    await self.fetchFromNetEase(
+                        title: resolvedTitle,
+                        artist: resolvedArtist,
+                        originalTitle: originalTitle,
+                        originalArtist: originalArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        album: album
+                    )
+                }
+            }
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 3.2) {
+                    await self.fetchFromQQMusic(
+                        title: resolvedTitle,
+                        artist: resolvedArtist,
+                        originalTitle: originalTitle,
+                        originalArtist: originalArtist,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        album: album
+                    )
+                }
+            }
+
+            for await result in group {
+                guard let result else { continue }
+                probeResults.append(result)
+                if result.kind == .synced,
+                   result.score >= 70,
+                   selectedHasPersistentIdentity(result) {
+                    group.cancelAll()
+                    break
+                }
+            }
+        }
+        return selectBestResult(from: probeResults, songDuration: duration)
     }
 
     private func fetchNativeTitleAliasWitnessBackfill(
@@ -1446,6 +1457,9 @@ public final class LyricsFetcher {
         var searches: [(query: String, albumScoped: Bool, requiresTitleAlbumEcho: Bool)] = [
             ("\(title) \(cjkArtist)", false, false)
         ]
+        if let primaryTitle, !titleCollaborators.isEmpty {
+            searches.insert(("\(primaryTitle) \(titleCollaborators.joined(separator: " ")) \(asciiArtist)", false, false), at: 0)
+        }
         if let primaryTitle {
             if !titleCollaborators.isEmpty {
                 searches.insert(("\(primaryTitle) \(titleCollaborators.joined(separator: " ")) \(cjkArtist)", false, false), at: 0)

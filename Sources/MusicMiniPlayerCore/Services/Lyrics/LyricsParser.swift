@@ -1203,7 +1203,9 @@ public final class LyricsParser {
                 "作词", "作曲", "编曲", "制作", "制作人", "混音", "录音", "演唱",
                 "演奏", "和声", "键盘", "吉他", "贝斯", "鼓手", "提琴", "弦乐",
                 "监制", "母带", "母帶", "編曲", "作詞", "作曲", "製作", "錄音",
-                "词", "曲", "詞", "編", "唱", "演", "奏", "鼓", "鼓組", "鼓组"
+                "出品", "出品方", "出品公司", "发行", "發行", "发行方", "發行方",
+                "版权", "版權", "词", "曲", "詞", "編", "唱", "演", "奏", "鼓",
+                "鼓組", "鼓组"
             ]
             let isCJKMetaLabel = cjkMetadataKeywords.contains(where: { labelTrimmed.contains($0) })
                 && labelTrimmed.count <= 12
@@ -1215,7 +1217,10 @@ public final class LyricsParser {
                                 "compos", "writ", "lyric", "perform", "engineer", "instrument",
                                 "drum", "bass", "guitar", "keyboard", "publisher", "copyright"]
             let isRoleLabel = roleKeywords.contains(where: { labelLower.contains($0) })
-            let explicitCreditLabels: Set<String> = ["sp", "op", "isrc", "iswc", "版权", "發行", "发行"]
+            let explicitCreditLabels: Set<String> = [
+                "sp", "op", "isrc", "iswc", "版权", "版權", "發行", "发行",
+                "发行方", "發行方", "出品", "出品方", "出品公司"
+            ]
             if hasSeparators || isCJKMetaLabel || hasLocationMarker || isRoleLabel {
                 return true
             }

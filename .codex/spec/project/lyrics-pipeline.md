@@ -103,11 +103,48 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   guarded bridge/background authoritative lookup available, but cut off the
   empty foreground path before 3s so source-unavailable tracks do not feel
   stuck.
+- Foreground lyrics resolution and app-side authoritative backfill are separate
+  latency budgets. The foreground source race must stay bounded for the visible
+  track switch, while authoritative rescue probes for English-title
+  CJK/native-title cases must run as concurrent, cancellable probes instead of
+  serially stacking album-title echo, album-scoped metadata, resolved metadata,
+  native-alias witness, and secondary library retries. Accept the first trusted
+  title/duration/persistent-identity result and cancel the remaining rescue
+  work; do not hold visible UX for a slow miss.
+- A foreground verifier pass under 3s is not proof that the app feels fast.
+  App backfill can still create a 7-10s tail if rescue probes are serialized.
+  Keep the accurate native-title probes, but parallelize and diagnose them
+  rather than removing alias evidence or weakening selection thresholds.
+- Exact synced foreground results may shorten the source race only when the
+  selected candidate has exact title evidence, tight duration evidence, and
+  passes normal result selection, and the visible metadata is not in a
+  CJK/native/romanized-protected path. CJK titles, CJK artists/albums, and
+  ASCII native-alias probes must still preserve the landing window for native
+  provider evidence. This keeps English-title CJK tracks fast when a trusted
+  library or provider result is already decisive without regressing native
+  alias accuracy.
 - When an album hint exists but direct album-catalog identity is unavailable,
   English-title/native-title alias selection may accept an unscoped provider
   alternate CJK title only with confirmed CJK artist identity, tight duration,
   alias-title search provenance, and conservative semantic title evidence.
   Generic English token overlap is not enough.
+- Provider-ranked native-title rows may also prove a short ASCII storefront
+  title when the provider itself returns a top-ranked CJK title with confirmed
+  CJK artist evidence, tight duration, safe query provenance, and no competing
+  same-artist title evidence. This is a generalized evidence rule for cases
+  where `title+artist`, `title+album+artist`, or a top QQ `title only` row
+  exposes the native title; it must not become a song whitelist or a broad
+  artist-only escape.
+- Search normalization and search evidence are different things. Strip noisy
+  media/version descriptors for title identity, but preserve discriminating CJK
+  work titles inside descriptors such as `(...电视剧《作品名》原声带版)` as a
+  bounded search keyword. This lets provider search find soundtrack rows without
+  making the descriptor part of title matching.
+- Featured collaborators in the visible title are identity evidence. When an
+  ASCII title contains `feat`/`ft`/`featuring`/`with`, build a collaboration
+  search phrase from the primary title plus collaborator tokens, and pass the
+  original title into candidate selection so that a same-title wrong artist does
+  not beat a native-title row whose artist list contains the collaborator.
 - A full provider `title+artist` query may bridge an ordinary English title to
   a provider alternate CJK catalog title only when the provider artist is the
   same non-compilation ASCII identity, the row is ranked at the top of the
@@ -147,6 +184,10 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   date, label, or copyright fields can arrive as timed lyric rows. Strip these
   as metadata before source-translation merging so they do not render, shift
   lyric timing, or create partial-translation diagnostics.
+- Timed provider credit rows with compact CJK labels such as `出品：...`,
+  `发行：...`, `版权：...`, and traditional variants are metadata, not lyrics.
+  Strip them using label semantics instead of fixed source IDs, so they cannot
+  appear as the first rendered lyric or suppress a real first line.
 - If several nearby-duration cache keys exist for the same metadata, read them
   as candidates and use the first result that passes current script/identity
   guards. A stale wrong-script cache row must not block a later verified
@@ -176,6 +217,10 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   already returned a trusted terminal classification (`instrumental` or
   `unavailable`). That wastes automation time and can make fixed terminal
   cases look slow even though the app foreground path is done.
+- App-side authoritative backfill must be cancellable and generation-gated by
+  current song ID. A slow miss from an old track must not apply `No Lyrics`,
+  record unavailable diagnostics, or keep background provider work alive after
+  the user has switched to a different song.
 
 ## Lyrics Page UI
 

@@ -759,6 +759,7 @@ final class LyricsParserTests: XCTestCase {
         let lines = [
             LyricLine(text: "鼓：吉田佳史 (TRICERATOPS) (Yoshifumi Yoshida(TRICERATOPS))", startTime: 9.1, endTime: 12.0),
             LyricLine(text: "SP: Warner Chappell Music, Hong Kong Limited Taiwan Branch", startTime: 8.0, endTime: 11.0),
+            LyricLine(text: "出品：Negia Entertainment Inc.", startTime: 17.65, endTime: 20.0),
             LyricLine(text: "一路上走走停停", startTime: 24.0, endTime: 28.0),
             LyricLine(text: "Good at breaking hearts", startTime: 5.2, endTime: 8.0),
         ]

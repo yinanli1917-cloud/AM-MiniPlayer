@@ -1003,5 +1003,22 @@
       "firstLineStartMaxS": 30,
       "maxTailGapS": 40
     }
+  },
+  {
+    "id": "X34_english_title_cjk_library_fast_exit",
+    "title": "Lovers",
+    "artist": "Li Ronghao",
+    "duration": 275,
+    "album": "Lovers - Single",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["LRCLIB", "LRCLIB-Search", "NetEase", "QQ"],
+      "firstLineSHA256": "1f8b25f320b90b4095e554c346e630e0c4f3605aea9697e391509407f7630abb",
+      "acceptableFirstLineSHA256": ["ed9fb87053eb15fba8b431babfaf2aa572ffa9b0019baa706e160f5a41ddea0b"],
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 20,
+      "firstLineStartMaxS": 30,
+      "maxTailGapS": 55
+    }
   }
 ]

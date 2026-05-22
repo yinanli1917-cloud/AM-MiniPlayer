@@ -2,7 +2,7 @@
  * [INPUT]: Raw search results from NetEase/QQ APIs
  * [OUTPUT]: selectBestCandidate — unified priority-chain candidate matching with explicit title-evidence state
  * [POS]: Candidate selection sub-module of LyricsFetcher — SearchCandidate + matching + alias resolution
- * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, bounded English-title/native pinyin aliases, compilation-artist safety, and buildCandidates generic builder
+ * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, provider-ranked native title evidence, bounded English-title/native pinyin aliases, compilation-artist safety, and buildCandidates generic builder
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -167,6 +167,48 @@ extension LyricsFetcher {
             }
             return true
         }
+        let inputIsShortASCIIAlias = LanguageUtils.isPureASCII(inputTitle)
+            && inputWordCount >= 2
+            && inputWordCount <= 4
+            && !likelyJapaneseRomaji
+        let providerRankedNativeTitleAlias: (SearchCandidate<ID>) -> Bool = { candidate in
+            let candidateArtistHasCJK = candidate.artist.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) })
+            guard allowNativeTitleAlias,
+                  (aliasConfirmedCJK || candidateArtistHasCJK),
+                  inputIsShortASCIIAlias,
+                  candidate.artistMatch,
+                  candidate.resultIndex <= 1,
+                  candidate.durationDiff < 1.0,
+                  candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }),
+                  !hasSameArtistTitleEvidence,
+                  !isBackingTrack(candidate),
+                  !isUnsafeGenericCompilationArtist(candidate) else {
+                return false
+            }
+            return candidate.searchDescriptor.hasPrefix("title+artist")
+                || candidate.searchDescriptor.hasPrefix("title+album+artist")
+        }
+        let exactTopNativeTitleAlias: (SearchCandidate<ID>) -> Bool = { candidate in
+            let candidateArtistHasCJK = candidate.artist.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) })
+            guard allowNativeTitleAlias,
+                  (aliasConfirmedCJK || candidateArtistHasCJK),
+                  inputIsShortASCIIAlias,
+                  candidate.artistMatch,
+                  candidate.resultIndex == 0,
+                  candidate.normalizedNameLength <= 8,
+                  candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }),
+                  !hasSameArtistTitleEvidence,
+                  !isBackingTrack(candidate),
+                  !isUnsafeGenericCompilationArtist(candidate) else {
+                return false
+            }
+            if candidate.searchDescriptor == "title only" {
+                return sourceIsQQ && inputWordCount >= 3 && candidate.durationDiff < 1.0
+            }
+            guard candidate.durationDiff < 0.35 else { return false }
+            return candidate.searchDescriptor == "artist only"
+                || candidate.searchDescriptor.hasPrefix("alias artist only")
+        }
 
         // 按优先级递减尝试
         let priorities: [(String, Int, (SearchCandidate<ID>) -> Bool)] = [
@@ -187,6 +229,9 @@ extension LyricsFetcher {
             }),
             ("P1d", 0, { candidate in
                 providerLocalizedTitleAlias(candidate)
+            }),
+            ("P1f", 1, { candidate in
+                providerRankedNativeTitleAlias(candidate)
             }),
             ("P1b", 1, { candidate in
                 guard allowNativeTitleAlias else { return false }
@@ -277,6 +322,9 @@ extension LyricsFetcher {
                 guard candidate.durationDiff < 1.25 else { return false }
                 return !isBackingTrack(candidate)
             }),
+            ("P2e", 2, { candidate in
+                exactTopNativeTitleAlias(candidate)
+            }),
             ("P2loose", 2, { candidate in
                 guard candidate.titleMatch,
                       candidate.artistMatch,
@@ -365,16 +413,16 @@ extension LyricsFetcher {
 
         if let winner = chosen {
             DebugLogger.log(source, "✅ \(winner.label): '\(winner.candidate.name)' by '\(winner.candidate.artist)' alb='\(winner.candidate.album)' q='\(winner.candidate.searchDescriptor)' AL=\(winner.candidate.albumMatch) L=\(winner.candidate.normalizedNameLength) Δ\(String(format: "%.1f", winner.candidate.durationDiff))s")
+            let nativeAliasLabels: Set<String> = ["P1d", "P1f", "P2d", "P2e"]
             return SelectedSearchCandidate(
                 id: winner.candidate.id,
                 title: winner.candidate.name,
                 artist: winner.candidate.artist,
                 albumMatched: winner.candidate.albumMatch,
-                titleMatched: winner.candidate.titleMatch || winner.candidate.albumMatch || winner.label == "P1d",
+                titleMatched: winner.candidate.titleMatch || winner.candidate.albumMatch || nativeAliasLabels.contains(winner.label),
                 nativeAliasMatched: !winner.candidate.titleMatch && (
                     (winner.rank == 1 && !winner.candidate.albumMatch)
-                        || winner.label == "P1d"
-                        || winner.label == "P2d"
+                        || nativeAliasLabels.contains(winner.label)
                         || winner.candidate.searchDescriptor.hasPrefix("alias artist only")
                         || winner.candidate.searchDescriptor.hasPrefix("alias album+artist")
                 ),
@@ -746,6 +794,20 @@ extension LyricsFetcher {
                 keywords.append((keyword, label))
             }
         }
+        if let collaborationQuery = Self.collaborationEvidenceTitleQuery(from: params.rawTitle) {
+            appendKeyword("\(collaborationQuery) \(params.rawArtist)", "title+artist-collaboration")
+        }
+        if params.rawOriginalTitle != params.rawTitle,
+           let collaborationQuery = Self.collaborationEvidenceTitleQuery(from: params.rawOriginalTitle) {
+            appendKeyword("\(collaborationQuery) \(params.rawOriginalArtist)", "original-collaboration")
+        }
+        if let descriptorTerms = Self.cjkMediaDescriptorSearchTerms(from: params.rawTitle) {
+            appendKeyword("\(params.simplifiedTitle) \(descriptorTerms) \(params.simplifiedArtist)", "title+media-descriptor+artist")
+        }
+        if params.rawOriginalTitle != params.rawTitle,
+           let descriptorTerms = Self.cjkMediaDescriptorSearchTerms(from: params.rawOriginalTitle) {
+            appendKeyword("\(params.simplifiedOriginalTitle) \(descriptorTerms) \(params.simplifiedOriginalArtist)", "original-media-descriptor")
+        }
         for variant in Self.englishContractionVariants(params.rawTitle) {
             let normalizedVariant = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(variant))
             let kw = "\(normalizedVariant) \(params.simplifiedArtist)"
@@ -850,7 +912,7 @@ extension LyricsFetcher {
                     if let match = self.selectBestCandidate(
                         candidates,
                         source: source,
-                        inputTitle: params.simplifiedTitle,
+                        inputTitle: params.rawTitle,
                         inputArtist: params.rawArtist,
                         disableCjkEscape: params.disableCjkEscapeInP3,
                         hasAlbumHint: !params.normalizedAlbum.isEmpty,
@@ -904,7 +966,7 @@ extension LyricsFetcher {
                         if let match = self.selectBestCandidate(
                             candidates,
                             source: source,
-                            inputTitle: params.simplifiedTitle,
+                            inputTitle: params.rawTitle,
                             inputArtist: params.rawArtist,
                             disableCjkEscape: params.disableCjkEscapeInP3,
                             aliasConfirmedCJK: true,
@@ -939,6 +1001,9 @@ extension LyricsFetcher {
                             (cjkArtist, "alias artist only:\(cjkArtist)")
                         ]
                         var aliasProbes = probes
+                        if let collaborationQuery = Self.collaborationEvidenceTitleQuery(from: params.rawTitle) {
+                            aliasProbes.insert(("\(collaborationQuery) \(asciiProbe)", "alias+title-collaboration:\(cjkArtist)"), at: 0)
+                        }
                         if !params.normalizedAlbum.isEmpty {
                             aliasProbes.append(("\(params.normalizedAlbum) \(cjkArtist)", "alias album+artist:\(cjkArtist)"))
                         }
@@ -958,7 +1023,7 @@ extension LyricsFetcher {
                                 let candidates = self.buildCandidates(
                                     songs: songs, params: aliasParams, searchDescriptor: desc, extractSong: extractSong
                                 )
-                                if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, aliasConfirmedCJK: true, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: true, allowCompilationAlbumFallback: allowCompilationAlbumFallback) {
+                                if let m = self.selectBestCandidate(candidates, source: source, inputTitle: params.rawTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, aliasConfirmedCJK: true, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: true, allowCompilationAlbumFallback: allowCompilationAlbumFallback) {
                                     return (m, desc, Self.keywordPriority(desc))
                                 }
                             } catch {
@@ -985,9 +1050,10 @@ extension LyricsFetcher {
                             || desc.hasPrefix("original")
                             || desc.hasPrefix("traditional")
                             || desc.hasPrefix("dual-")
+                            || desc == "title only"
                             || desc == "artist only"
                             || desc.hasPrefix("romaji-stem+artist")
-                        if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.simplifiedTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: allowNativeTitleAlias, allowCompilationAlbumFallback: allowCompilationAlbumFallback) {
+                        if let match = self.selectBestCandidate(candidates, source: source, inputTitle: params.rawTitle, inputArtist: params.rawArtist, disableCjkEscape: params.disableCjkEscapeInP3, hasAlbumHint: !params.normalizedAlbum.isEmpty, allowNativeTitleAlias: allowNativeTitleAlias, allowCompilationAlbumFallback: allowCompilationAlbumFallback) {
                             return (match, desc, Self.keywordPriority(desc))
                         }
                     } catch {
@@ -1074,6 +1140,81 @@ extension LyricsFetcher {
         }
 
         return Array(NSOrderedSet(array: variants).compactMap { $0 as? String }).prefix(4).map { $0 }
+    }
+
+    static func collaborationEvidenceTitleQuery(from title: String) -> String? {
+        guard LanguageUtils.isPureASCII(title) else { return nil }
+        let lower = title.lowercased()
+        let markers = [" feat. ", " feat ", " featuring ", " ft. ", " ft ", " with ", "(feat.", "(feat ", "(featuring ", "(ft.", "(ft ", "[feat.", "[feat "]
+        guard let markerRange = markers
+            .compactMap({ marker -> Range<String.Index>? in lower.range(of: marker) })
+            .min(by: { $0.lowerBound < $1.lowerBound }) else {
+            return nil
+        }
+        let primary = String(title[..<markerRange.lowerBound])
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "([{-–—")))
+        guard primary.count >= 2 else { return nil }
+        var suffix = String(title[markerRange.upperBound...])
+        if let end = suffix.firstIndex(where: { [")", "]", "}", "）"].contains(String($0)) }) {
+            suffix = String(suffix[..<end])
+        }
+        let separators = [" & ", " and ", " x ", " X ", ",", "/", "+", "、", "，"]
+        var parts = [suffix]
+        for separator in separators {
+            parts = parts.flatMap { $0.components(separatedBy: separator) }
+        }
+        let collaborators = parts
+            .map { $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".:-–—()[]{}"))) }
+            .filter { !$0.isEmpty }
+        guard !collaborators.isEmpty else { return nil }
+        return ([primary] + collaborators).joined(separator: " ")
+    }
+
+    static func cjkMediaDescriptorSearchTerms(from title: String) -> String? {
+        let mediaMarkers = ["电视剧", "電視劇", "电影", "電影", "原声", "原聲", "插曲", "主题曲", "主題曲", "片头", "片頭", "片尾", "片名曲", "ost"]
+        let pattern = #"[（(]([^）)]{2,})[）)]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsTitle = title as NSString
+        let matches = regex.matches(in: title, range: NSRange(location: 0, length: nsTitle.length))
+        for match in matches {
+            guard match.numberOfRanges >= 2 else { continue }
+            let segment = nsTitle.substring(with: match.range(at: 1))
+            let lower = segment.lowercased()
+            guard LanguageUtils.containsCJK(segment),
+                  mediaMarkers.contains(where: { lower.contains($0.lowercased()) }) else { continue }
+            if let quoted = firstQuotedCJKPhrase(in: segment) {
+                return quoted
+            }
+            let cleaned = mediaMarkers.reduce(segment) { partial, marker in
+                partial.replacingOccurrences(of: marker, with: " ")
+            }
+            let tokens = cleaned
+                .components(separatedBy: CharacterSet(charactersIn: "《》「」『』【】[]·・:：_-—–/|｜"))
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { token in
+                    token.unicodeScalars.filter { LanguageUtils.isCJKScalar($0) }.count >= 2
+                }
+            if let first = tokens.first {
+                return first
+            }
+        }
+        return nil
+    }
+
+    private static func firstQuotedCJKPhrase(in text: String) -> String? {
+        let patterns = [#"《([^》]{2,})》"#, #"「([^」]{2,})」"#, #"『([^』]{2,})』"#]
+        let nsText = text as NSString
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+                  match.numberOfRanges >= 2 else { continue }
+            let phrase = nsText.substring(with: match.range(at: 1))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if phrase.unicodeScalars.filter({ LanguageUtils.isCJKScalar($0) }).count >= 2 {
+                return phrase
+            }
+        }
+        return nil
     }
 
     // MARK: - Romaji Particle Stem

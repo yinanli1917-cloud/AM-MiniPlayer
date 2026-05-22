@@ -35,4 +35,11 @@ final class LanguageUtilsTests: XCTestCase {
             LanguageUtils.normalizeTrackName("Boys Don't Cry")
         )
     }
+
+    func testNormalizeTrackNameStripsAsciiParenthesizedCJKMediaDescriptor() {
+        XCTAssertEqual(
+            LanguageUtils.normalizeTrackName("叶子 (电视剧《蔷薇之恋》原声带版)"),
+            "叶子"
+        )
+    }
 }

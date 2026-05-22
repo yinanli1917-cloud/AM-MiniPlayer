@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 Lyrics/ 子模块 (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver)
  * [OUTPUT]: 歌词服务单例，提供 lyrics/currentLineIndex/翻译状态 等 @Published 属性
  * [POS]: Services/ 的歌词服务门面，协调子模块完成歌词获取/解析/翻译
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md; keep foreground and authoritative backfill work cancellable on track changes
  */
 
 import Foundation
@@ -147,6 +147,8 @@ public class LyricsService: ObservableObject {
     private var lastSystemTranslationLanguage: String?
 
     private var currentFetchTask: Task<Void, Never>?
+    private var currentBackfillTask: Task<Void, Never>?
+    private var currentBackfillGeneration: UInt64 = 0
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
     private var currentStableSongID: String?
 
@@ -370,6 +372,7 @@ public class LyricsService: ObservableObject {
         // (performFetch still caches results if already past the network call.)
         currentFetchTask?.cancel()
         currentFetchTask = nil
+        cancelCurrentBackfill()
 
         // 检查缓存（带过期检查）
         if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
@@ -445,6 +448,7 @@ public class LyricsService: ObservableObject {
         guard !Task.isCancelled else { return }
 
         // 并行获取所有歌词源
+        let foregroundStartedAt = Date()
         let results = await fetcher.fetchAllSources(
             title: title,
             artist: artist,
@@ -452,6 +456,7 @@ public class LyricsService: ObservableObject {
             translationEnabled: showTranslation,
             album: album
         )
+        let foregroundFetchSeconds = Date().timeIntervalSince(foregroundStartedAt)
 
         // 选择最佳结果 — 需要完整结果以读取 kind (synced/unsynced) 供自动滚动守卫使用
         let bestResult = fetcher.selectBestResult(from: results, songDuration: duration)
@@ -501,7 +506,9 @@ public class LyricsService: ObservableObject {
                 artist: artist,
                 duration: duration,
                 album: album,
-                songID: songID
+                songID: songID,
+                foregroundFetchSeconds: foregroundFetchSeconds,
+                foregroundResultCount: results.count
             )
             return
         }
@@ -513,7 +520,9 @@ public class LyricsService: ObservableObject {
                 artist: artist,
                 duration: duration,
                 album: album,
-                songID: songID
+                songID: songID,
+                foregroundFetchSeconds: foregroundFetchSeconds,
+                foregroundResultCount: results.count
             )
         }
     }
@@ -576,57 +585,144 @@ public class LyricsService: ObservableObject {
         artist: String,
         duration: TimeInterval,
         album: String,
-        songID: String
+        songID: String,
+        foregroundFetchSeconds: TimeInterval,
+        foregroundResultCount: Int
     ) {
-        let wantsTranslation = showTranslation
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
-            guard let backfill = await self.fetcher.backfillAuthoritativeLyrics(
+            guard self.currentSongID == songID else { return }
+            self.cancelCurrentBackfill()
+            self.currentBackfillGeneration &+= 1
+            let generation = self.currentBackfillGeneration
+            let wantsTranslation = self.showTranslation
+            self.recordDiagnosticsLyricsBackfillStarted(
                 title: title,
                 artist: artist,
+                album: album,
                 duration: duration,
-                translationEnabled: wantsTranslation,
-                album: album
-            ) else {
-                DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
-                await MainActor.run {
-                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
-                }
-                return
-            }
-            switch backfill {
-            case .lyrics(let backfilled):
-                await self.applyFetchedLyricsIfCurrent(
-                    backfilled,
+                foregroundFetchSeconds: foregroundFetchSeconds,
+                foregroundResultCount: foregroundResultCount
+            )
+
+            let task = Task.detached(priority: .utility) { [weak self] in
+                guard let self else { return }
+                guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
+
+                guard let backfill = await self.fetcher.backfillAuthoritativeLyrics(
                     title: title,
                     artist: artist,
                     duration: duration,
-                    songID: songID,
+                    translationEnabled: wantsTranslation,
                     album: album
-                )
-            case .instrumental:
-                self.recordDiagnosticsLyricsUnavailable(
-                    title: title,
-                    artist: artist,
-                    album: album,
-                    duration: duration,
-                    classification: "instrumental"
-                )
-                await MainActor.run {
-                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+                ) else {
+                    guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
+                    DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
+                    self.recordDiagnosticsLyricsBackfillFinished(
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        duration: duration,
+                        result: "miss",
+                        source: nil,
+                        score: nil,
+                        lineCount: 0
+                    )
+                    await MainActor.run {
+                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                    }
+                    await self.clearBackfillIfCurrent(generation: generation)
+                    return
                 }
-            case .unavailable:
-                self.recordDiagnosticsLyricsUnavailable(
-                    title: title,
-                    artist: artist,
-                    album: album,
-                    duration: duration,
-                    classification: "unavailable"
-                )
-                await MainActor.run {
-                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+
+                guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
+                switch backfill {
+                case .lyrics(let backfilled):
+                    self.recordDiagnosticsLyricsBackfillFinished(
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        duration: duration,
+                        result: "lyrics",
+                        source: backfilled.source,
+                        score: backfilled.score,
+                        lineCount: backfilled.lyrics.count
+                    )
+                    await self.applyFetchedLyricsIfCurrent(
+                        backfilled,
+                        title: title,
+                        artist: artist,
+                        duration: duration,
+                        songID: songID,
+                        album: album
+                    )
+                case .instrumental:
+                    self.recordDiagnosticsLyricsBackfillFinished(
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        duration: duration,
+                        result: "instrumental",
+                        source: nil,
+                        score: nil,
+                        lineCount: 0
+                    )
+                    self.recordDiagnosticsLyricsUnavailable(
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        duration: duration,
+                        classification: "instrumental"
+                    )
+                    await MainActor.run {
+                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+                    }
+                case .unavailable:
+                    self.recordDiagnosticsLyricsBackfillFinished(
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        duration: duration,
+                        result: "unavailable",
+                        source: nil,
+                        score: nil,
+                        lineCount: 0
+                    )
+                    self.recordDiagnosticsLyricsUnavailable(
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        duration: duration,
+                        classification: "unavailable"
+                    )
+                    await MainActor.run {
+                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                    }
                 }
+                await self.clearBackfillIfCurrent(generation: generation)
             }
+            self.currentBackfillTask = task
+        }
+    }
+
+    @MainActor
+    private func cancelCurrentBackfill() {
+        currentBackfillGeneration &+= 1
+        currentBackfillTask?.cancel()
+        currentBackfillTask = nil
+    }
+
+    @MainActor
+    private func isCurrentBackfill(generation: UInt64, songID: String) -> Bool {
+        !Task.isCancelled
+            && currentBackfillGeneration == generation
+            && currentSongID == songID
+    }
+
+    @MainActor
+    private func clearBackfillIfCurrent(generation: UInt64) {
+        if currentBackfillGeneration == generation {
+            currentBackfillTask = nil
         }
     }
 
@@ -835,6 +931,46 @@ public class LyricsService: ObservableObject {
         }
     }
 
+    private func recordDiagnosticsLyricsBackfillStarted(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval,
+        foregroundFetchSeconds: TimeInterval,
+        foregroundResultCount: Int
+    ) {
+        let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
+        Task { @MainActor in
+            DiagnosticsService.shared.recordLyricsBackfillStarted(
+                track: track,
+                foregroundFetchSeconds: foregroundFetchSeconds,
+                foregroundResultCount: foregroundResultCount
+            )
+        }
+    }
+
+    private func recordDiagnosticsLyricsBackfillFinished(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval,
+        result: String,
+        source: String?,
+        score: Double?,
+        lineCount: Int
+    ) {
+        let track = diagnosticsTrack(title: title, artist: artist, album: album, duration: duration)
+        Task { @MainActor in
+            DiagnosticsService.shared.recordLyricsBackfillFinished(
+                track: track,
+                result: result,
+                source: source,
+                score: score,
+                lineCount: lineCount
+            )
+        }
+    }
+
     private func recordDiagnosticsLyricsUnavailable(
         title: String,
         artist: String,
@@ -976,6 +1112,10 @@ public class LyricsService: ObservableObject {
         let isFillingPartialSourceTranslations = translationsAreFromLyricsSource && isTargetChinese
         if isTargetChinese && lyricsArePredominantlyChinese() { return nil }
         if !isFillingPartialSourceTranslations && lyricsAreInTargetLanguage() { return nil }
+        if isFillingPartialSourceTranslations && !Self.hasMissingEligibleTranslations(lyrics) {
+            translationFailed = false
+            return nil
+        }
 
         let targetLanguageID = Self.normalizedSystemTranslationLanguage(translationLanguage)
         let translationID = "\(currentSongID ?? "")-\(targetLanguageID)"

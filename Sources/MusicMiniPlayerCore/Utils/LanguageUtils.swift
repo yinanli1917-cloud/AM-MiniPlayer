@@ -363,6 +363,8 @@ public extension LanguageUtils {
             #"\s*\((feat|ft)\.?[^)]*\)"#,
             // 🔑 支持 "(2021 Remaster)" 等年份在前的变体
             #"\s*\((\d+\s+)?(with|remaster|live|acoustic|remix|radio|deluxe|cover|extended|original|official|bonus|edit|clean|explicit|instrumental|karaoke|from\s+|ost|theme|soundtrack|full\s*version)[^)]*\)"#,
+            // ASCII parentheses can still contain CJK soundtrack descriptors.
+            #"\s*\([^)]*(电视剧|電視劇|电影|電影|原声|原聲|插曲|主题曲|主題曲|片头|片頭|片尾|片尾曲|片頭曲|片名曲|版)[^)]*\)"#,
             // 中文全角括号
             #"\s*（[^）]*）"#,
             #"\s*《[^》]*》"#,

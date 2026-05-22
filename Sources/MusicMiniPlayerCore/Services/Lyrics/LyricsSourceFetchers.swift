@@ -127,7 +127,7 @@ extension LyricsFetcher {
             "Referer": "https://music.163.com"
         ]
         guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
-            "s": cjkArtist, "type": "1", "limit": "12"
+            "s": cjkArtist, "type": "1", "limit": "30"
         ]) else { return nil }
         guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 1.4, retry: false),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -144,7 +144,7 @@ extension LyricsFetcher {
             let resultIndex: Int
         }
 
-        let candidates = songs.prefix(10).enumerated().compactMap { index, song -> EchoCandidate? in
+        let candidates = songs.prefix(30).enumerated().compactMap { index, song -> EchoCandidate? in
             guard let id = song["id"] as? Int,
                   let name = song["name"] as? String,
                   let albumName = (song["album"] as? [String: Any])?["name"] as? String,

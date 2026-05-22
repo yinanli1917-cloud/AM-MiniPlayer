@@ -947,6 +947,70 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertNil(selected)
     }
 
+    func testProviderTitleArtistNativeAliasUsesConfirmedCJKArtistEvidence() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 276_461,
+                name: "告诉我",
+                artist: "陈绮贞",
+                album: "还是会寂寞",
+                durationDiff: 0.7,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 3,
+                resultIndex: 0,
+                searchDescriptor: "title+artist"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Tell Me",
+            inputArtist: "Cheer Chen",
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 276_461)
+        XCTAssertTrue(selected?.titleMatched == true)
+        XCTAssertTrue(selected?.nativeAliasMatched == true)
+    }
+
+    func testTopExactNativeTitleOnlyCandidateUsesConfirmedCJKArtistEvidence() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 3_006_001,
+                name: "鼻鼻",
+                artist: "文兆杰",
+                album: "其后",
+                durationDiff: 0.8,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 2,
+                resultIndex: 0,
+                searchDescriptor: "title only"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "QQMusic",
+            inputTitle: "For my Doggie",
+            inputArtist: "Wen Zhaojie",
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 3_006_001)
+        XCTAssertTrue(selected?.titleMatched == true)
+        XCTAssertTrue(selected?.nativeAliasMatched == true)
+    }
+
     func testAlbumHintAllowsSemanticEnglishNativeTitleAlias() {
         let fetcher = LyricsFetcher.shared
         let candidates = [
@@ -1337,6 +1401,69 @@ final class LyricsSelectionTests: XCTestCase {
             inputArtist: "deca joins",
             allowNativeTitleAlias: true
         ))
+    }
+
+    func testCollaborationEvidenceTitleQueryPreservesFeaturedArtistTokens() {
+        XCTAssertEqual(
+            LyricsFetcher.collaborationEvidenceTitleQuery(from: "Distance (feat. deca joins)"),
+            "Distance deca joins"
+        )
+        XCTAssertEqual(
+            LyricsFetcher.collaborationEvidenceTitleQuery(from: "Song ft. Artist A & Artist B"),
+            "Song Artist A Artist B"
+        )
+    }
+
+    func testCJKMediaDescriptorSearchTermsKeepQuotedWorkTitle() {
+        XCTAssertEqual(
+            LyricsFetcher.cjkMediaDescriptorSearchTerms(from: "叶子 (电视剧《蔷薇之恋》原声带版)"),
+            "蔷薇之恋"
+        )
+    }
+
+    func testFeaturedTitleNativeAliasBeatsWrongExactTitleWhenCollaboratorMatches() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 1_920_623_031,
+                name: "最好的距离",
+                artist: "郑宜农/deca joins",
+                album: "水逆",
+                durationDiff: 0.5,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: false,
+                normalizedNameLength: 5,
+                resultIndex: 0,
+                searchDescriptor: "title+artist-collaboration"
+            ),
+            LyricsFetcher.SearchCandidate(
+                id: 812_124,
+                name: "distance",
+                artist: "ラムジ",
+                album: "好きだから",
+                durationDiff: 7.7,
+                titleMatch: true,
+                artistMatch: false,
+                albumMatch: false,
+                normalizedNameLength: 8,
+                resultIndex: 2,
+                searchDescriptor: "title+artist-collaboration"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "Distance (feat. deca joins)",
+            inputArtist: "Enno Cheng",
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertEqual(selected?.id, 1_920_623_031)
+        XCTAssertTrue(selected?.titleMatched == true)
+        XCTAssertTrue(selected?.nativeAliasMatched == true)
     }
 
     func testSingleWordEnglishTitleUsesOnlyTightNativeArtistAlias() {
