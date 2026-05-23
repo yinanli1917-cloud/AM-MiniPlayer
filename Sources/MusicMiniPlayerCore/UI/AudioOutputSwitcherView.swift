@@ -9,13 +9,12 @@ struct AudioOutputSwitcherView: View {
     @StateObject private var outputService = AudioOutputDeviceService.shared
     @Namespace private var glassNamespace
     @State private var isPanelPresented = false
-    @State private var isTriggerHovering = false
-    @State private var isTriggerPressed = false
     @State private var hoveredDeviceID: AudioDeviceID?
     @State private var failedDeviceID: AudioDeviceID?
     @State private var selectionPulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -41,9 +40,7 @@ struct AudioOutputSwitcherView: View {
                     }
                 }
         )
-        .modifier(AudioOutputGlassGroup(spacing: 10))
         .animation(panelAnimation, value: isPanelPresented)
-        .animation(reduceMotion ? .linear(duration: 0.1) : .smooth(duration: 0.18), value: isTriggerHovering)
         .onExitCommand { dismissPanel() }
         .help("Switch audio output")
         .accessibilityLabel("Switch audio output")
@@ -72,31 +69,24 @@ struct AudioOutputSwitcherView: View {
     }
 
     private var triggerButton: some View {
-        Button {
-            togglePanel()
-        } label: {
-            Image(systemName: currentSymbolName)
+        HoverableActionButton(
+            action: togglePanel,
+            label: AnyView(
+                Image(systemName: currentSymbolName)
                 .font(.system(size: 13, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
                 .contentTransition(.symbolEffect(.replace))
                 .symbolEffect(.bounce, value: selectionPulse)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .scaleEffect(triggerIconScale)
-                .contentShape(Capsule())
-                .modifier(GlassButtonBackground(luminance: artworkBrightness))
-        }
-        .buttonStyle(.plain)
+            ),
+            helpText: "Switch audio output",
+            accessibilityText: "Switch audio output",
+            artworkBrightness: artworkBrightness,
+            isAlbumPage: isAlbumPage
+        )
         .modifier(AudioOutputNonDraggable())
         .onHover { hovering in
-            updateTriggerHover(hovering)
             if hovering { outputService.refresh() }
         }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in setTriggerPressed(true) }
-                .onEnded { _ in setTriggerPressed(false) }
-        )
     }
 
     private var routePanel: some View {
@@ -126,7 +116,8 @@ struct AudioOutputSwitcherView: View {
         .modifier(AudioOutputNonDraggable())
         .modifier(AudioOutputPanelGlass(
             namespace: glassNamespace,
-            reduceTransparency: reduceTransparency
+            reduceTransparency: reduceTransparency,
+            increaseContrast: colorSchemeContrast == .increased
         ))
     }
 
@@ -223,14 +214,6 @@ struct AudioOutputSwitcherView: View {
         return CGFloat(rows * 38) + 14 + errorHeight
     }
 
-    private var triggerIconScale: CGFloat {
-        if isTriggerPressed { return 0.88 }
-        if selectionPulse { return 1.07 }
-        if isPanelPresented { return 1.03 }
-        if isTriggerHovering { return 1.05 }
-        return 1.0
-    }
-
     private var panelAnimation: Animation {
         reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.30, dampingFraction: 0.82)
     }
@@ -283,27 +266,6 @@ struct AudioOutputSwitcherView: View {
         }
     }
 
-    private func updateTriggerHover(_ hovering: Bool) {
-        if reduceMotion {
-            isTriggerHovering = hovering
-        } else {
-            withAnimation(.smooth(duration: 0.16)) {
-                isTriggerHovering = hovering
-            }
-        }
-    }
-
-    private func setTriggerPressed(_ pressed: Bool) {
-        guard isTriggerPressed != pressed else { return }
-        if reduceMotion {
-            isTriggerPressed = pressed
-        } else {
-            withAnimation(.spring(response: pressed ? 0.10 : 0.22, dampingFraction: 0.74)) {
-                isTriggerPressed = pressed
-            }
-        }
-    }
-
     private func updateHoveredDevice(_ deviceID: AudioDeviceID?) {
         if reduceMotion {
             hoveredDeviceID = deviceID
@@ -320,13 +282,16 @@ struct AudioOutputSwitcherView: View {
 
     private func routeIconForeground(isCurrent: Bool, hasError: Bool) -> Color {
         if hasError { return .orange }
-        return isCurrent ? .accentColor : .primary.opacity(colorScheme == .dark ? 0.86 : 0.72)
+        if isCurrent { return .accentColor }
+        let opacity = colorSchemeContrast == .increased ? 0.94 : (colorScheme == .dark ? 0.86 : 0.72)
+        return .primary.opacity(opacity)
     }
 
     private func routeIconFill(isCurrent: Bool, isHovering: Bool) -> Color {
-        if isCurrent { return Color.accentColor.opacity(0.16) }
-        if isHovering { return Color.black.opacity(0.065) }
-        return Color.white.opacity(colorScheme == .dark ? 0.10 : 0.34)
+        let highContrast = colorSchemeContrast == .increased || reduceTransparency
+        if isCurrent { return Color.accentColor.opacity(highContrast ? 0.24 : 0.16) }
+        if isHovering { return Color.primary.opacity(highContrast ? 0.12 : 0.07) }
+        return Color.white.opacity(highContrast ? 0.48 : (colorScheme == .dark ? 0.10 : 0.30))
     }
 
     private func rowBackground(isCurrent: Bool, isHovering: Bool) -> some View {
@@ -339,14 +304,16 @@ struct AudioOutputSwitcherView: View {
     }
 
     private func rowFill(isCurrent: Bool, isHovering: Bool) -> Color {
-        if isCurrent { return Color.white.opacity(colorScheme == .dark ? 0.22 : 0.54) }
-        if isHovering { return Color.black.opacity(0.07) }
+        let highContrast = colorSchemeContrast == .increased || reduceTransparency
+        if isCurrent { return Color.white.opacity(highContrast ? 0.68 : (colorScheme == .dark ? 0.22 : 0.44)) }
+        if isHovering { return Color.primary.opacity(highContrast ? 0.13 : 0.07) }
         return Color.clear
     }
 
     private func rowStroke(isCurrent: Bool, isHovering: Bool) -> Color {
-        if isCurrent { return Color.white.opacity(colorScheme == .dark ? 0.22 : 0.66) }
-        if isHovering { return Color.black.opacity(0.10) }
+        let highContrast = colorSchemeContrast == .increased || reduceTransparency
+        if isCurrent { return Color.white.opacity(highContrast ? 0.88 : (colorScheme == .dark ? 0.22 : 0.56)) }
+        if isHovering { return Color.primary.opacity(highContrast ? 0.22 : 0.10) }
         return Color.clear
     }
 }
@@ -367,67 +334,103 @@ private struct AudioOutputNonDraggableRepresentable: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-private struct AudioOutputGlassGroup: ViewModifier {
-    let spacing: CGFloat
-
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) {
-                content
-            }
-        } else {
-            content
-        }
-    }
-}
-
 private struct AudioOutputPanelGlass: ViewModifier {
     let namespace: Namespace.ID
     let reduceTransparency: Bool
+    let increaseContrast: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
 
         if #available(macOS 26.0, *) {
-            content
-                .background {
-                    shape
-                        .fill(reduceTransparency ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor).opacity(0.86)) : AnyShapeStyle(.regularMaterial))
-                        .overlay(shape.fill(Color.white.opacity(reduceTransparency ? 0.10 : 0.16)))
-                }
-                .overlay {
-                    shape.strokeBorder(Color.white.opacity(reduceTransparency ? 0.54 : 0.46), lineWidth: 0.75)
-                }
-                .shadow(color: .black.opacity(reduceTransparency ? 0.16 : 0.18), radius: 20, x: 0, y: 11)
-                .glassEffect(reduceTransparency ? .identity : .regular, in: shape)
-                .background {
-                    clearBackplate(shape: shape)
-                }
+            if reduceTransparency {
+                content
+                    .background {
+                        shape
+                            .fill(Color(nsColor: .windowBackgroundColor))
+                            .overlay(shape.fill(Color(nsColor: .controlBackgroundColor).opacity(0.72)))
+                    }
+                    .overlay {
+                        shape.strokeBorder(Color.primary.opacity(0.22), lineWidth: 1.0)
+                    }
+                    .shadow(color: .black.opacity(0.14), radius: 16, x: 0, y: 8)
+                    .glassEffect(.identity, in: shape)
+            } else {
+                content
+                    .background {
+                        shape.fill(panelTint)
+                    }
+                    .overlay {
+                        shape
+                            .strokeBorder(panelStroke, lineWidth: increaseContrast ? 1.0 : 0.75)
+                    }
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.24 : 0.16), radius: 22, x: 0, y: 12)
+                    .glassEffect(.regular, in: shape)
+                    .glassEffectID("audio-route-glass", in: namespace)
+            }
         } else {
             content
                 .background {
-                    shape
-                        .fill(reduceTransparency ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)) : AnyShapeStyle(.regularMaterial))
-                        .overlay(shape.fill(Color.white.opacity(0.18)))
+                    if reduceTransparency {
+                        shape
+                            .fill(Color(nsColor: .windowBackgroundColor))
+                            .overlay(shape.fill(Color(nsColor: .controlBackgroundColor).opacity(0.72)))
+                    } else {
+                        shape
+                            .fill(.regularMaterial)
+                            .overlay(shape.fill(panelTint))
+                    }
                 }
                 .overlay {
-                    shape.strokeBorder(Color.white.opacity(0.46), lineWidth: 0.75)
+                    shape.strokeBorder(reduceTransparency ? Color.primary.opacity(0.22) : panelStroke, lineWidth: increaseContrast ? 1.0 : 0.75)
                 }
-                .shadow(color: .black.opacity(0.18), radius: 20, x: 0, y: 11)
-                .background {
-                    shape
-                        .fill(.ultraThinMaterial)
-                        .overlay(shape.fill(Color.white.opacity(0.08)))
-                }
+                .shadow(color: .black.opacity(reduceTransparency ? 0.14 : 0.16), radius: reduceTransparency ? 16 : 22, x: 0, y: reduceTransparency ? 8 : 12)
         }
     }
 
-    @available(macOS 26.0, *)
-    private func clearBackplate(shape: RoundedRectangle) -> some View {
-        shape
-            .fill(Color.white.opacity(reduceTransparency ? 0 : 0.055))
-            .glassEffect(reduceTransparency ? .identity : .clear, in: shape)
-            .glassEffectID("audio-route-glass", in: namespace)
+    private var panelTint: Color {
+        if increaseContrast {
+            return colorScheme == .dark ? Color.black.opacity(0.20) : Color.white.opacity(0.18)
+        }
+        return colorScheme == .dark ? Color.black.opacity(0.12) : Color.white.opacity(0.08)
+    }
+
+    private var panelStroke: Color {
+        if increaseContrast {
+            return colorScheme == .dark ? Color.white.opacity(0.44) : Color.white.opacity(0.68)
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.26) : Color.white.opacity(0.42)
+    }
+}
+
+struct FloatingMenuBackdropBlur: ViewModifier {
+    let isActive: Bool
+    let reduceTransparency: Bool
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .blur(radius: blurRadius, opaque: false)
+            .saturation(saturation)
+            .brightness(brightness)
+            .animation(backdropAnimation, value: isActive)
+    }
+
+    private var blurRadius: CGFloat {
+        isActive && !reduceTransparency ? 12 : 0
+    }
+
+    private var saturation: Double {
+        isActive && !reduceTransparency ? 0.92 : 1.0
+    }
+
+    private var brightness: Double {
+        isActive && !reduceTransparency ? -0.012 : 0
+    }
+
+    private var backdropAnimation: Animation {
+        reduceMotion ? .linear(duration: 0.1) : .smooth(duration: 0.18)
     }
 }
 

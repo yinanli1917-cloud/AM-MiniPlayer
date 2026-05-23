@@ -6,6 +6,7 @@ import SwiftUI
 public struct MiniPlayerView: View {
     @EnvironmentObject var musicController: MusicController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     // 🔑 使用 musicController.currentPage 替代本地状态，实现浮窗/菜单栏同步
     @State private var isHovering: Bool = false
     @State private var showControls: Bool = false
@@ -113,6 +114,11 @@ public struct MiniPlayerView: View {
 
 
             }
+            .modifier(FloatingMenuBackdropBlur(
+                isActive: isAudioOutputMenuPresented,
+                reduceTransparency: reduceTransparency,
+                reduceMotion: reduceMotion
+            ))
         }
         // 移除固定尺寸，让视图自动填充窗口以支持缩放
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -259,6 +259,7 @@ public struct LyricsView: View {
 
     // ── 无障碍 ──
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     // ── 设置 ──
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
@@ -288,10 +289,15 @@ public struct LyricsView: View {
                 }
             }
         }
+        .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
         .overlay(bottomControlsOverlay)
+        .modifier(FloatingMenuBackdropBlur(
+            isActive: isAudioOutputMenuPresented,
+            reduceTransparency: reduceTransparency,
+            reduceMotion: reduceMotion
+        ))
         .overlay(alignment: .topLeading) { musicButtonOverlay }
         .overlay(alignment: .topTrailing) { windowButtonsOverlay }
-        .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
         .onHover { hovering in handleHover(hovering) }
         // ── onChange: 页面切换 ──
         .onChange(of: currentPage) { _, newPage in
