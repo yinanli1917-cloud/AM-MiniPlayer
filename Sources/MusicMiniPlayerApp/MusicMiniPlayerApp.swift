@@ -372,7 +372,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(makeSwitchMenuItem(
             title: L10n.localized("mb.fullscreenCover"),
-            systemImageName: "arrow.up.left.and.arrow.down.right",
+            systemImageName: "rectangle.expand.vertical",
             isOn: UserDefaults.standard.bool(forKey: "fullscreenAlbumCover"),
             action: { isOn in
                 UserDefaults.standard.set(isOn, forKey: "fullscreenAlbumCover")
@@ -382,7 +382,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if #available(macOS 15.0, *) {
             menu.addItem(makeSwitchMenuItem(
                 title: L10n.localized("mb.translation"),
-                systemImageName: "captions.bubble",
+                systemImageName: "character.bubble",
                 isOn: LyricsService.shared.showTranslation,
                 action: { isOn in
                     LyricsService.shared.showTranslation = isOn
@@ -423,7 +423,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.keyEquivalentModifierMask = keyEquivalent.isEmpty ? [] : modifierMask
 
         if let image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: title) {
-            let configuration = NSImage.SymbolConfiguration(pointSize: MenuBarMenuMetrics.symbolPointSize, weight: .regular)
+            let configuration = NSImage.SymbolConfiguration(pointSize: MenuBarMenuMetrics.symbolPointSize, weight: .medium)
             let configuredImage = image.withSymbolConfiguration(configuration) ?? image
             configuredImage.isTemplate = true
             item.image = configuredImage
@@ -658,15 +658,16 @@ struct MiniPlayerContentView: View {
 // ──────────────────────────────────────────────
 
 private enum MenuBarMenuMetrics {
-    static let width: CGFloat = 180
-    static let rowHeight: CGFloat = 22
-    static let leftInset: CGFloat = 7
-    static let rightInset: CGFloat = 7
-    static let iconBoxSize: CGFloat = 15
-    static let symbolPointSize: CGFloat = 12
-    static let textX: CGFloat = 29
-    static let controlGap: CGFloat = 6
-    static let switchSize = NSSize(width: 26, height: 14)
+    static let width: CGFloat = 206
+    static let rowHeight: CGFloat = 26
+    static let leftInset: CGFloat = 15
+    static let rightInset: CGFloat = 9
+    static let iconBoxSize: CGFloat = 19
+    static let symbolPointSize: CGFloat = 15
+    static let textX: CGFloat = 39
+    static let controlGap: CGFloat = 8
+    static let switchSize = NSSize(width: 33, height: 18)
+    static let labelHeight: CGFloat = 17
 }
 
 private class MenuBarCustomItemView: NSView {
@@ -716,19 +717,19 @@ private class MenuBarCustomItemView: NSView {
             image.isTemplate = true
             let configuration = NSImage.SymbolConfiguration(
                 pointSize: MenuBarMenuMetrics.symbolPointSize,
-                weight: .regular
+                weight: .medium
             )
             imageView.image = image.withSymbolConfiguration(configuration) ?? image
         }
         imageView.imageAlignment = .alignCenter
         imageView.imageScaling = .scaleProportionallyDown
-        imageView.contentTintColor = .secondaryLabelColor
+        imageView.contentTintColor = .labelColor
         return imageView
     }
 
     func makeTitleLabel(_ title: String) -> NSTextField {
         let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 12.5, weight: .regular)
+        label.font = .systemFont(ofSize: 13.5, weight: .regular)
         label.textColor = .labelColor
         label.lineBreakMode = .byTruncatingTail
         return label
@@ -800,9 +801,9 @@ private final class MenuBarSwitchItemView: MenuBarCustomItemView {
         let labelMaxX = switchControl.frame.minX - MenuBarMenuMetrics.controlGap
         titleLabel.frame = NSRect(
             x: MenuBarMenuMetrics.textX,
-            y: (boundsHeight - 15) / 2,
+            y: (boundsHeight - MenuBarMenuMetrics.labelHeight) / 2,
             width: max(0, labelMaxX - MenuBarMenuMetrics.textX),
-            height: 15
+            height: MenuBarMenuMetrics.labelHeight
         )
     }
 
