@@ -7,7 +7,7 @@ App 层：AppDelegate + 窗口管理 + 设置界面 + 本地化
 | 文件 | 职责 |
 |------|------|
 | MusicMiniPlayerApp.swift | AppDelegate、浮窗/菜单栏/设置窗口创建、主菜单 |
-| SettingsView.swift | MenuBarSettingsView、SettingsWindowView、通用行组件 |
+| SettingsView.swift | SettingsWindowView、设置窗口状态与调试面板 |
 | LocalizedStrings.swift | L10n（统一本地化）、UserDefaultsBinding（绑定 helper） |
 
 ## 接口

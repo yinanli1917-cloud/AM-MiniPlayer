@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService/SnappablePanel/MiniPlayerView
- *          依赖 SettingsView 的 MenuBarSettingsView/SettingsWindowView
+ *          依赖 SettingsView 的 SettingsWindowView
  * [OUTPUT]: 导出 AppMain（应用入口）
  * [POS]: MusicMiniPlayerApp 的 AppDelegate + 窗口管理
  */
@@ -16,12 +16,12 @@ import MusicMiniPlayerCore
 /// macOS 菜单栏迷你播放器应用
 /// 支持：菜单栏迷你视图 + 浮动窗口模式切换
 @main
-class AppMain: NSObject, NSApplicationDelegate {
+class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static var shared: AppMain!
 
     var statusItem: NSStatusItem!
+    var menuBarMenu: NSMenu?
     var floatingWindow: NSPanel?
-    var menuBarPopover: NSPopover?
     var settingsWindow: NSWindow?
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     var diagnosticsWindow: NSWindow?
@@ -33,9 +33,6 @@ class AppMain: NSObject, NSApplicationDelegate {
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     private var diagnosticsWindowDelegate: SettingsWindowDelegate?
     #endif
-
-    // 自动隐藏计时器（可取消）
-    private var autoHideWorkItem: DispatchWorkItem?
 
     // 状态：是否显示为浮窗（true）还是菜单栏视图（false）
     @Published var isFloatingMode: Bool = true
@@ -77,7 +74,6 @@ class AppMain: NSObject, NSApplicationDelegate {
         updateDockVisibility()
         setupStatusItem()
         createFloatingWindow()
-        createMenuBarPopover()
         createSettingsWindow()
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         createDiagnosticsWindow()
@@ -204,16 +200,19 @@ class AppMain: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.isVisible = true
 
-        guard let button = statusItem.button else {
+        guard statusItem.button != nil else {
             debugPrint("[AppMain] ERROR: Failed to get status item button\n")
             return
         }
 
         updateStatusItemIcon()
 
-        button.action = #selector(statusItemClicked)
-        button.target = self
-        button.sendAction(on: [.leftMouseUp])
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self
+        populateMenuBarMenu(menu)
+        menuBarMenu = menu
+        statusItem.menu = menu
 
         debugPrint("[AppMain] Status item created\n")
     }
@@ -230,21 +229,16 @@ class AppMain: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func statusItemClicked(_ sender: NSStatusBarButton) {
-        toggleMenuBarPopover()
-    }
-
     // MARK: - Mode Toggle
 
     @objc func toggleMode() {
         isFloatingMode.toggle()
 
         if isFloatingMode {
-            menuBarPopover?.close()
             showFloatingWindow()
         } else {
             floatingWindow?.orderOut(nil)
-            showMenuBarPopover()
+            showMenuBarMenu()
         }
     }
 
@@ -345,77 +339,147 @@ class AppMain: NSObject, NSApplicationDelegate {
     func collapseToMenuBar() {
         isFloatingMode = false
         floatingWindow?.orderOut(nil)
-        showMenuBarPopover()
-        scheduleAutoHide()
-    }
-
-    /// 开始 2 秒自动隐藏计时
-    func scheduleAutoHide() {
-        autoHideWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.menuBarPopover?.close()
-        }
-        autoHideWorkItem = workItem
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
-    }
-
-    /// 取消自动隐藏计时
-    func cancelAutoHide() {
-        autoHideWorkItem?.cancel()
-        autoHideWorkItem = nil
-    }
-
-    /// 用户与 popover 交互时调用（鼠标进入时取消计时，离开时重新开始）
-    func userInteractingWithPopover(_ isInteracting: Bool) {
-        if isInteracting {
-            cancelAutoHide()
-        } else {
-            scheduleAutoHide()
-        }
+        showMenuBarMenu()
     }
 
     /// 从菜单栏展开为浮窗
     func expandToFloatingWindow() {
         isFloatingMode = true
-        menuBarPopover?.close()
         showFloatingWindow()
     }
 
-    // MARK: - Menu Bar Popover (菜单栏弹出设置页面)
+    // MARK: - Menu Bar Menu
 
-    func createMenuBarPopover() {
-        menuBarPopover = NSPopover()
-        menuBarPopover?.behavior = .transient
-        menuBarPopover?.animates = true
-
-        let popoverContent = MenuBarSettingsView(
-            onExpand: { [weak self] in
-                self?.expandToFloatingWindow()
-            },
-            onQuit: {
-                NSApp.terminate(nil)
-            }
-        )
-        .environmentObject(musicController)
-
-        let hostingController = NSHostingController(rootView: popoverContent)
-        hostingController.view.setFrameSize(hostingController.sizeThatFits(in: CGSize(width: 260, height: 600)))
-        menuBarPopover?.contentViewController = hostingController
-    }
-
-    func showMenuBarPopover() {
+    func showMenuBarMenu() {
         guard let button = statusItem.button else { return }
-        menuBarPopover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        button.performClick(nil)
     }
 
-    func toggleMenuBarPopover() {
-        if menuBarPopover?.isShown == true {
-            menuBarPopover?.close()
-        } else {
-            showMenuBarPopover()
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === menuBarMenu else { return }
+        populateMenuBarMenu(menu)
+    }
+
+    private func populateMenuBarMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        menu.addItem(makeMenuItem(
+            title: L10n.localized("showWindow"),
+            systemImageName: "macwindow",
+            action: #selector(showWindowFromMenu(_:))
+        ))
+
+        menu.addItem(.separator())
+
+        menu.addItem(makeSwitchMenuItem(
+            title: L10n.localized("mb.fullscreenCover"),
+            systemImageName: "arrow.up.left.and.arrow.down.right",
+            isOn: UserDefaults.standard.bool(forKey: "fullscreenAlbumCover"),
+            action: { isOn in
+                UserDefaults.standard.set(isOn, forKey: "fullscreenAlbumCover")
+            }
+        ))
+
+        if #available(macOS 15.0, *) {
+            menu.addItem(makeSwitchMenuItem(
+                title: L10n.localized("mb.translation"),
+                systemImageName: "captions.bubble",
+                isOn: LyricsService.shared.showTranslation,
+                action: { isOn in
+                    LyricsService.shared.showTranslation = isOn
+                }
+            ))
+
+            menu.addItem(makeTranslationTargetSubmenuItem())
         }
+
+        menu.addItem(.separator())
+
+        menu.addItem(makeMenuItem(
+            title: L10n.localized("settings"),
+            systemImageName: "gearshape",
+            action: #selector(openSettings(_:))
+        ))
+
+        menu.addItem(.separator())
+
+        menu.addItem(makeMenuItem(
+            title: L10n.localized("quit"),
+            systemImageName: "power",
+            action: #selector(NSApplication.terminate(_:)),
+            target: NSApp
+        ))
+    }
+
+    private func makeMenuItem(
+        title: String,
+        systemImageName: String,
+        action: Selector?,
+        keyEquivalent: String = "",
+        modifierMask: NSEvent.ModifierFlags = [.command],
+        target: AnyObject? = nil
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.target = target ?? self
+        item.keyEquivalentModifierMask = keyEquivalent.isEmpty ? [] : modifierMask
+
+        if let image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: title) {
+            let configuration = NSImage.SymbolConfiguration(pointSize: MenuBarMenuMetrics.symbolPointSize, weight: .regular)
+            let configuredImage = image.withSymbolConfiguration(configuration) ?? image
+            configuredImage.isTemplate = true
+            item.image = configuredImage
+        }
+
+        return item
+    }
+
+    private func makeSwitchMenuItem(
+        title: String,
+        systemImageName: String,
+        isOn: Bool,
+        action: @escaping (Bool) -> Void
+    ) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.view = MenuBarSwitchItemView(
+            title: title,
+            systemImageName: systemImageName,
+            isOn: isOn,
+            action: action
+        )
+        return item
+    }
+
+    private func makeTranslationTargetSubmenuItem() -> NSMenuItem {
+        let currentLanguage = LyricsService.shared.translationLanguage
+        let selectedCode = currentLanguage == L10n.systemLanguageCode ? "system" : currentLanguage
+
+        let item = makeMenuItem(
+            title: L10n.localized("mb.translationTarget"),
+            systemImageName: "globe",
+            action: nil
+        )
+        let submenu = NSMenu(title: L10n.localized("mb.translationTarget"))
+        for option in L10n.translationLanguageOptions {
+            let optionItem = NSMenuItem(
+                title: option.name,
+                action: #selector(selectTranslationLanguageFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            optionItem.target = self
+            optionItem.representedObject = option.code
+            optionItem.state = option.code == selectedCode ? .on : .off
+            submenu.addItem(optionItem)
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func showWindowFromMenu(_ sender: NSMenuItem) {
+        expandToFloatingWindow()
+    }
+
+    @objc private func selectTranslationLanguageFromMenu(_ sender: NSMenuItem) {
+        guard let code = sender.representedObject as? String else { return }
+        LyricsService.shared.translationLanguage = code == "system" ? L10n.systemLanguageCode : code
     }
 
     // MARK: - Settings Window (设置窗口)
@@ -586,5 +650,242 @@ struct MiniPlayerContentView: View {
 
     var body: some View {
         MiniPlayerView(openWindow: openWindow, onHide: onHide)
+    }
+}
+
+// ──────────────────────────────────────────────
+// MARK: - Menu Bar Custom Items
+// ──────────────────────────────────────────────
+
+private enum MenuBarMenuMetrics {
+    static let width: CGFloat = 180
+    static let rowHeight: CGFloat = 22
+    static let leftInset: CGFloat = 7
+    static let rightInset: CGFloat = 7
+    static let iconBoxSize: CGFloat = 15
+    static let symbolPointSize: CGFloat = 12
+    static let textX: CGFloat = 29
+    static let controlGap: CGFloat = 6
+    static let switchSize = NSSize(width: 26, height: 14)
+}
+
+private class MenuBarCustomItemView: NSView {
+    private var trackingArea: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        layer?.masksToBounds = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: MenuBarMenuMetrics.width, height: MenuBarMenuMetrics.rowHeight)
+    }
+
+    override func updateTrackingAreas() {
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12).cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    func makeIconView(systemImageName: String, accessibilityDescription: String) -> NSImageView {
+        let imageView = NSImageView()
+        if let image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: accessibilityDescription) {
+            image.isTemplate = true
+            let configuration = NSImage.SymbolConfiguration(
+                pointSize: MenuBarMenuMetrics.symbolPointSize,
+                weight: .regular
+            )
+            imageView.image = image.withSymbolConfiguration(configuration) ?? image
+        }
+        imageView.imageAlignment = .alignCenter
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.contentTintColor = .secondaryLabelColor
+        return imageView
+    }
+
+    func makeTitleLabel(_ title: String) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 12.5, weight: .regular)
+        label.textColor = .labelColor
+        label.lineBreakMode = .byTruncatingTail
+        return label
+    }
+}
+
+private final class MenuBarSwitchItemView: MenuBarCustomItemView {
+    private let iconView: NSImageView
+    private let titleLabel: NSTextField
+    private let switchControl = CompactSwitchControl()
+    private let action: (Bool) -> Void
+
+    init(title: String, systemImageName: String, isOn: Bool, action: @escaping (Bool) -> Void) {
+        self.iconView = NSImageView()
+        self.titleLabel = NSTextField(labelWithString: title)
+        self.action = action
+
+        super.init(frame: NSRect(
+            x: 0,
+            y: 0,
+            width: MenuBarMenuMetrics.width,
+            height: MenuBarMenuMetrics.rowHeight
+        ))
+
+        let configuredIcon = makeIconView(systemImageName: systemImageName, accessibilityDescription: title)
+        iconView.image = configuredIcon.image
+        iconView.symbolConfiguration = configuredIcon.symbolConfiguration
+        iconView.contentTintColor = configuredIcon.contentTintColor
+
+        let configuredLabel = makeTitleLabel(title)
+        titleLabel.font = configuredLabel.font
+        titleLabel.textColor = configuredLabel.textColor
+        titleLabel.lineBreakMode = configuredLabel.lineBreakMode
+
+        switchControl.isOn = isOn
+        switchControl.target = self
+        switchControl.action = #selector(switchChanged(_:))
+
+        addSubview(iconView)
+        addSubview(titleLabel)
+        addSubview(switchControl)
+
+        toolTip = title
+        setAccessibilityLabel(title)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+
+        let boundsHeight = bounds.height
+        iconView.frame = NSRect(
+            x: MenuBarMenuMetrics.leftInset,
+            y: (boundsHeight - MenuBarMenuMetrics.iconBoxSize) / 2,
+            width: MenuBarMenuMetrics.iconBoxSize,
+            height: MenuBarMenuMetrics.iconBoxSize
+        )
+
+        switchControl.frame = NSRect(
+            x: bounds.maxX - MenuBarMenuMetrics.rightInset - MenuBarMenuMetrics.switchSize.width,
+            y: (boundsHeight - MenuBarMenuMetrics.switchSize.height) / 2,
+            width: MenuBarMenuMetrics.switchSize.width,
+            height: MenuBarMenuMetrics.switchSize.height
+        )
+
+        let labelMaxX = switchControl.frame.minX - MenuBarMenuMetrics.controlGap
+        titleLabel.frame = NSRect(
+            x: MenuBarMenuMetrics.textX,
+            y: (boundsHeight - 15) / 2,
+            width: max(0, labelMaxX - MenuBarMenuMetrics.textX),
+            height: 15
+        )
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard !switchControl.frame.contains(point) else { return }
+        switchControl.setOn(!switchControl.isOn, notify: true)
+    }
+
+    @objc private func switchChanged(_ sender: CompactSwitchControl) {
+        action(sender.isOn)
+    }
+}
+
+private final class CompactSwitchControl: NSControl {
+    var isOn: Bool = false {
+        didSet {
+            needsDisplay = true
+            setAccessibilityValue(isOn ? "on" : "off")
+        }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        MenuBarMenuMetrics.switchSize
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        setAccessibilityRole(.checkBox)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setOn(_ newValue: Bool, notify: Bool) {
+        guard isOn != newValue else { return }
+        isOn = newValue
+        if notify {
+            sendAction(action, to: target)
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        let trackRect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let trackPath = NSBezierPath(
+            roundedRect: trackRect,
+            xRadius: trackRect.height / 2,
+            yRadius: trackRect.height / 2
+        )
+        let trackColor = isOn
+            ? NSColor.controlAccentColor.withAlphaComponent(0.82)
+            : NSColor.controlColor.withAlphaComponent(0.82)
+        trackColor.setFill()
+        trackPath.fill()
+
+        NSColor.separatorColor.withAlphaComponent(isOn ? 0.10 : 0.22).setStroke()
+        trackPath.lineWidth = 0.5
+        trackPath.stroke()
+
+        let knobDiameter = trackRect.height - 4
+        let knobX = isOn
+            ? trackRect.maxX - knobDiameter - 2
+            : trackRect.minX + 2
+        let knobRect = NSRect(
+            x: knobX,
+            y: trackRect.midY - knobDiameter / 2,
+            width: knobDiameter,
+            height: knobDiameter
+        )
+        let knobPath = NSBezierPath(
+            roundedRect: knobRect,
+            xRadius: knobDiameter / 2,
+            yRadius: knobDiameter / 2
+        )
+        NSColor.white.withAlphaComponent(0.94).setFill()
+        knobPath.fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        setOn(!isOn, notify: true)
     }
 }

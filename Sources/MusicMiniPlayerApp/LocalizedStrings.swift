@@ -48,6 +48,8 @@ enum L10n {
         "previous":             ("Previous", "上一首"),
         "next":                 ("Next", "下一首"),
         "mb.translationLang":   ("Translation", "翻译语言"),
+        "mb.translation":       ("Lyrics Translation", "歌词翻译"),
+        "mb.translationTarget": ("Translate To", "翻译到"),
         "mb.fullscreenCover":   ("Fullscreen Cover", "全屏封面"),
         "mb.followSystem":      ("System", "跟随系统"),
         "showInDock":           ("Show in Dock", "在 Dock 显示"),
