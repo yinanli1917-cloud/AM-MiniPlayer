@@ -34,6 +34,9 @@ For each context:
    complete and prove either that the public probe was unavailable for a
    visible queue state or that the public rows mismatched the visible queue by
    order and identity.
+   Resolved rows backed by a fixed-indexing probe must also show
+   `fixed_indexing.restored=true`; otherwise the probe changed a public
+   Music.app setting and cannot support an exact or unavailable claim.
    Notification rows in `NOTIFICATION_SUMMARY.md` are not considered exact
    claims unless promoted into `SUMMARY.md` and validated with visible parity
    notes.

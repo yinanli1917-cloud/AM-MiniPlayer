@@ -204,6 +204,46 @@ def main() -> int:
         session = write_multi_context_session(Path(tmp), outcomes=outcomes)
         assert_fails(session, "required context is not resolved", "--require-complete")
 
+    fixed_indexing_probe_rows = "\n".join(
+        [
+            "fixed_indexing_variant_probe: true",
+            "fixed_indexing.original=false",
+            "fixed_indexing.variant[false].set=ok",
+            "fixed_indexing.variant[true].set=ok",
+            "fixed_indexing.restored=true",
+            "fixed_indexing.variant[true].current_playlist.neighbor[1]=*|Song A|Artist A|Album|ABC",
+        ]
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=completed_notes(rows_match="yes"),
+            probe_extra=fixed_indexing_probe_rows,
+        )
+        assert_passes(session)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=completed_notes(rows_match="yes"),
+            probe_extra=fixed_indexing_probe_rows.replace("fixed_indexing.restored=true", "fixed_indexing.restored.error=failed"),
+        )
+        assert_fails(session, "exact fixed-indexing claim did not restore Music.app fixed indexing")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="unavailable",
+            probe_classification="unavailable_no_current_playlist",
+            notes_text=completed_notes(rows_match="no"),
+            probe_extra=fixed_indexing_probe_rows.replace("fixed_indexing.restored=true", "fixed_indexing.restored.error=failed"),
+        )
+        assert_fails(session, "unavailable fixed-indexing claim did not restore Music.app fixed indexing")
+
     print("validator smoke tests passed")
     return 0
 

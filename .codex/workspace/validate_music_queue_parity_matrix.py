@@ -110,6 +110,13 @@ def is_distributed_notification_probe(text: str) -> bool:
     )
 
 
+def is_fixed_indexing_probe(text: str) -> bool:
+    return (
+        "fixed_indexing_variant_probe: true" in text
+        or "fixed_indexing.variant[" in text
+    )
+
+
 def notification_has_row_payload_shape(text: str, row_keys: list[str]) -> bool:
     for key in row_keys:
         escaped_key = re.escape(key)
@@ -184,6 +191,7 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
 
     if row.manual_outcome == "exact":
         is_notification_probe = is_distributed_notification_probe(probe_text)
+        fixed_indexing_probe = is_fixed_indexing_probe(probe_text)
         notification_has_possible_rows = False
 
         if "TODO" in notes_text:
@@ -198,6 +206,8 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
             errors.append(f"{prefix}: exact claim must state visible rows matched probe rows by order and identity")
         if row.probe_classification.startswith(UNAVAILABLE_PREFIXES):
             errors.append(f"{prefix}: exact claim points to unavailable probe classification '{row.probe_classification}'")
+        if fixed_indexing_probe and extract_probe_value(probe_text, "fixed_indexing.restored") != "true":
+            errors.append(f"{prefix}: exact fixed-indexing claim did not restore Music.app fixed indexing")
 
         if is_notification_probe:
             event_count = parse_int_value(extract_probe_value(probe_text, "capture.events_count"))
@@ -240,6 +250,8 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
         if "TODO" in notes_text:
             warnings.append(f"{prefix}: pending row still has TODO markers, which is expected before manual comparison")
     elif row.manual_outcome == "unavailable":
+        if is_fixed_indexing_probe(probe_text) and extract_probe_value(probe_text, "fixed_indexing.restored") != "true":
+            errors.append(f"{prefix}: unavailable fixed-indexing claim did not restore Music.app fixed indexing")
         if not notes_have_completed_visible_context(notes_text):
             errors.append(
                 f"{prefix}: unavailable claim must include completed visible Music.app queue notes "

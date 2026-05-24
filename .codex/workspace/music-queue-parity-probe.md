@@ -75,7 +75,8 @@ bash .codex/workspace/run_music_queue_parity_matrix.sh \
 This toggles only the public AppleScript `fixed indexing` setting during the
 probe, records both variants, and restores the original value. It is not a
 queue edit and is not proof unless the captured variant rows match the visible
-Music.app Up Next/history rows.
+Music.app Up Next/history rows. The validator rejects resolved fixed-indexing
+claims unless the probe reports `fixed_indexing.restored=true`.
 
 To attach distributed-notification payload evidence to the same matrix session,
 run the supplemental notification mode:
@@ -260,6 +261,8 @@ Each report includes:
   keys, and non-empty row-like payload shapes in addition to visible Music.app
   parity notes. It also rejects unverified unavailable claims so missing public
   rows cannot be accepted without visible Music.app evidence.
+  It also rejects resolved fixed-indexing claims if the probe did not restore
+  Music.app's original `fixed indexing` value.
   Its `--require-complete` mode rejects any read-strategy completion claim that
   omits a required playback context or leaves that context pending/partial.
 
