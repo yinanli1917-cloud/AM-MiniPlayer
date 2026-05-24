@@ -24,6 +24,8 @@ For each context:
    and identity.
 6. Run `python3 .codex/workspace/validate_music_queue_parity_matrix.py <session-dir>`
    before using the matrix as implementation evidence.
+   Run the same validator with `--require-complete` before claiming that the
+   read strategy covers the required product contexts.
    The validator now explicitly rejects exact claims backed by
    distributed-notification artifacts that observed no events, contain only
    metadata/context payloads, have no row-carrier keys, or lack non-empty
@@ -35,6 +37,9 @@ For each context:
    Notification rows in `NOTIFICATION_SUMMARY.md` are not considered exact
    claims unless promoted into `SUMMARY.md` and validated with visible parity
    notes.
+   `--require-complete` additionally rejects missing required contexts and
+   contexts whose latest evidence is still pending/partial rather than resolved
+   as `exact` or `unavailable`.
 
 Private Music.app storage, Accessibility/UI scraping, private AppleEvents, and
 memory inspection are not acceptable proof sources for this App Store goal.
@@ -161,3 +166,8 @@ Music.app queue/history parity.
 The matrix validator now applies the same rigor to unavailable claims: a
 context cannot be called unavailable without completed visible Music.app notes
 and a public-probe failure or explicit visible/probe row mismatch.
+The current recorded matrix intentionally fails
+`validate_music_queue_parity_matrix.py --require-complete`: only
+`radio-station-url-track` has pending probe rows, and album, user playlist,
+Apple Music playlist, local/library file, Play Next/Play Later edits, and
+rapid skip/previous contexts are still missing resolved proof rows.

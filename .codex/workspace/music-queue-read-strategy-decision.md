@@ -211,6 +211,11 @@ Before any matrix result is used as implementation evidence, run
 `.codex/workspace/validate_music_queue_parity_matrix.py` on that session. Exact
 rows must have visible rows, explicit row-match confirmation, and a
 non-unavailable public probe classification.
+Before claiming that the read strategy is complete, run the same validator with
+`--require-complete`. That mode requires all product contexts from the parity
+matrix to have a resolved `exact` or `unavailable` row, so missing album,
+playlist, local-file, queue-edit, or rapid-change proof cannot be hidden by one
+well-tested context.
 Unavailable rows must also be proven, not assumed: they need completed visible
 Music.app notes with the queue UI open and visible rows recorded, plus either an
 unavailable public probe classification or an explicit visible/probe row

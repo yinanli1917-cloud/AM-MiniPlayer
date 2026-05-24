@@ -281,9 +281,20 @@ Before using a matrix result as implementation evidence, validate the session:
 python3 .codex/workspace/validate_music_queue_parity_matrix.py "$session_dir"
 \`\`\`
 
+Before claiming the read strategy covers the required product contexts, run the
+strict completion gate:
+
+\`\`\`bash
+python3 .codex/workspace/validate_music_queue_parity_matrix.py \\
+  "$session_dir" \\
+  --require-complete
+\`\`\`
+
 The validator rejects exact distributed-notification claims when the capture has
 no event, metadata/context-only payloads, no row-carrier keys, or no non-empty
 array/dictionary payload shape for the row-carrier keys.
+The strict completion gate also requires every matrix context below to have a
+resolved `exact` or `unavailable` row.
 
 When testing MusicKit as a possible read source, run the focused read-only
 runtime probe for the same already-visible Music.app state:

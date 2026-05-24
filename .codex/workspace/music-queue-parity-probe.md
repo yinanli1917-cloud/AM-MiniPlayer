@@ -99,6 +99,15 @@ python3 .codex/workspace/validate_music_queue_parity_matrix.py \
   ".codex/workspace/music-queue-probes/parity-matrix-YYYYMMDDTHHMMSSZ"
 ```
 
+Before claiming that the read strategy covers the required product contexts,
+run the strict completion gate:
+
+```bash
+python3 .codex/workspace/validate_music_queue_parity_matrix.py \
+  ".codex/workspace/music-queue-probes/parity-matrix-YYYYMMDDTHHMMSSZ" \
+  --require-complete
+```
+
 The validator blocks `exact` rows that still contain TODOs, lack visible
 Music.app rows, lack an explicit visible/probe row match, or point to an
 unavailable public probe classification.
@@ -106,6 +115,8 @@ It also blocks `unavailable` rows unless the visible notes are complete, the
 visible Music.app queue UI was open, visible rows were recorded, and the public
 probe either classified the surface as unavailable or the notes explicitly say
 the public rows did not match the visible rows by order and identity.
+With `--require-complete`, it additionally requires every manual-test matrix
+context below to have at least one resolved `exact` or `unavailable` row.
 It also blocks `exact` rows backed by distributed-notification artifacts when
 the capture observed no event, reported metadata/context-only payloads, had no
 row-carrier keys, or had row-carrier keys without a non-empty array/dictionary
@@ -230,6 +241,8 @@ Each report includes:
   keys, and non-empty row-like payload shapes in addition to visible Music.app
   parity notes. It also rejects unverified unavailable claims so missing public
   rows cannot be accepted without visible Music.app evidence.
+  Its `--require-complete` mode rejects any read-strategy completion claim that
+  omits a required playback context or leaves that context pending/partial.
 
 ## Manual Test Matrix
 

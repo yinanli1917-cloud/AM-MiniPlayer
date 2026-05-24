@@ -10,6 +10,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = ROOT / ".codex/workspace/validate_music_queue_parity_matrix.py"
+REQUIRED_CONTEXTS = (
+    "album-playback",
+    "user-playlist-playback",
+    "apple-music-playlist-playback",
+    "local-library-file-track",
+    "radio-station-url-track",
+    "play-next-play-later-edits",
+    "skip-previous-rapid-changes",
+)
 
 
 def write_session(
@@ -49,6 +58,39 @@ def write_session(
     return session_dir
 
 
+def write_multi_context_session(root: Path, *, outcomes: dict[str, str]) -> Path:
+    session_dir = root / "session"
+    session_dir.mkdir()
+    summary_lines = [
+        "# Music Queue Parity Matrix Summary",
+        "",
+        "| Context | Manual outcome | Probe classification | Probe output | Visible notes |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+
+    for context, manual_outcome in outcomes.items():
+        probe_name = f"probe-{context}.txt"
+        notes_name = f"notes-{context}.md"
+        probe_classification = "unavailable_no_current_playlist"
+        (session_dir / probe_name).write_text(
+            "\n".join(
+                [
+                    "# Music.app Public Queue Surface Probe",
+                    "excluded_queue_sources: private frameworks; private AppleEvents",
+                    f"classification.outcome={probe_classification}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (session_dir / notes_name).write_text(completed_notes(rows_match="no"), encoding="utf-8")
+        summary_lines.append(
+            f"| `{context}` | `{manual_outcome}` | `{probe_classification}` | `{probe_name}` | `{notes_name}` |"
+        )
+
+    (session_dir / "SUMMARY.md").write_text("\n".join(summary_lines), encoding="utf-8")
+    return session_dir
+
+
 def completed_notes(*, rows_match: str) -> str:
     return "\n".join(
         [
@@ -67,9 +109,9 @@ def completed_notes(*, rows_match: str) -> str:
     )
 
 
-def run_validator(session_dir: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(session_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["python3", str(VALIDATOR), str(session_dir)],
+        ["python3", str(VALIDATOR), str(session_dir), *args],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -78,13 +120,13 @@ def run_validator(session_dir: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def assert_passes(session_dir: Path) -> None:
-    result = run_validator(session_dir)
+def assert_passes(session_dir: Path, *args: str) -> None:
+    result = run_validator(session_dir, *args)
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def assert_fails(session_dir: Path, expected: str) -> None:
-    result = run_validator(session_dir)
+def assert_fails(session_dir: Path, expected: str, *args: str) -> None:
+    result = run_validator(session_dir, *args)
     combined = result.stderr + result.stdout
     assert result.returncode != 0, combined
     assert expected in combined, combined
@@ -140,6 +182,27 @@ def main() -> int:
             ),
         )
         assert_fails(session, "unavailable claim must include completed visible Music.app queue notes")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_multi_context_session(
+            Path(tmp),
+            outcomes={"radio-station-url-track": "unavailable"},
+        )
+        assert_passes(session)
+        assert_fails(session, "missing required context(s):", "--require-complete")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_multi_context_session(
+            Path(tmp),
+            outcomes={context: "unavailable" for context in REQUIRED_CONTEXTS},
+        )
+        assert_passes(session, "--require-complete")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        outcomes = {context: "unavailable" for context in REQUIRED_CONTEXTS}
+        outcomes["album-playback"] = "pending"
+        session = write_multi_context_session(Path(tmp), outcomes=outcomes)
+        assert_fails(session, "required context is not resolved", "--require-complete")
 
     print("validator smoke tests passed")
     return 0

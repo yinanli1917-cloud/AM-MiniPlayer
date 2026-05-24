@@ -21,6 +21,16 @@ NOTIFICATION_EXACT_BLOCKING_OUTCOMES = {
     "no_notifications_observed",
     "metadata_or_context_only_no_queue_row_keys_observed",
 }
+REQUIRED_CONTEXTS = (
+    "album-playback",
+    "user-playlist-playback",
+    "apple-music-playlist-playback",
+    "local-library-file-track",
+    "radio-station-url-track",
+    "play-next-play-later-edits",
+    "skip-previous-rapid-changes",
+)
+COMPLETE_OUTCOMES = {"exact", "unavailable"}
 
 
 @dataclass
@@ -248,9 +258,48 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
     return errors, warnings
 
 
+def validate_required_context_coverage(rows: list[SummaryRow], *, require_complete: bool) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    rows_by_context: dict[str, list[SummaryRow]] = {}
+    known_contexts = set(REQUIRED_CONTEXTS)
+
+    for row in rows:
+        rows_by_context.setdefault(row.context, []).append(row)
+        if row.context not in known_contexts:
+            warnings.append(f"SUMMARY.md:{row.line_number} [{row.context}]: context is not in required coverage list")
+
+    missing_contexts = [context for context in REQUIRED_CONTEXTS if context not in rows_by_context]
+    if missing_contexts:
+        errors.append("missing required context(s): " + ", ".join(missing_contexts))
+
+    if require_complete:
+        for context in REQUIRED_CONTEXTS:
+            context_rows = rows_by_context.get(context, [])
+            if not context_rows:
+                continue
+
+            if not any(row.manual_outcome in COMPLETE_OUTCOMES for row in context_rows):
+                latest = context_rows[-1]
+                errors.append(
+                    f"SUMMARY.md:{latest.line_number} [{context}]: required context is not resolved; "
+                    "manual outcome must be exact or unavailable"
+                )
+
+    return errors, warnings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate a Music queue parity matrix session.")
     parser.add_argument("session_dir", type=Path, help="Path to parity-matrix-* session directory")
+    parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help=(
+            "Require every required playback context to have a resolved exact or "
+            "unavailable row. Use this before claiming read-strategy coverage."
+        ),
+    )
     args = parser.parse_args()
 
     session_dir = args.session_dir
@@ -276,6 +325,11 @@ def main() -> int:
         all_errors.extend(errors)
         all_warnings.extend(warnings)
 
+    if args.require_complete:
+        errors, warnings = validate_required_context_coverage(rows, require_complete=True)
+        all_errors.extend(errors)
+        all_warnings.extend(warnings)
+
     for warning in all_warnings:
         print(f"warning: {warning}")
     for error in all_errors:
@@ -284,7 +338,10 @@ def main() -> int:
     if all_errors:
         return 1
 
-    print(f"validated {len(rows)} parity matrix row(s): {summary_path}")
+    if args.require_complete:
+        print(f"validated complete required context coverage for {len(rows)} parity matrix row(s): {summary_path}")
+    else:
+        print(f"validated {len(rows)} parity matrix row(s): {summary_path}")
     return 0
 
 
