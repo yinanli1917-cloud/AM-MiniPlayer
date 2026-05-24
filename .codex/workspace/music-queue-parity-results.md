@@ -101,6 +101,15 @@ live Music.app queue proof.
   probe now records those view summaries and neighbor rows when a view contains
   the current track; these are candidate public surfaces only until visible
   Up Next/history parity is proven.
+- Public Apple Events expose the application-level `fixed indexing` setting,
+  which controls whether AppleScript track indices are independent of playlist
+  play order. The public probe now has an opt-in `--probe-fixed-indexing` mode
+  that toggles both values and restores the original value. The current
+  URL-track smoke artifact
+  `.codex/workspace/music-queue-probes/public-surface-fixed-indexing-current-state-20260524T052141Z.txt`
+  restored `fixed_indexing.original=false` and still found no public current
+  playlist for either variant, so it does not change the radio/station
+  conclusion. It remains useful for future album/playlist parity passes.
 - Public Foundation `DistributedNotificationCenter` is acceptable for
   observing known Music.app notification names as change triggers, but
   notification payloads are not queue proof unless they expose every visible

@@ -4,6 +4,7 @@ set -euo pipefail
 out_dir=".codex/workspace/music-queue-probes"
 context_label="unspecified"
 visible_notes_file=""
+probe_fixed_indexing="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,6 +19,10 @@ while [[ $# -gt 0 ]]; do
     --visible-notes)
       visible_notes_file="$2"
       shift 2
+      ;;
+    --probe-fixed-indexing)
+      probe_fixed_indexing="true"
+      shift
       ;;
     -*)
       echo "unknown option: $1" >&2
@@ -66,6 +71,10 @@ fi
   echo
   echo "public_surface_rule: Apple Events through Music.app sdef, public MusicKit/MediaPlayer SDK symbols, and Apple Music API metadata/history only."
   echo "excluded_queue_sources: private frameworks; private AppleEvents; Music.app private databases/files; accessibility/UI scraping; memory inspection."
+  echo "fixed_indexing_variant_probe: $probe_fixed_indexing"
+  if [[ "$probe_fixed_indexing" == "true" ]]; then
+    echo "fixed_indexing_probe_rule: probe-only public Apple Event setting toggle; original value is restored; no playback or queue mutation."
+  fi
   if [[ -f "$entitlements_file" ]]; then
     echo "entitlements_file: $entitlements_file"
     if /usr/bin/plutil -p "$entitlements_file" | rg -q '"com.apple.security.automation.apple-events" => true'; then
@@ -541,12 +550,141 @@ end tell
 APPLESCRIPT
   echo
 
+  if [[ "$probe_fixed_indexing" == "true" ]]; then
+    echo "## Runtime AppleScript fixed-indexing variant probe"
+    echo
+    osascript <<'APPLESCRIPT'
+on appendNeighborRows(rows, label, playlistRef, currentID)
+    tell application "Music"
+        try
+            set trackTotal to count of tracks of playlistRef
+            set end of rows to label & ".track_count=" & (trackTotal as text)
+            if currentID is "" then
+                set end of rows to label & ".neighbors.skipped=no_current_persistent_id"
+                return rows
+            end if
+            if trackTotal > 5000 then
+                set end of rows to label & ".neighbors.skipped=track_count_exceeds_probe_limit"
+                return rows
+            end if
+
+            set foundIndex to 0
+            set foundCount to 0
+            repeat with i from 1 to trackTotal
+                try
+                    if persistent ID of track i of playlistRef is currentID then
+                        set foundCount to foundCount + 1
+                        if foundIndex is 0 then set foundIndex to i
+                    end if
+                end try
+            end repeat
+            set end of rows to label & ".current_id_occurrences=" & (foundCount as text)
+            if foundIndex is 0 then
+                set end of rows to label & ".neighbors.skipped=current_not_in_playlist"
+                return rows
+            end if
+
+            set lowerBound to foundIndex - 5
+            if lowerBound < 1 then set lowerBound to 1
+            set upperBound to foundIndex + 10
+            if upperBound > trackTotal then set upperBound to trackTotal
+            set end of rows to label & ".neighbor_window=" & (lowerBound as text) & ".." & (upperBound as text) & " current=" & (foundIndex as text)
+
+            repeat with i from lowerBound to upperBound
+                try
+                    set t to track i of playlistRef
+                    set marker to " "
+                    if i is foundIndex then set marker to "*"
+                    set end of rows to label & ".neighbor[" & (i as text) & "]=" & marker & "|" & (name of t) & "|" & (artist of t) & "|" & (album of t) & "|" & (persistent ID of t)
+                on error errMsg
+                    set end of rows to label & ".neighbor[" & (i as text) & "].error=" & errMsg
+                end try
+            end repeat
+        on error errMsg
+            set end of rows to label & ".neighbors.error=" & errMsg
+        end try
+    end tell
+    return rows
+end appendNeighborRows
+
+tell application "Music"
+    if it is not running then
+        return "fixed_indexing_variant.music_running=false"
+    end if
+
+    set AppleScript's text item delimiters to linefeed
+    set rows to {}
+    set originalFixedIndexing to missing value
+    set restoredFixedIndexing to "false"
+    set currentID to ""
+
+    try
+        set originalFixedIndexing to fixed indexing
+        set end of rows to "fixed_indexing.original=" & ((originalFixedIndexing) as text)
+    on error errMsg
+        set end of rows to "fixed_indexing.original.error=" & errMsg
+    end try
+
+    try
+        set currentID to persistent ID of current track
+        set end of rows to "fixed_indexing.current_track=" & (name of current track) & "|" & (artist of current track) & "|" & currentID
+    on error errMsg
+        set end of rows to "fixed_indexing.current_track.error=" & errMsg
+    end try
+
+    repeat with variantValue in {false, true}
+        set variantFlag to contents of variantValue
+        if variantFlag is true then
+            set variantLabel to "true"
+        else
+            set variantLabel to "false"
+        end if
+
+        try
+            set fixed indexing to variantFlag
+            set end of rows to "fixed_indexing.variant[" & variantLabel & "].set=ok"
+            try
+                set cp to current playlist
+                set end of rows to "fixed_indexing.variant[" & variantLabel & "].current_playlist.name=" & (name of cp)
+                set rows to my appendNeighborRows(rows, "fixed_indexing.variant[" & variantLabel & "].current_playlist", cp, currentID)
+            on error errMsg
+                set end of rows to "fixed_indexing.variant[" & variantLabel & "].current_playlist.error=" & errMsg
+            end try
+        on error errMsg
+            set end of rows to "fixed_indexing.variant[" & variantLabel & "].set.error=" & errMsg
+        end try
+    end repeat
+
+    if originalFixedIndexing is not missing value then
+        try
+            set fixed indexing to originalFixedIndexing
+            set restoredFixedIndexing to "true"
+            set end of rows to "fixed_indexing.restored=true"
+        on error errMsg
+            set end of rows to "fixed_indexing.restored.error=" & errMsg
+        end try
+    end if
+
+    if restoredFixedIndexing is "true" then
+        set end of rows to "fixed_indexing_variant.outcome=restored_compare_visible_required"
+    else
+        set end of rows to "fixed_indexing_variant.outcome=restore_failed_do_not_use"
+    end if
+
+    return rows as text
+end tell
+APPLESCRIPT
+    echo
+  fi
+
   echo "## Interpretation checklist"
   echo
   echo "- Context label is only a test label; it is not proof of playback origin."
   echo "- Compare the visible Music.app Up Next panel manually against neighbor[...] rows."
   echo "- Compare browser_window[*].view.neighbor[...] and playlist_window[*].view.neighbor[...] rows when testing whether public window views expose the visible queue."
   echo "- Compare application.selection[...] and window selection rows when testing whether Music.app exposes visible queue selections through public AppleEvents."
+  echo "- When --probe-fixed-indexing is used, compare fixed_indexing.variant[...] rows against visible Up Next before considering whether AppleScript play-order indexing helps a context."
+  echo "- The fixed-indexing variant is probe-only and must restore the original fixed indexing value before its output can be considered."
   echo "- A window view surface is still only a public playlist view; it is not exact queue proof unless it exposes every visible history/current/upcoming row by order and identity."
   echo "- A selection surface is selected visible items only; it is not exact queue proof unless it exposes every visible history/current/upcoming row by order and identity."
   echo "- If Play Next / Play Later edits appear in Music.app but not in this snapshot, currentPlaylist scanning is not a real queue mirror."

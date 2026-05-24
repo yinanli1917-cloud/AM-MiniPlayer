@@ -61,6 +61,22 @@ creates templates and calls the public-surface probe for the current state.
 Exact parity still requires the visible rows to be written in the notes file and
 manually compared against the probe rows by order and identity.
 
+For album/playlist contexts where AppleScript track indices might depend on
+Music.app's `fixed indexing` behavior, opt into the restored variant probe:
+
+```bash
+bash .codex/workspace/run_music_queue_parity_matrix.sh \
+  --run-current \
+  --session-dir ".codex/workspace/music-queue-probes/parity-matrix-YYYYMMDDTHHMMSSZ" \
+  --context "album-playback" \
+  --probe-fixed-indexing
+```
+
+This toggles only the public AppleScript `fixed indexing` setting during the
+probe, records both variants, and restores the original value. It is not a
+queue edit and is not proof unless the captured variant rows match the visible
+Music.app Up Next/history rows.
+
 To attach distributed-notification payload evidence to the same matrix session,
 run the supplemental notification mode:
 
@@ -230,6 +246,9 @@ Each report includes:
 - A runtime AppleScript snapshot, including the public `selection` surface.
 - Public browser/playlist window `view` playlist summaries and neighbor rows
   around the current track when those views expose the current item.
+- Optional restored `fixed indexing` variant rows for current-playlist probes,
+  used to test whether public AppleScript play-order indexing can explain
+  album/playlist Up Next order. These rows still require visible parity proof.
 - A coarse `classification.outcome` value that tells whether the current
   public surface is exact-ready, partial, or unavailable before manual visual
   comparison.

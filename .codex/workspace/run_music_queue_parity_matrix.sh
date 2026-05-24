@@ -15,6 +15,7 @@ notification_until_event_count="1"
 notification_trigger="none"
 notification_restore_delay="0.8"
 notification_mute="false"
+probe_fixed_indexing="false"
 
 usage() {
   cat <<'USAGE'
@@ -40,6 +41,7 @@ Options:
   --notification-trigger MODE      none|playpause-restore.
   --notification-restore-delay SEC
   --notification-mute              Temporarily mute Music.app during trigger.
+  --probe-fixed-indexing           Probe Music.app fixed indexing variants and restore the original value.
   --out-dir DIR            Probe output root. Default: .codex/workspace/music-queue-probes
   --session-dir DIR        Existing or desired matrix session directory.
   --help                   Show this help.
@@ -52,6 +54,8 @@ Safety:
   --run-notifications is passive unless --notification-trigger is set; triggered
   notification captures restore play/pause state and Music.app volume.
   --run-sdk does not talk to Music.app, request authorization, or mutate playback.
+  --probe-fixed-indexing changes only Music.app's public AppleScript fixed
+  indexing setting during the probe and restores the original value.
 USAGE
 }
 
@@ -103,6 +107,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --notification-mute)
       notification_mute="true"
+      shift
+      ;;
+    --probe-fixed-indexing)
+      probe_fixed_indexing="true"
       shift
       ;;
     --out-dir)
@@ -314,6 +322,18 @@ bash .codex/workspace/run_music_queue_parity_matrix.sh \\
   --session-dir "$session_dir"
 \`\`\`
 
+When testing album/playlist contexts where public AppleScript track indexing may
+depend on Music.app play-order semantics, opt into the restored fixed-indexing
+variant probe:
+
+\`\`\`bash
+bash .codex/workspace/run_music_queue_parity_matrix.sh \\
+  --run-current \\
+  --session-dir "$session_dir" \\
+  --context CONTEXT_LABEL \\
+  --probe-fixed-indexing
+\`\`\`
+
 When testing whether Music.app distributed notifications expose queue/history
 payloads, run the passive notification probe while the visible queue UI is
 open:
@@ -511,7 +531,17 @@ if [[ "$mode" == "run-current" ]]; then
   mkdir -p "$(dirname "$visible_notes_file")"
   write_notes_template "$visible_notes_file" "$context_label"
 
-  probe_out="$(bash "$probe_script" --out-dir "$session_dir" --context "$context_label" --visible-notes "$visible_notes_file")"
+  probe_args=(
+    "$probe_script"
+    --out-dir "$session_dir"
+    --context "$context_label"
+    --visible-notes "$visible_notes_file"
+  )
+  if [[ "$probe_fixed_indexing" == "true" ]]; then
+    probe_args+=(--probe-fixed-indexing)
+  fi
+
+  probe_out="$(bash "${probe_args[@]}")"
   classification="$(awk -F= '/classification\.outcome=/{ value=$2 } END { if (value == "") { print "missing" } else { print value } }' "$probe_out")"
   append_summary "$probe_out" "$context_label" "$visible_notes_file" "$classification"
   append_notes_result "$probe_out" "$visible_notes_file" "$classification"
