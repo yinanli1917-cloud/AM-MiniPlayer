@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Smoke tests for validate_music_queue_parity_matrix.py."""
+
+from __future__ import annotations
+
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR = ROOT / ".codex/workspace/validate_music_queue_parity_matrix.py"
+
+
+def write_session(
+    root: Path,
+    *,
+    manual_outcome: str,
+    probe_classification: str,
+    notes_text: str,
+    probe_extra: str = "",
+) -> Path:
+    session_dir = root / "session"
+    session_dir.mkdir()
+    (session_dir / "probe.txt").write_text(
+        "\n".join(
+            [
+                "# Music.app Public Queue Surface Probe",
+                "excluded_queue_sources: private frameworks; private AppleEvents",
+                f"classification.outcome={probe_classification}",
+                probe_extra,
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (session_dir / "notes.md").write_text(notes_text, encoding="utf-8")
+    (session_dir / "SUMMARY.md").write_text(
+        "\n".join(
+            [
+                "# Music Queue Parity Matrix Summary",
+                "",
+                "| Context | Manual outcome | Probe classification | Probe output | Visible notes |",
+                "| --- | --- | --- | --- | --- |",
+                f"| `radio-station-url-track` | `{manual_outcome}` | `{probe_classification}` | `probe.txt` | `notes.md` |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return session_dir
+
+
+def completed_notes(*, rows_match: str) -> str:
+    return "\n".join(
+        [
+            "# Visible Music.app Queue Notes",
+            "",
+            "- Music.app visible Up Next/history UI open: yes",
+            "- Do visible rows match probe rows by order and identity: " + rows_match,
+            "",
+            "## Visible Rows",
+            "",
+            "```text",
+            "history | Song A | Artist A",
+            "upcoming | Song B | Artist B",
+            "```",
+        ]
+    )
+
+
+def run_validator(session_dir: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["python3", str(VALIDATOR), str(session_dir)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def assert_passes(session_dir: Path) -> None:
+    result = run_validator(session_dir)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def assert_fails(session_dir: Path, expected: str) -> None:
+    result = run_validator(session_dir)
+    combined = result.stderr + result.stdout
+    assert result.returncode != 0, combined
+    assert expected in combined, combined
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="unavailable",
+            probe_classification="unavailable_no_current_playlist",
+            notes_text=completed_notes(rows_match="no"),
+        )
+        assert_passes(session)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="unavailable",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=completed_notes(rows_match="no"),
+            probe_extra="neighbor[1]= |Wrong Song|Wrong Artist|Wrong Album|ABC",
+        )
+        assert_passes(session)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="unavailable",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=completed_notes(rows_match="yes"),
+            probe_extra="neighbor[1]= |Song A|Artist A|Album|ABC",
+        )
+        assert_fails(session, "unavailable claim must either point to an unavailable probe classification")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="unavailable",
+            probe_classification="unavailable_no_current_playlist",
+            notes_text="\n".join(
+                [
+                    "# Visible Music.app Queue Notes",
+                    "",
+                    "- Music.app visible Up Next/history UI open: TODO yes/no",
+                    "",
+                    "## Visible Rows",
+                    "",
+                    "```text",
+                    "TODO paste visible queue rows here",
+                    "```",
+                ]
+            ),
+        )
+        assert_fails(session, "unavailable claim must include completed visible Music.app queue notes")
+
+    print("validator smoke tests passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

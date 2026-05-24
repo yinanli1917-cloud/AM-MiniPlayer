@@ -1,0 +1,56 @@
+# Music.app Distributed Notification Probe
+
+timestamp_utc: 20260524T045702Z
+context_label: radio-station-url-track
+duration_seconds: 1
+until_event_count: 1
+trigger_mode: none
+restore_delay_seconds: 0.8
+mute_during_trigger: false
+macos: 26.2
+
+## Compliance preflight
+
+public_surface_rule: Foundation DistributedNotificationCenter, observing known Music.app notification names only.
+observed_names: com.apple.Music.playerInfo, com.apple.iTunes.playerInfo, com.apple.Music.playlistChanged
+excluded_queue_sources: private frameworks; private notification frameworks; private AppleEvents; Music.app private files/databases; accessibility/UI scraping; memory inspection.
+contract_note: these notifications are treated as invalidation/metadata evidence only unless a payload exposes every visible queue row and passes a visible parity check.
+row_carrier_key_rule: only queue/up-next/history/recent/tracks/entries-like keys are treated as possible row carriers; playlist/current-track metadata is context-only.
+trigger_rule: default is passive; playpause-restore uses public Music.app Apple Events after observers are active and restores the original play/pause state; optional muting restores the original Music.app volume.
+
+## Current Music.app AppleScript snapshot
+
+music.running=true
+player_state=paused
+current_track.name=Not Worth
+current_track.artist=Dreamz FM
+current_track.album=Dreamz FM 2
+current_track.class=URL track
+current_track.persistent_id=65C30E3EB62708AA
+current_playlist.error=Music got an error: Can’t get current playlist.
+
+## Notification capture
+
+capture.started_at=2026-05-24T04:57:03Z
+capture.observer_names=com.apple.Music.playerInfo,com.apple.iTunes.playerInfo,com.apple.Music.playlistChanged
+capture.duration_seconds=1.000
+capture.until_event_count=1
+capture.trigger_mode=none
+capture.restore_delay_seconds=0.800
+capture.mute_during_trigger=false
+capture.finished_at=2026-05-24T04:57:04Z
+capture.events_count=0
+capture.trigger_finished=false
+capture.userInfo.keys=
+capture.row_carrier_userInfo_keys=
+capture.context_only_userInfo_keys=
+classification.outcome=no_notifications_observed
+classification.reason=No known Music.app distributed notification fired during the passive capture window.
+
+## Interpretation checklist
+
+- A no-notification run is only an inconclusive passive capture; rerun while manually causing Music.app to emit a playerInfo event.
+- A playpause-restore run is evidence for notification payload shape, not queue editing. It should restore the original play/pause state and, when muted, the original Music.app volume. It must never mutate the queue.
+- Metadata/context-only keys support using distributed notifications as invalidation signals, not as queue/history row data.
+- Row-carrier keys are not exact proof by name alone; their shapes and values must expose every visible Up Next/history row by order and identity.
+- Do not use private notification frameworks or broad system notification scraping as an App Store queue source.

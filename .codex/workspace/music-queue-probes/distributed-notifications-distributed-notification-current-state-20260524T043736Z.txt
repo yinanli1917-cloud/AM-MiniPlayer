@@ -1,0 +1,43 @@
+# Music.app Distributed Notification Probe
+
+timestamp_utc: 20260524T043736Z
+context_label: distributed-notification-current-state
+duration_seconds: 5
+macos: 26.2
+
+## Compliance preflight
+
+public_surface_rule: Foundation DistributedNotificationCenter, observing known Music.app notification names only.
+observed_names: com.apple.Music.playerInfo, com.apple.iTunes.playerInfo, com.apple.Music.playlistChanged
+excluded_queue_sources: private frameworks; private notification frameworks; private AppleEvents; Music.app private files/databases; accessibility/UI scraping; memory inspection.
+contract_note: these notifications are treated as invalidation/metadata evidence only unless a payload exposes every visible queue row and passes a visible parity check.
+
+## Current Music.app AppleScript snapshot
+
+music.running=true
+player_state=paused
+current_track.name=Not Worth
+current_track.artist=Dreamz FM
+current_track.album=Dreamz FM 2
+current_track.class=URL track
+current_track.persistent_id=65C30E3EB62708AA
+current_playlist.error=Music got an error: Can’t get current playlist.
+
+## Notification capture
+
+capture.started_at=2026-05-24T04:37:37Z
+capture.observer_names=com.apple.Music.playerInfo,com.apple.iTunes.playerInfo,com.apple.Music.playlistChanged
+capture.duration_seconds=5.000
+capture.finished_at=2026-05-24T04:37:42Z
+capture.events_count=0
+capture.userInfo.keys=
+capture.queue_like_userInfo_keys=
+classification.outcome=no_notifications_observed
+classification.reason=No known Music.app distributed notification fired during the passive capture window.
+
+## Interpretation checklist
+
+- A no-notification run is only an inconclusive passive capture; rerun while manually causing Music.app to emit a playerInfo event.
+- A metadata-only run supports using distributed notifications as invalidation signals, not as queue/history row data.
+- Queue-like keys are not exact proof by name alone; they must expose every visible Up Next/history row by order and identity.
+- Do not use private notification frameworks or broad system notification scraping as an App Store queue source.
