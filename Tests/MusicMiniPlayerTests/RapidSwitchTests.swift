@@ -786,21 +786,25 @@ final class RapidSwitchTests: XCTestCase {
 
     func testPlaylistOpenCachedQueueRequiresCurrentGeneration() {
         XCTAssertTrue(MusicController.shouldUseCachedQueueForPlaylistOpen(
-            hasDisplayableQueueData: true,
             recentlyCompletedQueue: true,
             completedCurrentQueueGeneration: true
         ))
 
         XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
-            hasDisplayableQueueData: true,
             recentlyCompletedQueue: true,
             completedCurrentQueueGeneration: false
         ))
     }
 
-    func testPlaylistOpenCachedQueueRequiresDisplayableProvenanceRows() {
+    func testPlaylistOpenCachedQueueRequiresRecentCompletedSnapshot() {
         XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
-            hasDisplayableQueueData: false,
+            recentlyCompletedQueue: false,
+            completedCurrentQueueGeneration: true
+        ))
+    }
+
+    func testPlaylistOpenReusesFreshCompletedSnapshotEvenWhenRowsAreNotDisplayable() {
+        XCTAssertTrue(MusicController.shouldUseCachedQueueForPlaylistOpen(
             recentlyCompletedQueue: true,
             completedCurrentQueueGeneration: true
         ))

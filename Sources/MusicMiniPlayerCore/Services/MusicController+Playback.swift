@@ -428,14 +428,10 @@ extension MusicController {
     }
 
     public func refreshQueueForPlaylistOpen() {
-        let hasDisplayableQueueData =
-            (upNextProvenance.canDisplayAsRealTimeQueueRows && !upNextTracks.isEmpty)
-            || (recentTracksProvenance.canDisplayAsRealTimeQueueRows && !recentTracks.isEmpty)
         let recentlyCompletedQueue = Date().timeIntervalSince(lastQueueFetchCompletedAt) < 5.0
         let completedCurrentQueueGeneration = lastQueueFetchCompletedGeneration == queueSyncGeneration
 
         if Self.shouldUseCachedQueueForPlaylistOpen(
-            hasDisplayableQueueData: hasDisplayableQueueData,
             recentlyCompletedQueue: recentlyCompletedQueue,
             completedCurrentQueueGeneration: completedCurrentQueueGeneration
         ) {
@@ -1074,11 +1070,10 @@ extension MusicController {
     }
 
     static func shouldUseCachedQueueForPlaylistOpen(
-        hasDisplayableQueueData: Bool,
         recentlyCompletedQueue: Bool,
         completedCurrentQueueGeneration: Bool
     ) -> Bool {
-        hasDisplayableQueueData && recentlyCompletedQueue && completedCurrentQueueGeneration
+        recentlyCompletedQueue && completedCurrentQueueGeneration
     }
 
     static func shouldPreloadNearbyAssets(

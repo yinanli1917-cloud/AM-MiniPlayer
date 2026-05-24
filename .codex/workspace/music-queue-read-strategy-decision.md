@@ -118,10 +118,15 @@ Music.app session. Exact row playback remains limited to Music.app public
 control surfaces until a public Music.app route for catalog/account IDs is
 proven.
 
-Playlist-open cache reuse and nearby asset preloading now use the same
-provenance gate. This matters for long-running companion sessions: unproven rows
-must not either suppress refresh attempts or fill predictive artwork/lyrics
-caches for weeks as if they were the user's real upcoming queue.
+Playlist-open cache reuse is tied to a fresh completed public snapshot for the
+current queue generation, not to row displayability. This lets exact-empty and
+unavailable public snapshots be reused briefly when the user reopens the
+playlist page, avoiding repeated Music.app queue reads during long-running
+companion sessions. Queue, track, or source changes still bump the generation
+and force a fresh public snapshot attempt before any rows can be shown.
+Nearby asset preloading remains stricter: it still requires displayable
+provenance, so unproven rows cannot fill predictive artwork/lyrics caches for
+weeks as if they were the user's real upcoming queue.
 
 Owner diagnostics now carry stable Up Next/recent provenance labels, row counts,
 and displayability flags. This does not prove exact parity, but it makes
