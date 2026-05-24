@@ -24,6 +24,9 @@ For each context:
    and identity.
 6. Run `python3 .codex/workspace/validate_music_queue_parity_matrix.py <session-dir>`
    before using the matrix as implementation evidence.
+   Add `--coverage-report` when you need the resolved/pending/missing status
+   for every required playback context without failing solely because the
+   matrix is incomplete.
    Run the same validator with `--require-complete` before claiming that the
    read strategy covers the required product contexts.
    The validator now explicitly rejects exact claims backed by
@@ -41,8 +44,8 @@ For each context:
    claims unless promoted into `SUMMARY.md` and validated with visible parity
    notes.
    `--require-complete` additionally rejects missing required contexts and
-   contexts whose latest evidence is still pending/partial rather than resolved
-   as `exact` or `unavailable`.
+   contexts without any resolved `exact` or `unavailable` evidence row; it also
+   prints the coverage report before the blocking errors.
 
 Private Music.app storage, Accessibility/UI scraping, private AppleEvents, and
 memory inspection are not acceptable proof sources for this App Store goal.
@@ -182,4 +185,6 @@ The current recorded matrix intentionally fails
 `validate_music_queue_parity_matrix.py --require-complete`: radio/station is
 now resolved unavailable, while album, user playlist, Apple Music playlist,
 local/library file, Play Next/Play Later edits, and rapid skip/previous
-contexts are still missing resolved proof rows.
+contexts are still missing resolved proof rows. The validator now reports that
+same status directly as coverage: resolved `radio-station-url-track`, missing
+the remaining six required contexts.

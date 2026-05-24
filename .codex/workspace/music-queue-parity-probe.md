@@ -116,6 +116,16 @@ python3 .codex/workspace/validate_music_queue_parity_matrix.py \
   ".codex/workspace/music-queue-probes/parity-matrix-YYYYMMDDTHHMMSSZ"
 ```
 
+To see which required playback contexts are resolved, pending, or still
+missing without turning the report into a completion gate, add
+`--coverage-report`:
+
+```bash
+python3 .codex/workspace/validate_music_queue_parity_matrix.py \
+  ".codex/workspace/music-queue-probes/parity-matrix-YYYYMMDDTHHMMSSZ" \
+  --coverage-report
+```
+
 Before claiming that the read strategy covers the required product contexts,
 run the strict completion gate:
 
@@ -134,6 +144,8 @@ probe either classified the surface as unavailable or the notes explicitly say
 the public rows did not match the visible rows by order and identity.
 With `--require-complete`, it additionally requires every manual-test matrix
 context below to have at least one resolved `exact` or `unavailable` row.
+That strict mode also prints the same coverage report so a failure names the
+resolved, pending, and missing contexts in one place.
 It also blocks `exact` rows backed by distributed-notification artifacts when
 the capture observed no event, reported metadata/context-only payloads, had no
 row-carrier keys, or had row-carrier keys without a non-empty array/dictionary
@@ -263,8 +275,12 @@ Each report includes:
   rows cannot be accepted without visible Music.app evidence.
   It also rejects resolved fixed-indexing claims if the probe did not restore
   Music.app's original `fixed indexing` value.
+  Its `--coverage-report` mode prints each required playback context as
+  resolved, pending, or missing without failing only because coverage is still
+  incomplete.
   Its `--require-complete` mode rejects any read-strategy completion claim that
-  omits a required playback context or leaves that context pending/partial.
+  omits a required playback context or leaves that context pending/partial, and
+  prints the same coverage report before the errors.
 
 ## Manual Test Matrix
 

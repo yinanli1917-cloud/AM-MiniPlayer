@@ -43,6 +43,16 @@ class SummaryRow:
     line_number: int
 
 
+@dataclass
+class ContextCoverage:
+    context: str
+    status: str
+    outcome: str | None
+    line_number: int | None
+    latest_outcome: str | None
+    latest_line_number: int | None
+
+
 def strip_cell(cell: str) -> str:
     cell = cell.strip()
     if len(cell) >= 2 and cell[0] == "`" and cell[-1] == "`":
@@ -281,29 +291,105 @@ def validate_required_context_coverage(rows: list[SummaryRow], *, require_comple
         if row.context not in known_contexts:
             warnings.append(f"SUMMARY.md:{row.line_number} [{row.context}]: context is not in required coverage list")
 
-    missing_contexts = [context for context in REQUIRED_CONTEXTS if context not in rows_by_context]
+    coverage = build_context_coverage(rows)
+    missing_contexts = [item.context for item in coverage if item.status == "missing"]
     if missing_contexts:
         errors.append("missing required context(s): " + ", ".join(missing_contexts))
 
     if require_complete:
-        for context in REQUIRED_CONTEXTS:
-            context_rows = rows_by_context.get(context, [])
-            if not context_rows:
+        for item in coverage:
+            if item.status != "pending":
                 continue
-
-            if not any(row.manual_outcome in COMPLETE_OUTCOMES for row in context_rows):
-                latest = context_rows[-1]
-                errors.append(
-                    f"SUMMARY.md:{latest.line_number} [{context}]: required context is not resolved; "
-                    "manual outcome must be exact or unavailable"
-                )
+            errors.append(
+                f"SUMMARY.md:{item.latest_line_number} [{item.context}]: required context is not resolved; "
+                "manual outcome must be exact or unavailable"
+            )
 
     return errors, warnings
+
+
+def build_context_coverage(rows: list[SummaryRow]) -> list[ContextCoverage]:
+    rows_by_context: dict[str, list[SummaryRow]] = {}
+    for row in rows:
+        rows_by_context.setdefault(row.context, []).append(row)
+
+    coverage: list[ContextCoverage] = []
+    for context in REQUIRED_CONTEXTS:
+        context_rows = rows_by_context.get(context, [])
+        if not context_rows:
+            coverage.append(
+                ContextCoverage(
+                    context=context,
+                    status="missing",
+                    outcome=None,
+                    line_number=None,
+                    latest_outcome=None,
+                    latest_line_number=None,
+                )
+            )
+            continue
+
+        latest = context_rows[-1]
+        resolved = [row for row in context_rows if row.manual_outcome in COMPLETE_OUTCOMES]
+        if resolved:
+            resolved_row = resolved[-1]
+            coverage.append(
+                ContextCoverage(
+                    context=context,
+                    status="resolved",
+                    outcome=resolved_row.manual_outcome,
+                    line_number=resolved_row.line_number,
+                    latest_outcome=latest.manual_outcome,
+                    latest_line_number=latest.line_number,
+                )
+            )
+        else:
+            coverage.append(
+                ContextCoverage(
+                    context=context,
+                    status="pending",
+                    outcome=None,
+                    line_number=None,
+                    latest_outcome=latest.manual_outcome,
+                    latest_line_number=latest.line_number,
+                )
+            )
+
+    return coverage
+
+
+def render_context_coverage(rows: list[SummaryRow]) -> list[str]:
+    coverage = build_context_coverage(rows)
+    counts = {"resolved": 0, "pending": 0, "missing": 0}
+    lines = ["coverage.required_contexts:"]
+
+    for item in coverage:
+        counts[item.status] += 1
+        if item.status == "missing":
+            detail = "missing"
+        elif item.status == "pending":
+            detail = f"pending {item.latest_outcome} (latest SUMMARY.md:{item.latest_line_number})"
+        else:
+            detail = f"resolved {item.outcome} (SUMMARY.md:{item.line_number})"
+            if item.latest_line_number != item.line_number:
+                detail += f"; latest {item.latest_outcome} (SUMMARY.md:{item.latest_line_number})"
+        lines.append(f"- {item.context}: {detail}")
+
+    lines.append(
+        "coverage.summary="
+        f"resolved:{counts['resolved']} pending:{counts['pending']} missing:{counts['missing']}"
+    )
+    return lines
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate a Music queue parity matrix session.")
     parser.add_argument("session_dir", type=Path, help="Path to parity-matrix-* session directory")
+    parser.add_argument(
+        "--coverage-report",
+        action="store_true",
+        help="Print resolved, pending, and missing coverage for every required playback context.",
+    )
     parser.add_argument(
         "--require-complete",
         action="store_true",
@@ -341,6 +427,10 @@ def main() -> int:
         errors, warnings = validate_required_context_coverage(rows, require_complete=True)
         all_errors.extend(errors)
         all_warnings.extend(warnings)
+
+    if args.coverage_report or args.require_complete:
+        for line in render_context_coverage(rows):
+            print(line)
 
     for warning in all_warnings:
         print(f"warning: {warning}")

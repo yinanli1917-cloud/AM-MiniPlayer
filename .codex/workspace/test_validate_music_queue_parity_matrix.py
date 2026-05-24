@@ -125,6 +125,13 @@ def assert_passes(session_dir: Path, *args: str) -> None:
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def assert_passes_with_output(session_dir: Path, expected: str, *args: str) -> None:
+    result = run_validator(session_dir, *args)
+    combined = result.stderr + result.stdout
+    assert result.returncode == 0, combined
+    assert expected in combined, combined
+
+
 def assert_fails(session_dir: Path, expected: str, *args: str) -> None:
     result = run_validator(session_dir, *args)
     combined = result.stderr + result.stdout
@@ -189,6 +196,18 @@ def main() -> int:
             outcomes={"radio-station-url-track": "unavailable"},
         )
         assert_passes(session)
+        assert_passes_with_output(session, "- album-playback: missing", "--coverage-report")
+        assert_passes_with_output(
+            session,
+            "- radio-station-url-track: resolved unavailable",
+            "--coverage-report",
+        )
+        assert_passes_with_output(
+            session,
+            "coverage.summary=resolved:1 pending:0 missing:6",
+            "--coverage-report",
+        )
+        assert_fails(session, "coverage.summary=resolved:1 pending:0 missing:6", "--require-complete")
         assert_fails(session, "missing required context(s):", "--require-complete")
 
     with tempfile.TemporaryDirectory() as tmp:
