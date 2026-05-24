@@ -627,6 +627,29 @@ public class SnappablePanel: NSPanel {
         startSpringAnimation()
     }
 
+    @discardableResult
+    public func revealAtNearbySnapPosition() -> Bool {
+        if isEdgeHidden {
+            restoreFromEdge()
+            return true
+        }
+
+        guard let screen = screen ?? NSScreen.main else { return false }
+        let visible = screen.visibleFrame
+        let intersection = frame.intersection(visible)
+        let minimumVisibleLength: CGFloat = 48
+
+        guard intersection.width < minimumVisibleLength || intersection.height < minimumVisibleLength else {
+            return false
+        }
+
+        animationTarget = calculateTargetCorner(velocity: .zero)
+        springVelocityX = 0
+        springVelocityY = 0
+        startSpringAnimation()
+        return true
+    }
+
     public override var canBecomeKey: Bool { true }
     public override var canBecomeMain: Bool { false }
 

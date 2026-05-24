@@ -317,11 +317,15 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         debugPrint("[AppMain] Floating window created\n")
     }
 
-    func showFloatingWindow() {
+    func showFloatingWindow(revealNearbySnapPosition: Bool = false) {
         guard let window = floatingWindow else { return }
         isFloatingMode = true
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+
+        if revealNearbySnapPosition, let snappableWindow = window as? SnappablePanel {
+            snappableWindow.revealAtNearbySnapPosition()
+        }
     }
 
     func toggleFloatingWindow() {
@@ -342,10 +346,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showMenuBarMenu()
     }
 
-    /// 从菜单栏展开为浮窗
-    func expandToFloatingWindow() {
+    /// 从菜单栏显示浮窗；不再作为菜单栏/浮窗模式切换的一半。
+    func revealFloatingWindowFromMenuBar() {
         isFloatingMode = true
-        showFloatingWindow()
+        showFloatingWindow(revealNearbySnapPosition: true)
     }
 
     // MARK: - Menu Bar Menu
@@ -474,7 +478,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showWindowFromMenu(_ sender: NSMenuItem) {
-        expandToFloatingWindow()
+        revealFloatingWindowFromMenuBar()
     }
 
     @objc private func selectTranslationLanguageFromMenu(_ sender: NSMenuItem) {
@@ -618,7 +622,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func showFloatingWindowAction(_ sender: Any?) {
-        showFloatingWindow()
+        showFloatingWindow(revealNearbySnapPosition: true)
     }
 }
 
