@@ -116,7 +116,17 @@ final class DiagnosticsServiceTests: XCTestCase {
             trackClass: "shared track",
             playlistName: "Music",
             playbackContext: "playlist-or-library",
-            playerPage: "lyrics"
+            playerPage: "lyrics",
+            upNextProvenance: MusicQueueProvenance.playlistContextOnly(playlistName: "Music").diagnosticLabel,
+            recentTracksProvenance: MusicQueueProvenance.appleMusicAccountRecentlyPlayed.diagnosticLabel,
+            upNextUnavailableMessage: MusicQueueProvenance.playlistContextOnly(playlistName: "Music").unavailableDisplayMessage,
+            recentTracksUnavailableMessage: MusicQueueProvenance.appleMusicAccountRecentlyPlayed.unavailableDisplayMessage,
+            upNextRowCount: 0,
+            recentRowCount: 0,
+            upNextRawRowCount: 8,
+            recentRawRowCount: 4,
+            upNextRowsDisplayable: false,
+            recentRowsDisplayable: false
         )
         DiagnosticsService.shared.enrichTrackContext(enriched)
 
@@ -124,6 +134,16 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.trackClass, "shared track")
         XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.playlistName, "Music")
         XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.playbackContext, "playlist-or-library")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.upNextProvenance, "playlist-context-only.playlist.Music")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.recentTracksProvenance, "apple-music-account-recently-played")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.upNextUnavailableMessage, "Only \"Music\" is public; Up Next has not been verified.")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.recentTracksUnavailableMessage, "Apple Music history is not the live Music.app session.")
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.upNextRowCount, 0)
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.recentRowCount, 0)
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.upNextRawRowCount, 8)
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.recentRawRowCount, 4)
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.upNextRowsDisplayable, false)
+        XCTAssertEqual(DiagnosticsService.shared.events.first { $0.name == "artwork.fetch.start" }?.track?.recentRowsDisplayable, false)
         XCTAssertEqual(DiagnosticsService.shared.incidents.first?.track?.persistentID, "CURRENT_ID")
     }
 
@@ -623,6 +643,52 @@ final class DiagnosticsServiceTests: XCTestCase {
         let report = try decoder.decode(DiagnosticReportManifest.self, from: data)
         XCTAssertEqual(report.lyricLineMotionSamples.count, 1)
         XCTAssertEqual(report.lyricLineMotionSamples.first?.lineID, "line-3")
+    }
+
+    func testReportBundleIncludesQueueProvenanceContext() throws {
+        let track = DiagnosticTrackContext(
+            title: "Queue Song",
+            artist: "Queue Artist",
+            album: "Queue Album",
+            duration: 180,
+            upNextProvenance: MusicQueueProvenance.unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")).diagnosticLabel,
+            recentTracksProvenance: MusicQueueProvenance.appleMusicAccountRecentlyPlayed.diagnosticLabel,
+            upNextUnavailableMessage: MusicQueueProvenance.unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")).unavailableDisplayMessage,
+            recentTracksUnavailableMessage: MusicQueueProvenance.appleMusicAccountRecentlyPlayed.unavailableDisplayMessage,
+            upNextRowCount: 0,
+            recentRowCount: 0,
+            upNextRawRowCount: 0,
+            recentRawRowCount: 10,
+            upNextRowsDisplayable: false,
+            recentRowsDisplayable: false
+        )
+
+        let url = try DiagnosticsService.shared.exportReportBundle(
+            userSymptom: .playbackContextWrong,
+            userNote: "queue mismatch",
+            track: track
+        )
+
+        let data = try Data(contentsOf: url.appendingPathComponent("report.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let report = try decoder.decode(DiagnosticReportManifest.self, from: data)
+        XCTAssertEqual(report.track?.upNextProvenance, "unavailable.no-current-playlist.track-class.URL track")
+        XCTAssertEqual(report.track?.recentTracksProvenance, "apple-music-account-recently-played")
+        XCTAssertEqual(report.track?.upNextUnavailableMessage, "Music.app exposes no public queue for URL track playback.")
+        XCTAssertEqual(report.track?.recentTracksUnavailableMessage, "Apple Music history is not the live Music.app session.")
+        XCTAssertEqual(report.track?.upNextRowCount, 0)
+        XCTAssertEqual(report.track?.recentRowCount, 0)
+        XCTAssertEqual(report.track?.upNextRawRowCount, 0)
+        XCTAssertEqual(report.track?.recentRawRowCount, 10)
+        XCTAssertEqual(report.track?.upNextRowsDisplayable, false)
+        XCTAssertEqual(report.track?.recentRowsDisplayable, false)
+
+        let summary = try String(contentsOf: url.appendingPathComponent("summary.md"), encoding: .utf8)
+        XCTAssertTrue(summary.contains("Up Next provenance: unavailable.no-current-playlist.track-class.URL track (0 retained rows, 0 raw rows, displayable: no)"))
+        XCTAssertTrue(summary.contains("Reason: Music.app exposes no public queue for URL track playback."))
+        XCTAssertTrue(summary.contains("Recent tracks provenance: apple-music-account-recently-played (0 retained rows, 10 raw rows, displayable: no)"))
+        XCTAssertTrue(summary.contains("Reason: Apple Music history is not the live Music.app session."))
     }
 
     func testLiveLyricLineMotionCSVWritesSingleHeaderAcrossBatches() throws {

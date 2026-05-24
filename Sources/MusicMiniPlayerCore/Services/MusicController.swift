@@ -72,6 +72,10 @@ public class MusicController: ObservableObject {
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
+    @Published public var upNextProvenance: MusicQueueProvenance = .unavailable(reason: .publicSourceUnverified)
+    @Published public var recentTracksProvenance: MusicQueueProvenance = .unavailable(reason: .publicSourceUnverified)
+    var upNextRawRowCount: Int = 0
+    var recentRawRowCount: Int = 0
     @Published public var currentPage: PlayerPage = .album {
         didSet {
             if oldValue != currentPage {
@@ -253,6 +257,8 @@ public class MusicController: ObservableObject {
     var queueFetchInFlight = false
     var queueFetchPending = false
     var queueFetchPendingForceRecent = false
+    var queueFetchPendingQueueGeneration: UInt64?
+    var queueFetchPendingTrackGeneration: Int?
     var lastQueueFetchStartedAt: Date = .distantPast
     var lastQueueFetchCompletedAt: Date = .distantPast
     var lastQueueFetchCompletedGeneration: UInt64 = 0
@@ -309,6 +315,65 @@ public class MusicController: ObservableObject {
 
     func markQueueMayHaveChanged() {
         queueSyncGeneration &+= 1
+        invalidatePublishedQueueRowsForPendingPublicRefresh()
+    }
+
+    @discardableResult
+    func beginObservedTrackChangeForPendingQueueRefresh() -> Int {
+        lastPolledPosition = 0
+        currentPersistentID = nil
+        currentTrackClass = ""
+        currentPlaylistName = ""
+        currentTrackIsURLTrack = false
+        markQueueMayHaveChanged()
+        return incrementGeneration()
+    }
+
+    func scheduleQueueRefreshAfterObservedTrackChange(generation: Int) {
+        // Debounce track-change queue reads so rapid skips do not iterate a
+        // mutating Music.app playlist, while still ensuring every detector
+        // leaves pending refresh with a scheduled public snapshot attempt.
+        queueRefreshTimer?.invalidate()
+        queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            guard let self,
+                  Self.shouldRunObservedTrackChangeQueueRefresh(
+                    requestTrackGeneration: generation,
+                    currentTrackGeneration: self.artworkFetchGeneration
+                  ) else { return }
+            self.fetchUpNextQueue()
+        }
+    }
+
+    static func shouldRunObservedTrackChangeQueueRefresh(
+        requestTrackGeneration: Int,
+        currentTrackGeneration: Int
+    ) -> Bool {
+        requestTrackGeneration == currentTrackGeneration
+    }
+
+    private func invalidatePublishedQueueRowsForPendingPublicRefresh() {
+        guard !isPreview else { return }
+
+        if !upNextTracks.isEmpty {
+            upNextTracks = []
+        }
+        if !recentTracks.isEmpty {
+            recentTracks = []
+        }
+        if upNextRawRowCount != 0 {
+            upNextRawRowCount = 0
+        }
+        if recentRawRowCount != 0 {
+            recentRawRowCount = 0
+        }
+        lastRecentHistoryFetchAt = .distantPast
+        let pending: MusicQueueProvenance = .unavailable(reason: .pendingPublicRefresh)
+        if upNextProvenance != pending {
+            upNextProvenance = pending
+        }
+        if recentTracksProvenance != pending {
+            recentTracksProvenance = pending
+        }
     }
 
     @inline(__always)
@@ -337,7 +402,17 @@ public class MusicController: ObservableObject {
             trackClass: currentTrackClass.isEmpty ? nil : currentTrackClass,
             playlistName: currentPlaylistName.isEmpty ? nil : currentPlaylistName,
             playbackContext: diagnosticsPlaybackContext(),
-            playerPage: String(describing: currentPage)
+            playerPage: String(describing: currentPage),
+            upNextProvenance: upNextProvenance.diagnosticLabel,
+            recentTracksProvenance: recentTracksProvenance.diagnosticLabel,
+            upNextUnavailableMessage: upNextProvenance.unavailableDisplayMessage,
+            recentTracksUnavailableMessage: recentTracksProvenance.unavailableDisplayMessage,
+            upNextRowCount: upNextTracks.count,
+            recentRowCount: recentTracks.count,
+            upNextRawRowCount: upNextRawRowCount,
+            recentRawRowCount: recentRawRowCount,
+            upNextRowsDisplayable: upNextProvenance.canDisplayAsRealTimeQueueRows,
+            recentRowsDisplayable: recentTracksProvenance.canDisplayAsRealTimeQueueRows
         )
     }
 
@@ -538,11 +613,15 @@ public class MusicController: ObservableObject {
             (title: "Recent Song 2", artist: "Artist B", album: "Album B", persistentID: "2", duration: 210.0),
             (title: "Recent Song 3", artist: "Artist C", album: "Album C", persistentID: "3", duration: 180.0)
         ]
+        self.recentRawRowCount = recentTracks.count
+        self.recentTracksProvenance = .preview
         self.upNextTracks = [
             (title: "Next Song 1", artist: "Artist X", album: "Album X", persistentID: "4", duration: 200.0),
             (title: "Next Song 2", artist: "Artist Y", album: "Album Y", persistentID: "5", duration: 220.0),
             (title: "Next Song 3", artist: "Artist Z", album: "Album Z", persistentID: "6", duration: 195.0)
         ]
+        self.upNextRawRowCount = upNextTracks.count
+        self.upNextProvenance = .preview
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -650,13 +729,30 @@ public class MusicController: ObservableObject {
             guard let hash = self.getQueueHashFromApp(app) else { return }
 
             DispatchQueue.main.async {
-                if hash != self.lastQueueHash {
-                    debugPrint("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n")
-                    self.lastQueueHash = hash
+                if self.applyDetectedQueueHash(hash) {
                     self.fetchUpNextQueue()
                 }
             }
         }
+    }
+
+    @discardableResult
+    func applyDetectedQueueHash(_ hash: String) -> Bool {
+        guard Self.shouldInvalidateForDetectedQueueHash(
+            previousHash: lastQueueHash,
+            newHash: hash
+        ) else {
+            return false
+        }
+
+        debugPrint("🔄 [checkQueueHash] Queue changed: \(lastQueueHash) -> \(hash)\n")
+        lastQueueHash = hash
+        markQueueMayHaveChanged()
+        return true
+    }
+
+    static func shouldInvalidateForDetectedQueueHash(previousHash: String, newHash: String) -> Bool {
+        newHash != previousHash
     }
 
     private func getQueueHashFromApp(_ app: SBApplication) -> String? {
@@ -828,11 +924,8 @@ public class MusicController: ObservableObject {
         logger.info("🎵 Track changed (notification): \(name) - \(artist)")
         logToFile("🎵 Track changed: \(name) - \(artist)")
 
-        lastPolledPosition = 0  // Reset so position-jump detection doesn't false-trigger
-        currentPersistentID = nil
-        currentTrackClass = ""
-        currentTrackIsURLTrack = false
-        let generation = incrementGeneration()
+        let generation = beginObservedTrackChangeForPendingQueueRefresh()
+        scheduleQueueRefreshAfterObservedTrackChange(generation: generation)
 
         // ━━━ IMMEDIATE: artwork + lyrics — zero queue dependency ━━━
         // fetchArtwork uses artworkQueue (separate SB instance) + API in parallel.
@@ -925,16 +1018,6 @@ public class MusicController: ObservableObject {
                             self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: self.currentAlbum)
                         }
                     }
-                }
-
-                // 🔑 Debounced queue refresh — 2s to survive rapid switching bursts.
-                // 1s was too short: user pressing next every 0.5s would fire queue refresh
-                // mid-burst, causing SBElementArray iteration on a mutating playlist → crash.
-                self.queueRefreshTimer?.invalidate()
-                let refreshGen = generation
-                self.queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-                    guard let self = self, self.artworkFetchGeneration == refreshGen else { return }
-                    self.fetchUpNextQueue()
                 }
 
                 if sbDuration == 0 {
@@ -1430,6 +1513,9 @@ public class MusicController: ObservableObject {
         if currentTrackClass != s.trackClass { currentTrackClass = s.trackClass }
         if currentPlaylistName != s.playlistName { currentPlaylistName = s.playlistName }
         if duration != s.trackDuration { duration = s.trackDuration }
+        if trackChanged {
+            markQueueMayHaveChanged()
+        }
         Task { @MainActor in
             DiagnosticsService.shared.enrichTrackContext(self.diagnosticsTrackContext())
         }
@@ -1460,6 +1546,7 @@ public class MusicController: ObservableObject {
             let generation = incrementGeneration()
             currentPersistentID = s.persistentID
             let artworkPersistentID = currentTrackIsURLTrack ? "" : s.persistentID
+            scheduleQueueRefreshAfterObservedTrackChange(generation: generation)
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: artworkPersistentID, generation: generation)
             // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
             Task { @MainActor in
@@ -1488,6 +1575,12 @@ public class MusicController: ObservableObject {
         currentTrackClass = ""
         currentPlaylistName = ""
         currentTrackIsURLTrack = false
+        upNextTracks = []
+        recentTracks = []
+        upNextRawRowCount = 0
+        recentRawRowCount = 0
+        upNextProvenance = .unavailable(reason: .noCurrentTrack)
+        recentTracksProvenance = .unavailable(reason: .noCurrentTrack)
         setArtwork(nil)
     }
 }

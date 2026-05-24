@@ -672,18 +672,498 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
+    func testPendingQueueFetchRequiresCapturedQueueAndTrackGenerations() {
+        XCTAssertTrue(MusicController.shouldRunPendingQueueFetch(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldRunPendingQueueFetch(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 4,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldRunPendingQueueFetch(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 8
+        ))
+
+        XCTAssertFalse(MusicController.shouldRunPendingQueueFetch(
+            requestQueueGeneration: nil,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldRunPendingQueueFetch(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: nil,
+            currentTrackGeneration: 7
+        ))
+    }
+
+    func testPendingQueueFetchCapturesLatestCurrentGenerations() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueFetchInFlight = true
+        c.queueSyncGeneration = 12
+        c.artworkFetchGeneration = 4
+
+        c.fetchUpNextQueue(forceRecent: true)
+
+        XCTAssertTrue(c.queueFetchPending)
+        XCTAssertTrue(c.queueFetchPendingForceRecent)
+        XCTAssertEqual(c.queueFetchPendingQueueGeneration, 12)
+        XCTAssertEqual(c.queueFetchPendingTrackGeneration, 4)
+
+        c.queueSyncGeneration = 13
+        c.artworkFetchGeneration = 5
+
+        c.fetchUpNextQueue(forceRecent: false)
+
+        XCTAssertTrue(c.queueFetchPending)
+        XCTAssertFalse(c.queueFetchPendingForceRecent)
+        XCTAssertEqual(c.queueFetchPendingQueueGeneration, 13)
+        XCTAssertEqual(c.queueFetchPendingTrackGeneration, 5)
+    }
+
+    func testRecentHistorySnapshotUsesSameGenerationGateAsQueue() {
+        XCTAssertTrue(MusicController.shouldApplyRecentHistorySnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldApplyRecentHistorySnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 4,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 7
+        ))
+
+        XCTAssertFalse(MusicController.shouldApplyRecentHistorySnapshot(
+            requestQueueGeneration: 3,
+            currentQueueGeneration: 3,
+            requestTrackGeneration: 7,
+            currentTrackGeneration: 8
+        ))
+    }
+
+    func testQueueAndRecentHistorySnapshotGatesStayEquivalent() {
+        let cases: [(requestQueue: UInt64, currentQueue: UInt64, requestTrack: Int, currentTrack: Int)] = [
+            (1, 1, 1, 1),
+            (1, 2, 1, 1),
+            (1, 1, 1, 2),
+            (42, 42, 7, 7),
+            (42, 41, 7, 8)
+        ]
+
+        for testCase in cases {
+            XCTAssertEqual(
+                MusicController.shouldApplyQueueSnapshot(
+                    requestQueueGeneration: testCase.requestQueue,
+                    currentQueueGeneration: testCase.currentQueue,
+                    requestTrackGeneration: testCase.requestTrack,
+                    currentTrackGeneration: testCase.currentTrack
+                ),
+                MusicController.shouldApplyRecentHistorySnapshot(
+                    requestQueueGeneration: testCase.requestQueue,
+                    currentQueueGeneration: testCase.currentQueue,
+                    requestTrackGeneration: testCase.requestTrack,
+                    currentTrackGeneration: testCase.currentTrack
+                )
+            )
+        }
+    }
+
     func testPlaylistOpenCachedQueueRequiresCurrentGeneration() {
         XCTAssertTrue(MusicController.shouldUseCachedQueueForPlaylistOpen(
-            hasVisibleQueueData: true,
+            hasDisplayableQueueData: true,
             recentlyCompletedQueue: true,
             completedCurrentQueueGeneration: true
         ))
 
         XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
-            hasVisibleQueueData: true,
+            hasDisplayableQueueData: true,
             recentlyCompletedQueue: true,
             completedCurrentQueueGeneration: false
         ))
+    }
+
+    func testPlaylistOpenCachedQueueRequiresDisplayableProvenanceRows() {
+        XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            hasDisplayableQueueData: false,
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: true
+        ))
+    }
+
+    func testNearbyAssetPreloadRequiresDisplayableQueueProvenance() {
+        XCTAssertTrue(MusicController.shouldPreloadNearbyAssets(
+            didChange: true,
+            provenance: .exactPublicMusicQueue(context: "manual-proof")
+        ))
+
+        XCTAssertFalse(MusicController.shouldPreloadNearbyAssets(
+            didChange: true,
+            provenance: .playlistContextOnly(playlistName: "Road Trip")
+        ))
+
+        XCTAssertFalse(MusicController.shouldPreloadNearbyAssets(
+            didChange: true,
+            provenance: .appleMusicAccountRecentlyPlayed
+        ))
+
+        XCTAssertFalse(MusicController.shouldPreloadNearbyAssets(
+            didChange: false,
+            provenance: .exactPublicMusicQueue(context: "manual-proof")
+        ))
+    }
+
+    func testCurrentPlaylistRowsArePlaylistContextOnlyUntilParityProof() {
+        let provenance = MusicController.currentPlaylistRowsProvenance(
+            hasCurrentPlaylist: true,
+            trackClass: "shared track",
+            playlistName: "Road Trip"
+        )
+
+        XCTAssertEqual(provenance, .playlistContextOnly(playlistName: "Road Trip"))
+        XCTAssertTrue(provenance.isPlaylistContextOnly)
+        XCTAssertFalse(provenance.isExactRealTimeQueue)
+        XCTAssertFalse(provenance.isUnavailable)
+        XCTAssertFalse(provenance.canDisplayAsRealTimeQueueRows)
+    }
+
+    func testMissingCurrentPlaylistForURLTrackMarksQueueUnavailable() {
+        let provenance = MusicController.currentPlaylistRowsProvenance(
+            hasCurrentPlaylist: false,
+            trackClass: "URL track",
+            playlistName: nil
+        )
+
+        XCTAssertEqual(provenance, .unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")))
+        XCTAssertTrue(provenance.isUnavailable)
+        XCTAssertFalse(provenance.isExactRealTimeQueue)
+        XCTAssertFalse(provenance.canDisplayAsRealTimeQueueRows)
+    }
+
+    func testAppleMusicRecentHistoryProvenanceIsNotExactRealTimeQueue() {
+        let provenance = MusicQueueProvenance.appleMusicAccountRecentlyPlayed
+
+        XCTAssertFalse(provenance.isExactRealTimeQueue)
+        XCTAssertFalse(provenance.isPlaylistContextOnly)
+        XCTAssertFalse(provenance.isUnavailable)
+        XCTAssertFalse(provenance.canDisplayAsRealTimeQueueRows)
+    }
+
+    func testOnlyPreviewAndExactProvenanceCanDisplayAsRealTimeQueueRows() {
+        XCTAssertTrue(MusicQueueProvenance.preview.canDisplayAsRealTimeQueueRows)
+        XCTAssertTrue(MusicQueueProvenance.exactPublicMusicQueue(context: "manual-proof").canDisplayAsRealTimeQueueRows)
+        XCTAssertFalse(MusicQueueProvenance.playlistContextOnly(playlistName: "Road Trip").canDisplayAsRealTimeQueueRows)
+        XCTAssertFalse(MusicQueueProvenance.appleMusicAccountRecentlyPlayed.canDisplayAsRealTimeQueueRows)
+        XCTAssertFalse(MusicQueueProvenance.unavailable(reason: .publicSourceUnverified).canDisplayAsRealTimeQueueRows)
+    }
+
+    func testOnlyDisplayableProvenanceRetainsQueueRowsForStorage() {
+        let rows = ["one", "two"]
+
+        XCTAssertEqual(
+            MusicController.rowsRetainedForRealTimeQueueStorage(rows, provenance: .preview),
+            rows
+        )
+        XCTAssertEqual(
+            MusicController.rowsRetainedForRealTimeQueueStorage(rows, provenance: .exactPublicMusicQueue(context: "manual-proof")),
+            rows
+        )
+        XCTAssertTrue(MusicController.rowsRetainedForRealTimeQueueStorage(
+            rows,
+            provenance: .playlistContextOnly(playlistName: "Road Trip")
+        ).isEmpty)
+        XCTAssertTrue(MusicController.rowsRetainedForRealTimeQueueStorage(
+            rows,
+            provenance: .appleMusicAccountRecentlyPlayed
+        ).isEmpty)
+        XCTAssertTrue(MusicController.rowsRetainedForRealTimeQueueStorage(
+            rows,
+            provenance: .unavailable(reason: .publicSourceUnverified)
+        ).isEmpty)
+    }
+
+    func testRuntimeOnlyMaterializesRowsForDisplayableQueueProvenance() {
+        XCTAssertTrue(MusicController.shouldMaterializeQueueRows(provenance: .preview))
+        XCTAssertTrue(MusicController.shouldMaterializeQueueRows(provenance: .exactPublicMusicQueue(context: "manual-proof")))
+        XCTAssertFalse(MusicController.shouldMaterializeQueueRows(provenance: .playlistContextOnly(playlistName: "Road Trip")))
+        XCTAssertFalse(MusicController.shouldMaterializeQueueRows(provenance: .appleMusicAccountRecentlyPlayed))
+        XCTAssertFalse(MusicController.shouldMaterializeQueueRows(provenance: .unavailable(reason: .publicSourceUnverified)))
+    }
+
+    func testPlaylistOpenOnlyForcesRecentFetchForEmptyDisplayableHistory() {
+        XCTAssertTrue(MusicController.shouldForceRecentHistoryForPlaylistOpen(
+            provenance: .preview,
+            rowsAreEmpty: true
+        ))
+        XCTAssertFalse(MusicController.shouldForceRecentHistoryForPlaylistOpen(
+            provenance: .preview,
+            rowsAreEmpty: false
+        ))
+        XCTAssertFalse(MusicController.shouldForceRecentHistoryForPlaylistOpen(
+            provenance: .appleMusicAccountRecentlyPlayed,
+            rowsAreEmpty: true
+        ))
+        XCTAssertFalse(MusicController.shouldForceRecentHistoryForPlaylistOpen(
+            provenance: .unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")),
+            rowsAreEmpty: true
+        ))
+    }
+
+    func testAppleMusicAPITrackIDsAreNotPlayableThroughAppLocalMusicKit() {
+        XCTAssertTrue(MusicController.canPlayTrackViaMusicAppPersistentID("65C30E3EB6270892"))
+        XCTAssertFalse(MusicController.canPlayTrackViaMusicAppPersistentID("am:123456789"))
+        XCTAssertFalse(MusicController.canPlayTrackViaMusicAppPersistentID("am:i.abcdef"))
+        XCTAssertFalse(MusicController.canPlayTrackViaMusicAppPersistentID(""))
+        XCTAssertFalse(MusicController.canPlayTrackViaMusicAppPersistentID(" 65C30E3EB6270892"))
+        XCTAssertFalse(MusicController.canPlayTrackViaMusicAppPersistentID("playlist-row-placeholder"))
+        XCTAssertFalse(MusicController.canPlayTrackViaMusicAppPersistentID("65C30E3EB6270892\" or true"))
+    }
+
+    func testQueueProvenanceDiagnosticLabelsAreStable() {
+        XCTAssertEqual(MusicQueueProvenance.preview.diagnosticLabel, "preview")
+        XCTAssertEqual(
+            MusicQueueProvenance.exactPublicMusicQueue(context: "manual-proof").diagnosticLabel,
+            "exact-public-music-queue.context.manual-proof"
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.playlistContextOnly(playlistName: "Road Trip").diagnosticLabel,
+            "playlist-context-only.playlist.Road Trip"
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.appleMusicAccountRecentlyPlayed.diagnosticLabel,
+            "apple-music-account-recently-played"
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")).diagnosticLabel,
+            "unavailable.no-current-playlist.track-class.URL track"
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.unavailable(reason: .pendingPublicRefresh).diagnosticLabel,
+            "unavailable.pending-public-refresh"
+        )
+    }
+
+    func testQueueProvenanceUnavailableDisplayMessagesAreStable() {
+        XCTAssertNil(MusicQueueProvenance.preview.unavailableDisplayMessage)
+        XCTAssertNil(MusicQueueProvenance.exactPublicMusicQueue(context: "manual-proof").unavailableDisplayMessage)
+
+        XCTAssertEqual(
+            MusicQueueProvenance.playlistContextOnly(playlistName: "Road Trip").unavailableDisplayMessage,
+            "Only \"Road Trip\" is public; Up Next has not been verified."
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.playlistContextOnly(playlistName: nil).unavailableDisplayMessage,
+            "Only the containing playlist is public; Up Next has not been verified."
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.appleMusicAccountRecentlyPlayed.unavailableDisplayMessage,
+            "Apple Music history is not the live Music.app session."
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")).unavailableDisplayMessage,
+            "Music.app exposes no public queue for URL track playback."
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.unavailable(reason: .noPublicQueueObject).unavailableDisplayMessage,
+            "Music.app exposes no public Up Next object."
+        )
+        XCTAssertEqual(
+            MusicQueueProvenance.unavailable(reason: .pendingPublicRefresh).unavailableDisplayMessage,
+            "Queue changed; waiting for a verified Music.app refresh."
+        )
+    }
+
+    func testQueueChangeInvalidatesPublishedRowsUntilFreshPublicSnapshot() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 3
+        c.recentRawRowCount = 2
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        let previousGeneration = c.queueSyncGeneration
+
+        c.markQueueMayHaveChanged()
+
+        XCTAssertEqual(c.queueSyncGeneration, previousGeneration + 1)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+    }
+
+    func testObservedTrackChangeInvalidatesRowsBeforeDelayedQueueRefresh() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 3
+        c.recentRawRowCount = 2
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        let previousQueueGeneration = c.queueSyncGeneration
+        let previousArtworkGeneration = c.artworkFetchGeneration
+
+        let generation = c.beginObservedTrackChangeForPendingQueueRefresh()
+
+        XCTAssertEqual(generation, previousArtworkGeneration + 1)
+        XCTAssertEqual(c.artworkFetchGeneration, generation)
+        XCTAssertEqual(c.queueSyncGeneration, previousQueueGeneration + 1)
+        XCTAssertNil(c.currentPersistentID)
+        XCTAssertFalse(c.currentTrackIsURLTrack)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+    }
+
+    func testObservedTrackChangeQueueRefreshRequiresCurrentTrackGeneration() {
+        XCTAssertTrue(MusicController.shouldRunObservedTrackChangeQueueRefresh(
+            requestTrackGeneration: 9,
+            currentTrackGeneration: 9
+        ))
+        XCTAssertFalse(MusicController.shouldRunObservedTrackChangeQueueRefresh(
+            requestTrackGeneration: 9,
+            currentTrackGeneration: 10
+        ))
+    }
+
+    func testMusicControlQueueRefreshRequiresCurrentQueueGeneration() {
+        XCTAssertTrue(MusicController.shouldRunMusicControlQueueRefresh(
+            requestQueueGeneration: 7,
+            currentQueueGeneration: 7
+        ))
+        XCTAssertFalse(MusicController.shouldRunMusicControlQueueRefresh(
+            requestQueueGeneration: 7,
+            currentQueueGeneration: 8
+        ))
+    }
+
+    func testMusicControlUnavailableStillExitsPendingViaPublicRefreshAttempt() async throws {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.controlApp = nil
+        c.queueApp = nil
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+
+        c.nextTrack()
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if c.upNextProvenance == .unavailable(reason: .musicAppUnavailable),
+               c.recentTracksProvenance == .unavailable(reason: .musicAppUnavailable),
+               c.upNextTracks.isEmpty,
+               c.recentTracks.isEmpty {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTFail("Unavailable control path should attempt a public refresh and exit pending state")
+    }
+
+    func testDetectedQueueHashChangeInvalidatesPublishedRowsUntilFreshPublicSnapshot() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        XCTAssertTrue(c.applyDetectedQueueHash("Music:10:current"))
+
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 3
+        c.recentRawRowCount = 2
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        let previousGeneration = c.queueSyncGeneration
+
+        XCTAssertTrue(c.applyDetectedQueueHash("Music:11:current"))
+
+        XCTAssertEqual(c.queueSyncGeneration, previousGeneration + 1)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+    }
+
+    func testDetectedQueueHashSameValueDoesNotInvalidateRows() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        XCTAssertTrue(c.applyDetectedQueueHash("Music:10:current"))
+
+        c.upNextTracks = [
+            (title: "Still Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.upNextRawRowCount = 1
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-change")
+        let previousGeneration = c.queueSyncGeneration
+
+        XCTAssertFalse(c.applyDetectedQueueHash("Music:10:current"))
+
+        XCTAssertEqual(c.queueSyncGeneration, previousGeneration)
+        XCTAssertEqual(c.upNextTracks.map { $0.persistentID }, ["next"])
+        XCTAssertEqual(c.upNextRawRowCount, 1)
+        XCTAssertEqual(c.upNextProvenance, .exactPublicMusicQueue(context: "verified-before-change"))
+    }
+
+    func testPreviewQueueChangeKeepsFixtureRowsVisible() {
+        let c = MusicController(preview: true)
+        let previousUpNext = c.upNextTracks.map { $0.persistentID }
+        let previousRecent = c.recentTracks.map { $0.persistentID }
+
+        c.markQueueMayHaveChanged()
+
+        XCTAssertEqual(c.upNextTracks.map { $0.persistentID }, previousUpNext)
+        XCTAssertEqual(c.recentTracks.map { $0.persistentID }, previousRecent)
+        XCTAssertEqual(c.upNextProvenance, .preview)
+        XCTAssertEqual(c.recentTracksProvenance, .preview)
     }
 
     func testLyricWaveTimingKeepsProtectedDefaultForLongLineInterval() {

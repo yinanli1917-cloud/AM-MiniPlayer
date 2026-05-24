@@ -123,7 +123,12 @@ public struct PlaylistView: View {
                                 title: "History",
                                 headerHeight: headerHeight
                             ) {
-                                if musicController.recentTracks.isEmpty {
+                                if !musicController.recentTracksProvenance.canDisplayAsRealTimeQueueRows {
+                                    unavailableStateText(
+                                        title: "Real-time history unavailable",
+                                        detail: musicController.recentTracksProvenance.unavailableDisplayMessage
+                                    )
+                                } else if musicController.recentTracks.isEmpty {
                                     emptyStateText("No recent tracks")
                                 } else {
                                     ForEach(musicController.recentTracks.reversed(), id: \.persistentID) { track in
@@ -158,7 +163,12 @@ public struct PlaylistView: View {
                                 title: "Up Next",
                                 headerHeight: headerHeight
                             ) {
-                                if musicController.upNextTracks.isEmpty {
+                                if !musicController.upNextProvenance.canDisplayAsRealTimeQueueRows {
+                                    unavailableStateText(
+                                        title: "Real-time queue unavailable",
+                                        detail: musicController.upNextProvenance.unavailableDisplayMessage
+                                    )
+                                } else if musicController.upNextTracks.isEmpty {
                                     emptyStateText("Queue is empty")
                                 } else {
                                     ForEach(musicController.upNextTracks, id: \.persistentID) { track in
@@ -287,6 +297,24 @@ public struct PlaylistView: View {
             .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 12)
             .padding(.vertical, 20)
+    }
+
+    @ViewBuilder
+    private func unavailableStateText(title: String, detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.55))
+
+            if let detail, !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.38))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 18)
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════

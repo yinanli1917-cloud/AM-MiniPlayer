@@ -22,3 +22,101 @@
   Music.app navigation origins, such as whether a song came from a search view
   versus another private UI route, are not exposed through the public API and
   should be reported as unavailable rather than guessed.
+
+## Queue Provenance
+
+- Queue rows must carry provenance separate from the row arrays. Empty rows can
+  mean an exact empty queue, an unavailable public source, or an unproven
+  playlist-context scan.
+- `currentPlaylist.tracks` rows are `playlistContextOnly` until a recorded
+  Music.app visible Up Next/history parity pass proves exact order and identity,
+  including Play Next/Play Later edits.
+- If Music.app exposes no public `current playlist` for a URL/radio/station
+  track, mark the queue unavailable with the current track class instead of
+  showing stale or guessed rows as Up Next.
+- Apple Music API recently played data is account history support, not proof of
+  the live Music.app queue/history session.
+- Queue UI must only render row arrays as History/Up Next when provenance is
+  `exactPublicMusicQueue` or `preview`. All other provenance states should show
+  an unavailable state instead of rows, even if row arrays contain data.
+- The published queue/history row arrays should also drop rows for
+  non-displayable provenance. Keep raw non-exact row counts only as diagnostics
+  metrics; do not retain playlist-context/account-history rows in long-lived
+  UI state where they can look cacheable over week-long sessions.
+- Production queue/history fetches should not materialize track row payloads
+  from public sources already classified as non-displayable, such as
+  `playlistContextOnly` or Apple Music account recently played. Use the probe
+  harness for parity evidence collection; runtime should avoid hidden playlist
+  scans or account-history fetches that cannot be displayed as the real queue.
+- Diagnostics must distinguish retained row counts from raw public-surface row
+  counts. For non-displayable provenance, retained rows should be zero while raw
+  rows can record how many playlist-context/account-history rows the public
+  source returned as evidence.
+- Diagnostics should include the same concise unavailable reason used by the UI
+  so report bundles explain why rows were withheld without requiring enum-label
+  decoding.
+- Queue unavailable states should include a concise provenance reason, such as
+  a missing public Music.app queue for URL-track playback, playlist-context-only
+  data, or Apple Music account history not being the live Music.app session.
+- Any known queue-changing signal, including user playback controls,
+  distributed Music.app `playerInfo` track-change notifications, externally
+  observed track/source changes, and periodic Music.app queue-hash changes,
+  must invalidate retained queue/history rows immediately and mark them as
+  pending public refresh. Do not keep previously exact rows visible while the
+  next public Music.app snapshot is still in flight.
+- User controls that can advance or reorder Music.app playback must schedule a
+  public queue refresh after the Music.app command returns, fails, or cannot
+  reach Music.app. Guard those scheduled reads by the queue generation captured
+  at invalidation time so a superseded command cannot refresh a newer queue
+  state.
+- Playlist row playback must only target non-empty hexadecimal Music.app
+  `persistent ID` values from the public scripting dictionary. Reject Apple
+  Music API/catalog IDs, placeholders, whitespace, and arbitrary strings so row
+  actions cannot become app-local playback or malformed AppleScript targets.
+- Observed track-change paths, including `playerInfo`, full-state sync, and
+  radio/backstop fallback detection, must also schedule a generation-gated
+  public queue refresh. If a newer track generation supersedes the scheduled
+  read, the stale refresh must not run.
+- Async Up Next and recent-history snapshots must both be gated by queue and
+  track generation before applying. A stale Apple Music API history response or
+  stale ScriptingBridge playlist-context scan must not replace a newer pending,
+  unavailable, or exact queue state. Capture both generations when scheduling
+  the fetch; do not recapture track generation inside the async worker.
+- Coalesced pending queue refreshes must carry the queue and track generations
+  captured when they were marked pending. Throttled delayed callbacks must
+  consume the pending refresh only if those generations still match current
+  state; stale pending refreshes must be discarded instead of recapturing a
+  newer state.
+- Playlist-open cache reuse must also be provenance-aware: hidden
+  playlist-context/account-history rows do not count as visible queue data and
+  must not suppress a fresh queue refresh attempt.
+- Nearby artwork/lyrics preloading must also be provenance-aware. Over
+  week-long companion sessions, unproven playlist-context or account-history
+  rows must not pollute predictive caches as if they were real upcoming queue
+  rows.
+- Diagnostics report bundles must include stable Up Next/recent provenance,
+  row counts, and whether each row set was displayable. This preserves
+  long-running session evidence for queue-unavailable states without relying on
+  transient UI screenshots.
+- MusicKit `ApplicationMusicPlayer.queue` must not be treated as the live
+  Music.app queue unless a visible parity pass proves it. The first focused
+  runtime probe saw Music.app playing while `ApplicationMusicPlayer` reported
+  `stopped`, `currentEntry=nil`, and `entries_count=0`, so current product code
+  should treat that surface as app-local/unbound for queue parity. Apple's
+  public documentation also describes application music players as not
+  affecting Music.app state.
+- Playlist row playback must also stay assistant-only. Do not use
+  `ApplicationMusicPlayer` as a fallback for Apple Music API row IDs (`am:*`);
+  those IDs come from account/catalog APIs, not from Music.app's current
+  visible session. Row playback should only target Music.app through public
+  Music.app control surfaces until an exact public route is proven.
+- `SystemMusicPlayer` is the only MusicKit player conceptually aligned with
+  controlling Music.app, but it is unavailable in the current local macOS SDK
+  and Apple's documentation says it shares only some Music.app state. If a
+  future SDK exposes it on macOS, require visible Up Next/history parity proof
+  before using its queue.
+- Public SDK availability must stay separate from queue parity proof. The
+  standalone SDK probe can show that `ApplicationMusicPlayer.queue` and
+  `MusicPlayer.Queue` insertion positions compile, but that only establishes API
+  shape. It does not prove read parity, edit safety, or that the target queue is
+  Music.app's visible Up Next/history session.

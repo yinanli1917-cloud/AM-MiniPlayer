@@ -181,6 +181,16 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
     public var playlistName: String?
     public var playbackContext: String?
     public var playerPage: String?
+    public var upNextProvenance: String?
+    public var recentTracksProvenance: String?
+    public var upNextUnavailableMessage: String?
+    public var recentTracksUnavailableMessage: String?
+    public var upNextRowCount: Int?
+    public var recentRowCount: Int?
+    public var upNextRawRowCount: Int?
+    public var recentRawRowCount: Int?
+    public var upNextRowsDisplayable: Bool?
+    public var recentRowsDisplayable: Bool?
 
     public init(
         title: String,
@@ -192,7 +202,17 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
         trackClass: String? = nil,
         playlistName: String? = nil,
         playbackContext: String? = nil,
-        playerPage: String? = nil
+        playerPage: String? = nil,
+        upNextProvenance: String? = nil,
+        recentTracksProvenance: String? = nil,
+        upNextUnavailableMessage: String? = nil,
+        recentTracksUnavailableMessage: String? = nil,
+        upNextRowCount: Int? = nil,
+        recentRowCount: Int? = nil,
+        upNextRawRowCount: Int? = nil,
+        recentRawRowCount: Int? = nil,
+        upNextRowsDisplayable: Bool? = nil,
+        recentRowsDisplayable: Bool? = nil
     ) {
         self.title = title
         self.artist = artist
@@ -204,6 +224,16 @@ public struct DiagnosticTrackContext: Codable, Equatable, Sendable {
         self.playlistName = playlistName
         self.playbackContext = playbackContext
         self.playerPage = playerPage
+        self.upNextProvenance = upNextProvenance
+        self.recentTracksProvenance = recentTracksProvenance
+        self.upNextUnavailableMessage = upNextUnavailableMessage
+        self.recentTracksUnavailableMessage = recentTracksUnavailableMessage
+        self.upNextRowCount = upNextRowCount
+        self.recentRowCount = recentRowCount
+        self.upNextRawRowCount = upNextRawRowCount
+        self.recentRawRowCount = recentRawRowCount
+        self.upNextRowsDisplayable = upNextRowsDisplayable
+        self.recentRowsDisplayable = recentRowsDisplayable
     }
 
     public var hasCredibleIdentity: Bool {
@@ -1856,6 +1886,44 @@ public final class DiagnosticsService: ObservableObject {
            !playerPage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             current.playerPage = playerPage
         }
+        if (current.upNextProvenance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let upNextProvenance = context.upNextProvenance,
+           !upNextProvenance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.upNextProvenance = upNextProvenance
+        }
+        if (current.recentTracksProvenance ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let recentTracksProvenance = context.recentTracksProvenance,
+           !recentTracksProvenance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.recentTracksProvenance = recentTracksProvenance
+        }
+        if (current.upNextUnavailableMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let upNextUnavailableMessage = context.upNextUnavailableMessage,
+           !upNextUnavailableMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.upNextUnavailableMessage = upNextUnavailableMessage
+        }
+        if (current.recentTracksUnavailableMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let recentTracksUnavailableMessage = context.recentTracksUnavailableMessage,
+           !recentTracksUnavailableMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            current.recentTracksUnavailableMessage = recentTracksUnavailableMessage
+        }
+        if current.upNextRowCount == nil, let upNextRowCount = context.upNextRowCount {
+            current.upNextRowCount = upNextRowCount
+        }
+        if current.recentRowCount == nil, let recentRowCount = context.recentRowCount {
+            current.recentRowCount = recentRowCount
+        }
+        if current.upNextRawRowCount == nil, let upNextRawRowCount = context.upNextRawRowCount {
+            current.upNextRawRowCount = upNextRawRowCount
+        }
+        if current.recentRawRowCount == nil, let recentRawRowCount = context.recentRawRowCount {
+            current.recentRawRowCount = recentRawRowCount
+        }
+        if current.upNextRowsDisplayable == nil, let upNextRowsDisplayable = context.upNextRowsDisplayable {
+            current.upNextRowsDisplayable = upNextRowsDisplayable
+        }
+        if current.recentRowsDisplayable == nil, let recentRowsDisplayable = context.recentRowsDisplayable {
+            current.recentRowsDisplayable = recentRowsDisplayable
+        }
 
         guard current != original else { return false }
         existing = current
@@ -3000,6 +3068,24 @@ public final class DiagnosticsService: ObservableObject {
             }
             if let playerPage = track.playerPage, !playerPage.isEmpty {
                 lines.append("- nanoPod page: \(playerPage)")
+            }
+            if let upNextProvenance = track.upNextProvenance, !upNextProvenance.isEmpty {
+                let rowCount = track.upNextRowCount.map(String.init) ?? "unknown"
+                let rawRowCount = track.upNextRawRowCount.map(String.init) ?? "unknown"
+                let displayable = track.upNextRowsDisplayable.map { $0 ? "yes" : "no" } ?? "unknown"
+                lines.append("- Up Next provenance: \(upNextProvenance) (\(rowCount) retained rows, \(rawRowCount) raw rows, displayable: \(displayable))")
+                if let message = track.upNextUnavailableMessage, !message.isEmpty {
+                    lines.append("  Reason: \(message)")
+                }
+            }
+            if let recentTracksProvenance = track.recentTracksProvenance, !recentTracksProvenance.isEmpty {
+                let rowCount = track.recentRowCount.map(String.init) ?? "unknown"
+                let rawRowCount = track.recentRawRowCount.map(String.init) ?? "unknown"
+                let displayable = track.recentRowsDisplayable.map { $0 ? "yes" : "no" } ?? "unknown"
+                lines.append("- Recent tracks provenance: \(recentTracksProvenance) (\(rowCount) retained rows, \(rawRowCount) raw rows, displayable: \(displayable))")
+                if let message = track.recentTracksUnavailableMessage, !message.isEmpty {
+                    lines.append("  Reason: \(message)")
+                }
             }
             lines.append("")
         }

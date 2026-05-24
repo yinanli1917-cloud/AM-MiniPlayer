@@ -40,6 +40,13 @@ enum AppleEventCode {
     }
 }
 
+private typealias MusicQueueTrackRow = (title: String, artist: String, album: String, persistentID: String, duration: Double)
+
+private struct QueueFetchSnapshot {
+    var tracks: [MusicQueueTrackRow]
+    var provenance: MusicQueueProvenance
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Playback Controls (用户交互优先，使用高优先级队列)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -82,13 +89,21 @@ extension MusicController {
         lastUserActionTime = Date()
         skipDirection = 1
         markQueueMayHaveChanged()
+        let queueGeneration = queueSyncGeneration
         controlQueue.async { [weak self] in
-            guard let app = self?.controlApp, app.isRunning else {
+            guard let self else { return }
+            guard let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] nextTrack: app not available\n")
+                DispatchQueue.main.async { [weak self] in
+                    self?.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: queueGeneration)
+                }
                 return
             }
             debugPrint("⏭️ [MusicController] nextTrack() executing\n")
             app.perform(Selector(("nextTrack")))
+            DispatchQueue.main.async { [weak self] in
+                self?.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: queueGeneration)
+            }
         }
     }
 
@@ -103,13 +118,21 @@ extension MusicController {
             lastUserActionTime = Date()
             skipDirection = -1
             markQueueMayHaveChanged()
+            let queueGeneration = queueSyncGeneration
             controlQueue.async { [weak self] in
-                guard let app = self?.controlApp, app.isRunning else {
+                guard let self else { return }
+                guard let app = self.controlApp, app.isRunning else {
                     debugPrint("⚠️ [MusicController] previousTrack: app not available\n")
+                    DispatchQueue.main.async { [weak self] in
+                        self?.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: queueGeneration)
+                    }
                     return
                 }
                 debugPrint("⏮️ [MusicController] previousTrack() executing\n")
                 app.perform(Selector(("backTrack")))
+                DispatchQueue.main.async { [weak self] in
+                    self?.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: queueGeneration)
+                }
             }
         }
     }
@@ -158,18 +181,24 @@ extension MusicController {
         // Optimistic UI update
         self.shuffleEnabled = newShuffleState
         markQueueMayHaveChanged()
+        let queueGeneration = queueSyncGeneration
 
         // 🔑 User-initiated control uses dedicated controlQueue
         controlQueue.async { [weak self] in
-            guard let self, let app = self.controlApp, app.isRunning else {
+            guard let self else { return }
+            guard let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] toggleShuffle: app not available\n")
+                DispatchQueue.main.async { [weak self] in
+                    self?.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: queueGeneration)
+                }
                 return
             }
             debugPrint("🔀 [MusicController] setShuffle(\(newShuffleState)) executing on controlQueue\n")
             app.setValue(newShuffleState, forKey: "shuffleEnabled")
             DispatchQueue.main.async { [weak self] in
-                self?.markQueueMayHaveChanged()
-                self?.scheduleQueueRefreshAfterMusicControlChange()
+                guard let self else { return }
+                self.markQueueMayHaveChanged()
+                self.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: self.queueSyncGeneration)
             }
         }
     }
@@ -180,11 +209,17 @@ extension MusicController {
             return
         }
 
+        guard Self.canPlayTrackViaMusicAppPersistentID(persistentID) else {
+            DebugLogger.log("Playback", "⚠️ Refusing app-local Apple Music API row playback for persistentID=\(persistentID)")
+            return
+        }
+
         debugPrint("🎵 [playTrack] Playing track with persistentID: \(persistentID)\n")
         markQueueMayHaveChanged()
+        let queueGeneration = queueSyncGeneration
 
         // 🔑 AppleScript execution — not SBApplication, so global queue is safe
-        DispatchQueue.global(qos: .userInteractive).async {
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             let script = """
             tell application "Music"
                 set targetTrack to first track of current playlist whose persistent ID is "\(persistentID)"
@@ -201,74 +236,18 @@ extension MusicController {
                     debugPrint("▶️ [playTrack] Started playing via AppleScript\n")
                 }
             }
+            DispatchQueue.main.async { [weak self] in
+                self?.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: queueGeneration)
+            }
         }
     }
 
     public func playTrack(title: String, artist: String, album: String, persistentID: String) {
-        if persistentID.hasPrefix("am:") {
-            playAppleMusicTrack(title: title, artist: artist, album: album, appleMusicID: String(persistentID.dropFirst(3)))
-        } else {
-            playTrack(persistentID: persistentID)
-        }
-    }
-
-    private func playAppleMusicTrack(title: String, artist: String, album: String, appleMusicID: String) {
-        guard MusicAuthorization.currentStatus == .authorized else {
-            DebugLogger.log("Playback", "⚠️ Apple Music row playback requires MusicKit authorization")
+        guard Self.canPlayTrackViaMusicAppPersistentID(persistentID) else {
+            DebugLogger.log("Playback", "⚠️ Refusing app-local Apple Music API row playback for '\(title)' by '\(artist)'")
             return
         }
-
-        Task(priority: .userInitiated) { [weak self] in
-            do {
-                guard let song = try await self?.resolveAppleMusicSong(
-                    id: appleMusicID,
-                    title: title,
-                    artist: artist,
-                    album: album
-                ) else {
-                    DebugLogger.log("Playback", "⚠️ Apple Music row playback could not resolve '\(title)' by '\(artist)'")
-                    return
-                }
-
-                let player = ApplicationMusicPlayer.shared
-                player.queue = ApplicationMusicPlayer.Queue(for: [song], startingAt: song)
-                try await player.play()
-                let playbackStartTime = Date()
-                await MainActor.run { [weak self] in
-                    self?.lastUserActionTime = playbackStartTime
-                    self?.markQueueMayHaveChanged()
-                }
-            } catch {
-                DebugLogger.log("Playback", "⚠️ Apple Music row playback failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func resolveAppleMusicSong(id: String, title: String, artist: String, album: String) async throws -> Song? {
-        if !id.hasPrefix("i.") {
-            var request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
-            request.limit = 1
-            if let song = try await request.response().items.first {
-                return song
-            }
-        }
-
-        var search = MusicCatalogSearchRequest(term: "\(title) \(artist)", types: [Song.self])
-        search.limit = 10
-        let songs = try await search.response().songs
-        return songs
-            .map { song -> (song: Song, score: ArtworkMatchScore) in
-                (song, Self.scoreArtworkCandidate(
-                    title: title,
-                    artist: artist,
-                    album: album,
-                    candidateTitle: song.title,
-                    candidateArtist: song.artistName,
-                    candidateAlbum: song.albumTitle ?? ""
-                ))
-            }
-            .filter { $0.score.isReliable }
-            .max(by: { $0.score.total < $1.score.total })?.song
+        playTrack(persistentID: persistentID)
     }
 
     public func cycleRepeatMode() {
@@ -280,6 +259,7 @@ extension MusicController {
 
         let newMode = (repeatMode + 1) % 3
         markQueueMayHaveChanged()
+        let queueGeneration = queueSyncGeneration
         let repeatValue = AppleEventCode.songRepeatValue(for: newMode)
 
         // Optimistic UI update
@@ -287,24 +267,89 @@ extension MusicController {
 
         // 🔑 User-initiated control uses dedicated controlQueue
         controlQueue.async { [weak self] in
-            guard let self, let app = self.controlApp, app.isRunning else {
+            guard let self else { return }
+            guard let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] cycleRepeatMode: app not available\n")
+                DispatchQueue.main.async { [weak self] in
+                    self?.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: queueGeneration)
+                }
                 return
             }
             debugPrint("🔁 [MusicController] setRepeat(\(newMode)) -> 0x\(String(repeatValue, radix: 16))\n")
             app.setValue(repeatValue, forKey: "songRepeat")
             DispatchQueue.main.async { [weak self] in
-                self?.markQueueMayHaveChanged()
-                self?.scheduleQueueRefreshAfterMusicControlChange()
+                guard let self else { return }
+                self.markQueueMayHaveChanged()
+                self.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: self.queueSyncGeneration)
             }
         }
     }
 
-    private func scheduleQueueRefreshAfterMusicControlChange() {
-        fetchUpNextQueue()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.fetchUpNextQueue()
+    private func scheduleQueueRefreshAfterMusicControlChange(queueGeneration: UInt64? = nil) {
+        let runIfCurrent: () -> Void = { [weak self] in
+            guard let self else { return }
+            if let queueGeneration,
+               !Self.shouldRunMusicControlQueueRefresh(
+                    requestQueueGeneration: queueGeneration,
+                    currentQueueGeneration: self.queueSyncGeneration
+               ) {
+                return
+            }
+            self.fetchUpNextQueue()
         }
+
+        runIfCurrent()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self else { return }
+            if let queueGeneration,
+               !Self.shouldRunMusicControlQueueRefresh(
+                    requestQueueGeneration: queueGeneration,
+                    currentQueueGeneration: self.queueSyncGeneration
+               ) {
+                return
+            }
+            self.fetchUpNextQueue()
+        }
+    }
+
+    private func markQueueFetchPending(forceRecent: Bool) {
+        let pendingMatchesCurrentGeneration =
+            queueFetchPending
+            && queueFetchPendingQueueGeneration == queueSyncGeneration
+            && queueFetchPendingTrackGeneration == artworkFetchGeneration
+
+        queueFetchPending = true
+        queueFetchPendingForceRecent = pendingMatchesCurrentGeneration
+            ? queueFetchPendingForceRecent || forceRecent
+            : forceRecent
+        queueFetchPendingQueueGeneration = queueSyncGeneration
+        queueFetchPendingTrackGeneration = artworkFetchGeneration
+    }
+
+    private func clearPendingQueueFetch() {
+        queueFetchPending = false
+        queueFetchPendingForceRecent = false
+        queueFetchPendingQueueGeneration = nil
+        queueFetchPendingTrackGeneration = nil
+    }
+
+    private func consumePendingQueueFetchIfCurrent() -> Bool? {
+        guard queueFetchPending else { return nil }
+
+        guard Self.shouldRunPendingQueueFetch(
+            requestQueueGeneration: queueFetchPendingQueueGeneration,
+            currentQueueGeneration: queueSyncGeneration,
+            requestTrackGeneration: queueFetchPendingTrackGeneration,
+            currentTrackGeneration: artworkFetchGeneration
+        ) else {
+            clearPendingQueueFetch()
+            logger.info("Discarded stale pending queue fetch")
+            return nil
+        }
+
+        let pendingForceRecent = queueFetchPendingForceRecent
+        clearPendingQueueFetch()
+        return pendingForceRecent
     }
 
     public func fetchUpNextQueue(forceRecent: Bool = false) {
@@ -317,51 +362,55 @@ extension MusicController {
                 ("Next Song 2", "Artist 2", "Album 2", "2", 200.0),
                 ("Next Song 3", "Artist 3", "Album 3", "3", 220.0)
             ]
+            upNextRawRowCount = upNextTracks.count
+            upNextProvenance = .preview
             recentTracks = [
                 ("Recent Song 1", "Artist A", "Album A", "A", 190.0),
                 ("Recent Song 2", "Artist B", "Album B", "B", 210.0)
             ]
+            recentRawRowCount = recentTracks.count
+            recentTracksProvenance = .preview
             return
         }
 
         let now = Date()
         if queueFetchInFlight {
-            queueFetchPending = true
-            queueFetchPendingForceRecent = queueFetchPendingForceRecent || forceRecent
+            markQueueFetchPending(forceRecent: forceRecent)
             return
         }
 
         let elapsed = now.timeIntervalSince(lastQueueFetchStartedAt)
         if elapsed < queueFetchMinimumInterval {
-            queueFetchPending = true
-            queueFetchPendingForceRecent = queueFetchPendingForceRecent || forceRecent
+            markQueueFetchPending(forceRecent: forceRecent)
             DispatchQueue.main.asyncAfter(deadline: .now() + (queueFetchMinimumInterval - elapsed)) { [weak self] in
                 guard let self else { return }
-                if self.queueFetchPending && !self.queueFetchInFlight {
-                    let pendingForceRecent = self.queueFetchPendingForceRecent
-                    self.queueFetchPending = false
-                    self.queueFetchPendingForceRecent = false
-                    self.fetchUpNextQueue(forceRecent: pendingForceRecent)
-                }
+                guard !self.queueFetchInFlight,
+                      let pendingForceRecent = self.consumePendingQueueFetchIfCurrent() else { return }
+                self.fetchUpNextQueue(forceRecent: pendingForceRecent)
             }
             return
         }
 
+        clearPendingQueueFetch()
         queueFetchInFlight = true
         lastQueueFetchStartedAt = now
         let requestQueueGeneration = queueSyncGeneration
+        let requestTrackGeneration = artworkFetchGeneration
 
         // 使用 ScriptingBridge 获取队列（App Store 合规）
         Task {
-            await fetchUpNextViaBridge(requestQueueGeneration: requestQueueGeneration)
+            await fetchUpNextViaBridge(
+                requestQueueGeneration: requestQueueGeneration,
+                requestTrackGeneration: requestTrackGeneration
+            )
             await MainActor.run {
                 self.queueFetchInFlight = false
                 if self.queueFetchPending {
-                    let pendingForceRecent = self.queueFetchPendingForceRecent
-                    self.queueFetchPending = false
-                    self.queueFetchPendingForceRecent = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + self.queueFetchMinimumInterval) { [weak self] in
-                        self?.fetchUpNextQueue(forceRecent: pendingForceRecent)
+                        guard let self else { return }
+                        guard !self.queueFetchInFlight,
+                              let pendingForceRecent = self.consumePendingQueueFetchIfCurrent() else { return }
+                        self.fetchUpNextQueue(forceRecent: pendingForceRecent)
                     }
                 }
             }
@@ -371,47 +420,74 @@ extension MusicController {
         let shouldRefreshRecent = forceRecent || now.timeIntervalSince(lastRecentHistoryFetchAt) >= recentHistoryRefreshInterval
         if shouldRefreshRecent {
             lastRecentHistoryFetchAt = now
-            fetchRecentHistoryViaBridge()
+            fetchRecentHistoryViaBridge(
+                requestQueueGeneration: requestQueueGeneration,
+                requestTrackGeneration: requestTrackGeneration
+            )
         }
     }
 
     public func refreshQueueForPlaylistOpen() {
-        let hasVisibleQueueData = !upNextTracks.isEmpty || !recentTracks.isEmpty
+        let hasDisplayableQueueData =
+            (upNextProvenance.canDisplayAsRealTimeQueueRows && !upNextTracks.isEmpty)
+            || (recentTracksProvenance.canDisplayAsRealTimeQueueRows && !recentTracks.isEmpty)
         let recentlyCompletedQueue = Date().timeIntervalSince(lastQueueFetchCompletedAt) < 5.0
         let completedCurrentQueueGeneration = lastQueueFetchCompletedGeneration == queueSyncGeneration
 
         if Self.shouldUseCachedQueueForPlaylistOpen(
-            hasVisibleQueueData: hasVisibleQueueData,
+            hasDisplayableQueueData: hasDisplayableQueueData,
             recentlyCompletedQueue: recentlyCompletedQueue,
             completedCurrentQueueGeneration: completedCurrentQueueGeneration
         ) {
             return
         }
 
-        fetchUpNextQueue(forceRecent: recentTracks.isEmpty)
+        fetchUpNextQueue(forceRecent: Self.shouldForceRecentHistoryForPlaylistOpen(
+            provenance: recentTracksProvenance,
+            rowsAreEmpty: recentTracks.isEmpty
+        ))
     }
 
     /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
-    private func fetchUpNextViaBridge(requestQueueGeneration: UInt64) async {
+    private func fetchUpNextViaBridge(
+        requestQueueGeneration: UInt64,
+        requestTrackGeneration: Int
+    ) async {
         debugPrint("📋 [fetchUpNextViaBridge] Called, queueApp=\(queueApp != nil)\n")
         guard let app = queueApp, app.isRunning else {
             debugPrint("⚠️ [fetchUpNextViaBridge] queueApp not available\n")
+            await MainActor.run {
+                guard Self.shouldApplyQueueSnapshot(
+                    requestQueueGeneration: requestQueueGeneration,
+                    currentQueueGeneration: self.queueSyncGeneration,
+                    requestTrackGeneration: requestTrackGeneration,
+                    currentTrackGeneration: self.artworkFetchGeneration
+                ) else {
+                    self.logger.info("Discarded stale Up Next unavailable snapshot for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
+                    return
+                }
+                _ = self.applyUpNextSnapshotIfChanged(QueueFetchSnapshot(
+                    tracks: [],
+                    provenance: .unavailable(reason: .musicAppUnavailable)
+                ))
+            }
             return
         }
 
-        let requestGeneration = artworkFetchGeneration
-
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         let controller = WeakSendableReference(self)
-        let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
+        let snapshot: QueueFetchSnapshot = await withCheckedContinuation { continuation in
             scriptingBridgeQueue.async {
                 guard let self = controller.value else {
-                    continuation.resume(returning: [])
+                    continuation.resume(returning: QueueFetchSnapshot(
+                        tracks: [],
+                        provenance: .unavailable(reason: .musicAppUnavailable)
+                    ))
                     return
                 }
                 defer { DispatchQueue.main.async { controller.value?.lastSBQueueHeartbeat = Date() } }
                 let limit = self.currentPage == .playlist ? 10 : 2
-                let result = self.getUpNextTracksFromApp(app, limit: limit)
+                let result = self.getUpNextSnapshotFromApp(app, limit: limit)
                 continuation.resume(returning: result)
             }
         }
@@ -420,18 +496,21 @@ extension MusicController {
             guard Self.shouldApplyQueueSnapshot(
                 requestQueueGeneration: requestQueueGeneration,
                 currentQueueGeneration: self.queueSyncGeneration,
-                requestTrackGeneration: requestGeneration,
+                requestTrackGeneration: requestTrackGeneration,
                 currentTrackGeneration: self.artworkFetchGeneration
             ) else {
-                self.logger.info("Discarded stale Up Next fetch for queue generation \(requestQueueGeneration), track generation \(requestGeneration)")
+                self.logger.info("Discarded stale Up Next fetch for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
                 return
             }
-            let didChange = self.applyUpNextTracksIfChanged(tracks)
+            let didChange = self.applyUpNextSnapshotIfChanged(snapshot)
             self.lastQueueFetchCompletedAt = Date()
             self.lastQueueFetchCompletedGeneration = requestQueueGeneration
-            self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
-            if didChange {
-                self.preloadNearbyAssets(from: tracks)
+            self.logger.info("✅ Fetched \(snapshot.tracks.count) up next tracks via ScriptingBridge")
+            if Self.shouldPreloadNearbyAssets(
+                didChange: didChange,
+                provenance: snapshot.provenance
+            ) {
+                self.preloadNearbyAssets(from: snapshot.tracks)
             }
         }
     }
@@ -441,26 +520,55 @@ extension MusicController {
     /// Apple Event — during rapid switching, the playlist/track objects become stale and
     /// cause EXC_BAD_ACCESS (pointer authentication failure). The generation check bails
     /// early when a new track change has been detected, preventing iteration on stale objects.
-    private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+    private func getUpNextSnapshotFromApp(_ app: SBApplication, limit: Int) -> QueueFetchSnapshot {
         let gen = artworkFetchGeneration  // Snapshot generation at start
 
         // 🔑 Hard timeout: prevents scriptingBridgeQueue from backing up when
         // Music.app hangs the playlist IPC. Previously the heartbeat recovery
         // recreated the SBApplication, which caused EXC_BAD_ACCESS in
         // AEProcessMessage (ARC-freed app with pending AE replies).
-        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
+        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> QueueFetchSnapshot? in
             guard let self else { return nil }
-            var result: [(String, String, String, String, Double)] = []
+            var result: [MusicQueueTrackRow] = []
+            var provenance: MusicQueueProvenance = .unavailable(reason: .publicSourceUnverified)
 
             // 🔑 ObjC shield: SBElementArray iteration can crash with NSException when
             // Music.app mutates the playlist mid-loop (rapid switching, queue edit).
             let ex = OBJCCatch {
 
-            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-                  let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+            guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
                   let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+                provenance = .unavailable(reason: .noCurrentTrack)
                 debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n")
+                return
+            }
+            let trackClass = Self.musicTrackClassName(from: currentTrack)
+
+            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject else {
+                provenance = Self.currentPlaylistRowsProvenance(
+                    hasCurrentPlaylist: false,
+                    trackClass: trackClass,
+                    playlistName: nil
+                )
+                debugPrint("⚠️ [getUpNextTracksFromApp] currentPlaylist unavailable; provenance=\(String(describing: provenance))\n")
+                return
+            }
+
+            let playlistName = playlist.value(forKey: "name") as? String
+            provenance = Self.currentPlaylistRowsProvenance(
+                hasCurrentPlaylist: true,
+                trackClass: trackClass,
+                playlistName: playlistName
+            )
+
+            guard Self.shouldMaterializeQueueRows(provenance: provenance) else {
+                debugPrint("📋 [getUpNextTracksFromApp] Skipping unproven playlist-context rows for provenance=\(String(describing: provenance))\n")
+                return
+            }
+
+            guard let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+                provenance = .unavailable(reason: .publicSourceUnverified)
+                debugPrint("⚠️ [getUpNextTracksFromApp] currentPlaylist tracks unavailable\n")
                 return
             }
 
@@ -529,36 +637,80 @@ extension MusicController {
             if let ex {
                 DebugLogger.log("Playback", "⚠️ [getUpNextTracksFromApp] NSException swallowed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
             }
-            return result
-        } ?? []
+            return QueueFetchSnapshot(tracks: result, provenance: provenance)
+        } ?? QueueFetchSnapshot(tracks: [], provenance: .unavailable(reason: .publicSourceUnverified))
     }
 
     /// 使用 ScriptingBridge 获取播放历史（使用自己的 musicApp 实例）
-    private func fetchRecentHistoryViaBridge() {
-        guard let app = queueApp, app.isRunning else { return }
+    private func fetchRecentHistoryViaBridge(
+        requestQueueGeneration: UInt64,
+        requestTrackGeneration: Int
+    ) {
+        guard let app = queueApp, app.isRunning else {
+            if Self.shouldApplyRecentHistorySnapshot(
+                requestQueueGeneration: requestQueueGeneration,
+                currentQueueGeneration: queueSyncGeneration,
+                requestTrackGeneration: requestTrackGeneration,
+                currentTrackGeneration: artworkFetchGeneration
+            ) {
+                _ = applyRecentSnapshotIfChanged(QueueFetchSnapshot(
+                    tracks: [],
+                    provenance: .unavailable(reason: .musicAppUnavailable)
+                ))
+            }
+            return
+        }
 
-        if MusicAuthorization.currentStatus == .authorized {
+        if MusicAuthorization.currentStatus == .authorized,
+           Self.shouldMaterializeQueueRows(provenance: .appleMusicAccountRecentlyPlayed) {
             Task { [weak self] in
                 guard let self else { return }
                 if let tracks = await self.fetchRecentHistoryViaAppleMusicAPI(), !tracks.isEmpty {
                     await MainActor.run {
-                        let didChange = self.applyRecentTracksIfChanged(tracks)
+                        guard Self.shouldApplyRecentHistorySnapshot(
+                            requestQueueGeneration: requestQueueGeneration,
+                            currentQueueGeneration: self.queueSyncGeneration,
+                            requestTrackGeneration: requestTrackGeneration,
+                            currentTrackGeneration: self.artworkFetchGeneration
+                        ) else {
+                            self.logger.info("Discarded stale recent history fetch for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
+                            return
+                        }
+                        let didChange = self.applyRecentSnapshotIfChanged(QueueFetchSnapshot(
+                            tracks: tracks,
+                            provenance: .appleMusicAccountRecentlyPlayed
+                        ))
                         self.logger.info("✅ Fetched \(tracks.count) recent tracks via Apple Music API")
-                        if didChange {
+                        if Self.shouldPreloadNearbyAssets(
+                            didChange: didChange,
+                            provenance: .appleMusicAccountRecentlyPlayed
+                        ) {
                             self.preloadNearbyAssets(from: tracks)
                         }
                     }
                     return
                 }
-                self.fetchRecentHistoryViaScriptingBridge(app)
+                self.fetchRecentHistoryViaScriptingBridge(
+                    app,
+                    requestQueueGeneration: requestQueueGeneration,
+                    requestTrackGeneration: requestTrackGeneration
+                )
             }
             return
         }
 
-        fetchRecentHistoryViaScriptingBridge(app)
+        fetchRecentHistoryViaScriptingBridge(
+            app,
+            requestQueueGeneration: requestQueueGeneration,
+            requestTrackGeneration: requestTrackGeneration
+        )
     }
 
-    private func fetchRecentHistoryViaScriptingBridge(_ app: SBApplication) {
+    private func fetchRecentHistoryViaScriptingBridge(
+        _ app: SBApplication,
+        requestQueueGeneration: UInt64,
+        requestTrackGeneration: Int
+    ) {
         guard app.isRunning else { return }
 
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
@@ -566,13 +718,25 @@ extension MusicController {
             guard let self = self else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
 
-            let tracks = self.getRecentTracksFromApp(app, limit: 10)
+            let snapshot = self.getRecentSnapshotFromApp(app, limit: 10)
 
             DispatchQueue.main.async {
-                let didChange = self.applyRecentTracksIfChanged(tracks)
-                self.logger.info("✅ Fetched \(tracks.count) recent tracks via ScriptingBridge")
-                if didChange {
-                    self.preloadNearbyAssets(from: tracks)
+                guard Self.shouldApplyRecentHistorySnapshot(
+                    requestQueueGeneration: requestQueueGeneration,
+                    currentQueueGeneration: self.queueSyncGeneration,
+                    requestTrackGeneration: requestTrackGeneration,
+                    currentTrackGeneration: self.artworkFetchGeneration
+                ) else {
+                    self.logger.info("Discarded stale recent history fetch for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
+                    return
+                }
+                let didChange = self.applyRecentSnapshotIfChanged(snapshot)
+                self.logger.info("✅ Fetched \(snapshot.tracks.count) recent tracks via ScriptingBridge")
+                if Self.shouldPreloadNearbyAssets(
+                    didChange: didChange,
+                    provenance: snapshot.provenance
+                ) {
+                    self.preloadNearbyAssets(from: snapshot.tracks)
                 }
             }
         }
@@ -631,17 +795,44 @@ extension MusicController {
     /// 🔑 Hard 3s timeout prevents scriptingBridgeQueue from hanging indefinitely on
     /// playlist IPC — which previously triggered the removed heartbeat-recreate path
     /// and the EXC_BAD_ACCESS in AEProcessMessage.
-    private func getRecentTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
-        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
+    private func getRecentSnapshotFromApp(_ app: SBApplication, limit: Int) -> QueueFetchSnapshot {
+        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> QueueFetchSnapshot? in
             guard let self else { return nil }
-            var recentList: [(String, String, String, String, Double)] = []
+            var recentList: [MusicQueueTrackRow] = []
+            var provenance: MusicQueueProvenance = .unavailable(reason: .publicSourceUnverified)
 
             // 🔑 ObjC shield: SBElementArray iteration may crash on mid-loop mutation.
             let ex = OBJCCatch {
-                guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-                      let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-                      let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+                guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
                       let currentID = currentTrack.value(forKey: "persistentID") as? String else {
+                    provenance = .unavailable(reason: .noCurrentTrack)
+                    return
+                }
+                let trackClass = Self.musicTrackClassName(from: currentTrack)
+
+                guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject else {
+                    provenance = Self.currentPlaylistRowsProvenance(
+                        hasCurrentPlaylist: false,
+                        trackClass: trackClass,
+                        playlistName: nil
+                    )
+                    return
+                }
+
+                let playlistName = playlist.value(forKey: "name") as? String
+                provenance = Self.currentPlaylistRowsProvenance(
+                    hasCurrentPlaylist: true,
+                    trackClass: trackClass,
+                    playlistName: playlistName
+                )
+
+                guard Self.shouldMaterializeQueueRows(provenance: provenance) else {
+                    debugPrint("📋 [getRecentTracksFromApp] Skipping unproven playlist-context rows for provenance=\(String(describing: provenance))\n")
+                    return
+                }
+
+                guard let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+                    provenance = .unavailable(reason: .publicSourceUnverified)
                     return
                 }
 
@@ -691,22 +882,77 @@ extension MusicController {
             }
 
             // 返回最后 limit 个，倒序（最近播放的在前）
-            return Array(recentList.suffix(limit).reversed())
-        } ?? []
+            return QueueFetchSnapshot(
+                tracks: Array(recentList.suffix(limit).reversed()),
+                provenance: provenance
+            )
+        } ?? QueueFetchSnapshot(tracks: [], provenance: .unavailable(reason: .publicSourceUnverified))
     }
 
     @discardableResult
-    private func applyUpNextTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) -> Bool {
-        guard !sameTrackIdentity(upNextTracks, tracks) else { return false }
-        upNextTracks = tracks
-        return true
+    private func applyUpNextSnapshotIfChanged(_ snapshot: QueueFetchSnapshot) -> Bool {
+        let retainedTracks = Self.rowsRetainedForRealTimeQueueStorage(
+            snapshot.tracks,
+            provenance: snapshot.provenance
+        )
+        let rawRowCount = snapshot.tracks.count
+        let tracksChanged = !sameTrackIdentity(upNextTracks, retainedTracks)
+        let rawRowCountChanged = upNextRawRowCount != rawRowCount
+        let provenanceChanged = upNextProvenance != snapshot.provenance
+        if tracksChanged { upNextTracks = retainedTracks }
+        if rawRowCountChanged { upNextRawRowCount = rawRowCount }
+        if provenanceChanged {
+            upNextProvenance = snapshot.provenance
+            let track = diagnosticsTrackContext()
+            let provenanceLabel = snapshot.provenance.diagnosticLabel
+            let rawRowCount = Double(rawRowCount)
+            let retainedRowCount = Double(retainedTracks.count)
+            Task { @MainActor in
+                DiagnosticsService.shared.recordEvent(
+                    "queue.upNext.provenance.changed",
+                    detail: provenanceLabel,
+                    track: track,
+                    metrics: [
+                        "rowCount": retainedRowCount,
+                        "rawRowCount": rawRowCount
+                    ]
+                )
+            }
+        }
+        return tracksChanged || rawRowCountChanged || provenanceChanged
     }
 
     @discardableResult
-    private func applyRecentTracksIfChanged(_ tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)]) -> Bool {
-        guard !sameTrackIdentity(recentTracks, tracks) else { return false }
-        recentTracks = tracks
-        return true
+    private func applyRecentSnapshotIfChanged(_ snapshot: QueueFetchSnapshot) -> Bool {
+        let retainedTracks = Self.rowsRetainedForRealTimeQueueStorage(
+            snapshot.tracks,
+            provenance: snapshot.provenance
+        )
+        let rawRowCount = snapshot.tracks.count
+        let tracksChanged = !sameTrackIdentity(recentTracks, retainedTracks)
+        let rawRowCountChanged = recentRawRowCount != rawRowCount
+        let provenanceChanged = recentTracksProvenance != snapshot.provenance
+        if tracksChanged { recentTracks = retainedTracks }
+        if rawRowCountChanged { recentRawRowCount = rawRowCount }
+        if provenanceChanged {
+            recentTracksProvenance = snapshot.provenance
+            let track = diagnosticsTrackContext()
+            let provenanceLabel = snapshot.provenance.diagnosticLabel
+            let rawRowCount = Double(rawRowCount)
+            let retainedRowCount = Double(retainedTracks.count)
+            Task { @MainActor in
+                DiagnosticsService.shared.recordEvent(
+                    "queue.recent.provenance.changed",
+                    detail: provenanceLabel,
+                    track: track,
+                    metrics: [
+                        "rowCount": retainedRowCount,
+                        "rawRowCount": rawRowCount
+                    ]
+                )
+            }
+        }
+        return tracksChanged || rawRowCountChanged || provenanceChanged
     }
 
     @MainActor
@@ -760,6 +1006,24 @@ extension MusicController {
         }
     }
 
+    static func currentPlaylistRowsProvenance(
+        hasCurrentPlaylist: Bool,
+        trackClass: String,
+        playlistName: String?
+    ) -> MusicQueueProvenance {
+        guard hasCurrentPlaylist else {
+            let normalizedClass = trackClass.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .unavailable(reason: .noCurrentPlaylistForTrackClass(normalizedClass.isEmpty ? "unknown" : normalizedClass))
+        }
+
+        let normalizedPlaylist = playlistName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedPlaylist, !normalizedPlaylist.isEmpty {
+            return .playlistContextOnly(playlistName: normalizedPlaylist)
+        }
+        return .playlistContextOnly(playlistName: nil)
+    }
+
     static func shouldApplyQueueSnapshot(
         requestQueueGeneration: UInt64,
         currentQueueGeneration: UInt64,
@@ -770,12 +1034,86 @@ extension MusicController {
             && requestTrackGeneration == currentTrackGeneration
     }
 
+    static func shouldApplyRecentHistorySnapshot(
+        requestQueueGeneration: UInt64,
+        currentQueueGeneration: UInt64,
+        requestTrackGeneration: Int,
+        currentTrackGeneration: Int
+    ) -> Bool {
+        shouldApplyQueueSnapshot(
+            requestQueueGeneration: requestQueueGeneration,
+            currentQueueGeneration: currentQueueGeneration,
+            requestTrackGeneration: requestTrackGeneration,
+            currentTrackGeneration: currentTrackGeneration
+        )
+    }
+
+    static func shouldRunMusicControlQueueRefresh(
+        requestQueueGeneration: UInt64,
+        currentQueueGeneration: UInt64
+    ) -> Bool {
+        requestQueueGeneration == currentQueueGeneration
+    }
+
+    static func shouldRunPendingQueueFetch(
+        requestQueueGeneration: UInt64?,
+        currentQueueGeneration: UInt64,
+        requestTrackGeneration: Int?,
+        currentTrackGeneration: Int
+    ) -> Bool {
+        guard let requestQueueGeneration, let requestTrackGeneration else {
+            return false
+        }
+
+        return shouldApplyQueueSnapshot(
+            requestQueueGeneration: requestQueueGeneration,
+            currentQueueGeneration: currentQueueGeneration,
+            requestTrackGeneration: requestTrackGeneration,
+            currentTrackGeneration: currentTrackGeneration
+        )
+    }
+
     static func shouldUseCachedQueueForPlaylistOpen(
-        hasVisibleQueueData: Bool,
+        hasDisplayableQueueData: Bool,
         recentlyCompletedQueue: Bool,
         completedCurrentQueueGeneration: Bool
     ) -> Bool {
-        hasVisibleQueueData && recentlyCompletedQueue && completedCurrentQueueGeneration
+        hasDisplayableQueueData && recentlyCompletedQueue && completedCurrentQueueGeneration
+    }
+
+    static func shouldPreloadNearbyAssets(
+        didChange: Bool,
+        provenance: MusicQueueProvenance
+    ) -> Bool {
+        didChange && provenance.canDisplayAsRealTimeQueueRows
+    }
+
+    static func rowsRetainedForRealTimeQueueStorage<Row>(
+        _ rows: [Row],
+        provenance: MusicQueueProvenance
+    ) -> [Row] {
+        provenance.canDisplayAsRealTimeQueueRows ? rows : []
+    }
+
+    static func shouldMaterializeQueueRows(provenance: MusicQueueProvenance) -> Bool {
+        provenance.canDisplayAsRealTimeQueueRows
+    }
+
+    static func shouldForceRecentHistoryForPlaylistOpen(
+        provenance: MusicQueueProvenance,
+        rowsAreEmpty: Bool
+    ) -> Bool {
+        provenance.canDisplayAsRealTimeQueueRows && rowsAreEmpty
+    }
+
+    static func canPlayTrackViaMusicAppPersistentID(_ persistentID: String) -> Bool {
+        let normalized = persistentID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized == persistentID, !normalized.isEmpty else { return false }
+        guard !normalized.lowercased().hasPrefix("am:") else { return false }
+
+        return normalized.unicodeScalars.allSatisfy { scalar in
+            CharacterSet(charactersIn: "0123456789abcdefABCDEF").contains(scalar)
+        }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
