@@ -49,4 +49,59 @@ final class UpdateServiceTests: XCTestCase {
     func testAutoUpdatesRemainEnabledForNormalBundles() {
         XCTAssertFalse(UpdateService.autoUpdatesDisabled(info: [:], environment: [:]))
     }
+
+    func testUpdateSequenceReadsInfoPlistValues() {
+        XCTAssertEqual(UpdateService.updateSequence(from: ["NPUpdateSequence": 28]), 28)
+        XCTAssertEqual(UpdateService.updateSequence(from: ["NPUpdateSequence": NSNumber(value: 29)]), 29)
+        XCTAssertEqual(UpdateService.updateSequence(from: ["NPUpdateSequence": "30"]), 30)
+        XCTAssertNil(UpdateService.updateSequence(from: [:]))
+    }
+
+    func testReleaseBodyUpdateSequenceBridgesFromV2TagToBetaVersion() {
+        let body = """
+        ## Release
+        UpdateSequence: 28
+        DisplayVersion: 0.28 beta
+        """
+
+        XCTAssertEqual(UpdateService.releaseUpdateSequence(tagName: "v2.8", body: body), 28)
+        XCTAssertFalse(
+            UpdateService.shouldUpdate(
+                remoteTag: "v2.8",
+                remoteBody: body,
+                installedVersion: "0.28",
+                installedUpdateSequence: 28
+            ),
+            "The 0.28 bridge app must not repeatedly stage the v2.8 bridge release."
+        )
+        XCTAssertTrue(
+            UpdateService.shouldUpdate(
+                remoteTag: "v2.8",
+                remoteBody: body,
+                installedVersion: "2.7",
+                installedUpdateSequence: nil
+            ),
+            "Existing 2.7 installs still need the v2.8 tag to trigger the bridge update."
+        )
+    }
+
+    func testZeroDotBetaTagsDeriveUpdateSequence() {
+        XCTAssertEqual(UpdateService.releaseUpdateSequence(tagName: "v0.29", body: nil), 29)
+        XCTAssertTrue(
+            UpdateService.shouldUpdate(
+                remoteTag: "v0.29",
+                remoteBody: nil,
+                installedVersion: "0.28",
+                installedUpdateSequence: 28
+            )
+        )
+        XCTAssertFalse(
+            UpdateService.shouldUpdate(
+                remoteTag: "v0.29",
+                remoteBody: nil,
+                installedVersion: "0.29",
+                installedUpdateSequence: 29
+            )
+        )
+    }
 }

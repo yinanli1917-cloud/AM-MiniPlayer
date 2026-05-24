@@ -1,8 +1,48 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="2.5"
+VERSION="${NANOPOD_MARKETING_VERSION:-0.28}"
+DISPLAY_VERSION="${NANOPOD_DISPLAY_VERSION:-0.28 beta}"
+UPDATE_SEQUENCE="${NANOPOD_UPDATE_SEQUENCE:-28}"
+BUILD_MODE="${1:-local}"
 UPDATE_DIR="$HOME/Library/Application Support/nanoPod/updates"
+
+case "$BUILD_MODE" in
+    release|--release)
+        RELEASE_BUILD=1
+        AUTO_UPDATE_STATE="enabled"
+        ;;
+    local|--local|"")
+        RELEASE_BUILD=0
+        AUTO_UPDATE_STATE="disabled"
+        ;;
+    *)
+        echo "Usage: ./build_app.sh [local|release]"
+        exit 64
+        ;;
+esac
+
+set_plist_string() {
+    local plist="$1"
+    local key="$2"
+    local value="$3"
+    /usr/libexec/PlistBuddy -c "Set :$key $value" "$plist" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :$key string $value" "$plist"
+}
+
+set_plist_integer() {
+    local plist="$1"
+    local key="$2"
+    local value="$3"
+    /usr/libexec/PlistBuddy -c "Set :$key $value" "$plist" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :$key integer $value" "$plist"
+}
+
+delete_plist_key_if_present() {
+    local plist="$1"
+    local key="$2"
+    /usr/libexec/PlistBuddy -c "Delete :$key" "$plist" >/dev/null 2>&1 || true
+}
 
 cleanup_bundle_metadata() {
     find nanoPod.app -name '._*' -delete 2>/dev/null || true
@@ -26,25 +66,47 @@ assert_codesign_valid() {
     fi
 }
 
-assert_local_build_identity() {
+assert_bundle_identity() {
     if [ ! -f nanoPod.app/Contents/Resources/BuildInfo.txt ]; then
         echo "❌ BuildInfo.txt missing; refusing to deliver an unverifiable bundle"
         exit 1
     fi
 
-    if ! grep -q "auto_update=disabled" nanoPod.app/Contents/Resources/BuildInfo.txt; then
-        echo "❌ BuildInfo.txt does not mark this as a local no-update build"
+    if ! grep -q "auto_update=$AUTO_UPDATE_STATE" nanoPod.app/Contents/Resources/BuildInfo.txt; then
+        echo "❌ BuildInfo.txt auto-update marker does not match $AUTO_UPDATE_STATE"
         exit 1
     fi
 
-    if [ "$(/usr/libexec/PlistBuddy -c 'Print :NPDisableAutoUpdate' nanoPod.app/Contents/Info.plist 2>/dev/null || true)" != "true" ]; then
-        echo "❌ NPDisableAutoUpdate missing from final bundle"
+    if [ "$(/usr/libexec/PlistBuddy -c 'Print :NPUpdateSequence' nanoPod.app/Contents/Info.plist 2>/dev/null || true)" != "$UPDATE_SEQUENCE" ]; then
+        echo "❌ NPUpdateSequence missing or wrong in final bundle"
         exit 1
     fi
 
-    if [ "$(/usr/libexec/PlistBuddy -c 'Print :NPLocalDeveloperBuild' nanoPod.app/Contents/Info.plist 2>/dev/null || true)" != "true" ]; then
-        echo "❌ NPLocalDeveloperBuild missing from final bundle"
+    if [ "$(/usr/libexec/PlistBuddy -c 'Print :NPDisplayVersion' nanoPod.app/Contents/Info.plist 2>/dev/null || true)" != "$DISPLAY_VERSION" ]; then
+        echo "❌ NPDisplayVersion missing or wrong in final bundle"
         exit 1
+    fi
+
+    if [ "$RELEASE_BUILD" = "1" ]; then
+        if /usr/libexec/PlistBuddy -c 'Print :NPDisableAutoUpdate' nanoPod.app/Contents/Info.plist >/dev/null 2>&1; then
+            echo "❌ Release bundle must not disable auto-update"
+            exit 1
+        fi
+
+        if /usr/libexec/PlistBuddy -c 'Print :NPLocalDeveloperBuild' nanoPod.app/Contents/Info.plist >/dev/null 2>&1; then
+            echo "❌ Release bundle must not be marked as a local developer build"
+            exit 1
+        fi
+    else
+        if [ "$(/usr/libexec/PlistBuddy -c 'Print :NPDisableAutoUpdate' nanoPod.app/Contents/Info.plist 2>/dev/null || true)" != "true" ]; then
+            echo "❌ NPDisableAutoUpdate missing from local bundle"
+            exit 1
+        fi
+
+        if [ "$(/usr/libexec/PlistBuddy -c 'Print :NPLocalDeveloperBuild' nanoPod.app/Contents/Info.plist 2>/dev/null || true)" != "true" ]; then
+            echo "❌ NPLocalDeveloperBuild missing from local bundle"
+            exit 1
+        fi
     fi
 }
 
@@ -103,11 +165,17 @@ cleanup_local_update_staging
 assert_no_local_update_staging
 
 echo "🔨 Building nanoPod..."
-/usr/libexec/PlistBuddy \
-    -c "Set :CFBundleVersion $VERSION" \
-    -c "Set :CFBundleShortVersionString $VERSION" \
-    Sources/MusicMiniPlayerApp/Info.plist
-swift build -c release -Xswiftc -DLOCAL_DEVELOPER_BUILD
+set_plist_string Sources/MusicMiniPlayerApp/Info.plist CFBundleVersion "$VERSION"
+set_plist_string Sources/MusicMiniPlayerApp/Info.plist CFBundleShortVersionString "$VERSION"
+set_plist_string Sources/MusicMiniPlayerApp/Info.plist NPDisplayVersion "$DISPLAY_VERSION"
+set_plist_integer Sources/MusicMiniPlayerApp/Info.plist NPUpdateSequence "$UPDATE_SEQUENCE"
+delete_plist_key_if_present Sources/MusicMiniPlayerApp/Info.plist NPDisableAutoUpdate
+delete_plist_key_if_present Sources/MusicMiniPlayerApp/Info.plist NPLocalDeveloperBuild
+if [ "$RELEASE_BUILD" = "1" ]; then
+    swift build -c release
+else
+    swift build -c release -Xswiftc -DLOCAL_DEVELOPER_BUILD
+fi
 
 echo "📦 Creating app bundle..."
 if pgrep -x nanoPod >/dev/null 2>&1; then
@@ -140,7 +208,8 @@ BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 GIT_REV="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 write_build_marker() {
-    local build_marker="version=$VERSION build_time=$BUILD_TIME git=$GIT_REV release_sha256=$SOURCE_HASH auto_update=disabled"
+    local display_token="${DISPLAY_VERSION// /-}"
+    local build_marker="version=$VERSION display_version=$display_token update_sequence=$UPDATE_SEQUENCE build_time=$BUILD_TIME git=$GIT_REV release_sha256=$SOURCE_HASH auto_update=$AUTO_UPDATE_STATE"
     cat > nanoPod.app/Contents/Resources/BuildInfo.txt << BUILDINFO
 $build_marker
 BUILDINFO
@@ -166,6 +235,10 @@ cat > nanoPod.app/Contents/Info.plist << PLIST
     <string>$VERSION</string>
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
+    <key>NPDisplayVersion</key>
+    <string>$DISPLAY_VERSION</string>
+    <key>NPUpdateSequence</key>
+    <integer>$UPDATE_SEQUENCE</integer>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
@@ -174,10 +247,6 @@ cat > nanoPod.app/Contents/Info.plist << PLIST
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
-    <key>NPLocalDeveloperBuild</key>
-    <true/>
-    <key>NPDisableAutoUpdate</key>
-    <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSAppleEventsUsageDescription</key>
@@ -200,6 +269,13 @@ cat > nanoPod.app/Contents/Info.plist << PLIST
 </dict>
 </plist>
 PLIST
+
+if [ "$RELEASE_BUILD" = "0" ]; then
+    /usr/libexec/PlistBuddy \
+        -c "Add :NPLocalDeveloperBuild bool true" \
+        -c "Add :NPDisableAutoUpdate bool true" \
+        nanoPod.app/Contents/Info.plist
+fi
 
 write_build_marker
 
@@ -260,7 +336,7 @@ cleanup_bundle_metadata
 assert_no_appledouble
 sign_bundle
 assert_codesign_valid
-assert_local_build_identity
+assert_bundle_identity
 assert_build_marker_hash_matches_release_binary
 write_signed_hash_manifest
 echo "✅ Code signature verified"

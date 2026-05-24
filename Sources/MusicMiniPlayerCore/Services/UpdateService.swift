@@ -1,12 +1,13 @@
 /**
- * [INPUT]: GitHub Releases API + CFBundleShortVersionString
+ * [INPUT]: GitHub Releases API + CFBundleShortVersionString + optional NPUpdateSequence
  * [OUTPUT]: Exports UpdateService.shared, observable @Published state
  * [POS]: Seamless auto-update — silent check/download/verify/stage.
  *
  * Design goals (from user: "most seamless, senseless, effortless"):
  *   - No UI prompt. No "check now" button required.
  *   - Fire-and-forget background check ~5s after launch.
- *   - Only acts if GitHub release tag > installed CFBundleShortVersionString.
+ *   - Acts when GitHub release update sequence or tag is newer than the
+ *     installed bundle.
  *   - Downloads .zip + .zip.sha256, verifies hash, expands to staged.app.
  *   - On verification failure the staged bundle is discarded, never applied.
  *   - The actual "apply" (swap bundle + relaunch) happens on app quit via
@@ -123,24 +124,31 @@ public final class UpdateService: ObservableObject {
         do {
             let release = try await fetchLatestRelease()
             let installed = Self.installedVersion
-            let remote = Self.normalize(release.tagName)
+            let installedSequence = Self.installedUpdateSequence
+            let remoteSequence = Self.releaseUpdateSequence(tagName: release.tagName, body: release.body)
+            let remoteMarker = Self.stagedVersionMarker(tagName: release.tagName, updateSequence: remoteSequence)
 
-            guard Self.isNewer(remote: remote, installed: installed) else {
+            guard Self.shouldUpdate(
+                remoteTag: release.tagName,
+                remoteBody: release.body,
+                installedVersion: installed,
+                installedUpdateSequence: installedSequence
+            ) else {
                 await setState(.upToDate)
                 return
             }
 
             // Already staged this exact version? Skip re-download.
-            if stagedVersion == remote,
+            if stagedVersion == remoteMarker,
                FileManager.default.fileExists(atPath: stagedAppURL.path) {
-                await setState(.staged(version: remote, stagedAppURL: stagedAppURL))
+                await setState(.staged(version: remoteMarker, stagedAppURL: stagedAppURL))
                 return
             }
 
-            try await download(release: release, version: remote)
+            try await download(release: release, version: remoteMarker)
 
-            await setStagedMarker(version: remote)
-            await setState(.staged(version: remote, stagedAppURL: stagedAppURL))
+            await setStagedMarker(version: remoteMarker)
+            await setState(.staged(version: remoteMarker, stagedAppURL: stagedAppURL))
         } catch {
             await setState(.failed(reason: "\(error)"))
         }
@@ -152,10 +160,12 @@ public final class UpdateService: ObservableObject {
 
     private struct Release: Decodable {
         let tagName: String
+        let body: String?
         let assets: [Asset]
 
         enum CodingKeys: String, CodingKey {
             case tagName = "tag_name"
+            case body
             case assets
         }
     }
@@ -318,6 +328,26 @@ public final class UpdateService: ObservableObject {
         return normalize(v)
     }
 
+    public nonisolated static var installedUpdateSequence: Int? {
+        updateSequence(from: Bundle.main.infoDictionary ?? [:])
+    }
+
+    public nonisolated static func updateSequence(from info: [String: Any]) -> Int? {
+        if let int = info["NPUpdateSequence"] as? Int {
+            return int
+        }
+
+        if let number = info["NPUpdateSequence"] as? NSNumber {
+            return number.intValue
+        }
+
+        if let string = info["NPUpdateSequence"] as? String {
+            return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        return nil
+    }
+
     public nonisolated static func autoUpdatesDisabled(
         info: [String: Any] = Bundle.main.infoDictionary ?? [:],
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -355,6 +385,66 @@ public final class UpdateService: ObservableObject {
         var s = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.first == "v" || s.first == "V" { s.removeFirst() }
         return s
+    }
+
+    public nonisolated static func releaseUpdateSequence(tagName: String, body: String?) -> Int? {
+        if let explicit = releaseBodyUpdateSequence(body) {
+            return explicit
+        }
+
+        let parts = normalize(tagName).split(separator: ".").map { Int($0) ?? 0 }
+        if parts.count >= 2, parts[0] == 0 {
+            return parts[1]
+        }
+
+        return nil
+    }
+
+    public nonisolated static func shouldUpdate(
+        remoteTag: String,
+        remoteBody: String?,
+        installedVersion: String,
+        installedUpdateSequence: Int?
+    ) -> Bool {
+        if let remoteSequence = releaseUpdateSequence(tagName: remoteTag, body: remoteBody),
+           let installedUpdateSequence {
+            return remoteSequence > installedUpdateSequence
+        }
+
+        return isNewer(remote: normalize(remoteTag), installed: installedVersion)
+    }
+
+    public nonisolated static func stagedVersionMarker(tagName: String, updateSequence: Int?) -> String {
+        if let updateSequence {
+            return "seq:\(updateSequence)"
+        }
+
+        return normalize(tagName)
+    }
+
+    private nonisolated static func releaseBodyUpdateSequence(_ body: String?) -> Int? {
+        guard let body else { return nil }
+
+        for rawLine in body.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = line.lowercased()
+            guard lower.hasPrefix("updatesequence:")
+                || lower.hasPrefix("update-sequence:")
+                || lower.hasPrefix("update_sequence:")
+                || lower.hasPrefix("update sequence:") else {
+                continue
+            }
+
+            let value = line.split(separator: ":", maxSplits: 1)
+                .dropFirst()
+                .first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value, let sequence = Int(value) {
+                return sequence
+            }
+        }
+
+        return nil
     }
 
     /// Semver-ish comparison: pad missing components with 0.

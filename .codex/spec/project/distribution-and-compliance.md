@@ -7,6 +7,24 @@
 - The Mac App Store variant is Apple Music-only and should use official Apple
   Music API/MusicKit authorization for Apple Music account access.
 
+## GitHub Beta Versioning And Auto-Update
+
+- GitHub beta/trial builds may display `0.x` product versions while preserving
+  the existing auto-update path for installed `2.x` builds.
+- Because shipped `2.7` builds compare GitHub release tags against
+  `CFBundleShortVersionString`, the first bridge build for the `0.x` scheme must
+  still be published under a monotonic GitHub tag, for example `v2.8`. The
+  bundle may display `0.28 beta`.
+- Bridge and later builds must include `NPUpdateSequence` in the app bundle.
+  The updater should compare release `UpdateSequence` metadata against
+  `NPUpdateSequence` when both are available, and only fall back to tag/version
+  comparison for legacy releases.
+- Release notes for the bridge release must include a plain line such as
+  `UpdateSequence: 28`. Future `v0.29+` tags may derive the update sequence from
+  the `0.x` tag, but including the explicit line remains preferred.
+- Local developer builds may set `NPLocalDeveloperBuild` and
+  `NPDisableAutoUpdate`; release builds must not set either flag.
+
 ## Shared System Features
 
 - System-level features that are not tied to a music source should stay

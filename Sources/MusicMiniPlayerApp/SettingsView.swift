@@ -174,7 +174,7 @@ struct SettingsWindowView: View {
             Text("nanoPod")
                 .font(.system(size: 24, weight: .bold, design: .rounded))
 
-            Text("\(L10n.localized("version")) \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+            Text("\(L10n.localized("version")) \(displayVersion)")
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(.secondary)
 
@@ -189,6 +189,12 @@ struct SettingsWindowView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var displayVersion: String {
+        Bundle.main.infoDictionary?["NPDisplayVersion"] as? String
+            ?? Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            ?? "?"
     }
 }
 

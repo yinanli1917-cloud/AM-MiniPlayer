@@ -9,7 +9,7 @@
 	<key>CFBundleName</key>
 	<string>nanoPod</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.5</string>
+	<string>0.28</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -22,11 +22,15 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>2.5</string>
+	<string>0.28</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NPDisplayVersion</key>
+	<string>0.28 beta</string>
+	<key>NPUpdateSequence</key>
+	<integer>28</integer>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Music Mini Player needs permission to control Music.app for playback control and to display track information, album artwork, and lyrics.</string>
 	<key>NSAppleMusicUsageDescription</key>
