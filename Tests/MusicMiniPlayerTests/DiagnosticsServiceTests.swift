@@ -402,6 +402,49 @@ final class DiagnosticsServiceTests: XCTestCase {
         )
     }
 
+    func testGeneratedLyricChunkMissingSourceTranslationCreatesInspectableIncident() {
+        let track = DiagnosticTrackContext(
+            title: "Segmented Translation Gap",
+            artist: "Diagnostics",
+            album: "Fixture",
+            duration: 180,
+            playbackTime: 120,
+            playerPage: "lyrics"
+        )
+
+        DiagnosticsService.shared.recordLyricsVisibleTranslationGap(
+            track: track,
+            lineIndex: 12,
+            sourceLineIndex: 7,
+            segmentIndex: 1,
+            segmentCount: 2,
+            displayIndex: 12,
+            activeIndex: 12,
+            playbackTime: 120.2,
+            lineStartTime: 119,
+            lineEndTime: 121,
+            totalLineCount: 30,
+            visibleLineCount: 4,
+            visibleTranslatedLineCount: 0,
+            visibleMissingTranslationLineCount: 1,
+            sourceLineHasTranslation: true,
+            lineIsTranslationEligible: true,
+            lineIsVocable: false,
+            showTranslation: true,
+            canTranslate: true,
+            translationFailed: false
+        )
+
+        let incident = DiagnosticsService.shared.incidents.first { $0.category == .lyricsPartialTranslation }
+        XCTAssertEqual(incident?.title, "Visible lyric line missing translation")
+        XCTAssertEqual(incident?.userSymptom, .missingTranslation)
+        XCTAssertEqual(incident?.metrics["sourceLineHasTranslation"], 1)
+        XCTAssertEqual(incident?.metrics["sourceLineIndex"], 7)
+        XCTAssertEqual(incident?.metrics["segmentIndex"], 1)
+        XCTAssertEqual(incident?.metrics["segmentCount"], 2)
+        XCTAssertEqual(incident?.evidence["reason"], "generated display chunk lost source translation")
+    }
+
     func testTrustedExactLRCLIBSyncedResultDoesNotCreateFallbackChurnNoise() {
         let track = DiagnosticTrackContext(
             title: "Round Midnight",

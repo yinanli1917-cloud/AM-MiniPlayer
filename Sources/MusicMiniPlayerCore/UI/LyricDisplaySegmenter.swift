@@ -86,10 +86,20 @@ enum LyricDisplaySegmenter {
             result.append(current.trimmingCharacters(in: .whitespaces))
         }
 
+        let polished = polishedWordDelimitedSegments(result.filter { !$0.isEmpty }, options: options)
+        if polished.count == count {
+            return polished
+        }
+        if polished.count < count {
+            let forced = forcedBalancedSegments(normalized, count: count, options: options)
+            if forced.count == count {
+                return forced
+            }
+        }
         if result.count < count, existing.count > result.count {
             return existing
         }
-        return polishedWordDelimitedSegments(result.filter { !$0.isEmpty }, options: options)
+        return polished
     }
 
     static func wordSegments(
@@ -103,7 +113,17 @@ enum LyricDisplaySegmenter {
         var currentUnits: Double = 0
 
         for word in words {
-            let unit = displayUnits(for: word.word)
+            let trimmedWord = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedWord.isEmpty {
+                if !current.isEmpty {
+                    result.append(current)
+                    current.removeAll()
+                    currentUnits = 0
+                }
+                continue
+            }
+
+            let unit = displayUnits(for: trimmedWord)
             let separatorUnit = needsSeparator(before: word, in: current) ? displayUnits(for: " ") : 0
             let nextUnits = currentUnits + separatorUnit + unit
 
@@ -116,7 +136,7 @@ enum LyricDisplaySegmenter {
                 currentUnits = nextUnits
             }
 
-            if isStrongBoundary(word.word), !current.isEmpty {
+            if isStrongBoundary(trimmedWord), !current.isEmpty {
                 result.append(current)
                 current.removeAll()
                 currentUnits = 0
@@ -323,6 +343,54 @@ enum LyricDisplaySegmenter {
         return result.map { $0.joined(separator: " ") }.filter { !$0.isEmpty }
     }
 
+    private static func forcedBalancedSegments(
+        _ text: String,
+        count: Int,
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        guard count > 1 else { return [text] }
+
+        let wordPieces = text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        if wordPieces.count >= count {
+            let grouped = balancedWordStrings(wordPieces, targetCount: count, options: options)
+            if grouped.count == count {
+                return grouped
+            }
+        }
+
+        let glyphs = text.map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard glyphs.count >= count else { return [text] }
+
+        var result: [String] = []
+        var current = ""
+        var currentUnits: Double = 0
+        let totalUnits = glyphs.reduce(0) { $0 + displayUnits(for: $1) }
+        let targetUnits = max(1, totalUnits / Double(count))
+
+        for (index, glyph) in glyphs.enumerated() {
+            let remainingGlyphsAfterCurrent = glyphs.count - index - 1
+            let remainingSlots = count - result.count - 1
+            if !current.isEmpty,
+               remainingSlots > 0,
+               remainingGlyphsAfterCurrent >= remainingSlots,
+               currentUnits >= targetUnits {
+                result.append(current)
+                current.removeAll()
+                currentUnits = 0
+            }
+            current += glyph
+            currentUnits += displayUnits(for: glyph)
+        }
+
+        if !current.isEmpty {
+            result.append(current)
+        }
+        return result.count == count ? result : [text]
+    }
+
     private static func bestTwoWaySplitIndex(
         forWords words: [String],
         options: LyricDisplaySegmentationOptions
@@ -333,12 +401,17 @@ enum LyricDisplaySegmenter {
         for index in 2...(words.count - 2) {
             let left = Array(words[..<index])
             let right = Array(words[index...])
-            let leftUnits = displayUnits(for: left.joined(separator: " "))
-            let rightUnits = displayUnits(for: right.joined(separator: " "))
+            let leftText = left.joined(separator: " ")
+            let rightText = right.joined(separator: " ")
+            let leftUnits = displayUnits(for: leftText)
+            let rightUnits = displayUnits(for: rightText)
             let orphanPenalty: Double =
                 (estimatedWrappedLineWordCounts(forWords: left, options: options).last == 1 ? 1_000 : 0)
                 + (estimatedWrappedLineWordCounts(forWords: right, options: options).last == 1 ? 1_000 : 0)
-            let score = orphanPenalty + abs(leftUnits - rightUnits)
+            let singleVisualLinePenalty: Double =
+                (estimatedVisualLineCount(for: leftText, options: options) == 1 ? 600 : 0)
+                + (estimatedVisualLineCount(for: rightText, options: options) == 1 ? 600 : 0)
+            let score = orphanPenalty + singleVisualLinePenalty + abs(leftUnits - rightUnits)
             if best == nil || score < best!.score {
                 best = (index, score)
             }
@@ -454,16 +527,17 @@ enum LyricDisplaySegmenter {
         _ segment: [LyricWord],
         options: LyricDisplaySegmentationOptions
     ) -> [[LyricWord]] {
-        let words = segment.map { $0.word.trimmingCharacters(in: .whitespaces) }
+        let words = segment.map { $0.word.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         let text = words.joined(separator: " ")
         if shouldPreserveCompactPhrase(
-            wordCount: segment.count,
+            wordCount: words.count,
             estimatedLineCount: estimatedVisualLineCount(for: text, options: options),
             options: options
         ) {
             return [segment]
         }
-        guard segment.count >= 5 else { return [segment] }
+        guard words.count >= 5 else { return [segment] }
         guard !containsCompactScript(text),
               estimatedWrappedLineWordCounts(forWords: words, options: options).last == 1 else {
             return [segment]
@@ -487,7 +561,7 @@ enum LyricDisplaySegmenter {
         // Short lyric phrases can wrap to two or three visual lines in the
         // compact window and still read as one sentence. Splitting those into
         // separate scroll rows makes the cadence look broken.
-        return wordCount <= 6 || estimatedLineCount <= 2
+        return wordCount <= 8 || estimatedLineCount <= 2
     }
 
     private static func rebalanceOneWordBuckets<T>(_ buckets: inout [[T]]) {
@@ -537,7 +611,7 @@ enum LyricDisplaySegmenter {
             if index > 0, needsSeparator(before: word, in: Array(words.prefix(index))) {
                 units += displayUnits(for: " ")
             }
-            units += displayUnits(for: word.word)
+            units += displayUnits(for: word.word.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return units
     }

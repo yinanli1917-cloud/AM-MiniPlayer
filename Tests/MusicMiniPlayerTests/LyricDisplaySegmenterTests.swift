@@ -100,6 +100,14 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(segments, [text])
     }
 
+    func testSplitterAvoidsTinyGeneratedChunkForBrainScreenshotLine() {
+        let text = "if you could save me from my brain?"
+
+        let segments = LyricDisplaySegmenter.segments(for: text, options: .mainLyric)
+
+        XCTAssertEqual(segments, [text])
+    }
+
     func testSplitterDoesNotLeaveOneWordFinalVisualLine() {
         let text = "And if we had the chance to do it"
 
@@ -176,6 +184,57 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(segments.flatMap { $0 }.map(\.word), words.map(\.word))
     }
 
+    func testWordSplitterAvoidsTinyGeneratedChunkForBrainScreenshotLine() {
+        let words = [
+            LyricWord(word: "if", startTime: 1.0, endTime: 1.2),
+            LyricWord(word: "you", startTime: 1.2, endTime: 1.4),
+            LyricWord(word: "could", startTime: 1.4, endTime: 1.6),
+            LyricWord(word: "save", startTime: 1.6, endTime: 1.8),
+            LyricWord(word: "me", startTime: 1.8, endTime: 2.0),
+            LyricWord(word: "from", startTime: 2.0, endTime: 2.2),
+            LyricWord(word: "my", startTime: 2.2, endTime: 2.4),
+            LyricWord(word: "brain?", startTime: 2.4, endTime: 2.6),
+        ]
+
+        let segments = LyricDisplaySegmenter.wordSegments(for: words, options: .mainLyric)
+        let textSegments = segments.map { $0.map(\.word).joined(separator: " ") }
+
+        XCTAssertEqual(textSegments, ["if you could save me from my brain?"])
+        XCTAssertEqual(segments.flatMap { $0 }.map(\.word), words.map(\.word))
+    }
+
+    func testWordSplitterTreatsWhitespaceTimedSpanAsPhraseBoundary() {
+        let words = [
+            LyricWord(word: "Wouldn't ", startTime: 117.29, endTime: 117.53),
+            LyricWord(word: "it ", startTime: 117.53, endTime: 117.59),
+            LyricWord(word: "be ", startTime: 117.59, endTime: 117.65),
+            LyricWord(word: "sweet ", startTime: 117.65, endTime: 118.22),
+            LyricWord(word: " ", startTime: 118.22, endTime: 118.79),
+            LyricWord(word: "if ", startTime: 118.79, endTime: 119.33),
+            LyricWord(word: "you ", startTime: 119.33, endTime: 119.57),
+            LyricWord(word: "could ", startTime: 119.57, endTime: 119.66),
+            LyricWord(word: "save ", startTime: 119.66, endTime: 120.05),
+            LyricWord(word: "me ", startTime: 120.05, endTime: 120.17),
+            LyricWord(word: "from ", startTime: 120.17, endTime: 120.47),
+            LyricWord(word: "my ", startTime: 120.47, endTime: 120.68),
+            LyricWord(word: "brain?", startTime: 120.68, endTime: 121.04),
+        ]
+
+        let segments = LyricDisplaySegmenter.wordSegments(for: words, options: .mainLyric)
+        let textSegments = segments.map {
+            $0.map { $0.word.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+        }
+
+        XCTAssertEqual(textSegments, [
+            "Wouldn't it be sweet",
+            "if you could save me from my brain?",
+        ])
+        XCTAssertFalse(textSegments.contains("if you could"))
+        XCTAssertFalse(segments.flatMap { $0 }.contains { $0.word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
     func testWordSplitterDoesNotLeaveOneWordFinalVisualLine() {
         let words = [
             LyricWord(word: "And", startTime: 1.0, endTime: 1.2),
@@ -209,6 +268,33 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         )
 
         XCTAssertEqual(segments.count, 2)
+        XCTAssertTrue(segments.allSatisfy { !$0.isEmpty })
+        XCTAssertEqual(segments.joined(), translation)
+    }
+
+    func testTranslationWithSingleInternalSpaceStillBalancesToEveryLyricChunk() {
+        let translation = "若你能拯救我脱离苦海 这样难道不好吗"
+
+        let segments = LyricDisplaySegmenter.balancedSegments(
+            for: translation,
+            count: 2,
+            options: .translation
+        )
+
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertTrue(segments.allSatisfy { !$0.isEmpty })
+    }
+
+    func testCompactTranslationWithoutSpacesStillBalancesToEveryLyricChunk() {
+        let translation = "如果我们还有机会重新来过"
+
+        let segments = LyricDisplaySegmenter.balancedSegments(
+            for: translation,
+            count: 3,
+            options: .translation
+        )
+
+        XCTAssertEqual(segments.count, 3)
         XCTAssertTrue(segments.allSatisfy { !$0.isEmpty })
         XCTAssertEqual(segments.joined(), translation)
     }

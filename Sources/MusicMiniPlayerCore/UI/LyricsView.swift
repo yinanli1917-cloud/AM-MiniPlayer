@@ -864,6 +864,7 @@ public struct LyricsView: View {
 
         struct MotionPartial {
             let index: Int
+            let displayLine: DisplayLyricLine
             let line: LyricLine
             let frame: CGRect
             let targetIndex: Int
@@ -875,7 +876,8 @@ public struct LyricsView: View {
 
         let immediateLineOffset = anchorY - calculateAccumulatedHeight(upTo: displayIndex)
         let partials: [MotionPartial] = sorted.map { index, frame in
-            let line = displayLines[index].line
+            let displayLine = displayLines[index]
+            let line = displayLine.line
             let targetIndex = scroll.isManualScrolling
                 ? (scroll.lockedLineIndex ?? displayIndex)
                 : (wave.lineTargetIndices[index] ?? displayIndex)
@@ -886,6 +888,7 @@ public struct LyricsView: View {
             let targetMidY = targetMinY + Double(frame.height / 2)
             return MotionPartial(
                 index: index,
+                displayLine: displayLine,
                 line: line,
                 frame: frame,
                 targetIndex: targetIndex,
@@ -962,18 +965,36 @@ public struct LyricsView: View {
             shouldConsiderVisibleTranslationLine($0.line.text)
         }
         if lyricsService.showTranslation,
-           !lyricsService.isTranslating,
-           let currentPartial = visibleTranslationPartials.first(where: { $0.index == displayIndex }),
-           !currentPartial.line.hasTranslation {
+           !lyricsService.isTranslating {
+            let missingTranslatedSourcePartial = visibleTranslationPartials.first { partial in
+                guard !partial.line.hasTranslation,
+                      partial.displayLine.segmentCount > 1,
+                      lyrics.indices.contains(partial.displayLine.sourceIndex) else {
+                    return false
+                }
+                return lyrics[partial.displayLine.sourceIndex].hasTranslation
+            }
+            let missingCurrentPartial = visibleTranslationPartials.first {
+                $0.index == displayIndex && !$0.line.hasTranslation
+            }
+            guard let currentPartial = missingTranslatedSourcePartial ?? missingCurrentPartial else {
+                return
+            }
             let visibleTranslatedLineCount = visibleTranslationPartials.filter { $0.line.hasTranslation }.count
             let visibleMissingTranslationLineCount = visibleTranslationPartials.count - visibleTranslatedLineCount
             let eligibleLineIndices = Set(LyricsService.translationEligibleLineIndices(
                 in: lyrics,
                 onlyMissingTranslations: false
             ))
+            let sourceLineHasTranslation = lyrics.indices.contains(currentPartial.displayLine.sourceIndex)
+                ? lyrics[currentPartial.displayLine.sourceIndex].hasTranslation
+                : false
             diagnostics.recordLyricsVisibleTranslationGap(
                 track: track,
                 lineIndex: currentPartial.index,
+                sourceLineIndex: currentPartial.displayLine.sourceIndex,
+                segmentIndex: currentPartial.displayLine.segmentIndex,
+                segmentCount: currentPartial.displayLine.segmentCount,
                 displayIndex: displayIndex,
                 activeIndex: activeIndex,
                 playbackTime: playbackTime,
@@ -983,7 +1004,8 @@ public struct LyricsView: View {
                 visibleLineCount: visibleTranslationPartials.count,
                 visibleTranslatedLineCount: visibleTranslatedLineCount,
                 visibleMissingTranslationLineCount: visibleMissingTranslationLineCount,
-                lineIsTranslationEligible: eligibleLineIndices.contains(currentPartial.index),
+                sourceLineHasTranslation: sourceLineHasTranslation,
+                lineIsTranslationEligible: eligibleLineIndices.contains(currentPartial.displayLine.sourceIndex),
                 lineIsVocable: isVocableLine(currentPartial.line.text),
                 showTranslation: lyricsService.showTranslation,
                 canTranslate: lyricsService.canTranslate,
@@ -1386,7 +1408,9 @@ public struct LyricsView: View {
                     startTime: timing.start,
                     endTime: timing.end,
                     words: wordSegments.indices.contains(segmentIndex) ? wordSegments[segmentIndex] : [],
-                    translation: translationSegments.indices.contains(segmentIndex) ? translationSegments[segmentIndex] : nil
+                    translation: translationSegments.indices.contains(segmentIndex)
+                        ? translationSegments[segmentIndex]
+                        : line.translation
                 )
                 result.append(DisplayLyricLine(
                     id: "\(line.id.uuidString)-\(segmentIndex)",
@@ -1403,10 +1427,13 @@ public struct LyricsView: View {
 
     private func displayText(forWords words: [LyricWord]) -> String {
         guard !words.isEmpty else { return "" }
-        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
+        let displayWords = words
+            .map { $0.word.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !displayWords.isEmpty else { return "" }
+        let avgLen = Double(displayWords.reduce(0) { $0 + $1.count }) / Double(displayWords.count)
         let needsSpaces = avgLen > 2
-        return words.map { $0.word.trimmingCharacters(in: .whitespaces) }
-            .joined(separator: needsSpaces ? " " : "")
+        return displayWords.joined(separator: needsSpaces ? " " : "")
     }
 
     private func displayTiming(

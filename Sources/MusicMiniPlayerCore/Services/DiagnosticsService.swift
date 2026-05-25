@@ -1018,6 +1018,9 @@ public final class DiagnosticsService: ObservableObject {
     public func recordLyricsVisibleTranslationGap(
         track: DiagnosticTrackContext,
         lineIndex: Int,
+        sourceLineIndex: Int? = nil,
+        segmentIndex: Int? = nil,
+        segmentCount: Int? = nil,
         displayIndex: Int,
         activeIndex: Int,
         playbackTime: TimeInterval,
@@ -1027,6 +1030,7 @@ public final class DiagnosticsService: ObservableObject {
         visibleLineCount: Int,
         visibleTranslatedLineCount: Int,
         visibleMissingTranslationLineCount: Int,
+        sourceLineHasTranslation: Bool = false,
         lineIsTranslationEligible: Bool,
         lineIsVocable: Bool,
         showTranslation: Bool,
@@ -1035,14 +1039,20 @@ public final class DiagnosticsService: ObservableObject {
     ) {
         guard isEnabled, showTranslation else { return }
         guard totalLineCount > 0, visibleLineCount > 0 else { return }
-        guard visibleTranslatedLineCount > 0, visibleMissingTranslationLineCount > 0 else { return }
+        guard visibleMissingTranslationLineCount > 0,
+              visibleTranslatedLineCount > 0 || sourceLineHasTranslation else {
+            return
+        }
 
         let reason: String = {
+            if sourceLineHasTranslation, (segmentCount ?? 1) > 1 {
+                return "generated display chunk lost source translation"
+            }
             if lineIsTranslationEligible { return "visible eligible line missing translation" }
             if lineIsVocable { return "visible vocable line excluded from aggregate translation coverage" }
             return "visible line excluded from aggregate translation coverage"
         }()
-        let metrics: [String: Double] = [
+        var metrics: [String: Double] = [
             "lineIndex": Double(lineIndex),
             "displayIndex": Double(displayIndex),
             "activeIndex": Double(activeIndex),
@@ -1054,18 +1064,38 @@ public final class DiagnosticsService: ObservableObject {
             "visibleLineCount": Double(visibleLineCount),
             "visibleTranslatedLineCount": Double(visibleTranslatedLineCount),
             "visibleMissingTranslationLineCount": Double(visibleMissingTranslationLineCount),
+            "sourceLineHasTranslation": sourceLineHasTranslation ? 1 : 0,
             "lineIsTranslationEligible": lineIsTranslationEligible ? 1 : 0,
             "lineIsVocable": lineIsVocable ? 1 : 0,
             "canTranslate": canTranslate ? 1 : 0,
             "translationFailed": translationFailed ? 1 : 0
         ]
-        let evidence = [
+        if let sourceLineIndex {
+            metrics["sourceLineIndex"] = Double(sourceLineIndex)
+        }
+        if let segmentIndex {
+            metrics["segmentIndex"] = Double(segmentIndex)
+        }
+        if let segmentCount {
+            metrics["segmentCount"] = Double(segmentCount)
+        }
+
+        var evidence = [
             "source": "visibleLine",
             "reason": reason,
             "lineIndex": String(lineIndex),
             "displayIndex": String(displayIndex),
             "activeIndex": String(activeIndex)
         ]
+        if let sourceLineIndex {
+            evidence["sourceLineIndex"] = String(sourceLineIndex)
+        }
+        if let segmentIndex {
+            evidence["segmentIndex"] = String(segmentIndex)
+        }
+        if let segmentCount {
+            evidence["segmentCount"] = String(segmentCount)
+        }
 
         if let existingIndex = incidents.firstIndex(where: { incident in
             guard incident.category == .lyricsPartialTranslation,
