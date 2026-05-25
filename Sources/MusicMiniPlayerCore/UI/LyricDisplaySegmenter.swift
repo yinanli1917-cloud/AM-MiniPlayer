@@ -1,0 +1,605 @@
+import Foundation
+
+struct LyricDisplaySegmentationOptions: Equatable {
+    let maxVisualLines: Int
+    let maxLineUnits: Double
+
+    init(maxVisualLines: Int = 3, maxLineUnits: Double) {
+        self.maxVisualLines = max(1, maxVisualLines)
+        self.maxLineUnits = max(1, maxLineUnits)
+    }
+
+    static let mainLyric = LyricDisplaySegmentationOptions(maxVisualLines: 3, maxLineUnits: 7.0)
+    static let translation = LyricDisplaySegmentationOptions(maxVisualLines: 3, maxLineUnits: 14.0)
+
+    var maxSegmentUnits: Double {
+        maxLineUnits * Double(maxVisualLines)
+    }
+}
+
+enum LyricDisplaySegmenter {
+    static func displayText(
+        for text: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> String {
+        segments(for: text, options: options).joined(separator: "\n")
+    }
+
+    static func segments(
+        for text: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        var result: [String] = []
+        for line in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            result.append(contentsOf: segmentSingleLine(trimmed, options: options))
+        }
+        return result.isEmpty ? [] : polishedWordDelimitedSegments(result, options: options)
+    }
+
+    static func balancedSegments(
+        for text: String,
+        count: Int,
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        guard count > 1 else { return segments(for: text, options: options) }
+        let existing = segments(for: text, options: options)
+        if existing.count == count { return existing }
+
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return [] }
+
+        let tokens = wrapTokens(from: normalized)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !tokens.isEmpty else { return [] }
+
+        let totalUnits = tokens.reduce(0) { $0 + displayUnits(for: $1) }
+        let targetUnits = max(1, totalUnits / Double(count))
+        var result: [String] = []
+        var current = ""
+        var currentUnits: Double = 0
+
+        for (index, token) in tokens.enumerated() {
+            let remainingTokens = tokens.count - index
+            let remainingSlots = count - result.count - 1
+            if !current.isEmpty,
+               currentUnits >= targetUnits,
+               remainingSlots > 0,
+               remainingTokens > remainingSlots {
+                result.append(current.trimmingCharacters(in: .whitespaces))
+                current.removeAll()
+                currentUnits = 0
+            }
+            current += token
+            currentUnits += displayUnits(for: token)
+        }
+
+        if !current.isEmpty {
+            result.append(current.trimmingCharacters(in: .whitespaces))
+        }
+
+        if result.count < count, existing.count > result.count {
+            return existing
+        }
+        return polishedWordDelimitedSegments(result.filter { !$0.isEmpty }, options: options)
+    }
+
+    static func wordSegments(
+        for words: [LyricWord],
+        options: LyricDisplaySegmentationOptions
+    ) -> [[LyricWord]] {
+        guard !words.isEmpty else { return [] }
+
+        var result: [[LyricWord]] = []
+        var current: [LyricWord] = []
+        var currentUnits: Double = 0
+
+        for word in words {
+            let unit = displayUnits(for: word.word)
+            let separatorUnit = needsSeparator(before: word, in: current) ? displayUnits(for: " ") : 0
+            let nextUnits = currentUnits + separatorUnit + unit
+
+            if !current.isEmpty && nextUnits > options.maxSegmentUnits {
+                result.append(current)
+                current = [word]
+                currentUnits = unit
+            } else {
+                current.append(word)
+                currentUnits = nextUnits
+            }
+
+            if isStrongBoundary(word.word), !current.isEmpty {
+                result.append(current)
+                current.removeAll()
+                currentUnits = 0
+            }
+        }
+
+        if !current.isEmpty {
+            result.append(current)
+        }
+        return polishedWordSegments(result, options: options)
+    }
+
+    static func estimatedVisualLineCount(
+        for text: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> Int {
+        let units = displayUnits(for: text)
+        return max(1, Int(ceil(units / options.maxLineUnits)))
+    }
+
+    static func estimatedWrappedLineWordCounts(
+        for text: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> [Int] {
+        let words = text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        return estimatedWrappedLineWordCounts(forWords: words, options: options)
+    }
+
+    private static func segmentSingleLine(
+        _ text: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        let pieces = punctuationPieces(from: text)
+        var result: [String] = []
+        var current = ""
+        var currentUnits: Double = 0
+
+        for piece in pieces {
+            let pieceUnits = displayUnits(for: piece)
+            if pieceUnits > options.maxSegmentUnits {
+                if !current.isEmpty {
+                    result.append(current.trimmingCharacters(in: .whitespaces))
+                    current.removeAll()
+                    currentUnits = 0
+                }
+                result.append(contentsOf: hardWrap(piece, options: options))
+                continue
+            }
+
+            let nextUnits = currentUnits + pieceUnits
+            if !current.isEmpty && nextUnits > options.maxSegmentUnits {
+                result.append(current.trimmingCharacters(in: .whitespaces))
+                current = piece
+                currentUnits = pieceUnits
+            } else {
+                current += piece
+                currentUnits = nextUnits
+            }
+
+            if isStrongBoundary(piece), currentUnits >= options.maxLineUnits {
+                result.append(current.trimmingCharacters(in: .whitespaces))
+                current.removeAll()
+                currentUnits = 0
+            }
+        }
+
+        if !current.isEmpty {
+            result.append(current.trimmingCharacters(in: .whitespaces))
+        }
+        return polishedWordDelimitedSegments(result.filter { !$0.isEmpty }, options: options)
+    }
+
+    private static func punctuationPieces(from text: String) -> [String] {
+        var pieces: [String] = []
+        var current = ""
+
+        for character in text {
+            current.append(character)
+            if isBoundary(character) {
+                pieces.append(current)
+                current.removeAll()
+            }
+        }
+
+        if !current.isEmpty {
+            pieces.append(current)
+        }
+        return pieces
+    }
+
+    private static func hardWrap(
+        _ text: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        var result: [String] = []
+        var current = ""
+        var currentUnits: Double = 0
+
+        for token in wrapTokens(from: text) {
+            let tokenUnits = displayUnits(for: token)
+            if !current.isEmpty && currentUnits + tokenUnits > options.maxSegmentUnits {
+                result.append(current.trimmingCharacters(in: .whitespaces))
+                current.removeAll()
+                currentUnits = 0
+            }
+            if current.isEmpty && token.trimmingCharacters(in: .whitespaces).isEmpty {
+                continue
+            }
+            current += token
+            currentUnits += tokenUnits
+        }
+
+        if !current.isEmpty {
+            result.append(current.trimmingCharacters(in: .whitespaces))
+        }
+        return polishedWordDelimitedSegments(result.filter { !$0.isEmpty }, options: options)
+    }
+
+    private static func polishedWordDelimitedSegments(
+        _ segments: [String],
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        let splitSegments = segments.flatMap {
+            splitWrappedShortFinalWordSegment($0, options: options)
+        }
+        return avoidSingleWordOrphans(in: splitSegments, options: options)
+    }
+
+    private static func splitWrappedShortFinalWordSegment(
+        _ segment: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        guard options.maxVisualLines >= 3 else { return [segment] }
+        guard !containsCompactScript(segment) else { return [segment] }
+
+        let words = segment
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        if words.count <= 5,
+           estimatedVisualLineCount(for: segment, options: options) <= options.maxVisualLines {
+            return [segment]
+        }
+        guard words.count >= 5,
+              estimatedWrappedLineWordCounts(forWords: words, options: options).last == 1 else {
+            return [segment]
+        }
+
+        let balanced = balancedWordStrings(words, targetCount: 2, options: options)
+        guard balanced.count > 1 else { return [segment] }
+        return balanced
+    }
+
+    private static func avoidSingleWordOrphans(
+        in segments: [String],
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        guard segments.count > 1 else { return segments }
+        let combined = segments.joined(separator: " ")
+        guard combined.contains(where: { $0.isWhitespace }) else { return segments }
+        guard !containsCompactScript(combined) else { return segments }
+
+        let words = combined
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        guard words.count > 2, segments.contains(where: { semanticWordCount(in: $0) == 1 }) else {
+            return segments
+        }
+
+        let targetCount = max(1, min(segments.count, words.count / 2))
+        guard targetCount < words.count else { return segments }
+
+        let joined = balancedWordStrings(words, targetCount: targetCount, options: options)
+        return joined.isEmpty ? segments : joined
+    }
+
+    private static func balancedWordStrings(
+        _ words: [String],
+        targetCount: Int,
+        options: LyricDisplaySegmentationOptions
+    ) -> [String] {
+        if targetCount == 2, let splitIndex = bestTwoWaySplitIndex(forWords: words, options: options) {
+            return [
+                words[..<splitIndex].joined(separator: " "),
+                words[splitIndex...].joined(separator: " "),
+            ]
+        }
+
+        let splitIndices = balancedSplitIndices(forWords: words, targetCount: targetCount)
+        guard !splitIndices.isEmpty else { return [words.joined(separator: " ")] }
+
+        var result: [[String]] = []
+        var start = words.startIndex
+        for splitIndex in splitIndices {
+            result.append(Array(words[start..<splitIndex]))
+            start = splitIndex
+        }
+        result.append(Array(words[start..<words.endIndex]))
+        rebalanceOneWordBuckets(&result)
+        return result.map { $0.joined(separator: " ") }.filter { !$0.isEmpty }
+    }
+
+    private static func bestTwoWaySplitIndex(
+        forWords words: [String],
+        options: LyricDisplaySegmentationOptions
+    ) -> Int? {
+        guard words.count >= 4 else { return nil }
+
+        var best: (index: Int, score: Double)?
+        for index in 2...(words.count - 2) {
+            let left = Array(words[..<index])
+            let right = Array(words[index...])
+            let leftUnits = displayUnits(for: left.joined(separator: " "))
+            let rightUnits = displayUnits(for: right.joined(separator: " "))
+            let orphanPenalty: Double =
+                (estimatedWrappedLineWordCounts(forWords: left, options: options).last == 1 ? 1_000 : 0)
+                + (estimatedWrappedLineWordCounts(forWords: right, options: options).last == 1 ? 1_000 : 0)
+            let score = orphanPenalty + abs(leftUnits - rightUnits)
+            if best == nil || score < best!.score {
+                best = (index, score)
+            }
+        }
+        return best?.index
+    }
+
+    private static func balancedSplitIndices(forWords words: [String], targetCount: Int) -> [Int] {
+        let targetCount = max(1, min(targetCount, max(1, words.count / 2)))
+        var current: [String] = []
+        var currentUnits: Double = 0
+        var splitIndices: [Int] = []
+        let totalUnits = displayUnits(for: words.joined(separator: " "))
+        let targetUnits = max(1, totalUnits / Double(targetCount))
+
+        for (index, word) in words.enumerated() {
+            let remainingWordsAfterCurrent = words.count - index - 1
+            let remainingSlots = targetCount - splitIndices.count - 1
+            let canCloseCurrent = current.count >= 2
+                && remainingSlots > 0
+                && remainingWordsAfterCurrent >= remainingSlots * 2
+                && currentUnits >= targetUnits
+
+            if canCloseCurrent {
+                splitIndices.append(index)
+                current.removeAll()
+                currentUnits = 0
+            }
+
+            if !current.isEmpty {
+                currentUnits += displayUnits(for: " ")
+            }
+            current.append(word)
+            currentUnits += displayUnits(for: word)
+        }
+
+        return splitIndices
+    }
+
+    private static func estimatedWrappedLineWordCounts(
+        forWords words: [String],
+        options: LyricDisplaySegmentationOptions
+    ) -> [Int] {
+        guard !words.isEmpty else { return [] }
+
+        var lineCounts: [Int] = []
+        var currentCount = 0
+        var currentUnits: Double = 0
+        let visualLineUnits = options.maxLineUnits + 1.0
+
+        for word in words {
+            let wordUnits = displayUnits(for: word)
+            let separatorUnits = currentCount == 0 ? 0 : displayUnits(for: " ")
+            if currentCount > 0, currentUnits + separatorUnits + wordUnits > visualLineUnits {
+                lineCounts.append(currentCount)
+                currentCount = 1
+                currentUnits = wordUnits
+            } else {
+                currentCount += 1
+                currentUnits += separatorUnits + wordUnits
+            }
+        }
+
+        if currentCount > 0 {
+            lineCounts.append(currentCount)
+        }
+        return lineCounts
+    }
+
+    private static func avoidSingleWordOrphans(
+        in segments: [[LyricWord]],
+        options: LyricDisplaySegmentationOptions
+    ) -> [[LyricWord]] {
+        guard segments.count > 1 else { return segments }
+        let totalWordCount = segments.reduce(0) { $0 + $1.count }
+        guard totalWordCount > 2, segments.contains(where: { $0.count == 1 }) else {
+            return segments
+        }
+
+        var result = segments
+        rebalanceOneWordBuckets(&result)
+
+        for index in result.indices {
+            if result[index].count == 1 {
+                if index > result.startIndex,
+                   !result[index - 1].isEmpty,
+                   wordSegmentUnits(result[index - 1] + result[index], options: options) <= options.maxSegmentUnits {
+                    result[index - 1].append(contentsOf: result[index])
+                    result[index].removeAll()
+                } else if index + 1 < result.endIndex,
+                          !result[index + 1].isEmpty,
+                          wordSegmentUnits(result[index] + result[index + 1], options: options) <= options.maxSegmentUnits {
+                    result[index + 1].insert(contentsOf: result[index], at: 0)
+                    result[index].removeAll()
+                }
+            }
+        }
+
+        let compacted = result.filter { !$0.isEmpty }
+        return compacted.isEmpty ? segments : compacted
+    }
+
+    private static func polishedWordSegments(
+        _ segments: [[LyricWord]],
+        options: LyricDisplaySegmentationOptions
+    ) -> [[LyricWord]] {
+        avoidSingleWordOrphans(in: segments, options: options).flatMap {
+            splitWrappedFinalWordSegment($0, options: options)
+        }
+    }
+
+    private static func splitWrappedFinalWordSegment(
+        _ segment: [LyricWord],
+        options: LyricDisplaySegmentationOptions
+    ) -> [[LyricWord]] {
+        let words = segment.map { $0.word.trimmingCharacters(in: .whitespaces) }
+        let text = words.joined(separator: " ")
+        if segment.count <= 5,
+           estimatedVisualLineCount(for: text, options: options) <= options.maxVisualLines {
+            return [segment]
+        }
+        guard segment.count >= 5 else { return [segment] }
+        guard !containsCompactScript(text),
+              estimatedWrappedLineWordCounts(forWords: words, options: options).last == 1 else {
+            return [segment]
+        }
+
+        let splitPoint = bestTwoWaySplitIndex(forWords: words, options: options)
+            ?? balancedSplitIndices(forWords: words, targetCount: 2).first
+            ?? segment.count
+        guard splitPoint >= 2, segment.count - splitPoint >= 2 else { return [segment] }
+        return [Array(segment[..<splitPoint]), Array(segment[splitPoint...])]
+    }
+
+    private static func rebalanceOneWordBuckets<T>(_ buckets: inout [[T]]) {
+        guard buckets.count > 1 else { return }
+
+        for index in buckets.indices where buckets[index].count == 1 {
+            if index > buckets.startIndex, buckets[index - 1].count > 2 {
+                buckets[index].insert(buckets[index - 1].removeLast(), at: 0)
+            } else if index + 1 < buckets.endIndex, buckets[index + 1].count > 2 {
+                buckets[index].append(buckets[index + 1].removeFirst())
+            }
+        }
+
+        var index = buckets.startIndex
+        while index < buckets.endIndex {
+            if buckets[index].count == 1 {
+                if index > buckets.startIndex {
+                    buckets[index - 1].append(contentsOf: buckets[index])
+                    buckets[index].removeAll()
+                } else if index + 1 < buckets.endIndex {
+                    buckets[index + 1].insert(contentsOf: buckets[index], at: 0)
+                    buckets[index].removeAll()
+                }
+            }
+            index += 1
+        }
+    }
+
+    private static func semanticWordCount(in text: String) -> Int {
+        text.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .count
+    }
+
+    private static func containsCompactScript(_ text: String) -> Bool {
+        text.unicodeScalars.contains {
+            LanguageUtils.isCJKScalar($0)
+                || isKana($0)
+                || isHangul($0)
+                || isThai($0)
+        }
+    }
+
+    private static func wordSegmentUnits(_ words: [LyricWord], options: LyricDisplaySegmentationOptions) -> Double {
+        var units: Double = 0
+        for (index, word) in words.enumerated() {
+            if index > 0, needsSeparator(before: word, in: Array(words.prefix(index))) {
+                units += displayUnits(for: " ")
+            }
+            units += displayUnits(for: word.word)
+        }
+        return units
+    }
+
+    private static func wrapTokens(from text: String) -> [String] {
+        guard text.contains(where: { $0.isWhitespace }) else {
+            return text.map(String.init)
+        }
+
+        var tokens: [String] = []
+        var current = ""
+        var currentIsWhitespace: Bool?
+
+        for character in text {
+            let isWhitespace = character.isWhitespace
+            if let currentIsWhitespace, currentIsWhitespace != isWhitespace {
+                tokens.append(current)
+                current.removeAll()
+            }
+            current.append(character)
+            currentIsWhitespace = isWhitespace
+        }
+
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+        return tokens
+    }
+
+    private static func needsSeparator(before word: LyricWord, in current: [LyricWord]) -> Bool {
+        guard !current.isEmpty else { return false }
+        return !LanguageUtils.containsCJK(word.word)
+            && !LanguageUtils.containsCJK(current.last?.word ?? "")
+    }
+
+    private static func isBoundary(_ character: Character) -> Bool {
+        isStrongBoundary(character) || isWeakBoundary(character)
+    }
+
+    private static func isStrongBoundary(_ text: String) -> Bool {
+        text.contains { isStrongBoundary($0) }
+    }
+
+    private static func isStrongBoundary(_ character: Character) -> Bool {
+        ".!?。！？…".contains(character)
+    }
+
+    private static func isWeakBoundary(_ character: Character) -> Bool {
+        ",;:，、；：،؛¿¡".contains(character)
+    }
+
+    private static func displayUnits(for text: String) -> Double {
+        text.reduce(0) { partial, character in
+            partial + displayUnits(for: character)
+        }
+    }
+
+    private static func displayUnits(for character: Character) -> Double {
+        guard let scalar = character.unicodeScalars.first else { return 1.0 }
+        if CharacterSet.whitespacesAndNewlines.contains(scalar) { return 0.28 }
+        if CharacterSet.punctuationCharacters.contains(scalar) { return 0.35 }
+        if LanguageUtils.isCJKScalar(scalar)
+            || isKana(scalar)
+            || isHangul(scalar)
+            || isThai(scalar) {
+            return 1.0
+        }
+        if scalar.isASCII { return 0.55 }
+        return 0.85
+    }
+
+    private static func isKana(_ scalar: UnicodeScalar) -> Bool {
+        (0x3040...0x30FF).contains(Int(scalar.value))
+    }
+
+    private static func isHangul(_ scalar: UnicodeScalar) -> Bool {
+        (0xAC00...0xD7AF).contains(Int(scalar.value))
+            || (0x1100...0x11FF).contains(Int(scalar.value))
+            || (0x3130...0x318F).contains(Int(scalar.value))
+    }
+
+    private static func isThai(_ scalar: UnicodeScalar) -> Bool {
+        (0x0E00...0x0E7F).contains(Int(scalar.value))
+    }
+}

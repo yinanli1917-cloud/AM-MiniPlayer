@@ -45,6 +45,16 @@ private struct WaveState {
     var workItems: [DispatchWorkItem] = []
 }
 
+private struct DisplayLyricLine: Identifiable, Equatable {
+    let id: String
+    let sourceIndex: Int
+    let segmentIndex: Int
+    let segmentCount: Int
+    let line: LyricLine
+
+    var isLastSegment: Bool { segmentIndex == segmentCount - 1 }
+}
+
 private let lyricLineMotionCoordinateSpace = "nanoPod.lyrics.lineMotion"
 private let lyricLineMotionSampleInterval: TimeInterval = 0.25
 private let lyricLineMotionBoundarySampleInterval: TimeInterval = 0.40
@@ -250,6 +260,10 @@ public struct LyricsView: View {
     @State private var lineMotionSamplingUntil: Date = .distantPast
     @State private var lineMotionFrameCaptureActive = false
     @State private var pendingLineMotionCapture: LyricLineMotionCaptureRequest?
+    @State private var displayCurrentLineIndex: Int? = nil
+    @State private var cachedDisplayLines: [DisplayLyricLine] = []
+    @State private var cachedDisplayLyrics: [LyricLine] = []
+    @State private var cachedFirstRealDisplayIndex: Int = 0
 
     // ── 翻译状态 ──
     @State private var translationSessionConfigAny: Any?
@@ -320,6 +334,7 @@ public struct LyricsView: View {
         // ── onAppear + 歌曲切换 ──
         .onAppear {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
+            refreshDisplayLineCache()
             suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
             startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
@@ -337,6 +352,10 @@ public struct LyricsView: View {
             wave.lastCurrentIndex = -1
             cache.heightCacheInvalidated = true
             cache.renderedIndicesValid = false
+            cachedDisplayLines.removeAll()
+            cachedDisplayLyrics.removeAll()
+            cachedFirstRealDisplayIndex = 0
+            displayCurrentLineIndex = nil
             pendingLineHeightResetForNextPayload = true
             // 🔑 Reset manual scroll state — prevents stuck isManualScrolling
             // when track changes during a manual scroll (timer would fire on stale state)
@@ -363,7 +382,9 @@ public struct LyricsView: View {
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
         // ── onChange: 翻译相关 ──
-        .onChange(of: lyricsService.lyrics.count) { _, newCount in
+        .onChange(of: lyricsService.lyrics) { _, newLyrics in
+            let newCount = newLyrics.count
+            refreshDisplayLineCache()
             if #available(macOS 15.0, *), newCount > 0 {
                 scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
             }
@@ -371,8 +392,6 @@ public struct LyricsView: View {
                 cache.lineHeights.removeAll()
                 pendingLineHeightResetForNextPayload = false
             }
-            refreshRenderedIndicesCache()
-            cache.heightCacheInvalidated = true
             updateHeightCache()
             if newCount > 0 {
                 suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
@@ -424,8 +443,10 @@ public struct LyricsView: View {
             handleExternalManualScroll(newValue)
         }
         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
-            guard let newIndex = newValue else { return }
-            let oldIndex = oldValue ?? wave.lastCurrentIndex
+            guard let newSourceIndex = newValue else { return }
+            let newIndex = displayIndex(forSourceIndex: newSourceIndex)
+            let oldIndex = oldValue.map { displayIndex(forSourceIndex: $0) } ?? wave.lastCurrentIndex
+            displayCurrentLineIndex = newIndex
             if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
                 triggerWaveAnimation(from: oldIndex, to: newIndex)
                 wave.lastCurrentIndex = newIndex
@@ -445,6 +466,10 @@ public struct LyricsView: View {
             if newValue != fullscreenAlbumCover {
                 withAnimation(.easeInOut(duration: 0.3)) { fullscreenAlbumCover = newValue }
             }
+        }
+        .onReceive(musicController.timePublisher.$currentTime) { time in
+            guard currentPage == .lyrics else { return }
+            updateDisplayCurrentLineIndex(at: time)
         }
         .modifier(SystemTranslationModifier(
             translationSessionConfigAny: translationSessionConfigAny,
@@ -541,9 +566,13 @@ public struct LyricsView: View {
         let lyricsViewID = "\(musicController.currentTrackTitle)-\(musicController.currentArtist)"
 
         return GeometryReader { geo in
+            let displayLines = cachedDisplayLines
+            let displayLyrics = cachedDisplayLyrics
+            let firstRealDisplayIndex = cachedFirstRealDisplayIndex
             let containerHeight = geo.size.height
             let controlBarHeight: CGFloat = 120
-            let liveIndex = lyricsService.currentLineIndex ?? 0
+            let liveIndex = displayCurrentLineIndex
+                ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0, in: displayLines)
             // AMLL: 高亮瞬时切换，位移通过 wave spring 过渡
             let displayIndex = scroll.isManualScrolling
                 ? (scroll.frozenDisplayIndex ?? liveIndex)
@@ -562,8 +591,12 @@ public struct LyricsView: View {
             let shouldCull = !scroll.isManualScrolling && hasEnoughMeasuredHeights
 
             ZStack(alignment: .topLeading) {
-                ForEach(Array(lyricsService.lyrics.enumerated()), id: \.element.id) { index, line in
-                    if index == 0 || index >= lyricsService.firstRealLyricIndex {
+                ForEach(Array(displayLines.enumerated()), id: \.element.id) { index, displayLine in
+                    let line = displayLine.line
+                    let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
+                        ? lyricsService.lyrics[displayLine.sourceIndex]
+                        : line
+                    if index == 0 || index >= firstRealDisplayIndex {
                         let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
 
                         if isVisible {
@@ -576,9 +609,11 @@ public struct LyricsView: View {
                                 line: line,
                                 index: index,
                                 currentIndex: displayIndex,
+                                sourceIndex: displayLine.sourceIndex,
+                                isLastSegment: displayLine.isLastSegment,
                                 isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
-                                    index: index,
-                                    line: line,
+                                    index: displayLine.sourceIndex,
+                                    line: sourceLine,
                                     pendingLineIndices: pendingTranslationLineIndices,
                                     isTranslating: lyricsService.isTranslating
                                 )
@@ -618,7 +653,12 @@ public struct LyricsView: View {
                 recordLyricLineMotion(
                     frames: frames,
                     anchorY: anchorY,
+                    containerHeight: containerHeight,
+                    controlBarHeight: controlBarHeight,
                     displayIndex: displayIndex,
+                    displayLines: displayLines,
+                    displayLyrics: displayLyrics,
+                    firstRealDisplayIndex: firstRealDisplayIndex,
                     playbackTime: capture.playbackTime,
                     timestamp: capture.requestedAt
                 )
@@ -646,6 +686,8 @@ public struct LyricsView: View {
         line: LyricLine,
         index: Int,
         currentIndex: Int,
+        sourceIndex: Int,
+        isLastSegment: Bool,
         isAwaitingTranslation: Bool
     ) -> some View {
             if isPreludeEllipsis(line.text) {
@@ -684,7 +726,7 @@ public struct LyricsView: View {
                     )
                     .padding(.horizontal, 32)
 
-                    if let interludeInfo = checkForInterlude(at: index) {
+                    if isLastSegment, let interludeInfo = checkForInterlude(at: sourceIndex) {
                         PreludeDotsView(
                             startTime: interludeInfo.startTime,
                             endTime: interludeInfo.endTime,
@@ -788,13 +830,18 @@ public struct LyricsView: View {
     private func recordLyricLineMotion(
         frames: [Int: CGRect],
         anchorY: CGFloat,
+        containerHeight: CGFloat,
+        controlBarHeight: CGFloat,
         displayIndex: Int,
+        displayLines: [DisplayLyricLine],
+        displayLyrics: [LyricLine],
+        firstRealDisplayIndex: Int,
         playbackTime: TimeInterval,
         timestamp: Date
     ) {
         guard currentPage == .lyrics, diagnostics.isEnabled, !frames.isEmpty else { return }
 
-        let lyrics = lyricsService.lyrics
+        let lyrics = displayLyrics
         guard !lyrics.isEmpty else { return }
         guard lyricsService.displayedLyricsBelongTo(
             title: musicController.currentTrackTitle,
@@ -807,11 +854,11 @@ public struct LyricsView: View {
         let activeIndex = LyricMotionSamplingPolicy.activeIndex(
             at: playbackTime,
             lyrics: lyrics,
-            firstRealIndex: lyricsService.firstRealLyricIndex
+            firstRealIndex: firstRealDisplayIndex
         ) ?? lyricsService.currentLineIndex ?? displayIndex
         let sorted = frames
             .filter { index, frame in
-                lyrics.indices.contains(index) && frame.height > 0
+                displayLines.indices.contains(index) && frame.height > 0
             }
             .sorted { $0.key < $1.key }
 
@@ -828,7 +875,7 @@ public struct LyricsView: View {
 
         let immediateLineOffset = anchorY - calculateAccumulatedHeight(upTo: displayIndex)
         let partials: [MotionPartial] = sorted.map { index, frame in
-            let line = lyrics[index]
+            let line = displayLines[index].line
             let targetIndex = scroll.isManualScrolling
                 ? (scroll.lockedLineIndex ?? displayIndex)
                 : (wave.lineTargetIndices[index] ?? displayIndex)
@@ -853,9 +900,18 @@ public struct LyricsView: View {
         samples.reserveCapacity(partials.count)
         var previousRenderedMidY: Double?
         var previousTargetMidY: Double?
+        let visibleTopY = 42.0
+        let visibleBottomY = max(
+            visibleTopY + 1,
+            Double(containerHeight - (showControls || isAudioOutputMenuPresented ? controlBarHeight : 20))
+        )
         for partial in partials {
             let renderedMinY = Double(partial.frame.minY) + partial.appliedOffsetY
             let renderedMidY = Double(partial.frame.midY) + partial.appliedOffsetY
+            let renderedMaxY = renderedMinY + Double(partial.frame.height)
+            let lineTopClipY = max(0, visibleTopY - renderedMinY)
+            let lineBottomClipY = max(0, renderedMaxY - visibleBottomY)
+            let isActiveLine = partial.index == activeIndex
             let observedDelta = previousRenderedMidY.map { renderedMidY - $0 }
             let expectedDelta = previousTargetMidY.map { partial.targetMidY - $0 }
             let deltaError: Double? = {
@@ -887,7 +943,14 @@ public struct LyricsView: View {
                 waveOffsetY: partial.waveOffsetY,
                 manualScrollOffsetY: Double(scroll.manualScrollOffset),
                 isManualScrolling: scroll.isManualScrolling,
-                isInitialMotionSuppressed: suppressInitialLineMotion
+                isInitialMotionSuppressed: suppressInitialLineMotion,
+                visibleTopY: visibleTopY,
+                visibleBottomY: visibleBottomY,
+                lineTopClipY: lineTopClipY,
+                lineBottomClipY: lineBottomClipY,
+                activeTopClipY: isActiveLine ? lineTopClipY : 0,
+                activeBottomClipY: isActiveLine ? lineBottomClipY : 0,
+                controlsVisible: showControls || isAudioOutputMenuPresented
             ))
             previousRenderedMidY = renderedMidY
             previousTargetMidY = partial.targetMidY
@@ -1055,14 +1118,15 @@ public struct LyricsView: View {
         // Sync line index to tapped position BEFORE unfreezing
         // Prevents double-jump: frozen → old liveIndex → tapped line
         lyricsService.updateCurrentTime(line.startTime)
+        updateDisplayCurrentLineIndex(at: line.startTime)
         // Sync wave state so the next natural line advance doesn't see a stale lastCurrentIndex
-        if let idx = lyricsService.currentLineIndex {
+        if let idx = displayCurrentLineIndex {
             wave.lastCurrentIndex = idx
         }
         // Cancel pending wave work items and set all targets to new index (instant jump)
         for item in wave.workItems { item.cancel() }
         wave.workItems.removeAll()
-        let newIdx = lyricsService.currentLineIndex ?? 0
+        let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
         for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
         // Unfreeze — no withAnimation! The .animation(value: fullOffset) on each line
         // handles the spring transition naturally when fullOffset changes.
@@ -1099,7 +1163,7 @@ public struct LyricsView: View {
         guard newValue && !scroll.isManualScrolling else { return }
 
         if cache.heightCacheInvalidated { updateHeightCache() }
-        let currentIdx = lyricsService.currentLineIndex ?? 0
+        let currentIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
         scroll.lockedLineIndex = currentIdx
         scroll.frozenDisplayIndex = currentIdx  // 冻结高亮行
         scroll.isManualScrolling = true
@@ -1110,7 +1174,8 @@ public struct LyricsView: View {
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
             // Sync wave to latest line index BEFORE unfreezing
-            let newIdx = lyricsService.currentLineIndex ?? 0
+            updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
+            let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
             wave.lastCurrentIndex = newIdx
             // Set all targets to current index so spring transitions correctly
             for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
@@ -1136,7 +1201,7 @@ public struct LyricsView: View {
         autoScrollTimer?.invalidate()
         if cache.heightCacheInvalidated { updateHeightCache() }
 
-        let currentIdx = lyricsService.currentLineIndex ?? 0
+        let currentIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
         scroll.lockedLineIndex = currentIdx
         scroll.frozenDisplayIndex = currentIdx  // 冻结高亮行
         scroll.rawScrollOffset = scroll.manualScrollOffset
@@ -1161,7 +1226,8 @@ public struct LyricsView: View {
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
             // Sync wave to latest line index BEFORE unfreezing
-            let newIdx = lyricsService.currentLineIndex ?? 0
+            updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
+            let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
             wave.lastCurrentIndex = newIdx
             for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
 
@@ -1278,6 +1344,137 @@ public struct LyricsView: View {
         return gap >= 5.0 ? (startTime: currentLine.endTime, endTime: nextLine.startTime) : nil
     }
 
+    private func makeDisplayLyricLines(from lyrics: [LyricLine]) -> [DisplayLyricLine] {
+        var result: [DisplayLyricLine] = []
+        result.reserveCapacity(lyrics.count)
+
+        for (sourceIndex, line) in lyrics.enumerated() {
+            if isPreludeEllipsis(line.text) || isInstrumentalNotice(line.text) {
+                result.append(DisplayLyricLine(
+                    id: "\(line.id.uuidString)-0",
+                    sourceIndex: sourceIndex,
+                    segmentIndex: 0,
+                    segmentCount: 1,
+                    line: line
+                ))
+                continue
+            }
+
+            let wordSegments = line.hasSyllableSync
+                ? LyricDisplaySegmenter.wordSegments(for: line.words, options: .mainLyric)
+                : []
+            let textSegments = wordSegments.isEmpty
+                ? LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)
+                : wordSegments.map { displayText(forWords: $0) }
+            let segmentCount = max(textSegments.count, 1)
+            let translationSegments = line.translation.map {
+                LyricDisplaySegmenter.balancedSegments(
+                    for: $0,
+                    count: segmentCount,
+                    options: .translation
+                )
+            } ?? []
+            for segmentIndex in 0..<segmentCount {
+                let timing = displayTiming(
+                    for: line,
+                    segmentIndex: segmentIndex,
+                    segmentCount: segmentCount,
+                    wordSegment: wordSegments.indices.contains(segmentIndex) ? wordSegments[segmentIndex] : []
+                )
+                let segmentLine = LyricLine(
+                    text: textSegments.indices.contains(segmentIndex) ? textSegments[segmentIndex] : line.text,
+                    startTime: timing.start,
+                    endTime: timing.end,
+                    words: wordSegments.indices.contains(segmentIndex) ? wordSegments[segmentIndex] : [],
+                    translation: translationSegments.indices.contains(segmentIndex) ? translationSegments[segmentIndex] : nil
+                )
+                result.append(DisplayLyricLine(
+                    id: "\(line.id.uuidString)-\(segmentIndex)",
+                    sourceIndex: sourceIndex,
+                    segmentIndex: segmentIndex,
+                    segmentCount: segmentCount,
+                    line: segmentLine
+                ))
+            }
+        }
+
+        return result
+    }
+
+    private func displayText(forWords words: [LyricWord]) -> String {
+        guard !words.isEmpty else { return "" }
+        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
+        let needsSpaces = avgLen > 2
+        return words.map { $0.word.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: needsSpaces ? " " : "")
+    }
+
+    private func displayTiming(
+        for line: LyricLine,
+        segmentIndex: Int,
+        segmentCount: Int,
+        wordSegment: [LyricWord]
+    ) -> (start: TimeInterval, end: TimeInterval) {
+        if let first = wordSegment.first, let last = wordSegment.last, last.endTime > first.startTime {
+            return (first.startTime, last.endTime)
+        }
+
+        let duration = max(0, line.endTime - line.startTime)
+        guard segmentCount > 1, duration > 0 else { return (line.startTime, line.endTime) }
+        let segmentDuration = duration / Double(segmentCount)
+        let start = line.startTime + segmentDuration * Double(segmentIndex)
+        let end = segmentIndex == segmentCount - 1 ? line.endTime : start + segmentDuration
+        return (start, end)
+    }
+
+    private func displayFirstRealLyricIndex(in displayLines: [DisplayLyricLine]) -> Int {
+        displayLines.firstIndex { $0.sourceIndex >= lyricsService.firstRealLyricIndex }
+            ?? min(lyricsService.firstRealLyricIndex, max(0, displayLines.count - 1))
+    }
+
+    private func refreshDisplayLineCache() {
+        let displayLines = makeDisplayLyricLines(from: lyricsService.lyrics)
+        let firstRealDisplayIndex = displayFirstRealLyricIndex(in: displayLines)
+        cachedDisplayLines = displayLines
+        cachedDisplayLyrics = displayLines.map(\.line)
+        cachedFirstRealDisplayIndex = firstRealDisplayIndex
+        displayCurrentLineIndex = displayIndex(
+            forSourceIndex: lyricsService.currentLineIndex ?? lyricsService.firstRealLyricIndex,
+            in: displayLines
+        )
+        cache.renderedIndicesCached = makeRenderedIndices(in: displayLines, firstRealIndex: firstRealDisplayIndex)
+        cache.renderedIndicesValid = true
+        cache.heightCacheInvalidated = true
+    }
+
+    private func displayIndex(forSourceIndex sourceIndex: Int) -> Int {
+        displayIndex(forSourceIndex: sourceIndex, in: cachedDisplayLines)
+    }
+
+    private func displayIndex(forSourceIndex sourceIndex: Int, in displayLines: [DisplayLyricLine]) -> Int {
+        displayLines.firstIndex { $0.sourceIndex == sourceIndex } ?? 0
+    }
+
+    private func updateDisplayCurrentLineIndex(at playbackTime: TimeInterval) {
+        let displayLines = cachedDisplayLines
+        guard !displayLines.isEmpty else {
+            displayCurrentLineIndex = nil
+            return
+        }
+        let newIndex = LyricMotionSamplingPolicy.activeIndex(
+            at: playbackTime,
+            lyrics: cachedDisplayLyrics,
+            firstRealIndex: cachedFirstRealDisplayIndex
+        )
+        guard displayCurrentLineIndex != newIndex else { return }
+        let oldIndex = displayCurrentLineIndex ?? wave.lastCurrentIndex
+        displayCurrentLineIndex = newIndex
+        guard let newIndex, !scroll.isManualScrolling else { return }
+        triggerWaveAnimation(from: oldIndex, to: newIndex)
+        wave.lastCurrentIndex = newIndex
+        startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
+    }
+
     // MARK: - 滚动边界 + 橡皮筋
 
     private func rubberBand(_ x: CGFloat, _ d: CGFloat) -> CGFloat {
@@ -1286,7 +1483,7 @@ public struct LyricsView: View {
     }
 
     private func scrollBounds() -> (maxUp: CGFloat, maxDown: CGFloat) {
-        let idx = scroll.lockedLineIndex ?? (lyricsService.currentLineIndex ?? 0)
+        let idx = scroll.lockedLineIndex ?? (displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0))
         let curOffset = calculateAccumulatedHeight(upTo: idx)
         let anchorY = (cache.lyricsContainerHeight - 120) * 0.24
         let visibleBottom = (cache.lyricsContainerHeight - 120) - anchorY
@@ -1305,8 +1502,12 @@ public struct LyricsView: View {
     }
 
     private func makeRenderedIndices() -> [Int] {
-        lyricsService.lyrics.enumerated()
-            .filter { index, _ in index == 0 || index >= lyricsService.firstRealLyricIndex }
+        makeRenderedIndices(in: cachedDisplayLines, firstRealIndex: cachedFirstRealDisplayIndex)
+    }
+
+    private func makeRenderedIndices(in displayLines: [DisplayLyricLine], firstRealIndex: Int) -> [Int] {
+        displayLines.enumerated()
+            .filter { index, _ in index == 0 || index >= firstRealIndex }
             .map { $0.offset }
     }
 

@@ -1,6 +1,6 @@
 # Lyrics Renderer Performance
 
-Last updated: 2026-05-21
+Last updated: 2026-05-24
 
 ## Protected UX
 
@@ -13,6 +13,17 @@ The old smooth lyrics page is the behavioral reference. Preserve:
 - active/non-active blur, scale, and opacity;
 - held-word emphasis, lift, glow, and float;
 - line spacing, wrapping, CJK behavior, interlude/prelude dots, and rapid page/song transitions.
+
+Long lyric and translation text may be segmented for compact-window display, but
+the segmentation must remain display-only. Do not split or rewrite parser
+output, cache records, source scoring, or translation state to solve layout
+density. `LyricsView` may derive virtual display rows from a single source
+`LyricLine` so each chunk gets its own scroll step, provided the source index,
+translation mapping, interlude behavior, and word timing remain traceable to the
+original lyric line. Generated Latin-script chunks must avoid one-word orphan
+segments and one-word final visual lines, but orphan prevention must not promote
+already-compact short phrases into separate scroll rows; compact scripts such as
+CJK, kana, Hangul, and Thai must not be re-spaced by Latin orphan balancing.
 
 Do not replace the old layout with fade-based transitions, opacity culling, cadence reduction, or simplified lyric effects. Those may lower implementation complexity but break the perceived continuity.
 
@@ -73,10 +84,14 @@ When debugging line-to-line latency, enable owner diagnostics and inspect
 `lyrics_line_motion_samples.csv`. The supported signal is sampled rendered
 geometry from `LyricsView`: rendered min/mid Y, target min/mid Y, active/display
 index, per-line wave target index, velocity, inter-line spacing delta, and
-manual-scroll / initial-load suppression flags. Do not diagnose wave timing only
-from playback timestamps or source lyric timing. The geometry preference path
-may update cached frames, but must not write diagnostics on every layout pass;
-line-motion recording should happen only from the bounded sampling timer.
+manual-scroll / initial-load suppression flags. The samples must also include
+usable viewport bounds, per-line top/bottom clip distance, active-line top/bottom
+clip distance, and controls-visible state so screenshot-only layout failures
+such as bottom-clipped next lines or top-crowded active lines are detectable from
+reports. Do not diagnose wave timing only from playback timestamps or source
+lyric timing. The geometry preference path may update cached frames, but must
+not write diagnostics on every layout pass; line-motion recording should happen
+only from the bounded sampling timer.
 
 False manual-scroll state is a first-class lyrics stutter cause even when CPU is
 low. Scroll-wheel monitors must not let momentum-only events or events outside
@@ -88,6 +103,13 @@ timeout and line switches feel stuck while diagnostics show low CPU.
 Lyrics controls must stay mounted across loading/error/empty/rendered lyric
 content states. A next/previous click starts a protected replacement animation;
 track-change lyric loading must not swap out the control subtree mid-animation.
+The lyrics page content mask must remain hover-driven: `BottomFadeMask` should
+use the lyrics `showControls` state, not a constant active value. Forcing the
+mask active when controls are hidden makes the no-hover lyrics page swallow too
+much lower content. Do not externalize skip replacement animation state into
+parent page chrome. `SkipControlButton` owns the glyph state and may reset to
+its static glyph when track identity changes, but hover and fade behavior must
+remain page-owned.
 
 Line-switch fixes must preserve the original AMLL-style staggered wave. Do not
 collapse line switches into an immediate single-target jump to make diagnostics
