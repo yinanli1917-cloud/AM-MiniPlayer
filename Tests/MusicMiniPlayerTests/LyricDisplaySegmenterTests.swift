@@ -235,6 +235,32 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertFalse(segments.flatMap { $0 }.contains { $0.word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
     }
 
+    func testWordSplitterIgnoresShortWhitespaceSpacerGlyphsInsidePhrase() {
+        let words = [
+            LyricWord(word: "I ", startTime: 20.96, endTime: 21.14),
+            LyricWord(word: "gave", startTime: 21.14, endTime: 21.62),
+            LyricWord(word: "\u{2005}", startTime: 21.62, endTime: 21.71),
+            LyricWord(word: "you", startTime: 21.71, endTime: 21.83),
+            LyricWord(word: "\u{2005}", startTime: 21.83, endTime: 21.92),
+            LyricWord(word: "that ", startTime: 21.92, endTime: 22.13),
+            LyricWord(word: "tattoo ", startTime: 22.13, endTime: 22.82),
+            LyricWord(word: "on", startTime: 22.82, endTime: 23.03),
+            LyricWord(word: "\u{2005}", startTime: 23.03, endTime: 23.06),
+            LyricWord(word: "your ", startTime: 23.06, endTime: 23.36),
+            LyricWord(word: "arm", startTime: 23.36, endTime: 23.69),
+        ]
+
+        let segments = LyricDisplaySegmenter.wordSegments(for: words, options: .mainLyric)
+        let textSegments = segments.map {
+            $0.map { $0.word.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+        }
+
+        XCTAssertEqual(textSegments, ["I gave you that tattoo on your arm"])
+        XCTAssertFalse(segments.flatMap { $0 }.contains { $0.word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
     func testWordSplitterDoesNotLeaveOneWordFinalVisualLine() {
         let words = [
             LyricWord(word: "And", startTime: 1.0, endTime: 1.2),

@@ -18,6 +18,8 @@ struct LyricDisplaySegmentationOptions: Equatable {
 }
 
 enum LyricDisplaySegmenter {
+    private static let phraseBoundaryWhitespaceDuration: TimeInterval = 0.35
+
     static func displayText(
         for text: String,
         options: LyricDisplaySegmentationOptions
@@ -115,7 +117,8 @@ enum LyricDisplaySegmenter {
         for word in words {
             let trimmedWord = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmedWord.isEmpty {
-                if !current.isEmpty {
+                let whitespaceDuration = max(word.endTime - word.startTime, 0)
+                if !current.isEmpty, whitespaceDuration >= phraseBoundaryWhitespaceDuration {
                     result.append(current)
                     current.removeAll()
                     currentUnits = 0

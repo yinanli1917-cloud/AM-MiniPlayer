@@ -24,8 +24,10 @@ original lyric line. Generated Latin-script chunks must avoid one-word orphan
 segments and one-word final visual lines, but orphan prevention must not promote
 already-compact short phrases into separate scroll rows. Phrases that fit within
 the compact lyric row budget and are roughly eight words or fewer should stay a
-single scroll unit; word-timed whitespace-only spans are phrase boundaries, not
+single scroll unit; word-timed whitespace-only spans are display separators, not
 display words, and must never become their own visible or measured segment.
+Only long whitespace-only timed spans should act as phrase boundaries; short
+spacer glyphs inside a phrase must not create extra scroll rows.
 When a translated source line is displayed as virtual lyric chunks, every
 generated chunk must receive visible translation text; balancing failures should
 split the translation more aggressively or fall back to the source translation,
