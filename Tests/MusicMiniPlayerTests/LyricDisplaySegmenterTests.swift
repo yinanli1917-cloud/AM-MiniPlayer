@@ -117,6 +117,15 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(normalizedWhitespace(protected), text)
     }
 
+    func testFinalWordWrapProtectionDoesNotDependOnEstimatorTailPrediction() {
+        let text = "You told all our friends it was my fault"
+
+        let protected = LyricDisplaySegmenter.protectFinalWordWrap(in: text, options: .mainLyric)
+
+        XCTAssertEqual(protected, "You told all our friends it was my\u{00A0}fault")
+        XCTAssertEqual(normalizedWhitespace(protected), text)
+    }
+
     func testSplitterDoesNotLeaveOneWordFinalVisualLine() {
         let text = "And if we had the chance to do it"
 

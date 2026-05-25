@@ -34,9 +34,10 @@ split the translation more aggressively or fall back to the source translation,
 never leave a blank translated row.
 Compact scripts such as CJK, kana, Hangul, and Thai must not be re-spaced by
 Latin orphan balancing.
-For Latin-script compact phrases that should remain one scroll chunk but would
-visually wrap with a one-word final line, protect the separator before the final
-word in the rendered text instead of creating extra lyric chunks.
+For Latin-script compact phrases that should remain one scroll chunk, protect
+the separator before the final word in the rendered text instead of trying to
+predict the exact SwiftUI wrap. The invariant is simple: the last visual line
+must not contain only one Latin word.
 
 Do not replace the old layout with fade-based transitions, opacity culling, cadence reduction, or simplified lyric effects. Those may lower implementation complexity but break the perceived continuity.
 

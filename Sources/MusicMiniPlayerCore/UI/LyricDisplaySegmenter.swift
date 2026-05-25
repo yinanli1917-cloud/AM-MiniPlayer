@@ -180,7 +180,7 @@ enum LyricDisplaySegmenter {
         guard normalizedWords.count >= 2 else { return false }
         let text = normalizedWords.joined(separator: " ")
         guard !containsCompactScript(text) else { return false }
-        return estimatedWrappedLineWordCounts(forWords: normalizedWords, options: options).last == 1
+        return true
     }
 
     static func protectFinalWordWrap(
