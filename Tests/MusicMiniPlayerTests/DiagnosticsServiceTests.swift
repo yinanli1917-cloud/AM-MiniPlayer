@@ -1515,6 +1515,49 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertTrue(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsLineMotion })
     }
 
+    func testLyricViewportClipCreatesIncident() {
+        let sample = DiagnosticLyricLineMotionSample(
+            page: "lyrics",
+            trackTitle: "Clipped Song",
+            trackArtist: "Layout Artist",
+            lineIndex: 7,
+            lineID: "line-7",
+            lineStartTime: 30.0,
+            lineEndTime: 33.0,
+            playbackTime: 31.0,
+            activeIndex: 6,
+            displayIndex: 6,
+            targetIndex: 6,
+            renderedMinY: 260,
+            renderedMidY: 285,
+            renderedHeight: 50,
+            targetMinY: 260,
+            targetMidY: 285,
+            targetErrorY: 0,
+            observedInterLineDeltaY: 54,
+            expectedInterLineDeltaY: 54,
+            interLineDeltaErrorY: 0,
+            waveOffsetY: 0,
+            manualScrollOffsetY: 0,
+            isManualScrolling: false,
+            isInitialMotionSuppressed: false,
+            visibleTopY: 42,
+            visibleBottomY: 292,
+            lineTopClipY: 0,
+            lineBottomClipY: 18,
+            activeTopClipY: 0,
+            activeBottomClipY: 0,
+            controlsVisible: true
+        )
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples([sample])
+
+        let incident = DiagnosticsService.shared.incidents.first { $0.category == .lyricsLineMotion }
+        XCTAssertEqual(incident?.title, "Lyrics line clipped")
+        XCTAssertEqual(incident?.metrics["lineViewportClip"], 1)
+        XCTAssertEqual(incident?.metrics["maxLineBottomClipPt"], 18)
+    }
+
     func testCollapsedLyricLineMotionGeometryDoesNotCreateIncident() {
         let samples = (0..<6).map { index in
             let targetMinY = 40.0 + Double(index * 72)
@@ -1899,6 +1942,43 @@ final class DiagnosticsServiceTests: XCTestCase {
 
         DiagnosticsService.shared.completeInteraction(second)
         XCTAssertEqual(DiagnosticsService.shared.activeInteractionCount, 0)
+    }
+
+    func testSkipInteractionRecordsControlVisibilityMetrics() {
+        let id = DiagnosticsService.shared.beginInteraction(
+            type: .nextTrack,
+            page: "lyrics",
+            expectedDuration: 0.60,
+            metrics: [
+                "controlsVisibleAtStart": 1,
+                "activeSkipAnimationCountAtStart": 0
+            ],
+            evidence: [
+                "animation": "SkipControlButton.replacementFlow",
+                "controlsVisibleAtStart": "true"
+            ]
+        )
+
+        DiagnosticsService.shared.completeInteraction(
+            id,
+            status: .interrupted,
+            detail: "Skip animation view disappeared before the replacement flow completed.",
+            metrics: [
+                "controlsVisibleAtFinish": 0,
+                "activeSkipAnimationCountAtFinish": 1,
+                "skipAnimationHiddenAtFinish": 1
+            ],
+            evidence: [
+                "controlsVisibleAtFinish": "false"
+            ]
+        )
+
+        let trace = DiagnosticsService.shared.interactions.first
+        XCTAssertEqual(trace?.metrics["controlsVisibleAtStart"], 1)
+        XCTAssertEqual(trace?.metrics["controlsVisibleAtFinish"], 0)
+        XCTAssertEqual(trace?.metrics["skipAnimationHiddenAtFinish"], 1)
+        XCTAssertEqual(trace?.evidence["controlsVisibleAtFinish"], "false")
+        XCTAssertTrue(DiagnosticsService.shared.incidents.contains { $0.category == .uiAnimationIncomplete })
     }
 
     func testArtworkSlowApplyCreatesInspectableIncident() {

@@ -343,6 +343,13 @@ public struct DiagnosticLyricLineMotionSample: Identifiable, Codable, Equatable,
     public var manualScrollOffsetY: Double
     public var isManualScrolling: Bool
     public var isInitialMotionSuppressed: Bool
+    public var visibleTopY: Double
+    public var visibleBottomY: Double
+    public var lineTopClipY: Double
+    public var lineBottomClipY: Double
+    public var activeTopClipY: Double
+    public var activeBottomClipY: Double
+    public var controlsVisible: Bool
 
     public init(
         id: UUID = UUID(),
@@ -371,7 +378,14 @@ public struct DiagnosticLyricLineMotionSample: Identifiable, Codable, Equatable,
         waveOffsetY: Double,
         manualScrollOffsetY: Double,
         isManualScrolling: Bool,
-        isInitialMotionSuppressed: Bool
+        isInitialMotionSuppressed: Bool,
+        visibleTopY: Double = 0,
+        visibleBottomY: Double = 0,
+        lineTopClipY: Double = 0,
+        lineBottomClipY: Double = 0,
+        activeTopClipY: Double = 0,
+        activeBottomClipY: Double = 0,
+        controlsVisible: Bool = false
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -400,6 +414,13 @@ public struct DiagnosticLyricLineMotionSample: Identifiable, Codable, Equatable,
         self.manualScrollOffsetY = manualScrollOffsetY
         self.isManualScrolling = isManualScrolling
         self.isInitialMotionSuppressed = isInitialMotionSuppressed
+        self.visibleTopY = visibleTopY
+        self.visibleBottomY = visibleBottomY
+        self.lineTopClipY = lineTopClipY
+        self.lineBottomClipY = lineBottomClipY
+        self.activeTopClipY = activeTopClipY
+        self.activeBottomClipY = activeBottomClipY
+        self.controlsVisible = controlsVisible
     }
 }
 
@@ -1555,15 +1576,27 @@ public final class DiagnosticsService: ObservableObject {
         let maxTargetError = enriched.map { abs($0.targetErrorY) }.max() ?? 0
         let maxInterLineError = enriched.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
         let maxVelocity = enriched.map { abs($0.velocityY) }.max() ?? 0
+        let maxActiveTopClip = enriched.map(\.activeTopClipY).max() ?? 0
+        let maxActiveBottomClip = enriched.map(\.activeBottomClipY).max() ?? 0
+        let maxLineTopClip = enriched.map(\.lineTopClipY).max() ?? 0
+        let maxLineBottomClip = enriched.map(\.lineBottomClipY).max() ?? 0
         updateBaseline("lyrics.lineMotion.targetError.pt", value: maxTargetError)
         updateBaseline("lyrics.lineMotion.interLineError.pt", value: maxInterLineError)
         updateBaseline("lyrics.lineMotion.velocity.ptPerSec", value: maxVelocity)
+        updateBaseline("lyrics.layout.activeTopClip.pt", value: maxActiveTopClip)
+        updateBaseline("lyrics.layout.activeBottomClip.pt", value: maxActiveBottomClip)
+        updateBaseline("lyrics.layout.lineTopClip.pt", value: maxLineTopClip)
+        updateBaseline("lyrics.layout.lineBottomClip.pt", value: maxLineBottomClip)
 
         updateActiveInteractions { trace in
             incrementMetric("lyricsLineMotionSampleCount", by: Double(enriched.count), in: &trace.metrics)
             maximizeMetric("maxLyricLineMotionTargetErrorPt", value: maxTargetError, in: &trace.metrics)
             maximizeMetric("maxLyricLineMotionInterLineErrorPt", value: maxInterLineError, in: &trace.metrics)
             maximizeMetric("maxLyricLineMotionVelocityPtPerSec", value: maxVelocity, in: &trace.metrics)
+            maximizeMetric("maxLyricActiveTopClipPt", value: maxActiveTopClip, in: &trace.metrics)
+            maximizeMetric("maxLyricActiveBottomClipPt", value: maxActiveBottomClip, in: &trace.metrics)
+            maximizeMetric("maxLyricLineTopClipPt", value: maxLineTopClip, in: &trace.metrics)
+            maximizeMetric("maxLyricLineBottomClipPt", value: maxLineBottomClip, in: &trace.metrics)
         }
 
         writeLiveLyricLineMotionSamples(enriched)
@@ -3033,10 +3066,16 @@ public final class DiagnosticsService: ObservableObject {
             let maxTargetError = report.lyricLineMotionSamples.map { abs($0.targetErrorY) }.max() ?? 0
             let maxInterLineError = report.lyricLineMotionSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
             let maxVelocity = report.lyricLineMotionSamples.map { abs($0.velocityY) }.max() ?? 0
+            let maxTopClip = report.lyricLineMotionSamples.map(\.activeTopClipY).max() ?? 0
+            let maxBottomClip = report.lyricLineMotionSamples.map(\.activeBottomClipY).max() ?? 0
+            let maxLineTopClip = report.lyricLineMotionSamples.map(\.lineTopClipY).max() ?? 0
+            let maxLineBottomClip = report.lyricLineMotionSamples.map(\.lineBottomClipY).max() ?? 0
             lines.append("- Samples: \(report.lyricLineMotionSamples.count)")
             lines.append("- Max target error: \(String(format: "%.1f", maxTargetError))pt")
             lines.append("- Max inter-line spacing error: \(String(format: "%.1f", maxInterLineError))pt")
             lines.append("- Max observed line velocity: \(String(format: "%.1f", maxVelocity))pt/s")
+            lines.append("- Max active line viewport clip: top \(String(format: "%.1f", maxTopClip))pt, bottom \(String(format: "%.1f", maxBottomClip))pt")
+            lines.append("- Max sampled line viewport clip: top \(String(format: "%.1f", maxLineTopClip))pt, bottom \(String(format: "%.1f", maxLineBottomClip))pt")
         }
         lines.append("")
         lines.append("## Baseline")
@@ -3078,7 +3117,7 @@ public final class DiagnosticsService: ObservableObject {
         includeHeader: Bool = true
     ) -> String where S.Element == DiagnosticLyricLineMotionSample {
         var rows = includeHeader ? [
-            "timestamp,page,trackTitle,trackArtist,lineIndex,lineID,lineStartTime,lineEndTime,playbackTime,activeIndex,displayIndex,targetIndex,renderedMinY,renderedMidY,renderedHeight,targetMinY,targetMidY,targetErrorY,velocityY,observedInterLineDeltaY,expectedInterLineDeltaY,interLineDeltaErrorY,waveOffsetY,manualScrollOffsetY,isManualScrolling,isInitialMotionSuppressed"
+            "timestamp,page,trackTitle,trackArtist,lineIndex,lineID,lineStartTime,lineEndTime,playbackTime,activeIndex,displayIndex,targetIndex,renderedMinY,renderedMidY,renderedHeight,targetMinY,targetMidY,targetErrorY,velocityY,observedInterLineDeltaY,expectedInterLineDeltaY,interLineDeltaErrorY,waveOffsetY,manualScrollOffsetY,isManualScrolling,isInitialMotionSuppressed,visibleTopY,visibleBottomY,lineTopClipY,lineBottomClipY,activeTopClipY,activeBottomClipY,controlsVisible"
         ] : []
         for sample in samples {
             rows.append([
@@ -3107,7 +3146,14 @@ public final class DiagnosticsService: ObservableObject {
                 csvNumber(sample.waveOffsetY),
                 csvNumber(sample.manualScrollOffsetY),
                 sample.isManualScrolling ? "1" : "0",
-                sample.isInitialMotionSuppressed ? "1" : "0"
+                sample.isInitialMotionSuppressed ? "1" : "0",
+                csvNumber(sample.visibleTopY),
+                csvNumber(sample.visibleBottomY),
+                csvNumber(sample.lineTopClipY),
+                csvNumber(sample.lineBottomClipY),
+                csvNumber(sample.activeTopClipY),
+                csvNumber(sample.activeBottomClipY),
+                sample.controlsVisible ? "1" : "0"
             ].joined(separator: ","))
         }
         return rows.joined(separator: "\n")
@@ -3188,6 +3234,10 @@ public final class DiagnosticsService: ObservableObject {
 
         let maxTargetError = stableSamples.map { abs($0.targetErrorY) }.max() ?? 0
         let maxInterLineError = stableSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
+        let maxActiveTopClip = stableSamples.map(\.activeTopClipY).max() ?? 0
+        let maxActiveBottomClip = stableSamples.map(\.activeBottomClipY).max() ?? 0
+        let maxLineTopClip = stableSamples.map(\.lineTopClipY).max() ?? 0
+        let maxLineBottomClip = stableSamples.map(\.lineBottomClipY).max() ?? 0
         let activeSample = stableSamples.first { $0.lineIndex == $0.activeIndex }
         let activeLineElapsed = activeSample.map { $0.playbackTime - $0.lineStartTime } ?? 0
         let activeVisualElapsed = activeSample.map { visualElapsedForActiveState(sample: $0) } ?? 0
@@ -3216,7 +3266,9 @@ public final class DiagnosticsService: ObservableObject {
         let hasGeometryDrift = maxInterLineError > 18 || maxTargetError > 32
         let hasLateActiveTarget = activeVisualElapsed > 0.55 && activeTargetLagged && laggedNearbyTargets >= 4
         let hasLingeringWaveBacklog = activeVisualElapsed > 0.90 && laggedNearbyTargets >= 4
-        guard hasGeometryDrift || hasLateActiveTarget || hasLingeringWaveBacklog else { return }
+        let hasActiveViewportClip = maxActiveTopClip > 8 || maxActiveBottomClip > 8
+        let hasLineViewportClip = maxLineTopClip > 8 || maxLineBottomClip > 8
+        guard hasGeometryDrift || hasLateActiveTarget || hasLingeringWaveBacklog || hasActiveViewportClip || hasLineViewportClip else { return }
 
         let sample = activeSample ?? stableSamples[0]
         let signature = [
@@ -3226,7 +3278,8 @@ public final class DiagnosticsService: ObservableObject {
             String(sample.displayIndex),
             String(sample.targetIndex),
             String(Int(maxTargetError / 10)),
-            String(Int(maxInterLineError / 10))
+            String(Int(maxInterLineError / 10)),
+            String(Int(max(max(maxActiveTopClip, maxActiveBottomClip), max(maxLineTopClip, maxLineBottomClip)) / 8))
         ].joined(separator: "|")
         let now = Date()
         let cooldown: TimeInterval = signature == lastLyricLineMotionIncidentSignature ? 30.0 : 3.0
@@ -3246,25 +3299,35 @@ public final class DiagnosticsService: ObservableObject {
         )
         recordIncident(
             category: .lyricsLineMotion,
-            severity: maxInterLineError > 28 || maxTargetError > 48 ? .critical : .warning,
-            title: "Lyrics line motion drift",
-            detail: "Rendered lyric lines diverged from their target motion during playback.",
+            severity: maxInterLineError > 28 || maxTargetError > 48 || max(max(maxActiveTopClip, maxActiveBottomClip), max(maxLineTopClip, maxLineBottomClip)) > 28 ? .critical : .warning,
+            title: (hasActiveViewportClip || hasLineViewportClip) && !hasGeometryDrift ? "Lyrics line clipped" : "Lyrics line motion drift",
+            detail: hasActiveViewportClip || hasLineViewportClip
+                ? "A rendered lyric line crossed the usable viewport while controls or panel bounds were present."
+                : "Rendered lyric lines diverged from their target motion during playback.",
             track: track,
             metrics: [
                 "maxTargetErrorPt": maxTargetError,
                 "maxInterLineErrorPt": maxInterLineError,
+                "maxActiveTopClipPt": maxActiveTopClip,
+                "maxActiveBottomClipPt": maxActiveBottomClip,
+                "maxLineTopClipPt": maxLineTopClip,
+                "maxLineBottomClipPt": maxLineBottomClip,
                 "laggedNearbyTargetCount": Double(laggedNearbyTargets),
                 "activeLineElapsedMs": activeLineElapsed * 1000,
                 "activeVisualElapsedMs": activeVisualElapsed * 1000,
                 "activeTargetLagged": activeTargetLagged ? 1 : 0,
-                "lingeringWaveBacklog": hasLingeringWaveBacklog ? 1 : 0
+                "lingeringWaveBacklog": hasLingeringWaveBacklog ? 1 : 0,
+                "activeViewportClip": hasActiveViewportClip ? 1 : 0,
+                "lineViewportClip": hasLineViewportClip ? 1 : 0,
+                "controlsVisible": sample.controlsVisible ? 1 : 0
             ],
             evidence: [
                 "track": "\(sample.trackTitle) / \(sample.trackArtist)",
                 "activeIndex": "\(sample.activeIndex)",
                 "displayIndex": "\(sample.displayIndex)",
                 "targetIndex": "\(sample.targetIndex)",
-                "page": sample.page
+                "page": sample.page,
+                "visibleRangeY": "\(String(format: "%.1f", sample.visibleTopY))...\(String(format: "%.1f", sample.visibleBottomY))"
             ]
         )
     }
