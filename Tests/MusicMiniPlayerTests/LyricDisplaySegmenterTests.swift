@@ -92,6 +92,14 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(segments, [text])
     }
 
+    func testSplitterKeepsCompactSixWordPhraseTogether() {
+        let text = "Yeah, I feel my pulse quickening"
+
+        let segments = LyricDisplaySegmenter.segments(for: text, options: .mainLyric)
+
+        XCTAssertEqual(segments, [text])
+    }
+
     func testSplitterDoesNotLeaveOneWordFinalVisualLine() {
         let text = "And if we had the chance to do it"
 
@@ -144,6 +152,22 @@ final class LyricDisplaySegmenterTests: XCTestCase {
             LyricWord(word: "hundred", startTime: 1.4, endTime: 1.6),
             LyricWord(word: "per", startTime: 1.6, endTime: 1.8),
             LyricWord(word: "cent", startTime: 1.8, endTime: 2.0),
+        ]
+
+        let segments = LyricDisplaySegmenter.wordSegments(for: words, options: .mainLyric)
+
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments.flatMap { $0 }.map(\.word), words.map(\.word))
+    }
+
+    func testWordSplitterKeepsCompactSixWordPhraseTogether() {
+        let words = [
+            LyricWord(word: "Yeah,", startTime: 1.0, endTime: 1.2),
+            LyricWord(word: "I", startTime: 1.2, endTime: 1.4),
+            LyricWord(word: "feel", startTime: 1.4, endTime: 1.6),
+            LyricWord(word: "my", startTime: 1.6, endTime: 1.8),
+            LyricWord(word: "pulse", startTime: 1.8, endTime: 2.0),
+            LyricWord(word: "quickening", startTime: 2.0, endTime: 2.2),
         ]
 
         let segments = LyricDisplaySegmenter.wordSegments(for: words, options: .mainLyric)

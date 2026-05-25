@@ -22,8 +22,10 @@ density. `LyricsView` may derive virtual display rows from a single source
 translation mapping, interlude behavior, and word timing remain traceable to the
 original lyric line. Generated Latin-script chunks must avoid one-word orphan
 segments and one-word final visual lines, but orphan prevention must not promote
-already-compact short phrases into separate scroll rows; compact scripts such as
-CJK, kana, Hangul, and Thai must not be re-spaced by Latin orphan balancing.
+already-compact short phrases into separate scroll rows. Phrases that fit within
+the compact lyric row budget and are roughly six words or fewer should stay a
+single scroll unit; compact scripts such as CJK, kana, Hangul, and Thai must not
+be re-spaced by Latin orphan balancing.
 
 Do not replace the old layout with fade-based transitions, opacity culling, cadence reduction, or simplified lyric effects. Those may lower implementation complexity but break the perceived continuity.
 

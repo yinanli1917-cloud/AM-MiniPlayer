@@ -257,8 +257,11 @@ enum LyricDisplaySegmenter {
         let words = segment
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
-        if words.count <= 5,
-           estimatedVisualLineCount(for: segment, options: options) <= options.maxVisualLines {
+        if shouldPreserveCompactPhrase(
+            wordCount: words.count,
+            estimatedLineCount: estimatedVisualLineCount(for: segment, options: options),
+            options: options
+        ) {
             return [segment]
         }
         guard words.count >= 5,
@@ -453,8 +456,11 @@ enum LyricDisplaySegmenter {
     ) -> [[LyricWord]] {
         let words = segment.map { $0.word.trimmingCharacters(in: .whitespaces) }
         let text = words.joined(separator: " ")
-        if segment.count <= 5,
-           estimatedVisualLineCount(for: text, options: options) <= options.maxVisualLines {
+        if shouldPreserveCompactPhrase(
+            wordCount: segment.count,
+            estimatedLineCount: estimatedVisualLineCount(for: text, options: options),
+            options: options
+        ) {
             return [segment]
         }
         guard segment.count >= 5 else { return [segment] }
@@ -468,6 +474,20 @@ enum LyricDisplaySegmenter {
             ?? segment.count
         guard splitPoint >= 2, segment.count - splitPoint >= 2 else { return [segment] }
         return [Array(segment[..<splitPoint]), Array(segment[splitPoint...])]
+    }
+
+    private static func shouldPreserveCompactPhrase(
+        wordCount: Int,
+        estimatedLineCount: Int,
+        options: LyricDisplaySegmentationOptions
+    ) -> Bool {
+        guard wordCount > 0 else { return true }
+        guard estimatedLineCount <= options.maxVisualLines else { return false }
+
+        // Short lyric phrases can wrap to two or three visual lines in the
+        // compact window and still read as one sentence. Splitting those into
+        // separate scroll rows makes the cadence look broken.
+        return wordCount <= 6 || estimatedLineCount <= 2
     }
 
     private static func rebalanceOneWordBuckets<T>(_ buckets: inout [[T]]) {
