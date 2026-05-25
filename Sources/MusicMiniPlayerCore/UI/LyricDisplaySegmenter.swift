@@ -170,6 +170,55 @@ enum LyricDisplaySegmenter {
         return estimatedWrappedLineWordCounts(forWords: words, options: options)
     }
 
+    static func shouldProtectFinalWordWrap(
+        forWords words: [String],
+        options: LyricDisplaySegmentationOptions
+    ) -> Bool {
+        let normalizedWords = words
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard normalizedWords.count >= 2 else { return false }
+        let text = normalizedWords.joined(separator: " ")
+        guard !containsCompactScript(text) else { return false }
+        return estimatedWrappedLineWordCounts(forWords: normalizedWords, options: options).last == 1
+    }
+
+    static func protectFinalWordWrap(
+        in text: String,
+        options: LyricDisplaySegmentationOptions
+    ) -> String {
+        let words = text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        guard shouldProtectFinalWordWrap(forWords: words, options: options) else { return text }
+
+        var end = text.endIndex
+        while end > text.startIndex {
+            let previous = text.index(before: end)
+            if !text[previous].isWhitespace { break }
+            end = previous
+        }
+
+        var lastWordStart = end
+        while lastWordStart > text.startIndex {
+            let previous = text.index(before: lastWordStart)
+            if text[previous].isWhitespace { break }
+            lastWordStart = previous
+        }
+
+        var separatorStart = lastWordStart
+        while separatorStart > text.startIndex {
+            let previous = text.index(before: separatorStart)
+            if !text[previous].isWhitespace { break }
+            separatorStart = previous
+        }
+        guard separatorStart < lastWordStart else { return text }
+
+        var protected = text
+        protected.replaceSubrange(separatorStart..<lastWordStart, with: "\u{00A0}")
+        return protected
+    }
+
     private static func segmentSingleLine(
         _ text: String,
         options: LyricDisplaySegmentationOptions

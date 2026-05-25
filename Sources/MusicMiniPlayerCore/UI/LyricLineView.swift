@@ -111,7 +111,7 @@ struct LyricLineView: View {
                 text = line.words.map(\.word).joined()
             }
         }
-        return text
+        return LyricDisplaySegmenter.protectFinalWordWrap(in: text, options: .mainLyric)
     }
 
     // 🔑 翻译文本（如果有）
@@ -495,10 +495,16 @@ private struct WordByWordText: View {
     }
 
     var body: some View {
+        let protectFinalPair = needsSpaces && LyricDisplaySegmenter.shouldProtectFinalWordWrap(
+            forWords: words.map(\.word),
+            options: .mainLyric
+        )
         WordFlowLayout {
             ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
                 let cleaned = word.word.trimmingCharacters(in: .whitespaces)
-                let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
+                let suffix = (index < words.count - 1 && needsSpaces)
+                    ? (protectFinalPair && index == words.count - 2 ? "\u{00A0}" : " ")
+                    : ""
                 let text = cleaned + suffix
                 let isLast = (index == words.count - 1)
                 if let opacity = staticOpacity {
@@ -644,6 +650,10 @@ private struct SyllableTextPayload {
 
     init(words: [LyricWord]) {
         let needsSpaces = Self.needsSpaces(words)
+        let protectFinalPair = needsSpaces && LyricDisplaySegmenter.shouldProtectFinalWordWrap(
+            forWords: words.map(\.word),
+            options: .mainLyric
+        )
         let lineEnd = words.last?.endTime ?? 0
         var result = Text("")
         for (index, word) in words.enumerated() {
@@ -652,7 +662,9 @@ private struct SyllableTextPayload {
             // trailing space on `word.word` would add to the suffix space
             // and widen the line vs the line-level Text(...) rendering.
             let cleaned = word.word.trimmingCharacters(in: .whitespaces)
-            let suffix = (index < words.count - 1 && needsSpaces) ? " " : ""
+            let suffix = (index < words.count - 1 && needsSpaces)
+                ? (protectFinalPair && index == words.count - 2 ? "\u{00A0}" : " ")
+                : ""
             let text = cleaned + suffix
             let duration = word.endTime - word.startTime
             let isLast = (index == words.count - 1)

@@ -108,6 +108,15 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(segments, [text])
     }
 
+    func testFinalWordWrapProtectionUsesNonBreakingSeparatorForSingleWordTail() {
+        let text = "But you were just two years I wasted"
+
+        let protected = LyricDisplaySegmenter.protectFinalWordWrap(in: text, options: .mainLyric)
+
+        XCTAssertEqual(protected, "But you were just two years I\u{00A0}wasted")
+        XCTAssertEqual(normalizedWhitespace(protected), text)
+    }
+
     func testSplitterDoesNotLeaveOneWordFinalVisualLine() {
         let text = "And if we had the chance to do it"
 
@@ -201,6 +210,24 @@ final class LyricDisplaySegmenterTests: XCTestCase {
 
         XCTAssertEqual(textSegments, ["if you could save me from my brain?"])
         XCTAssertEqual(segments.flatMap { $0 }.map(\.word), words.map(\.word))
+    }
+
+    func testFinalWordWrapProtectionRecognizesWordTimedSingleWordTail() {
+        let words = [
+            LyricWord(word: "But ", startTime: 31.07, endTime: 31.28),
+            LyricWord(word: "you ", startTime: 31.28, endTime: 31.46),
+            LyricWord(word: "were ", startTime: 31.46, endTime: 31.64),
+            LyricWord(word: "just ", startTime: 31.64, endTime: 32.00),
+            LyricWord(word: "two ", startTime: 32.00, endTime: 32.30),
+            LyricWord(word: "years ", startTime: 32.30, endTime: 32.93),
+            LyricWord(word: "I ", startTime: 32.93, endTime: 33.20),
+            LyricWord(word: "wasted", startTime: 33.20, endTime: 34.55),
+        ]
+
+        XCTAssertTrue(LyricDisplaySegmenter.shouldProtectFinalWordWrap(
+            forWords: words.map(\.word),
+            options: .mainLyric
+        ))
     }
 
     func testWordSplitterTreatsWhitespaceTimedSpanAsPhraseBoundary() {
