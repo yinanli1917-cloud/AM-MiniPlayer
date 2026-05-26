@@ -290,6 +290,7 @@ public class MusicController: ObservableObject {
         debugPrint("🎯 [MusicController] Initializing - isPreview=\(isPreview)\n")
         logger.info("🎯 Initializing MusicController - will connect after setup")
 
+        pruneDefaultArtworkDiskCacheOnUtilityQueue()
         setupNotifications()
         startTimers()
 

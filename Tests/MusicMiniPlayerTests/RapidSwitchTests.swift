@@ -11,6 +11,7 @@
 
 import XCTest
 import Foundation
+import AppKit
 import SQLite3
 @testable import MusicMiniPlayerCore
 import ObjCSupport
@@ -343,6 +344,47 @@ final class RapidSwitchTests: XCTestCase {
             url?.absoluteString,
             "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/3c/0f/75/cover.jpg/800x800bb.jpg"
         )
+    }
+
+    func testArtworkDiskCacheEncodingUsesCompressedJPEG() throws {
+        let image = NSImage(size: NSSize(width: 600, height: 600))
+        image.lockFocus()
+        NSColor.systemPink.setFill()
+        NSRect(x: 0, y: 0, width: 600, height: 600).fill()
+        NSColor.systemBlue.setFill()
+        NSRect(x: 120, y: 120, width: 360, height: 360).fill()
+        image.unlockFocus()
+
+        let encoded = try XCTUnwrap(encodedArtworkDiskCacheData(from: image))
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+
+        XCTAssertEqual(encoded.prefix(2), Data([0xff, 0xd8]))
+        XCTAssertLessThan(encoded.count, tiff.count / 4)
+    }
+
+    func testArtworkDiskCachePrunesByByteBudgetAndRecency() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nanopod-artwork-prune-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for index in 0..<6 {
+            let url = root.appendingPathComponent("artwork-\(index).jpg")
+            try Data(repeating: UInt8(index), count: 1024).write(to: url)
+            let date = Date(timeIntervalSince1970: TimeInterval(index))
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+        }
+
+        pruneArtworkDiskCache(in: root, maxBytes: 4 * 1024, targetBytes: 3 * 1024, maxFiles: 4)
+
+        let remaining = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.fileSizeKey])
+        let names = Set(remaining.map(\.lastPathComponent))
+        let totalBytes = try remaining.reduce(0) { total, url in
+            total + (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        }
+
+        XCTAssertLessThanOrEqual(totalBytes, 3 * 1024)
+        XCTAssertEqual(names, ["artwork-3.jpg", "artwork-4.jpg", "artwork-5.jpg"])
     }
 
     func testPlaybackSessionArtworkTextMatchHandlesBinaryPayloadWithoutWholeBlobNormalization() {

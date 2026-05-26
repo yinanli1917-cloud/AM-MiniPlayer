@@ -1196,6 +1196,22 @@ func encodedArtworkDiskCacheData(from image: NSImage, compressionFactor: CGFloat
         ?? image.tiffRepresentation
 }
 
+func defaultArtworkDiskCacheDirectory() -> URL? {
+    guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        return nil
+    }
+    return appSupport
+        .appendingPathComponent("nanoPod", isDirectory: true)
+        .appendingPathComponent("ArtworkCache", isDirectory: true)
+}
+
+func pruneDefaultArtworkDiskCacheOnUtilityQueue() {
+    guard let directory = defaultArtworkDiskCacheDirectory() else { return }
+    DispatchQueue.global(qos: .utility).async {
+        pruneArtworkDiskCache(in: directory)
+    }
+}
+
 func pruneArtworkDiskCache(
     in directory: URL,
     maxBytes: Int = 24 * 1024 * 1024,

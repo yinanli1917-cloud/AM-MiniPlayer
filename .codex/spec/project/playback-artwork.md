@@ -24,6 +24,10 @@ cover on a new track.
   album-disambiguated metadata key. On restart or rebuild, check this disk cache
   before async fetches so previously seen tracks do not briefly black out while
   local Apple caches or web fallbacks warm up.
+- The artwork disk cache must be compressed and byte-bounded. Do not persist
+  full TIFF artwork for normal cache rows; write compressed image data, keep
+  legacy TIFF reads only for migration, and prune the directory by total bytes
+  and recency on launch/write.
 - Nearby queue artwork prewarming should use the same bounded artwork race as
   current-track fetches, not only playback-session reads. Some Apple Music URL
   tracks have no ScriptingBridge artwork and no current playback-session archive
