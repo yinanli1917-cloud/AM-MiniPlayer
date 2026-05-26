@@ -77,6 +77,10 @@ technical causes.
   should be coalesced into a burst record with occurrence count and max read /
   queue-wait metrics. This keeps the monitor readable while preserving the
   root-cause evidence.
+- Process memory diagnostics must not turn routine developer-build RSS into a
+  recurring warning stream. Memory incidents require either high absolute RSS
+  or sharp short-window growth, and repeated elevated samples should be
+  coalesced into one burst with occurrence count, max RSS, and growth evidence.
 - Isolated ScriptingBridge reads below the severe standalone threshold
   (currently 1000ms) are baseline evidence, not monitor incidents, unless they
   overlap an active interaction trace or back up the queue. Low queue-wait reads
@@ -87,6 +91,12 @@ technical causes.
   target positions, active/display/target indices, per-line velocity,
   inter-line spacing error, wave offset, playback time, and manual-scroll /
   initial-load suppression flags.
+- Viewport-clip diagnostics must only classify the active line or rows that can
+  actually affect the visible viewport. Sampled rows that are intentionally
+  offscreen are baseline geometry, not visible clipping and not motion drift.
+  When repeated line-clip incidents are coalesced, the burst label must remain a
+  clipping label unless the merged metrics include real target/spacing drift or
+  stale target evidence.
 - Lyrics-page motion probes must not record diagnostics directly from every
   SwiftUI geometry preference update, and they must not keep per-line geometry
   readers active continuously. The bounded sampling clock should request a

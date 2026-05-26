@@ -508,6 +508,12 @@ public final class DiagnosticsService: ObservableObject {
     private let standaloneWarningFrameStallIncidentThreshold = 6
     private let standaloneCriticalFrameStallIncidentThreshold = 3
     private let scriptingBridgeCoalesceWindow: TimeInterval = 120
+    private let memoryCoalesceWindow: TimeInterval = 10 * 60
+    private let memorySampleWindow: TimeInterval = 90
+    private let memoryWarningRSSMB: Double = 800
+    private let memoryCriticalRSSMB: Double = 1200
+    private let memoryGrowthWarningMB: Double = 300
+    private let memoryGrowthCriticalMB: Double = 600
     private let correlatedScriptingBridgeReadIncidentThreshold: TimeInterval = 0.50
     private let severeStandaloneScriptingBridgeReadIncidentThreshold: TimeInterval = 1.0
     private let startupStandaloneFrameStallSuppressionDuration: TimeInterval = 5.0
@@ -518,6 +524,7 @@ public final class DiagnosticsService: ObservableObject {
     private var lastLyricLineMotionIncidentAt: Date?
     private var lastLyricLineMotionIncidentSignature: String?
     private var recentCPUSamples: [(timestamp: Date, cpu: Double)] = []
+    private var recentMemorySamples: [(timestamp: Date, rss: Double)] = []
     private var lastHighCPUIncidentAt: Date?
     private var suppressStandaloneFrameStallsUntil: Date = .distantPast
     private var pendingStandaloneFrameStalls: [String: DiagnosticIncident] = [:]
@@ -570,6 +577,7 @@ public final class DiagnosticsService: ObservableObject {
         lastLyricLineMotionIncidentAt = nil
         lastLyricLineMotionIncidentSignature = nil
         recentCPUSamples.removeAll()
+        recentMemorySamples.removeAll()
         lastHighCPUIncidentAt = nil
         pendingStandaloneFrameStalls.removeAll()
         suppressStandaloneFrameStallsUntil = suppressImmediateStandaloneFrameStalls
@@ -615,6 +623,10 @@ public final class DiagnosticsService: ObservableObject {
 
     func currentAppBuildSignatureForTesting() -> String {
         Self.currentAppBuildSignature()
+    }
+
+    func recordProcessHealthSampleForTesting(cpu: Double?, rss: Double?) {
+        recordProcessHealthSample(cpu: cpu, rss: rss)
     }
 
     public func prepareForTermination() {
@@ -2298,6 +2310,7 @@ public final class DiagnosticsService: ObservableObject {
         coalesceStandaloneFrameStallIncidents()
         coalesceLyricLineMotionIncidents()
         coalesceScriptingBridgeIncidents()
+        coalesceMemoryIncidents()
         if events.count > maxEvents {
             events.removeLast(events.count - maxEvents)
         }
@@ -2386,6 +2399,30 @@ public final class DiagnosticsService: ObservableObject {
         incidents = compacted
     }
 
+    private func coalesceMemoryIncidents() {
+        guard incidents.count > 1 else { return }
+
+        var compacted: [DiagnosticIncident] = []
+        var bucketIndexBySignature: [String: Int] = [:]
+        compacted.reserveCapacity(incidents.count)
+
+        for incident in incidents {
+            guard let signature = memoryCoalesceSignature(for: incident) else {
+                compacted.append(incident)
+                continue
+            }
+
+            if let index = bucketIndexBySignature[signature] {
+                compacted[index] = mergeMemoryIncident(incident, into: compacted[index])
+            } else {
+                bucketIndexBySignature[signature] = compacted.count
+                compacted.append(normalizedMemoryIncident(incident, signature: signature))
+            }
+        }
+
+        incidents = compacted
+    }
+
     private func refreshLastWarningAfterIncidentNormalization() {
         guard let lastWarning else { return }
         if let current = incidents.first(where: { $0.id == lastWarning.id }) {
@@ -2452,6 +2489,15 @@ public final class DiagnosticsService: ObservableObject {
         let normalizedOperation = operation?.isEmpty == false ? operation! : "unknown"
         let bucket = floor(incident.timestamp.timeIntervalSince1970 / scriptingBridgeCoalesceWindow)
         return "scriptingBridge|\(incident.category.rawValue)|\(normalizedOperation)|\(Int(bucket))"
+    }
+
+    private func memoryCoalesceSignature(for incident: DiagnosticIncident) -> String? {
+        guard incident.category == .memorySpike,
+              incident.automaticallyDetected else {
+            return nil
+        }
+        let bucket = floor(incident.timestamp.timeIntervalSince1970 / memoryCoalesceWindow)
+        return "memorySpike|\(Int(bucket))"
     }
 
     private func normalizedFrameStallIncident(
@@ -2550,9 +2596,16 @@ public final class DiagnosticsService: ObservableObject {
         for key in [
             "maxTargetErrorPt",
             "maxInterLineErrorPt",
+            "maxActiveTopClipPt",
+            "maxActiveBottomClipPt",
+            "maxLineTopClipPt",
+            "maxLineBottomClipPt",
             "laggedNearbyTargetCount",
             "activeLineElapsedMs",
-            "activeTargetLagged"
+            "activeTargetLagged",
+            "lingeringWaveBacklog",
+            "activeViewportClip",
+            "lineViewportClip"
         ] {
             if let incomingValue = incoming.metrics[key] {
                 merged.metrics[key] = max(merged.metrics[key] ?? incomingValue, incomingValue)
@@ -2567,9 +2620,50 @@ public final class DiagnosticsService: ObservableObject {
         }
         let maxTarget = merged.metrics["maxTargetErrorPt"] ?? 0
         let maxInterLine = merged.metrics["maxInterLineErrorPt"] ?? 0
-        merged.title = "Lyrics line motion drift burst"
-        merged.detail = "\(Int(count)) line-motion drift samples for this track; max target error \(String(format: "%.0f", maxTarget))pt, max spacing error \(String(format: "%.0f", maxInterLine))pt."
+        let presentation = lyricLineMotionBurstPresentation(for: merged, count: Int(count))
+        merged.title = presentation.title
+        merged.detail = presentation.detail(maxTarget, maxInterLine)
         return merged
+    }
+
+    private func lyricLineMotionBurstPresentation(
+        for incident: DiagnosticIncident,
+        count: Int
+    ) -> (title: String, detail: (Double, Double) -> String) {
+        let hasViewportClip = (incident.metrics["activeViewportClip"] ?? 0) > 0
+            || (incident.metrics["lineViewportClip"] ?? 0) > 0
+            || (incident.metrics["maxActiveTopClipPt"] ?? 0) > 8
+            || (incident.metrics["maxActiveBottomClipPt"] ?? 0) > 8
+            || (incident.metrics["maxLineTopClipPt"] ?? 0) > 8
+            || (incident.metrics["maxLineBottomClipPt"] ?? 0) > 8
+        let hasMotionDrift = (incident.metrics["maxTargetErrorPt"] ?? 0) > 32
+            || (incident.metrics["maxInterLineErrorPt"] ?? 0) > 18
+            || (incident.metrics["activeTargetLagged"] ?? 0) > 0
+            || (incident.metrics["lingeringWaveBacklog"] ?? 0) > 0
+
+        if hasViewportClip && !hasMotionDrift {
+            return (
+                "Lyrics line clipped burst",
+                { _, _ in
+                    let maxTop = max(
+                        incident.metrics["maxActiveTopClipPt"] ?? 0,
+                        incident.metrics["maxLineTopClipPt"] ?? 0
+                    )
+                    let maxBottom = max(
+                        incident.metrics["maxActiveBottomClipPt"] ?? 0,
+                        incident.metrics["maxLineBottomClipPt"] ?? 0
+                    )
+                    return "\(count) viewport-clip samples for this track; max top clip \(String(format: "%.0f", maxTop))pt, max bottom clip \(String(format: "%.0f", maxBottom))pt."
+                }
+            )
+        }
+
+        return (
+            "Lyrics line motion drift burst",
+            { maxTarget, maxInterLine in
+                "\(count) line-motion drift samples for this track; max target error \(String(format: "%.0f", maxTarget))pt, max spacing error \(String(format: "%.0f", maxInterLine))pt."
+            }
+        )
     }
 
     private func normalizedScriptingBridgeIncident(
@@ -2640,6 +2734,85 @@ public final class DiagnosticsService: ObservableObject {
             merged.detail = "\(operation) had \(Int(count)) slow reads in \(Int(scriptingBridgeCoalesceWindow))s; max read \(maxReadText)ms."
         }
         return merged
+    }
+
+    private func normalizedMemoryIncident(
+        _ incident: DiagnosticIncident,
+        signature: String
+    ) -> DiagnosticIncident {
+        var normalized = incident
+        let rss = normalized.metrics["rssMB"] ?? normalized.metrics["maxRSSMB"] ?? 0
+        normalized.metrics["occurrenceCount"] = max(normalized.metrics["occurrenceCount"] ?? 1, 1)
+        normalized.metrics["maxRSSMB"] = max(normalized.metrics["maxRSSMB"] ?? rss, rss)
+        normalized.metrics["minRSSMB"] = min(
+            normalized.metrics["minRSSMB"] ?? normalized.metrics["minRecentRSSMB"] ?? rss,
+            normalized.metrics["minRecentRSSMB"] ?? rss
+        )
+        normalized.metrics["maxMemoryGrowthMB"] = max(
+            normalized.metrics["maxMemoryGrowthMB"] ?? 0,
+            normalized.metrics["memoryGrowthMB"] ?? 0
+        )
+        normalized.metrics["maxCPUPercent"] = max(
+            normalized.metrics["maxCPUPercent"] ?? 0,
+            normalized.metrics["cpuPercent"] ?? 0
+        )
+        normalized.metrics["firstTimestampEpoch"] = normalized.timestamp.timeIntervalSince1970
+        normalized.metrics["lastTimestampEpoch"] = normalized.timestamp.timeIntervalSince1970
+        normalized.evidence["signature"] = signature
+        normalized.evidence["coalescedWindowSeconds"] = "\(Int(memoryCoalesceWindow))"
+        normalized.title = "Memory pressure burst"
+        normalized.detail = memoryBurstDetail(for: normalized)
+        return normalized
+    }
+
+    private func mergeMemoryIncident(
+        _ incoming: DiagnosticIncident,
+        into representative: DiagnosticIncident
+    ) -> DiagnosticIncident {
+        var merged = representative
+        let incomingRSS = incoming.metrics["rssMB"] ?? incoming.metrics["maxRSSMB"] ?? 0
+        let incomingMinRSS = incoming.metrics["minRSSMB"] ?? incoming.metrics["minRecentRSSMB"] ?? incomingRSS
+        let incomingGrowth = incoming.metrics["memoryGrowthMB"] ?? incoming.metrics["maxMemoryGrowthMB"] ?? 0
+        let incomingCPU = incoming.metrics["cpuPercent"] ?? incoming.metrics["maxCPUPercent"] ?? 0
+        let count = (merged.metrics["occurrenceCount"] ?? 1) + (incoming.metrics["occurrenceCount"] ?? 1)
+        let firstTimestamp = min(
+            merged.metrics["firstTimestampEpoch"] ?? merged.timestamp.timeIntervalSince1970,
+            incoming.timestamp.timeIntervalSince1970
+        )
+        let lastTimestamp = max(
+            merged.metrics["lastTimestampEpoch"] ?? merged.timestamp.timeIntervalSince1970,
+            incoming.timestamp.timeIntervalSince1970
+        )
+
+        merged.metrics["occurrenceCount"] = count
+        merged.metrics["rssMB"] = max(merged.metrics["rssMB"] ?? merged.metrics["maxRSSMB"] ?? 0, incomingRSS)
+        merged.metrics["maxRSSMB"] = max(merged.metrics["maxRSSMB"] ?? 0, incomingRSS)
+        merged.metrics["minRSSMB"] = min(merged.metrics["minRSSMB"] ?? incomingMinRSS, incomingMinRSS)
+        merged.metrics["maxMemoryGrowthMB"] = max(merged.metrics["maxMemoryGrowthMB"] ?? 0, incomingGrowth)
+        merged.metrics["maxCPUPercent"] = max(merged.metrics["maxCPUPercent"] ?? 0, incomingCPU)
+        merged.metrics["firstTimestampEpoch"] = firstTimestamp
+        merged.metrics["lastTimestampEpoch"] = lastTimestamp
+        if incoming.severity == .critical {
+            merged.severity = .critical
+        }
+        if merged.evidence["signature"] == nil,
+           let signature = memoryCoalesceSignature(for: merged) {
+            merged.evidence["signature"] = signature
+        }
+        merged.evidence["coalescedWindowSeconds"] = "\(Int(memoryCoalesceWindow))"
+        merged.title = "Memory pressure burst"
+        merged.detail = memoryBurstDetail(for: merged)
+        return merged
+    }
+
+    private func memoryBurstDetail(for incident: DiagnosticIncident) -> String {
+        let count = Int(incident.metrics["occurrenceCount"] ?? 1)
+        let maxRSS = incident.metrics["maxRSSMB"] ?? incident.metrics["rssMB"] ?? 0
+        let growth = incident.metrics["maxMemoryGrowthMB"] ?? incident.metrics["memoryGrowthMB"] ?? 0
+        if growth >= memoryGrowthWarningMB {
+            return "\(count) elevated memory samples in \(Int(memoryCoalesceWindow / 60))m; max resident memory \(String(format: "%.0f", maxRSS)) MB, max short-window growth \(String(format: "%.0f", growth)) MB."
+        }
+        return "\(count) elevated memory samples in \(Int(memoryCoalesceWindow / 60))m; max resident memory \(String(format: "%.0f", maxRSS)) MB."
     }
 
     private func normalizeLegacyHighCPUIncidents() {
@@ -2835,6 +3008,7 @@ public final class DiagnosticsService: ObservableObject {
         lyricLineMotionSampleCount = 0
         previousLyricLineMotionSamples.removeAll()
         pendingStandaloneFrameStalls.removeAll()
+        recentMemorySamples.removeAll()
         baselineStats.removeAll()
         artworkFetchStarts.removeAll()
         activeInteractions.values.forEach { $0.timeoutTask?.cancel() }
@@ -2875,6 +3049,10 @@ public final class DiagnosticsService: ObservableObject {
 
         let cpu = currentProcessCPUPercent()
         let rss = currentResidentMemoryMB()
+        recordProcessHealthSample(cpu: cpu, rss: rss)
+    }
+
+    private func recordProcessHealthSample(cpu: Double?, rss: Double?) {
         var metrics: [String: Double] = [:]
 
         if let cpu {
@@ -2935,15 +3113,38 @@ public final class DiagnosticsService: ObservableObject {
     }
 
     private func recordMemoryIncidentIfNeeded(rss: Double, metrics: [String: Double]) {
-        if rss > 600 {
-            recordIncident(
-                category: .memorySpike,
-                severity: rss > 900 ? .critical : .warning,
-                title: "Memory spike detected",
-                detail: "Resident memory reached \(String(format: "%.0f", rss)) MB.",
-                metrics: metrics
-            )
+        let now = Date()
+        recentMemorySamples.append((timestamp: now, rss: rss))
+        recentMemorySamples.removeAll { now.timeIntervalSince($0.timestamp) > memorySampleWindow }
+
+        let minRecentRSS = recentMemorySamples.map(\.rss).min() ?? rss
+        let growth = max(0, rss - minRecentRSS)
+        let hasAbsolutePressure = rss >= memoryWarningRSSMB
+        let hasSharpGrowth = rss >= memoryWarningRSSMB * 0.85 && growth >= memoryGrowthWarningMB
+        guard hasAbsolutePressure || hasSharpGrowth else { return }
+
+        let isCritical = rss >= memoryCriticalRSSMB || growth >= memoryGrowthCriticalMB
+        var incidentMetrics = metrics
+        incidentMetrics["rssMB"] = rss
+        incidentMetrics["minRecentRSSMB"] = minRecentRSS
+        incidentMetrics["memoryGrowthMB"] = growth
+        incidentMetrics["memorySampleWindowSeconds"] = memorySampleWindow
+        incidentMetrics["memoryWarningRSSMB"] = memoryWarningRSSMB
+
+        let detail: String
+        if hasSharpGrowth {
+            detail = "Resident memory reached \(String(format: "%.0f", rss)) MB after rising \(String(format: "%.0f", growth)) MB in \(Int(memorySampleWindow))s."
+        } else {
+            detail = "Resident memory reached \(String(format: "%.0f", rss)) MB."
         }
+
+        recordIncident(
+            category: .memorySpike,
+            severity: isCritical ? .critical : .warning,
+            title: "Memory pressure detected",
+            detail: detail,
+            metrics: incidentMetrics
+        )
     }
 
     private func currentResidentMemoryMB() -> Double? {
@@ -3266,8 +3467,9 @@ public final class DiagnosticsService: ObservableObject {
         let maxInterLineError = stableSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
         let maxActiveTopClip = stableSamples.map(\.activeTopClipY).max() ?? 0
         let maxActiveBottomClip = stableSamples.map(\.activeBottomClipY).max() ?? 0
-        let maxLineTopClip = stableSamples.map(\.lineTopClipY).max() ?? 0
-        let maxLineBottomClip = stableSamples.map(\.lineBottomClipY).max() ?? 0
+        let viewportRelevantSamples = stableSamples.filter(isViewportRelevantLineMotionSample)
+        let maxLineTopClip = viewportRelevantSamples.map(\.lineTopClipY).max() ?? 0
+        let maxLineBottomClip = viewportRelevantSamples.map(\.lineBottomClipY).max() ?? 0
         let activeSample = stableSamples.first { $0.lineIndex == $0.activeIndex }
         let activeLineElapsed = activeSample.map { $0.playbackTime - $0.lineStartTime } ?? 0
         let activeVisualElapsed = activeSample.map { visualElapsedForActiveState(sample: $0) } ?? 0
@@ -3360,6 +3562,18 @@ public final class DiagnosticsService: ObservableObject {
                 "visibleRangeY": "\(String(format: "%.1f", sample.visibleTopY))...\(String(format: "%.1f", sample.visibleBottomY))"
             ]
         )
+    }
+
+    private func isViewportRelevantLineMotionSample(_ sample: DiagnosticLyricLineMotionSample) -> Bool {
+        if sample.lineIndex == sample.activeIndex { return true }
+        let padding = 8.0
+        let renderedMaxY = sample.renderedMinY + sample.renderedHeight
+        let targetMaxY = sample.targetMinY + sample.renderedHeight
+        let visibleTopY = sample.visibleTopY - padding
+        let visibleBottomY = sample.visibleBottomY + padding
+        let renderedCanAffectViewport = renderedMaxY >= visibleTopY && sample.renderedMinY <= visibleBottomY
+        let targetCanAffectViewport = targetMaxY >= visibleTopY && sample.targetMinY <= visibleBottomY
+        return renderedCanAffectViewport || targetCanAffectViewport
     }
 
     private func visualElapsedForActiveState(sample: DiagnosticLyricLineMotionSample) -> TimeInterval {

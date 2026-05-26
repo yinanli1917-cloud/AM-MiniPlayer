@@ -1303,13 +1303,25 @@ final class DiagnosticsServiceTests: XCTestCase {
                 evidence: ["track": "Motion Spam Song / Motion Spam Artist"]
             ))
         }
+        let memoryIncidents = (0..<6).map { index in
+            DiagnosticIncident(
+                timestamp: base.addingTimeInterval(-Double(70 + index * 5)),
+                category: .memorySpike,
+                severity: .warning,
+                title: "Memory spike detected",
+                detail: "Resident memory reached \(650 + index) MB.",
+                automaticallyDetected: true,
+                metrics: ["rssMB": Double(650 + index), "cpuPercent": Double(10 + index)],
+                evidence: [:]
+            )
+        }
 
         let snapshot = TestSnapshot(
             savedAt: base,
             sessionID: UUID(),
             sessionStartedAt: base.addingTimeInterval(-300),
             appBuildSignature: DiagnosticsService.shared.currentAppBuildSignatureForTesting(),
-            incidents: [legacyHighCPU] + lineMotionIncidents + incidents,
+            incidents: [legacyHighCPU] + memoryIncidents + lineMotionIncidents + incidents,
             lastWarning: incidents[0]
         )
         let snapshotURL = try XCTUnwrap(diagnosticsStorageRoot)
@@ -1348,6 +1360,12 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(lineMotion.first?.metrics["maxTargetErrorPt"] ?? -1, 44, accuracy: 0.001)
         XCTAssertEqual(lineMotion.first?.metrics["maxInterLineErrorPt"] ?? -1, 16, accuracy: 0.001)
 
+        let memory = DiagnosticsService.shared.incidents.filter { $0.category == .memorySpike }
+        XCTAssertEqual(memory.count, 1)
+        XCTAssertEqual(memory.first?.title, "Memory pressure burst")
+        XCTAssertEqual(memory.first?.metrics["occurrenceCount"], 6)
+        XCTAssertEqual(memory.first?.metrics["maxRSSMB"] ?? -1, 655, accuracy: 0.001)
+
         let warning = try XCTUnwrap(DiagnosticsService.shared.lastWarning)
         XCTAssertEqual(warning.id, frameStalls.first?.id)
         XCTAssertEqual(warning.title, "UI frame stall burst")
@@ -1360,6 +1378,29 @@ final class DiagnosticsServiceTests: XCTestCase {
         let restoredSnapshot = try decoder.decode(RestoredSnapshot.self, from: restoredData)
         XCTAssertEqual(restoredSnapshot.incidents.filter { $0.category == .lyricsLineMotion }.count, 1)
         XCTAssertEqual(restoredSnapshot.incidents.filter { $0.category == .uiFrameStall }.count, 1)
+        XCTAssertEqual(restoredSnapshot.incidents.filter { $0.category == .memorySpike }.count, 1)
+    }
+
+    func testRoutineDebugRSSDoesNotCreateMemorySpikeIncident() {
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 20, rss: 650)
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 22, rss: 660)
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 18, rss: 670)
+
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .memorySpike })
+    }
+
+    func testElevatedMemorySamplesCoalesceIntoBurst() throws {
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 12, rss: 340)
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 18, rss: 690)
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 21, rss: 705)
+
+        let memory = DiagnosticsService.shared.incidents.filter { $0.category == .memorySpike }
+        XCTAssertEqual(memory.count, 1)
+        let burst = try XCTUnwrap(memory.first)
+        XCTAssertEqual(burst.title, "Memory pressure burst")
+        XCTAssertEqual(burst.metrics["occurrenceCount"], 2)
+        XCTAssertEqual(burst.metrics["maxRSSMB"] ?? -1, 705, accuracy: 0.001)
+        XCTAssertEqual(burst.metrics["maxMemoryGrowthMB"] ?? -1, 365, accuracy: 0.001)
     }
 
     func testClearRemovesPersistedDiagnosticsSnapshotAndLiveMotionCSV() throws {
@@ -1599,6 +1640,150 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(incident?.title, "Lyrics line clipped")
         XCTAssertEqual(incident?.metrics["lineViewportClip"], 1)
         XCTAssertEqual(incident?.metrics["maxLineBottomClipPt"], 18)
+    }
+
+    func testOffscreenSampledLyricLinesDoNotCreateViewportClipIncident() {
+        let active = DiagnosticLyricLineMotionSample(
+            page: "lyrics",
+            trackTitle: "Viewport Song",
+            trackArtist: "Layout Artist",
+            lineIndex: 4,
+            lineID: "line-4",
+            lineStartTime: 30.0,
+            lineEndTime: 33.0,
+            playbackTime: 31.0,
+            activeIndex: 4,
+            displayIndex: 4,
+            targetIndex: 4,
+            renderedMinY: 140,
+            renderedMidY: 160,
+            renderedHeight: 40,
+            targetMinY: 140,
+            targetMidY: 160,
+            targetErrorY: 0,
+            observedInterLineDeltaY: nil,
+            expectedInterLineDeltaY: nil,
+            interLineDeltaErrorY: nil,
+            waveOffsetY: 0,
+            manualScrollOffsetY: 0,
+            isManualScrolling: false,
+            isInitialMotionSuppressed: false,
+            visibleTopY: 42,
+            visibleBottomY: 264,
+            lineTopClipY: 0,
+            lineBottomClipY: 0,
+            activeTopClipY: 0,
+            activeBottomClipY: 0,
+            controlsVisible: false
+        )
+        let offscreen = DiagnosticLyricLineMotionSample(
+            page: "lyrics",
+            trackTitle: "Viewport Song",
+            trackArtist: "Layout Artist",
+            lineIndex: 16,
+            lineID: "line-16",
+            lineStartTime: 90.0,
+            lineEndTime: 93.0,
+            playbackTime: 31.0,
+            activeIndex: 4,
+            displayIndex: 4,
+            targetIndex: 4,
+            renderedMinY: 900,
+            renderedMidY: 920,
+            renderedHeight: 40,
+            targetMinY: 900,
+            targetMidY: 920,
+            targetErrorY: 0,
+            observedInterLineDeltaY: 760,
+            expectedInterLineDeltaY: 760,
+            interLineDeltaErrorY: 0,
+            waveOffsetY: 0,
+            manualScrollOffsetY: 0,
+            isManualScrolling: false,
+            isInitialMotionSuppressed: false,
+            visibleTopY: 42,
+            visibleBottomY: 264,
+            lineTopClipY: 0,
+            lineBottomClipY: 676,
+            activeTopClipY: 0,
+            activeBottomClipY: 0,
+            controlsVisible: false
+        )
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples([active, offscreen])
+
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsLineMotion })
+    }
+
+    func testRestoredLineClipSpamKeepsClippedBurstLabel() throws {
+        struct EmptyRunningStat: Encodable {}
+        struct TestSnapshot: Encodable {
+            var schemaVersion = 1
+            let savedAt: Date
+            let sessionID: UUID
+            let sessionStartedAt: Date
+            let appBuildSignature: String?
+            let incidents: [DiagnosticIncident]
+            var events: [DiagnosticEvent] = []
+            var interactions: [DiagnosticInteractionTrace] = []
+            var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample] = []
+            var baselineStats: [String: EmptyRunningStat] = [:]
+            var lastWarning: DiagnosticIncident? = nil
+            var lastExportPath: String? = nil
+        }
+
+        let base = Date(timeIntervalSince1970: 1_800_001_000)
+        let track = DiagnosticTrackContext(
+            title: "Clipped Burst Song",
+            artist: "Layout Artist",
+            album: "",
+            duration: 180
+        )
+        let incidents = (0..<3).map { index in
+            DiagnosticIncident(
+                timestamp: base.addingTimeInterval(-Double(index)),
+                category: .lyricsLineMotion,
+                severity: .warning,
+                title: "Lyrics line clipped",
+                detail: "A rendered lyric line crossed the usable viewport while controls or panel bounds were present.",
+                automaticallyDetected: true,
+                track: track,
+                metrics: [
+                    "maxTargetErrorPt": 0,
+                    "maxInterLineErrorPt": 0,
+                    "lineViewportClip": 1,
+                    "maxLineBottomClipPt": Double(18 + index)
+                ],
+                evidence: ["track": "Clipped Burst Song / Layout Artist"]
+            )
+        }
+        let snapshot = TestSnapshot(
+            savedAt: base,
+            sessionID: UUID(),
+            sessionStartedAt: base.addingTimeInterval(-60),
+            appBuildSignature: DiagnosticsService.shared.currentAppBuildSignatureForTesting(),
+            incidents: incidents
+        )
+        let snapshotURL = try XCTUnwrap(diagnosticsStorageRoot)
+            .appendingPathComponent("nanoPod", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+            .appendingPathComponent("State", isDirectory: true)
+            .appendingPathComponent("rolling_state.json")
+        try FileManager.default.createDirectory(
+            at: snapshotURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(snapshot).write(to: snapshotURL)
+
+        DiagnosticsService.shared.simulateProcessRestartForTesting()
+
+        let lineMotion = DiagnosticsService.shared.incidents.filter { $0.category == .lyricsLineMotion }
+        XCTAssertEqual(lineMotion.count, 1)
+        XCTAssertEqual(lineMotion.first?.title, "Lyrics line clipped burst")
+        XCTAssertEqual(lineMotion.first?.metrics["occurrenceCount"], 3)
+        XCTAssertEqual(lineMotion.first?.metrics["maxLineBottomClipPt"] ?? -1, 20, accuracy: 0.001)
     }
 
     func testCollapsedLyricLineMotionGeometryDoesNotCreateIncident() {
