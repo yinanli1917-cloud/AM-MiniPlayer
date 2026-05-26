@@ -67,7 +67,8 @@ private let lyricInitialRenderVisibleRange = 4
 private let lyricSteadyRenderVisibleRange = 6
 private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.55
 private let lyricMinimumGeneratedSegmentDuration: TimeInterval = 1.65
-private let lyricContentHorizontalInset: CGFloat = 20
+private let lyricContentLeadingInset: CGFloat = 32
+private let lyricContentTrailingInset: CGFloat = 20
 
 struct LyricWaveTiming {
     static let defaultBaseDelay: TimeInterval = 0.08
@@ -711,7 +712,8 @@ public struct LyricsView: View {
                     timePublisher: musicController.timePublisher
                 )
                 .frame(height: 30)
-                .padding(.horizontal, lyricContentHorizontalInset)
+                .padding(.leading, lyricContentLeadingInset)
+                .padding(.trailing, lyricContentTrailingInset)
                 .padding(.vertical, 8)
             } else {
                 VStack(spacing: 0) {
@@ -727,7 +729,8 @@ public struct LyricsView: View {
                         translationFailed: lyricsService.translationFailed && isAwaitingTranslation,
                         isPrecedingInterlude: lyricsService.interludeAfterIndex == index
                     )
-                    .padding(.horizontal, lyricContentHorizontalInset)
+                    .padding(.leading, lyricContentLeadingInset)
+                    .padding(.trailing, lyricContentTrailingInset)
 
                     if isLastSegment, let interludeInfo = checkForInterlude(at: sourceIndex) {
                         PreludeDotsView(
@@ -736,7 +739,8 @@ public struct LyricsView: View {
                             timePublisher: musicController.timePublisher,
                             gateByTimeRange: true
                         )
-                        .padding(.horizontal, lyricContentHorizontalInset)
+                        .padding(.leading, lyricContentLeadingInset)
+                        .padding(.trailing, lyricContentTrailingInset)
                     }
                 }
             }
@@ -1449,14 +1453,7 @@ public struct LyricsView: View {
     }
 
     private func displayText(forWords words: [LyricWord]) -> String {
-        guard !words.isEmpty else { return "" }
-        let displayWords = words
-            .map { $0.word.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !displayWords.isEmpty else { return "" }
-        let avgLen = Double(displayWords.reduce(0) { $0 + $1.count }) / Double(displayWords.count)
-        let needsSpaces = avgLen > 2
-        return displayWords.joined(separator: needsSpaces ? " " : "")
+        LyricDisplaySegmenter.displayText(forWords: words)
     }
 
     private func displayTiming(

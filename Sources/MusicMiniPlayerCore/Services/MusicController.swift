@@ -1152,7 +1152,25 @@ public class MusicController: ObservableObject {
                 self.internalCurrentTime = position
                 self.lastPollTime = measurementTime
                 self.syncPlaybackClock(to: position, playing: playing, at: measurementTime)
-                if self.seekPending || !self.isPlaying || timeDiff > 2.0 {
+                let shouldCorrectVisibleLyrics = self.currentPage == .lyrics
+                    && abs(drift) > 0.35
+                    && !self.lyricsService.isManualScrolling
+                if shouldCorrectVisibleLyrics {
+                    DiagnosticsService.shared.recordEvent(
+                        "lyrics.playbackDriftCorrection",
+                        detail: "Corrected visible lyric clock from polled playback position.",
+                        track: self.diagnosticsTrackContext(),
+                        metrics: [
+                            "driftSeconds": drift,
+                            "absoluteDriftSeconds": abs(drift),
+                            "polledPositionSeconds": position,
+                            "interpolatedPositionSeconds": position - drift,
+                            "scriptingBridgeReadMs": sbReadTime * 1000,
+                            "scriptingBridgeQueueWaitMs": queueWait * 1000
+                        ]
+                    )
+                }
+                if self.seekPending || !self.isPlaying || timeDiff > 2.0 || shouldCorrectVisibleLyrics {
                     let wasSeeking = self.seekPending
                     self.currentTime = position
                     self.seekPending = false

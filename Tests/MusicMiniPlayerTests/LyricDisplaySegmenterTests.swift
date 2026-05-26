@@ -137,8 +137,46 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         for text in cases {
             let segments = LyricDisplaySegmenter.segments(for: text, options: .mainLyric)
             XCTAssertEqual(normalizedWhitespace(segments.joined(separator: " ")), text)
-            XCTAssertFalse(segments.contains { semanticWordCount($0) == 1 }, text)
         }
+    }
+
+    func testTimedCJKDisplayPreservesIntentionalPhraseSpace() {
+        let words = [
+            LyricWord(word: "而", startTime: 35.09, endTime: 38.09),
+            LyricWord(word: "眼", startTime: 38.53, endTime: 39.08),
+            LyricWord(word: "泪", startTime: 39.08, endTime: 39.38),
+            LyricWord(word: "吗 ", startTime: 39.38, endTime: 40.15),
+            LyricWord(word: "我", startTime: 40.15, endTime: 40.42),
+            LyricWord(word: "不", startTime: 40.42, endTime: 40.71),
+            LyricWord(word: "敢", startTime: 40.71, endTime: 41.46),
+            LyricWord(word: "发", startTime: 41.46, endTime: 42.07),
+            LyricWord(word: "挥", startTime: 42.07, endTime: 42.56),
+        ]
+
+        XCTAssertEqual(LyricDisplaySegmenter.displayText(forWords: words), "而眼泪吗 我不敢发挥")
+    }
+
+    func testTimedCJKDisplayDoesNotInventSpacesForCharacterTimedLyrics() {
+        let words = [
+            LyricWord(word: "别", startTime: 21.73, endTime: 21.95),
+            LyricWord(word: "来", startTime: 21.95, endTime: 22.24),
+            LyricWord(word: "扮", startTime: 22.24, endTime: 23.03),
+            LyricWord(word: "伶", startTime: 23.03, endTime: 23.29),
+            LyricWord(word: "仃", startTime: 23.29, endTime: 23.71),
+        ]
+
+        XCTAssertEqual(LyricDisplaySegmenter.displayText(forWords: words), "别来扮伶仃")
+    }
+
+    func testTimedLatinDisplayKeepsSyntheticSpacesWhenSourceHasNone() {
+        let words = [
+            LyricWord(word: "Sweet", startTime: 1, endTime: 1.2),
+            LyricWord(word: "So", startTime: 1.2, endTime: 1.4),
+            LyricWord(word: "Sweet", startTime: 1.4, endTime: 1.6),
+            LyricWord(word: "Kiss", startTime: 1.6, endTime: 1.8),
+        ]
+
+        XCTAssertEqual(LyricDisplaySegmenter.displayText(forWords: words), "Sweet So Sweet Kiss")
     }
 
     func testWordSplitterDoesNotLeaveSingleWordOrphanWhenItCanRebalance() {

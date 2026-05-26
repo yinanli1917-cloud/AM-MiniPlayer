@@ -106,10 +106,7 @@ struct LyricLineView: View {
         // TTML parser adds " " between each span. For CJK (avg word ≤ 2 chars),
         // these spaces are artifacts — strip them so characters pack naturally.
         if line.hasSyllableSync && !line.words.isEmpty {
-            let avgLen = Double(line.words.reduce(0) { $0 + $1.word.count }) / Double(line.words.count)
-            if avgLen <= 2 {
-                text = line.words.map(\.word).joined()
-            }
+            text = LyricDisplaySegmenter.displayText(forWords: line.words)
         }
         return text
     }
@@ -487,21 +484,14 @@ private struct WordByWordText: View {
     let currentTime: TimeInterval
     var staticOpacity: CGFloat? = nil
 
-    private var needsSpaces: Bool {
-        guard !words.isEmpty else { return false }
-        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
-        return avgLen > 2
-    }
-
     var body: some View {
+        let tokens = LyricDisplaySegmenter.displayTokens(forWords: words)
+
         WordFlowLayout {
-            ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
-                let cleaned = word.word.trimmingCharacters(in: .whitespaces)
-                let suffix = (index < words.count - 1 && needsSpaces)
-                    ? " "
-                    : ""
-                let text = cleaned + suffix
-                let isLast = (index == words.count - 1)
+            ForEach(Array(tokens.enumerated()), id: \.element.word.id) { index, token in
+                let word = token.word
+                let text = token.text
+                let isLast = (index == tokens.count - 1)
                 if let opacity = staticOpacity {
                     Text(text)
                         .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
@@ -644,21 +634,14 @@ private struct SyllableTextPayload {
     let text: Text
 
     init(words: [LyricWord]) {
-        let needsSpaces = Self.needsSpaces(words)
         let lineEnd = words.last?.endTime ?? 0
         var result = Text("")
-        for (index, word) in words.enumerated() {
-            // Trim any internal whitespace artifact from the word source so
-            // the " " joiner is the sole source of inter-word spacing. A
-            // trailing space on `word.word` would add to the suffix space
-            // and widen the line vs the line-level Text(...) rendering.
-            let cleaned = word.word.trimmingCharacters(in: .whitespaces)
-            let suffix = (index < words.count - 1 && needsSpaces)
-                ? " "
-                : ""
-            let text = cleaned + suffix
+        let tokens = LyricDisplaySegmenter.displayTokens(forWords: words)
+        for (index, token) in tokens.enumerated() {
+            let word = token.word
+            let text = token.text
             let duration = word.endTime - word.startTime
-            let isLast = (index == words.count - 1)
+            let isLast = (index == tokens.count - 1)
             let isCJK = LanguageUtils.containsCJK(word.word)
             // CJK: suppress per-glyph emphasis scale/lift/glow even for long-held
             // characters. A single 1.5s+ character ballooning up while its
@@ -678,12 +661,6 @@ private struct SyllableTextPayload {
                 ))
         }
         self.text = result
-    }
-
-    private static func needsSpaces(_ words: [LyricWord]) -> Bool {
-        guard !words.isEmpty else { return false }
-        let avgLen = Double(words.reduce(0) { $0 + $1.word.count }) / Double(words.count)
-        return avgLen > 2
     }
 }
 

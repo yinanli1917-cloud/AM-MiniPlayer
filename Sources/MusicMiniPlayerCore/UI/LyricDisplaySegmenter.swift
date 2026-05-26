@@ -17,6 +17,11 @@ struct LyricDisplaySegmentationOptions: Equatable {
     }
 }
 
+struct LyricTimedDisplayToken: Equatable {
+    let word: LyricWord
+    let text: String
+}
+
 enum LyricDisplaySegmenter {
     private static let phraseBoundaryWhitespaceDuration: TimeInterval = 0.35
 
@@ -152,6 +157,42 @@ enum LyricDisplaySegmenter {
         return polishedWordSegments(result, options: options)
     }
 
+    static func displayText(forWords words: [LyricWord]) -> String {
+        displayTokens(forWords: words).map(\.text).joined()
+    }
+
+    static func displayTokens(forWords words: [LyricWord]) -> [LyricTimedDisplayToken] {
+        let visibleWords = words.compactMap { word -> (word: LyricWord, raw: String, trimmed: String)? in
+            let trimmed = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return (word, word.word, trimmed)
+        }
+        guard !visibleWords.isEmpty else { return [] }
+
+        let hasExplicitWhitespace = visibleWords.contains { item in
+            item.raw.contains(where: { $0.isWhitespace })
+        }
+        let needsSyntheticSpaces = !hasExplicitWhitespace && shouldUseSyntheticSpaces(
+            for: visibleWords.map(\.trimmed)
+        )
+
+        return visibleWords.enumerated().map { offset, item in
+            var text = item.trimmed
+            let isLast = offset == visibleWords.count - 1
+            if !isLast {
+                let next = visibleWords[offset + 1]
+                if hasExplicitWhitespace {
+                    if item.raw.last?.isWhitespace == true || next.raw.first?.isWhitespace == true {
+                        text += " "
+                    }
+                } else if needsSyntheticSpaces {
+                    text += " "
+                }
+            }
+            return LyricTimedDisplayToken(word: item.word, text: text)
+        }
+    }
+
     static func estimatedVisualLineCount(
         for text: String,
         options: LyricDisplaySegmentationOptions
@@ -264,7 +305,7 @@ enum LyricDisplaySegmenter {
         _ segments: [String],
         options: LyricDisplaySegmentationOptions
     ) -> [String] {
-        avoidSingleWordOrphans(in: segments, options: options)
+        segments
     }
 
     private static func avoidSingleWordOrphans(
@@ -491,7 +532,13 @@ enum LyricDisplaySegmenter {
         _ segments: [[LyricWord]],
         options: LyricDisplaySegmentationOptions
     ) -> [[LyricWord]] {
-        avoidSingleWordOrphans(in: segments, options: options)
+        segments
+    }
+
+    private static func shouldUseSyntheticSpaces(for words: [String]) -> Bool {
+        guard !words.isEmpty else { return false }
+        let avgLen = Double(words.reduce(0) { $0 + $1.count }) / Double(words.count)
+        return avgLen > 2
     }
 
     private static func shouldPreserveCompactPhrase(
