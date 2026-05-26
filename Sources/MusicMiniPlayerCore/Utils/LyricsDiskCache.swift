@@ -41,7 +41,7 @@ public final class LyricsDiskCache {
     public static let schemaVersion = 26
     public static let ttlSeconds: TimeInterval = 30 * 86400
     public static let unavailableTTLSeconds: TimeInterval = 24 * 3600
-    public static let defaultMaxEntryCount = 900
+    public static let defaultMaxEntryCount = 450
 
     private let fileURL: URL
     private let maxEntryCount: Int
