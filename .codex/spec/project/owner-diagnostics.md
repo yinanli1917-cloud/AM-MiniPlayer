@@ -77,10 +77,12 @@ technical causes.
   should be coalesced into a burst record with occurrence count and max read /
   queue-wait metrics. This keeps the monitor readable while preserving the
   root-cause evidence.
-- Process memory diagnostics must not turn routine developer-build RSS into a
-  recurring warning stream. Memory incidents require either high absolute RSS
-  or sharp short-window growth, and repeated elevated samples should be
-  coalesced into one burst with occurrence count, max RSS, and growth evidence.
+- Process memory diagnostics must not use RSS alone as the pressure signal.
+  RSS includes shared/read-only framework residency on macOS; keep it as
+  evidence, but trigger memory incidents from physical footprint, with either
+  high absolute footprint or sharp short-window growth. Repeated elevated
+  samples should be coalesced into one burst with occurrence count, max RSS,
+  max physical footprint, and growth evidence.
 - Isolated ScriptingBridge reads below the severe standalone threshold
   (currently 1000ms) are baseline evidence, not monitor incidents, unless they
   overlap an active interaction trace or back up the queue. Low queue-wait reads

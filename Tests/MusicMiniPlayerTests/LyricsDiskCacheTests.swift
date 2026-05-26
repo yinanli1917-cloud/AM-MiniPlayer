@@ -120,4 +120,33 @@ final class LyricsDiskCacheTests: XCTestCase {
         XCTAssertEqual(cached?.kind, .unavailable)
         XCTAssertEqual(cached?.source, "NetEase")
     }
+
+    func testCachePrunesOldEntriesToBoundMemoryGrowth() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+        let cache = LyricsDiskCache(fileURL: url, maxEntryCount: 9)
+        let line = LyricLine(text: "bounded cache", startTime: 1, endTime: 2)
+
+        for index in 0..<8 {
+            cache.set(
+                title: "Song \(index)",
+                artist: "Artist",
+                duration: TimeInterval(200 + index),
+                album: "Album",
+                source: "NetEase",
+                lines: [line],
+                matchedDurationDiff: 0.1
+            )
+        }
+
+        XCTAssertLessThanOrEqual(cache.entryCountForTesting(), 9)
+        XCTAssertNil(cache.get(title: "Song 0", artist: "Artist", duration: 200, album: "Album"))
+        XCTAssertNotNil(cache.get(title: "Song 7", artist: "Artist", duration: 207, album: "Album"))
+
+        let reloaded = LyricsDiskCache(fileURL: url, maxEntryCount: 9)
+        XCTAssertLessThanOrEqual(reloaded.entryCountForTesting(), 9)
+        XCTAssertNil(reloaded.get(title: "Song 0", artist: "Artist", duration: 200, album: "Album"))
+        XCTAssertNotNil(reloaded.get(title: "Song 7", artist: "Artist", duration: 207, album: "Album"))
+    }
 }

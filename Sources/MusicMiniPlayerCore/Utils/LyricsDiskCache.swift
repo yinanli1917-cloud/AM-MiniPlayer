@@ -41,14 +41,17 @@ public final class LyricsDiskCache {
     public static let schemaVersion = 26
     public static let ttlSeconds: TimeInterval = 30 * 86400
     public static let unavailableTTLSeconds: TimeInterval = 24 * 3600
+    public static let defaultMaxEntryCount = 900
 
     private let fileURL: URL
+    private let maxEntryCount: Int
     private let queue = DispatchQueue(label: "com.yinanli.MusicMiniPlayer.lyrics-disk-cache")
     private var memory: [String: LyricsDiskCacheEntry] = [:]
     private var loaded = false
 
-    public init(fileURL: URL = LyricsDiskCache.defaultURL()) {
+    public init(fileURL: URL = LyricsDiskCache.defaultURL(), maxEntryCount: Int = LyricsDiskCache.defaultMaxEntryCount) {
         self.fileURL = fileURL
+        self.maxEntryCount = max(1, maxEntryCount)
     }
 
     public static func defaultURL() -> URL {
@@ -70,15 +73,20 @@ public final class LyricsDiskCache {
         let keys = Self.cacheKeys(title: title, artist: artist, duration: duration, album: album)
         return queue.sync {
             ensureLoaded()
+            var changed = pruneMemoryIfNeeded()
             var entries: [LyricsDiskCacheEntry] = []
             for key in keys {
                 guard let entry = memory[key] else { continue }
                 let ttl = entry.kind == .unavailable ? Self.unavailableTTLSeconds : Self.ttlSeconds
                 if Date().timeIntervalSince1970 - entry.ts > ttl {
                     memory.removeValue(forKey: key)
+                    changed = true
                     continue
                 }
                 entries.append(entry)
+            }
+            if changed {
+                persist()
             }
             return entries
         }
@@ -173,6 +181,7 @@ public final class LyricsDiskCache {
             for key in keys {
                 memory[key] = entry
             }
+            _ = pruneMemoryIfNeeded()
             persist()
         }
     }
@@ -184,6 +193,43 @@ public final class LyricsDiskCache {
               let envelope = try? JSONDecoder().decode(LyricsDiskCacheFile.self, from: data),
               envelope.version == Self.schemaVersion else { return }
         memory = envelope.entries
+        if pruneMemoryIfNeeded() {
+            persist()
+        }
+    }
+
+    @discardableResult
+    private func pruneMemoryIfNeeded(now: TimeInterval = Date().timeIntervalSince1970) -> Bool {
+        let before = memory.count
+        memory = memory.filter { _, entry in
+            let ttl = entry.kind == .unavailable ? Self.unavailableTTLSeconds : Self.ttlSeconds
+            return now - entry.ts <= ttl
+        }
+
+        if memory.count > maxEntryCount {
+            let overflow = memory.count - maxEntryCount
+            let oldestKeys = memory.keys.sorted { lhs, rhs in
+                let lhsTimestamp = memory[lhs]?.ts ?? 0
+                let rhsTimestamp = memory[rhs]?.ts ?? 0
+                if lhsTimestamp == rhsTimestamp {
+                    return lhs < rhs
+                }
+                return lhsTimestamp < rhsTimestamp
+            }.prefix(overflow)
+
+            for key in oldestKeys {
+                memory.removeValue(forKey: key)
+            }
+        }
+
+        return memory.count != before
+    }
+
+    func entryCountForTesting() -> Int {
+        queue.sync {
+            ensureLoaded()
+            return memory.count
+        }
     }
 
     private func persist() {

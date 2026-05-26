@@ -10,6 +10,15 @@ Do not collapse all empty lyric outcomes into "no lyrics".
 - `unavailable`: a provider catalog row matches the requested title/artist/duration, but the provider returns no lyric payload. The app should report lyrics unavailable, not no lyrics.
 - `none`: no trusted source or catalog identity was resolved. Keep the state unresolved and do not cache it as no lyrics.
 
+## Lyrics Disk Cache
+
+- The disk cache is a latency optimization, not an unbounded library archive.
+  It must enforce expiry and a hard retained-entry budget on load and write, so
+  a large legacy `lyrics_cache.json` cannot be decoded and kept in memory for
+  the rest of the app session.
+- Keep album-scoped keys and nearby-duration lookup, but prune oldest entries
+  after inserting the key family for a fresh result.
+
 ## System Translation Fill
 
 - Local ML translation is a supplemental lyrics feature, not a blocking fetch

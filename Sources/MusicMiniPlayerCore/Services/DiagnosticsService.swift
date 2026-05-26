@@ -625,8 +625,8 @@ public final class DiagnosticsService: ObservableObject {
         Self.currentAppBuildSignature()
     }
 
-    func recordProcessHealthSampleForTesting(cpu: Double?, rss: Double?) {
-        recordProcessHealthSample(cpu: cpu, rss: rss)
+    func recordProcessHealthSampleForTesting(cpu: Double?, rss: Double?, physicalFootprint: Double? = nil) {
+        recordProcessHealthSample(cpu: cpu, rss: rss, physicalFootprint: physicalFootprint ?? rss)
     }
 
     public func prepareForTermination() {
@@ -3049,10 +3049,11 @@ public final class DiagnosticsService: ObservableObject {
 
         let cpu = currentProcessCPUPercent()
         let rss = currentResidentMemoryMB()
-        recordProcessHealthSample(cpu: cpu, rss: rss)
+        let physicalFootprint = currentPhysicalFootprintMB()
+        recordProcessHealthSample(cpu: cpu, rss: rss, physicalFootprint: physicalFootprint)
     }
 
-    private func recordProcessHealthSample(cpu: Double?, rss: Double?) {
+    private func recordProcessHealthSample(cpu: Double?, rss: Double?, physicalFootprint: Double?) {
         var metrics: [String: Double] = [:]
 
         if let cpu {
@@ -3063,6 +3064,10 @@ public final class DiagnosticsService: ObservableObject {
             metrics["rssMB"] = rss
             updateBaseline("process.rss.mb", value: rss)
         }
+        if let physicalFootprint {
+            metrics["physicalFootprintMB"] = physicalFootprint
+            updateBaseline("process.physical_footprint.mb", value: physicalFootprint)
+        }
         updateActiveInteractions { trace in
             if let cpu {
                 maximizeMetric("maxCPUPercent", value: cpu, in: &trace.metrics)
@@ -3070,16 +3075,19 @@ public final class DiagnosticsService: ObservableObject {
             if let rss {
                 maximizeMetric("maxRSSMB", value: rss, in: &trace.metrics)
             }
+            if let physicalFootprint {
+                maximizeMetric("maxPhysicalFootprintMB", value: physicalFootprint, in: &trace.metrics)
+            }
         }
 
         guard !metrics.isEmpty else { return }
-        recordEvent("process.health.sample", detail: "CPU/RSS sample", metrics: metrics)
+        recordEvent("process.health.sample", detail: "CPU/memory sample", metrics: metrics)
 
         if let cpu {
             recordHighCPUIncidentIfNeeded(cpu: cpu, metrics: metrics)
         }
-        if let rss {
-            recordMemoryIncidentIfNeeded(rss: rss, metrics: metrics)
+        if let memory = physicalFootprint ?? rss {
+            recordMemoryIncidentIfNeeded(memory: memory, metrics: metrics)
         }
     }
 
@@ -3112,30 +3120,30 @@ public final class DiagnosticsService: ObservableObject {
         )
     }
 
-    private func recordMemoryIncidentIfNeeded(rss: Double, metrics: [String: Double]) {
+    private func recordMemoryIncidentIfNeeded(memory: Double, metrics: [String: Double]) {
         let now = Date()
-        recentMemorySamples.append((timestamp: now, rss: rss))
+        recentMemorySamples.append((timestamp: now, rss: memory))
         recentMemorySamples.removeAll { now.timeIntervalSince($0.timestamp) > memorySampleWindow }
 
-        let minRecentRSS = recentMemorySamples.map(\.rss).min() ?? rss
-        let growth = max(0, rss - minRecentRSS)
-        let hasAbsolutePressure = rss >= memoryWarningRSSMB
-        let hasSharpGrowth = rss >= memoryWarningRSSMB * 0.85 && growth >= memoryGrowthWarningMB
+        let minRecentMemory = recentMemorySamples.map(\.rss).min() ?? memory
+        let growth = max(0, memory - minRecentMemory)
+        let hasAbsolutePressure = memory >= memoryWarningRSSMB
+        let hasSharpGrowth = memory >= memoryWarningRSSMB * 0.85 && growth >= memoryGrowthWarningMB
         guard hasAbsolutePressure || hasSharpGrowth else { return }
 
-        let isCritical = rss >= memoryCriticalRSSMB || growth >= memoryGrowthCriticalMB
+        let isCritical = memory >= memoryCriticalRSSMB || growth >= memoryGrowthCriticalMB
         var incidentMetrics = metrics
-        incidentMetrics["rssMB"] = rss
-        incidentMetrics["minRecentRSSMB"] = minRecentRSS
+        incidentMetrics["memoryPressureMB"] = memory
+        incidentMetrics["minRecentMemoryPressureMB"] = minRecentMemory
         incidentMetrics["memoryGrowthMB"] = growth
         incidentMetrics["memorySampleWindowSeconds"] = memorySampleWindow
         incidentMetrics["memoryWarningRSSMB"] = memoryWarningRSSMB
 
         let detail: String
         if hasSharpGrowth {
-            detail = "Resident memory reached \(String(format: "%.0f", rss)) MB after rising \(String(format: "%.0f", growth)) MB in \(Int(memorySampleWindow))s."
+            detail = "Physical memory footprint reached \(String(format: "%.0f", memory)) MB after rising \(String(format: "%.0f", growth)) MB in \(Int(memorySampleWindow))s."
         } else {
-            detail = "Resident memory reached \(String(format: "%.0f", rss)) MB."
+            detail = "Physical memory footprint reached \(String(format: "%.0f", memory)) MB."
         }
 
         recordIncident(
@@ -3157,6 +3165,18 @@ public final class DiagnosticsService: ObservableObject {
         }
         guard result == KERN_SUCCESS else { return nil }
         return Double(info.resident_size) / 1024.0 / 1024.0
+    }
+
+    private func currentPhysicalFootprintMB() -> Double? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        return Double(info.phys_footprint) / 1024.0 / 1024.0
     }
 
     private func currentProcessCPUPercent() -> Double? {

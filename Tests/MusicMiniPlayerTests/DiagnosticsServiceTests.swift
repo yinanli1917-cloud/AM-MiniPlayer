@@ -1389,6 +1389,17 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .memorySpike })
     }
 
+    func testHighRSSWithModestPhysicalFootprintDoesNotCreateMemorySpikeIncident() {
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 20, rss: 920, physicalFootprint: 320)
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 22, rss: 940, physicalFootprint: 335)
+        DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 18, rss: 950, physicalFootprint: 340)
+
+        XCTAssertFalse(DiagnosticsService.shared.incidents.contains { $0.category == .memorySpike })
+        let samples = DiagnosticsService.shared.events.filter { $0.name == "process.health.sample" }
+        XCTAssertEqual(samples.first?.metrics["rssMB"], 950)
+        XCTAssertEqual(samples.first?.metrics["physicalFootprintMB"], 340)
+    }
+
     func testElevatedMemorySamplesCoalesceIntoBurst() throws {
         DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 12, rss: 340)
         DiagnosticsService.shared.recordProcessHealthSampleForTesting(cpu: 18, rss: 690)
