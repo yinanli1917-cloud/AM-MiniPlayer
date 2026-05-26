@@ -1293,6 +1293,24 @@ final class LyricsSelectionTests: XCTestCase {
         ))
     }
 
+    func testCatalogExactTitleDiscoveryQueriesCompilationArtistHints() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "This Is My Love",
+            artist: "Michelle Chen",
+            originalTitle: "This Is My Love",
+            originalArtist: "Michelle Chen",
+            duration: 312,
+            album: "Young Stars"
+        )
+
+        let queries = fetcher.netEaseCompilationAlbumDiscoveryQueriesForTesting(params: params)
+
+        XCTAssertTrue(queries.contains("This Is My Love"))
+        XCTAssertTrue(queries.contains("This Is My Love 华语群星"))
+        XCTAssertTrue(queries.contains("This Is My Love 華語群星"))
+    }
+
     func testCatalogExactTitleCandidateCanWinExistingSearchRoundWithoutDeepProbe() {
         let fetcher = LyricsFetcher.shared
         let candidate = LyricsFetcher.SearchCandidate(
@@ -1371,6 +1389,61 @@ final class LyricsSelectionTests: XCTestCase {
             originalArtist: "Tanya Chua",
             duration: 244,
             album: "Known Album"
+        ))
+    }
+
+    func testLibraryCatalogTitleCanExposeNativeAliasForEnglishStorefrontTitle() {
+        let fetcher = LyricsFetcher.shared
+        let alias = fetcher.libraryNativeTitleAliasForTesting(
+            resultTitle: "你不知道的事 - All The Things You Never Knew",
+            inputTitle: "All The Things You Never Knew"
+        )
+
+        XCTAssertEqual(alias, "你不知道的事")
+        XCTAssertNil(fetcher.libraryNativeTitleAliasForTesting(
+            resultTitle: "All The Things You Are",
+            inputTitle: "All The Things You Never Knew"
+        ))
+    }
+
+    func testLibraryNativeTitleBridgeKeepsEmptyEnglishMissInsideForegroundBudget() {
+        let fetcher = LyricsFetcher.shared
+
+        let deadline = fetcher.foregroundEmptyResultDeadlineForTesting(
+            title: "Love Is Free",
+            artist: "Brenton Wood",
+            duration: 153,
+            album: ""
+        )
+
+        XCTAssertLessThanOrEqual(deadline, 2.25)
+    }
+
+    func testAlbumTitleEchoDoesNotUseLibraryNativeTitleCachePreflight() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertFalse(fetcher.shouldUsePreflightLibraryNativeTitleCacheForTesting(
+            title: "Love You More & More",
+            artist: "Rene Liu",
+            album: "Love You More & More"
+        ))
+        XCTAssertTrue(fetcher.shouldUsePreflightLibraryNativeTitleCacheForTesting(
+            title: "All The Things You Never Knew",
+            artist: "Wang Leehom",
+            album: ""
+        ))
+    }
+
+    func testDecoratedTitleCanUseNativeMetadataCachePreflight() {
+        let fetcher = LyricsFetcher.shared
+
+        XCTAssertTrue(fetcher.shouldUseDecoratedTitleMetadataCachePreflightForTesting(
+            inputTitle: "None of Your Business (feat. Kumachan)",
+            cachedTitle: "關你屁事啊 (feat. 熊仔)"
+        ))
+        XCTAssertFalse(fetcher.shouldUseDecoratedTitleMetadataCachePreflightForTesting(
+            inputTitle: "Love Is Free",
+            cachedTitle: "Love Is Free"
         ))
     }
 

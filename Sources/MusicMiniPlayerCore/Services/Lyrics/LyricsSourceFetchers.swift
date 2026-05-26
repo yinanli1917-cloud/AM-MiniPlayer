@@ -443,7 +443,8 @@ extension LyricsFetcher {
         let candidates = await discoverNetEaseCompilationAlbumCandidates(
             params: params,
             headers: headers,
-            duration: duration
+            duration: duration,
+            returnOnFirstSafeBatch: true
         )
         return await fetchBestNetEaseCompilationAlbumResult(
             candidates: candidates,
@@ -870,28 +871,20 @@ extension LyricsFetcher {
     private func discoverNetEaseCompilationAlbumCandidates(
         params: SearchParams,
         headers: [String: String],
-        duration: TimeInterval
+        duration: TimeInterval,
+        returnOnFirstSafeBatch: Bool = false
     ) async -> [NetEaseCompilationAlbumCandidate] {
         guard !params.normalizedAlbum.isEmpty else { return [] }
 
-        var titleQueries: [String] = []
-        func addTitleQuery(_ value: String) {
-            let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !clean.isEmpty,
-                  !titleQueries.contains(clean) else { return }
-            titleQueries.append(clean)
-        }
-        addTitleQuery(params.rawTitle)
-        addTitleQuery(params.rawOriginalTitle)
-        addTitleQuery(params.simplifiedTitle)
-        addTitleQuery(params.simplifiedOriginalTitle)
+        let titleQueries = netEaseCompilationAlbumDiscoveryQueries(params: params)
 
         var candidatesByID: [Int: NetEaseCompilationAlbumCandidate] = [:]
         await withTaskGroup(of: [NetEaseCompilationAlbumCandidate].self) { group in
-            for query in titleQueries.prefix(3) {
+            for query in titleQueries.prefix(8) {
                 group.addTask {
+                    let searchLimit = query.contains("群星") ? "20" : "100"
                     guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
-                        "s": query, "type": "1", "limit": "100"
+                        "s": query, "type": "1", "limit": searchLimit
                     ]) else { return [] }
                     guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 2.4, retry: false),
                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -940,6 +933,10 @@ extension LyricsFetcher {
                     }
                     candidatesByID[candidate.id] = candidate
                 }
+                if returnOnFirstSafeBatch && !batch.isEmpty {
+                    group.cancelAll()
+                    break
+                }
             }
         }
 
@@ -951,6 +948,33 @@ extension LyricsFetcher {
             DebugLogger.log("NetEase", "🔎 native compilation album discovery: \(candidates.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' Δ\(String(format: "%.1f", $0.durationDiff))s" }.joined(separator: ", "))")
         }
         return candidates
+    }
+
+    func netEaseCompilationAlbumDiscoveryQueriesForTesting(params: SearchParams) -> [String] {
+        netEaseCompilationAlbumDiscoveryQueries(params: params)
+    }
+
+    private func netEaseCompilationAlbumDiscoveryQueries(params: SearchParams) -> [String] {
+        var queries: [String] = []
+        func add(_ value: String) {
+            let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty,
+                  !queries.contains(clean) else { return }
+            queries.append(clean)
+        }
+
+        add(params.rawTitle)
+        add(params.rawOriginalTitle)
+        add(params.simplifiedTitle)
+        add(params.simplifiedOriginalTitle)
+
+        let exactTitleQueries = queries
+        for title in exactTitleQueries {
+            add("\(title) 华语群星")
+            add("\(title) 華語群星")
+            add("\(title) 群星")
+        }
+        return queries
     }
 
     private func hasCJKLyricOverlap(_ lhs: [LyricLine], _ rhs: [LyricLine]) -> Bool {
@@ -2260,6 +2284,7 @@ extension LyricsFetcher {
                 }
             }
 
+            lyrics = removingStandaloneSpeakerLabelLines(lyrics)
             lyrics = parser.stripChineseTranslations(lyrics)
 
             let final = resultKind == .synced
@@ -2421,6 +2446,372 @@ extension LyricsFetcher {
             DebugLogger.log("LRCLIB", "❌ /search error for '\(title)' by '\(artist)': \(error)")
             return nil
         }
+    }
+
+    func fetchLibraryNativeTitleAliasForeground(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String
+    ) async -> LyricsFetchResult? {
+        guard LanguageUtils.isPureASCII(title),
+              LanguageUtils.isPureASCII(artist),
+              LanguageUtils.isLikelyEnglishTitle(title) else {
+            return nil
+        }
+        let cachedMetadata = metadataResolver.diskCache.get(
+            title: title,
+            artist: artist,
+            duration: duration
+        )
+        let cachedNativeTitle = cachedMetadata.flatMap { cached -> String? in
+            guard LanguageUtils.containsCJK(cached.resolvedTitle),
+                  cached.resolvedTitle != title else { return nil }
+            return LanguageUtils.toSimplifiedChinese(
+                LanguageUtils.normalizeTrackName(cached.resolvedTitle)
+            )
+        }
+        let cachedNativeArtist = cachedMetadata.flatMap { cached -> String? in
+            LanguageUtils.containsChinese(cached.resolvedArtist)
+                ? cached.resolvedArtist
+                : nil
+        }
+        let discoveredNativeTitle: String?
+        if let cachedNativeTitle {
+            discoveredNativeTitle = cachedNativeTitle
+        } else {
+            discoveredNativeTitle = await discoverLibraryNativeTitleAlias(
+                title: title,
+                artist: artist,
+                duration: duration
+            )
+        }
+        guard let nativeTitle = discoveredNativeTitle else {
+            return nil
+        }
+
+        DebugLogger.log("LRCLIB", "🧭 catalog native-title bridge: '\(title)' -> '\(nativeTitle)'")
+        if let directQQ = await withHardSourceTimeout(seconds: cachedNativeTitle == nil ? 2.35 : 1.8, operation: {
+            await self.fetchQQMusicUsingLibraryNativeTitleAlias(
+                title: nativeTitle,
+                originalTitle: title,
+                originalArtist: cachedNativeArtist ?? artist,
+                duration: duration,
+                translationEnabled: translationEnabled
+            )
+        }) {
+            return directQQ
+        }
+
+        var results: [LyricsFetchResult] = []
+        await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 2.35) {
+                    await self.fetchQQMusicUsingLibraryNativeTitleAlias(
+                        title: nativeTitle,
+                        originalTitle: title,
+                        originalArtist: artist,
+                        duration: duration,
+                        translationEnabled: translationEnabled
+                    )
+                }
+            }
+            group.addTask {
+                await self.withHardSourceTimeout(seconds: 2.35) {
+                    await self.fetchResolvedTitleKeyedSources(
+                        title: nativeTitle,
+                        artist: artist,
+                        originalTitle: title,
+                        originalArtist: artist,
+                        duration: duration,
+                        translationEnabled: translationEnabled,
+                        album: album
+                    )
+                }
+            }
+
+            for await result in group {
+                guard let result else { continue }
+                results.append(result)
+                if result.kind == .synced,
+                   result.score >= 35,
+                   (result.titleMatched || result.nativeAliasMatched || (result.matchedDurationDiff.map { $0 < 1.5 } ?? false)) {
+                    group.cancelAll()
+                    break
+                }
+            }
+        }
+        return selectBestResult(from: results, songDuration: duration)
+    }
+
+    func fetchQQMusicUsingLibraryNativeTitleAlias(
+        title nativeTitle: String,
+        originalTitle: String,
+        originalArtist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool
+    ) async -> LyricsFetchResult? {
+        guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
+        let keyword = "\(nativeTitle) \(originalArtist)"
+        let body: [String: Any] = [
+            "comm": ["ct": 19, "cv": 1845],
+            "req": [
+                "method": "DoSearchForQQMusicDesktop",
+                "module": "music.search.SearchCgiService",
+                "param": ["num_per_page": 10, "page_num": 1, "query": keyword, "search_type": 0] as [String: Any]
+            ] as [String: Any]
+        ]
+
+        struct AliasQQCandidate {
+            let songMid: String
+            let songID: Int
+            let title: String
+            let artist: String
+            let album: String
+            let durationDiff: Double
+            let resultIndex: Int
+        }
+
+        do {
+            let json = try await HTTPClient.postJSON(url: apiURL, body: body, timeout: 2.4)
+            guard let reqDict = json["req"] as? [String: Any],
+                  let dataDict = reqDict["data"] as? [String: Any],
+                  let bodyDict = dataDict["body"] as? [String: Any],
+                  let songDict = bodyDict["song"] as? [String: Any],
+                  let songs = songDict["list"] as? [[String: Any]] else {
+                return nil
+            }
+            let simplifiedNativeTitle = LanguageUtils.toSimplifiedChinese(
+                LanguageUtils.normalizeTrackName(nativeTitle)
+            )
+            let backingTrackMarkers = ["karaoke", "instrumental", "伴奏", "カラオケ", "オリジナル・カラオケ"]
+            let candidates = songs.prefix(10).enumerated().compactMap { index, song -> AliasQQCandidate? in
+                guard let songMid = song["mid"] as? String,
+                      let songID = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let interval = song["interval"] as? Int else { return nil }
+                let artist = (song["singer"] as? [[String: Any]]).map { self.joinedProviderArtists($0) } ?? ""
+                let album = (song["album"] as? [String: Any])?["name"] as? String ?? ""
+                let lowerIdentity = (name + " " + album).lowercased()
+                guard !backingTrackMarkers.contains(where: { lowerIdentity.contains($0) }) else { return nil }
+                guard isTitleMatch(input: nativeTitle, result: name, simplifiedInput: simplifiedNativeTitle) else {
+                    return nil
+                }
+                let durationDiff = abs(Double(interval) - duration)
+                guard durationDiff < 1.5 else { return nil }
+                let artistOK = isArtistMatch(
+                    input: originalArtist,
+                    result: artist,
+                    simplifiedInput: LanguageUtils.toSimplifiedChinese(originalArtist)
+                )
+                let crossScriptArtistOK = LanguageUtils.isPureASCII(originalArtist)
+                    && LanguageUtils.containsCJK(artist)
+                    && LanguageUtils.containsCJK(name)
+                guard artistOK || crossScriptArtistOK else { return nil }
+                return AliasQQCandidate(
+                    songMid: songMid,
+                    songID: songID,
+                    title: name,
+                    artist: artist,
+                    album: album,
+                    durationDiff: durationDiff,
+                    resultIndex: index
+                )
+            }
+            .sorted {
+                if $0.durationDiff != $1.durationDiff { return $0.durationDiff < $1.durationDiff }
+                return $0.resultIndex < $1.resultIndex
+            }
+            guard let candidate = candidates.first else {
+                DebugLogger.log("QQMusic", "❌ library native-title bridge found no safe row for '\(nativeTitle)' by '\(originalArtist)'")
+                return nil
+            }
+            let musicuLyrics = await fetchQQMusicLyricsViaMusicu(
+                songMid: candidate.songMid,
+                songID: candidate.songID,
+                duration: duration
+            )
+            let legacyLyrics = musicuLyrics == nil
+                ? await fetchQQMusicLyrics(songMid: candidate.songMid, duration: duration)
+                : nil
+            guard let result = musicuLyrics ?? legacyLyrics else {
+                DebugLogger.log("QQMusic", "❌ library native-title bridge lyrics unavailable for songMid=\(candidate.songMid)")
+                return catalogUnavailableResult(
+                    source: "QQ",
+                    albumMatched: false,
+                    titleMatched: true,
+                    durationDiff: candidate.durationDiff
+                )
+            }
+            let rawScore = scorer.calculateScore(
+                result.lyrics,
+                source: "QQ",
+                duration: duration,
+                translationEnabled: translationEnabled,
+                kind: result.kind
+            )
+            let score = scoreWithCatalogEvidence(
+                baseScore: rawScore,
+                lyrics: result.lyrics,
+                kind: result.kind,
+                albumMatched: false,
+                titleMatched: true,
+                durationDiff: candidate.durationDiff,
+                nativeAliasMatched: true
+            )
+            DebugLogger.log("QQMusic", "✅ library native-title bridge hit: '\(candidate.title)' by '\(candidate.artist)' Δ\(String(format: "%.1f", candidate.durationDiff))s")
+            return LyricsFetchResult(
+                lyrics: result.lyrics,
+                source: "QQ",
+                score: score,
+                kind: result.kind,
+                albumMatched: false,
+                titleMatched: true,
+                matchedDurationDiff: candidate.durationDiff,
+                nativeAliasMatched: true
+            )
+        } catch {
+            DebugLogger.log("QQMusic", "❌ library native-title bridge error for '\(nativeTitle)' by '\(originalArtist)': \(error)")
+            return nil
+        }
+    }
+
+    private func fetchQQMusicLyricsViaMusicu(
+        songMid: String,
+        songID: Int,
+        duration: TimeInterval
+    ) async -> (lyrics: [LyricLine], kind: LyricsKind)? {
+        guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
+        let body: [String: Any] = [
+            "comm": ["ct": 19, "cv": 1845],
+            "lyric": [
+                "method": "GetPlayLyricInfo",
+                "module": "music.musichallSong.PlayLyricInfo",
+                "param": ["songMID": songMid, "songID": songID] as [String: Any]
+            ] as [String: Any]
+        ]
+
+        do {
+            let json = try await HTTPClient.postJSON(url: apiURL, body: body, timeout: 1.8)
+            guard let lyricDict = json["lyric"] as? [String: Any],
+                  let dataDict = lyricDict["data"] as? [String: Any],
+                  let encodedLyric = dataDict["lyric"] as? String,
+                  !encodedLyric.isEmpty,
+                  let lyricData = Data(base64Encoded: encodedLyric),
+                  let lyricText = String(data: lyricData, encoding: .utf8),
+                  !lyricText.isEmpty else {
+                return nil
+            }
+            if isInstrumentalNotice(lyricText) {
+                return ([LyricLine(text: lyricText, startTime: 0, endTime: duration)], .instrumental)
+            }
+
+            let parsed = parser.parseLRC(lyricText)
+            var lyrics: [LyricLine]
+            var resultKind: LyricsKind = .synced
+            if parsed.isEmpty {
+                lyrics = parser.createUnsyncedLyrics(lyricText, duration: duration)
+                resultKind = .unsynced
+            } else {
+                lyrics = parser.stripMetadataLines(parsed)
+                resultKind = parser.detectKind(lyrics)
+            }
+
+            if let encodedTrans = dataDict["trans"] as? String,
+               !encodedTrans.isEmpty,
+               let transData = Data(base64Encoded: encodedTrans),
+               let transText = String(data: transData, encoding: .utf8),
+               !transText.isEmpty {
+                let translatedLyrics = parser.stripMetadataLines(parser.parseLRC(transText))
+                if !translatedLyrics.isEmpty {
+                    lyrics = parser.mergeLyricsWithTranslation(original: lyrics, translated: translatedLyrics)
+                }
+            }
+
+            lyrics = removingStandaloneSpeakerLabelLines(lyrics)
+            lyrics = parser.stripChineseTranslations(lyrics)
+            let final = resultKind == .synced
+                ? parser.applyTimeOffset(to: lyrics, offset: qqTimeOffset)
+                : lyrics
+            return (final, resultKind)
+        } catch {
+            return nil
+        }
+    }
+
+    private func removingStandaloneSpeakerLabelLines(_ lyrics: [LyricLine]) -> [LyricLine] {
+        lyrics.filter { line in
+            let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.hasSuffix(":") || text.hasSuffix("：") else { return true }
+            let label = String(text.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty, label.count <= 6 else { return true }
+            let isSpeakerLabel = label.unicodeScalars.allSatisfy { scalar in
+                CharacterSet.letters.contains(scalar) || LanguageUtils.isCJKScalar(scalar)
+            }
+            return !isSpeakerLabel
+        }
+    }
+
+    func libraryNativeTitleAliasForTesting(resultTitle: String, inputTitle: String) -> String? {
+        libraryNativeTitleAlias(resultTitle: resultTitle, inputTitle: inputTitle)
+    }
+
+    private func discoverLibraryNativeTitleAlias(
+        title: String,
+        artist: String,
+        duration: TimeInterval
+    ) async -> String? {
+        let headers = [
+            "Accept": "application/json",
+            "User-Agent": "nanoPod/1.0 (https://github.com/yinanli1917-cloud/AM-MiniPlayer)"
+        ]
+        guard let url = HTTPClient.buildURL(base: "https://lrclib.net/api/search", queryItems: [
+            "track_name": title,
+            "artist_name": artist
+        ]) else { return nil }
+
+        guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 1.5, retry: false),
+              let results = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+
+        for result in results.prefix(8) {
+            guard let resultTitle = result["trackName"] as? String,
+                  let resultArtist = result["artistName"] as? String,
+                  MatchingUtils.isArtistMatch(target: artist, actual: resultArtist),
+                  let resultDuration = Self.jsonDouble(result["duration"]),
+                  abs(resultDuration - duration) < 1.5,
+                  let alias = libraryNativeTitleAlias(resultTitle: resultTitle, inputTitle: title) else {
+                continue
+            }
+            return alias
+        }
+        return nil
+    }
+
+    private func libraryNativeTitleAlias(resultTitle: String, inputTitle: String) -> String? {
+        guard LanguageUtils.containsCJK(resultTitle),
+              latinEvidenceKey(resultTitle).contains(latinEvidenceKey(inputTitle)) else {
+            return nil
+        }
+        let separators = CharacterSet(charactersIn: "-–—|｜/／()（）[]【】")
+        let disallowedMarkers = [
+            "live", "remix", "instrumental", "karaoke", "cover", "dj",
+            "现场", "現場", "伴奏", "翻唱", "纯音乐", "純音樂"
+        ]
+        return resultTitle
+            .components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { segment in
+                let normalized = LanguageUtils.normalizeTrackName(segment)
+                let cjkCount = normalized.unicodeScalars.filter { LanguageUtils.isCJKScalar($0) }.count
+                let lower = normalized.lowercased()
+                return cjkCount >= 2
+                    && cjkCount <= 16
+                    && !disallowedMarkers.contains(where: { lower.contains($0) })
+            }
+            .map { LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName($0)) }
     }
 
     private static func jsonDouble(_ value: Any?) -> Double? {

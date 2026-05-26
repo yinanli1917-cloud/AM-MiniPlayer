@@ -112,6 +112,21 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   guarded bridge/background authoritative lookup available, but cut off the
   empty foreground path before 3s so source-unavailable tracks do not feel
   stuck.
+- Album-title echo native bridges must not be bypassed by an immediate
+  library-native-title cache preflight. Cached native metadata is evidence for
+  the bridge, but the foreground race still needs the album-echo native
+  provider window so higher-quality NetEase syllable results can beat a faster
+  same-lyric QQ row.
+- LRCLIB catalog-native-title bridges for English storefront titles should be
+  reserved for long/explicit localized-title evidence. Short generic English
+  titles should keep the ordinary empty-result deadline; otherwise source-miss
+  tracks spend the interaction budget on a native-title bridge that is unlikely
+  to be valid.
+- Decorated English titles with cached CJK metadata may use a guarded preflight
+  before the full source race. If the cached artist is stale or non-Chinese,
+  repair it through the confirmed CJK artist-alias path first, then query with
+  the cached native title. This keeps collaboration-credit cache hits fast
+  without trusting stale transliteration artists.
 - Foreground lyrics resolution and app-side authoritative backfill are separate
   latency budgets. The foreground source race must stay bounded for the visible
   track switch, while authoritative rescue probes for English-title
@@ -165,6 +180,11 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   specific requested artist, an album hint, tight duration/rank bounds, and a
   provider compilation/grouping artist; it must reject live/remix/backing rows
   and must not contain song, artist, or source-ID exceptions.
+- Exact-title compilation discovery may include provider compilation-artist
+  search hints such as `华语群星` / `群星` when the provider no longer ranks the
+  guarded compilation row under the bare storefront title. The result still
+  needs the same exact title, tight duration, CJK compilation album, and
+  backing-track rejection gates before fetching lyrics.
 - Same-artist provider discography rescue may run in the foreground for short
   ASCII titles only through general title-shape evidence, not a fixed title
   list. It still requires a specific ASCII artist, no album hint, a confirmed
