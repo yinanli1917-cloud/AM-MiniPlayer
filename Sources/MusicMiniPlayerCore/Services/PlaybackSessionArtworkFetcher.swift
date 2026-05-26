@@ -30,6 +30,11 @@ enum PlaybackSessionArtworkFetcher {
         }
         DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI artwork URL hit: \(url.absoluteString)")
         guard !Task.isCancelled else { return nil }
+        if let localData = await cachedArtworkDataOnFileQueue(for: url),
+           let image = NSImage(data: localData) {
+            DebugLogger.log("Artwork", "🎨 [PlaybackSession] Music UI cache hit: \(url.absoluteString)")
+            return image
+        }
         do {
             let (data, _) = try await HTTPClient.getData(url: url, timeout: 0.9, retry: false)
             DebugLogger.log("Artwork", "🎨 [PlaybackSession] original Music artwork: \(url.absoluteString)")
@@ -115,8 +120,7 @@ enum PlaybackSessionArtworkFetcher {
     }
 
     private static func cachedArtworkDataOnFileQueue(for artworkURL: URL) async -> Data? {
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/com.apple.Music/MusicUIArtworkCache")
+        let root = defaultMusicUICacheRoot()
         return await withCheckedContinuation { continuation in
             fileQueue.async {
                 continuation.resume(returning: cachedArtworkData(for: artworkURL, cacheRoot: root))
@@ -247,9 +251,12 @@ enum PlaybackSessionArtworkFetcher {
     }
 
     static func cachedArtworkData(for artworkURL: URL) -> Data? {
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/com.apple.Music/MusicUIArtworkCache")
-        return cachedArtworkData(for: artworkURL, cacheRoot: root)
+        cachedArtworkData(for: artworkURL, cacheRoot: defaultMusicUICacheRoot())
+    }
+
+    static func cachedArtworkImage(for artworkURL: URL, cacheRoot: URL) -> NSImage? {
+        guard let data = cachedArtworkData(for: artworkURL, cacheRoot: cacheRoot) else { return nil }
+        return NSImage(data: data)
     }
 
     static func cachedArtworkData(for artworkURL: URL, cacheRoot: URL) -> Data? {
@@ -288,6 +295,11 @@ enum PlaybackSessionArtworkFetcher {
             return try? Data(contentsOf: dataRoot.appendingPathComponent(fileName))
         }
         return rowData
+    }
+
+    private static func defaultMusicUICacheRoot() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Caches/com.apple.Music/MusicUIArtworkCache")
     }
 
     private static func gunzip(_ data: Data) -> Data? {

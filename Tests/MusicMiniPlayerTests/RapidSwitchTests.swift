@@ -440,6 +440,44 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(data, expected)
     }
 
+    func testPlaybackSessionArtworkCacheBuildsImageFromMusicUICache() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nanopod-artwork-cache-image-\(UUID().uuidString)")
+        let fsRoot = root.appendingPathComponent("fsCachedData")
+        try FileManager.default.createDirectory(at: fsRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let dbURL = root.appendingPathComponent("Cache.db")
+        let requestKey = "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/4e/92/0b/cover.rgb.jpg/800x800bb.jpg"
+        let fileName = "D7A55A62-2B6A-4D3A-A4D7-0E0B8E437CE8"
+        let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 2,
+            pixelsHigh: 2,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bitmapFormat: [],
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        )
+        bitmap?.setColor(NSColor(calibratedRed: 1, green: 0, blue: 0, alpha: 1), atX: 0, y: 0)
+        guard let imageData = bitmap?.representation(using: .png, properties: [:]) else {
+            return XCTFail("expected test image data")
+        }
+        try imageData.write(to: fsRoot.appendingPathComponent(fileName))
+        try createMusicUICacheFixture(dbURL: dbURL, requestKey: requestKey, fileName: fileName)
+
+        let image = PlaybackSessionArtworkFetcher.cachedArtworkImage(
+            for: URL(string: requestKey)!,
+            cacheRoot: root
+        )
+
+        XCTAssertEqual(image?.size, NSSize(width: 2, height: 2))
+    }
+
     private func writePlaybackSessionArchive(root: URL, payload: String) throws {
         let archive = root.appendingPathComponent("IT-999999.playbackSessionArchive", isDirectory: true)
         try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
