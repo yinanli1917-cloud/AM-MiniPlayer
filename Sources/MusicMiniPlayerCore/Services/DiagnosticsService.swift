@@ -3518,6 +3518,7 @@ public final class DiagnosticsService: ObservableObject {
         let hasGeometryDrift = maxInterLineError > 18 || maxTargetError > 32
         let hasLateActiveTarget = activeVisualElapsed > 0.55 && activeTargetLagged && laggedNearbyTargets >= 4
         let hasLingeringWaveBacklog = activeVisualElapsed > 0.90 && laggedNearbyTargets >= 4
+        let hasUnevenLineSpacing = maxInterLineError > 18
         let hasActiveViewportClip = maxActiveTopClip > 8 || maxActiveBottomClip > 8
         let hasLineViewportClip = maxLineTopClip > 8 || maxLineBottomClip > 8
         guard hasGeometryDrift || hasLateActiveTarget || hasLingeringWaveBacklog || hasActiveViewportClip || hasLineViewportClip else { return }
@@ -3569,6 +3570,7 @@ public final class DiagnosticsService: ObservableObject {
                 "activeVisualElapsedMs": activeVisualElapsed * 1000,
                 "activeTargetLagged": activeTargetLagged ? 1 : 0,
                 "lingeringWaveBacklog": hasLingeringWaveBacklog ? 1 : 0,
+                "unevenLineSpacing": hasUnevenLineSpacing ? 1 : 0,
                 "activeViewportClip": hasActiveViewportClip ? 1 : 0,
                 "lineViewportClip": hasLineViewportClip ? 1 : 0,
                 "controlsVisible": sample.controlsVisible ? 1 : 0
@@ -3579,6 +3581,7 @@ public final class DiagnosticsService: ObservableObject {
                 "displayIndex": "\(sample.displayIndex)",
                 "targetIndex": "\(sample.targetIndex)",
                 "page": sample.page,
+                "spacingMetric": "interLineDeltaErrorY",
                 "visibleRangeY": "\(String(format: "%.1f", sample.visibleTopY))...\(String(format: "%.1f", sample.visibleBottomY))"
             ]
         )

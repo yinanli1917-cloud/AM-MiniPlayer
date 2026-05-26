@@ -115,12 +115,13 @@ continue an already-owned scroll gesture; out-of-bounds events may only continue
 an already-active gesture. Otherwise auto-follow freezes for the manual-scroll
 timeout and line switches feel stuck while diagnostics show low CPU.
 
-Line-level lyrics need interval-aware scroll motion. The geometry diagnostics
-measure target layout, not the presentation-layer spring currently visible to
-the user; a correct target can still look late if the fixed spring settles
-slower than the next lyric interval. Keep normal lyrics on the original softer
-spring, but use faster spring parameters and a shorter wave budget for dense
-line-level timings.
+Line-level lyrics need interval-aware motion policy, but word-level lyrics are
+the normal baseline and should keep AMLL stagger. The geometry diagnostics
+measure target layout, not the presentation-layer animation currently visible
+to the user; a correct target can still look late if dense line-level intervals
+are driven through the stagger queue. Keep the original scroll spring and keep
+stagger for syllable/word-synced lyrics, but skip staggered per-line wave work
+for dense line-level timings so the page moves as one scroll target.
 
 Lyrics controls must stay mounted across loading/error/empty/rendered lyric
 content states. A next/previous click starts a protected replacement animation;

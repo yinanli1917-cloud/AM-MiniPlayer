@@ -816,56 +816,12 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(delay, LyricWaveTiming.minimumBaseDelay, accuracy: 0.0001)
     }
 
-    func testLyricWaveTimingUsesShorterBudgetForDenseLineLevelLyrics() {
-        let indices = Array(0...12)
-        let denseDelay = LyricWaveTiming.baseDelay(
-            for: indices,
-            startPosition: 2,
-            newIndex: 4,
-            lineInterval: 0.9
-        )
-        let normalDelay = LyricWaveTiming.baseDelay(
-            for: indices,
-            startPosition: 2,
-            newIndex: 4,
-            lineInterval: 1.6
-        )
-
-        let denseDuration = LyricWaveTiming.waveDuration(
-            for: indices,
-            startPosition: 2,
-            newIndex: 4,
-            baseDelay: denseDelay
-        )
-
-        XCTAssertLessThan(denseDelay, normalDelay)
-        XCTAssertLessThanOrEqual(
-            denseDuration,
-            0.9 * LyricWaveTiming.maxDenseLineIntervalFraction + LyricWaveTiming.settlePadding + 0.001
-        )
-    }
-
-    func testLyricScrollAnimationPolicySpeedsUpDenseLineLevelLyrics() {
-        XCTAssertEqual(
-            LyricScrollAnimationPolicy.parameters(for: nil),
-            LyricScrollAnimationPolicy.normal
-        )
-        XCTAssertEqual(
-            LyricScrollAnimationPolicy.parameters(for: 1.7),
-            LyricScrollAnimationPolicy.compact
-        )
-        XCTAssertEqual(
-            LyricScrollAnimationPolicy.parameters(for: 1.0),
-            LyricScrollAnimationPolicy.dense
-        )
-        XCTAssertEqual(
-            LyricScrollAnimationPolicy.parameters(for: 0.6),
-            LyricScrollAnimationPolicy.veryDense
-        )
-        XCTAssertGreaterThan(
-            LyricScrollAnimationPolicy.parameters(for: 0.6).stiffness,
-            LyricScrollAnimationPolicy.parameters(for: 1.7).stiffness
-        )
+    func testLyricWaveTimingDisablesStaggerOnlyForDenseLineLevelLyrics() {
+        XCTAssertFalse(LyricWaveTiming.shouldUseStagger(lineInterval: 0.9, hasSyllableSync: false))
+        XCTAssertFalse(LyricWaveTiming.shouldUseStagger(lineInterval: 1.45, hasSyllableSync: false))
+        XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: 1.6, hasSyllableSync: false))
+        XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: 0.9, hasSyllableSync: true))
+        XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: nil, hasSyllableSync: false))
     }
 
     func testPlaybackPositionCorrectionDefersLargeBackwardResetWhileLyricsAreVisible() {

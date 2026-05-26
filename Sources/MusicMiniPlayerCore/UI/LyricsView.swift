@@ -75,9 +75,16 @@ struct LyricWaveTiming {
     static let minimumBaseDelay: TimeInterval = 0.024
     static let settlePadding: TimeInterval = 0.20
     static let maxLineIntervalFraction: TimeInterval = 0.72
-    static let maxDenseLineIntervalFraction: TimeInterval = 0.45
-    static let denseLineIntervalThreshold: TimeInterval = 1.0
+    static let minimumStaggerLineInterval: TimeInterval = 1.45
     static let tailAccelerationFactor: TimeInterval = 1.05
+
+    static func shouldUseStagger(lineInterval: TimeInterval?, hasSyllableSync: Bool) -> Bool {
+        if hasSyllableSync { return true }
+        guard let lineInterval, lineInterval.isFinite, lineInterval > 0 else {
+            return true
+        }
+        return lineInterval > minimumStaggerLineInterval
+    }
 
     static func baseDelay(
         for indices: [Int],
@@ -96,10 +103,7 @@ struct LyricWaveTiming {
             newIndex: newIndex,
             baseDelay: defaultBaseDelay
         )
-        let targetFraction = lineInterval <= denseLineIntervalThreshold
-            ? maxDenseLineIntervalFraction
-            : maxLineIntervalFraction
-        let targetDuration = max(minimumBaseDelay, lineInterval * targetFraction)
+        let targetDuration = max(minimumBaseDelay, lineInterval * maxLineIntervalFraction)
         guard defaultDuration > targetDuration else { return defaultBaseDelay }
 
         let scalableDuration = max(defaultDuration - settlePadding, minimumBaseDelay)
@@ -125,29 +129,6 @@ struct LyricWaveTiming {
             }
         }
         return delay + settlePadding
-    }
-}
-
-struct LyricScrollAnimationPolicy {
-    struct SpringParameters: Equatable {
-        let mass: Double
-        let stiffness: Double
-        let damping: Double
-    }
-
-    static let normal = SpringParameters(mass: 1.0, stiffness: 100.0, damping: 16.5)
-    static let compact = SpringParameters(mass: 0.90, stiffness: 180.0, damping: 24.0)
-    static let dense = SpringParameters(mass: 0.75, stiffness: 280.0, damping: 30.0)
-    static let veryDense = SpringParameters(mass: 0.65, stiffness: 420.0, damping: 34.0)
-
-    static func parameters(for lineInterval: TimeInterval?) -> SpringParameters {
-        guard let lineInterval, lineInterval.isFinite, lineInterval > 0 else {
-            return normal
-        }
-        if lineInterval <= 0.85 { return veryDense }
-        if lineInterval <= 1.45 { return dense }
-        if lineInterval <= 2.0 { return compact }
-        return normal
     }
 }
 
@@ -635,10 +616,6 @@ public struct LyricsView: View {
                 ? (scroll.frozenDisplayIndex ?? liveIndex)
                 : liveIndex
             let isLineWaveActive = !wave.workItems.isEmpty
-            let scrollAnimation = lyricScrollAnimation(
-                currentIndex: displayIndex,
-                displayLyrics: displayLyrics
-            )
             let _ = updateLyricsContainerHeight(containerHeight)
             let anchorY = (containerHeight - controlBarHeight) * 0.24
             let pendingTranslationLineIndices = lyricsService.showTranslation
@@ -683,7 +660,9 @@ public struct LyricsView: View {
                                 .allowsHitTesting(true)
                                 .offset(y: fullOffset)
                                 .animation(
-                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : scrollAnimation,
+                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
+                                        mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+                                    ),
                                     value: scroll.isManualScrolling ? 0 : fullOffset
                                 )
                                 .background(lineMotionTracker(index: index))
@@ -946,7 +925,8 @@ public struct LyricsView: View {
             let lineOffset = calculateLineOffset(index: index, currentIndex: displayIndex, anchorY: anchorY)
             let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
             let appliedOffsetY = Double(fullOffset + scroll.manualScrollOffset)
-            let targetMinY = Double(frame.minY) + appliedOffsetY
+            let uniformTargetOffsetY = Double(immediateLineOffset + scroll.manualScrollOffset)
+            let targetMinY = Double(frame.minY) + uniformTargetOffsetY
             let targetMidY = targetMinY + Double(frame.height / 2)
             return MotionPartial(
                 index: index,
@@ -964,7 +944,7 @@ public struct LyricsView: View {
         var samples: [DiagnosticLyricLineMotionSample] = []
         samples.reserveCapacity(partials.count)
         var previousRenderedMidY: Double?
-        var previousTargetMidY: Double?
+        var previousBaseMidY: Double?
         let visibleTopY = 42.0
         let visibleBottomY = max(
             visibleTopY + 1,
@@ -978,7 +958,7 @@ public struct LyricsView: View {
             let lineBottomClipY = max(0, renderedMaxY - visibleBottomY)
             let isActiveLine = partial.index == activeIndex
             let observedDelta = previousRenderedMidY.map { renderedMidY - $0 }
-            let expectedDelta = previousTargetMidY.map { partial.targetMidY - $0 }
+            let expectedDelta = previousBaseMidY.map { Double(partial.frame.midY) - $0 }
             let deltaError: Double? = {
                 guard let observedDelta, let expectedDelta else { return nil }
                 return observedDelta - expectedDelta
@@ -1018,7 +998,7 @@ public struct LyricsView: View {
                 controlsVisible: showControls || isAudioOutputMenuPresented
             ))
             previousRenderedMidY = renderedMidY
-            previousTargetMidY = partial.targetMidY
+            previousBaseMidY = Double(partial.frame.midY)
         }
 
         let activeTargetIndex = partials.first { $0.index == activeIndex }?.targetIndex
@@ -1677,17 +1657,6 @@ public struct LyricsView: View {
         startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
     }
 
-    private func lyricScrollAnimation(currentIndex: Int, displayLyrics: [LyricLine]) -> Animation {
-        let lineInterval = estimatedLineInterval(around: currentIndex, in: displayLyrics)
-        let parameters = LyricScrollAnimationPolicy.parameters(for: lineInterval)
-        return .interpolatingSpring(
-            mass: parameters.mass,
-            stiffness: parameters.stiffness,
-            damping: parameters.damping,
-            initialVelocity: 0
-        )
-    }
-
     // MARK: - 滚动边界 + 橡皮筋
 
     private func rubberBand(_ x: CGFloat, _ d: CGFloat) -> CGFloat {
@@ -1832,9 +1801,17 @@ public struct LyricsView: View {
         }
         guard !indices.isEmpty else { return }
 
-        // Skip wave on large jumps (seeks) or accessibility
+        let lineInterval = estimatedLineInterval(around: newIndex, in: lyrics)
+
+        // Skip wave on large jumps, accessibility, or dense line-level lyrics.
+        // Fast line-level lyrics should move as one scroll target; staggered per-line
+        // work makes the page look late even if each delayed animation is shorter.
         let isLargeJump = abs(newIndex - oldIndex) > 4
-        if reduceMotion || isLargeJump {
+        let hasSyllableSync = lyrics.indices.contains(newIndex) && lyrics[newIndex].hasSyllableSync
+        if reduceMotion || isLargeJump || !LyricWaveTiming.shouldUseStagger(
+            lineInterval: lineInterval,
+            hasSyllableSync: hasSyllableSync
+        ) {
             for idx in indices { wave.lineTargetIndices[idx] = newIndex }
             return
         }
@@ -1843,7 +1820,6 @@ public struct LyricsView: View {
         let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
 
-        let lineInterval = estimatedLineInterval(around: newIndex, in: lyrics)
         var delay: TimeInterval = 0
         var baseDelay = LyricWaveTiming.baseDelay(
             for: indices,

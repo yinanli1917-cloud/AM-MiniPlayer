@@ -670,7 +670,7 @@ final class DiagnosticsServiceTests: XCTestCase {
 
     func testLiveLyricLineMotionCSVWritesSingleHeaderAcrossBatches() throws {
         func sample(lineID: String, lineIndex: Int) -> DiagnosticLyricLineMotionSample {
-            DiagnosticLyricLineMotionSample(
+            return DiagnosticLyricLineMotionSample(
                 page: "lyrics",
                 trackTitle: "Live Motion Song",
                 trackArtist: "Live Motion Artist",
@@ -1608,6 +1608,50 @@ final class DiagnosticsServiceTests: XCTestCase {
         DiagnosticsService.shared.recordLyricsLineMotionSamples([sample])
 
         XCTAssertTrue(DiagnosticsService.shared.incidents.contains { $0.category == .lyricsLineMotion })
+    }
+
+    func testUnevenLyricLineSpacingCreatesMotionIncidentMetric() {
+        func sample(index: Int) -> DiagnosticLyricLineMotionSample {
+            let baseY = Double(index) * 64
+            let shifted = index >= 2
+            let shift = shifted ? 36.0 : 0.0
+            let observedDelta: Double? = index == 0 ? nil : (index == 2 ? 100.0 : 64.0)
+            let spacingError: Double? = index == 0 ? nil : (index == 2 ? 36.0 : 0.0)
+            return DiagnosticLyricLineMotionSample(
+                page: "lyrics",
+                trackTitle: "Dense Motion Song",
+                trackArtist: "Motion Artist",
+                lineIndex: index,
+                lineID: "dense-\(index)",
+                lineStartTime: Double(index) * 0.85,
+                lineEndTime: Double(index) * 0.85 + 0.7,
+                playbackTime: 1.8,
+                activeIndex: 2,
+                displayIndex: 2,
+                targetIndex: index == 2 ? 2 : 1,
+                renderedMinY: baseY + shift,
+                renderedMidY: baseY + 22 + shift,
+                renderedHeight: 44,
+                targetMinY: baseY,
+                targetMidY: baseY + 22,
+                targetErrorY: shift,
+                observedInterLineDeltaY: observedDelta,
+                expectedInterLineDeltaY: index == 0 ? nil : 64,
+                interLineDeltaErrorY: spacingError,
+                waveOffsetY: shift,
+                manualScrollOffsetY: 0,
+                isManualScrolling: false,
+                isInitialMotionSuppressed: false
+            )
+        }
+        let samples = (0..<5).map(sample)
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples(samples)
+
+        let incident = DiagnosticsService.shared.incidents.first { $0.category == .lyricsLineMotion }
+        XCTAssertEqual(incident?.metrics["unevenLineSpacing"], 1)
+        XCTAssertEqual(incident?.metrics["maxInterLineErrorPt"] ?? -1, 36, accuracy: 0.001)
+        XCTAssertEqual(incident?.evidence["spacingMetric"], "interLineDeltaErrorY")
     }
 
     func testLyricViewportClipCreatesIncident() {
