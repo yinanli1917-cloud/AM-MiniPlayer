@@ -1,1 +1,1 @@
-version=2.5 build_time=2026-05-25T08:23:50Z git=365c8b0f release_sha256=17056f0148643adcbc824fbeb779160053c9024857fa2ca2cd9878618121981a auto_update=disabled
+version=2.5 build_time=2026-05-26T08:06:11Z git=a0b98a83 release_sha256=ee64c741039a8d3dc55d32ebeab142251ba20511ba8ee3e5cba31d8bf877a1c5 auto_update=disabled
