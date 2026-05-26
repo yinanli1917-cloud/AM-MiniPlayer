@@ -86,6 +86,10 @@ struct LyricWaveTiming {
         return lineInterval > minimumStaggerLineInterval
     }
 
+    static func shouldUseGroupedGeometry(lineInterval: TimeInterval?, hasSyllableSync: Bool) -> Bool {
+        !shouldUseStagger(lineInterval: lineInterval, hasSyllableSync: hasSyllableSync)
+    }
+
     static func baseDelay(
         for indices: [Int],
         startPosition: Int,
@@ -621,6 +625,17 @@ public struct LyricsView: View {
             let pendingTranslationLineIndices = lyricsService.showTranslation
                 ? LyricLineTranslationLayoutPolicy.pendingLineIndices(in: lyricsService.lyrics)
                 : []
+            let lineInterval = estimatedLineInterval(around: displayIndex, in: displayLyrics)
+            let hasSyllableSync = displayLyrics.indices.contains(displayIndex)
+                && displayLyrics[displayIndex].hasSyllableSync
+            let usesGroupedGeometry = !scroll.isManualScrolling
+                && LyricWaveTiming.shouldUseGroupedGeometry(
+                    lineInterval: lineInterval,
+                    hasSyllableSync: hasSyllableSync
+                )
+            let groupedGeometryOffset = usesGroupedGeometry
+                ? anchorY - calculateAccumulatedHeight(upTo: displayIndex)
+                : 0
 
             // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12
@@ -641,7 +656,10 @@ public struct LyricsView: View {
                             let lineOffset = calculateLineOffset(
                                 index: index, currentIndex: displayIndex, anchorY: anchorY
                             )
-                            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+                            let accumulatedHeight = calculateAccumulatedHeight(upTo: index)
+                            let fullOffset = usesGroupedGeometry
+                                ? accumulatedHeight
+                                : lineOffset + accumulatedHeight
 
                             lyricLineContent(
                                 line: line,
@@ -660,7 +678,7 @@ public struct LyricsView: View {
                                 .allowsHitTesting(true)
                                 .offset(y: fullOffset)
                                 .animation(
-                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
+                                    scroll.isManualScrolling || reduceMotion || usesGroupedGeometry || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
                                         mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
                                     ),
                                     value: scroll.isManualScrolling ? 0 : fullOffset
@@ -671,7 +689,13 @@ public struct LyricsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .offset(y: scroll.manualScrollOffset)
+            .offset(y: scroll.manualScrollOffset + groupedGeometryOffset)
+            .animation(
+                scroll.isManualScrolling || reduceMotion || !usesGroupedGeometry ? nil : .interpolatingSpring(
+                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+                ),
+                value: groupedGeometryOffset
+            )
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
                 guard lineMotionFrameCaptureActive else {
