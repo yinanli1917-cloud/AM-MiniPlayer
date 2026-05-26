@@ -159,6 +159,47 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.source, "NetEase")
     }
 
+    func testComparableHumanCuratedSyncedSourceBeatsLibraryFallback() {
+        let fetcher = LyricsFetcher.shared
+        let libraryFallback = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "I'm like some kind of Supernova",
+                "Watch out",
+                "Look at me go",
+                "Have some fun",
+                "We're going on",
+                "New stars are born"
+            ]),
+            source: "LRCLIB-Search",
+            score: 77,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+        let humanCurated = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "I'm like some kind of Supernova",
+                "Watch out",
+                "Look at me go",
+                "Have some fun",
+                "We're going on",
+                "New stars are born"
+            ]),
+            source: "NetEase",
+            score: 68,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        let selected = fetcher.selectBestResult(
+            from: [libraryFallback, humanCurated],
+            songDuration: 178
+        )
+
+        XCTAssertEqual(selected?.source, "NetEase")
+    }
+
     func testUnsyncedConsensusCanReturnStaticFallbackWhenNoSyncedSurvives() {
         let fetcher = LyricsFetcher.shared
         let plainA = LyricsFetcher.LyricsFetchResult(
@@ -1791,6 +1832,132 @@ final class LyricsSelectionTests: XCTestCase {
         let selected = fetcher.selectUnavailableResult(from: [unavailable])
 
         XCTAssertEqual(selected?.source, "NetEase")
+    }
+
+    func testWeakTerminalAvailabilityDoesNotBlockAlbumNativeAliasRescue() {
+        let fetcher = LyricsFetcher.shared
+        let instrumental = LyricsFetcher.LyricsFetchResult(
+            lyrics: [LyricLine(text: "纯音乐，请欣赏", startTime: 0, endTime: 1)],
+            source: "QQ",
+            score: -100,
+            kind: .instrumental,
+            albumMatched: false,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertTrue(fetcher.shouldSuppressWeakTerminalAvailabilityForNativeAliasMiss(
+            album: "Shangri-La",
+            results: [instrumental],
+            albumScopedBranchFired: true,
+            catalogExactTitleBranchFired: true
+        ))
+    }
+
+    func testAlbumMatchedTerminalAvailabilityRemainsAuthoritative() {
+        let fetcher = LyricsFetcher.shared
+        let unavailable = LyricsFetcher.LyricsFetchResult(
+            lyrics: [],
+            source: "QQ",
+            score: -80,
+            kind: .unavailable,
+            albumMatched: true,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertFalse(fetcher.shouldSuppressWeakTerminalAvailabilityForNativeAliasMiss(
+            album: "Known Album",
+            results: [unavailable],
+            albumScopedBranchFired: true,
+            catalogExactTitleBranchFired: false
+        ))
+    }
+
+    func testNoAlbumTerminalAvailabilityCacheDoesNotBypassAlbumScopedRetry() {
+        let fetcher = LyricsFetcher.shared
+        let cached = LyricsDiskCacheEntry(
+            source: "QQ",
+            syncedLyrics: "",
+            lines: [CachedLyricLine(text: "Instrumental", startTime: 0, endTime: 180, words: [], translation: nil)],
+            kind: .instrumental,
+            ts: Date().timeIntervalSince1970,
+            duration: 180,
+            album: nil,
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertFalse(fetcher.shouldUseImmediateCachedAvailability(
+            cached,
+            requestedAlbum: "Known Album"
+        ))
+        XCTAssertTrue(fetcher.shouldUseImmediateCachedAvailability(
+            cached,
+            requestedAlbum: ""
+        ))
+    }
+
+    func testAlbumMatchedTerminalAvailabilityCacheCanShortCircuit() {
+        let fetcher = LyricsFetcher.shared
+        let cached = LyricsDiskCacheEntry(
+            source: "QQ",
+            syncedLyrics: "",
+            lines: [CachedLyricLine(text: "Instrumental", startTime: 0, endTime: 180, words: [], translation: nil)],
+            kind: .instrumental,
+            ts: Date().timeIntervalSince1970,
+            duration: 180,
+            album: "Known Album",
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertTrue(fetcher.shouldUseImmediateCachedAvailability(
+            cached,
+            requestedAlbum: "known album"
+        ))
+        XCTAssertFalse(fetcher.shouldUseImmediateCachedAvailability(
+            cached,
+            requestedAlbum: "Other Album"
+        ))
+    }
+
+    func testAlbumScopedTerminalAvailabilityRequiresAlbumEvidenceToPersist() {
+        let fetcher = LyricsFetcher.shared
+        let unavailable = LyricsFetcher.LyricsFetchResult(
+            lyrics: [],
+            source: "NetEase",
+            score: -80,
+            kind: .unavailable,
+            albumMatched: false,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertFalse(fetcher.shouldPersistAvailabilityResult(
+            unavailable,
+            requestedAlbum: "Known Album"
+        ))
+        XCTAssertTrue(fetcher.shouldPersistAvailabilityResult(
+            unavailable,
+            requestedAlbum: ""
+        ))
+    }
+
+    func testAlbumMatchedTerminalAvailabilityCanPersistWithAlbumHint() {
+        let fetcher = LyricsFetcher.shared
+        let instrumental = LyricsFetcher.LyricsFetchResult(
+            lyrics: [LyricLine(text: "Instrumental", startTime: 0, endTime: 180)],
+            source: "QQ",
+            score: -100,
+            kind: .instrumental,
+            albumMatched: true,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertTrue(fetcher.shouldPersistAvailabilityResult(
+            instrumental,
+            requestedAlbum: "Known Album"
+        ))
     }
 
     func testNativeAliasDoesNotBeatExplicitSameArtistTitleEvidence() {

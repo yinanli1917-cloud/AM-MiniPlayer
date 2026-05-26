@@ -300,6 +300,7 @@
     "id": "H07",
     "title": "How Sweet",
     "artist": "NewJeans",
+    "album": "How Sweet",
     "duration": 219,
     "expectation": {
       "shouldFindLyrics": true,

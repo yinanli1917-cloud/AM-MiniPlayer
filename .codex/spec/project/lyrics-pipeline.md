@@ -30,6 +30,11 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   If LRCLIB, LRCLIB-Search, Genius, or lyrics.ovh are slow, let
   authoritative background backfill finish and cache them instead of holding
   the visible track switch past the interaction budget.
+- Album hints should not automatically delay exact library fallbacks for
+  ordinary English-title tracks. Preserve the native-provider holdback for
+  romanized/non-English alias paths, but let likely-English visible titles race
+  exact LRCLIB/LRCLIB-Search work immediately so correct foreground lyrics do
+  not miss the latency budget.
 - When a same-title provider row returns a compressed or wrong-version
   line-timed lyric (for example: first real lyric or catalog marker appears in
   the first few seconds, no word-level timing, and a large tail gap), reject it
@@ -92,6 +97,10 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   showing a plausible same-artist wrong lyric payload.
 - English-title tracks must not use artist-only native-title aliases; require stronger title, album, or Apple catalog evidence to avoid same-English-name artist collisions.
 - If an album hint is available, do not accept a loose artist-only native-title alias for an English title. Use album-scoped witness probes or direct title evidence so same-artist duration collisions cannot win.
+- If title+artist metadata is likely ordinary English and no resolved native
+  artist alias exists, do not pay a late provider probe only to discover a CJK
+  alias. That probe belongs to romanized/non-English alias paths or to cases
+  where earlier metadata already exposed a native alias.
 - English storefront title tracks whose title and album are the same normalized
   phrase may use a confirmed CJK artist alias plus an exact native
   title==album catalog row as a native-title bridge. The bridge must require a
@@ -197,6 +206,19 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   rows only with a short TTL so repeated visits do not re-run slow provider
   checks or refill fallback-churn diagnostics, while still allowing sources to
   recover later.
+- Terminal `instrumental`/`unavailable` rows are authoritative only when their
+  identity evidence is authoritative. If an album/catalog native rescue branch
+  fired and the only terminal row is not album-matched, suppress that weak
+  terminal result so it cannot block a correct synced fallback or turn an
+  unresolved native-alias miss into a false no-lyrics state.
+- A terminal availability cache row saved without album evidence must not
+  short-circuit a later request that has an album hint. Re-check the
+  album-scoped/native paths for that request; only album-matched terminal cache
+  rows may bypass the foreground resolver when an album is known.
+- Terminal availability rows must not be persisted under an album-scoped cache
+  key unless the provider result itself matched that album. A title/duration
+  terminal result without album evidence may be returned for the current
+  no-lyrics state, but it must not become an album-authoritative cache entry.
 - Album-scoped provider rows whose artist is a generic compilation bucket
   (`群星`, `Various Artists`, `VA`, soundtrack-style labels, etc.) must not
   satisfy normal artist evidence for a specific requested artist.

@@ -565,6 +565,21 @@ extension LyricsFetcher {
         return min(span / songDuration, 1.0)
     }
 
+    private func isLibraryFallbackSourceName(_ source: String) -> Bool {
+        source == "LRCLIB" || source == "LRCLIB-Search"
+    }
+
+    private func isPreferredHumanCuratedSource(_ source: String) -> Bool {
+        source == "NetEase" || source == "QQ" || source == "AppleMusic" || source == "AMLL"
+    }
+
+    private func hasComparableCatalogEvidence(_ result: LyricsFetchResult) -> Bool {
+        result.albumMatched
+            || result.titleMatched
+            || (result.matchedDurationDiff.map { $0 < 1.5 } ?? false)
+            || result.nativeAliasMatched
+    }
+
     // MARK: - selectReliable (CJK vs romaji + album preference)
 
     func selectReliable(_ reliable: [LyricsFetchResult], songDuration: TimeInterval = 0) -> LyricsFetchResult? {
@@ -589,6 +604,17 @@ extension LyricsFetcher {
                }) {
                 DebugLogger.log("🏆 Exact LRCLIB preferred over low-score source: \(exactLRCLIB.source) (\(String(format: "%.1f", exactLRCLIB.score))) over \(top.source) (\(String(format: "%.1f", top.score)))")
                 return exactLRCLIB
+            }
+
+            if isLibraryFallbackSourceName(top.source),
+               let curated = workingPool.first(where: {
+                   isPreferredHumanCuratedSource($0.source)
+                       && $0.kind == .synced
+                       && $0.score + 12 >= top.score
+                       && hasComparableCatalogEvidence($0)
+               }) {
+                DebugLogger.log("🏆 Human-curated source preferred: \(curated.source) (\(String(format: "%.1f", curated.score))) over library fallback \(top.source) (\(String(format: "%.1f", top.score)))")
+                return curated
             }
 
             // Direct title evidence beats a small score lead from a loose
