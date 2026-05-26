@@ -86,6 +86,10 @@ struct LyricWaveTiming {
         return lineInterval > minimumStaggerLineInterval
     }
 
+    static func shouldUseGroupedLayerMotion(lineInterval: TimeInterval?, hasSyllableSync: Bool) -> Bool {
+        !shouldUseStagger(lineInterval: lineInterval, hasSyllableSync: hasSyllableSync)
+    }
+
     static func baseDelay(
         for indices: [Int],
         startPosition: Int,
@@ -621,6 +625,17 @@ public struct LyricsView: View {
             let pendingTranslationLineIndices = lyricsService.showTranslation
                 ? LyricLineTranslationLayoutPolicy.pendingLineIndices(in: lyricsService.lyrics)
                 : []
+            let lineInterval = estimatedLineInterval(around: displayIndex, in: displayLyrics)
+            let hasSyllableSync = displayLyrics.indices.contains(displayIndex)
+                && displayLyrics[displayIndex].hasSyllableSync
+            let usesGroupedLineMotion = !scroll.isManualScrolling
+                && LyricWaveTiming.shouldUseGroupedLayerMotion(
+                    lineInterval: lineInterval,
+                    hasSyllableSync: hasSyllableSync
+                )
+            let groupedLineOffset = usesGroupedLineMotion
+                ? anchorY - calculateAccumulatedHeight(upTo: displayIndex)
+                : 0
 
             // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12
@@ -641,7 +656,10 @@ public struct LyricsView: View {
                             let lineOffset = calculateLineOffset(
                                 index: index, currentIndex: displayIndex, anchorY: anchorY
                             )
-                            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+                            let baseOffset = calculateAccumulatedHeight(upTo: index)
+                            let fullOffset = usesGroupedLineMotion
+                                ? baseOffset
+                                : lineOffset + baseOffset
 
                             lyricLineContent(
                                 line: line,
@@ -649,6 +667,7 @@ public struct LyricsView: View {
                                 currentIndex: displayIndex,
                                 sourceIndex: displayLine.sourceIndex,
                                 isLastSegment: displayLine.isLastSegment,
+                                stabilizeDenseLineLevelMotion: usesGroupedLineMotion,
                                 isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
                                     index: displayLine.sourceIndex,
                                     line: sourceLine,
@@ -660,7 +679,7 @@ public struct LyricsView: View {
                                 .allowsHitTesting(true)
                                 .offset(y: fullOffset)
                                 .animation(
-                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
+                                    scroll.isManualScrolling || reduceMotion || usesGroupedLineMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
                                         mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
                                     ),
                                     value: scroll.isManualScrolling ? 0 : fullOffset
@@ -671,7 +690,13 @@ public struct LyricsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .offset(y: scroll.manualScrollOffset)
+            .offset(y: scroll.manualScrollOffset + groupedLineOffset)
+            .animation(
+                scroll.isManualScrolling || reduceMotion || !usesGroupedLineMotion ? nil : .interpolatingSpring(
+                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+                ),
+                value: groupedLineOffset
+            )
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
                 guard lineMotionFrameCaptureActive else {
@@ -726,6 +751,7 @@ public struct LyricsView: View {
         currentIndex: Int,
         sourceIndex: Int,
         isLastSegment: Bool,
+        stabilizeDenseLineLevelMotion: Bool,
         isAwaitingTranslation: Bool
     ) -> some View {
             if isPreludeEllipsis(line.text) {
@@ -761,6 +787,7 @@ public struct LyricsView: View {
                         showTranslation: lyricsService.showTranslation,
                         isTranslating: isAwaitingTranslation,
                         translationFailed: lyricsService.translationFailed && isAwaitingTranslation,
+                        stabilizeDenseLineLevelMotion: stabilizeDenseLineLevelMotion,
                         isPrecedingInterlude: lyricsService.interludeAfterIndex == index
                     )
                     .padding(.leading, lyricContentLeadingInset)
@@ -923,10 +950,20 @@ public struct LyricsView: View {
                 ? (scroll.lockedLineIndex ?? displayIndex)
                 : (wave.lineTargetIndices[index] ?? displayIndex)
             let lineOffset = calculateLineOffset(index: index, currentIndex: displayIndex, anchorY: anchorY)
-            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
-            let appliedOffsetY = Double(fullOffset + scroll.manualScrollOffset)
+            let accumulatedHeight = calculateAccumulatedHeight(upTo: index)
+            let lineInterval = estimatedLineInterval(around: displayIndex, in: lyrics)
+            let hasSyllableSync = lyrics.indices.contains(displayIndex) && lyrics[displayIndex].hasSyllableSync
+            let usesGroupedLineMotion = !scroll.isManualScrolling
+                && LyricWaveTiming.shouldUseGroupedLayerMotion(
+                    lineInterval: lineInterval,
+                    hasSyllableSync: hasSyllableSync
+                )
+            let groupedLineOffset = usesGroupedLineMotion
+                ? immediateLineOffset
+                : lineOffset
+            let appliedOffsetY = Double(accumulatedHeight + groupedLineOffset + scroll.manualScrollOffset)
             let uniformTargetOffsetY = Double(immediateLineOffset + scroll.manualScrollOffset)
-            let targetMinY = Double(frame.minY) + uniformTargetOffsetY
+            let targetMinY = Double(accumulatedHeight) + uniformTargetOffsetY
             let targetMidY = targetMinY + Double(frame.height / 2)
             return MotionPartial(
                 index: index,
@@ -937,7 +974,7 @@ public struct LyricsView: View {
                 appliedOffsetY: appliedOffsetY,
                 targetMinY: targetMinY,
                 targetMidY: targetMidY,
-                waveOffsetY: Double(lineOffset - immediateLineOffset)
+                waveOffsetY: usesGroupedLineMotion ? 0 : Double(lineOffset - immediateLineOffset)
             )
         }
 
@@ -951,14 +988,14 @@ public struct LyricsView: View {
             Double(containerHeight - (showControls || isAudioOutputMenuPresented ? controlBarHeight : 20))
         )
         for partial in partials {
-            let renderedMinY = Double(partial.frame.minY) + partial.appliedOffsetY
-            let renderedMidY = Double(partial.frame.midY) + partial.appliedOffsetY
+            let renderedMinY = Double(partial.frame.minY)
+            let renderedMidY = Double(partial.frame.midY)
             let renderedMaxY = renderedMinY + Double(partial.frame.height)
             let lineTopClipY = max(0, visibleTopY - renderedMinY)
             let lineBottomClipY = max(0, renderedMaxY - visibleBottomY)
             let isActiveLine = partial.index == activeIndex
             let observedDelta = previousRenderedMidY.map { renderedMidY - $0 }
-            let expectedDelta = previousBaseMidY.map { Double(partial.frame.midY) - $0 }
+            let expectedDelta = previousBaseMidY.map { partial.targetMidY - $0 }
             let deltaError: Double? = {
                 guard let observedDelta, let expectedDelta else { return nil }
                 return observedDelta - expectedDelta
@@ -998,7 +1035,7 @@ public struct LyricsView: View {
                 controlsVisible: showControls || isAudioOutputMenuPresented
             ))
             previousRenderedMidY = renderedMidY
-            previousBaseMidY = Double(partial.frame.midY)
+            previousBaseMidY = partial.targetMidY
         }
 
         let activeTargetIndex = partials.first { $0.index == activeIndex }?.targetIndex

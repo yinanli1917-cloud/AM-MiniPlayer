@@ -824,6 +824,14 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: nil, hasSyllableSync: false))
     }
 
+    func testLyricWaveTimingGroupsDenseLineLevelMotionOnly() {
+        XCTAssertTrue(LyricWaveTiming.shouldUseGroupedLayerMotion(lineInterval: 0.9, hasSyllableSync: false))
+        XCTAssertTrue(LyricWaveTiming.shouldUseGroupedLayerMotion(lineInterval: 1.45, hasSyllableSync: false))
+        XCTAssertFalse(LyricWaveTiming.shouldUseGroupedLayerMotion(lineInterval: 1.6, hasSyllableSync: false))
+        XCTAssertFalse(LyricWaveTiming.shouldUseGroupedLayerMotion(lineInterval: 0.9, hasSyllableSync: true))
+        XCTAssertFalse(LyricWaveTiming.shouldUseGroupedLayerMotion(lineInterval: nil, hasSyllableSync: false))
+    }
+
     func testPlaybackPositionCorrectionDefersLargeBackwardResetWhileLyricsAreVisible() {
         XCTAssertTrue(
             PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(

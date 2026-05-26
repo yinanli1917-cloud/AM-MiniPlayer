@@ -71,6 +71,7 @@ struct LyricLineView: View {
     var showTranslation: Bool = false
     var isTranslating: Bool = false
     var translationFailed: Bool = false
+    var stabilizeDenseLineLevelMotion: Bool = false
     /// True when the song is sitting in a ≥5s interlude gap AFTER this line.
     /// LyricLineView treats itself as past (distance effectively -1) so the
     /// normal past-line animation (blur + dim + scale) plays and the view's
@@ -126,12 +127,17 @@ struct LyricLineView: View {
         let b = isCurrent ? CGFloat(interludeBlend) : 0
 
         let scale: CGFloat = {
+            if stabilizeDenseLineLevelMotion { return 1.0 }
             if isScrolling { return 0.95 }
             if isCurrent { return 1.0 - b * 0.05 }
             return 0.95
         }()
 
         let blur: CGFloat = {
+            if stabilizeDenseLineLevelMotion {
+                if isScrolling { return 0 }
+                return isCurrent ? 0 : 4.5
+            }
             if isScrolling { return 0 }
             if isCurrent { return b * 1.5 }
             return CGFloat(absDistance) * 1.5
@@ -288,9 +294,18 @@ struct LyricLineView: View {
         )
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: textOpacity)
+        .animation(
+            stabilizeDenseLineLevelMotion ? nil : .interpolatingSpring(mass: 1, stiffness: 100, damping: 20),
+            value: scale
+        )
+        .animation(
+            stabilizeDenseLineLevelMotion ? nil : .interpolatingSpring(mass: 1, stiffness: 100, damping: 20),
+            value: blur
+        )
+        .animation(
+            stabilizeDenseLineLevelMotion ? nil : .interpolatingSpring(mass: 1, stiffness: 100, damping: 20),
+            value: textOpacity
+        )
         // 🔑 翻译动画已移至容器级别，此处不再单独设置（性能优化）
         // 🔑 无障碍
         .accessibilityElement(children: .ignore)
