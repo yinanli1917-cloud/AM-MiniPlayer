@@ -251,6 +251,7 @@ public struct LyricsView: View {
     @State private var controlsOffsetY: CGFloat = 0
     @State private var isAudioOutputMenuPresented = false
     @State private var autoScrollTimer: Timer? = nil
+    @State private var lineAdvanceTimer: Timer? = nil
     @State private var pendingTrackLyricsFetchTask: Task<Void, Never>? = nil
     @State private var suppressInitialLineMotion = false
     @State private var lineMotionSuppressionGeneration = 0
@@ -263,6 +264,8 @@ public struct LyricsView: View {
     @State private var lineMotionSamplingUntil: Date = .distantPast
     @State private var lineMotionFrameCaptureActive = false
     @State private var pendingLineMotionCapture: LyricLineMotionCaptureRequest?
+    @State private var lastLineBoundaryLagEventAt: Date = .distantPast
+    @State private var lastLineBoundaryLagSignature: String?
     @State private var heightCacheUpdateScheduled = false
     @State private var displayCurrentLineIndex: Int? = nil
     @State private var cachedDisplayLines: [DisplayLyricLine] = []
@@ -322,6 +325,8 @@ public struct LyricsView: View {
             if newPage != .lyrics {
                 pendingTrackLyricsFetchTask?.cancel()
                 pendingTrackLyricsFetchTask = nil
+                lineAdvanceTimer?.invalidate()
+                lineAdvanceTimer = nil
                 translationPreflightTask?.cancel()
                 translationPreflightTask = nil
                 translationSessionConfigAny = nil
@@ -332,6 +337,8 @@ public struct LyricsView: View {
             if newPage == .lyrics {
                 isHovering = true
                 animateControlsIn()
+                updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
+                scheduleNextLineAdvanceTimer()
                 startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
             }
         }
@@ -365,6 +372,8 @@ public struct LyricsView: View {
             // when track changes during a manual scroll (timer would fire on stale state)
             autoScrollTimer?.invalidate()
             autoScrollTimer = nil
+            lineAdvanceTimer?.invalidate()
+            lineAdvanceTimer = nil
             scroll.isManualScrolling = false
             lyricsService.isManualScrolling = false
             scroll.manualScrollOffset = 0
@@ -398,8 +407,18 @@ public struct LyricsView: View {
             }
             updateHeightCache()
             if newCount > 0 {
+                updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
+                scheduleNextLineAdvanceTimer()
                 suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
                 startLineMotionSamplingWindow(duration: lyricLineMotionTrackSwitchSampleDuration)
+            }
+        }
+        .onChange(of: musicController.isPlaying) { _, isPlaying in
+            if isPlaying {
+                scheduleNextLineAdvanceTimer()
+            } else {
+                lineAdvanceTimer?.invalidate()
+                lineAdvanceTimer = nil
             }
         }
         .onChange(of: diagnostics.isEnabled) { _, isEnabled in
@@ -448,14 +467,19 @@ public struct LyricsView: View {
         }
         .onChange(of: lyricsService.currentLineIndex) { oldValue, newValue in
             guard let newSourceIndex = newValue else { return }
-            let newIndex = displayIndex(forSourceIndex: newSourceIndex)
-            let oldIndex = oldValue.map { displayIndex(forSourceIndex: $0) } ?? wave.lastCurrentIndex
-            displayCurrentLineIndex = newIndex
-            if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
-                triggerWaveAnimation(from: oldIndex, to: newIndex)
-                wave.lastCurrentIndex = newIndex
-                startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
+            if cachedDisplayLyrics.isEmpty {
+                let newIndex = displayIndex(forSourceIndex: newSourceIndex)
+                let oldIndex = oldValue.map { displayIndex(forSourceIndex: $0) } ?? wave.lastCurrentIndex
+                displayCurrentLineIndex = newIndex
+                if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
+                    triggerWaveAnimation(from: oldIndex, to: newIndex)
+                    wave.lastCurrentIndex = newIndex
+                    startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
+                }
+            } else {
+                updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
             }
+            scheduleNextLineAdvanceTimer()
         }
         .onChange(of: lyricsService.error) { _, newError in
             if newError != nil && !musicController.userManuallyOpenedLyrics && currentPage == .lyrics {
@@ -471,9 +495,10 @@ public struct LyricsView: View {
                 withAnimation(.easeInOut(duration: 0.3)) { fullscreenAlbumCover = newValue }
             }
         }
-        .onReceive(musicController.timePublisher.$currentTime) { time in
+        .onReceive(musicController.timePublisher.$currentTime) { _ in
             guard currentPage == .lyrics else { return }
-            updateDisplayCurrentLineIndex(at: time)
+            updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
+            scheduleNextLineAdvanceTimer()
         }
         .modifier(SystemTranslationModifier(
             translationSessionConfigAny: translationSessionConfigAny,
@@ -966,6 +991,19 @@ public struct LyricsView: View {
             previousTargetMidY = partial.targetMidY
         }
 
+        let activeTargetIndex = partials.first { $0.index == activeIndex }?.targetIndex
+            ?? wave.lineTargetIndices[activeIndex]
+            ?? displayIndex
+        recordLineBoundaryLagIfNeeded(
+            activeIndex: activeIndex,
+            displayIndex: displayIndex,
+            targetIndex: activeTargetIndex,
+            displayLyrics: lyrics,
+            playbackTime: playbackTime,
+            track: track,
+            timestamp: timestamp
+        )
+
         diagnostics.recordLyricsLineMotionSamples(samples)
 
         let visibleTranslationPartials = partials.filter {
@@ -1019,6 +1057,47 @@ public struct LyricsView: View {
                 translationFailed: lyricsService.translationFailed
             )
         }
+    }
+
+    private func recordLineBoundaryLagIfNeeded(
+        activeIndex: Int,
+        displayIndex: Int,
+        targetIndex: Int,
+        displayLyrics: [LyricLine],
+        playbackTime: TimeInterval,
+        track: DiagnosticTrackContext,
+        timestamp: Date
+    ) {
+        guard displayLyrics.indices.contains(activeIndex) else { return }
+        let displayLagLines = activeIndex - displayIndex
+        let targetLagLines = activeIndex - targetIndex
+        guard displayLagLines != 0 || targetLagLines != 0 else { return }
+
+        let boundaryLatency = max(0, playbackTime - displayLyrics[activeIndex].startTime)
+        guard boundaryLatency >= 0.025 else { return }
+
+        let signature = "\(track.title)|\(track.artist)|\(activeIndex)|\(displayIndex)|\(targetIndex)"
+        guard signature != lastLineBoundaryLagSignature
+                || timestamp.timeIntervalSince(lastLineBoundaryLagEventAt) >= 1.0 else {
+            return
+        }
+
+        lastLineBoundaryLagSignature = signature
+        lastLineBoundaryLagEventAt = timestamp
+        diagnostics.recordEvent(
+            "lyrics.autoscroll.boundaryLag",
+            detail: "Active lyric advanced before the rendered scroll target caught up",
+            track: track,
+            metrics: [
+                "playbackTime": playbackTime,
+                "activeIndex": Double(activeIndex),
+                "displayIndex": Double(displayIndex),
+                "targetIndex": Double(targetIndex),
+                "displayLagLines": Double(displayLagLines),
+                "targetLagLines": Double(targetLagLines),
+                "boundaryLatencySeconds": boundaryLatency
+            ]
+        )
     }
 
     private func shouldConsiderVisibleTranslationLine(_ text: String) -> Bool {
@@ -1144,6 +1223,8 @@ public struct LyricsView: View {
     private func handleLineTap(line: LyricLine) {
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
+        lineAdvanceTimer?.invalidate()
+        lineAdvanceTimer = nil
         // Sync line index to tapped position BEFORE unfreezing
         // Prevents double-jump: frozen → old liveIndex → tapped line
         lyricsService.updateCurrentTime(line.startTime)
@@ -1166,6 +1247,7 @@ public struct LyricsView: View {
         scroll.rawScrollOffset = 0
         scroll.manualScrollOffset = 0
         musicController.seek(to: line.startTime)
+        scheduleNextLineAdvanceTimer()
     }
 
     private func scheduleTrackChangeLyricsFetch() {
@@ -1201,6 +1283,8 @@ public struct LyricsView: View {
         scroll.hasTriggeredSlowScroll = false
 
         autoScrollTimer?.invalidate()
+        lineAdvanceTimer?.invalidate()
+        lineAdvanceTimer = nil
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
             // Sync wave to latest line index BEFORE unfreezing
             updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
@@ -1220,6 +1304,7 @@ public struct LyricsView: View {
             }
             scroll.scrollLocked = false
             scroll.hasTriggeredSlowScroll = false
+            scheduleNextLineAdvanceTimer()
         }
         RunLoop.main.add(autoScrollTimer!, forMode: .common)
     }
@@ -1228,6 +1313,8 @@ public struct LyricsView: View {
 
     private func handleScrollStarted() {
         autoScrollTimer?.invalidate()
+        lineAdvanceTimer?.invalidate()
+        lineAdvanceTimer = nil
         if cache.heightCacheInvalidated { updateHeightCache() }
 
         let currentIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
@@ -1277,6 +1364,7 @@ public struct LyricsView: View {
 
             // 恢复后如果鼠标在窗口内则显示控件
             if isHovering { animateControlsIn() }
+            scheduleNextLineAdvanceTimer()
         }
     }
 
@@ -1500,6 +1588,43 @@ public struct LyricsView: View {
 
     private func displayIndex(forSourceIndex sourceIndex: Int, in displayLines: [DisplayLyricLine]) -> Int {
         displayLines.firstIndex { $0.sourceIndex == sourceIndex } ?? 0
+    }
+
+    private func scheduleNextLineAdvanceTimer() {
+        lineAdvanceTimer?.invalidate()
+        lineAdvanceTimer = nil
+
+        guard currentPage == .lyrics,
+              musicController.isPlaying,
+              !scroll.isManualScrolling,
+              !cachedDisplayLyrics.isEmpty else {
+            return
+        }
+
+        let now = Date()
+        let playbackTime = musicController.lyricRenderTime(at: now)
+        let currentIndex = LyricMotionSamplingPolicy.activeIndex(
+            at: playbackTime,
+            lyrics: cachedDisplayLyrics,
+            firstRealIndex: cachedFirstRealDisplayIndex
+        ) ?? cachedFirstRealDisplayIndex
+        let nextStartIndex = min(max(currentIndex + 1, cachedFirstRealDisplayIndex), cachedDisplayLyrics.count)
+        guard nextStartIndex < cachedDisplayLyrics.count else { return }
+
+        guard let nextLine = cachedDisplayLyrics[nextStartIndex...].first(where: {
+            $0.startTime > playbackTime + 0.006
+        }) else {
+            return
+        }
+
+        let delay = max(0.006, nextLine.startTime - playbackTime)
+        let timer = Timer(timeInterval: delay, repeats: false) { [self] _ in
+            guard currentPage == .lyrics else { return }
+            updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
+            scheduleNextLineAdvanceTimer()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        lineAdvanceTimer = timer
     }
 
     private func updateDisplayCurrentLineIndex(at playbackTime: TimeInterval) {
