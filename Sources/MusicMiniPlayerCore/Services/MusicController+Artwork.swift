@@ -740,18 +740,20 @@ extension MusicController {
     }
 
     private func getDiskCachedArtwork(for key: NSString) -> NSImage? {
-        guard let url = artworkDiskCacheURL(for: key),
-              let data = try? Data(contentsOf: url),
-              let image = NSImage(data: data) else {
-            return nil
+        for url in artworkDiskCacheURLs(for: key) {
+            guard let data = try? Data(contentsOf: url),
+                  let image = NSImage(data: data) else {
+                continue
+            }
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+            return image
         }
-        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
-        return image
+        return nil
     }
 
     private func storeDiskCachedArtwork(_ image: NSImage, for key: NSString) {
-        guard let data = image.tiffRepresentation,
-              let url = artworkDiskCacheURL(for: key) else {
+        guard let data = encodedArtworkDiskCacheData(from: image),
+              let url = artworkDiskCacheWriteURL(for: key) else {
             return
         }
         DispatchQueue.global(qos: .utility).async {
@@ -766,7 +768,18 @@ extension MusicController {
         }
     }
 
-    private func artworkDiskCacheURL(for key: NSString) -> URL? {
+    private func artworkDiskCacheWriteURL(for key: NSString) -> URL? {
+        artworkDiskCacheURL(for: key, fileExtension: "jpg")
+    }
+
+    private func artworkDiskCacheURLs(for key: NSString) -> [URL] {
+        [
+            artworkDiskCacheURL(for: key, fileExtension: "jpg"),
+            artworkDiskCacheURL(for: key, fileExtension: "tiff")
+        ].compactMap { $0 }
+    }
+
+    private func artworkDiskCacheURL(for key: NSString, fileExtension: String) -> URL? {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
@@ -776,7 +789,7 @@ extension MusicController {
         return appSupport
             .appendingPathComponent("nanoPod", isDirectory: true)
             .appendingPathComponent("ArtworkCache", isDirectory: true)
-            .appendingPathComponent("\(digest).tiff")
+            .appendingPathComponent("\(digest).\(fileExtension)")
     }
 
     private func artworkCacheKeys(
@@ -1173,21 +1186,58 @@ private final class ArtworkContinuationBox: @unchecked Sendable {
     }
 }
 
-private func pruneArtworkDiskCache(in directory: URL) {
+func encodedArtworkDiskCacheData(from image: NSImage, compressionFactor: CGFloat = 0.82) -> Data? {
+    var rect = NSRect(origin: .zero, size: image.size)
+    guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
+        return image.tiffRepresentation
+    }
+    let bitmap = NSBitmapImageRep(cgImage: cgImage)
+    return bitmap.representation(using: .jpeg, properties: [.compressionFactor: compressionFactor])
+        ?? image.tiffRepresentation
+}
+
+func pruneArtworkDiskCache(
+    in directory: URL,
+    maxBytes: Int = 24 * 1024 * 1024,
+    targetBytes: Int = 20 * 1024 * 1024,
+    maxFiles: Int = 96
+) {
     guard let files = try? FileManager.default.contentsOfDirectory(
         at: directory,
-        includingPropertiesForKeys: [.contentModificationDateKey],
+        includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
         options: [.skipsHiddenFiles]
-    ), files.count > 128 else {
+    ) else {
         return
     }
 
-    let sorted = files.sorted { lhs, rhs in
-        let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-        let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-        return lhsDate > rhsDate
+    let cacheFiles = files.filter { ["jpg", "jpeg", "png", "tiff"].contains($0.pathExtension.lowercased()) }
+    let records: [(url: URL, modifiedAt: Date, bytes: Int)] = cacheFiles.map { url in
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        return (
+            url,
+            values?.contentModificationDate ?? .distantPast,
+            values?.fileSize ?? 0
+        )
     }
-    for file in sorted.dropFirst(96) {
-        try? FileManager.default.removeItem(at: file)
+
+    let totalBytes = records.reduce(0) { $0 + $1.bytes }
+    guard records.count > maxFiles || totalBytes > maxBytes else { return }
+
+    var keptBytes = 0
+    var keptCount = 0
+    let sorted = records.sorted { lhs, rhs in
+        if lhs.modifiedAt == rhs.modifiedAt {
+            return lhs.url.lastPathComponent < rhs.url.lastPathComponent
+        }
+        return lhs.modifiedAt > rhs.modifiedAt
+    }
+
+    for record in sorted {
+        if keptCount < maxFiles, keptBytes + record.bytes <= targetBytes {
+            keptCount += 1
+            keptBytes += record.bytes
+        } else {
+            try? FileManager.default.removeItem(at: record.url)
+        }
     }
 }
