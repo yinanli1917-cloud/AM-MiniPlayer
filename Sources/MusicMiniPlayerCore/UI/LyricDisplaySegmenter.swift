@@ -170,55 +170,6 @@ enum LyricDisplaySegmenter {
         return estimatedWrappedLineWordCounts(forWords: words, options: options)
     }
 
-    static func shouldProtectFinalWordWrap(
-        forWords words: [String],
-        options: LyricDisplaySegmentationOptions
-    ) -> Bool {
-        let normalizedWords = words
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard normalizedWords.count >= 2 else { return false }
-        let text = normalizedWords.joined(separator: " ")
-        guard !containsCompactScript(text) else { return false }
-        return true
-    }
-
-    static func protectFinalWordWrap(
-        in text: String,
-        options: LyricDisplaySegmentationOptions
-    ) -> String {
-        let words = text
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-        guard shouldProtectFinalWordWrap(forWords: words, options: options) else { return text }
-
-        var end = text.endIndex
-        while end > text.startIndex {
-            let previous = text.index(before: end)
-            if !text[previous].isWhitespace { break }
-            end = previous
-        }
-
-        var lastWordStart = end
-        while lastWordStart > text.startIndex {
-            let previous = text.index(before: lastWordStart)
-            if text[previous].isWhitespace { break }
-            lastWordStart = previous
-        }
-
-        var separatorStart = lastWordStart
-        while separatorStart > text.startIndex {
-            let previous = text.index(before: separatorStart)
-            if !text[previous].isWhitespace { break }
-            separatorStart = previous
-        }
-        guard separatorStart < lastWordStart else { return text }
-
-        var protected = text
-        protected.replaceSubrange(separatorStart..<lastWordStart, with: "\u{00A0}")
-        return protected
-    }
-
     private static func segmentSingleLine(
         _ text: String,
         options: LyricDisplaySegmentationOptions
@@ -313,44 +264,14 @@ enum LyricDisplaySegmenter {
         _ segments: [String],
         options: LyricDisplaySegmentationOptions
     ) -> [String] {
-        let splitSegments = segments.flatMap {
-            splitWrappedShortFinalWordSegment($0, options: options)
-        }
-        return avoidSingleWordOrphans(in: splitSegments, options: options)
-    }
-
-    private static func splitWrappedShortFinalWordSegment(
-        _ segment: String,
-        options: LyricDisplaySegmentationOptions
-    ) -> [String] {
-        guard options.maxVisualLines >= 3 else { return [segment] }
-        guard !containsCompactScript(segment) else { return [segment] }
-
-        let words = segment
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-        if shouldPreserveCompactPhrase(
-            wordCount: words.count,
-            estimatedLineCount: estimatedVisualLineCount(for: segment, options: options),
-            options: options
-        ) {
-            return [segment]
-        }
-        guard words.count >= 5,
-              estimatedWrappedLineWordCounts(forWords: words, options: options).last == 1 else {
-            return [segment]
-        }
-
-        let balanced = balancedWordStrings(words, targetCount: 2, options: options)
-        guard balanced.count > 1 else { return [segment] }
-        return balanced
+        avoidSingleWordOrphans(in: segments, options: options)
     }
 
     private static func avoidSingleWordOrphans(
         in segments: [String],
         options: LyricDisplaySegmentationOptions
     ) -> [String] {
-        guard segments.count > 1 else { return segments }
+        guard !segments.isEmpty else { return segments }
         let combined = segments.joined(separator: " ")
         guard combined.contains(where: { $0.isWhitespace }) else { return segments }
         guard !containsCompactScript(combined) else { return segments }
@@ -457,13 +378,10 @@ enum LyricDisplaySegmenter {
             let rightText = right.joined(separator: " ")
             let leftUnits = displayUnits(for: leftText)
             let rightUnits = displayUnits(for: rightText)
-            let orphanPenalty: Double =
-                (estimatedWrappedLineWordCounts(forWords: left, options: options).last == 1 ? 1_000 : 0)
-                + (estimatedWrappedLineWordCounts(forWords: right, options: options).last == 1 ? 1_000 : 0)
             let singleVisualLinePenalty: Double =
                 (estimatedVisualLineCount(for: leftText, options: options) == 1 ? 600 : 0)
                 + (estimatedVisualLineCount(for: rightText, options: options) == 1 ? 600 : 0)
-            let score = orphanPenalty + singleVisualLinePenalty + abs(leftUnits - rightUnits)
+            let score = singleVisualLinePenalty + abs(leftUnits - rightUnits)
             if best == nil || score < best!.score {
                 best = (index, score)
             }
@@ -537,9 +455,12 @@ enum LyricDisplaySegmenter {
         in segments: [[LyricWord]],
         options: LyricDisplaySegmentationOptions
     ) -> [[LyricWord]] {
-        guard segments.count > 1 else { return segments }
         let totalWordCount = segments.reduce(0) { $0 + $1.count }
-        guard totalWordCount > 2, segments.contains(where: { $0.count == 1 }) else {
+        guard totalWordCount > 2 else {
+            return segments
+        }
+
+        guard segments.count > 1, segments.contains(where: { $0.count == 1 }) else {
             return segments
         }
 
@@ -570,36 +491,7 @@ enum LyricDisplaySegmenter {
         _ segments: [[LyricWord]],
         options: LyricDisplaySegmentationOptions
     ) -> [[LyricWord]] {
-        avoidSingleWordOrphans(in: segments, options: options).flatMap {
-            splitWrappedFinalWordSegment($0, options: options)
-        }
-    }
-
-    private static func splitWrappedFinalWordSegment(
-        _ segment: [LyricWord],
-        options: LyricDisplaySegmentationOptions
-    ) -> [[LyricWord]] {
-        let words = segment.map { $0.word.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let text = words.joined(separator: " ")
-        if shouldPreserveCompactPhrase(
-            wordCount: words.count,
-            estimatedLineCount: estimatedVisualLineCount(for: text, options: options),
-            options: options
-        ) {
-            return [segment]
-        }
-        guard words.count >= 5 else { return [segment] }
-        guard !containsCompactScript(text),
-              estimatedWrappedLineWordCounts(forWords: words, options: options).last == 1 else {
-            return [segment]
-        }
-
-        let splitPoint = bestTwoWaySplitIndex(forWords: words, options: options)
-            ?? balancedSplitIndices(forWords: words, targetCount: 2).first
-            ?? segment.count
-        guard splitPoint >= 2, segment.count - splitPoint >= 2 else { return [segment] }
-        return [Array(segment[..<splitPoint]), Array(segment[splitPoint...])]
+        avoidSingleWordOrphans(in: segments, options: options)
     }
 
     private static func shouldPreserveCompactPhrase(

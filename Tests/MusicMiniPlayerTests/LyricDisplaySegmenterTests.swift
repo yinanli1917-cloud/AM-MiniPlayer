@@ -108,37 +108,25 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(segments, [text])
     }
 
-    func testFinalWordWrapProtectionUsesNonBreakingSeparatorForSingleWordTail() {
-        let text = "But you were just two years I wasted"
-
-        let protected = LyricDisplaySegmenter.protectFinalWordWrap(in: text, options: .mainLyric)
-
-        XCTAssertEqual(protected, "But you were just two years I\u{00A0}wasted")
-        XCTAssertEqual(normalizedWhitespace(protected), text)
-    }
-
-    func testFinalWordWrapProtectionDoesNotDependOnEstimatorTailPrediction() {
-        let text = "You told all our friends it was my fault"
-
-        let protected = LyricDisplaySegmenter.protectFinalWordWrap(in: text, options: .mainLyric)
-
-        XCTAssertEqual(protected, "You told all our friends it was my\u{00A0}fault")
-        XCTAssertEqual(normalizedWhitespace(protected), text)
-    }
-
-    func testSplitterDoesNotLeaveOneWordFinalVisualLine() {
+    func testSplitterAllowsSingleWordFinalVisualLineForCompactPhrase() {
         let text = "And if we had the chance to do it"
 
         let segments = LyricDisplaySegmenter.segments(for: text, options: .mainLyric)
 
-        XCTAssertGreaterThan(segments.count, 1)
-        XCTAssertTrue(segments.allSatisfy {
-            LyricDisplaySegmenter.estimatedWrappedLineWordCounts(for: $0, options: .mainLyric).last != 1
-        })
+        XCTAssertEqual(segments, [text])
+        XCTAssertEqual(LyricDisplaySegmenter.estimatedWrappedLineWordCounts(for: text, options: .mainLyric).last, 1)
         XCTAssertEqual(normalizedWhitespace(segments.joined(separator: " ")), text)
     }
 
-    func testSplitterAvoidsShortFinalVisualLineAcrossCommonCompactEnglishShapes() {
+    func testCompactPopPhraseStaysOneDisplaySegment() {
+        let text = "I'm like some kind of Supernova"
+
+        let segments = LyricDisplaySegmenter.segments(for: text, options: .mainLyric)
+
+        XCTAssertEqual(segments, [text])
+    }
+
+    func testSplitterDoesNotCreateExtraRowsOnlyToAvoidFinalVisualWord() {
         let cases = [
             "I used to walk into the room",
             "the chance to do it all again",
@@ -148,10 +136,8 @@ final class LyricDisplaySegmenterTests: XCTestCase {
 
         for text in cases {
             let segments = LyricDisplaySegmenter.segments(for: text, options: .mainLyric)
-            XCTAssertTrue(segments.allSatisfy {
-                LyricDisplaySegmenter.estimatedWrappedLineWordCounts(for: $0, options: .mainLyric).last != 1
-            }, text)
             XCTAssertEqual(normalizedWhitespace(segments.joined(separator: " ")), text)
+            XCTAssertFalse(segments.contains { semanticWordCount($0) == 1 }, text)
         }
     }
 
@@ -221,7 +207,7 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(segments.flatMap { $0 }.map(\.word), words.map(\.word))
     }
 
-    func testFinalWordWrapProtectionRecognizesWordTimedSingleWordTail() {
+    func testWordSplitterKeepsWordTimedSingleWordTailInSameSourcePhrase() {
         let words = [
             LyricWord(word: "But ", startTime: 31.07, endTime: 31.28),
             LyricWord(word: "you ", startTime: 31.28, endTime: 31.46),
@@ -233,10 +219,10 @@ final class LyricDisplaySegmenterTests: XCTestCase {
             LyricWord(word: "wasted", startTime: 33.20, endTime: 34.55),
         ]
 
-        XCTAssertTrue(LyricDisplaySegmenter.shouldProtectFinalWordWrap(
-            forWords: words.map(\.word),
-            options: .mainLyric
-        ))
+        let segments = LyricDisplaySegmenter.wordSegments(for: words, options: .mainLyric)
+
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments.flatMap { $0 }.map(\.word), words.map(\.word))
     }
 
     func testWordSplitterTreatsWhitespaceTimedSpanAsPhraseBoundary() {
@@ -297,7 +283,7 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertFalse(segments.flatMap { $0 }.contains { $0.word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
     }
 
-    func testWordSplitterDoesNotLeaveOneWordFinalVisualLine() {
+    func testWordSplitterAllowsOneWordFinalVisualLine() {
         let words = [
             LyricWord(word: "And", startTime: 1.0, endTime: 1.2),
             LyricWord(word: "if", startTime: 1.2, endTime: 1.4),
@@ -312,11 +298,9 @@ final class LyricDisplaySegmenterTests: XCTestCase {
 
         let segments = LyricDisplaySegmenter.wordSegments(for: words, options: .mainLyric)
 
-        XCTAssertGreaterThan(segments.count, 1)
-        XCTAssertTrue(segments.allSatisfy {
-            let text = $0.map(\.word).joined(separator: " ")
-            return LyricDisplaySegmenter.estimatedWrappedLineWordCounts(for: text, options: .mainLyric).last != 1
-        })
+        let text = segments.flatMap { $0 }.map(\.word).joined(separator: " ")
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(LyricDisplaySegmenter.estimatedWrappedLineWordCounts(for: text, options: .mainLyric).last, 1)
         XCTAssertEqual(segments.flatMap { $0 }.map(\.word), words.map(\.word))
     }
 

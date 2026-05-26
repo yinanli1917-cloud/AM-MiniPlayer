@@ -66,6 +66,8 @@ private let lyricLineLayoutSettleDuration: TimeInterval = 0.65
 private let lyricInitialRenderVisibleRange = 4
 private let lyricSteadyRenderVisibleRange = 6
 private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.55
+private let lyricMinimumGeneratedSegmentDuration: TimeInterval = 1.65
+private let lyricContentHorizontalInset: CGFloat = 20
 
 struct LyricWaveTiming {
     static let defaultBaseDelay: TimeInterval = 0.08
@@ -260,6 +262,7 @@ public struct LyricsView: View {
     @State private var lineMotionSamplingUntil: Date = .distantPast
     @State private var lineMotionFrameCaptureActive = false
     @State private var pendingLineMotionCapture: LyricLineMotionCaptureRequest?
+    @State private var heightCacheUpdateScheduled = false
     @State private var displayCurrentLineIndex: Int? = nil
     @State private var cachedDisplayLines: [DisplayLyricLine] = []
     @State private var cachedDisplayLyrics: [LyricLine] = []
@@ -708,7 +711,7 @@ public struct LyricsView: View {
                     timePublisher: musicController.timePublisher
                 )
                 .frame(height: 30)
-                .padding(.horizontal, 32)
+                .padding(.horizontal, lyricContentHorizontalInset)
                 .padding(.vertical, 8)
             } else {
                 VStack(spacing: 0) {
@@ -724,7 +727,7 @@ public struct LyricsView: View {
                         translationFailed: lyricsService.translationFailed && isAwaitingTranslation,
                         isPrecedingInterlude: lyricsService.interludeAfterIndex == index
                     )
-                    .padding(.horizontal, 32)
+                    .padding(.horizontal, lyricContentHorizontalInset)
 
                     if isLastSegment, let interludeInfo = checkForInterlude(at: sourceIndex) {
                         PreludeDotsView(
@@ -733,7 +736,7 @@ public struct LyricsView: View {
                             timePublisher: musicController.timePublisher,
                             gateByTimeRange: true
                         )
-                        .padding(.horizontal, 32)
+                        .padding(.horizontal, lyricContentHorizontalInset)
                     }
                 }
             }
@@ -746,7 +749,7 @@ public struct LyricsView: View {
                 if abs((cache.lineHeights[index] ?? 0) - h) > 2.0 {
                     cache.lineHeights[index] = h
                     cache.heightCacheInvalidated = true
-                    updateHeightCache()
+                    scheduleHeightCacheUpdate()
                 }
             }
             .onChange(of: lineGeo.size.height) { _, newHeight in
@@ -754,7 +757,7 @@ public struct LyricsView: View {
                 if abs((cache.lineHeights[index] ?? 0) - newHeight) > 2.0 {
                     cache.lineHeights[index] = newHeight
                     cache.heightCacheInvalidated = true
-                    updateHeightCache()
+                    scheduleHeightCacheUpdate()
                 }
             }
         }
@@ -1389,6 +1392,16 @@ public struct LyricsView: View {
                 ? LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)
                 : wordSegments.map { displayText(forWords: $0) }
             let segmentCount = max(textSegments.count, 1)
+            if shouldKeepDisplayLineUnsplit(line, generatedSegmentCount: segmentCount) {
+                result.append(DisplayLyricLine(
+                    id: "\(line.id.uuidString)-0",
+                    sourceIndex: sourceIndex,
+                    segmentIndex: 0,
+                    segmentCount: 1,
+                    line: line
+                ))
+                continue
+            }
             let translationSegments = line.translation.map {
                 LyricDisplaySegmenter.balancedSegments(
                     for: $0,
@@ -1423,6 +1436,16 @@ public struct LyricsView: View {
         }
 
         return result
+    }
+
+    private func shouldKeepDisplayLineUnsplit(
+        _ line: LyricLine,
+        generatedSegmentCount: Int
+    ) -> Bool {
+        guard generatedSegmentCount > 1 else { return true }
+        let duration = line.endTime - line.startTime
+        guard duration.isFinite, duration > 0 else { return false }
+        return duration / Double(generatedSegmentCount) < lyricMinimumGeneratedSegmentDuration
     }
 
     private func displayText(forWords words: [LyricWord]) -> String {
@@ -1615,6 +1638,17 @@ public struct LyricsView: View {
         cache.heightCacheInvalidated = false
     }
 
+    private func scheduleHeightCacheUpdate() {
+        guard !heightCacheUpdateScheduled else { return }
+        heightCacheUpdateScheduled = true
+        DispatchQueue.main.async {
+            heightCacheUpdateScheduled = false
+            if cache.heightCacheInvalidated {
+                updateHeightCache()
+            }
+        }
+    }
+
     // MARK: - AMLL 波浪动画（纯计算驱动）
 
     /// AMLL wave animation — GCD-driven stagger.
@@ -1623,7 +1657,7 @@ public struct LyricsView: View {
     /// at a genuinely different wall-clock time — creating natural stagger.
     private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
         guard !scroll.isManualScrolling else { return }
-        let lyrics = lyricsService.lyrics
+        let lyrics = cachedDisplayLyrics
         guard !lyrics.isEmpty else { return }
 
         // Cancel pending work items from previous wave

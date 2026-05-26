@@ -111,7 +111,7 @@ struct LyricLineView: View {
                 text = line.words.map(\.word).joined()
             }
         }
-        return LyricDisplaySegmenter.protectFinalWordWrap(in: text, options: .mainLyric)
+        return text
     }
 
     // 🔑 翻译文本（如果有）
@@ -280,16 +280,15 @@ struct LyricLineView: View {
         }
         // 🔑 不设固定高度，让内容自然决定高度
         .padding(.vertical, LyricMetrics.outerVerticalPadding)  // hover 背景 + 渲染溢出
-        .padding(.horizontal, 8)
         .background(
             Group {
                 if isScrolling && isHovering && line.text != "⋯" {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.white.opacity(0.08))
+                        .padding(.horizontal, -8)
                 }
             }
         )
-        .padding(.horizontal, -8)  // 🔑 抵消内部 padding，保持文字对齐
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
         .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
@@ -495,15 +494,11 @@ private struct WordByWordText: View {
     }
 
     var body: some View {
-        let protectFinalPair = needsSpaces && LyricDisplaySegmenter.shouldProtectFinalWordWrap(
-            forWords: words.map(\.word),
-            options: .mainLyric
-        )
         WordFlowLayout {
             ForEach(Array(words.enumerated()), id: \.element.id) { index, word in
                 let cleaned = word.word.trimmingCharacters(in: .whitespaces)
                 let suffix = (index < words.count - 1 && needsSpaces)
-                    ? (protectFinalPair && index == words.count - 2 ? "\u{00A0}" : " ")
+                    ? " "
                     : ""
                 let text = cleaned + suffix
                 let isLast = (index == words.count - 1)
@@ -650,10 +645,6 @@ private struct SyllableTextPayload {
 
     init(words: [LyricWord]) {
         let needsSpaces = Self.needsSpaces(words)
-        let protectFinalPair = needsSpaces && LyricDisplaySegmenter.shouldProtectFinalWordWrap(
-            forWords: words.map(\.word),
-            options: .mainLyric
-        )
         let lineEnd = words.last?.endTime ?? 0
         var result = Text("")
         for (index, word) in words.enumerated() {
@@ -663,7 +654,7 @@ private struct SyllableTextPayload {
             // and widen the line vs the line-level Text(...) rendering.
             let cleaned = word.word.trimmingCharacters(in: .whitespaces)
             let suffix = (index < words.count - 1 && needsSpaces)
-                ? (protectFinalPair && index == words.count - 2 ? "\u{00A0}" : " ")
+                ? " "
                 : ""
             let text = cleaned + suffix
             let duration = word.endTime - word.startTime

@@ -21,11 +21,17 @@ density. `LyricsView` may derive virtual display rows from a single source
 `LyricLine` so each chunk gets its own scroll step, provided the source index,
 translation mapping, interlude behavior, and word timing remain traceable to the
 original lyric line. Generated Latin-script chunks must avoid one-word orphan
-segments and one-word final visual lines, but orphan prevention must not promote
-already-compact short phrases into separate scroll rows. Phrases that fit within
-the compact lyric row budget and are roughly eight words or fewer should stay a
-single scroll unit; word-timed whitespace-only spans are display separators, not
-display words, and must never become their own visible or measured segment.
+segments, but a final visual line containing one word is acceptable in the
+compact window. Do not bind the last two words with non-breaking spaces or add
+extra display rows solely to avoid a one-word final visual wrap; those
+constraints increase visual pressure and can make dense lyrics feel less stable.
+Orphan prevention must not promote already-compact short phrases into separate
+scroll rows. Phrases that fit within the compact lyric row budget and are
+roughly eight words or fewer should stay a single scroll unit; word-timed
+whitespace-only spans are display separators, not display words, and must never
+become their own visible or measured segment.
+Generated display chunks should also be skipped when the source line duration is
+too short to give each chunk a readable dwell time.
 Only long whitespace-only timed spans should act as phrase boundaries; short
 spacer glyphs inside a phrase must not create extra scroll rows.
 When a translated source line is displayed as virtual lyric chunks, every
@@ -34,11 +40,6 @@ split the translation more aggressively or fall back to the source translation,
 never leave a blank translated row.
 Compact scripts such as CJK, kana, Hangul, and Thai must not be re-spaced by
 Latin orphan balancing.
-For Latin-script compact phrases that should remain one scroll chunk, protect
-the separator before the final word in the rendered text instead of trying to
-predict the exact SwiftUI wrap. The invariant is simple: the last visual line
-must not contain only one Latin word.
-
 Do not replace the old layout with fade-based transitions, opacity culling, cadence reduction, or simplified lyric effects. Those may lower implementation complexity but break the perceived continuity.
 
 Missing translation rows must not leave invisible spacer rows for lines that are
