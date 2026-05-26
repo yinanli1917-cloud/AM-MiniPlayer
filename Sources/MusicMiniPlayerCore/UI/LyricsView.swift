@@ -75,6 +75,8 @@ struct LyricWaveTiming {
     static let minimumBaseDelay: TimeInterval = 0.024
     static let settlePadding: TimeInterval = 0.20
     static let maxLineIntervalFraction: TimeInterval = 0.72
+    static let maxDenseLineIntervalFraction: TimeInterval = 0.45
+    static let denseLineIntervalThreshold: TimeInterval = 1.0
     static let tailAccelerationFactor: TimeInterval = 1.05
 
     static func baseDelay(
@@ -94,7 +96,10 @@ struct LyricWaveTiming {
             newIndex: newIndex,
             baseDelay: defaultBaseDelay
         )
-        let targetDuration = max(minimumBaseDelay, lineInterval * maxLineIntervalFraction)
+        let targetFraction = lineInterval <= denseLineIntervalThreshold
+            ? maxDenseLineIntervalFraction
+            : maxLineIntervalFraction
+        let targetDuration = max(minimumBaseDelay, lineInterval * targetFraction)
         guard defaultDuration > targetDuration else { return defaultBaseDelay }
 
         let scalableDuration = max(defaultDuration - settlePadding, minimumBaseDelay)
@@ -120,6 +125,29 @@ struct LyricWaveTiming {
             }
         }
         return delay + settlePadding
+    }
+}
+
+struct LyricScrollAnimationPolicy {
+    struct SpringParameters: Equatable {
+        let mass: Double
+        let stiffness: Double
+        let damping: Double
+    }
+
+    static let normal = SpringParameters(mass: 1.0, stiffness: 100.0, damping: 16.5)
+    static let compact = SpringParameters(mass: 0.90, stiffness: 180.0, damping: 24.0)
+    static let dense = SpringParameters(mass: 0.75, stiffness: 280.0, damping: 30.0)
+    static let veryDense = SpringParameters(mass: 0.65, stiffness: 420.0, damping: 34.0)
+
+    static func parameters(for lineInterval: TimeInterval?) -> SpringParameters {
+        guard let lineInterval, lineInterval.isFinite, lineInterval > 0 else {
+            return normal
+        }
+        if lineInterval <= 0.85 { return veryDense }
+        if lineInterval <= 1.45 { return dense }
+        if lineInterval <= 2.0 { return compact }
+        return normal
     }
 }
 
@@ -607,6 +635,10 @@ public struct LyricsView: View {
                 ? (scroll.frozenDisplayIndex ?? liveIndex)
                 : liveIndex
             let isLineWaveActive = !wave.workItems.isEmpty
+            let scrollAnimation = lyricScrollAnimation(
+                currentIndex: displayIndex,
+                displayLyrics: displayLyrics
+            )
             let _ = updateLyricsContainerHeight(containerHeight)
             let anchorY = (containerHeight - controlBarHeight) * 0.24
             let pendingTranslationLineIndices = lyricsService.showTranslation
@@ -651,9 +683,7 @@ public struct LyricsView: View {
                                 .allowsHitTesting(true)
                                 .offset(y: fullOffset)
                                 .animation(
-                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
-                                        mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
-                                    ),
+                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : scrollAnimation,
                                     value: scroll.isManualScrolling ? 0 : fullOffset
                                 )
                                 .background(lineMotionTracker(index: index))
@@ -1645,6 +1675,17 @@ public struct LyricsView: View {
         triggerWaveAnimation(from: oldIndex, to: newIndex)
         wave.lastCurrentIndex = newIndex
         startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
+    }
+
+    private func lyricScrollAnimation(currentIndex: Int, displayLyrics: [LyricLine]) -> Animation {
+        let lineInterval = estimatedLineInterval(around: currentIndex, in: displayLyrics)
+        let parameters = LyricScrollAnimationPolicy.parameters(for: lineInterval)
+        return .interpolatingSpring(
+            mass: parameters.mass,
+            stiffness: parameters.stiffness,
+            damping: parameters.damping,
+            initialVelocity: 0
+        )
     }
 
     // MARK: - 滚动边界 + 橡皮筋

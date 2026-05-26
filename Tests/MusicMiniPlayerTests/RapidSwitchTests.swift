@@ -816,6 +816,117 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(delay, LyricWaveTiming.minimumBaseDelay, accuracy: 0.0001)
     }
 
+    func testLyricWaveTimingUsesShorterBudgetForDenseLineLevelLyrics() {
+        let indices = Array(0...12)
+        let denseDelay = LyricWaveTiming.baseDelay(
+            for: indices,
+            startPosition: 2,
+            newIndex: 4,
+            lineInterval: 0.9
+        )
+        let normalDelay = LyricWaveTiming.baseDelay(
+            for: indices,
+            startPosition: 2,
+            newIndex: 4,
+            lineInterval: 1.6
+        )
+
+        let denseDuration = LyricWaveTiming.waveDuration(
+            for: indices,
+            startPosition: 2,
+            newIndex: 4,
+            baseDelay: denseDelay
+        )
+
+        XCTAssertLessThan(denseDelay, normalDelay)
+        XCTAssertLessThanOrEqual(
+            denseDuration,
+            0.9 * LyricWaveTiming.maxDenseLineIntervalFraction + LyricWaveTiming.settlePadding + 0.001
+        )
+    }
+
+    func testLyricScrollAnimationPolicySpeedsUpDenseLineLevelLyrics() {
+        XCTAssertEqual(
+            LyricScrollAnimationPolicy.parameters(for: nil),
+            LyricScrollAnimationPolicy.normal
+        )
+        XCTAssertEqual(
+            LyricScrollAnimationPolicy.parameters(for: 1.7),
+            LyricScrollAnimationPolicy.compact
+        )
+        XCTAssertEqual(
+            LyricScrollAnimationPolicy.parameters(for: 1.0),
+            LyricScrollAnimationPolicy.dense
+        )
+        XCTAssertEqual(
+            LyricScrollAnimationPolicy.parameters(for: 0.6),
+            LyricScrollAnimationPolicy.veryDense
+        )
+        XCTAssertGreaterThan(
+            LyricScrollAnimationPolicy.parameters(for: 0.6).stiffness,
+            LyricScrollAnimationPolicy.parameters(for: 1.7).stiffness
+        )
+    }
+
+    func testPlaybackPositionCorrectionDefersLargeBackwardResetWhileLyricsAreVisible() {
+        XCTAssertTrue(
+            PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
+                polledPosition: 3.65,
+                interpolatedPosition: 27.66,
+                duration: 210,
+                isPlaying: true,
+                seekPending: false,
+                consecutiveDeferrals: 0
+            )
+        )
+    }
+
+    func testPlaybackPositionCorrectionEventuallyAcceptsUnverifiableRepeatedReset() {
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
+                polledPosition: 0.92,
+                interpolatedPosition: 28.66,
+                duration: 210,
+                isPlaying: true,
+                seekPending: false,
+                consecutiveDeferrals: PlaybackPositionCorrectionPolicy.maxConsecutiveTransientResetDeferrals
+            )
+        )
+    }
+
+    func testPlaybackPositionCorrectionDoesNotBlockUserSeekOrTrackLoop() {
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
+                polledPosition: 0.8,
+                interpolatedPosition: 34,
+                duration: 210,
+                isPlaying: true,
+                seekPending: true
+            )
+        )
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
+                polledPosition: 0.8,
+                interpolatedPosition: 207,
+                duration: 210,
+                isPlaying: true,
+                seekPending: false
+            )
+        )
+    }
+
+    func testPlaybackPositionCorrectionAllowsNormalSmallDriftCorrection() {
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
+                polledPosition: 42.0,
+                interpolatedPosition: 45.0,
+                duration: 210,
+                isPlaying: true,
+                seekPending: false
+            )
+        )
+    }
+
     func testLyricMotionSamplingUsesPlaybackDerivedActiveIndex() {
         let lyrics = [
             LyricLine(text: "...", startTime: 0, endTime: 10),

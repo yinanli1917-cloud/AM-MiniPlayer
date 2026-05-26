@@ -38,6 +38,29 @@ public class TimePublisher: ObservableObject {
     @Published public var currentTime: Double = 0
 }
 
+struct PlaybackPositionCorrectionPolicy {
+    static let maxConsecutiveTransientResetDeferrals = 3
+    static let minimumSuspiciousBackwardJump: TimeInterval = 8.0
+
+    static func shouldDeferTransientReset(
+        polledPosition: TimeInterval,
+        interpolatedPosition: TimeInterval,
+        duration: TimeInterval,
+        isPlaying: Bool,
+        seekPending: Bool,
+        consecutiveDeferrals: Int = 0
+    ) -> Bool {
+        guard isPlaying, !seekPending else { return false }
+        guard consecutiveDeferrals < maxConsecutiveTransientResetDeferrals else { return false }
+        guard polledPosition >= 0, interpolatedPosition > minimumSuspiciousBackwardJump else { return false }
+        guard interpolatedPosition - polledPosition > minimumSuspiciousBackwardJump else { return false }
+        if duration > 0, duration - interpolatedPosition <= 5.0 {
+            return false
+        }
+        return true
+    }
+}
+
 // MARK: - MusicController
 
 public class MusicController: ObservableObject {
@@ -226,6 +249,8 @@ public class MusicController: ObservableObject {
     private var positionPollCooldownUntil: Date = .distantPast
     private var positionPollTimeoutStreak: Int = 0
     private var lastPositionPollFallbackAt: Date = .distantPast
+    private var transientPositionResetDeferrals: Int = 0
+    private var transientPositionResetVerificationInFlight = false
 
     // 🔑 Radio track-change backstop: when persistentID is empty (radio/URL track),
     // position-jump detection can miss changes if the user skips before accumulating
@@ -1091,7 +1116,6 @@ public class MusicController: ObservableObject {
             let prevPosition = self.lastPolledPosition
             let positionJumpedBack = playing && !self.seekPending
                 && prevPosition > 3 && position < prevPosition - 3
-            self.lastPolledPosition = position
 
             // Trigger an AppleScript-backed metadata check when:
             //   (a) position jumped back (library or radio), OR
@@ -1147,6 +1171,40 @@ public class MusicController: ObservableObject {
                 // interpolateTime() advances locally; polls correct accumulated drift.
                 let drift = position - self.internalCurrentTime
                 let timeDiff = abs(position - self.currentTime)
+                let shouldDeferTransientReset = PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
+                    polledPosition: position,
+                    interpolatedPosition: self.internalCurrentTime,
+                    duration: self.duration,
+                    isPlaying: playing && self.currentPage == .lyrics,
+                    seekPending: self.seekPending,
+                    consecutiveDeferrals: self.transientPositionResetDeferrals
+                )
+                if shouldDeferTransientReset {
+                    self.transientPositionResetDeferrals += 1
+                    DebugLogger.log("Timing", "🧯 TRANSIENT POSITION RESET: ignored polled=\(String(format: "%.2f", position)) interpolated=\(String(format: "%.2f", self.internalCurrentTime))")
+                    DiagnosticsService.shared.recordEvent(
+                        "playback.positionTransientReset",
+                        detail: "Ignored a one-poll playback position reset while lyrics were visible.",
+                        track: self.diagnosticsTrackContext(),
+                        metrics: [
+                            "polledPositionSeconds": position,
+                            "interpolatedPositionSeconds": self.internalCurrentTime,
+                            "durationSeconds": self.duration,
+                            "scriptingBridgeReadMs": sbReadTime * 1000,
+                            "scriptingBridgeQueueWaitMs": queueWait * 1000
+                        ]
+                    )
+                    self.verifyDeferredTransientPositionReset(
+                        polledPosition: position,
+                        interpolatedPosition: self.internalCurrentTime
+                    )
+                    self.lastPollTime = measurementTime
+                    self.updateTimerState()
+                    return
+                }
+
+                self.transientPositionResetDeferrals = 0
+                self.lastPolledPosition = position
                 if abs(drift) > 0.3 {
                     DebugLogger.log("Timing", "📐 DRIFT CORRECTION: drift=\(String(format: "%+.2f", drift))s polled=\(String(format: "%.2f", position)) interpolated=\(String(format: "%.2f", self.internalCurrentTime))")
                 }
@@ -1184,6 +1242,68 @@ public class MusicController: ObservableObject {
                 }
 
                 self.updateTimerState()
+            }
+        }
+    }
+
+    private func verifyDeferredTransientPositionReset(
+        polledPosition: TimeInterval,
+        interpolatedPosition: TimeInterval
+    ) {
+        guard !transientPositionResetVerificationInFlight else { return }
+        transientPositionResetVerificationInFlight = true
+        let expectedPersistentID = currentPersistentID ?? ""
+        let expectedTitle = currentTrackTitle
+        let expectedArtist = currentArtist
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let snapshot = AppleScriptRunner.fetchPlayerState(timeout: 0.5)
+            DispatchQueue.main.async {
+                self.transientPositionResetVerificationInFlight = false
+                guard let snapshot else { return }
+
+                let samePersistentID = !expectedPersistentID.isEmpty
+                    && snapshot.persistentID == expectedPersistentID
+                let sameTitleArtist = expectedPersistentID.isEmpty
+                    && snapshot.trackName == expectedTitle
+                    && snapshot.trackArtist == expectedArtist
+                let sameTrack = samePersistentID || sameTitleArtist
+
+                if !sameTrack {
+                    self.transientPositionResetDeferrals = 0
+                    self.processPlayerState(snapshot)
+                    return
+                }
+
+                let confirmedBackwardReset =
+                    self.internalCurrentTime - snapshot.position
+                    > PlaybackPositionCorrectionPolicy.minimumSuspiciousBackwardJump
+                if confirmedBackwardReset {
+                    self.transientPositionResetDeferrals = 0
+                    DiagnosticsService.shared.recordEvent(
+                        "playback.positionResetConfirmed",
+                        detail: "AppleScript confirmed a backward playback position reset.",
+                        track: self.diagnosticsTrackContext(),
+                        metrics: [
+                            "scriptingBridgePolledPositionSeconds": polledPosition,
+                            "appleScriptPositionSeconds": snapshot.position,
+                            "interpolatedPositionSeconds": interpolatedPosition
+                        ]
+                    )
+                    self.processPlayerState(snapshot)
+                } else {
+                    self.transientPositionResetDeferrals = 0
+                    DiagnosticsService.shared.recordEvent(
+                        "playback.positionResetRejected",
+                        detail: "AppleScript rejected a suspicious backward ScriptingBridge position poll.",
+                        track: self.diagnosticsTrackContext(),
+                        metrics: [
+                            "scriptingBridgePolledPositionSeconds": polledPosition,
+                            "appleScriptPositionSeconds": snapshot.position,
+                            "interpolatedPositionSeconds": interpolatedPosition
+                        ]
+                    )
+                }
             }
         }
     }
