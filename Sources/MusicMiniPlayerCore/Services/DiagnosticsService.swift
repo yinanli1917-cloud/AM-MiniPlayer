@@ -3485,6 +3485,11 @@ public final class DiagnosticsService: ObservableObject {
 
         let maxTargetError = stableSamples.map { abs($0.targetErrorY) }.max() ?? 0
         let maxInterLineError = stableSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
+        let abnormalMotionSamples = stableSamples.filter(isAbnormalLyricLineMotionSample)
+        let maxAbnormalTargetError = abnormalMotionSamples.map { abs($0.targetErrorY) }.max() ?? 0
+        let maxAbnormalInterLineError = abnormalMotionSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
+        let staleStaticSamples = stableSamples.filter(isStaleStaticLyricLineMotionSample)
+        let maxStaleStaticTargetError = staleStaticSamples.map { abs($0.targetErrorY) }.max() ?? 0
         let maxActiveTopClip = stableSamples.map(\.activeTopClipY).max() ?? 0
         let maxActiveBottomClip = stableSamples.map(\.activeBottomClipY).max() ?? 0
         let viewportRelevantSamples = stableSamples.filter(isViewportRelevantLineMotionSample)
@@ -3515,13 +3520,14 @@ public final class DiagnosticsService: ObservableObject {
             return
         }
 
-        let hasGeometryDrift = maxInterLineError > 18 || maxTargetError > 32
+        let hasGeometryDrift = maxAbnormalInterLineError > 18 || maxAbnormalTargetError > 32
         let hasLateActiveTarget = activeVisualElapsed > 0.55 && activeTargetLagged && laggedNearbyTargets >= 4
         let hasLingeringWaveBacklog = activeVisualElapsed > 0.90 && laggedNearbyTargets >= 4
-        let hasUnevenLineSpacing = maxInterLineError > 18
+        let hasUnevenLineSpacing = maxAbnormalInterLineError > 18
+        let hasStaleStaticMotion = activeVisualElapsed > 0.20 && staleStaticSamples.count >= 3
         let hasActiveViewportClip = maxActiveTopClip > 8 || maxActiveBottomClip > 8
-        let hasLineViewportClip = maxLineTopClip > 8 || maxLineBottomClip > 8
-        guard hasGeometryDrift || hasLateActiveTarget || hasLingeringWaveBacklog || hasActiveViewportClip || hasLineViewportClip else { return }
+        let hasLineViewportClip = maxLineTopClip > 40 || maxLineBottomClip > 40
+        guard hasGeometryDrift || hasLateActiveTarget || hasLingeringWaveBacklog || hasStaleStaticMotion || hasActiveViewportClip || hasLineViewportClip else { return }
 
         let sample = activeSample ?? stableSamples[0]
         let signature = [
@@ -3530,8 +3536,9 @@ public final class DiagnosticsService: ObservableObject {
             String(sample.activeIndex),
             String(sample.displayIndex),
             String(sample.targetIndex),
-            String(Int(maxTargetError / 10)),
-            String(Int(maxInterLineError / 10)),
+            String(Int(maxAbnormalTargetError / 10)),
+            String(Int(maxAbnormalInterLineError / 10)),
+            String(Int(maxStaleStaticTargetError / 10)),
             String(Int(max(max(maxActiveTopClip, maxActiveBottomClip), max(maxLineTopClip, maxLineBottomClip)) / 8))
         ].joined(separator: "|")
         let now = Date()
@@ -3552,7 +3559,7 @@ public final class DiagnosticsService: ObservableObject {
         )
         recordIncident(
             category: .lyricsLineMotion,
-            severity: maxInterLineError > 28 || maxTargetError > 48 || max(max(maxActiveTopClip, maxActiveBottomClip), max(maxLineTopClip, maxLineBottomClip)) > 28 ? .critical : .warning,
+            severity: maxAbnormalInterLineError > 28 || maxAbnormalTargetError > 48 || max(max(maxActiveTopClip, maxActiveBottomClip), max(maxLineTopClip, maxLineBottomClip)) > 28 ? .critical : .warning,
             title: (hasActiveViewportClip || hasLineViewportClip) && !hasGeometryDrift ? "Lyrics line clipped" : "Lyrics line motion drift",
             detail: hasActiveViewportClip || hasLineViewportClip
                 ? "A rendered lyric line crossed the usable viewport while controls or panel bounds were present."
@@ -3561,6 +3568,10 @@ public final class DiagnosticsService: ObservableObject {
             metrics: [
                 "maxTargetErrorPt": maxTargetError,
                 "maxInterLineErrorPt": maxInterLineError,
+                "maxAbnormalTargetErrorPt": maxAbnormalTargetError,
+                "maxAbnormalInterLineErrorPt": maxAbnormalInterLineError,
+                "staleStaticLineCount": Double(staleStaticSamples.count),
+                "maxStaleStaticTargetErrorPt": maxStaleStaticTargetError,
                 "maxActiveTopClipPt": maxActiveTopClip,
                 "maxActiveBottomClipPt": maxActiveBottomClip,
                 "maxLineTopClipPt": maxLineTopClip,
@@ -3571,6 +3582,7 @@ public final class DiagnosticsService: ObservableObject {
                 "activeTargetLagged": activeTargetLagged ? 1 : 0,
                 "lingeringWaveBacklog": hasLingeringWaveBacklog ? 1 : 0,
                 "unevenLineSpacing": hasUnevenLineSpacing ? 1 : 0,
+                "staleStaticMotion": hasStaleStaticMotion ? 1 : 0,
                 "activeViewportClip": hasActiveViewportClip ? 1 : 0,
                 "lineViewportClip": hasLineViewportClip ? 1 : 0,
                 "controlsVisible": sample.controlsVisible ? 1 : 0
@@ -3587,8 +3599,31 @@ public final class DiagnosticsService: ObservableObject {
         )
     }
 
+    private func isAbnormalLyricLineMotionSample(_ sample: DiagnosticLyricLineMotionSample) -> Bool {
+        let targetDistance = abs(sample.targetIndex - sample.activeIndex)
+        let intendedWaveOffset = abs(sample.waveOffsetY)
+        let explainedTargetError = abs(abs(sample.targetErrorY) - intendedWaveOffset)
+        let singleStepWaveAllowance = max(72, sample.renderedHeight * 1.4)
+
+        return targetDistance > 1
+            || intendedWaveOffset > singleStepWaveAllowance
+            || explainedTargetError > 18
+    }
+
+    private func isStaleStaticLyricLineMotionSample(_ sample: DiagnosticLyricLineMotionSample) -> Bool {
+        guard !sample.isManualScrolling, !sample.isInitialMotionSuppressed else { return false }
+        guard sample.targetIndex != sample.activeIndex else { return false }
+        guard abs(sample.lineIndex - sample.activeIndex) <= 4 else { return false }
+
+        let staleOffsetThreshold = max(32, sample.renderedHeight * 0.70)
+        let isOffsetFromTarget = abs(sample.targetErrorY) >= staleOffsetThreshold
+        let isNotMoving = abs(sample.velocityY) < 2
+        return isOffsetFromTarget && isNotMoving
+    }
+
     private func isViewportRelevantLineMotionSample(_ sample: DiagnosticLyricLineMotionSample) -> Bool {
         if sample.lineIndex == sample.activeIndex { return true }
+        guard abs(sample.lineIndex - sample.activeIndex) <= 1 else { return false }
         let padding = 8.0
         let renderedMaxY = sample.renderedMinY + sample.renderedHeight
         let targetMaxY = sample.targetMinY + sample.renderedHeight

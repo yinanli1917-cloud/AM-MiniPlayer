@@ -62,6 +62,8 @@ private let lyricLineMotionIdleSampleInterval: TimeInterval = 2.50
 private let lyricLineMotionPageSwitchSampleDuration: TimeInterval = 0.95
 private let lyricLineMotionTrackSwitchSampleDuration: TimeInterval = 1.25
 private let lyricLineMotionLineAdvanceSampleDuration: TimeInterval = 0.85
+private let lyricLineMotionCaptureTimeout: TimeInterval = 0.45
+private let lyricLineMotionCaptureMissEventInterval: TimeInterval = 3.0
 private let lyricLineLayoutSettleDuration: TimeInterval = 0.65
 private let lyricInitialRenderVisibleRange = 4
 private let lyricSteadyRenderVisibleRange = 6
@@ -86,8 +88,27 @@ struct LyricWaveTiming {
         return lineInterval > minimumStaggerLineInterval
     }
 
-    static func shouldUseGroupedGeometry(lineInterval: TimeInterval?, hasSyllableSync: Bool) -> Bool {
-        !shouldUseStagger(lineInterval: lineInterval, hasSyllableSync: hasSyllableSync)
+    static func targetRadius(lineInterval: TimeInterval?, hasSyllableSync: Bool) -> Int {
+        14
+    }
+
+    static func targetIndices(
+        renderedIndices: [Int],
+        oldIndex: Int,
+        newIndex: Int,
+        radius: Int,
+        existingTargetIndices: some Sequence<Int>
+    ) -> [Int] {
+        let existing = Set(existingTargetIndices)
+        return renderedIndices.filter {
+            abs($0 - newIndex) <= radius
+                || abs($0 - oldIndex) <= radius
+                || existing.contains($0)
+            }
+    }
+
+    static func isLargeJump(from oldIndex: Int, to newIndex: Int, hasSyllableSync: Bool) -> Bool {
+        abs(newIndex - oldIndex) > 4
     }
 
     static func baseDelay(
@@ -279,6 +300,7 @@ public struct LyricsView: View {
     @State private var pendingLineMotionCapture: LyricLineMotionCaptureRequest?
     @State private var lastLineBoundaryLagEventAt: Date = .distantPast
     @State private var lastLineBoundaryLagSignature: String?
+    @State private var lastLineMotionCaptureMissEventAt: Date = .distantPast
     @State private var heightCacheUpdateScheduled = false
     @State private var displayCurrentLineIndex: Int? = nil
     @State private var cachedDisplayLines: [DisplayLyricLine] = []
@@ -625,18 +647,6 @@ public struct LyricsView: View {
             let pendingTranslationLineIndices = lyricsService.showTranslation
                 ? LyricLineTranslationLayoutPolicy.pendingLineIndices(in: lyricsService.lyrics)
                 : []
-            let lineInterval = estimatedLineInterval(around: displayIndex, in: displayLyrics)
-            let hasSyllableSync = displayLyrics.indices.contains(displayIndex)
-                && displayLyrics[displayIndex].hasSyllableSync
-            let usesGroupedGeometry = !scroll.isManualScrolling
-                && LyricWaveTiming.shouldUseGroupedGeometry(
-                    lineInterval: lineInterval,
-                    hasSyllableSync: hasSyllableSync
-                )
-            let groupedGeometryOffset = usesGroupedGeometry
-                ? anchorY - calculateAccumulatedHeight(upTo: displayIndex)
-                : 0
-
             // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12
             let cullingMeasurementThreshold = min(renderedIndices.count, max(8, visibleRange * 2))
@@ -656,10 +666,7 @@ public struct LyricsView: View {
                             let lineOffset = calculateLineOffset(
                                 index: index, currentIndex: displayIndex, anchorY: anchorY
                             )
-                            let accumulatedHeight = calculateAccumulatedHeight(upTo: index)
-                            let fullOffset = usesGroupedGeometry
-                                ? accumulatedHeight
-                                : lineOffset + accumulatedHeight
+                            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
 
                             lyricLineContent(
                                 line: line,
@@ -678,7 +685,7 @@ public struct LyricsView: View {
                                 .allowsHitTesting(true)
                                 .offset(y: fullOffset)
                                 .animation(
-                                    scroll.isManualScrolling || reduceMotion || usesGroupedGeometry || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
+                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
                                         mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
                                     ),
                                     value: scroll.isManualScrolling ? 0 : fullOffset
@@ -689,13 +696,7 @@ public struct LyricsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .offset(y: scroll.manualScrollOffset + groupedGeometryOffset)
-            .animation(
-                scroll.isManualScrolling || reduceMotion || !usesGroupedGeometry ? nil : .interpolatingSpring(
-                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
-                ),
-                value: groupedGeometryOffset
-            )
+            .offset(y: scroll.manualScrollOffset)
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
                 guard lineMotionFrameCaptureActive else {
@@ -857,12 +858,32 @@ public struct LyricsView: View {
         pendingLineMotionCapture = capture
         lineMotionFrameCaptureActive = true
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + lyricLineMotionCaptureTimeout) {
             guard pendingLineMotionCapture == capture else { return }
             pendingLineMotionCapture = nil
             lineMotionFrameCaptureActive = false
             latestLineMotionFrames.removeAll()
+            recordLineMotionCaptureMissIfNeeded(timestamp: Date(), playbackTime: playbackTime)
         }
+    }
+
+    private func recordLineMotionCaptureMissIfNeeded(timestamp: Date, playbackTime: TimeInterval) {
+        guard timestamp.timeIntervalSince(lastLineMotionCaptureMissEventAt) >= lyricLineMotionCaptureMissEventInterval else {
+            return
+        }
+        lastLineMotionCaptureMissEventAt = timestamp
+        diagnostics.recordEvent(
+            "diagnostics.lyricsLineMotionCaptureMissed",
+            detail: "Line-motion diagnostics requested a frame sample but no lyric line geometry arrived before timeout.",
+            track: musicController.diagnosticsTrackContext(),
+            metrics: [
+                "playbackTime": playbackTime,
+                "lyricLineCount": Double(cachedDisplayLyrics.count),
+                "displayLineCount": Double(cachedDisplayLines.count),
+                "displayIndex": Double(displayCurrentLineIndex ?? -1),
+                "monitoringEnabled": lineMotionMonitoringEnabled ? 1 : 0
+            ]
+        )
     }
 
     private func startLineMotionSamplingWindow(duration: TimeInterval) {
@@ -934,6 +955,7 @@ public struct LyricsView: View {
             let frame: CGRect
             let targetIndex: Int
             let appliedOffsetY: Double
+            let baseMidY: Double
             let targetMinY: Double
             let targetMidY: Double
             let waveOffsetY: Double
@@ -946,11 +968,13 @@ public struct LyricsView: View {
             let targetIndex = scroll.isManualScrolling
                 ? (scroll.lockedLineIndex ?? displayIndex)
                 : (wave.lineTargetIndices[index] ?? displayIndex)
+            let accumulatedHeight = calculateAccumulatedHeight(upTo: index)
             let lineOffset = calculateLineOffset(index: index, currentIndex: displayIndex, anchorY: anchorY)
-            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+            let fullOffset = lineOffset + accumulatedHeight
             let appliedOffsetY = Double(fullOffset + scroll.manualScrollOffset)
-            let uniformTargetOffsetY = Double(immediateLineOffset + scroll.manualScrollOffset)
-            let targetMinY = Double(frame.minY) + uniformTargetOffsetY
+            let baseMidY = Double(accumulatedHeight) + Double(frame.height / 2)
+            let targetMinY = Double(accumulatedHeight)
+                + Double(immediateLineOffset + scroll.manualScrollOffset)
             let targetMidY = targetMinY + Double(frame.height / 2)
             return MotionPartial(
                 index: index,
@@ -959,6 +983,7 @@ public struct LyricsView: View {
                 frame: frame,
                 targetIndex: targetIndex,
                 appliedOffsetY: appliedOffsetY,
+                baseMidY: baseMidY,
                 targetMinY: targetMinY,
                 targetMidY: targetMidY,
                 waveOffsetY: Double(lineOffset - immediateLineOffset)
@@ -982,7 +1007,7 @@ public struct LyricsView: View {
             let lineBottomClipY = max(0, renderedMaxY - visibleBottomY)
             let isActiveLine = partial.index == activeIndex
             let observedDelta = previousRenderedMidY.map { renderedMidY - $0 }
-            let expectedDelta = previousBaseMidY.map { Double(partial.frame.midY) - $0 }
+            let expectedDelta = previousBaseMidY.map { partial.baseMidY - $0 }
             let deltaError: Double? = {
                 guard let observedDelta, let expectedDelta else { return nil }
                 return observedDelta - expectedDelta
@@ -1022,7 +1047,7 @@ public struct LyricsView: View {
                 controlsVisible: showControls || isAudioOutputMenuPresented
             ))
             previousRenderedMidY = renderedMidY
-            previousBaseMidY = Double(partial.frame.midY)
+            previousBaseMidY = partial.baseMidY
         }
 
         let activeTargetIndex = partials.first { $0.index == activeIndex }?.targetIndex
@@ -1816,27 +1841,61 @@ public struct LyricsView: View {
         let lyrics = cachedDisplayLyrics
         guard !lyrics.isEmpty else { return }
 
-        // Cancel pending work items from previous wave
+        // Finish the interrupted wave at the previous line before scheduling
+        // the next one. Fast line-level lyrics can advance before every delayed
+        // row target has fired; leaving those stale targets behind creates the
+        // visible uneven spacing shown in the line-level screenshots.
+        let interruptedTargets = wave.lineTargetIndices
         for item in wave.workItems { item.cancel() }
         wave.workItems.removeAll()
 
-        let indices = renderedIndices.filter {
-            abs($0 - newIndex) <= 14 || abs($0 - oldIndex) <= 14
-        }
+        let lineInterval = estimatedLineInterval(around: newIndex, in: lyrics)
+        let hasSyllableSync = lyrics.indices.contains(newIndex) && lyrics[newIndex].hasSyllableSync
+        let targetRadius = LyricWaveTiming.targetRadius(
+            lineInterval: lineInterval,
+            hasSyllableSync: hasSyllableSync
+        )
+        let indices = LyricWaveTiming.targetIndices(
+            renderedIndices: renderedIndices,
+            oldIndex: oldIndex,
+            newIndex: newIndex,
+            radius: targetRadius,
+            existingTargetIndices: interruptedTargets.keys
+        )
         guard !indices.isEmpty else { return }
 
-        let lineInterval = estimatedLineInterval(around: newIndex, in: lyrics)
+        var settleTransaction = Transaction()
+        settleTransaction.disablesAnimations = true
+        withTransaction(settleTransaction) {
+            for idx in indices where interruptedTargets[idx] != nil && interruptedTargets[idx] != oldIndex {
+                wave.lineTargetIndices[idx] = oldIndex
+            }
+        }
 
-        // Skip wave on large jumps, accessibility, or dense line-level lyrics.
-        // Fast line-level lyrics should move as one scroll target; staggered per-line
-        // work makes the page look late even if each delayed animation is shorter.
-        let isLargeJump = abs(newIndex - oldIndex) > 4
-        let hasSyllableSync = lyrics.indices.contains(newIndex) && lyrics[newIndex].hasSyllableSync
+        // Preserve the original wave timing: skip stagger only for accessibility,
+        // large jumps, and the dense line-level fallback already defined above.
+        let isLargeJump = LyricWaveTiming.isLargeJump(
+            from: oldIndex,
+            to: newIndex,
+            hasSyllableSync: hasSyllableSync
+        )
         if reduceMotion || isLargeJump || !LyricWaveTiming.shouldUseStagger(
             lineInterval: lineInterval,
             hasSyllableSync: hasSyllableSync
         ) {
-            for idx in indices { wave.lineTargetIndices[idx] = newIndex }
+            let updateTargets = {
+                for idx in indices { wave.lineTargetIndices[idx] = newIndex }
+                wave.lineTargetIndices = wave.lineTargetIndices.filter { key, _ in
+                    abs(key - newIndex) <= max(targetRadius, 12)
+                }
+            }
+            if reduceMotion || isLargeJump {
+                var jumpTransaction = Transaction()
+                jumpTransaction.disablesAnimations = true
+                withTransaction(jumpTransaction, updateTargets)
+            } else {
+                updateTargets()
+            }
             return
         }
 

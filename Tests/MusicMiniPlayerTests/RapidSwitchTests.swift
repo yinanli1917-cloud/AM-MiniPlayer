@@ -824,12 +824,33 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: nil, hasSyllableSync: false))
     }
 
-    func testLyricWaveTimingGroupsDenseLineLevelGeometryOnly() {
-        XCTAssertTrue(LyricWaveTiming.shouldUseGroupedGeometry(lineInterval: 0.9, hasSyllableSync: false))
-        XCTAssertTrue(LyricWaveTiming.shouldUseGroupedGeometry(lineInterval: 1.45, hasSyllableSync: false))
-        XCTAssertFalse(LyricWaveTiming.shouldUseGroupedGeometry(lineInterval: 1.6, hasSyllableSync: false))
-        XCTAssertFalse(LyricWaveTiming.shouldUseGroupedGeometry(lineInterval: 0.9, hasSyllableSync: true))
-        XCTAssertFalse(LyricWaveTiming.shouldUseGroupedGeometry(lineInterval: nil, hasSyllableSync: false))
+    func testLyricWaveTimingKeepsOriginalTargetWindow() {
+        XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 0.9, hasSyllableSync: false), 14)
+        XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 1.45, hasSyllableSync: false), 14)
+        XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 1.6, hasSyllableSync: false), 14)
+        XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 0.9, hasSyllableSync: true), 14)
+        XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: nil, hasSyllableSync: false), 14)
+    }
+
+    func testLyricWaveTimingCarriesExistingTargetsIntoNextWaveCleanup() {
+        let indices = LyricWaveTiming.targetIndices(
+            renderedIndices: Array(24...54),
+            oldIndex: 64,
+            newIndex: 30,
+            radius: 6,
+            existingTargetIndices: [37]
+        )
+
+        XCTAssertTrue(indices.contains(37))
+        XCTAssertTrue(indices.contains(30))
+        XCTAssertFalse(indices.contains(51))
+    }
+
+    func testLyricWaveTimingUsesSharedLargeJumpLimitForLineLevelLyrics() {
+        XCTAssertFalse(LyricWaveTiming.isLargeJump(from: 62, to: 64, hasSyllableSync: false))
+        XCTAssertFalse(LyricWaveTiming.isLargeJump(from: 62, to: 63, hasSyllableSync: false))
+        XCTAssertFalse(LyricWaveTiming.isLargeJump(from: 62, to: 64, hasSyllableSync: true))
+        XCTAssertTrue(LyricWaveTiming.isLargeJump(from: 62, to: 67, hasSyllableSync: true))
     }
 
     func testPlaybackPositionCorrectionDefersLargeBackwardResetWhileLyricsAreVisible() {
