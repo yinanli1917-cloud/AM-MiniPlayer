@@ -668,6 +668,82 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(report.lyricLineMotionSamples.first?.lineID, "line-3")
     }
 
+    func testLiveMotionSnapshotUpdatesFromLineMotionSamplesAndFrameTicks() {
+        DiagnosticsService.shared.recordFrameTick(delta: 0.042, page: "lyrics")
+        func sample(index: Int) -> DiagnosticLyricLineMotionSample {
+            let isLaggedLine = index == 1
+            let isFarFieldLag = index == 8
+            return DiagnosticLyricLineMotionSample(
+                page: "lyrics",
+                trackTitle: "Motion Song",
+                trackArtist: "Motion Artist",
+                lineIndex: index,
+                lineID: "line-\(index)",
+                lineStartTime: Double(index),
+                lineEndTime: Double(index + 1),
+                playbackTime: 2.4,
+                activeIndex: 2,
+                displayIndex: 2,
+                targetIndex: isLaggedLine || isFarFieldLag ? 1 : 2,
+                renderedMinY: Double(index * 50),
+                renderedMidY: Double(index * 50 + 18),
+                renderedHeight: 36,
+                targetMinY: Double(index * 50),
+                targetMidY: Double(index * 50 + 18),
+                targetErrorY: isLaggedLine ? 34 : 0,
+                observedInterLineDeltaY: isLaggedLine ? nil : 50,
+                expectedInterLineDeltaY: isLaggedLine ? nil : 50,
+                interLineDeltaErrorY: isLaggedLine ? nil : 0,
+                waveOffsetY: isLaggedLine ? 34 : 0,
+                manualScrollOffsetY: 0,
+                isManualScrolling: false,
+                isInitialMotionSuppressed: false
+            )
+        }
+        let samples = [sample(index: 1), sample(index: 2), sample(index: 3), sample(index: 8)]
+
+        DiagnosticsService.shared.recordLyricsLineMotionSamples(samples)
+
+        let snapshot = DiagnosticsService.shared.liveMotionSnapshot
+        XCTAssertEqual(snapshot?.trackTitle, "Motion Song")
+        XCTAssertEqual(snapshot?.activeIndex, 2)
+        XCTAssertEqual(snapshot?.displayIndex, 2)
+        XCTAssertEqual(snapshot?.targetIndex, 2)
+        XCTAssertEqual(snapshot?.sampleCount, 4)
+        XCTAssertEqual(snapshot?.capturedFirstLineIndex, 1)
+        XCTAssertEqual(snapshot?.capturedLastLineIndex, 8)
+        XCTAssertEqual(snapshot?.maxTargetErrorY ?? -1, 34, accuracy: 0.001)
+        XCTAssertEqual(snapshot?.latestFrameDeltaMs ?? -1, 42, accuracy: 0.001)
+        XCTAssertEqual(snapshot?.fieldTargetMismatchCount, 2)
+        XCTAssertEqual(snapshot?.maxFieldTargetDistance, 1)
+        XCTAssertEqual(snapshot?.laggedNearbyTargetCount, 1)
+    }
+
+    func testLiveMotionSnapshotRecordsCaptureMisses() {
+        let track = DiagnosticTrackContext(
+            title: "Motion Song",
+            artist: "Motion Artist",
+            album: "Motion Album",
+            duration: 180
+        )
+
+        DiagnosticsService.shared.recordLyricsLineMotionCaptureMiss(
+            track: track,
+            playbackTime: 42.5,
+            lyricLineCount: 18,
+            displayLineCount: 22,
+            displayIndex: 7,
+            monitoringEnabled: true
+        )
+
+        let snapshot = DiagnosticsService.shared.liveMotionSnapshot
+        XCTAssertEqual(snapshot?.captureMissCount, 1)
+        XCTAssertEqual(snapshot?.captureMissDisplayLineCount, 22)
+        XCTAssertEqual(snapshot?.captureMissMonitoringEnabled, true)
+        XCTAssertEqual(snapshot?.displayIndex, 7)
+        XCTAssertTrue(DiagnosticsService.shared.events.contains { $0.name == "diagnostics.lyricsLineMotionCaptureMissed" })
+    }
+
     func testLiveLyricLineMotionCSVWritesSingleHeaderAcrossBatches() throws {
         func sample(lineID: String, lineIndex: Int) -> DiagnosticLyricLineMotionSample {
             return DiagnosticLyricLineMotionSample(
@@ -718,6 +794,70 @@ final class DiagnosticsServiceTests: XCTestCase {
 
         XCTAssertTrue(text.contains("line-a"))
         XCTAssertTrue(text.contains("line-b"))
+        XCTAssertEqual(text.components(separatedBy: "\n").filter { $0.hasPrefix("timestamp,page") }.count, 1)
+    }
+
+    func testLiveLyricWaveTimelineCSVWritesAllRowScheduleAndFireEvents() throws {
+        UserDefaults.standard.set(true, forKey: DiagnosticsService.lyricWaveTimelineEnabledKey)
+        defer { UserDefaults.standard.removeObject(forKey: DiagnosticsService.lyricWaveTimelineEnabledKey) }
+
+        let scheduled = DiagnosticLyricWaveTimelineSample(
+            page: "lyrics",
+            trackTitle: "Wave Song",
+            trackArtist: "Wave Artist",
+            waveID: 42,
+            phase: "scheduled",
+            lineIndex: 7,
+            oldIndex: 6,
+            newIndex: 8,
+            displayIndex: 8,
+            scheduledDelay: 0.08,
+            actualDelay: 0,
+            lineInterval: 1.2,
+            targetRadius: 14,
+            scheduleCount: 25,
+            renderedCount: 25,
+            isActiveLine: false
+        )
+        let fired = DiagnosticLyricWaveTimelineSample(
+            page: "lyrics",
+            trackTitle: "Wave Song",
+            trackArtist: "Wave Artist",
+            waveID: 42,
+            phase: "fired",
+            lineIndex: 8,
+            oldIndex: 6,
+            newIndex: 8,
+            displayIndex: 8,
+            scheduledDelay: 0.16,
+            actualDelay: 0.19,
+            lineInterval: 1.2,
+            targetRadius: 14,
+            scheduleCount: 25,
+            renderedCount: 25,
+            isActiveLine: true
+        )
+
+        DiagnosticsService.shared.recordLyricsWaveTimelineSamples([scheduled, fired])
+
+        let liveURL = try XCTUnwrap(diagnosticsStorageRoot)
+            .appendingPathComponent("nanoPod", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+            .appendingPathComponent("Live", isDirectory: true)
+            .appendingPathComponent("lyrics_wave_timeline.csv")
+        let deadline = Date().addingTimeInterval(2)
+        var text = ""
+        while Date() < deadline {
+            text = (try? String(contentsOf: liveURL, encoding: .utf8)) ?? ""
+            if text.contains("scheduled"), text.contains("fired") {
+                break
+            }
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+
+        XCTAssertTrue(text.contains("Wave Song"))
+        XCTAssertTrue(text.contains("scheduled"))
+        XCTAssertTrue(text.contains("fired"))
         XCTAssertEqual(text.components(separatedBy: "\n").filter { $0.hasPrefix("timestamp,page") }.count, 1)
     }
 

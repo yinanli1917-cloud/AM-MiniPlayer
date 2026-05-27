@@ -424,6 +424,94 @@ public struct DiagnosticLyricLineMotionSample: Identifiable, Codable, Equatable,
     }
 }
 
+public struct DiagnosticLiveMotionSnapshot: Equatable, Sendable {
+    public var timestamp: Date
+    public var trackTitle: String
+    public var trackArtist: String
+    public var playbackTime: TimeInterval
+    public var activeIndex: Int
+    public var displayIndex: Int
+    public var targetIndex: Int
+    public var sampleCount: Int
+    public var capturedFirstLineIndex: Int
+    public var capturedLastLineIndex: Int
+    public var maxTargetErrorY: Double
+    public var maxInterLineErrorY: Double
+    public var maxVelocityY: Double
+    public var staleStaticLineCount: Int
+    public var fieldTargetMismatchCount: Int
+    public var maxFieldTargetDistance: Int
+    public var laggedNearbyTargetCount: Int
+    public var activeTargetLagged: Bool
+    public var latestFrameDeltaMs: Double
+    public var recentFrameStallCount: Int
+    public var captureMissCount: Int
+    public var latestCaptureMissAt: Date?
+    public var captureMissDisplayLineCount: Int
+    public var captureMissMonitoringEnabled: Bool
+}
+
+public struct DiagnosticLyricWaveTimelineSample: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var timestamp: Date
+    public var page: String
+    public var trackTitle: String
+    public var trackArtist: String
+    public var waveID: Int
+    public var phase: String
+    public var lineIndex: Int
+    public var oldIndex: Int
+    public var newIndex: Int
+    public var displayIndex: Int
+    public var scheduledDelay: TimeInterval
+    public var actualDelay: TimeInterval
+    public var lineInterval: TimeInterval?
+    public var targetRadius: Int
+    public var scheduleCount: Int
+    public var renderedCount: Int
+    public var isActiveLine: Bool
+
+    public init(
+        id: UUID = UUID(),
+        timestamp: Date = Date(),
+        page: String,
+        trackTitle: String,
+        trackArtist: String,
+        waveID: Int,
+        phase: String,
+        lineIndex: Int,
+        oldIndex: Int,
+        newIndex: Int,
+        displayIndex: Int,
+        scheduledDelay: TimeInterval,
+        actualDelay: TimeInterval,
+        lineInterval: TimeInterval?,
+        targetRadius: Int,
+        scheduleCount: Int,
+        renderedCount: Int,
+        isActiveLine: Bool
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.page = page
+        self.trackTitle = trackTitle
+        self.trackArtist = trackArtist
+        self.waveID = waveID
+        self.phase = phase
+        self.lineIndex = lineIndex
+        self.oldIndex = oldIndex
+        self.newIndex = newIndex
+        self.displayIndex = displayIndex
+        self.scheduledDelay = scheduledDelay
+        self.actualDelay = actualDelay
+        self.lineInterval = lineInterval
+        self.targetRadius = targetRadius
+        self.scheduleCount = scheduleCount
+        self.renderedCount = renderedCount
+        self.isActiveLine = isActiveLine
+    }
+}
+
 public struct DiagnosticReportManifest: Codable, Sendable {
     public var generatedAt: Date
     public var appVersion: String
@@ -446,6 +534,8 @@ public final class DiagnosticsService: ObservableObject {
     public static let shared = DiagnosticsService()
 
     public static let enabledKey = "ownerDiagnosticsEnabled"
+    public static let lineMotionGeometryEnabledKey = "ownerLineMotionGeometryEnabled"
+    public static let lyricWaveTimelineEnabledKey = "ownerLyricWaveTimelineEnabled"
     public static var isOwnerDiagnosticsBuild: Bool {
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         return true
@@ -458,7 +548,9 @@ public final class DiagnosticsService: ObservableObject {
     @Published public private(set) var events: [DiagnosticEvent] = []
     @Published public private(set) var interactions: [DiagnosticInteractionTrace] = []
     public private(set) var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample] = []
+    public private(set) var lyricWaveTimelineSamples: [DiagnosticLyricWaveTimelineSample] = []
     @Published public private(set) var lyricLineMotionSampleCount: Int = 0
+    public private(set) var liveMotionSnapshot: DiagnosticLiveMotionSnapshot?
     @Published public private(set) var activeInteractionCount: Int = 0
     @Published public private(set) var lastExportURL: URL?
     @Published public private(set) var lastWarning: DiagnosticIncident?
@@ -501,6 +593,7 @@ public final class DiagnosticsService: ObservableObject {
     private let maxIncidents = 120
     private let maxInteractions = 120
     private let maxLyricLineMotionSamples = 2400
+    private let maxLyricWaveTimelineSamples = 4000
     private let standaloneFrameStallThreshold: TimeInterval = 0.125
     private let criticalStandaloneFrameStallThreshold: TimeInterval = 0.250
     private let severeStandaloneFrameStallThreshold: TimeInterval = 0.500
@@ -519,6 +612,12 @@ public final class DiagnosticsService: ObservableObject {
     private let startupStandaloneFrameStallSuppressionDuration: TimeInterval = 5.0
     private let retention: TimeInterval = 24 * 60 * 60
     private var previousLyricLineMotionSamples: [String: (timestamp: Date, renderedMidY: Double)] = [:]
+    private var latestFrameDeltaMs: Double = 0
+    private var recentFrameStallTicks: [Date] = []
+    private var lyricLineMotionCaptureMissCount = 0
+    private var latestLyricLineMotionCaptureMissAt: Date?
+    private var lastLyricLineMotionCaptureDisplayLineCount = 0
+    private var lastLyricLineMotionCaptureMonitoringEnabled = false
     private var lastLyricLineMotionActiveStateKey: String?
     private var lastLyricLineMotionActiveStateSince: Date?
     private var lastLyricLineMotionIncidentAt: Date?
@@ -536,6 +635,10 @@ public final class DiagnosticsService: ObservableObject {
         label: "com.nanopod.diagnostics.live-line-motion-writes",
         qos: .utility
     )
+    private let liveWaveTimelineWriteQueue = DispatchQueue(
+        label: "com.nanopod.diagnostics.live-wave-timeline-writes",
+        qos: .utility
+    )
 
     private init() {
         self.isEnabled = Self.isOwnerDiagnosticsBuild && UserDefaults.standard.bool(forKey: Self.enabledKey)
@@ -550,6 +653,12 @@ public final class DiagnosticsService: ObservableObject {
     public var incidentCount: Int { incidents.count }
     public var latestIncident: DiagnosticIncident? { incidents.first }
     public var latestInteraction: DiagnosticInteractionTrace? { interactions.first }
+    public var isLyricWaveTimelineEnabled: Bool {
+        isEnabled && UserDefaults.standard.bool(forKey: Self.lyricWaveTimelineEnabledKey)
+    }
+    public var isLineMotionGeometryEnabled: Bool {
+        isEnabled && UserDefaults.standard.bool(forKey: Self.lineMotionGeometryEnabledKey)
+    }
 
     public var severeOrRepeatedIssue: DiagnosticIncident? {
         if let latest = incidents.first, latest.severity == .critical {
@@ -570,8 +679,16 @@ public final class DiagnosticsService: ObservableObject {
         activeInteractions.removeAll()
         interactions.removeAll()
         lyricLineMotionSamples.removeAll()
+        lyricWaveTimelineSamples.removeAll()
         lyricLineMotionSampleCount = 0
         previousLyricLineMotionSamples.removeAll()
+        liveMotionSnapshot = nil
+        latestFrameDeltaMs = 0
+        recentFrameStallTicks.removeAll()
+        lyricLineMotionCaptureMissCount = 0
+        latestLyricLineMotionCaptureMissAt = nil
+        lastLyricLineMotionCaptureDisplayLineCount = 0
+        lastLyricLineMotionCaptureMonitoringEnabled = false
         lastLyricLineMotionActiveStateKey = nil
         lastLyricLineMotionActiveStateSince = nil
         lastLyricLineMotionIncidentAt = nil
@@ -597,6 +714,7 @@ public final class DiagnosticsService: ObservableObject {
         persistenceSaveTask = nil
         removePersistedSnapshot()
         removeLiveLyricLineMotionSamples()
+        removeLiveLyricWaveTimelineSamples()
     }
 
     func setStorageBaseDirectoryForTesting(_ url: URL?) {
@@ -1511,6 +1629,9 @@ public final class DiagnosticsService: ObservableObject {
 
     public func recordFrameTick(delta: TimeInterval, page: String) {
         guard isEnabled else { return }
+        latestFrameDeltaMs = delta * 1000
+        let now = Date()
+        recentFrameStallTicks.removeAll { now.timeIntervalSince($0) > 5.0 }
         updateBaseline("frame.delta.ms", value: delta * 1000)
         let hasActiveInteractions = !activeInteractions.isEmpty
         updateActiveInteractions { trace in
@@ -1526,6 +1647,7 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
         guard delta > standaloneFrameStallThreshold else { return }
+        recentFrameStallTicks.append(now)
         guard !hasActiveInteractions else { return }
         guard Date() >= suppressStandaloneFrameStallsUntil else { return }
         recordStandaloneFrameStall(page: page, delta: delta)
@@ -1629,6 +1751,7 @@ public final class DiagnosticsService: ObservableObject {
         updateBaseline("lyrics.layout.activeBottomClip.pt", value: maxActiveBottomClip)
         updateBaseline("lyrics.layout.lineTopClip.pt", value: maxLineTopClip)
         updateBaseline("lyrics.layout.lineBottomClip.pt", value: maxLineBottomClip)
+        updateLiveMotionSnapshot(with: enriched)
 
         updateActiveInteractions { trace in
             incrementMetric("lyricsLineMotionSampleCount", by: Double(enriched.count), in: &trace.metrics)
@@ -1645,6 +1768,146 @@ public final class DiagnosticsService: ObservableObject {
         recordLyricLineMotionIncidentIfNeeded(enriched)
         trimBuffers()
         scheduleHighFrequencyPersistenceSave()
+    }
+
+    public func recordLyricsWaveTimelineSamples(_ samples: [DiagnosticLyricWaveTimelineSample]) {
+        guard isLyricWaveTimelineEnabled, !samples.isEmpty else { return }
+
+        lyricWaveTimelineSamples.insert(contentsOf: samples.reversed(), at: 0)
+        if lyricWaveTimelineSamples.count > maxLyricWaveTimelineSamples {
+            lyricWaveTimelineSamples.removeLast(lyricWaveTimelineSamples.count - maxLyricWaveTimelineSamples)
+        }
+
+        let scheduledCount = samples.filter { $0.phase == "scheduled" }.count
+        let firedCount = samples.filter { $0.phase == "fired" }.count
+        let maxDelayOverrun = samples
+            .map { max(0, $0.actualDelay - $0.scheduledDelay) }
+            .max() ?? 0
+        updateBaseline("lyrics.waveTimeline.sampleCount", value: Double(samples.count))
+        updateBaseline("lyrics.waveTimeline.delayOverrun.ms", value: maxDelayOverrun * 1000)
+
+        updateActiveInteractions { trace in
+            incrementMetric("lyricsWaveTimelineSampleCount", by: Double(samples.count), in: &trace.metrics)
+            incrementMetric("lyricsWaveScheduledRowCount", by: Double(scheduledCount), in: &trace.metrics)
+            incrementMetric("lyricsWaveFiredRowCount", by: Double(firedCount), in: &trace.metrics)
+            maximizeMetric("maxLyricsWaveDelayOverrunMs", value: maxDelayOverrun * 1000, in: &trace.metrics)
+        }
+
+        writeLiveLyricWaveTimelineSamples(samples)
+        trimBuffers()
+    }
+
+    public func recordLyricsLineMotionCaptureMiss(
+        track: DiagnosticTrackContext,
+        playbackTime: TimeInterval,
+        lyricLineCount: Int,
+        displayLineCount: Int,
+        displayIndex: Int,
+        monitoringEnabled: Bool
+    ) {
+        guard isEnabled else { return }
+        lyricLineMotionCaptureMissCount += 1
+        latestLyricLineMotionCaptureMissAt = Date()
+        lastLyricLineMotionCaptureDisplayLineCount = displayLineCount
+        lastLyricLineMotionCaptureMonitoringEnabled = monitoringEnabled
+
+        var snapshot = liveMotionSnapshot ?? DiagnosticLiveMotionSnapshot(
+            timestamp: Date(),
+            trackTitle: track.title,
+            trackArtist: track.artist,
+            playbackTime: playbackTime,
+            activeIndex: -1,
+            displayIndex: displayIndex,
+            targetIndex: -1,
+            sampleCount: 0,
+            capturedFirstLineIndex: -1,
+            capturedLastLineIndex: -1,
+            maxTargetErrorY: 0,
+            maxInterLineErrorY: 0,
+            maxVelocityY: 0,
+            staleStaticLineCount: 0,
+            fieldTargetMismatchCount: 0,
+            maxFieldTargetDistance: 0,
+            laggedNearbyTargetCount: 0,
+            activeTargetLagged: false,
+            latestFrameDeltaMs: latestFrameDeltaMs,
+            recentFrameStallCount: recentFrameStallTicks.count,
+            captureMissCount: lyricLineMotionCaptureMissCount,
+            latestCaptureMissAt: latestLyricLineMotionCaptureMissAt,
+            captureMissDisplayLineCount: displayLineCount,
+            captureMissMonitoringEnabled: monitoringEnabled
+        )
+        snapshot.timestamp = Date()
+        snapshot.trackTitle = track.title
+        snapshot.trackArtist = track.artist
+        snapshot.playbackTime = playbackTime
+        snapshot.displayIndex = displayIndex
+        snapshot.latestFrameDeltaMs = latestFrameDeltaMs
+        snapshot.recentFrameStallCount = recentFrameStallTicks.count
+        snapshot.captureMissCount = lyricLineMotionCaptureMissCount
+        snapshot.latestCaptureMissAt = latestLyricLineMotionCaptureMissAt
+        snapshot.captureMissDisplayLineCount = displayLineCount
+        snapshot.captureMissMonitoringEnabled = monitoringEnabled
+        liveMotionSnapshot = snapshot
+
+        recordEvent(
+            "diagnostics.lyricsLineMotionCaptureMissed",
+            detail: "Line-motion diagnostics requested a frame sample but no lyric line geometry arrived before timeout.",
+            track: track,
+            metrics: [
+                "playbackTime": playbackTime,
+                "lyricLineCount": Double(lyricLineCount),
+                "displayLineCount": Double(displayLineCount),
+                "displayIndex": Double(displayIndex),
+                "monitoringEnabled": monitoringEnabled ? 1 : 0
+            ]
+        )
+    }
+
+    private func updateLiveMotionSnapshot(with samples: [DiagnosticLyricLineMotionSample]) {
+        let stableSamples = samples.filter { !$0.isManualScrolling && !$0.isInitialMotionSuppressed }
+        let visibleSamples = stableSamples.isEmpty ? samples : stableSamples
+        guard let sample = visibleSamples.first else { return }
+
+        let maxTargetError = visibleSamples.map { abs($0.targetErrorY) }.max() ?? 0
+        let maxInterLineError = visibleSamples.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
+        let maxVelocity = visibleSamples.map { abs($0.velocityY) }.max() ?? 0
+        let staleStaticCount = visibleSamples.filter(isStaleStaticLyricLineMotionSample).count
+        let capturedFirstLineIndex = visibleSamples.map(\.lineIndex).min() ?? -1
+        let capturedLastLineIndex = visibleSamples.map(\.lineIndex).max() ?? -1
+        let fieldTargetMismatches = visibleSamples.filter { $0.targetIndex != $0.activeIndex }.count
+        let maxFieldTargetDistance = visibleSamples.map { abs($0.targetIndex - $0.activeIndex) }.max() ?? 0
+        let laggedNearbyTargets = visibleSamples.filter {
+            abs($0.lineIndex - $0.activeIndex) <= 4 && $0.targetIndex != $0.activeIndex
+        }.count
+        let activeSample = visibleSamples.first { $0.lineIndex == $0.activeIndex }
+
+        liveMotionSnapshot = DiagnosticLiveMotionSnapshot(
+            timestamp: sample.timestamp,
+            trackTitle: sample.trackTitle,
+            trackArtist: sample.trackArtist,
+            playbackTime: sample.playbackTime,
+            activeIndex: sample.activeIndex,
+            displayIndex: sample.displayIndex,
+            targetIndex: activeSample?.targetIndex ?? sample.targetIndex,
+            sampleCount: samples.count,
+            capturedFirstLineIndex: capturedFirstLineIndex,
+            capturedLastLineIndex: capturedLastLineIndex,
+            maxTargetErrorY: maxTargetError,
+            maxInterLineErrorY: maxInterLineError,
+            maxVelocityY: maxVelocity,
+            staleStaticLineCount: staleStaticCount,
+            fieldTargetMismatchCount: fieldTargetMismatches,
+            maxFieldTargetDistance: maxFieldTargetDistance,
+            laggedNearbyTargetCount: laggedNearbyTargets,
+            activeTargetLagged: activeSample.map { $0.targetIndex != $0.activeIndex } ?? false,
+            latestFrameDeltaMs: latestFrameDeltaMs,
+            recentFrameStallCount: recentFrameStallTicks.count,
+            captureMissCount: lyricLineMotionCaptureMissCount,
+            latestCaptureMissAt: latestLyricLineMotionCaptureMissAt,
+            captureMissDisplayLineCount: lastLyricLineMotionCaptureDisplayLineCount,
+            captureMissMonitoringEnabled: lastLyricLineMotionCaptureMonitoringEnabled
+        )
     }
 
     public func recordScriptingBridgeTiming(
@@ -3031,6 +3294,13 @@ public final class DiagnosticsService: ObservableObject {
         }
     }
 
+    private func removeLiveLyricWaveTimelineSamples() {
+        guard let url = try? liveLyricWaveTimelineSamplesURL() else { return }
+        liveWaveTimelineWriteQueue.sync {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     private func updateLyricLineMotionSampleCount(force: Bool = false) {
         let now = Date()
         guard force || now.timeIntervalSince(lastLyricLineMotionCountPublishAt) >= 0.75 else { return }
@@ -3410,6 +3680,37 @@ public final class DiagnosticsService: ObservableObject {
         return rows.joined(separator: "\n")
     }
 
+    private func lyricWaveTimelineCSV<S: Sequence>(
+        samples: S,
+        includeHeader: Bool = true
+    ) -> String where S.Element == DiagnosticLyricWaveTimelineSample {
+        var rows = includeHeader ? [
+            "timestamp,page,trackTitle,trackArtist,waveID,phase,lineIndex,oldIndex,newIndex,displayIndex,scheduledDelay,actualDelay,lineInterval,targetRadius,scheduleCount,renderedCount,isActiveLine"
+        ] : []
+        for sample in samples {
+            rows.append([
+                Self.csvDateFormatter.string(from: sample.timestamp),
+                csv(sample.page),
+                csv(sample.trackTitle),
+                csv(sample.trackArtist),
+                "\(sample.waveID)",
+                csv(sample.phase),
+                "\(sample.lineIndex)",
+                "\(sample.oldIndex)",
+                "\(sample.newIndex)",
+                "\(sample.displayIndex)",
+                csvNumber(sample.scheduledDelay),
+                csvNumber(sample.actualDelay),
+                csvNumber(sample.lineInterval),
+                "\(sample.targetRadius)",
+                "\(sample.scheduleCount)",
+                "\(sample.renderedCount)",
+                sample.isActiveLine ? "1" : "0"
+            ].joined(separator: ","))
+        }
+        return rows.joined(separator: "\n")
+    }
+
     private func writeLiveLyricLineMotionSamples(_ samples: [DiagnosticLyricLineMotionSample]) {
         guard !samples.isEmpty else { return }
         let header = lyricLineMotionCSV(samples: [])
@@ -3436,6 +3737,35 @@ public final class DiagnosticsService: ObservableObject {
             }
         } catch {
             recordEvent("diagnostics.liveMotionWriteFailed", detail: error.localizedDescription)
+        }
+    }
+
+    private func writeLiveLyricWaveTimelineSamples(_ samples: [DiagnosticLyricWaveTimelineSample]) {
+        guard !samples.isEmpty else { return }
+        let header = lyricWaveTimelineCSV(samples: [])
+        let rows = lyricWaveTimelineCSV(samples: samples, includeHeader: false)
+        guard let data = (rows + "\n").data(using: .utf8) else { return }
+
+        do {
+            let url = try liveLyricWaveTimelineSamplesURL()
+            liveWaveTimelineWriteQueue.async {
+                do {
+                    let fileExists = FileManager.default.fileExists(atPath: url.path)
+                    if !fileExists {
+                        try (header + "\n").write(to: url, atomically: true, encoding: .utf8)
+                    }
+                    let handle = try FileHandle(forWritingTo: url)
+                    defer { try? handle.close() }
+                    try handle.seekToEnd()
+                    handle.write(data)
+                } catch {
+                    Task { @MainActor in
+                        DiagnosticsService.shared.recordEvent("diagnostics.liveWaveTimelineWriteFailed", detail: error.localizedDescription)
+                    }
+                }
+            }
+        } catch {
+            recordEvent("diagnostics.liveWaveTimelineWriteFailed", detail: error.localizedDescription)
         }
     }
 
@@ -3501,6 +3831,8 @@ public final class DiagnosticsService: ObservableObject {
         let laggedNearbyTargets = stableSamples.filter {
             abs($0.lineIndex - $0.activeIndex) <= 4 && $0.targetIndex != $0.activeIndex
         }.count
+        let fieldTargetMismatches = stableSamples.filter { $0.targetIndex != $0.activeIndex }.count
+        let maxFieldTargetDistance = stableSamples.map { abs($0.targetIndex - $0.activeIndex) }.max() ?? 0
         let activeTargetLagged = activeSample.map { $0.targetIndex != $0.activeIndex } ?? false
 
         if isCollapsedLyricLineMotionGeometry(
@@ -3577,6 +3909,8 @@ public final class DiagnosticsService: ObservableObject {
                 "maxLineTopClipPt": maxLineTopClip,
                 "maxLineBottomClipPt": maxLineBottomClip,
                 "laggedNearbyTargetCount": Double(laggedNearbyTargets),
+                "fieldTargetMismatchCount": Double(fieldTargetMismatches),
+                "maxFieldTargetDistance": Double(maxFieldTargetDistance),
                 "activeLineElapsedMs": activeLineElapsed * 1000,
                 "activeVisualElapsedMs": activeVisualElapsed * 1000,
                 "activeTargetLagged": activeTargetLagged ? 1 : 0,
@@ -3731,6 +4065,11 @@ public final class DiagnosticsService: ObservableObject {
     private func liveLyricLineMotionSamplesURL() throws -> URL {
         let dir = try diagnosticsLiveDirectory()
         return dir.appendingPathComponent("lyrics_line_motion_samples.csv")
+    }
+
+    private func liveLyricWaveTimelineSamplesURL() throws -> URL {
+        let dir = try diagnosticsLiveDirectory()
+        return dir.appendingPathComponent("lyrics_wave_timeline.csv")
     }
 
     private func lyricLineMotionKey(for sample: DiagnosticLyricLineMotionSample) -> String {

@@ -143,109 +143,11 @@ struct LyricLineView: View {
             return 0.35
         }()
 
-        // Syllable-synced lines ALWAYS use WordByWordText (same FlowLayout in all states)
-        // to prevent layout jumps when transitioning between current/non-current.
-        VStack(alignment: .leading, spacing: LyricMetrics.intraPairSpacing) {
-            // Main lyrics line
-            HStack(spacing: 0) {
-                if line.hasSyllableSync {
-                    if #available(macOS 15.0, *) {
-                        let payload = SyllableTextPayload(words: line.words)
-                        if isCurrent, let mc = musicController {
-                            TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
-                                SyllableSyncedLine(
-                                    payload: payload,
-                                    currentTime: mc.wordFillTime,
-                                    isAnimated: true,
-                                    staticOpacity: 0
-                                )
-                            }
-                        } else {
-                            SyllableSyncedLine(
-                                payload: payload,
-                                currentTime: 0,
-                                isAnimated: false,
-                                staticOpacity: textOpacity
-                            )
-                        }
-                    } else {
-                        // macOS 14 fallback: per-word WordFillSpan
-                        if isCurrent, let mc = musicController {
-                            TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
-                                WordByWordText(
-                                    words: line.words,
-                                    lineText: cleanedText,
-                                    currentTime: mc.wordFillTime,
-                                    staticOpacity: nil
-                                )
-                            }
-                        } else {
-                            WordByWordText(
-                                words: line.words,
-                                lineText: cleanedText,
-                                currentTime: 0,
-                                staticOpacity: textOpacity
-                            )
-                        }
-                    }
-                } else {
-                    Text(cleanedText)
-                        .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
-                        .foregroundColor(.white.opacity(textOpacity))
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            // Translation line — same view identity in all states (like SyllableSyncedLine)
-            // to prevent lag when switching between current/non-current.
-            if showTranslation && internalShowTranslation, let translation = translationText {
-                if line.hasSyllableSync {
-                    if isCurrent, let mc = musicController {
-                        TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
-                            TranslationSweepText(
-                                text: translation,
-                                words: line.words,
-                                lineStartTime: line.startTime,
-                                lineEndTime: line.endTime,
-                                currentTime: mc.wordFillTime,
-                                staticOpacity: nil
-                            )
-                        }
-                    } else {
-                        TranslationSweepText(
-                            text: translation,
-                            words: line.words,
-                            lineStartTime: line.startTime,
-                            lineEndTime: line.endTime,
-                            currentTime: 0,
-                            staticOpacity: textOpacity * LyricMetrics.currentTranslationOpacityFactor
-                        )
-                    }
-                } else {
-                    HStack(spacing: 0) {
-                        Text(translation)
-                            .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
-                            .foregroundColor(.white.opacity(textOpacity * LyricMetrics.currentTranslationOpacityFactor))
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .lineSpacing(LyricMetrics.translationLineSpacing)
-
-                        Spacer(minLength: 0)
-                    }
-                }
-            } else if showTranslation && isTranslating {
-                // 🔑 翻译加载中动画
-                HStack(spacing: 4) {
-                    TranslationLoadingDotsView()
-                    Spacer(minLength: 0)
-                }
-            } else if showTranslation && translationFailed && isCurrent {
-                EmptyView()
-            }
-        }
+        lyricTimelineContent(
+            textOpacity: textOpacity,
+            cleanedText: cleanedText,
+            translationText: translationText
+        )
         // Drive the interlude blend: when the song enters a >=5s gap,
         // hold the line at its current look for 0.5s so the three-dot
         // indicator is established as the new focal, then over 2.5s
@@ -304,6 +206,179 @@ struct LyricLineView: View {
         }
         .onHover { hovering in
             if isScrolling { isHovering = hovering }
+        }
+    }
+
+    @ViewBuilder
+    private func lyricTimelineContent(
+        textOpacity: CGFloat,
+        cleanedText: String,
+        translationText: String?
+    ) -> some View {
+        if line.hasSyllableSync, isCurrent, let mc = musicController {
+            if #available(macOS 15.0, *) {
+                let payload = SyllableTextPayload(words: line.words)
+                TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
+                    activeSyllableStack(
+                        payload: payload,
+                        currentTime: mc.lyricRenderTime(),
+                        translationText: translationText
+                    )
+                }
+            } else {
+                TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
+                    activeFallbackSyllableStack(
+                        currentTime: mc.lyricRenderTime(),
+                        cleanedText: cleanedText,
+                        translationText: translationText
+                    )
+                }
+            }
+        } else {
+            staticLyricStack(
+                textOpacity: textOpacity,
+                cleanedText: cleanedText,
+                translationText: translationText
+            )
+        }
+    }
+
+    @available(macOS 15.0, *)
+    private func activeSyllableStack(
+        payload: SyllableTextPayload,
+        currentTime: TimeInterval,
+        translationText: String?
+    ) -> some View {
+        lyricStack {
+            SyllableSyncedLine(
+                payload: payload,
+                currentTime: currentTime,
+                isAnimated: true,
+                staticOpacity: 0
+            )
+        } translation: {
+            activeTranslation(currentTime: currentTime, translationText: translationText)
+        }
+    }
+
+    private func activeFallbackSyllableStack(
+        currentTime: TimeInterval,
+        cleanedText: String,
+        translationText: String?
+    ) -> some View {
+        lyricStack {
+            WordByWordText(
+                words: line.words,
+                lineText: cleanedText,
+                currentTime: currentTime,
+                staticOpacity: nil
+            )
+        } translation: {
+            activeTranslation(currentTime: currentTime, translationText: translationText)
+        }
+    }
+
+    private func staticLyricStack(
+        textOpacity: CGFloat,
+        cleanedText: String,
+        translationText: String?
+    ) -> some View {
+        lyricStack {
+            if line.hasSyllableSync {
+                if #available(macOS 15.0, *) {
+                    SyllableSyncedLine(
+                        payload: SyllableTextPayload(words: line.words),
+                        currentTime: 0,
+                        isAnimated: false,
+                        staticOpacity: textOpacity
+                    )
+                } else {
+                    WordByWordText(
+                        words: line.words,
+                        lineText: cleanedText,
+                        currentTime: 0,
+                        staticOpacity: textOpacity
+                    )
+                }
+            } else {
+                Text(cleanedText)
+                    .font(.system(size: LyricMetrics.mainFontSize, weight: .semibold))
+                    .foregroundColor(.white.opacity(textOpacity))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } translation: {
+            staticTranslation(textOpacity: textOpacity, translationText: translationText)
+        }
+    }
+
+    private func lyricStack<Main: View, Translation: View>(
+        @ViewBuilder main: () -> Main,
+        @ViewBuilder translation: () -> Translation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LyricMetrics.intraPairSpacing) {
+            HStack(spacing: 0) {
+                main()
+                Spacer(minLength: 0)
+            }
+            translation()
+        }
+    }
+
+    @ViewBuilder
+    private func activeTranslation(currentTime: TimeInterval, translationText: String?) -> some View {
+        if showTranslation && internalShowTranslation, let translation = translationText {
+            TranslationSweepText(
+                text: translation,
+                words: line.words,
+                lineStartTime: line.startTime,
+                lineEndTime: line.endTime,
+                currentTime: currentTime,
+                staticOpacity: nil
+            )
+        } else {
+            translationPlaceholder()
+        }
+    }
+
+    @ViewBuilder
+    private func staticTranslation(textOpacity: CGFloat, translationText: String?) -> some View {
+        if showTranslation && internalShowTranslation, let translation = translationText {
+            if line.hasSyllableSync {
+                TranslationSweepText(
+                    text: translation,
+                    words: line.words,
+                    lineStartTime: line.startTime,
+                    lineEndTime: line.endTime,
+                    currentTime: 0,
+                    staticOpacity: textOpacity * LyricMetrics.currentTranslationOpacityFactor
+                )
+            } else {
+                HStack(spacing: 0) {
+                    Text(translation)
+                        .font(.system(size: LyricMetrics.translationFontSize, weight: .semibold))
+                        .foregroundColor(.white.opacity(textOpacity * LyricMetrics.currentTranslationOpacityFactor))
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(LyricMetrics.translationLineSpacing)
+
+                    Spacer(minLength: 0)
+                }
+            }
+        } else {
+            translationPlaceholder()
+        }
+    }
+
+    @ViewBuilder
+    private func translationPlaceholder() -> some View {
+        if showTranslation && isTranslating {
+            HStack(spacing: 4) {
+                TranslationLoadingDotsView()
+                Spacer(minLength: 0)
+            }
+        } else if showTranslation && translationFailed && isCurrent {
+            EmptyView()
         }
     }
 

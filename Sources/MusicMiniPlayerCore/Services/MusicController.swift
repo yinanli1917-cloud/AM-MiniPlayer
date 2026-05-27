@@ -291,6 +291,7 @@ public class MusicController: ObservableObject {
     }
     private static let timingDiagnosticsEnabled =
         ProcessInfo.processInfo.environment["NANOPOD_TIMING_DIAGNOSTICS"] == "1"
+    private static let diagnosticsEnabledUserDefaultsKey = "ownerDiagnosticsEnabled"
 
     private var playbackClockBaseTime: TimeInterval = 0
     private var playbackClockBaseDate: Date = Date()
@@ -624,7 +625,7 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let shouldRun = self.isPlaying && !self.windowMovementPaused
-            let targetInterval: TimeInterval = self.currentPage == .lyrics ? 0.05 : 0.1
+            let targetInterval: TimeInterval = 0.1
             if shouldRun && (!self.interpolationTimerActive || self.interpolationTimerInterval != targetInterval) {
                 self.interpolationTimer?.invalidate()
                 // 🔑 Reset frame clock so first dt is ~0, not time-since-last-stop
@@ -759,9 +760,11 @@ public class MusicController: ObservableObject {
             }
         }
         #if DEBUG || LOCAL_DEVELOPER_BUILD
-        let page = String(describing: currentPage)
-        Task { @MainActor in
-            DiagnosticsService.shared.recordFrameTick(delta: dt, page: page)
+        if UserDefaults.standard.bool(forKey: Self.diagnosticsEnabledUserDefaultsKey) {
+            let page = String(describing: currentPage)
+            Task { @MainActor in
+                DiagnosticsService.shared.recordFrameTick(delta: dt, page: page)
+            }
         }
         #endif
 

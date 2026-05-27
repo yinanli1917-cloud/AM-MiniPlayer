@@ -1,6 +1,6 @@
 # Lyrics Renderer Performance
 
-Last updated: 2026-05-24
+Last updated: 2026-05-27
 
 ## Protected UX
 
@@ -85,6 +85,13 @@ Fixes that worked:
 7. Do not replace the progress bar publisher with a local `TimelineView`.
    A local progress timeline looked like an isolation win on the lyrics page, but page-cycle soak showed hidden album/playlist overlays becoming expensive. Keep progress time on the scoped `TimePublisher` child path unless a replacement is proven on album, lyrics, and playlist together.
 
+8. Unmount hidden lyrics controls after their fade-out completes.
+   The lyrics page can keep `SharedBottomControls` mounted during the fade-out so
+   the UX remains identical, but once controls are fully hidden the progress/time
+   section should not stay subscribed to high-frequency playback ticks. Keep the
+   controls mounted while visible, hovered, dragging, or while an audio-output
+   menu is open.
+
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:
@@ -115,13 +122,23 @@ continue an already-owned scroll gesture; out-of-bounds events may only continue
 an already-active gesture. Otherwise auto-follow freezes for the manual-scroll
 timeout and line switches feel stuck while diagnostics show low CPU.
 
-Line-level lyrics need interval-aware motion policy, but word-level lyrics are
-the normal baseline and should keep AMLL stagger. The geometry diagnostics
-measure target layout, not the presentation-layer animation currently visible
-to the user; a correct target can still look late if dense line-level intervals
-are driven through the stagger queue. Keep the original scroll spring and keep
-stagger for syllable/word-synced lyrics, but skip staggered per-line wave work
-for dense line-level timings so the page moves as one scroll target.
+Line-level lyrics need a single natural motion policy. Word/syllable-synced lyrics
+and dense plain line-level lyrics both must keep the protected top-to-bottom
+AMLL-style wave. Natural playback line advances should use the old verified
+`0.08s` row cadence; do not introduce a second direct-scroll animation type for
+dense lyrics or large display-index jumps. The geometry
+diagnostics measure target layout, not the presentation-layer animation
+currently visible to the user; a correct target can still be the wrong UX if the
+per-row wave order changes. Keep the original scroll spring and do not replace
+the top-to-bottom wave with an active-row wraparound schedule.
+
+The protected wave feel comes from discrete per-row target flips that let
+SwiftUI's AMLL spring carry each row into the new position. Do not replace that
+with hand-interpolated row offsets; it removes the spring character. Fix lag by
+preserving the top-to-bottom target-flip order, seeding visible rows with their
+old target before `displayCurrentLineIndex` changes, and keeping dense plain
+line-level lyrics on that same spring-driven wave instead of falling back to
+simultaneous target updates.
 
 Lyrics controls must stay mounted across loading/error/empty/rendered lyric
 content states. A next/previous click starts a protected replacement animation;
@@ -140,6 +157,30 @@ quiet. If diagnostics shows target indices staying behind after the intended
 wave has already finished, add a post-wave cleanup that aligns stale target
 state after the visual stagger completes; do not remove the stagger, spring
 parameters, highlight timing, or row layout.
+
+Natural playback line changes must not share the seek/manual-scroll direct-snap
+path. The direct path is acceptable for explicit user seek, manual-scroll return,
+track reset, or reduced motion, but not for ordinary lyric boundary advancement.
+Before a natural line advance publishes the new display index, every row in the
+wave window should already have an old target so no visible row falls through to
+the new global index and moves as a separate direct scroll.
+Do not keep alternate natural-playback timing helpers that are not used by the
+render path; stale delay-compression or large-jump helpers make tests protect an
+animation type that the user cannot actually see.
+
+The original AMLL-style wave starts around three rows above the new active line
+and travels top-to-bottom through the active line and tail. Rows above that
+visible wave start are reconciled immediately, but the visible wave itself must
+not wrap around the active row or reorder rows after the fact; that produces the
+visually late "catch-up" motion this spec is meant to prevent.
+
+Line switches should start the wave at the lyric boundary, not before it.
+Prewarming the whole wave before `displayCurrentLineIndex` changes makes the
+rows look like they are trying to jump to the next line while the highlight is
+still on the old line. That breaks the tuned AMLL feel even if diagnostics later
+show aligned targets. Preserve the three-row lead-in at boundary time and fix
+lag by reducing main-thread work, keeping the height cache hot, and avoiding
+backward target rewinds when a dense line interrupts an unfinished wave.
 
 The line-motion verifier must distinguish intended short stagger from lingering
 backlog. A single sample where nearby rows still point at the prior target is

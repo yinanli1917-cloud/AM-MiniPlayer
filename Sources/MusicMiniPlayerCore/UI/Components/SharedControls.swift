@@ -293,11 +293,13 @@ private struct PlaybackProgressSection: View {
     let reduceMotion: Bool
 
     var body: some View {
+        let currentTime = timePublisher.currentTime
+        let duration = musicController.duration
         VStack(spacing: 2) {
-            progressBar
+            progressBar(currentTime: currentTime, duration: duration)
 
             HStack {
-                Text(formatTime(timePublisher.currentTime))
+                Text(formatTime(currentTime))
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(subduedInk)
                     .shadow(color: shadowColor, radius: shadowRadius)
@@ -311,7 +313,7 @@ private struct PlaybackProgressSection: View {
 
                 Spacer()
 
-                Text("-" + formatTime(musicController.duration - timePublisher.currentTime))
+                Text("-" + formatTime(duration - currentTime))
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(subduedInk)
                     .shadow(color: shadowColor, radius: shadowRadius)
@@ -321,13 +323,13 @@ private struct PlaybackProgressSection: View {
         }
     }
 
-    private var progressBar: some View {
+    private func progressBar(currentTime: Double, duration: Double) -> some View {
         let barHeight: CGFloat = isProgressBarHovering ? 12 : 7  // 🔑 hover前7px，hover后12px
 
         return GeometryReader { geo in
             let currentProgress: CGFloat = {
-                if musicController.duration > 0 {
-                    return dragPosition ?? CGFloat(timePublisher.currentTime / musicController.duration)
+                if duration > 0 {
+                    return dragPosition ?? CGFloat(currentTime / duration)
                 }
                 return 0
             }()
@@ -377,7 +379,7 @@ private struct PlaybackProgressSection: View {
         .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
         .padding(.horizontal, 20)  // 🔑 进度条额外padding
         .accessibilityLabel("播放进度")
-        .accessibilityValue("\(formatTime(timePublisher.currentTime)) / \(formatTime(musicController.duration))")
+        .accessibilityValue("\(formatTime(currentTime)) / \(formatTime(duration))")
         .accessibilityAddTraits(.allowsDirectInteraction)
     }
 
@@ -404,9 +406,10 @@ private struct PlaybackProgressSection: View {
     }
 
     private func formatTime(_ time: Double) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
+        let totalSeconds = max(0, Int(time))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return seconds < 10 ? "\(minutes):0\(seconds)" : "\(minutes):\(seconds)"
     }
 }
 

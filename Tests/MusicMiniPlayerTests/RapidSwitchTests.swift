@@ -766,62 +766,56 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
-    func testLyricWaveTimingKeepsProtectedDefaultForLongLineInterval() {
+    func testLyricWaveTimingKeepsOriginalTopDownWaveOrder() {
+        let indices = Array(0...8)
+        let schedule = LyricWaveTiming.staggerSchedule(for: indices, newIndex: 5)
+
+        XCTAssertEqual(schedule.map(\.lineIndex), indices)
+        XCTAssertEqual(Set(schedule.map(\.lineIndex)), Set(indices))
+        XCTAssertEqual(schedule[0].delay, 0, accuracy: 0.0001)
+        XCTAssertEqual(schedule[1].delay, 0, accuracy: 0.0001)
+        XCTAssertEqual(schedule[2].delay, 0, accuracy: 0.0001)
+        XCTAssertGreaterThan(schedule[3].delay, 0)
+        XCTAssertGreaterThan(schedule[5].delay, schedule[3].delay)
+    }
+
+    func testLyricWaveTimingStartsThreeRowsAboveActiveLineLikeOriginalAMLLWave() {
+        let indices = Array(0...24)
+        let schedule = LyricWaveTiming.staggerSchedule(for: indices, newIndex: 12)
+        let activeDelay = schedule.first { $0.lineIndex == 12 }?.delay
+        let zeroDelayRows = schedule.filter { $0.delay == 0 }.map(\.lineIndex)
+
+        XCTAssertEqual(schedule.map(\.lineIndex), indices)
+        XCTAssertEqual(zeroDelayRows, Array(0...9))
+        XCTAssertEqual(activeDelay ?? 0, LyricWaveTiming.defaultBaseDelay * 3, accuracy: 0.001)
+        XCTAssertEqual(Set(schedule.map(\.lineIndex)).count, indices.count)
+    }
+
+    func testLyricWaveTimingKeepsLeadInAtLineBoundaryWithoutPrewarm() {
+        let indices = Array(0...24)
+        let schedule = LyricWaveTiming.staggerSchedule(for: indices, newIndex: 12)
+        let delays = Dictionary(uniqueKeysWithValues: schedule.map { ($0.lineIndex, $0.delay) })
+        let activeDelay = delays[12] ?? 1
+
+        XCTAssertEqual(schedule.map(\.lineIndex), indices)
+        XCTAssertEqual(schedule.filter { $0.delay == 0 }.map(\.lineIndex), Array(0...9))
+        XCTAssertGreaterThan(delays[10] ?? 0, 0)
+        XCTAssertGreaterThan(delays[11] ?? 0, delays[10] ?? 1)
+        XCTAssertGreaterThan(activeDelay, delays[11] ?? 1)
+        XCTAssertEqual(activeDelay, LyricWaveTiming.defaultBaseDelay * 3, accuracy: 0.001)
+        XCTAssertGreaterThan(delays[13] ?? 0, activeDelay)
+    }
+
+    func testLyricWaveTimingKeepsDensePlainLineLyricsOnTopDownDriftWave() {
         let indices = Array(0...18)
-        let delay = LyricWaveTiming.baseDelay(
-            for: indices,
-            startPosition: 0,
-            newIndex: 3,
-            lineInterval: 4.0
-        )
+        let schedule = LyricWaveTiming.staggerSchedule(for: indices, newIndex: 6)
+        let activeDelay = schedule.first { $0.lineIndex == 6 }?.delay
+        let tailDelay = schedule.last?.delay
 
-        XCTAssertEqual(delay, LyricWaveTiming.defaultBaseDelay, accuracy: 0.0001)
-    }
-
-    func testLyricWaveTimingCompressesShortLineIntervalBeforeNextLyric() {
-        let indices = Array(0...18)
-        let defaultDuration = LyricWaveTiming.waveDuration(
-            for: indices,
-            startPosition: 0,
-            newIndex: 3,
-            baseDelay: LyricWaveTiming.defaultBaseDelay
-        )
-        let delay = LyricWaveTiming.baseDelay(
-            for: indices,
-            startPosition: 0,
-            newIndex: 3,
-            lineInterval: 1.2
-        )
-        let adjustedDuration = LyricWaveTiming.waveDuration(
-            for: indices,
-            startPosition: 0,
-            newIndex: 3,
-            baseDelay: delay
-        )
-
-        XCTAssertLessThan(delay, LyricWaveTiming.defaultBaseDelay)
-        XCTAssertLessThan(adjustedDuration, defaultDuration)
-        XCTAssertLessThanOrEqual(adjustedDuration, 1.2 * LyricWaveTiming.maxLineIntervalFraction + 0.001)
-    }
-
-    func testLyricWaveTimingHonorsMinimumDelayForVeryDenseLyrics() {
-        let indices = Array(0...30)
-        let delay = LyricWaveTiming.baseDelay(
-            for: indices,
-            startPosition: 0,
-            newIndex: 2,
-            lineInterval: 0.25
-        )
-
-        XCTAssertEqual(delay, LyricWaveTiming.minimumBaseDelay, accuracy: 0.0001)
-    }
-
-    func testLyricWaveTimingDisablesStaggerOnlyForDenseLineLevelLyrics() {
-        XCTAssertFalse(LyricWaveTiming.shouldUseStagger(lineInterval: 0.9, hasSyllableSync: false))
-        XCTAssertFalse(LyricWaveTiming.shouldUseStagger(lineInterval: 1.45, hasSyllableSync: false))
-        XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: 1.6, hasSyllableSync: false))
-        XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: 0.9, hasSyllableSync: true))
-        XCTAssertTrue(LyricWaveTiming.shouldUseStagger(lineInterval: nil, hasSyllableSync: false))
+        XCTAssertEqual(schedule.map(\.lineIndex), indices)
+        XCTAssertEqual(schedule.filter { $0.delay == 0 }.map(\.lineIndex), Array(0...3))
+        XCTAssertEqual(activeDelay ?? 0, LyricWaveTiming.defaultBaseDelay * 3, accuracy: 0.001)
+        XCTAssertGreaterThan(tailDelay ?? 0, activeDelay ?? 0)
     }
 
     func testLyricWaveTimingKeepsOriginalTargetWindow() {
@@ -846,11 +840,69 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertFalse(indices.contains(51))
     }
 
-    func testLyricWaveTimingUsesSharedLargeJumpLimitForLineLevelLyrics() {
-        XCTAssertFalse(LyricWaveTiming.isLargeJump(from: 62, to: 64, hasSyllableSync: false))
-        XCTAssertFalse(LyricWaveTiming.isLargeJump(from: 62, to: 63, hasSyllableSync: false))
-        XCTAssertFalse(LyricWaveTiming.isLargeJump(from: 62, to: 64, hasSyllableSync: true))
-        XCTAssertTrue(LyricWaveTiming.isLargeJump(from: 62, to: 67, hasSyllableSync: true))
+    func testLyricWaveTimingSeedsInterruptedNaturalAdvanceToCurrentOldLine() {
+        let seeded = LyricWaveTiming.seededTargetsForNaturalAdvance(
+            existingTargets: [
+                10: 8,
+                11: 8,
+                40: 39
+            ],
+            indices: [10, 11, 12],
+            oldIndex: 9
+        )
+
+        XCTAssertEqual(seeded[10], 9)
+        XCTAssertEqual(seeded[11], 9)
+        XCTAssertEqual(seeded[12], 9)
+        XCTAssertEqual(seeded[40], 39)
+    }
+
+    func testLyricWaveAnimationSeedsCurrentLineBeforeNaturalAdvance() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let lyricsView = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let source = try String(contentsOf: lyricsView, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("seedWaveTargetsForLineAdvance(from: oldIndex, to: newIndex)"),
+            "Natural lyric advances must seed the visible wave window before displayCurrentLineIndex changes so rows do not fall through to direct scroll."
+        )
+        XCTAssertTrue(
+            source.contains("transaction.disablesAnimations = true"),
+            "Seeding interrupted wave targets must not animate a catch-up-to-old-line correction before the protected wave starts."
+        )
+        XCTAssertTrue(
+            source.contains("seededTargetsForNaturalAdvance"),
+            "Rows inherited from an unfinished previous wave must be normalized to the current old line before the next protected wave starts."
+        )
+        XCTAssertFalse(
+            source.contains("interruptedTargets"),
+            "Interrupted lyric waves should not run a separate delayed rewind pass; seeding belongs directly at the natural line-advance boundary."
+        )
+        XCTAssertFalse(
+            source.contains("recordLyricsWaveTimelineSamples(["),
+            "Wave timeline diagnostics must be batched; recording diagnostics from every row fire path perturbs the animation timing being measured."
+        )
+    }
+
+    func testLyricLineAdvanceTimingReusesSameScheduledTarget() {
+        XCTAssertTrue(LyricLineAdvanceTiming.shouldReuseScheduledTimer(
+            existingTarget: 42.0,
+            nextTarget: 42.008,
+            timerActive: true
+        ))
+        XCTAssertFalse(LyricLineAdvanceTiming.shouldReuseScheduledTimer(
+            existingTarget: 42.0,
+            nextTarget: 42.08,
+            timerActive: true
+        ))
+        XCTAssertFalse(LyricLineAdvanceTiming.shouldReuseScheduledTimer(
+            existingTarget: 42.0,
+            nextTarget: 42.0,
+            timerActive: false
+        ))
     }
 
     func testPlaybackPositionCorrectionDefersLargeBackwardResetWhileLyricsAreVisible() {
