@@ -863,27 +863,37 @@ final class RapidSwitchTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let lyricsView = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
-        let source = try String(contentsOf: lyricsView, encoding: .utf8)
+        let scrollEngine = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsScrollEngine.swift")
+        let lyricsSource = try String(contentsOf: lyricsView, encoding: .utf8)
+        let engineSource = try String(contentsOf: scrollEngine, encoding: .utf8)
 
         XCTAssertTrue(
-            source.contains("seedWaveTargetsForLineAdvance(from: oldIndex, to: newIndex)"),
+            lyricsSource.contains("seedWaveTargetsForLineAdvance(from: oldIndex, to: newIndex)"),
             "Natural lyric advances must seed the visible wave window before displayCurrentLineIndex changes so rows do not fall through to direct scroll."
         )
         XCTAssertTrue(
-            source.contains("transaction.disablesAnimations = true"),
-            "Seeding interrupted wave targets must not animate a catch-up-to-old-line correction before the protected wave starts."
+            lyricsSource.contains("scrollEngine.seedTargets(indices: indices, oldIndex: oldIndex)"),
+            "Interrupted wave targets are seeded in the scroll engine without SwiftUI row animation."
         )
         XCTAssertTrue(
-            source.contains("seededTargetsForNaturalAdvance"),
+            lyricsSource.contains("seededTargetsForNaturalAdvance"),
             "Rows inherited from an unfinished previous wave must be normalized to the current old line before the next protected wave starts."
         )
         XCTAssertFalse(
-            source.contains("interruptedTargets"),
+            lyricsSource.contains("interruptedTargets"),
             "Interrupted lyric waves should not run a separate delayed rewind pass; seeding belongs directly at the natural line-advance boundary."
         )
         XCTAssertFalse(
-            source.contains("recordLyricsWaveTimelineSamples(["),
-            "Wave timeline diagnostics must be batched; recording diagnostics from every row fire path perturbs the animation timing being measured."
+            lyricsSource.contains("DispatchWorkItem"),
+            "Wave row flips must not use per-row GCD work items that invalidate SwiftUI for every stagger step."
+        )
+        XCTAssertTrue(
+            engineSource.contains("onTimelineSamples:"),
+            "Wave timeline diagnostics must flush in batches from the presentation engine, not from each row fire path."
+        )
+        XCTAssertFalse(
+            lyricsSource.contains("recordLyricsWaveTimelineSamples(["),
+            "LyricsView must not record wave timeline samples per row fire; batching belongs to LyricsScrollEngine.flushTimelineSamples."
         )
     }
 
@@ -956,6 +966,15 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
+    func testLyricLineAdvanceTimingKeepsOriginalScrollLead() {
+        XCTAssertEqual(
+            LyricLineAdvanceTiming.displayPlaybackTime(12.30),
+            12.35,
+            accuracy: 0.0001,
+            "Display-level line advance must keep the original 50ms scroll lead so the wave starts before the lyric boundary instead of chasing it after highlight."
+        )
+    }
+
     func testPlaybackPositionCorrectionDefersLargeBackwardResetWhileLyricsAreVisible() {
         XCTAssertTrue(
             PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
@@ -1015,29 +1034,39 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
-    func testVisibleLyricClockCorrectionUsesSameThresholdAsWordHighlight() {
-        XCTAssertTrue(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+    func testVisibleLyricClockCorrectionIgnoresSmallPollJitter() {
+        XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
             drift: 0.12,
             isLyricsVisible: true,
             isManualScrolling: false
         ))
-        XCTAssertTrue(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+        XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
             drift: -0.12,
             isLyricsVisible: true,
             isManualScrolling: false
         ))
         XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
-            drift: 0.09,
+            drift: 0.34,
+            isLyricsVisible: true,
+            isManualScrolling: false
+        ))
+        XCTAssertTrue(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+            drift: 0.36,
+            isLyricsVisible: true,
+            isManualScrolling: false
+        ))
+        XCTAssertTrue(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+            drift: -0.36,
             isLyricsVisible: true,
             isManualScrolling: false
         ))
         XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
-            drift: 0.20,
+            drift: 0.40,
             isLyricsVisible: false,
             isManualScrolling: false
         ))
         XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
-            drift: 0.20,
+            drift: 0.40,
             isLyricsVisible: true,
             isManualScrolling: true
         ))

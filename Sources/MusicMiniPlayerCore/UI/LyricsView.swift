@@ -36,19 +36,6 @@ private struct CacheState {
     var renderedIndicesValid = false
 }
 
-/// AMLL wave animation state (GCD-driven: each line's target mutated independently via asyncAfter)
-private struct WaveState {
-    var lastCurrentIndex: Int = -1
-    /// Per-line target index — updated staggered via GCD, read in body for offset calculation
-    var lineTargetIndices: [Int: Int] = [:]
-    /// Pending DispatchWorkItems for cancellation on seek/track-change
-    var workItems: [DispatchWorkItem] = []
-    /// Batched diagnostics for the current wave. Writing diagnostics from each
-    /// row fire path perturbs the same main-queue timing it is trying to measure.
-    var pendingTimelineSamples: [DiagnosticLyricWaveTimelineSample] = []
-    var sequence: Int = 0
-}
-
 private struct DisplayLyricLine: Identifiable, Equatable {
     let id: String
     let sourceIndex: Int
@@ -151,6 +138,11 @@ struct LyricWaveTiming {
 struct LyricLineAdvanceTiming {
     static let scheduledTargetReuseTolerance: TimeInterval = 0.012
     static let minimumTimerDelay: TimeInterval = 0.006
+    static let scrollAnimationLeadTime: TimeInterval = 0.05
+
+    static func displayPlaybackTime(_ playbackTime: TimeInterval) -> TimeInterval {
+        playbackTime + scrollAnimationLeadTime
+    }
 
     static func shouldReuseScheduledTimer(
         existingTarget: TimeInterval?,
@@ -280,7 +272,8 @@ public struct LyricsView: View {
     // ── 分组状态 ──
     @State private var scroll = ScrollState()
     @State private var cache = CacheState()
-    @State private var wave = WaveState()
+    @State private var scrollEngine = LyricsScrollEngine()
+    @State private var scrollContentGeneration = 0
 
     // ── UI 状态 ──
     @State private var isHovering = false
@@ -408,8 +401,8 @@ public struct LyricsView: View {
         .onChange(of: musicController.currentTrackTitle) {
             debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             cancelWaveAnimations()
-            wave.lineTargetIndices.removeAll()
-            wave.lastCurrentIndex = -1
+            scrollEngine.reset()
+            scrollContentGeneration += 1
             cache.heightCacheInvalidated = true
             cache.renderedIndicesValid = false
             cachedDisplayLines.removeAll()
@@ -522,11 +515,11 @@ public struct LyricsView: View {
             guard let newSourceIndex = newValue else { return }
             if cachedDisplayLyrics.isEmpty {
                 let newIndex = displayIndex(forSourceIndex: newSourceIndex)
-                let oldIndex = oldValue.map { displayIndex(forSourceIndex: $0) } ?? wave.lastCurrentIndex
+                let oldIndex = oldValue.map { displayIndex(forSourceIndex: $0) } ?? scrollEngine.lastCurrentIndex
                 displayCurrentLineIndex = newIndex
-                if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
-                    triggerWaveAnimation(from: oldIndex, to: newIndex)
-                    wave.lastCurrentIndex = newIndex
+                if newIndex != scrollEngine.lastCurrentIndex && !scroll.isManualScrolling {
+                    scheduleScrollWave(from: oldIndex, to: newIndex)
+                    scrollContentGeneration += 1
                     startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
                 }
             } else {
@@ -673,60 +666,37 @@ public struct LyricsView: View {
             let displayIndex = scroll.isManualScrolling
                 ? (scroll.frozenDisplayIndex ?? liveIndex)
                 : liveIndex
-            let isLineWaveActive = !wave.workItems.isEmpty
             let _ = updateLyricsContainerHeight(containerHeight)
             let anchorY = (containerHeight - controlBarHeight) * 0.24
             let pendingTranslationLineIndices = cachedPendingTranslationLineIndices
-            // Visibility culling: only during steady auto-play with all heights measured
+            let _ = ensureHeightCache()
             let visibleRange = 12
             let cullingMeasurementThreshold = min(renderedIndices.count, max(8, visibleRange * 2))
             let hasEnoughMeasuredHeights = cache.lineHeights.count >= cullingMeasurementThreshold
             let shouldCull = !scroll.isManualScrolling && hasEnoughMeasuredHeights
+            let hostConfiguration = makeScrollHostConfiguration(
+                displayLines: displayLines,
+                displayIndex: displayIndex,
+                firstRealDisplayIndex: firstRealDisplayIndex,
+                anchorY: anchorY,
+                contentWidth: geo.size.width,
+                pendingTranslationLineIndices: pendingTranslationLineIndices,
+                shouldCull: shouldCull,
+                visibleRange: visibleRange
+            )
 
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(displayLines.enumerated()), id: \.element.id) { index, displayLine in
-                    let line = displayLine.line
-                    let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
-                        ? lyricsService.lyrics[displayLine.sourceIndex]
-                        : line
-                    if index == 0 || index >= firstRealDisplayIndex {
-                        let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
-
-                        if isVisible {
-                            let lineOffset = calculateLineOffset(
-                                index: index, currentIndex: displayIndex, anchorY: anchorY
-                            )
-                            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
-
-                            lyricLineContent(
-                                line: line,
-                                index: index,
-                                currentIndex: displayIndex,
-                                sourceIndex: displayLine.sourceIndex,
-                                isLastSegment: displayLine.isLastSegment,
-                                isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
-                                    index: displayLine.sourceIndex,
-                                    line: sourceLine,
-                                    pendingLineIndices: pendingTranslationLineIndices,
-                                    isTranslating: lyricsService.isTranslating
-                                )
-                            )
-                            .background(lineHeightTracker(index: index))
-                            .allowsHitTesting(true)
-                            .offset(y: fullOffset)
-                            .animation(
-                                scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
-                                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
-                                ),
-                                value: scroll.isManualScrolling ? 0 : fullOffset
-                            )
-                            .background(lineMotionTracker(index: index))
-                        }
-                    }
+            LyricsScrollHostRepresentable(
+                engine: scrollEngine,
+                configuration: hostConfiguration,
+                onPresentationFrame: { delta in
+                    diagnostics.recordLyricsPresentationFrame(delta: delta)
+                },
+                onRowHeightChange: { index, height in
+                    applyMeasuredRowHeight(index: index, height: height)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            )
             .offset(y: scroll.manualScrollOffset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
                 guard lineMotionFrameCaptureActive else {
@@ -999,7 +969,7 @@ public struct LyricsView: View {
             let line = displayLine.line
             let targetIndex = scroll.isManualScrolling
                 ? (scroll.lockedLineIndex ?? displayIndex)
-                : (wave.lineTargetIndices[index] ?? displayIndex)
+                : (scrollEngine.targetLineIndex(forRow: index, fallback: displayIndex))
             let accumulatedHeight = calculateAccumulatedHeight(upTo: index)
             let lineOffset = calculateLineOffset(index: index, currentIndex: displayIndex, anchorY: anchorY)
             let fullOffset = lineOffset + accumulatedHeight
@@ -1083,8 +1053,7 @@ public struct LyricsView: View {
         }
 
         let activeTargetIndex = partials.first { $0.index == activeIndex }?.targetIndex
-            ?? wave.lineTargetIndices[activeIndex]
-            ?? displayIndex
+            ?? scrollEngine.targetLineIndex(forRow: activeIndex, fallback: displayIndex)
         recordLineBoundaryLagIfNeeded(
             activeIndex: activeIndex,
             displayIndex: displayIndex,
@@ -1203,16 +1172,80 @@ public struct LyricsView: View {
     }
 
     private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
-        if scroll.isManualScrolling {
-            let frozenTargetIndex = scroll.lockedLineIndex ?? currentIndex
-            return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
-        } else {
-            // GCD wave: each line's target is updated independently via asyncAfter.
-            // Lines not yet flipped retain the previous wave's target (= oldIndex),
-            // creating the stagger. Fallback to currentIndex for lines never in a wave.
-            let lineTargetIndex = wave.lineTargetIndices[index] ?? currentIndex
-            return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
+        let frozenTarget = scroll.isManualScrolling ? (scroll.lockedLineIndex ?? currentIndex) : nil
+        let fullY = scrollEngine.fullOffsetY(
+            forRow: index,
+            displayIndex: currentIndex,
+            manualScrollFrozenTarget: frozenTarget
+        )
+        return fullY - calculateAccumulatedHeight(upTo: index)
+    }
+
+    private func applyMeasuredRowHeight(index: Int, height: CGFloat) {
+        guard height > 1 else { return }
+        let rounded = (height * 2).rounded() / 2
+        guard cache.lineHeights[index] != rounded else { return }
+        cache.lineHeights[index] = rounded
+        cache.heightCacheInvalidated = true
+        scheduleHeightCacheUpdate()
+    }
+
+    private func makeScrollHostConfiguration(
+        displayLines: [DisplayLyricLine],
+        displayIndex: Int,
+        firstRealDisplayIndex: Int,
+        anchorY: CGFloat,
+        contentWidth: CGFloat,
+        pendingTranslationLineIndices: Set<Int>,
+        shouldCull: Bool,
+        visibleRange: Int
+    ) -> LyricsScrollHostConfiguration {
+        var rows: [LyricsScrollRowConfiguration] = []
+        rows.reserveCapacity(displayLines.count)
+        for (index, displayLine) in displayLines.enumerated() {
+            guard index == 0 || index >= firstRealDisplayIndex else { continue }
+            if shouldCull && abs(index - displayIndex) > visibleRange { continue }
+            let line = displayLine.line
+            let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
+                ? lyricsService.lyrics[displayLine.sourceIndex]
+                : line
+            let content = AnyView(
+                lyricLineContent(
+                    line: line,
+                    index: index,
+                    currentIndex: displayIndex,
+                    sourceIndex: displayLine.sourceIndex,
+                    isLastSegment: displayLine.isLastSegment,
+                    isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
+                        index: displayLine.sourceIndex,
+                        line: sourceLine,
+                        pendingLineIndices: pendingTranslationLineIndices,
+                        isTranslating: lyricsService.isTranslating
+                    )
+                )
+                .background(lineHeightTracker(index: index))
+                .background(lineMotionTracker(index: index))
+                .allowsHitTesting(true)
+            )
+            rows.append(LyricsScrollRowConfiguration(
+                id: displayLine.id,
+                index: index,
+                content: content
+            ))
         }
+        return LyricsScrollHostConfiguration(
+            rows: rows,
+            anchorY: anchorY,
+            accumulatedHeights: cache.cachedAccumulatedHeights,
+            manualScrollOffset: 0,
+            displayIndex: displayIndex,
+            isManualScrolling: scroll.isManualScrolling,
+            frozenTargetIndex: scroll.isManualScrolling ? (scroll.lockedLineIndex ?? displayIndex) : nil,
+            contentWidth: contentWidth,
+            reduceMotion: reduceMotion,
+            suppressInitialMotion: suppressInitialLineMotion,
+            contentGeneration: scrollContentGeneration
+        )
     }
 
     // MARK: - Overlay 组件
@@ -1345,14 +1378,9 @@ public struct LyricsView: View {
         lyricsService.updateCurrentTime(line.startTime)
         updateDisplayCurrentLineIndex(at: line.startTime)
         // Sync wave state so the next natural line advance doesn't see a stale lastCurrentIndex
-        if let idx = displayCurrentLineIndex {
-            wave.lastCurrentIndex = idx
-        }
-        // Cancel pending wave work items and set all targets to new index (instant jump)
-        for item in wave.workItems { item.cancel() }
-        wave.workItems.removeAll()
         let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
-        for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
+        scrollEngine.snapAllTargets(to: newIdx, indices: renderedIndices)
+        scrollContentGeneration += 1
         // Unfreeze — no withAnimation! The .animation(value: fullOffset) on each line
         // handles the spring transition naturally when fullOffset changes.
         scroll.isManualScrolling = false
@@ -1403,9 +1431,8 @@ public struct LyricsView: View {
             // Sync wave to latest line index BEFORE unfreezing
             updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
             let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
-            wave.lastCurrentIndex = newIdx
-            // Set all targets to current index so spring transitions correctly
-            for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
+            scrollEngine.snapAllTargets(to: newIdx, indices: renderedIndices)
+            scrollContentGeneration += 1
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
             withAnimation(.interpolatingSpring(
@@ -1457,8 +1484,8 @@ public struct LyricsView: View {
             // Sync wave to latest line index BEFORE unfreezing
             updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
             let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
-            wave.lastCurrentIndex = newIdx
-            for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
+            scrollEngine.snapAllTargets(to: newIdx, indices: renderedIndices)
+            scrollContentGeneration += 1
 
             scroll.lockedLineIndex = nil
             scroll.rawScrollOffset = 0
@@ -1775,14 +1802,14 @@ public struct LyricsView: View {
             firstRealIndex: cachedFirstRealDisplayIndex
         )
         guard displayCurrentLineIndex != newIndex else { return }
-        let oldIndex = displayCurrentLineIndex ?? wave.lastCurrentIndex
+        let oldIndex = displayCurrentLineIndex ?? scrollEngine.lastCurrentIndex
         if let newIndex, !scroll.isManualScrolling {
             seedWaveTargetsForLineAdvance(from: oldIndex, to: newIndex)
         }
         displayCurrentLineIndex = newIndex
         guard let newIndex, !scroll.isManualScrolling else { return }
-        triggerWaveAnimation(from: oldIndex, to: newIndex)
-        wave.lastCurrentIndex = newIndex
+        scheduleScrollWave(from: oldIndex, to: newIndex)
+        scrollContentGeneration += 1
         startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
     }
 
@@ -1796,17 +1823,38 @@ public struct LyricsView: View {
             oldIndex: oldIndex,
             newIndex: newIndex,
             radius: targetRadius,
-            existingTargetIndices: wave.lineTargetIndices.keys
+            existingTargetIndices: scrollEngine.lineTargetIndices.keys
         )
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            wave.lineTargetIndices = LyricWaveTiming.seededTargetsForNaturalAdvance(
-                existingTargets: wave.lineTargetIndices,
-                indices: indices,
-                oldIndex: oldIndex
-            )
-        }
+        scrollEngine.seedTargets(indices: indices, oldIndex: oldIndex)
+    }
+
+    private func configureScrollWaveTimeline() {
+        let track = musicController.diagnosticsTrackContext()
+        scrollEngine.beginWaveTimeline(LyricsScrollEngine.WaveTimelineContext(
+            trackTitle: track.title,
+            trackArtist: track.artist,
+            renderedCount: renderedIndices.count,
+            recordTimeline: diagnostics.isLyricWaveTimelineEnabled,
+            onTimelineSamples: { [diagnostics] samples in
+                diagnostics.recordLyricsWaveTimelineSamples(samples)
+            }
+        ))
+    }
+
+    private func scheduleScrollWave(from oldIndex: Int, to newIndex: Int) {
+        guard !scroll.isManualScrolling else { return }
+        configureScrollWaveTimeline()
+        scrollEngine.flushTimelineSamples(deferred: true)
+        let lyrics = cachedDisplayLyrics
+        let lineInterval = estimatedLineInterval(around: newIndex, in: lyrics)
+        let hasSyllableSync = lyrics.indices.contains(newIndex) && lyrics[newIndex].hasSyllableSync
+        scrollEngine.scheduleNaturalWave(
+            from: oldIndex,
+            to: newIndex,
+            renderedIndices: renderedIndices,
+            lineInterval: lineInterval,
+            hasSyllableSync: hasSyllableSync
+        )
     }
 
     // MARK: - 滚动边界 + 橡皮筋
@@ -1933,185 +1981,6 @@ public struct LyricsView: View {
         }
     }
 
-    // MARK: - AMLL 波浪动画（纯计算驱动）
-
-    /// AMLL wave animation — GCD-driven stagger.
-    /// Each line's target is updated independently via DispatchWorkItem + asyncAfter.
-    /// Each mutation triggers a SwiftUI body re-evaluation, starting that line's spring
-    /// at a genuinely different wall-clock time — creating natural stagger.
-    private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
-        guard !scroll.isManualScrolling else { return }
-        let lyrics = cachedDisplayLyrics
-        guard !lyrics.isEmpty else { return }
-
-        let existingTargetIndices = wave.lineTargetIndices.keys
-        for item in wave.workItems { item.cancel() }
-        wave.workItems.removeAll()
-        flushPendingLyricWaveTimelineSamples(deferred: true)
-
-        let lineInterval = estimatedLineInterval(around: newIndex, in: lyrics)
-        let hasSyllableSync = lyrics.indices.contains(newIndex) && lyrics[newIndex].hasSyllableSync
-        let targetRadius = LyricWaveTiming.targetRadius(
-            lineInterval: lineInterval,
-            hasSyllableSync: hasSyllableSync
-        )
-        let indices = LyricWaveTiming.targetIndices(
-            renderedIndices: renderedIndices,
-            oldIndex: oldIndex,
-            newIndex: newIndex,
-            radius: targetRadius,
-            existingTargetIndices: existingTargetIndices
-        )
-        guard !indices.isEmpty else { return }
-
-        // Natural lyric advancement must not take the direct-scroll path. User
-        // seeks and manual-scroll returns already seed targets outside this
-        // function; this path is reserved for the protected top-to-bottom wave.
-        if reduceMotion {
-            let updateTargets = {
-                for idx in indices { wave.lineTargetIndices[idx] = newIndex }
-                wave.lineTargetIndices = wave.lineTargetIndices.filter { key, _ in
-                    abs(key - newIndex) <= max(targetRadius, 12)
-                }
-            }
-            var jumpTransaction = Transaction()
-            jumpTransaction.disablesAnimations = true
-            withTransaction(jumpTransaction, updateTargets)
-            return
-        }
-
-        let schedule = LyricWaveTiming.staggerSchedule(
-            for: indices,
-            newIndex: newIndex
-        )
-        wave.sequence += 1
-        let waveID = wave.sequence
-        let scheduledAt = Date()
-        let track = musicController.diagnosticsTrackContext()
-        let renderedCount = renderedIndices.count
-
-        if diagnostics.isLyricWaveTimelineEnabled {
-            wave.pendingTimelineSamples = schedule.map { target in
-                DiagnosticLyricWaveTimelineSample(
-                    timestamp: scheduledAt,
-                    page: "lyrics",
-                    trackTitle: track.title,
-                    trackArtist: track.artist,
-                    waveID: waveID,
-                    phase: "scheduled",
-                    lineIndex: target.lineIndex,
-                    oldIndex: oldIndex,
-                    newIndex: newIndex,
-                    displayIndex: newIndex,
-                    scheduledDelay: target.delay,
-                    actualDelay: 0,
-                    lineInterval: lineInterval,
-                    targetRadius: targetRadius,
-                    scheduleCount: schedule.count,
-                    renderedCount: renderedCount,
-                    isActiveLine: target.lineIndex == newIndex
-                )
-            }
-        }
-
-        var finalScheduledDelay: TimeInterval = 0
-        for target in schedule {
-            let lineIndex = target.lineIndex
-            finalScheduledDelay = target.delay
-
-            if target.delay < 0.01 {
-                wave.lineTargetIndices[lineIndex] = newIndex
-                if diagnostics.isLyricWaveTimelineEnabled {
-                    let firedAt = Date()
-                    wave.pendingTimelineSamples.append(DiagnosticLyricWaveTimelineSample(
-                        timestamp: firedAt,
-                        page: "lyrics",
-                        trackTitle: track.title,
-                        trackArtist: track.artist,
-                        waveID: waveID,
-                        phase: "fired",
-                        lineIndex: lineIndex,
-                        oldIndex: oldIndex,
-                        newIndex: newIndex,
-                        displayIndex: newIndex,
-                        scheduledDelay: target.delay,
-                        actualDelay: firedAt.timeIntervalSince(scheduledAt),
-                        lineInterval: lineInterval,
-                        targetRadius: targetRadius,
-                        scheduleCount: schedule.count,
-                        renderedCount: renderedCount,
-                        isActiveLine: lineIndex == newIndex
-                    ))
-                }
-            } else {
-                let scheduledDelay = target.delay
-                let workItem = DispatchWorkItem { [self] in
-                    guard !scroll.isManualScrolling else { return }
-                    wave.lineTargetIndices[lineIndex] = newIndex
-                    if diagnostics.isLyricWaveTimelineEnabled {
-                        let firedAt = Date()
-                        wave.pendingTimelineSamples.append(DiagnosticLyricWaveTimelineSample(
-                            timestamp: firedAt,
-                            page: "lyrics",
-                            trackTitle: track.title,
-                            trackArtist: track.artist,
-                            waveID: waveID,
-                            phase: "fired",
-                            lineIndex: lineIndex,
-                            oldIndex: oldIndex,
-                            newIndex: newIndex,
-                            displayIndex: newIndex,
-                            scheduledDelay: scheduledDelay,
-                            actualDelay: firedAt.timeIntervalSince(scheduledAt),
-                            lineInterval: lineInterval,
-                            targetRadius: targetRadius,
-                            scheduleCount: schedule.count,
-                            renderedCount: renderedCount,
-                            isActiveLine: lineIndex == newIndex
-                        ))
-                    }
-                }
-                wave.workItems.append(workItem)
-                DispatchQueue.main.asyncAfter(deadline: .now() + scheduledDelay, execute: workItem)
-            }
-        }
-
-        let settleWorkItem = DispatchWorkItem { [self] in
-            guard wave.lastCurrentIndex == newIndex else { return }
-            wave.workItems.removeAll()
-            guard !scroll.isManualScrolling else { return }
-
-            var keep = Set<Int>()
-            for idx in renderedIndices where abs(idx - newIndex) <= 18 {
-                keep.insert(idx)
-                if wave.lineTargetIndices[idx] != newIndex {
-                    wave.lineTargetIndices[idx] = newIndex
-                }
-            }
-            wave.lineTargetIndices = wave.lineTargetIndices.filter { keep.contains($0.key) }
-            flushPendingLyricWaveTimelineSamples(deferred: false)
-        }
-        wave.workItems.append(settleWorkItem)
-        DispatchQueue.main.asyncAfter(deadline: .now() + finalScheduledDelay + LyricWaveTiming.settlePadding, execute: settleWorkItem)
-    }
-
-    private func flushPendingLyricWaveTimelineSamples(deferred: Bool) {
-        guard diagnostics.isLyricWaveTimelineEnabled, !wave.pendingTimelineSamples.isEmpty else {
-            wave.pendingTimelineSamples.removeAll()
-            return
-        }
-
-        let samples = wave.pendingTimelineSamples
-        wave.pendingTimelineSamples.removeAll()
-        if deferred {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                diagnostics.recordLyricsWaveTimelineSamples(samples)
-            }
-        } else {
-            diagnostics.recordLyricsWaveTimelineSamples(samples)
-        }
-    }
-
     private func estimatedLineInterval(around index: Int, in lyrics: [LyricLine]) -> TimeInterval? {
         guard lyrics.indices.contains(index) else { return nil }
 
@@ -2127,9 +1996,8 @@ public struct LyricsView: View {
     }
 
     private func cancelWaveAnimations() {
-        for item in wave.workItems { item.cancel() }
-        wave.workItems.removeAll()
-        flushPendingLyricWaveTimelineSamples(deferred: true)
+        scrollEngine.cancelWave()
+        scrollEngine.flushTimelineSamples(deferred: true)
     }
 }
 
@@ -2140,6 +2008,12 @@ private struct LyricsMotionDiagnosticsPanel: View {
     private var status: (label: String, color: Color) {
         guard let snapshot else {
             return isMonitoring ? ("WAIT", .yellow) : ("OFF", .gray)
+        }
+        if snapshot.recentPresentationFrameStallCount > 0 || snapshot.latestPresentationFrameDeltaMs > 80 {
+            return ("PRES", .orange)
+        }
+        if snapshot.recentPresentationFrameStallCount > 0 || snapshot.latestPresentationFrameDeltaMs > 80 {
+            return ("PRES", .orange)
         }
         if snapshot.recentFrameStallCount > 0 || snapshot.latestFrameDeltaMs > 80 {
             return ("FRAME", .orange)
@@ -2208,6 +2082,7 @@ private struct LyricsMotionDiagnosticsPanel: View {
             metricRow("wave", "\(snapshot.wavePropagationLineCount) stale \(snapshot.staleStaticLineCount)")
             metricRow("age", "\(number(snapshot.activeVisualElapsedMs))ms")
             metricRow("frame", "\(number(snapshot.latestFrameDeltaMs))ms s\(snapshot.recentFrameStallCount)")
+            metricRow("pres", "\(number(snapshot.latestPresentationFrameDeltaMs))ms s\(snapshot.recentPresentationFrameStallCount)")
             metricRow("cap", "\(snapshot.captureMissCount)")
         }
         .font(.system(size: 9, weight: .semibold, design: .monospaced))
