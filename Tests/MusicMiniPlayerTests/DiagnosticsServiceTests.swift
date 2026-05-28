@@ -861,6 +861,94 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(text.components(separatedBy: "\n").filter { $0.hasPrefix("timestamp,page") }.count, 1)
     }
 
+    func testLyricWaveTimelineAnalysisSeparatesNormalWaveFromLateTargetFlips() {
+        let scheduledRows = [
+            DiagnosticLyricWaveTimelineSample(
+                page: "lyrics",
+                trackTitle: "Wave Song",
+                trackArtist: "Wave Artist",
+                waveID: 7,
+                phase: "scheduled",
+                lineIndex: 4,
+                oldIndex: 5,
+                newIndex: 8,
+                displayIndex: 8,
+                scheduledDelay: 0,
+                actualDelay: 0,
+                lineInterval: 1.0,
+                targetRadius: 14,
+                scheduleCount: 5,
+                renderedCount: 12,
+                isActiveLine: false
+            ),
+            DiagnosticLyricWaveTimelineSample(
+                page: "lyrics",
+                trackTitle: "Wave Song",
+                trackArtist: "Wave Artist",
+                waveID: 7,
+                phase: "scheduled",
+                lineIndex: 8,
+                oldIndex: 5,
+                newIndex: 8,
+                displayIndex: 8,
+                scheduledDelay: 0.24,
+                actualDelay: 0,
+                lineInterval: 1.0,
+                targetRadius: 14,
+                scheduleCount: 5,
+                renderedCount: 12,
+                isActiveLine: true
+            )
+        ]
+        let firedRows = [
+            DiagnosticLyricWaveTimelineSample(
+                page: "lyrics",
+                trackTitle: "Wave Song",
+                trackArtist: "Wave Artist",
+                waveID: 7,
+                phase: "fired",
+                lineIndex: 4,
+                oldIndex: 5,
+                newIndex: 8,
+                displayIndex: 8,
+                scheduledDelay: 0,
+                actualDelay: 0.02,
+                lineInterval: 1.0,
+                targetRadius: 14,
+                scheduleCount: 5,
+                renderedCount: 12,
+                isActiveLine: false
+            ),
+            DiagnosticLyricWaveTimelineSample(
+                page: "lyrics",
+                trackTitle: "Wave Song",
+                trackArtist: "Wave Artist",
+                waveID: 7,
+                phase: "fired",
+                lineIndex: 8,
+                oldIndex: 5,
+                newIndex: 8,
+                displayIndex: 8,
+                scheduledDelay: 0.24,
+                actualDelay: 0.43,
+                lineInterval: 1.0,
+                targetRadius: 14,
+                scheduleCount: 5,
+                renderedCount: 12,
+                isActiveLine: true
+            )
+        ]
+
+        let analysis = LyricWaveTimelineDiagnostics.analyze(scheduledRows + firedRows)
+
+        XCTAssertEqual(analysis.scheduledCount, 2)
+        XCTAssertEqual(analysis.firedCount, 2)
+        XCTAssertEqual(analysis.missingFiredCount, 0)
+        XCTAssertEqual(analysis.lateFiredCount, 1)
+        XCTAssertEqual(analysis.maxDelayOverrun, 0.19, accuracy: 0.001)
+        XCTAssertEqual(analysis.activeDelayOverrun, 0.19, accuracy: 0.001)
+    }
+
     func testLiveLyricLineMotionCSVRepairsExistingDuplicateHeadersOnSessionStart() throws {
         let liveURL = try XCTUnwrap(diagnosticsStorageRoot)
             .appendingPathComponent("nanoPod", isDirectory: true)

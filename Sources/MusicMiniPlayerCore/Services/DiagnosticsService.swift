@@ -448,6 +448,9 @@ public struct DiagnosticLiveMotionSnapshot: Equatable, Sendable {
     public var lingeringWaveBacklog: Bool
     public var latestFrameDeltaMs: Double
     public var recentFrameStallCount: Int
+    /// Display-link frame interval for lyrics scroll/wave presentation (not playback timer).
+    public var latestPresentationFrameDeltaMs: Double
+    public var recentPresentationFrameStallCount: Int
     public var captureMissCount: Int
     public var latestCaptureMissAt: Date?
     public var captureMissDisplayLineCount: Int
@@ -512,6 +515,61 @@ public struct DiagnosticLyricWaveTimelineSample: Identifiable, Codable, Equatabl
         self.scheduleCount = scheduleCount
         self.renderedCount = renderedCount
         self.isActiveLine = isActiveLine
+    }
+}
+
+public struct DiagnosticLyricWaveTimelineAnalysis: Equatable, Sendable {
+    public var scheduledCount: Int
+    public var firedCount: Int
+    public var missingFiredCount: Int
+    public var lateFiredCount: Int
+    public var maxDelayOverrun: TimeInterval
+    public var activeDelayOverrun: TimeInterval
+}
+
+public enum LyricWaveTimelineDiagnostics {
+    public static let fireDelayTolerance: TimeInterval = 0.09
+
+    public static func analyze(
+        _ samples: [DiagnosticLyricWaveTimelineSample],
+        fireDelayTolerance: TimeInterval = fireDelayTolerance
+    ) -> DiagnosticLyricWaveTimelineAnalysis {
+        let scheduled = samples.filter { $0.phase == "scheduled" }
+        let fired = samples.filter { $0.phase == "fired" }
+        let firedByLine = Dictionary(
+            grouping: fired,
+            by: { "\($0.waveID)|\($0.lineIndex)" }
+        )
+
+        var missingFiredCount = 0
+        var lateFiredCount = 0
+        var maxDelayOverrun: TimeInterval = 0
+        var activeDelayOverrun: TimeInterval = 0
+
+        for scheduledSample in scheduled {
+            let key = "\(scheduledSample.waveID)|\(scheduledSample.lineIndex)"
+            guard let firedSample = firedByLine[key]?.min(by: { $0.actualDelay < $1.actualDelay }) else {
+                missingFiredCount += 1
+                continue
+            }
+            let overrun = max(0, firedSample.actualDelay - scheduledSample.scheduledDelay)
+            maxDelayOverrun = max(maxDelayOverrun, overrun)
+            if scheduledSample.isActiveLine {
+                activeDelayOverrun = max(activeDelayOverrun, overrun)
+            }
+            if overrun > fireDelayTolerance {
+                lateFiredCount += 1
+            }
+        }
+
+        return DiagnosticLyricWaveTimelineAnalysis(
+            scheduledCount: scheduled.count,
+            firedCount: fired.count,
+            missingFiredCount: missingFiredCount,
+            lateFiredCount: lateFiredCount,
+            maxDelayOverrun: maxDelayOverrun,
+            activeDelayOverrun: activeDelayOverrun
+        )
     }
 }
 
@@ -616,7 +674,9 @@ public final class DiagnosticsService: ObservableObject {
     private let retention: TimeInterval = 24 * 60 * 60
     private var previousLyricLineMotionSamples: [String: (timestamp: Date, renderedMidY: Double)] = [:]
     private var latestFrameDeltaMs: Double = 0
+    private var latestPresentationFrameDeltaMs: Double = 0
     private var recentFrameStallTicks: [Date] = []
+    private var recentPresentationFrameStallTicks: [Date] = []
     private var lyricLineMotionCaptureMissCount = 0
     private var latestLyricLineMotionCaptureMissAt: Date?
     private var lastLyricLineMotionCaptureDisplayLineCount = 0
@@ -687,7 +747,9 @@ public final class DiagnosticsService: ObservableObject {
         previousLyricLineMotionSamples.removeAll()
         liveMotionSnapshot = nil
         latestFrameDeltaMs = 0
+        latestPresentationFrameDeltaMs = 0
         recentFrameStallTicks.removeAll()
+        recentPresentationFrameStallTicks.removeAll()
         lyricLineMotionCaptureMissCount = 0
         latestLyricLineMotionCaptureMissAt = nil
         lastLyricLineMotionCaptureDisplayLineCount = 0
@@ -1630,6 +1692,23 @@ public final class DiagnosticsService: ObservableObject {
         )
     }
 
+    public func recordLyricsPresentationFrame(delta: TimeInterval) {
+        guard isEnabled else { return }
+        latestPresentationFrameDeltaMs = delta * 1000
+        let now = Date()
+        recentPresentationFrameStallTicks.removeAll { now.timeIntervalSince($0) > 5.0 }
+        updateBaseline("lyrics.presentationFrame.delta.ms", value: delta * 1000)
+        updateActiveInteractions { trace in
+            incrementMetric("lyricsPresentationFrameSampleCount", in: &trace.metrics)
+            maximizeMetric("maxLyricsPresentationFrameDeltaMs", value: delta * 1000, in: &trace.metrics)
+            if delta > standaloneFrameStallThreshold {
+                incrementMetric("lyricsPresentationFrameStallCount", in: &trace.metrics)
+            }
+        }
+        guard delta > standaloneFrameStallThreshold else { return }
+        recentPresentationFrameStallTicks.append(now)
+    }
+
     public func recordFrameTick(delta: TimeInterval, page: String) {
         guard isEnabled else { return }
         latestFrameDeltaMs = delta * 1000
@@ -1781,19 +1860,35 @@ public final class DiagnosticsService: ObservableObject {
             lyricWaveTimelineSamples.removeLast(lyricWaveTimelineSamples.count - maxLyricWaveTimelineSamples)
         }
 
-        let scheduledCount = samples.filter { $0.phase == "scheduled" }.count
-        let firedCount = samples.filter { $0.phase == "fired" }.count
-        let maxDelayOverrun = samples
-            .map { max(0, $0.actualDelay - $0.scheduledDelay) }
-            .max() ?? 0
+        let analysis = LyricWaveTimelineDiagnostics.analyze(samples)
         updateBaseline("lyrics.waveTimeline.sampleCount", value: Double(samples.count))
-        updateBaseline("lyrics.waveTimeline.delayOverrun.ms", value: maxDelayOverrun * 1000)
+        updateBaseline("lyrics.waveTimeline.delayOverrun.ms", value: analysis.maxDelayOverrun * 1000)
+        updateBaseline("lyrics.waveTimeline.activeDelayOverrun.ms", value: analysis.activeDelayOverrun * 1000)
 
         updateActiveInteractions { trace in
             incrementMetric("lyricsWaveTimelineSampleCount", by: Double(samples.count), in: &trace.metrics)
-            incrementMetric("lyricsWaveScheduledRowCount", by: Double(scheduledCount), in: &trace.metrics)
-            incrementMetric("lyricsWaveFiredRowCount", by: Double(firedCount), in: &trace.metrics)
-            maximizeMetric("maxLyricsWaveDelayOverrunMs", value: maxDelayOverrun * 1000, in: &trace.metrics)
+            incrementMetric("lyricsWaveScheduledRowCount", by: Double(analysis.scheduledCount), in: &trace.metrics)
+            incrementMetric("lyricsWaveFiredRowCount", by: Double(analysis.firedCount), in: &trace.metrics)
+            incrementMetric("lyricsWaveMissingFiredRowCount", by: Double(analysis.missingFiredCount), in: &trace.metrics)
+            incrementMetric("lyricsWaveLateFiredRowCount", by: Double(analysis.lateFiredCount), in: &trace.metrics)
+            maximizeMetric("maxLyricsWaveDelayOverrunMs", value: analysis.maxDelayOverrun * 1000, in: &trace.metrics)
+            maximizeMetric("maxLyricsWaveActiveDelayOverrunMs", value: analysis.activeDelayOverrun * 1000, in: &trace.metrics)
+        }
+
+        if analysis.lateFiredCount > 0 {
+            recordEvent(
+                "diagnostics.lyricsWaveTimelineLate",
+                detail: "One or more lyric wave row target flips fired later than their scheduled stagger time.",
+                metrics: [
+                    "sampleCount": Double(samples.count),
+                    "scheduledRowCount": Double(analysis.scheduledCount),
+                    "firedRowCount": Double(analysis.firedCount),
+                    "missingFiredRowCount": Double(analysis.missingFiredCount),
+                    "lateFiredRowCount": Double(analysis.lateFiredCount),
+                    "maxDelayOverrunMs": analysis.maxDelayOverrun * 1000,
+                    "activeDelayOverrunMs": analysis.activeDelayOverrun * 1000
+                ]
+            )
         }
 
         writeLiveLyricWaveTimelineSamples(samples)
@@ -1838,6 +1933,8 @@ public final class DiagnosticsService: ObservableObject {
             lingeringWaveBacklog: false,
             latestFrameDeltaMs: latestFrameDeltaMs,
             recentFrameStallCount: recentFrameStallTicks.count,
+            latestPresentationFrameDeltaMs: latestPresentationFrameDeltaMs,
+            recentPresentationFrameStallCount: recentPresentationFrameStallTicks.count,
             captureMissCount: lyricLineMotionCaptureMissCount,
             latestCaptureMissAt: latestLyricLineMotionCaptureMissAt,
             captureMissDisplayLineCount: displayLineCount,
@@ -1850,6 +1947,8 @@ public final class DiagnosticsService: ObservableObject {
         snapshot.displayIndex = displayIndex
         snapshot.latestFrameDeltaMs = latestFrameDeltaMs
         snapshot.recentFrameStallCount = recentFrameStallTicks.count
+        snapshot.latestPresentationFrameDeltaMs = latestPresentationFrameDeltaMs
+        snapshot.recentPresentationFrameStallCount = recentPresentationFrameStallTicks.count
         snapshot.captureMissCount = lyricLineMotionCaptureMissCount
         snapshot.latestCaptureMissAt = latestLyricLineMotionCaptureMissAt
         snapshot.captureMissDisplayLineCount = displayLineCount
@@ -1916,6 +2015,8 @@ public final class DiagnosticsService: ObservableObject {
             lingeringWaveBacklog: lingeringWaveBacklog,
             latestFrameDeltaMs: latestFrameDeltaMs,
             recentFrameStallCount: recentFrameStallTicks.count,
+            latestPresentationFrameDeltaMs: latestPresentationFrameDeltaMs,
+            recentPresentationFrameStallCount: recentPresentationFrameStallTicks.count,
             captureMissCount: lyricLineMotionCaptureMissCount,
             latestCaptureMissAt: latestLyricLineMotionCaptureMissAt,
             captureMissDisplayLineCount: lastLyricLineMotionCaptureDisplayLineCount,
