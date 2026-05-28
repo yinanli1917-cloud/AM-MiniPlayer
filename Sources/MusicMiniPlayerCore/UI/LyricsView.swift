@@ -1590,12 +1590,18 @@ public struct LyricsView: View {
                 continue
             }
 
-            let wordSegments = line.hasSyllableSync
-                ? LyricDisplaySegmenter.wordSegments(for: line.words, options: .mainLyric)
-                : []
-            let textSegments = wordSegments.isEmpty
-                ? LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)
-                : wordSegments.map { displayText(forWords: $0) }
+            if line.hasSyllableSync {
+                result.append(DisplayLyricLine(
+                    id: "\(line.id.uuidString)-0",
+                    sourceIndex: sourceIndex,
+                    segmentIndex: 0,
+                    segmentCount: 1,
+                    line: line
+                ))
+                continue
+            }
+
+            let textSegments = LyricDisplaySegmenter.segments(for: line.text, options: .mainLyric)
             let segmentCount = max(textSegments.count, 1)
             if shouldKeepDisplayLineUnsplit(line, generatedSegmentCount: segmentCount) {
                 result.append(DisplayLyricLine(
@@ -1619,13 +1625,13 @@ public struct LyricsView: View {
                     for: line,
                     segmentIndex: segmentIndex,
                     segmentCount: segmentCount,
-                    wordSegment: wordSegments.indices.contains(segmentIndex) ? wordSegments[segmentIndex] : []
+                    wordSegment: []
                 )
                 let segmentLine = LyricLine(
                     text: textSegments.indices.contains(segmentIndex) ? textSegments[segmentIndex] : line.text,
                     startTime: timing.start,
                     endTime: timing.end,
-                    words: wordSegments.indices.contains(segmentIndex) ? wordSegments[segmentIndex] : [],
+                    words: [],
                     translation: translationSegments.indices.contains(segmentIndex)
                         ? translationSegments[segmentIndex]
                         : line.translation
@@ -1651,10 +1657,6 @@ public struct LyricsView: View {
         let duration = line.endTime - line.startTime
         guard duration.isFinite, duration > 0 else { return false }
         return duration / Double(generatedSegmentCount) < lyricMinimumGeneratedSegmentDuration
-    }
-
-    private func displayText(forWords words: [LyricWord]) -> String {
-        LyricDisplaySegmenter.displayText(forWords: words)
     }
 
     private func displayTiming(

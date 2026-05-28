@@ -887,6 +887,30 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testWordLevelLyricsBypassDisplayChunking() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let lyricsView = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let source = try String(contentsOf: lyricsView, encoding: .utf8)
+        guard let functionStart = source.range(of: "private func makeDisplayLyricLines")?.lowerBound,
+              let functionEnd = source.range(of: "private func shouldKeepDisplayLineUnsplit")?.lowerBound else {
+            XCTFail("Could not locate makeDisplayLyricLines in LyricsView.swift")
+            return
+        }
+        let body = String(source[functionStart..<functionEnd])
+
+        XCTAssertTrue(
+            body.contains("if line.hasSyllableSync"),
+            "Word-level lyrics must keep one source line as one display line."
+        )
+        XCTAssertFalse(
+            body.contains("wordSegments"),
+            "Display chunking must not split word-level lyrics into virtual rows; that changes sentence breaks and wave geometry."
+        )
+    }
+
     func testLyricLineAdvanceTimingReusesSameScheduledTarget() {
         XCTAssertTrue(LyricLineAdvanceTiming.shouldReuseScheduledTimer(
             existingTarget: 42.0,
