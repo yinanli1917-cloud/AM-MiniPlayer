@@ -2148,15 +2148,15 @@ private struct LyricsMotionDiagnosticsPanel: View {
            Date().timeIntervalSince(missAt) < 3 {
             return ("MISS", .yellow)
         }
+        if snapshot.lateActiveTarget || snapshot.lingeringWaveBacklog {
+            return ("LATE", .red)
+        }
         if snapshot.staleStaticLineCount > 0
-            || snapshot.fieldTargetMismatchCount > 0
-            || snapshot.laggedNearbyTargetCount > 0
-            || snapshot.activeTargetLagged
             || snapshot.maxInterLineErrorY > 18
             || snapshot.maxTargetErrorY > 32 {
             return ("DRIFT", .red)
         }
-        return ("DRIFT", .cyan)
+        return ("WAVE", .cyan)
     }
 
     var body: some View {
@@ -2205,7 +2205,8 @@ private struct LyricsMotionDiagnosticsPanel: View {
             metricRow("rows", "\(snapshot.capturedFirstLineIndex)-\(snapshot.capturedLastLineIndex) n\(snapshot.sampleCount)")
             metricRow("err", "\(number(snapshot.maxTargetErrorY))/\(number(snapshot.maxInterLineErrorY))")
             metricRow("field", "\(snapshot.fieldTargetMismatchCount) max \(snapshot.maxFieldTargetDistance)")
-            metricRow("near", "\(snapshot.laggedNearbyTargetCount) stale \(snapshot.staleStaticLineCount)")
+            metricRow("wave", "\(snapshot.wavePropagationLineCount) stale \(snapshot.staleStaticLineCount)")
+            metricRow("age", "\(number(snapshot.activeVisualElapsedMs))ms")
             metricRow("frame", "\(number(snapshot.latestFrameDeltaMs))ms s\(snapshot.recentFrameStallCount)")
             metricRow("cap", "\(snapshot.captureMissCount)")
         }

@@ -716,7 +716,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(snapshot?.latestFrameDeltaMs ?? -1, 42, accuracy: 0.001)
         XCTAssertEqual(snapshot?.fieldTargetMismatchCount, 2)
         XCTAssertEqual(snapshot?.maxFieldTargetDistance, 1)
-        XCTAssertEqual(snapshot?.laggedNearbyTargetCount, 1)
+        XCTAssertEqual(snapshot?.wavePropagationLineCount, 1)
     }
 
     func testLiveMotionSnapshotRecordsCaptureMisses() {

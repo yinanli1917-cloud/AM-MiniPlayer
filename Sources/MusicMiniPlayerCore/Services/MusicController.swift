@@ -41,6 +41,7 @@ public class TimePublisher: ObservableObject {
 struct PlaybackPositionCorrectionPolicy {
     static let maxConsecutiveTransientResetDeferrals = 3
     static let minimumSuspiciousBackwardJump: TimeInterval = 8.0
+    static let visibleLyricCorrectionThreshold: TimeInterval = 0.1
 
     static func shouldDeferTransientReset(
         polledPosition: TimeInterval,
@@ -58,6 +59,16 @@ struct PlaybackPositionCorrectionPolicy {
             return false
         }
         return true
+    }
+
+    static func shouldCorrectVisibleLyrics(
+        drift: TimeInterval,
+        isLyricsVisible: Bool,
+        isManualScrolling: Bool
+    ) -> Bool {
+        isLyricsVisible
+            && !isManualScrolling
+            && abs(drift) >= visibleLyricCorrectionThreshold
     }
 }
 
@@ -1184,6 +1195,7 @@ public class MusicController: ObservableObject {
                 )
                 if shouldDeferTransientReset {
                     self.transientPositionResetDeferrals += 1
+                    self.lastPolledPosition = position
                     DebugLogger.log("Timing", "🧯 TRANSIENT POSITION RESET: ignored polled=\(String(format: "%.2f", position)) interpolated=\(String(format: "%.2f", self.internalCurrentTime))")
                     DiagnosticsService.shared.recordEvent(
                         "playback.positionTransientReset",
@@ -1214,9 +1226,11 @@ public class MusicController: ObservableObject {
                 self.internalCurrentTime = position
                 self.lastPollTime = measurementTime
                 self.syncPlaybackClock(to: position, playing: playing, at: measurementTime)
-                let shouldCorrectVisibleLyrics = self.currentPage == .lyrics
-                    && abs(drift) > 0.35
-                    && !self.lyricsService.isManualScrolling
+                let shouldCorrectVisibleLyrics = PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+                    drift: drift,
+                    isLyricsVisible: self.currentPage == .lyrics,
+                    isManualScrolling: self.lyricsService.isManualScrolling
+                )
                 if shouldCorrectVisibleLyrics {
                     DiagnosticsService.shared.recordEvent(
                         "lyrics.playbackDriftCorrection",

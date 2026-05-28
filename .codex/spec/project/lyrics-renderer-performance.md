@@ -1,6 +1,6 @@
 # Lyrics Renderer Performance
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 ## Protected UX
 
@@ -41,6 +41,13 @@ never leave a blank translated row.
 Compact scripts such as CJK, kana, Hangul, and Thai must not be re-spaced by
 Latin orphan balancing.
 Do not replace the old layout with fade-based transitions, opacity culling, cadence reduction, or simplified lyric effects. Those may lower implementation complexity but break the perceived continuity.
+
+The protected auto-scroll state is a wave, not an "aligned OK" state. Runtime
+diagnostics must not treat every visible row already targeting the active line as
+the desired animation shape during a line transition. Nearby rows whose targets
+still differ from the active line are normal during early wave propagation; only
+late active targets, lingering nearby backlog, real geometry error, stale static
+motion, clipping, or frame stalls should be reported as failures.
 
 Missing translation rows must not leave invisible spacer rows for lines that are
 not eligible for translation, such as `Yeah`/`Oh` vocables or role markers. Only
@@ -91,6 +98,12 @@ Fixes that worked:
    section should not stay subscribed to high-frequency playback ticks. Keep the
    controls mounted while visible, hovered, dragging, or while an audio-output
    menu is open.
+
+9. Keep word-level highlighting and row-level wave on the same corrected
+   playback clock. ScriptingBridge position polls may correct the interpolated
+   playback time while lyrics are visible; if the correction is large enough to
+   move `wordFillTime`, it must also trigger the line-level lyric clock so the
+   highlight does not visibly lead the row movement.
 
 ## Verification Pattern
 

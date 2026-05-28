@@ -911,6 +911,33 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testLyricMotionHudDoesNotTreatAlignedDirectScrollAsOkay() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let lyricsView = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let source = try String(contentsOf: lyricsView, encoding: .utf8)
+        guard let panelStart = source.range(of: "private struct LyricsMotionDiagnosticsPanel")?.lowerBound else {
+            XCTFail("Could not locate LyricsMotionDiagnosticsPanel in LyricsView.swift")
+            return
+        }
+        let panel = String(source[panelStart...])
+
+        XCTAssertFalse(
+            panel.contains("\"OK\""),
+            "The motion HUD must not label fully aligned/direct-scroll geometry as OK; the protected UX is a wave."
+        )
+        XCTAssertTrue(
+            panel.contains("\"WAVE\""),
+            "The normal HUD state should describe the protected wave shape, not an aligned OK state."
+        )
+        XCTAssertTrue(
+            panel.contains("\"LATE\""),
+            "The HUD should reserve red failure for wave propagation that stays late past the allowed window."
+        )
+    }
+
     func testLyricLineAdvanceTimingReusesSameScheduledTarget() {
         XCTAssertTrue(LyricLineAdvanceTiming.shouldReuseScheduledTimer(
             existingTarget: 42.0,
@@ -986,6 +1013,34 @@ final class RapidSwitchTests: XCTestCase {
                 seekPending: false
             )
         )
+    }
+
+    func testVisibleLyricClockCorrectionUsesSameThresholdAsWordHighlight() {
+        XCTAssertTrue(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+            drift: 0.12,
+            isLyricsVisible: true,
+            isManualScrolling: false
+        ))
+        XCTAssertTrue(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+            drift: -0.12,
+            isLyricsVisible: true,
+            isManualScrolling: false
+        ))
+        XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+            drift: 0.09,
+            isLyricsVisible: true,
+            isManualScrolling: false
+        ))
+        XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+            drift: 0.20,
+            isLyricsVisible: false,
+            isManualScrolling: false
+        ))
+        XCTAssertFalse(PlaybackPositionCorrectionPolicy.shouldCorrectVisibleLyrics(
+            drift: 0.20,
+            isLyricsVisible: true,
+            isManualScrolling: true
+        ))
     }
 
     func testLyricMotionSamplingUsesPlaybackDerivedActiveIndex() {

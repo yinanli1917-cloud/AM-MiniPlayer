@@ -441,8 +441,11 @@ public struct DiagnosticLiveMotionSnapshot: Equatable, Sendable {
     public var staleStaticLineCount: Int
     public var fieldTargetMismatchCount: Int
     public var maxFieldTargetDistance: Int
-    public var laggedNearbyTargetCount: Int
+    public var wavePropagationLineCount: Int
     public var activeTargetLagged: Bool
+    public var activeVisualElapsedMs: Double
+    public var lateActiveTarget: Bool
+    public var lingeringWaveBacklog: Bool
     public var latestFrameDeltaMs: Double
     public var recentFrameStallCount: Int
     public var captureMissCount: Int
@@ -1828,8 +1831,11 @@ public final class DiagnosticsService: ObservableObject {
             staleStaticLineCount: 0,
             fieldTargetMismatchCount: 0,
             maxFieldTargetDistance: 0,
-            laggedNearbyTargetCount: 0,
+            wavePropagationLineCount: 0,
             activeTargetLagged: false,
+            activeVisualElapsedMs: 0,
+            lateActiveTarget: false,
+            lingeringWaveBacklog: false,
             latestFrameDeltaMs: latestFrameDeltaMs,
             recentFrameStallCount: recentFrameStallTicks.count,
             captureMissCount: lyricLineMotionCaptureMissCount,
@@ -1877,10 +1883,14 @@ public final class DiagnosticsService: ObservableObject {
         let capturedLastLineIndex = visibleSamples.map(\.lineIndex).max() ?? -1
         let fieldTargetMismatches = visibleSamples.filter { $0.targetIndex != $0.activeIndex }.count
         let maxFieldTargetDistance = visibleSamples.map { abs($0.targetIndex - $0.activeIndex) }.max() ?? 0
-        let laggedNearbyTargets = visibleSamples.filter {
+        let wavePropagationLines = visibleSamples.filter {
             abs($0.lineIndex - $0.activeIndex) <= 4 && $0.targetIndex != $0.activeIndex
         }.count
         let activeSample = visibleSamples.first { $0.lineIndex == $0.activeIndex }
+        let activeVisualElapsed = activeSample.map { visualElapsedForActiveState(sample: $0) } ?? 0
+        let activeTargetLagged = activeSample.map { $0.targetIndex != $0.activeIndex } ?? false
+        let lateActiveTarget = activeVisualElapsed > 0.55 && activeTargetLagged && wavePropagationLines >= 4
+        let lingeringWaveBacklog = activeVisualElapsed > 0.90 && wavePropagationLines >= 4
 
         liveMotionSnapshot = DiagnosticLiveMotionSnapshot(
             timestamp: sample.timestamp,
@@ -1899,8 +1909,11 @@ public final class DiagnosticsService: ObservableObject {
             staleStaticLineCount: staleStaticCount,
             fieldTargetMismatchCount: fieldTargetMismatches,
             maxFieldTargetDistance: maxFieldTargetDistance,
-            laggedNearbyTargetCount: laggedNearbyTargets,
-            activeTargetLagged: activeSample.map { $0.targetIndex != $0.activeIndex } ?? false,
+            wavePropagationLineCount: wavePropagationLines,
+            activeTargetLagged: activeTargetLagged,
+            activeVisualElapsedMs: activeVisualElapsed * 1000,
+            lateActiveTarget: lateActiveTarget,
+            lingeringWaveBacklog: lingeringWaveBacklog,
             latestFrameDeltaMs: latestFrameDeltaMs,
             recentFrameStallCount: recentFrameStallTicks.count,
             captureMissCount: lyricLineMotionCaptureMissCount,
