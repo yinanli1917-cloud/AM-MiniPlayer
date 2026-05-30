@@ -26,6 +26,8 @@ struct NativeLyricsTextRenderPlan: Equatable {
 
     let displayText: String
     let wordRuns: [NativeLyricsWordRunPlan]
+    let mainSweepProgress: CGFloat
+    let mainPostLineFade: CGFloat
     let translation: NativeLyricsTranslationRenderPlan?
     let constants: NativeLyricsTextConstants
 
@@ -35,6 +37,15 @@ struct NativeLyricsTextRenderPlan: Equatable {
         let displayText = cleanedDisplayText(for: line)
         let tokens = LyricDisplaySegmenter.displayTokens(forWords: line.words)
         let lineEndTime = line.words.last?.endTime ?? line.endTime
+        let mainSweepProgress = configuration.isActive
+            ? wordCountProgress(
+                words: line.words,
+                currentTime: configuration.currentTime,
+                lineStartTime: line.startTime,
+                lineEndTime: lineEndTime
+            )
+            : 1
+        let mainPostLineFade = postLineFadeOut(currentTime: configuration.currentTime, lineEndTime: lineEndTime)
         let runs = tokens.enumerated().map { index, token in
             NativeLyricsWordRunPlan.make(
                 token: token,
@@ -58,6 +69,8 @@ struct NativeLyricsTextRenderPlan: Equatable {
         return NativeLyricsTextRenderPlan(
             displayText: displayText,
             wordRuns: runs,
+            mainSweepProgress: mainSweepProgress,
+            mainPostLineFade: mainPostLineFade,
             translation: translation,
             constants: constants
         )

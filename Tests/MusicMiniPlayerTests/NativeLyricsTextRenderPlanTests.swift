@@ -46,6 +46,8 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
 
         XCTAssertEqual(plan.wordRuns[0].progress, 0.5, accuracy: 0.0001)
         XCTAssertEqual(plan.wordRuns[0].sweep.progress, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(plan.mainSweepProgress, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(plan.mainPostLineFade, 1, accuracy: 0.0001)
         XCTAssertLessThan(plan.wordRuns[0].baseFloatY, 0)
         XCTAssertGreaterThan(plan.wordRuns[0].baseFloatY, -2)
         XCTAssertEqual(plan.wordRuns[1].progress, 0, accuracy: 0.0001)
@@ -124,6 +126,7 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         ))
 
         XCTAssertEqual(plan.wordRuns[0].progress, 1)
+        XCTAssertEqual(plan.mainSweepProgress, 1)
         XCTAssertEqual(plan.wordRuns[0].opacity, 0.35)
         XCTAssertEqual(plan.wordRuns[0].baseFloatY, 0)
         XCTAssertEqual(plan.wordRuns[0].emphasis, .inactive)

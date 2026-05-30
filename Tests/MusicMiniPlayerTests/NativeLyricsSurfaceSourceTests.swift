@@ -15,5 +15,9 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("NativeLyricsRowView"))
         XCTAssertTrue(source.contains("CATextLayer"))
         XCTAssertTrue(source.contains("NativeLyricsFrameCadenceAccumulator"))
+        XCTAssertTrue(source.contains("mainSweepMaskLayer"))
+        XCTAssertTrue(source.contains("translationSweepMaskLayer"))
+        XCTAssertTrue(source.contains("lyricRenderTime()"))
+        XCTAssertFalse(source.contains("wordFillBucket"))
     }
 }
