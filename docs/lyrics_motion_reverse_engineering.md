@@ -121,8 +121,10 @@ The next architecture should be a renderer with one stable surface and an
 internal frame clock, not a per-frame Core Graphics text redraw and not a large
 tree of `CATextLayer` word tiles:
 
-1. Keep SwiftUI as the owner of page structure, scrolling, controls, line
-   identity, height caching, and non-current static text.
+1. Keep SwiftUI as the owner of page structure, controls, high-level line
+   identity, height-cache handoff, accessibility, and fallback. Native renderer
+   mode must own lyric scrolling, row hover/click, tap-to-jump direct snap, and
+   manual-scroll recovery inside its AppKit surface.
 2. For the active current word-level line, build an immutable `LyricRenderPlan`
    only when words, translation, font, or width changes.
 3. Pre-render stable glyph content into cached texture or bitmap content:

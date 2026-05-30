@@ -135,6 +135,40 @@ final class NativeLyricsRenderPlanTests: XCTestCase {
         XCTAssertEqual(visible, [0, 2, 13, 14, 15, 16, 17, 29])
     }
 
+    func testNativeManualScrollStateFreezesIndexAndRubberBandsInsideSurface() {
+        var state = NativeLyricsManualScrollState()
+        state.begin(frozenDisplayIndex: 4)
+        state.apply(
+            deltaY: 80,
+            velocity: 900,
+            bounds: NativeLyricsManualScrollBounds(maxUp: 60, maxDown: 120, rubberBandDimension: 200)
+        )
+
+        XCTAssertEqual(state.activeSnapshot?.frozenDisplayIndex, 4)
+        XCTAssertGreaterThan(state.manualOffset, 60)
+        XCTAssertLessThan(state.manualOffset, 80)
+        XCTAssertEqual(state.lastVelocity, 900)
+
+        state.clampToBounds(NativeLyricsManualScrollBounds(maxUp: 60, maxDown: 120, rubberBandDimension: 200))
+        XCTAssertEqual(state.manualOffset, 60, accuracy: 0.001)
+    }
+
+    func testNativeManualScrollResetClearsSurfaceOwnedOffset() {
+        var state = NativeLyricsManualScrollState()
+        state.begin(frozenDisplayIndex: 2)
+        state.apply(
+            deltaY: -90,
+            velocity: -500,
+            bounds: NativeLyricsManualScrollBounds(maxUp: 120, maxDown: 80, rubberBandDimension: 160)
+        )
+        state.reset()
+
+        XCTAssertNil(state.activeSnapshot)
+        XCTAssertEqual(state.manualOffset, 0)
+        XCTAssertEqual(state.rawOffset, 0)
+        XCTAssertEqual(state.lastVelocity, 0)
+    }
+
     private func sampleLyrics() -> [LyricLine] {
         [
             LyricLine(text: "zero", startTime: 0, endTime: 2),

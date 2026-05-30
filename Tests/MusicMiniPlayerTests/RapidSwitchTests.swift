@@ -1133,8 +1133,16 @@ final class RapidSwitchTests: XCTestCase {
             "The hidden sampling probe is still required for motion verification."
         )
         XCTAssertTrue(
-            source.contains("let appliedOffsetY = framesIncludeLineOffset\n                ? 0\n                : Double(fullOffset + scroll.manualScrollOffset)"),
+            source.contains("let appliedOffsetY = framesIncludeLineOffset\n                ? 0\n                : Double(fullOffset + effectiveManualOffset)"),
             "Native renderer frame telemetry already reports final visible row coordinates and must not double-count manual scroll offset."
+        )
+        XCTAssertTrue(
+            source.contains(".offset(y: layerActive ? 0 : scroll.manualScrollOffset)"),
+            "Native renderer mode must not keep the old SwiftUI manual-scroll offset wrapped around the native surface."
+        )
+        XCTAssertTrue(
+            source.contains("isEnabled: currentPage == .lyrics && !lyricsLayerRendererActive"),
+            "Native renderer mode must not keep the old global SwiftUI scroll detector active over the native surface."
         )
     }
 

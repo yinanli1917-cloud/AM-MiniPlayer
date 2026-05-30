@@ -321,24 +321,37 @@ Telemetry-only gates must cover:
   lyrics fetch/cache/parse/translation duration, ScriptingBridge latency, Music
   clock correction.
 
-## Experimental Layer Presentation Engine
+## Native Presentation Surface In Progress
 
-`LyricsView` remains the SwiftUI coordinator for page shell, controls, gestures,
-translation state, accessibility, and fallback. `LyricsPresentationEngine` owns
-the semantic row presentation state in the experimental native path: current
-index, playback mode, row targets, row Y/velocity, spring progression, and
-invisible wave diagnostics. Natural playback uses the protected AMLL-style
-top-to-bottom wave with the verified `0.08s` row cadence. Direct snap is
-reserved for seek, tap-to-line, manual-scroll recovery, track reset, initial
-layout, and reduced motion.
+`LyricsView` remains the SwiftUI coordinator for page shell, controls,
+translation state, accessibility, lifecycle, diagnostics handoff, and fallback.
+In native renderer mode it must not wrap the native lyric surface in the old
+manual-scroll offset, and it must not keep the old global
+`scrollDetectionWithVelocity` listener active over the surface. SwiftUI may
+receive narrow callbacks for controls visibility, Music seek, measured row
+heights, and diagnostics export, but the lyric interaction state belongs inside
+the native surface.
 
-`LyricsLayerRendererView` is only the presentation surface. It hosts the
-existing lyric row content but applies row Y movement through layer transforms
-instead of changing SwiftUI row offsets every frame. Do not move per-frame row
-motion back into SwiftUI body invalidation. If a future profile shows the active
-word or translation sweep is still the dominant bottleneck after row movement
-has left SwiftUI, add a second pass for a custom active text surface rather than
-simplifying the protected wave.
+`LyricsPresentationEngine` owns semantic row presentation state in the native
+path: current index, playback mode, row targets, row Y/velocity, spring
+progression, and invisible wave diagnostics. Natural playback uses the
+protected AMLL-style top-to-bottom wave with the verified `0.08s` row cadence.
+Direct snap is reserved for seek, tap-to-line, manual-scroll recovery, track
+reset, initial layout, and reduced motion.
+
+`NativeLyricsSurfaceView` owns visible row selection, native row view lifecycle,
+hover/click hit testing, `scrollWheel` manual-scroll capture, frozen display
+index, rubber-banded manual offset, tap-to-jump direct snap, recovery direct
+snap, frame cadence telemetry, text phase telemetry, and native motion metrics.
+Do not move these responsibilities back into SwiftUI body invalidation. If a
+future profile shows the active word or translation sweep is still the dominant
+bottleneck after row movement and manual-scroll ownership have left SwiftUI,
+add a second pass for a custom active text surface rather than simplifying the
+protected wave.
+
+This surface is still not accepted as complete until blur parity, text sweep
+parity, live scroll-tap-jump, FPS, drift, and CPU gates pass on the locked
+fixtures.
 
 For long-session stall reports, use `scripts/soak_harness.py` and watch:
 
