@@ -198,6 +198,120 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertTrue(selected?.lyrics.contains(where: { $0.hasSyllableSync }) == true)
     }
 
+    func testNetEaseWordLevelSiblingOverridesAlbumMatchedCreditLineSync() {
+        let fetcher = LyricsFetcher.shared
+        let albumLineSync = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "後期；樸總監",
+                "浪漫節日燈飾太亮",
+                "情人陪同來到多擠迫的關口",
+                "沿路有千百人在一起倒數",
+                "霓虹燈照著我一個人走",
+                "寒風中記低未完成的夢",
+                "誰還留在街角等候",
+                "若然明日天色仍舊"
+            ], startingAt: 15.2, gap: 4.3),
+            source: "NetEase",
+            score: 75,
+            kind: .synced,
+            albumMatched: true,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+        let wordLevelSibling = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "浪漫 節日 燈飾 太亮 掩蓋 了 隱憂",
+                "情人 陪同 來到 多 擠迫 的 關口",
+                "沿路 有 千百人 在 一起 倒數",
+                "霓虹燈 照著 我 一個人 走",
+                "寒風 中 記低 未完成 的 夢",
+                "誰 還 留在 街角 等候",
+                "若然 明日 天色 仍舊",
+                "我 都 想 再 向前 走"
+            ], wordLevel: true),
+            source: "NetEase",
+            score: 66,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertTrue(fetcher.shouldPreferNetEaseAuthoritativeSiblingForTesting(
+            sibling: wordLevelSibling,
+            primary: albumLineSync,
+            duration: 256
+        ))
+    }
+
+    func testNetEaseWordLevelSiblingCanReplaceOverSegmentedGenericSingleAlbumVersion() {
+        let fetcher = LyricsFetcher.shared
+        let overSegmentedAlbumMatch = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "浪漫 節日 燈飾 太亮",
+                "掩蓋 了 隱憂",
+                "情人 陪同 來到",
+                "多 擠迫 的 關口",
+                "沿路 有 千百人",
+                "在 一起 倒數",
+                "霓虹燈 照著 我",
+                "一個人 走"
+            ], wordLevel: true),
+            source: "NetEase",
+            score: 100,
+            kind: .synced,
+            albumMatched: true,
+            titleMatched: true,
+            matchedDurationDiff: 2.3
+        )
+        let canonicalSibling = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "浪漫 節日 燈飾 太亮 掩蓋 了 隱憂",
+                "情人 陪同 來到 多 擠迫 的 關口",
+                "沿路 有 千百人 在 一起 倒數",
+                "霓虹燈 照著 我 一個人 走",
+                "寒風 中 記低 未完成 的 夢",
+                "誰 還 留在 街角 等候"
+            ], wordLevel: true),
+            source: "NetEase",
+            score: 100,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 1.8
+        )
+
+        XCTAssertTrue(fetcher.shouldPreferNetEaseAuthoritativeSiblingForTesting(
+            sibling: canonicalSibling,
+            primary: overSegmentedAlbumMatch,
+            duration: 256
+        ))
+    }
+
+    func testSparseCJKLineSyncWithoutAlbumDoesNotProbeWordLevelSibling() {
+        let fetcher = LyricsFetcher.shared
+        let sparseLineSync = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "我的宝贝　请听我说",
+                "世界很大　你要慢慢走",
+                "别怕风雨　别怕寂寞",
+                "我会在这里为你守候",
+                "有一天你会看见",
+                "温柔一直在身边"
+            ], startingAt: 25.7, gap: 18.0),
+            source: "NetEase",
+            score: 47,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        XCTAssertFalse(fetcher.shouldProbeNetEaseAuthoritativeSiblingForTesting(
+            primary: sparseLineSync,
+            title: "我的寶貝",
+            artist: "Lee Chih Ching",
+            duration: 257
+        ))
+    }
+
     func testAlbumMatchedLineSyncCanBeatUnprovenWordLevelOutlier() {
         let fetcher = LyricsFetcher.shared
         let albumLineSync = LyricsFetcher.LyricsFetchResult(
@@ -933,6 +1047,61 @@ final class LyricsSelectionTests: XCTestCase {
                 simplifiedInput: "陈妍希"
             )
         )
+    }
+
+    func testCJKTitleWithASCIIArtistDoesNotPromoteWrongCJKArtistThroughAlbumMatch() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "冬天一個遊",
+            artist: "Gordon Flanders",
+            originalTitle: "冬天一個遊",
+            originalArtist: "Gordon Flanders",
+            duration: 255.957,
+            album: "冬天一個遊 - Single"
+        )
+        let songs: [[String: Any]] = [
+            [
+                "id": 1,
+                "name": "冬天一个游",
+                "artist": "Gordon Flanders",
+                "duration": 254.149,
+                "album": "FLANDERS"
+            ],
+            [
+                "id": 2,
+                "name": "冬天一个游",
+                "artist": "Hoho / 之之是林之之",
+                "duration": 254.0,
+                "album": "冬天一个游"
+            ]
+        ]
+
+        let candidates: [LyricsFetcher.SearchCandidate<Int>] = fetcher.buildCandidates(
+            songs: songs,
+            params: params,
+            searchDescriptor: "title only",
+            extractSong: { song in
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let artist = song["artist"] as? String,
+                      let duration = song["duration"] as? Double,
+                      let album = song["album"] as? String else { return nil }
+                return (id, name, artist, duration, album)
+            }
+        )
+
+        XCTAssertEqual(candidates.first { $0.id == 1 }?.artistMatch, true)
+        XCTAssertEqual(candidates.first { $0.id == 2 }?.artistMatch, false)
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: "NetEase",
+            inputTitle: "冬天一個遊",
+            inputArtist: "Gordon Flanders",
+            hasAlbumHint: true
+        )
+
+        XCTAssertEqual(selected?.id, 1)
     }
 
     func testCompactRomanizedTitleMatchesProviderParticleSpacing() {

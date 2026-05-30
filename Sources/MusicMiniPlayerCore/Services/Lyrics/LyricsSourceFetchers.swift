@@ -363,6 +363,200 @@ extension LyricsFetcher {
         return leavesLargeTail && (startsTooEarly || startsWithCatalogMarker)
     }
 
+    private func realLyricLines(_ lyrics: [LyricLine]) -> [LyricLine] {
+        lyrics.filter { line in
+            let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+        }
+    }
+
+    private func hasSyllableSync(_ result: LyricsFetchResult) -> Bool {
+        result.lyrics.contains(where: { $0.hasSyllableSync })
+    }
+
+    private func hasCJKLyricOrMetadataContext(params: SearchParams, lyrics: [LyricLine]) -> Bool {
+        LanguageUtils.containsCJK(params.rawTitle)
+            || LanguageUtils.containsCJK(params.rawOriginalTitle)
+            || LanguageUtils.containsCJK(params.normalizedAlbum)
+            || lyrics.contains(where: { LanguageUtils.containsCJK($0.text) })
+    }
+
+    private func looksLikeOpeningCatalogCreditLine(_ result: LyricsFetchResult) -> Bool {
+        guard let firstReal = realLyricLines(result.lyrics).first,
+              firstReal.startTime <= 45.0 else {
+            return false
+        }
+        let simplified = LanguageUtils.toSimplifiedChinese(firstReal.text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard simplified.count <= 32 else { return false }
+        let creditKeywords = [
+            "作词", "作曲", "编曲", "制作", "制作人", "监制", "混音", "录音",
+            "母带", "母帶", "后期", "後期", "企划", "企劃", "出品", "发行",
+            "發行", "统筹", "統籌", "producer", "mix", "master", "record"
+        ]
+        guard creditKeywords.contains(where: { simplified.contains($0) }) else {
+            return false
+        }
+        let hasCreditSeparator = simplified.contains(":")
+            || simplified.contains("：")
+            || simplified.contains(";")
+            || simplified.contains("；")
+            || simplified.contains("@")
+        return hasCreditSeparator || simplified.count <= 12
+    }
+
+    private func shouldProbeNetEaseAuthoritativeSibling(
+        primary: LyricsFetchResult,
+        params: SearchParams,
+        match: SelectedSearchCandidate<Int>,
+        duration: TimeInterval
+    ) -> Bool {
+        guard primary.kind == .synced,
+              !hasSyllableSync(primary),
+              match.durationDiff < 3.0,
+              match.albumMatched || match.titleMatched || match.nativeAliasMatched,
+              hasCJKLyricOrMetadataContext(params: params, lyrics: primary.lyrics) else {
+            return false
+        }
+
+        if match.albumMatched && !params.normalizedAlbum.isEmpty {
+            return true
+        }
+        if looksLikeOpeningCatalogCreditLine(primary) {
+            return true
+        }
+        return false
+    }
+
+    private func isGenericSingleAlbumEcho(params: SearchParams) -> Bool {
+        let album = params.normalizedAlbum
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+        guard !album.isEmpty else { return false }
+        let titleKeys = [
+            params.simplifiedTitle,
+            params.simplifiedOriginalTitle,
+            LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(params.rawTitle)),
+            LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(params.rawOriginalTitle))
+        ]
+        .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+        let genericTokens: Set<String> = ["single", "ep", "单曲", "單曲", "singles"]
+        for title in titleKeys where album.contains(title) {
+            let remainder = album
+                .replacingOccurrences(of: title, with: " ")
+                .split { !$0.isLetter && !$0.isNumber }
+                .map { String($0).lowercased() }
+            if !remainder.isEmpty && remainder.allSatisfy({ genericTokens.contains($0) }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func shouldProbeNetEaseCanonicalWordLevelSibling(
+        primary: LyricsFetchResult,
+        params: SearchParams,
+        match: SelectedSearchCandidate<Int>
+    ) -> Bool {
+        guard primary.kind == .synced,
+              hasSyllableSync(primary),
+              match.albumMatched,
+              match.durationDiff < 3.0,
+              hasCJKLyricOrMetadataContext(params: params, lyrics: primary.lyrics) else {
+            return false
+        }
+        return isGenericSingleAlbumEcho(params: params) || match.durationDiff >= 1.5
+    }
+
+    private func shouldPreferNetEaseAuthoritativeSibling(
+        _ sibling: LyricsFetchResult,
+        over primary: LyricsFetchResult,
+        duration: TimeInterval
+    ) -> Bool {
+        let siblingHasSyllableSync = hasSyllableSync(sibling)
+        let primaryHasSyllableSync = hasSyllableSync(primary)
+        guard sibling.kind == .synced,
+              siblingHasSyllableSync,
+              sibling.score >= 35,
+              !isSuspiciousCompressedLineTiming(sibling, duration: duration) else {
+            return false
+        }
+
+        let primaryRealCount = realLyricLines(primary.lyrics).count
+        let siblingRealCount = realLyricLines(sibling.lyrics).count
+        if primaryHasSyllableSync {
+            guard hasCJKLyricOverlap(primary.lyrics, sibling.lyrics) else { return false }
+            let primaryDurationDiff = primary.matchedDurationDiff ?? .greatestFiniteMagnitude
+            let siblingDurationDiff = sibling.matchedDurationDiff ?? .greatestFiniteMagnitude
+            if sibling.score >= primary.score - 8,
+               siblingDurationDiff + 0.25 < primaryDurationDiff {
+                return true
+            }
+            if primaryRealCount >= siblingRealCount + 3,
+               sibling.score >= primary.score - 3,
+               siblingDurationDiff <= primaryDurationDiff + 0.5 {
+                return true
+            }
+            return false
+        }
+
+        if sibling.score >= primary.score - 12 {
+            return true
+        }
+        if siblingRealCount >= primaryRealCount {
+            return true
+        }
+        return looksLikeOpeningCatalogCreditLine(primary)
+    }
+
+    func shouldPreferNetEaseAuthoritativeSiblingForTesting(
+        sibling: LyricsFetchResult,
+        primary: LyricsFetchResult,
+        duration: TimeInterval
+    ) -> Bool {
+        shouldPreferNetEaseAuthoritativeSibling(sibling, over: primary, duration: duration)
+    }
+
+    func shouldProbeNetEaseAuthoritativeSiblingForTesting(
+        primary: LyricsFetchResult,
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String = "",
+        albumMatched: Bool = false,
+        titleMatched: Bool = true,
+        nativeAliasMatched: Bool = false,
+        durationDiff: Double = 0.2
+    ) -> Bool {
+        let params = SearchParams(
+            title: title,
+            artist: artist,
+            originalTitle: title,
+            originalArtist: artist,
+            duration: duration,
+            album: album
+        )
+        let match = SelectedSearchCandidate<Int>(
+            id: 0,
+            title: title,
+            artist: artist,
+            albumMatched: albumMatched,
+            titleMatched: titleMatched,
+            nativeAliasMatched: nativeAliasMatched,
+            durationDiff: durationDiff,
+            matchRank: 0
+        )
+        return shouldProbeNetEaseAuthoritativeSibling(
+            primary: primary,
+            params: params,
+            match: match,
+            duration: duration
+        )
+    }
+
     private struct NetEaseSiblingQualityCandidate: Sendable {
         let id: Int
         let name: String
@@ -1330,9 +1524,28 @@ extension LyricsFetcher {
                     scriptMismatchSuspected: scriptMismatchSuspected
                 )
                 let shouldProbeSiblingRows = isSuspiciousCompressedLineTiming(fetched, duration: duration)
-                if shouldProbeSiblingRows {
+                let shouldProbeLineTimedAuthoritativeSibling = shouldProbeNetEaseAuthoritativeSibling(
+                    primary: fetched,
+                    params: params,
+                    match: match,
+                    duration: duration
+                )
+                let shouldProbeCanonicalWordLevelSibling = shouldProbeNetEaseCanonicalWordLevelSibling(
+                    primary: fetched,
+                    params: params,
+                    match: match
+                )
+                if shouldProbeSiblingRows || shouldProbeLineTimedAuthoritativeSibling || shouldProbeCanonicalWordLevelSibling {
                     primaryResult = fetched
-                    DebugLogger.log("NetEase", "⚠️ Primary lyrics look like a compressed line-timed version (score=\(String(format: "%.1f", score))) — probing sibling catalog rows")
+                    let reason: String
+                    if shouldProbeSiblingRows {
+                        reason = "compressed line-timed version"
+                    } else if shouldProbeLineTimedAuthoritativeSibling {
+                        reason = "line-timed album match with possible word-level sibling"
+                    } else {
+                        reason = "generic album word-level match with possible canonical sibling"
+                    }
+                    DebugLogger.log("NetEase", "⚠️ Primary lyrics look like a \(reason) (score=\(String(format: "%.1f", score))) — probing sibling catalog rows")
                     if let siblingResult = await fetchNetEaseSiblingQualityFallback(
                         params: params,
                         headers: headers,
@@ -1342,6 +1555,10 @@ extension LyricsFetcher {
                         catalogTitle: match.title,
                         catalogArtist: match.artist,
                         skipAliasResolution: true
+                    ), shouldProbeSiblingRows || shouldPreferNetEaseAuthoritativeSibling(
+                        siblingResult,
+                        over: fetched,
+                        duration: duration
                     ) {
                         return siblingResult
                     }

@@ -1296,6 +1296,7 @@ extension LyricsFetcher {
             let isCrossScriptArtist = (inputArtistIsASCII && resultArtistIsCJK) || (inputArtistIsCJK && resultArtistIsASCII)
 
             let inputHasBothScripts = inputArtistIsASCII && inputArtistIsCJK
+            let inputTitleHasCJK = params.titlePairs.contains { LanguageUtils.containsCJK($0.0) }
             let inputArtistIsCompilation = params.artistPairs.contains {
                 isCompilationArtistName($0.0) || isCompilationArtistName($0.1)
             }
@@ -1311,6 +1312,7 @@ extension LyricsFetcher {
             if !artistMatch,
                isCrossScriptArtist,
                !inputHasBothScripts,
+               !(inputTitleHasCJK && inputArtistIsASCII && resultArtistIsCJK),
                (!resultArtistIsCompilation || inputArtistIsCompilation) {
                 if (albumMatch && titleMatch) ||
                    (titleMatch && durationDiff < 1.0) ||
