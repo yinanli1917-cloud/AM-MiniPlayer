@@ -283,7 +283,7 @@ func testSong(
 }
 
 // =========================================================================
-// MARK: - 期望值校验
+// MARK: - Expectation Validation
 // =========================================================================
 
 private func checkExpectation(
@@ -341,6 +341,16 @@ private func checkExpectation(
         if let expected = exp.expectedClassification,
            classification != expected {
             failures.append("分类 \(classification) != 期望 \(expected)")
+        }
+        if exp.requiresSyllableSync == true,
+           !lyrics.contains(where: { $0.hasSyllableSync }) {
+            failures.append("期望逐字/逐音节歌词，但选中结果没有 word-level timing")
+        }
+        if let minRealLineCount = exp.minRealLineCount {
+            let realLineCount = lyrics.filter { isRealLyricText($0.text) }.count
+            if realLineCount < minRealLineCount {
+                failures.append("有效歌词行数 \(realLineCount) 少于期望下限 \(minRealLineCount)")
+            }
         }
         if exp.firstLineStartMinS != nil || exp.firstLineStartMaxS != nil {
             guard let line = firstReal else {

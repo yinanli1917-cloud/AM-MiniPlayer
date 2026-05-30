@@ -1,10 +1,10 @@
 /**
  * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils
- * [OUTPUT]: fetchAllSources 并行歌词源请求 with direct-title and native-alias identity evidence kept separate
- * [POS]: Lyrics 的获取子模块，负责 7 个歌词源的 HTTP 请求和结果整合
- * [NOTE]: NetEase/QQ 共用 searchAndSelectCandidate 模板 + buildCandidates 泛型构建；album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches
+ * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate
+ * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
+ * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
- * [PROTOCOL]: 变更时更新此头部，然后检查 Services/Lyrics/CLAUDE.md
+ * [PROTOCOL]: Update this header when changing the module, then check Services/Lyrics/CLAUDE.md
  */
 
 import Foundation
@@ -12,10 +12,10 @@ import MusicKit
 import os
 
 // ============================================================
-// MARK: - 歌词获取器
+// MARK: - Lyrics Fetcher
 // ============================================================
 
-/// 歌词获取工具 - 并行请求多个歌词源
+/// Lyrics fetch utility that requests multiple sources in parallel.
 public final class LyricsFetcher {
 
     public static let shared = LyricsFetcher()
@@ -35,7 +35,7 @@ public final class LyricsFetcher {
     let amllIndexCacheDuration: TimeInterval = 3600
     let amllIndexFailureCooldown: TimeInterval = 300
 
-    /// AMLL 镜像源
+    /// AMLL mirror sources.
     let amllMirrorBaseURLs: [(name: String, baseURL: String)] = [
         ("jsDelivr", "https://cdn.jsdelivr.net/gh/Steve-xmh/amll-ttml-db@main/"),
         ("GitHub", "https://raw.githubusercontent.com/Steve-xmh/amll-ttml-db/main/"),
@@ -50,7 +50,7 @@ public final class LyricsFetcher {
         Task { await loadAMLLIndex() }
     }
 
-    /// 歌词搜索结果
+    /// Lyrics search result.
     public struct LyricsFetchResult {
         public let lyrics: [LyricLine]
         public let source: String
@@ -128,7 +128,7 @@ public final class LyricsFetcher {
         }
     }
 
-    // MARK: - 并行获取 (GAMMA — speculative parallel branches)
+    // MARK: - Parallel Fetch (GAMMA — speculative parallel branches)
     //
     // Only high-tier sources can trigger early return — prevents fast low-tier sources
     // (LRCLIB) from cancelling slower high-quality sources (AMLL/NetEase/QQ) that provide
@@ -906,20 +906,20 @@ public final class LyricsFetcher {
                         && !catalogExactTitleEvidencePending
                         && !libraryNativeTitleEvidencePending
                         && (!needsIdentityWitness || hasIdentityWitness) {
-                        DebugLogger.log("⚡ 早期返回: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold)) albumMatch=\(r.albumMatched)")
+                        DebugLogger.log("⚡ Early return: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold)) albumMatch=\(r.albumMatched)")
                         group.cancelAll()
                         break
                     }
                     if hasAlbumHint
                         && hasAlbumExactSyncedResult
                         && self.earlyReturnSources.contains(r.source) {
-                        DebugLogger.log("⚡ 早期返回: \(r.source) album-exact synced score=\(String(format: "%.1f", r.score))")
+                        DebugLogger.log("⚡ Early return: \(r.source) album-exact synced score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
                     }
                     if self.selectedHasTightCatalogAliasIdentity(r),
                        self.earlyReturnSources.contains(r.source) {
-                        DebugLogger.log("⚡ 早期返回: \(r.source) tight catalog-alias score=\(String(format: "%.1f", r.score))")
+                        DebugLogger.log("⚡ Early return: \(r.source) tight catalog-alias score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
                     }
@@ -927,7 +927,7 @@ public final class LyricsFetcher {
                        r.score >= 18,
                        !self.isLibraryFallbackSource(r.source),
                        self.hasIndependentLyricAgreement(for: r, allResults: results) {
-                        DebugLogger.log("⚡ 早期返回: \(r.source) cross-source agreement score=\(String(format: "%.1f", r.score))")
+                        DebugLogger.log("⚡ Early return: \(r.source) cross-source agreement score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
                     }
@@ -2307,6 +2307,7 @@ public final class LyricsFetcher {
         artist: String
     ) -> Bool {
         guard !lyrics.isEmpty else { return false }
+        guard lyrics.contains(where: { $0.hasSyllableSync }) else { return false }
         let containsCJKLyrics = lyrics.contains { LanguageUtils.containsCJK($0.text) }
         if containsCJKLyrics {
             return LanguageUtils.isPureASCII(title)

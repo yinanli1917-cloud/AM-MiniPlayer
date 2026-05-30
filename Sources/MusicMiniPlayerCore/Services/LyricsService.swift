@@ -218,14 +218,26 @@ public class LyricsService: ObservableObject {
         let hasSourceTranslation: Bool
         let isNoLyrics: Bool
         let isUnsynced: Bool
+        let source: String?
+        let score: Double?
         let timestamp: Date
 
-        init(lyrics: [LyricLine], firstRealLyricIndex: Int = 1, hasSourceTranslation: Bool = false, isNoLyrics: Bool = false, isUnsynced: Bool = false) {
+        init(
+            lyrics: [LyricLine],
+            firstRealLyricIndex: Int = 1,
+            hasSourceTranslation: Bool = false,
+            isNoLyrics: Bool = false,
+            isUnsynced: Bool = false,
+            source: String? = nil,
+            score: Double? = nil
+        ) {
             self.lyrics = lyrics
             self.firstRealLyricIndex = firstRealLyricIndex
             self.hasSourceTranslation = hasSourceTranslation
             self.isNoLyrics = isNoLyrics
             self.isUnsynced = isUnsynced
+            self.source = source
+            self.score = score
             self.timestamp = Date()
         }
 
@@ -234,6 +246,15 @@ public class LyricsService: ObservableObject {
             let expirationTime: TimeInterval = isNoLyrics ? 21600 : 86400
             return Date().timeIntervalSince(timestamp) > expirationTime
         }
+    }
+
+    static func shouldRefreshCachedLyricsForGranularity(
+        lyrics: [LyricLine],
+        isNoLyrics: Bool,
+        isUnsynced: Bool
+    ) -> Bool {
+        guard !isNoLyrics, !isUnsynced, !lyrics.isEmpty else { return false }
+        return !lyrics.contains { $0.hasSyllableSync }
     }
 
     // ========================================================================
@@ -353,17 +374,17 @@ public class LyricsService: ObservableObject {
 
         // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
         lastGoodLyricsTime = nil
-        // 🔑 立即清除 error + loading（防止切歌时 retry UI 残留）
+        // Clear error/loading immediately so retry UI does not leak across track changes.
         error = nil
         isLoading = true
 
-        // 重置翻译状态（含 isTranslating，防止 Task 取消后卡死）
+        // Reset translation state, including isTranslating, so a cancelled task cannot leave it stuck.
         currentSongTranslationID = nil
         translationsAreFromLyricsSource = false
         isTranslating = false
         translationFailed = false
 
-        // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
+        // Clear old translation data so hasTranslation cannot be read from stale lyrics.
         clearAllTranslations()
         refreshTranslationAvailability()
 
@@ -374,16 +395,24 @@ public class LyricsService: ObservableObject {
         currentFetchTask = nil
         cancelCurrentBackfill()
 
-        // 检查缓存（带过期检查）
-        if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
-            DebugLogger.log("LyricsService", "📦 缓存命中: '\(songID)' (isNoLyrics=\(cached.isNoLyrics), lines=\(cached.lyrics.count))")
+        var appliedProvisionalCache = false
 
-            // 🔑 先清空旧歌词，避免切歌时新旧歌词重叠
+        // Check cache with expiration.
+        if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+            let cachedNeedsGranularityRefresh = Self.shouldRefreshCachedLyricsForGranularity(
+                lyrics: cached.lyrics,
+                isNoLyrics: cached.isNoLyrics,
+                isUnsynced: cached.isUnsynced
+            )
+            let cachedHasSyllableSync = cached.lyrics.contains { $0.hasSyllableSync }
+            DebugLogger.log("LyricsService", "📦 Cache hit: '\(songID)' (source=\(cached.source ?? "unknown"), score=\(cached.score.map { String(format: "%.1f", $0) } ?? "n/a"), isNoLyrics=\(cached.isNoLyrics), unsynced=\(cached.isUnsynced), syllable=\(cachedHasSyllableSync), lines=\(cached.lyrics.count))")
+
+            // Clear old lyrics first so old and new lines cannot overlap during track changes.
             lyrics = []
             currentLineIndex = nil
             refreshTranslationAvailability()
 
-            // 处理 No Lyrics 缓存
+            // Handle cached no-lyrics result.
             if cached.isNoLyrics {
                 currentSongID = songID
                 currentSongTitle = title
@@ -393,7 +422,7 @@ public class LyricsService: ObservableObject {
                 currentSongAlbum = album
                 isLoading = false
                 error = "No lyrics available"
-                DebugLogger.log("LyricsService", "❌ 使用 No Lyrics 缓存")
+                DebugLogger.log("LyricsService", "❌ Using cached no-lyrics result")
                 recordDiagnosticsLyricsMiss(
                     title: title,
                     artist: artist,
@@ -404,12 +433,12 @@ public class LyricsService: ObservableObject {
                 return
             }
 
-            // 🔑 缓存命中时，检查缓存歌词是否实际包含翻译
+            // On cache hit, inspect whether cached lyrics actually contain translations.
             let cachedHasActualTranslation = cached.lyrics.contains { $0.hasTranslation }
 
             applyLyrics(cached.lyrics,
                         firstRealLyricIndex: cached.firstRealLyricIndex,
-                        hasSourceTranslation: cachedHasActualTranslation,  // 🔑 使用实际翻译状态
+                        hasSourceTranslation: cachedHasActualTranslation,
                         isUnsynced: cached.isUnsynced,
                         songID: songID,
                         title: title,
@@ -417,7 +446,26 @@ public class LyricsService: ObservableObject {
                         stableSongID: stableSongID,
                         duration: duration,
                         album: album)
-            return
+            if !cachedNeedsGranularityRefresh {
+                recordDiagnosticsLyricsFetchFinished(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    duration: duration,
+                    source: cached.source.map { "cache:\($0)" } ?? "cache",
+                    score: cached.score,
+                    lineCount: cached.lyrics.count,
+                    isUnsynced: cached.isUnsynced,
+                    hasSourceTranslation: cachedHasActualTranslation,
+                    translationLineCount: Self.translationCoverageStats(in: cached.lyrics).translated,
+                    translatableLineCount: Self.translationCoverageStats(in: cached.lyrics).eligible,
+                    missingTranslationLineCount: Self.translationCoverageStats(in: cached.lyrics).missing,
+                    translationDisplayRequested: showTranslation
+                )
+                return
+            }
+            appliedProvisionalCache = true
+            DebugLogger.log("LyricsService", "🔄 Cached lyrics are line-sync only; keeping them provisional while refreshing authoritative word-level sources")
         }
 
         currentSongID = songID
@@ -427,16 +475,18 @@ public class LyricsService: ObservableObject {
         currentSongDuration = duration
         currentSongAlbum = album
 
-        // 🔑 同步设置加载状态（避免竞态条件）
+        // Set loading state synchronously to avoid races.
         isLoading = true
-        lyrics = []  // 立即清空旧歌词
-        currentLineIndex = nil
+        if !appliedProvisionalCache {
+            lyrics = []
+            currentLineIndex = nil
+        }
         error = nil
         refreshTranslationAvailability()
 
-        DebugLogger.log("LyricsService", "🔄 开始异步获取...")
+        DebugLogger.log("LyricsService", "🔄 Starting async lyrics fetch...")
 
-        // 异步获取歌词
+        // Fetch lyrics asynchronously.
         currentFetchTask = Task { [weak self] in
             guard let self = self else { return }
             await self.performFetch(title: title, artist: artist, duration: duration, album: album, songID: songID)
@@ -447,7 +497,7 @@ public class LyricsService: ObservableObject {
         // 🔑 Early exit only if cancelled BEFORE network starts (no work wasted)
         guard !Task.isCancelled else { return }
 
-        // 并行获取所有歌词源
+        // Fetch all lyrics sources in parallel.
         let foregroundStartedAt = Date()
         let results = await fetcher.fetchAllSources(
             title: title,
@@ -752,7 +802,9 @@ public class LyricsService: ObservableObject {
             lyrics: processed.lyrics,
             firstRealLyricIndex: processed.firstRealLyricIndex,
             hasSourceTranslation: hasSourceTranslation,
-            isUnsynced: isUnsynced
+            isUnsynced: isUnsynced,
+            source: bestResult.source,
+            score: bestResult.score
         )
         lyricsCache.setObject(cacheItem, forKey: songID as NSString)
         DebugLogger.log("LyricsService", "📦 Cached: '\(songID)' (\(processed.lyrics.count) lines, unsynced=\(isUnsynced))")
@@ -1495,7 +1547,9 @@ public class LyricsService: ObservableObject {
                     lyrics: processed.lyrics,
                     firstRealLyricIndex: processed.firstRealLyricIndex,
                     hasSourceTranslation: hasSourceTranslation,
-                    isUnsynced: bestResult.kind == .unsynced
+                    isUnsynced: bestResult.kind == .unsynced,
+                    source: bestResult.source,
+                    score: bestResult.score
                 )
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
             }
