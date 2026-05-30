@@ -1132,6 +1132,10 @@ final class RapidSwitchTests: XCTestCase {
             source.contains("diagnosticLineMotionProbe"),
             "The hidden sampling probe is still required for motion verification."
         )
+        XCTAssertTrue(
+            source.contains("let appliedOffsetY = framesIncludeLineOffset\n                ? 0\n                : Double(fullOffset + scroll.manualScrollOffset)"),
+            "Native renderer frame telemetry already reports final visible row coordinates and must not double-count manual scroll offset."
+        )
     }
 
     func testLyricLineAdvanceTimingReusesSameScheduledTarget() {

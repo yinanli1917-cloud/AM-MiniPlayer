@@ -1099,7 +1099,7 @@ public struct LyricsView: View {
             )
             let fullOffset = lineOffset + accumulatedHeight
             let appliedOffsetY = framesIncludeLineOffset
-                ? Double(scroll.manualScrollOffset)
+                ? 0
                 : Double(fullOffset + scroll.manualScrollOffset)
             let baseMidY = Double(accumulatedHeight) + Double(frame.height / 2)
             let targetMinY = framesIncludeLineOffset
