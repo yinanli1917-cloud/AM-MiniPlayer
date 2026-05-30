@@ -103,4 +103,47 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.activeTopClipY, 12)
         XCTAssertEqual(metrics.activeBottomClipY, 4)
     }
+
+    func testNativeRenderTelemetrySummarizesTextAndMotionSignals() {
+        var accumulator = NativeLyricsRenderTelemetryAccumulator()
+        accumulator.recordLifecycle(mounted: 3, unmounted: 1, mountedRows: 8, renderedRows: 12)
+        accumulator.recordContentUpdate()
+        accumulator.recordHeightMeasurement(changed: true)
+        accumulator.recordHeightMeasurement(changed: false)
+        accumulator.recordTextPhase(NativeLyricsTextPhaseSample(
+            hasSyllableSync: true,
+            wordRunCount: 7,
+            mainExpectedProgress: 0.45,
+            mainAppliedProgress: 0.40,
+            translationExpectedProgress: 0.50,
+            translationAppliedProgress: 0.48
+        ))
+        accumulator.recordMotion(NativeLyricsMotionMetrics.evaluate(
+            rows: [
+                NativeLyricsMotionMetricRow(displayIndex: 0, targetIndex: 1, renderedMinY: 0, renderedHeight: 30, targetMinY: 0, velocityY: 0),
+                NativeLyricsMotionMetricRow(displayIndex: 1, targetIndex: 1, renderedMinY: 50, renderedHeight: 30, targetMinY: 36, velocityY: 0)
+            ],
+            configuration: NativeLyricsMotionMetricConfiguration(
+                activeDisplayIndex: 1,
+                visibleTopY: 0,
+                visibleBottomY: 70
+            )
+        ))
+
+        let summary = accumulator.summary()
+
+        XCTAssertTrue(accumulator.hasSamples)
+        XCTAssertEqual(summary.rowMountCount, 3)
+        XCTAssertEqual(summary.rowUnmountCount, 1)
+        XCTAssertEqual(summary.maxRenderedRows, 12)
+        XCTAssertEqual(summary.heightMeasurementCount, 2)
+        XCTAssertEqual(summary.heightChangeCount, 1)
+        XCTAssertEqual(summary.activeSyllableSampleCount, 1)
+        XCTAssertEqual(summary.maxActiveWordRunCount, 7)
+        XCTAssertEqual(summary.mainPhaseErrorMax, 0.05, accuracy: 0.0001)
+        XCTAssertEqual(summary.translationPhaseErrorMax, 0.02, accuracy: 0.0001)
+        XCTAssertEqual(summary.maxTargetErrorY, 14)
+        XCTAssertEqual(summary.maxActiveBottomClipY, 10)
+        XCTAssertEqual(summary.metrics["maxActiveWordRunCount"], 7)
+    }
 }

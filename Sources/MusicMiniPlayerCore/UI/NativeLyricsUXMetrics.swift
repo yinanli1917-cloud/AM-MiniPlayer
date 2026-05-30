@@ -78,6 +78,170 @@ struct NativeLyricsFrameCadenceSummary: Equatable {
     let tickJitterMax: TimeInterval
 }
 
+struct NativeLyricsTextPhaseSample: Equatable {
+    let hasSyllableSync: Bool
+    let wordRunCount: Int
+    let mainExpectedProgress: CGFloat
+    let mainAppliedProgress: CGFloat
+    let translationExpectedProgress: CGFloat?
+    let translationAppliedProgress: CGFloat?
+
+    var mainPhaseError: CGFloat {
+        abs(mainExpectedProgress - mainAppliedProgress)
+    }
+
+    var translationPhaseError: CGFloat? {
+        guard let translationExpectedProgress, let translationAppliedProgress else { return nil }
+        return abs(translationExpectedProgress - translationAppliedProgress)
+    }
+}
+
+struct NativeLyricsRenderTelemetryAccumulator {
+    private(set) var rowMountCount = 0
+    private(set) var rowUnmountCount = 0
+    private(set) var maxMountedRows = 0
+    private(set) var maxRenderedRows = 0
+    private(set) var contentUpdateCount = 0
+    private(set) var heightMeasurementCount = 0
+    private(set) var heightChangeCount = 0
+    private(set) var textPhaseSampleCount = 0
+    private(set) var activeSyllableSampleCount = 0
+    private(set) var maxActiveWordRunCount = 0
+    private var mainPhaseErrors: [CGFloat] = []
+    private var translationPhaseErrors: [CGFloat] = []
+    private var motionSamples: [NativeLyricsMotionMetrics] = []
+
+    mutating func recordLifecycle(mounted: Int, unmounted: Int, mountedRows: Int, renderedRows: Int) {
+        rowMountCount += max(0, mounted)
+        rowUnmountCount += max(0, unmounted)
+        maxMountedRows = max(maxMountedRows, mountedRows)
+        maxRenderedRows = max(maxRenderedRows, renderedRows)
+    }
+
+    mutating func recordContentUpdate() {
+        contentUpdateCount += 1
+    }
+
+    mutating func recordHeightMeasurement(changed: Bool) {
+        heightMeasurementCount += 1
+        if changed {
+            heightChangeCount += 1
+        }
+    }
+
+    mutating func recordTextPhase(_ sample: NativeLyricsTextPhaseSample) {
+        textPhaseSampleCount += 1
+        if sample.hasSyllableSync {
+            activeSyllableSampleCount += 1
+        }
+        maxActiveWordRunCount = max(maxActiveWordRunCount, sample.wordRunCount)
+        mainPhaseErrors.append(sample.mainPhaseError)
+        if let translationError = sample.translationPhaseError {
+            translationPhaseErrors.append(translationError)
+        }
+    }
+
+    mutating func recordMotion(_ metrics: NativeLyricsMotionMetrics) {
+        motionSamples.append(metrics)
+    }
+
+    func summary() -> NativeLyricsRenderTelemetrySummary {
+        NativeLyricsRenderTelemetrySummary(
+            rowMountCount: rowMountCount,
+            rowUnmountCount: rowUnmountCount,
+            maxMountedRows: maxMountedRows,
+            maxRenderedRows: maxRenderedRows,
+            contentUpdateCount: contentUpdateCount,
+            heightMeasurementCount: heightMeasurementCount,
+            heightChangeCount: heightChangeCount,
+            textPhaseSampleCount: textPhaseSampleCount,
+            activeSyllableSampleCount: activeSyllableSampleCount,
+            maxActiveWordRunCount: maxActiveWordRunCount,
+            mainPhaseErrorP95: percentile(mainPhaseErrors.sorted(), 0.95),
+            mainPhaseErrorMax: mainPhaseErrors.max() ?? 0,
+            translationPhaseErrorP95: percentile(translationPhaseErrors.sorted(), 0.95),
+            translationPhaseErrorMax: translationPhaseErrors.max() ?? 0,
+            maxTargetErrorY: motionSamples.map(\.maxTargetErrorY).max() ?? 0,
+            maxInterLineSpacingErrorY: motionSamples.map(\.maxInterLineSpacingErrorY).max() ?? 0,
+            maxStaleNearbyTargetCount: motionSamples.map(\.staleNearbyTargetCount).max() ?? 0,
+            maxWaveOrderViolationCount: motionSamples.map(\.waveOrderViolationCount).max() ?? 0,
+            maxActiveTopClipY: motionSamples.map(\.activeTopClipY).max() ?? 0,
+            maxActiveBottomClipY: motionSamples.map(\.activeBottomClipY).max() ?? 0,
+            falseManualScrollOwnershipCount: motionSamples.filter(\.falseManualScrollOwnership).count
+        )
+    }
+
+    var hasSamples: Bool {
+        rowMountCount > 0
+            || rowUnmountCount > 0
+            || contentUpdateCount > 0
+            || heightMeasurementCount > 0
+            || textPhaseSampleCount > 0
+            || !motionSamples.isEmpty
+    }
+
+    private func percentile(_ sorted: [CGFloat], _ percentile: Double) -> CGFloat {
+        guard !sorted.isEmpty else { return 0 }
+        let clamped = min(max(percentile, 0), 1)
+        let position = clamped * Double(sorted.count - 1)
+        let lower = Int(floor(position))
+        let upper = Int(ceil(position))
+        if lower == upper { return sorted[lower] }
+        let fraction = CGFloat(position - Double(lower))
+        return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction
+    }
+}
+
+struct NativeLyricsRenderTelemetrySummary: Equatable {
+    let rowMountCount: Int
+    let rowUnmountCount: Int
+    let maxMountedRows: Int
+    let maxRenderedRows: Int
+    let contentUpdateCount: Int
+    let heightMeasurementCount: Int
+    let heightChangeCount: Int
+    let textPhaseSampleCount: Int
+    let activeSyllableSampleCount: Int
+    let maxActiveWordRunCount: Int
+    let mainPhaseErrorP95: CGFloat
+    let mainPhaseErrorMax: CGFloat
+    let translationPhaseErrorP95: CGFloat
+    let translationPhaseErrorMax: CGFloat
+    let maxTargetErrorY: CGFloat
+    let maxInterLineSpacingErrorY: CGFloat
+    let maxStaleNearbyTargetCount: Int
+    let maxWaveOrderViolationCount: Int
+    let maxActiveTopClipY: CGFloat
+    let maxActiveBottomClipY: CGFloat
+    let falseManualScrollOwnershipCount: Int
+
+    var metrics: [String: Double] {
+        [
+            "rowMountCount": Double(rowMountCount),
+            "rowUnmountCount": Double(rowUnmountCount),
+            "maxMountedRows": Double(maxMountedRows),
+            "maxRenderedRows": Double(maxRenderedRows),
+            "contentUpdateCount": Double(contentUpdateCount),
+            "heightMeasurementCount": Double(heightMeasurementCount),
+            "heightChangeCount": Double(heightChangeCount),
+            "textPhaseSampleCount": Double(textPhaseSampleCount),
+            "activeSyllableSampleCount": Double(activeSyllableSampleCount),
+            "maxActiveWordRunCount": Double(maxActiveWordRunCount),
+            "mainPhaseErrorP95": Double(mainPhaseErrorP95),
+            "mainPhaseErrorMax": Double(mainPhaseErrorMax),
+            "translationPhaseErrorP95": Double(translationPhaseErrorP95),
+            "translationPhaseErrorMax": Double(translationPhaseErrorMax),
+            "maxTargetErrorY": Double(maxTargetErrorY),
+            "maxInterLineSpacingErrorY": Double(maxInterLineSpacingErrorY),
+            "maxStaleNearbyTargetCount": Double(maxStaleNearbyTargetCount),
+            "maxWaveOrderViolationCount": Double(maxWaveOrderViolationCount),
+            "maxActiveTopClipY": Double(maxActiveTopClipY),
+            "maxActiveBottomClipY": Double(maxActiveBottomClipY),
+            "falseManualScrollOwnershipCount": Double(falseManualScrollOwnershipCount)
+        ]
+    }
+}
+
 struct NativeLyricsMotionMetricRow: Equatable {
     let displayIndex: Int
     let targetIndex: Int
