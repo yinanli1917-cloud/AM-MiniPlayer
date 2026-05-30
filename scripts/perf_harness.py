@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import statistics
 import subprocess
 import sys
@@ -24,6 +25,8 @@ import lyrics_visual_harness as visual
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "tmp" / "perf"
+if os.environ.get("NANOPOD_APP_PATH"):
+    visual.APP = Path(os.environ["NANOPOD_APP_PATH"]).expanduser().resolve()
 
 
 def log(message: str) -> None:
@@ -78,6 +81,7 @@ def resolve_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> S
     positive_float(parser, float(duration), "--play-duration")
     positive_float(parser, args.duration, "--duration")
     positive_float(parser, args.interval, "--interval")
+    positive_float(parser, args.interaction_interval, "--interaction-interval")
     non_negative_float(parser, args.warmup, "--warmup")
 
     expect_lyrics = args.expect_lyrics
@@ -108,6 +112,9 @@ def resolve_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> S
         play_duration=float(duration),
         expect_lyrics=expect_lyrics,
         expect_translation=bool(expect_translation),
+        expect_selected_source=fixture.get("expect_selected_source") if fixture else None,
+        expect_lyrics_line_count=fixture.get("expect_lyrics_line_count") if fixture else None,
+        expect_first_real_line_sha256=fixture.get("expect_first_real_line_sha256") if fixture else None,
         duration=args.duration,
         warmup=args.warmup,
         interval=args.interval,
@@ -115,12 +122,19 @@ def resolve_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> S
         output_dir=Path(args.output_dir).expanduser(),
         require_music_playing=args.require_music_playing,
         skip_playback_control=args.skip_playback_control,
+        interaction=args.interaction,
+        interaction_interval=args.interaction_interval,
         dry_run=args.dry_run,
     )
 
 
 def verify_workload(request: SimpleNamespace) -> dict[str, object] | None:
-    if request.expect_lyrics == "any":
+    has_locked_identity = any([
+        request.expect_selected_source,
+        request.expect_lyrics_line_count is not None,
+        request.expect_first_real_line_sha256,
+    ])
+    if request.expect_lyrics == "any" and not has_locked_identity:
         return None
     return visual.verify_lyrics_workload(request)
 
@@ -245,14 +259,66 @@ def read_process_sample(pid: int) -> dict[str, object]:
     }
 
 
-def sample_process(pid: int, duration: float, interval: float) -> list[dict[str, object]]:
+def post_scroll_tap_jump(rect: tuple[int, int, int, int]) -> None:
+    x, y, width, height = rect
+    center_x = int(x + width * 0.48)
+    scroll_y = int(y + height * 0.48)
+    tap_y = int(y + height * 0.62)
+    swift_source = f'''
+import CoreGraphics
+import Foundation
+
+let source = CGEventSource(stateID: .hidSystemState)
+let scrollPoint = CGPoint(x: {center_x}, y: {scroll_y})
+let tapPoint = CGPoint(x: {center_x}, y: {tap_y})
+
+for _ in 0..<3 {{
+    if let event = CGEvent(
+        scrollWheelEvent2Source: source,
+        units: .pixel,
+        wheelCount: 1,
+        wheel1: -220,
+        wheel2: 0,
+        wheel3: 0
+    ) {{
+        event.location = scrollPoint
+        event.post(tap: .cghidEventTap)
+    }}
+    usleep(90_000)
+}}
+
+if let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: tapPoint, mouseButton: .left) {{
+    down.post(tap: .cghidEventTap)
+}}
+usleep(70_000)
+if let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: tapPoint, mouseButton: .left) {{
+    up.post(tap: .cghidEventTap)
+}}
+'''
+    run(["swift", "-e", swift_source], check=False)
+
+
+def sample_process(
+    pid: int,
+    duration: float,
+    interval: float,
+    *,
+    interaction: str = "passive",
+    interaction_interval: float = 3.0,
+    window_rect: tuple[int, int, int, int] | None = None,
+) -> list[dict[str, object]]:
     samples: list[dict[str, object]] = []
     started = time.monotonic()
     deadline = started + duration
     next_sample = started
+    next_interaction = started + min(max(interaction_interval, interval), max(duration, interval))
 
     while time.monotonic() < deadline or not samples:
         now = time.monotonic()
+        if interaction == "scroll-tap-jump" and window_rect and now >= next_interaction:
+            post_scroll_tap_jump(window_rect)
+            next_interaction = time.monotonic() + interaction_interval
+            now = time.monotonic()
         if now < next_sample:
             time.sleep(next_sample - now)
             now = time.monotonic()
@@ -349,6 +415,9 @@ def build_summary(
         "expectations": {
             "lyrics": request.expect_lyrics,
             "translation": request.expect_translation,
+            "selectedSource": request.expect_selected_source,
+            "lyricsLineCount": request.expect_lyrics_line_count,
+            "firstRealLineSHA256": request.expect_first_real_line_sha256,
             "musicPlayingRequired": request.require_music_playing,
         },
         "featureState": {
@@ -365,6 +434,8 @@ def build_summary(
             "warmupSeconds": request.warmup,
             "durationSeconds": request.duration,
             "intervalSeconds": request.interval,
+            "interaction": request.interaction,
+            "interactionIntervalSeconds": request.interaction_interval,
             **summarize_samples(samples),
         },
         "files": {
@@ -410,6 +481,18 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument("--duration", type=float, default=16.0, help="measurement duration in seconds")
     parser.add_argument("--warmup", type=float, default=8.0, help="warmup seconds after routing to the page")
     parser.add_argument("--interval", type=float, default=0.5, help="sampling interval in seconds")
+    parser.add_argument(
+        "--interaction",
+        choices=["passive", "scroll-tap-jump"],
+        default="passive",
+        help="optional telemetry-only input workload to run while sampling",
+    )
+    parser.add_argument(
+        "--interaction-interval",
+        type=float,
+        default=3.0,
+        help="seconds between scroll-tap-jump interaction bursts",
+    )
     parser.add_argument("--label", default="perf", help="short label included in output file names")
     parser.add_argument("--output-dir", default=str(OUT_DIR), help="directory for CSV and JSON evidence")
     parser.add_argument(
@@ -447,12 +530,17 @@ def main() -> None:
             "expectations": {
                 "lyrics": request.expect_lyrics,
                 "translation": request.expect_translation,
+                "selectedSource": request.expect_selected_source,
+                "lyricsLineCount": request.expect_lyrics_line_count,
+                "firstRealLineSHA256": request.expect_first_real_line_sha256,
                 "musicPlayingRequired": request.require_music_playing,
             },
             "measurement": {
                 "warmupSeconds": request.warmup,
                 "durationSeconds": request.duration,
                 "intervalSeconds": request.interval,
+                "interaction": request.interaction,
+                "interactionIntervalSeconds": request.interaction_interval,
             },
             "files": {
                 "csv": str(csv_path),
@@ -467,13 +555,21 @@ def main() -> None:
 
     log(f"Routing nanoPod to {request.page} page")
     pid = route_app(request.page)
+    window_rect = visual.nano_window_target().rect if request.interaction == "scroll-tap-jump" else None
 
     if request.warmup > 0:
         log(f"Waiting {request.warmup:.1f}s warmup")
         time.sleep(request.warmup)
 
     log(f"Sampling process {pid} for {request.duration:.1f}s")
-    samples = sample_process(pid, request.duration, request.interval)
+    samples = sample_process(
+        pid,
+        request.duration,
+        request.interval,
+        interaction=request.interaction,
+        interaction_interval=request.interaction_interval,
+        window_rect=window_rect,
+    )
 
     if request.require_music_playing:
         music = ensure_music_playing(SimpleNamespace(**{

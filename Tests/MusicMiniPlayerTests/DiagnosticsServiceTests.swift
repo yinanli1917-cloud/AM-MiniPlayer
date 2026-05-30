@@ -2417,6 +2417,8 @@ final class DiagnosticsServiceTests: XCTestCase {
             source: "NetEase",
             score: 72,
             lineCount: 28,
+            hasSyllableSync: true,
+            firstRealLineSHA256: "fixture-hash",
             isUnsynced: false,
             hadSourceTranslation: false
         )
@@ -2426,7 +2428,10 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(trace?.page, "lyrics")
         XCTAssertEqual(trace?.status, .completed)
         XCTAssertEqual(trace?.metrics["lineCount"], 28)
+        XCTAssertEqual(trace?.metrics["hasSyllableSync"], 1)
         XCTAssertEqual(trace?.evidence["source"], "NetEase")
+        XCTAssertEqual(trace?.evidence["hasSyllableSync"], "true")
+        XCTAssertEqual(trace?.evidence["firstRealLineSHA256"], "fixture-hash")
         XCTAssertEqual(DiagnosticsService.shared.activeInteractionCount, 0)
     }
 

@@ -1,12 +1,13 @@
 /**
- * [INPUT]: 依赖 Lyrics/ 子模块 (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver)
- * [OUTPUT]: 歌词服务单例，提供 lyrics/currentLineIndex/翻译状态 等 @Published 属性
- * [POS]: Services/ 的歌词服务门面，协调子模块完成歌词获取/解析/翻译
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md; keep foreground and authoritative backfill work cancellable on track changes
+ * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver)
+ * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state
+ * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
+ * [PROTOCOL]: Update this header on behavior changes; keep foreground and authoritative backfill work cancellable on track changes
  */
 
 import Foundation
 import Combine
+import CryptoKit
 import os
 import Translation
 import NaturalLanguage
@@ -34,7 +35,7 @@ public class LyricsService: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var error: String? = nil
 
-    // 🔑 翻译状态
+    // Translation state.
     @Published public var showTranslation: Bool = false {
         didSet {
             UserDefaults.standard.set(showTranslation, forKey: showTranslationKey)
@@ -60,7 +61,7 @@ public class LyricsService: ObservableObject {
     @Published public private(set) var canTranslate: Bool = false
     @Published public var isManualScrolling: Bool = false
 
-    // 🔧 第一句真正歌词的索引
+    // Index of the first real lyric line.
     public var firstRealLyricIndex: Int = 1
 
     // ========================================================================
@@ -157,7 +158,7 @@ public class LyricsService: ObservableObject {
     /// Cooldown: refuse re-fetches within this window unless forceRefresh
     private let stabilityGuardCooldown: TimeInterval = 3.0
 
-    /// 清除所有歌词行的翻译数据
+    /// Clears translation text from all lyric lines.
     private func clearAllTranslations() {
         for i in lyrics.indices { lyrics[i].translation = nil }
     }
@@ -230,7 +231,7 @@ public class LyricsService: ObservableObject {
         }
 
         var isExpired: Bool {
-            // No Lyrics 缓存 6 小时过期，有歌词的缓存 24 小时过期
+            // No-lyrics cache entries expire after 6 hours; lyric entries expire after 24 hours.
             let expirationTime: TimeInterval = isNoLyrics ? 21600 : 86400
             return Date().timeIntervalSince(timestamp) > expirationTime
         }
@@ -241,7 +242,7 @@ public class LyricsService: ObservableObject {
     // ========================================================================
 
     private init() {
-        // 从 UserDefaults 加载状态
+        // Load persisted state from UserDefaults.
         self.showTranslation = UserDefaults.standard.bool(forKey: showTranslationKey)
 
         if let savedLang = UserDefaults.standard.string(forKey: translationLanguageKey) {
@@ -262,9 +263,9 @@ public class LyricsService: ObservableObject {
 
     @MainActor
     func fetchLyrics(for title: String, artist: String, duration: TimeInterval, album: String = "", forceRefresh: Bool = false) {
-        // 🔑 忽略无效曲目（未连接/未播放时的默认值）
+        // Ignore invalid placeholder tracks used when playback is disconnected or stopped.
         guard !title.isEmpty, title != kNotPlayingSentinel else {
-            DebugLogger.log("LyricsService", "⏭️ 忽略无效曲目: '\(title)'")
+            DebugLogger.log("LyricsService", "⏭️ Ignoring invalid track: '\(title)'")
             return
         }
 
@@ -308,7 +309,7 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        // 避免重复获取（exact songID match — fast path for identical calls）
+        // Avoid duplicate fetches: exact songID match is the fast path for identical calls.
         let canRetryWithBetterDuration = songID == currentSongID && !forceRefresh
             && duration > 0
             && (currentSongDuration == 0 || abs(duration - currentSongDuration) > 1.0)
@@ -328,15 +329,15 @@ public class LyricsService: ObservableObject {
         )
 
         guard songID != currentSongID || forceRefresh || canRetryWithBetterDuration || canRetryWithBetterAlbum || canRetryAfterEmptyCurrentResult else {
-            DebugLogger.log("LyricsService", "⏭️ 跳过重复获取: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
+            DebugLogger.log("LyricsService", "⏭️ Skipping duplicate fetch: '\(songID)' (currentSongID='\(currentSongID ?? "nil")')")
             return
         }
 
         if canRetryWithBetterDuration {
-            DebugLogger.log("LyricsService", "🔄 duration 改善重试: \(currentSongDuration) → \(duration)")
+            DebugLogger.log("LyricsService", "🔄 Retrying with improved duration: \(currentSongDuration) → \(duration)")
         }
         if canRetryWithBetterAlbum {
-            DebugLogger.log("LyricsService", "🔄 album 改善重试: '\(currentSongAlbum)' → '\(album)'")
+            DebugLogger.log("LyricsService", "🔄 Retrying with improved album: '\(currentSongAlbum)' → '\(album)'")
         }
         if canRetryAfterEmptyCurrentResult {
             DebugLogger.log("LyricsService", "🔄 retry empty/error current lyrics: '\(songID)'")
@@ -353,17 +354,17 @@ public class LyricsService: ObservableObject {
 
         // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
         lastGoodLyricsTime = nil
-        // 🔑 立即清除 error + loading（防止切歌时 retry UI 残留）
+        // Clear error/loading immediately so retry UI does not leak across track changes.
         error = nil
         isLoading = true
 
-        // 重置翻译状态（含 isTranslating，防止 Task 取消后卡死）
+        // Reset translation state, including isTranslating, so a cancelled task cannot leave it stuck.
         currentSongTranslationID = nil
         translationsAreFromLyricsSource = false
         isTranslating = false
         translationFailed = false
 
-        // 清除旧歌词中的翻译数据（避免 hasTranslation 误判）
+        // Clear old translation data so hasTranslation cannot be read from stale lyrics.
         clearAllTranslations()
         refreshTranslationAvailability()
 
@@ -374,16 +375,16 @@ public class LyricsService: ObservableObject {
         currentFetchTask = nil
         cancelCurrentBackfill()
 
-        // 检查缓存（带过期检查）
+        // Check cache with expiration.
         if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
-            DebugLogger.log("LyricsService", "📦 缓存命中: '\(songID)' (isNoLyrics=\(cached.isNoLyrics), lines=\(cached.lyrics.count))")
+            DebugLogger.log("LyricsService", "📦 Cache hit: '\(songID)' (isNoLyrics=\(cached.isNoLyrics), lines=\(cached.lyrics.count))")
 
-            // 🔑 先清空旧歌词，避免切歌时新旧歌词重叠
+            // Clear old lyrics first so old and new lines cannot overlap during track changes.
             lyrics = []
             currentLineIndex = nil
             refreshTranslationAvailability()
 
-            // 处理 No Lyrics 缓存
+            // Handle cached no-lyrics result.
             if cached.isNoLyrics {
                 currentSongID = songID
                 currentSongTitle = title
@@ -393,7 +394,7 @@ public class LyricsService: ObservableObject {
                 currentSongAlbum = album
                 isLoading = false
                 error = "No lyrics available"
-                DebugLogger.log("LyricsService", "❌ 使用 No Lyrics 缓存")
+                DebugLogger.log("LyricsService", "❌ Using cached no-lyrics result")
                 recordDiagnosticsLyricsMiss(
                     title: title,
                     artist: artist,
@@ -404,12 +405,12 @@ public class LyricsService: ObservableObject {
                 return
             }
 
-            // 🔑 缓存命中时，检查缓存歌词是否实际包含翻译
+            // On cache hit, inspect whether cached lyrics actually contain translations.
             let cachedHasActualTranslation = cached.lyrics.contains { $0.hasTranslation }
 
             applyLyrics(cached.lyrics,
                         firstRealLyricIndex: cached.firstRealLyricIndex,
-                        hasSourceTranslation: cachedHasActualTranslation,  // 🔑 使用实际翻译状态
+                        hasSourceTranslation: cachedHasActualTranslation,
                         isUnsynced: cached.isUnsynced,
                         songID: songID,
                         title: title,
@@ -427,16 +428,16 @@ public class LyricsService: ObservableObject {
         currentSongDuration = duration
         currentSongAlbum = album
 
-        // 🔑 同步设置加载状态（避免竞态条件）
+        // Set loading state synchronously to avoid races.
         isLoading = true
-        lyrics = []  // 立即清空旧歌词
+        lyrics = []
         currentLineIndex = nil
         error = nil
         refreshTranslationAvailability()
 
-        DebugLogger.log("LyricsService", "🔄 开始异步获取...")
+        DebugLogger.log("LyricsService", "🔄 Starting async lyrics fetch...")
 
-        // 异步获取歌词
+        // Fetch lyrics asynchronously.
         currentFetchTask = Task { [weak self] in
             guard let self = self else { return }
             await self.performFetch(title: title, artist: artist, duration: duration, album: album, songID: songID)
@@ -447,7 +448,7 @@ public class LyricsService: ObservableObject {
         // 🔑 Early exit only if cancelled BEFORE network starts (no work wasted)
         guard !Task.isCancelled else { return }
 
-        // 并行获取所有歌词源
+        // Fetch all lyrics sources in parallel.
         let foregroundStartedAt = Date()
         let results = await fetcher.fetchAllSources(
             title: title,
@@ -458,7 +459,7 @@ public class LyricsService: ObservableObject {
         )
         let foregroundFetchSeconds = Date().timeIntervalSince(foregroundStartedAt)
 
-        // 选择最佳结果 — 需要完整结果以读取 kind (synced/unsynced) 供自动滚动守卫使用
+        // Select the best result; keep the full result so auto-scroll can use parse-time kind.
         let bestResult = fetcher.selectBestResult(from: results, songDuration: duration)
         guard let bestResult = bestResult, !bestResult.lyrics.isEmpty else {
             // 🔑 CRITICAL: Do NOT cache "No Lyrics" if the task was cancelled.
@@ -737,12 +738,16 @@ public class LyricsService: ObservableObject {
         // Last-resort rescale: if best lyrics still overshoot, no source had the right version
         let aligned = fetcher.rescaleTimestamps(bestResult.lyrics, duration: duration)
 
-        // 处理歌词（修复 endTime、添加前奏占位符等）
+        // Process lyrics by fixing end times and adding prelude placeholders.
         let processed = parser.processLyrics(aligned)
 
-        // 检查是否有歌词源翻译
+        // Check whether the lyrics source already provided translations.
         let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
         let translationStats = Self.translationCoverageStats(in: processed.lyrics)
+        let workloadIdentity = Self.lyricsWorkloadIdentity(
+            lyrics: processed.lyrics,
+            firstRealLyricIndex: processed.firstRealLyricIndex
+        )
         // Parse-time classification — no heuristic re-derivation.
         let isUnsynced = bestResult.kind == .unsynced
 
@@ -764,6 +769,8 @@ public class LyricsService: ObservableObject {
             source: bestResult.source,
             score: bestResult.score,
             lineCount: processed.lyrics.count,
+            hasSyllableSync: workloadIdentity.hasSyllableSync,
+            firstRealLineSHA256: workloadIdentity.firstRealLineSHA256,
             isUnsynced: isUnsynced,
             hasSourceTranslation: hasSourceTranslation,
             translationLineCount: translationStats.translated,
@@ -806,7 +813,7 @@ public class LyricsService: ObservableObject {
         self.firstRealLyricIndex = firstRealLyricIndex
         self.translationsAreFromLyricsSource = hasSourceTranslation
         self.isLoading = false
-        self.error = nil  // 🔑 歌词成功加载，清除旧 error（防止 duration 竞态导致 retry 残留）
+        self.error = nil
         self.currentLineIndex = nil
         // Parse-time classification from LyricsKind — no IQR/CV guessing.
         // Only lyrics.ovh / Genius (createUnsyncedLyrics) are tagged .unsynced.
@@ -824,7 +831,7 @@ public class LyricsService: ObservableObject {
         // so the user's preference is preserved across same-language songs
         refreshTranslationAvailability()
 
-        // 🔑 Diagnostic: log first real lyric line so we can verify content correctness
+        // Diagnostic: log the first real lyric line so content correctness can be verified.
         let firstReal = newLyrics.dropFirst(firstRealLyricIndex).first { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty && $0.text != "⋯" }
         DebugLogger.log("LyricsService", "📋 Applied: '\(songID)' \(newLyrics.count)L, firstReal=\"\(firstReal?.text.prefix(40) ?? "nil")\", unsynced=\(isUnsyncedLyrics)")
 
@@ -833,7 +840,7 @@ public class LyricsService: ObservableObject {
         // and other paths that create a different songID for the same song.
         self.lastGoodLyricsTime = Date()
 
-        // 🔑 延迟触发翻译，避免与 lyrics 更新同时发生导致 SwiftUI AttributeGraph 递归
+        // Delay translation so it does not race the lyrics update and trigger SwiftUI AttributeGraph recursion.
         if showTranslation {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms delay
@@ -868,6 +875,28 @@ public class LyricsService: ObservableObject {
         )
     }
 
+    private static func lyricsWorkloadIdentity(
+        lyrics: [LyricLine],
+        firstRealLyricIndex: Int
+    ) -> (hasSyllableSync: Bool, firstRealLineSHA256: String?) {
+        let firstReal = lyrics.dropFirst(firstRealLyricIndex).first {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.text != "⋯"
+        }
+        return (
+            hasSyllableSync: lyrics.contains { $0.hasSyllableSync },
+            firstRealLineSHA256: firstReal.map { normalizedFirstRealLineSHA256($0.text) }
+        )
+    }
+
+    private static func normalizedFirstRealLineSHA256(_ line: String) -> String {
+        let normalized = LanguageUtils.toSimplifiedChinese(line)
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let digest = SHA256.hash(data: Data(normalized.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private func recordDiagnosticsLyricsFetchStarted(
         title: String,
         artist: String,
@@ -889,6 +918,8 @@ public class LyricsService: ObservableObject {
         source: String?,
         score: Double?,
         lineCount: Int,
+        hasSyllableSync: Bool,
+        firstRealLineSHA256: String?,
         isUnsynced: Bool,
         hasSourceTranslation: Bool,
         translationLineCount: Int,
@@ -903,6 +934,8 @@ public class LyricsService: ObservableObject {
                 source: source,
                 score: score,
                 lineCount: lineCount,
+                hasSyllableSync: hasSyllableSync,
+                firstRealLineSHA256: firstRealLineSHA256,
                 isUnsynced: isUnsynced,
                 hadSourceTranslation: hasSourceTranslation,
                 translationLineCount: translationLineCount,
@@ -1015,7 +1048,7 @@ public class LyricsService: ObservableObject {
         // 🔑 Unsynced lyrics: no auto-scroll, user scrolls manually
         guard !isUnsyncedLyrics else { return }
 
-        // 前奏处理
+        // Prelude handling.
         if lyrics.count > firstRealLyricIndex {
             let firstRealLyricStartTime = lyrics[firstRealLyricIndex].startTime
             if time < (firstRealLyricStartTime - scrollAnimationLeadTime) {
@@ -1026,7 +1059,7 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        // 时间匹配
+        // Timeline matching.
         var bestMatch: Int? = nil
         for index in firstRealLyricIndex..<lyrics.count {
             let triggerTime = lyrics[index].startTime - scrollAnimationLeadTime
@@ -1081,7 +1114,7 @@ public class LyricsService: ObservableObject {
     // MARK: - Public API: Translation
     // ========================================================================
 
-    /// 强制重试翻译
+    /// Forces a translation retry.
     public func forceRetryTranslation() {
         currentSongTranslationID = nil
         lastSystemTranslationLanguage = nil
@@ -1093,15 +1126,15 @@ public class LyricsService: ObservableObject {
         translationRequestTrigger += 1
     }
 
-    /// 翻译当前歌词（检查是否需要系统翻译）
+    /// Translates the current lyrics if system translation is needed.
     @MainActor
     public func translateCurrentLyrics() async {
         guard !lyrics.isEmpty else { return }
         guard !hasTranslation else { return }
-        // 实际翻译由 SwiftUI .translationTask() 完成
+        // Actual translation is performed by SwiftUI .translationTask().
     }
 
-    /// 检查本机已安装的翻译语言包；不允许系统弹出语言选择/下载窗口。
+    /// Checks installed translation language packs without allowing a system picker/download prompt.
     @available(macOS 15.0, *)
     @MainActor
     public func silentSystemTranslationConfiguration() async -> TranslationSession.Configuration? {
@@ -1198,11 +1231,11 @@ public class LyricsService: ObservableObject {
         }
     }
 
-    /// 执行系统翻译（由 SwiftUI .translationTask() 调用）
+    /// Performs system translation from SwiftUI .translationTask().
     @available(macOS 15.0, *)
     @MainActor
     public func performSystemTranslation(session: TranslationSession) async {
-        // 🔑 防止重复执行：正在翻译时不再触发
+        // Prevent duplicate translation work while a translation is already running.
         guard !isTranslating else { return }
         guard !lyrics.isEmpty, showTranslation, !isLoading else { return }
 
@@ -1211,10 +1244,10 @@ public class LyricsService: ObservableObject {
         let isFillingPartialSourceTranslations = translationsAreFromLyricsSource && isTargetChinese
         if isTargetChinese && lyricsArePredominantlyChinese() { return }
 
-        // 🔑 歌词内容已经是目标语言 → 跳过
+        // Skip when the lyrics are already in the target language.
         if !isFillingPartialSourceTranslations && lyricsAreInTargetLanguage() { return }
 
-        // 检查是否已翻译过（相同歌曲+相同语言）
+        // Check whether this song was already translated into the same language.
         let targetLanguageID = Self.normalizedSystemTranslationLanguage(translationLanguage)
         let translationID = "\(currentSongID ?? "")-\(targetLanguageID)"
         if currentSongTranslationID == translationID {
@@ -1225,14 +1258,14 @@ public class LyricsService: ObservableObject {
             }
         }
 
-        // 目标语言不是中文，需要系统翻译覆盖
+        // Non-Chinese targets require system translation to replace source translations.
         if translationsAreFromLyricsSource && !isTargetChinese {
             clearAllTranslations()
             translationsAreFromLyricsSource = false
             refreshTranslationAvailability()
         }
 
-        // 清除旧翻译. When filling sparse source translations, preserve existing
+        // Clear old translations. When filling sparse source translations, preserve existing
         // source lines and translate only the missing visible rows.
         if hasTranslation && !isFillingPartialSourceTranslations {
             clearAllTranslations()
@@ -1251,11 +1284,11 @@ public class LyricsService: ObservableObject {
         // 🔑 Snapshot song identity + lyrics count BEFORE await suspension point
         let songIDBeforeAwait = currentSongID
         let lyricsCountBeforeAwait = lyrics.count
-        debugLogPublic("🔄 开始翻译: \(eligibleIndices.count)/\(lyricsCountBeforeAwait) 行")
+        debugLogPublic("🔄 Starting translation: \(eligibleIndices.count)/\(lyricsCountBeforeAwait) lines")
 
         let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
-            debugLogPublic("❌ 翻译失败 — 保留用户偏好，下首歌重试")
+            debugLogPublic("❌ Translation failed; preserving user preference for the next retry")
             currentSongTranslationID = translationID
             translationFailed = true
             recordDiagnosticsSystemTranslationGap(
@@ -1311,11 +1344,11 @@ public class LyricsService: ObservableObject {
                 )
             }
         }
-        debugLogPublic("✅ 翻译完成: \(translatedTexts.count) 行")
+        debugLogPublic("✅ Translation completed: \(translatedTexts.count) lines")
     }
 
     // ========================================================================
-    // MARK: - 语言检测
+    // MARK: - Language Detection
     // ========================================================================
 
     private func lyricsAreInTargetLanguage() -> Bool {
@@ -1424,7 +1457,7 @@ public class LyricsService: ObservableObject {
         }
         guard !validLines.isEmpty else { return false }
 
-        // 任何一行含假名 → 日文歌词，不是中文
+        // Any kana means the lyric is Japanese, not Chinese.
         let hasJapanese = validLines.contains { LanguageUtils.containsJapanese($0.text) }
         if hasJapanese { return false }
 

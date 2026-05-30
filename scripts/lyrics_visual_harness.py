@@ -36,6 +36,9 @@ FIXTURES: dict[str, dict[str, object]] = {
         "duration": 234,
         "expect_lyrics": "syllable",
         "expect_translation": True,
+        "expect_selected_source": "NetEase",
+        "expect_lyrics_line_count": 25,
+        "expect_first_real_line_sha256": "43180988879b1854dfbdc28c2eac68f223c2b4210bda87cd87fed3897fd772e8",
         "purpose": "deterministic translated word-level sweep, active-word timing, spacing, blur, and translation layout",
         "settle_s": 8.0,
     },
@@ -97,6 +100,30 @@ FIXTURES: dict[str, dict[str, object]] = {
         "purpose": "long gaps, interlude/prelude dots, and scroll continuity",
         "settle_s": 10.0,
     },
+    "line-winter-trip": {
+        "title": "冬天一個遊",
+        "artist": "Gordon Flanders",
+        "duration": 256,
+        "expect_lyrics": "syllable",
+        "expect_translation": False,
+        "expect_selected_source": "NetEase",
+        "expect_lyrics_line_count": 67,
+        "expect_first_real_line_sha256": "15ce6b4d94c2f2b4f016cbd746a807825b26fa90608465af1dbb623ad645fee9",
+        "purpose": "mandatory winter word-level fixture for passive playback plus scroll-tap-jump CPU, drift, and refresh telemetry",
+        "settle_s": 8.0,
+    },
+    "word-seek-fun": {
+        "title": "尋開心",
+        "artist": "Bondy Chiu",
+        "duration": 265,
+        "expect_lyrics": "syllable",
+        "expect_translation": False,
+        "expect_selected_source": "NetEase",
+        "expect_lyrics_line_count": 44,
+        "expect_first_real_line_sha256": "8b9a2fd7d0bc2de6d45adeb5758c5f11492b018c1900b67a6afe4002fbda4f3b",
+        "purpose": "word-level seek/tap recovery fixture for sweep phase and active-word animation telemetry",
+        "settle_s": 8.0,
+    },
 }
 
 
@@ -117,6 +144,9 @@ def workload_args(fixture: dict[str, object]) -> SimpleNamespace:
         play_artist=str(fixture["artist"]),
         play_album="",
         play_duration=float(fixture["duration"]),
+        expect_selected_source=fixture.get("expect_selected_source"),
+        expect_lyrics_line_count=fixture.get("expect_lyrics_line_count"),
+        expect_first_real_line_sha256=fixture.get("expect_first_real_line_sha256"),
     )
 
 
@@ -247,9 +277,30 @@ def verify_lyrics_workload(args: SimpleNamespace) -> dict[str, object] | None:
             f'Expected translated lyrics for "{args.play_title}" - {args.play_artist}, '
             f"but verifier selected {record.get('selectedSource')} without translation"
         )
+    expected_source = getattr(args, "expect_selected_source", None)
+    if expected_source and record.get("selectedSource") != expected_source:
+        raise SystemExit(
+            f'Expected lyrics source {expected_source} for "{args.play_title}" - {args.play_artist}, '
+            f"but verifier selected {record.get('selectedSource')}"
+        )
+    expected_line_count = getattr(args, "expect_lyrics_line_count", None)
+    if expected_line_count is not None and record.get("lyricsLineCount") != int(expected_line_count):
+        raise SystemExit(
+            f'Expected {expected_line_count} lyric lines for "{args.play_title}" - {args.play_artist}, '
+            f"but verifier selected {record.get('lyricsLineCount')}"
+        )
+    expected_first_real_sha = getattr(args, "expect_first_real_line_sha256", None)
+    if expected_first_real_sha and record.get("firstRealLineSHA256") != expected_first_real_sha:
+        raise SystemExit(
+            f'Expected first real line SHA {expected_first_real_sha} for "{args.play_title}" - {args.play_artist}, '
+            f"but verifier selected {record.get('firstRealLineSHA256')}"
+        )
     return {
         "expectation": args.expect_lyrics,
         "expectTranslation": args.expect_translation,
+        "expectSelectedSource": expected_source,
+        "expectLyricsLineCount": expected_line_count,
+        "expectFirstRealLineSHA256": expected_first_real_sha,
         "title": record.get("title"),
         "artist": record.get("artist"),
         "selectedSource": record.get("selectedSource"),
@@ -280,7 +331,10 @@ end tell
         raise SystemExit(f"Could not read nanoPod window bounds: {result.stderr.strip()}")
     if output in {"NO_PROCESS", "NO_WINDOW", ""}:
         raise SystemExit(f"Could not find a visible nanoPod window: {output or 'empty response'}")
-    parts = [int(part) for part in output.split(",")]
+    try:
+        parts = [int(part.strip()) for part in output.split(",")]
+    except ValueError as error:
+        raise SystemExit(f"Unexpected nanoPod window bounds: {output}") from error
     if len(parts) != 4:
         raise SystemExit(f"Unexpected nanoPod window bounds: {output}")
     return parts[0], parts[1], parts[2], parts[3]

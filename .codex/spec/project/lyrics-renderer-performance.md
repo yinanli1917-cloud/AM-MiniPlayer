@@ -1,6 +1,6 @@
 # Lyrics Renderer Performance
 
-Last updated: 2026-05-28
+Last updated: 2026-05-30
 
 ## Protected UX
 
@@ -108,6 +108,13 @@ Fixes that worked:
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:
+
+Before any CPU/RSS/FPS/drift result is compared, the lyrics workload must be
+locked. Record and validate `selectedSource`, `hasSyllableSync`,
+`lyricsLineCount`, and `firstRealLineSHA256` for each fixture. A candidate that
+selects lighter line-level lyrics when the baseline selected word/syllable
+lyrics has not improved renderer performance; it changed the workload and the
+run must fail before sampling.
 
 Visual artifacts must be nonblank. `scripts/lyrics_visual_harness.py` rejects
 effectively blank screenshots so Screen Recording permission, display-sleep, or
@@ -221,6 +228,118 @@ The reference fixture is `Stardust Night` by `JADOES`, selected from NetEase wit
 
 Also check album and playlist pages on the same fixture. They should stay near idle CPU compared with the active lyrics page.
 
+For lyrics-animation-specific CPU verification, do not only sample passive
+playback and do not tap the same stale screen position. The stricter gate is:
+
+- route the rebuilt app to the lyrics page on the translated-word fixture;
+- scroll the lyric surface first so the visible rows move into manual-scroll
+  mode;
+- after the scroll settles briefly, click a visible lyric row in the scrolled
+  panel;
+- repeat this scroll-then-visible-row-jump loop during the performance sample.
+
+This catches the expensive path that users feel when manually browsing lyrics
+and jumping to a line.
+
+## Native Renderer Rebuild Gate
+
+The Native macOS AMLL rebuild is not allowed to ship as the default renderer
+until it passes the same-machine `main` baseline on the protected UX and
+telemetry gates. A partial native shell is not enough. The known-good SwiftUI
+renderer remains the default until the native path passes all gates.
+
+The renderer modes are controlled through:
+
+```bash
+defaults write com.yinanli.nanoPod nanoPodLyricsRendererMode swiftui
+defaults write com.yinanli.nanoPod nanoPodLyricsRendererMode native
+```
+
+`layer` and `engine` are historical aliases for the experimental native path,
+not accepted architecture names.
+
+### Failed 2026-05-30 Native Surface Slice
+
+The first native surface attempt failed product acceptance. It moved row Y
+motion into an AppKit/CVDisplayLink wrapper but still mounted lyric rows as
+`NSHostingView<LyricLineView>`. That hybrid boundary is explicitly not a valid
+native rebuild because it loses or weakens foundational UX:
+
+- row hover and line-owned tap behavior are broken by passthrough hosting and
+  coarse surface-level hit testing;
+- manual scroll/tap recovery is no longer the same interaction contract as the
+  protected SwiftUI renderer;
+- Core Image layer blur did not match the protected blur and increased passive
+  CPU;
+- CPU only improved on one scroll/tap sample and regressed passive playback;
+- text rendering, word sweep, translation sweep, interlude dots, and hover
+  affordances remained SwiftUI-hosted, so the implementation was not a real
+  architecture replacement.
+
+Measured on `冬天一個遊` / Gordon Flanders, 8s samples on the same machine:
+
+| Build | Workload | Avg CPU | p95 CPU | Max CPU |
+|-------|----------|---------|---------|---------|
+| clean `main` | passive | 26.924% | 28.66% | 28.9% |
+| clean `main` | scroll-tap-jump | 44.188% | 70.82% | 70.9% |
+| failed native slice | passive | 39.759% | 57.0% | 81.0% |
+| failed native slice | scroll-tap-jump | 36.394% | 53.7% | 66.1% |
+
+This is a failed slice: it does not meet the required 50-80% reduction, and it
+regresses passive UX/performance. Do not cite it as completed work.
+
+### Hard Rules For The Next Native Attempt
+
+- Do not call a renderer "native" if each visible lyric row is still an
+  `NSHostingView` containing `LyricLineView`.
+- Do not use `PassthroughHostingView` or surface-level hit testing as the final
+  interaction model. Native rows must own hover, click, scroll, tap-to-jump,
+  and recovery semantics directly.
+- Do not move blur to a different rendering primitive unless telemetry and UX
+  parity prove the protected blur is preserved. Core Image layer blur is not
+  accepted based on the failed slice.
+- Native must preserve manual-scroll frozen display index, row hover feedback,
+  tap-to-jump line identity, interlude/prelude dots, active/non-active
+  blur/scale/opacity, word sweep, translation sweep, held-word glow/lift/float,
+  CJK spacing, and compact long-line behavior before CPU numbers are accepted.
+- Native must be opt-in until all protected UX gates and CPU/FPS gates pass.
+
+### Required Objective UX Gates
+
+Telemetry-only gates must cover:
+
+- manual scroll start/end, frozen display index, false ownership, and recovery;
+- row hover enter/exit and hover target identity;
+- tap-to-jump target line, tap latency, settle time, and final playback line;
+- blur radius/effect path used by active and inactive rows;
+- frame cadence: display refresh interval, effective FPS, p50/p95/p99/max
+  frame delta, dropped frames above 1.5x and 2x refresh, longest stall, jitter;
+- drift: target Y error, inter-line spacing error, stale nearby targets, wave
+  start latency, completion time, order violations, row velocity, clipping;
+- text/backend: word sweep phase, translation sweep phase, height cache
+  invalidations, accumulated-height recomputes, row mount/unmount counts,
+  lyrics fetch/cache/parse/translation duration, ScriptingBridge latency, Music
+  clock correction.
+
+## Experimental Layer Presentation Engine
+
+`LyricsView` remains the SwiftUI coordinator for page shell, controls, gestures,
+translation state, accessibility, and fallback. `LyricsPresentationEngine` owns
+the semantic row presentation state in the experimental native path: current
+index, playback mode, row targets, row Y/velocity, spring progression, and
+invisible wave diagnostics. Natural playback uses the protected AMLL-style
+top-to-bottom wave with the verified `0.08s` row cadence. Direct snap is
+reserved for seek, tap-to-line, manual-scroll recovery, track reset, initial
+layout, and reduced motion.
+
+`LyricsLayerRendererView` is only the presentation surface. It hosts the
+existing lyric row content but applies row Y movement through layer transforms
+instead of changing SwiftUI row offsets every frame. Do not move per-frame row
+motion back into SwiftUI body invalidation. If a future profile shows the active
+word or translation sweep is still the dominant bottleneck after row movement
+has left SwiftUI, add a second pass for a custom active text surface rather than
+simplifying the protected wave.
+
 For long-session stall reports, use `scripts/soak_harness.py` and watch:
 
 - `stallCount`;
@@ -251,8 +370,25 @@ After the 30 Hz grouped-sweep experiment:
 - page breakdown in that soak: album CPU avg `1.863%`, lyrics CPU avg `27.782%`, playlist CPU avg `2.087%`;
 - harness `stallCount` was `6`, but every flagged delay aligned with route/cycle work and had low app CPU, so treat that run as no app-side CPU stall evidence, not as a clean stall-free long-session proof.
 
+After the first layer-backed row presentation pass on `codex/lyrics-scroll-engine`:
+
+- passive translated-word lyrics gate, SwiftUI fallback: CPU avg `35.136%`,
+  p95 `69.86%`;
+- passive translated-word lyrics gate, layer engine: CPU avg `28.779%`,
+  p95 `46.04%`;
+- strict scroll-then-visible-row-jump gate, SwiftUI fallback: CPU avg
+  `52.352%`, p95 `63.12%`, max `68.6%`;
+- strict scroll-then-visible-row-jump gate, layer engine after transform/keying
+  fixes: CPU avg `44.112%`, p95 `55.48%`, max `56.5%`;
+- visual evidence must be a nonblank lyrics-page recording of the scrolled
+  visible-row jump, not a stale-position tap or an album-page capture.
+
 ## Remaining Bottleneck
 
-After the fixes above, samples point to the active `LyricsTextRenderer`, `TranslationSweepRenderer`, and SwiftUI layout engine. Further large CPU reductions need a renderer architecture that preserves the old UX while reducing SwiftUI frame invalidation, likely a single custom bitmap or Metal-backed lyric surface with precomputed glyph positions and masks.
+After the fixes above, samples still point to the active `LyricsTextRenderer`,
+`TranslationSweepRenderer`, and SwiftUI layout engine for the hosted row
+content. Further large CPU reductions need a custom active text surface with
+precomputed glyph positions and masks. Do that only after the layer row-motion
+engine is preserved and measured as insufficient by itself.
 
 Do not make another layout simplification unless it can prove visual parity against the old smooth renderer.

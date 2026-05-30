@@ -900,6 +900,8 @@ public final class DiagnosticsService: ObservableObject {
         source: String?,
         score: Double?,
         lineCount: Int,
+        hasSyllableSync: Bool = false,
+        firstRealLineSHA256: String? = nil,
         isUnsynced: Bool,
         hadSourceTranslation: Bool,
         translationLineCount: Int = 0,
@@ -916,6 +918,7 @@ public final class DiagnosticsService: ObservableObject {
         var metrics: [String: Double] = [
             "fetchSeconds": elapsed,
             "lineCount": Double(lineCount),
+            "hasSyllableSync": hasSyllableSync ? 1 : 0,
             "isUnsynced": isUnsynced ? 1 : 0,
             "hasSourceTranslation": hadSourceTranslation ? 1 : 0,
             "translationLineCount": Double(translationLineCount),
@@ -926,6 +929,11 @@ public final class DiagnosticsService: ObservableObject {
                 : 0
         ]
         if let score { metrics["score"] = score }
+        let workloadEvidence = [
+            "source": source ?? "unknown",
+            "hasSyllableSync": hasSyllableSync ? "true" : "false",
+            "firstRealLineSHA256": firstRealLineSHA256 ?? "unknown"
+        ]
 
         recordEvent(
             "lyrics.fetch.finish",
@@ -938,7 +946,7 @@ public final class DiagnosticsService: ObservableObject {
             track: track,
             detail: source.map { "Lyrics refresh selected \($0)." } ?? "Lyrics refresh finished.",
             metrics: metrics,
-            evidence: ["source": source ?? "unknown"]
+            evidence: workloadEvidence
         )
 
         let isLowConfidence = shouldRecordLowConfidenceLyricsResult(
@@ -962,7 +970,7 @@ public final class DiagnosticsService: ObservableObject {
                 detail: "Lyrics took \(formatSeconds(elapsed)) to load.",
                 track: track,
                 metrics: metrics,
-                evidence: ["source": source ?? "unknown"]
+                evidence: workloadEvidence
             )
         }
 
