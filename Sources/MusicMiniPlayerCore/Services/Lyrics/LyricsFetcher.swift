@@ -337,8 +337,12 @@ public final class LyricsFetcher {
         let libraryNativeTitleBranchLanded = Box(false)
         let branch3Fired = Box(false)
         let branch3Landed = Box(false)
+        let netEaseProviderLanded = Box(false)
         let shouldDelayLowTierFallbacks = !alb.isEmpty
             && !(titleIsASCII && LanguageUtils.isLikelyEnglishTitle(ot))
+        let shouldProtectNativeProviderRace = LanguageUtils.containsCJK(ot)
+            || LanguageUtils.containsCJK(oa)
+            || LanguageUtils.containsCJK(alb)
         let lowTierFallbackDelay: UInt64 = shouldDelayLowTierFallbacks ? 700_000_000 : 0
         let albumScopedLandingDeadline: TimeInterval = 2.85
         let shouldProtectAsciiNativeAlias = titleIsASCII && !LanguageUtils.isLikelyEnglishTitle(ot)
@@ -377,7 +381,14 @@ public final class LyricsFetcher {
             shouldProbeLibraryNativeTitle: shouldProbeLibraryNativeTitle,
             shouldProbeAlbumTitleEchoNativeAlias: shouldProbeAlbumTitleEchoNativeAlias
         )
-        let nativeProviderTimeout: TimeInterval = shouldProtectAsciiNativeAlias ? 2.55 : 2.2
+        let nativeProviderTimeout: TimeInterval
+        if shouldProtectAsciiNativeAlias {
+            nativeProviderTimeout = 2.55
+        } else if shouldProtectNativeProviderRace && !alb.isEmpty {
+            nativeProviderTimeout = 4.2
+        } else {
+            nativeProviderTimeout = 2.2
+        }
 
         if shouldUsePreflightLibraryNativeTitleCache(
             shouldProbeLibraryNativeTitle: shouldProbeLibraryNativeTitle,
@@ -481,7 +492,13 @@ public final class LyricsFetcher {
                     await self.fetchFromAppleMusic(title: ot, artist: oa, duration: d, translationEnabled: te, album: alb)
                 }
             }
-            group.addTask { await self.withHardSourceTimeout(seconds: nativeProviderTimeout) { await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) } }
+            group.addTask {
+                let result = await self.withHardSourceTimeout(seconds: nativeProviderTimeout) {
+                    await self.fetchFromNetEase(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
+                }
+                netEaseProviderLanded.value = true
+                return result
+            }
             group.addTask { await self.withHardSourceTimeout(seconds: 2.2) { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) } }
 
             // ───────────────────────────────────────────────────────────────
@@ -861,6 +878,10 @@ public final class LyricsFetcher {
                 if let r = result {
                     results.append(r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
+                    let isLineTimedCJKNativeProviderResult = shouldProtectNativeProviderRace
+                        && ["NetEase", "QQ"].contains(r.source)
+                        && r.kind == .synced
+                        && !r.lyrics.contains(where: { $0.hasSyllableSync })
 
                     let hasStrongCatalogEvidence = r.albumMatched
                         || (r.matchedDurationDiff.map { $0 < 1.0 } ?? false)
@@ -905,6 +926,7 @@ public final class LyricsFetcher {
                         && !albumScopedEvidencePending
                         && !catalogExactTitleEvidencePending
                         && !libraryNativeTitleEvidencePending
+                        && !isLineTimedCJKNativeProviderResult
                         && (!needsIdentityWitness || hasIdentityWitness) {
                         DebugLogger.log("⚡ Early return: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold)) albumMatch=\(r.albumMatched)")
                         group.cancelAll()
@@ -912,13 +934,15 @@ public final class LyricsFetcher {
                     }
                     if hasAlbumHint
                         && hasAlbumExactSyncedResult
-                        && self.earlyReturnSources.contains(r.source) {
+                        && self.earlyReturnSources.contains(r.source)
+                        && !isLineTimedCJKNativeProviderResult {
                         DebugLogger.log("⚡ Early return: \(r.source) album-exact synced score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
                     }
                     if self.selectedHasTightCatalogAliasIdentity(r),
-                       self.earlyReturnSources.contains(r.source) {
+                       self.earlyReturnSources.contains(r.source),
+                       !isLineTimedCJKNativeProviderResult {
                         DebugLogger.log("⚡ Early return: \(r.source) tight catalog-alias score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
@@ -926,7 +950,8 @@ public final class LyricsFetcher {
                     if r.kind == .synced,
                        r.score >= 18,
                        !self.isLibraryFallbackSource(r.source),
-                       self.hasIndependentLyricAgreement(for: r, allResults: results) {
+                       self.hasIndependentLyricAgreement(for: r, allResults: results),
+                       !isLineTimedCJKNativeProviderResult {
                         DebugLogger.log("⚡ Early return: \(r.source) cross-source agreement score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
@@ -934,6 +959,9 @@ public final class LyricsFetcher {
                 }
 
                 if results.isEmpty {
+                    if shouldProtectNativeProviderRace && !netEaseProviderLanded.value && elapsed < nativeProviderTimeout {
+                        continue
+                    }
                     if catalogExactTitleBranchFired.value && !catalogExactTitleBranchLanded.value && elapsed < catalogExactTitleLandingDeadline {
                         continue
                     }
@@ -959,6 +987,10 @@ public final class LyricsFetcher {
                     continue
                 }
                 let hasFastExitSyncedResult = results.contains {
+                    let lineTimedCJKNativeProvider = shouldProtectNativeProviderRace
+                        && ["NetEase", "QQ"].contains($0.source)
+                        && $0.kind == .synced
+                        && !$0.lyrics.contains(where: { $0.hasSyllableSync })
                     let looseNativeAlias = $0.nativeAliasMatched
                         && !$0.titleMatched
                         && !$0.albumMatched
@@ -986,6 +1018,7 @@ public final class LyricsFetcher {
                         )
                     let tightCatalogAliasCanFastExit = self.selectedHasTightCatalogAliasIdentity($0)
                     return $0.kind == .synced
+                        && !lineTimedCJKNativeProvider
                         && !looseNativeAlias
                         && (
                             tightCatalogAliasCanFastExit
@@ -1017,9 +1050,6 @@ public final class LyricsFetcher {
                         $0.score < 50
                     )
                 }
-                let shouldProtectNativeProviderRace = LanguageUtils.containsCJK(ot)
-                    || LanguageUtils.containsCJK(oa)
-                    || LanguageUtils.containsCJK(alb)
                 let protectNativeProviderRace = hasOnlyWeakLibraryFallbackSyncedResults && shouldProtectNativeProviderRace
                 let trustedExactSyncedCanShortCircuit = hasTrustedExactSyncedResult
                     && !shouldProtectNativeProviderRace
@@ -1046,6 +1076,11 @@ public final class LyricsFetcher {
                     && !hasFastExitSyncedResult
                     && !trustedExactSyncedCanShortCircuit
                     && elapsed < 2.35
+                let netEaseProviderNeedsLandingWindow = shouldProtectNativeProviderRace
+                    && !netEaseProviderLanded.value
+                    && !hasFastExitSyncedResult
+                    && !trustedExactSyncedCanShortCircuit
+                    && elapsed < nativeProviderTimeout
                 let branch2NeedsLandingWindow = branch2Fired.value
                     && !branch2Landed.value
                     && !hasFastExitSyncedResult
@@ -1064,11 +1099,16 @@ public final class LyricsFetcher {
                     && !hasFastExitSyncedResult
                     && !trustedExactSyncedCanShortCircuit
                     && elapsed < libraryNativeTitleLandingDeadline
-                if catalogExactTitleNeedsLandingWindow || libraryNativeTitleNeedsLandingWindow || albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
+                if netEaseProviderNeedsLandingWindow || catalogExactTitleNeedsLandingWindow || libraryNativeTitleNeedsLandingWindow || albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
                 }
                 let hasHighConfidenceResult = results.contains {
-                    $0.kind == .synced
+                    let lineTimedCJKNativeProvider = shouldProtectNativeProviderRace
+                        && ["NetEase", "QQ"].contains($0.source)
+                        && $0.kind == .synced
+                        && !$0.lyrics.contains(where: { $0.hasSyllableSync })
+                    return $0.kind == .synced
+                        && !lineTimedCJKNativeProvider
                         && $0.score >= 60
                         && self.earlyReturnSources.contains($0.source)
                         && ($0.titleMatched || self.selectedHasStrongNativeAliasIdentity($0))
@@ -1079,7 +1119,7 @@ public final class LyricsFetcher {
                 if (hasHighConfidenceResult && elapsed >= 1.5)
                     || (hasFastExitSyncedResult && elapsed >= 0.15)
                     || (trustedExactSyncedCanShortCircuit && elapsed >= 0.15)
-                    || (!branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.2)
+                    || (!netEaseProviderNeedsLandingWindow && !branch3Fired.value && !hasAnyPotentiallyUsableSyncedResult && elapsed >= 2.2)
                     || (!protectNativeProviderRace && catalogExactTitleBranchFired.value && !catalogExactTitleBranchLanded.value && elapsed >= catalogExactTitleLandingDeadline)
                     || (!protectNativeProviderRace && libraryNativeTitleBranchFired.value && !libraryNativeTitleBranchLanded.value && elapsed >= libraryNativeTitleLandingDeadline)
                     || (!protectNativeProviderRace && albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed >= albumScopedLandingDeadline)
