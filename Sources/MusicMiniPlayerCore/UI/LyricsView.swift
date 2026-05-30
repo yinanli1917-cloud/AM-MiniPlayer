@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 MusicController, LyricsService, LyricLineView, SharedBottomControls
- * [OUTPUT]: 导出 LyricsView
- * [POS]: UI 的 歌词全屏视图
+ * [INPUT]: Depends on MusicController, LyricsService, LyricLineView, SharedBottomControls
+ * [OUTPUT]: Exports LyricsView
+ * [POS]: Full-screen lyrics UI
  */
 import SwiftUI
 import AppKit
@@ -12,19 +12,19 @@ import Translation
 
 // MARK: - State Structs
 
-/// 手动滚动相关状态
+/// Manual scroll state.
 private struct ScrollState {
     var isManualScrolling = false
-    var manualScrollOffset: CGFloat = 0     // 显示用（含橡皮筋）
-    var rawScrollOffset: CGFloat = 0        // 原始累积（不含橡皮筋）
+    var manualScrollOffset: CGFloat = 0     // Display offset, including rubber banding.
+    var rawScrollOffset: CGFloat = 0        // Raw accumulated offset, excluding rubber banding.
     var lastVelocity: CGFloat = 0
     var scrollLocked = false
     var hasTriggeredSlowScroll = false
     var lockedLineIndex: Int? = nil
-    var frozenDisplayIndex: Int? = nil      // 手动滚动时冻结的高亮行索引
+    var frozenDisplayIndex: Int? = nil      // Highlighted row index frozen during manual scroll.
 }
 
-/// 行高度 + 累积高度缓存
+/// Row height and accumulated-height cache.
 private struct CacheState {
     var lineHeights: [Int: CGFloat] = [:]
     var cachedTotalContentHeight: CGFloat = 0
@@ -47,16 +47,6 @@ private struct WaveState {
     /// row fire path perturbs the same main-queue timing it is trying to measure.
     var pendingTimelineSamples: [DiagnosticLyricWaveTimelineSample] = []
     var sequence: Int = 0
-}
-
-private struct DisplayLyricLine: Identifiable, Equatable {
-    let id: String
-    let sourceIndex: Int
-    let segmentIndex: Int
-    let segmentCount: Int
-    let line: LyricLine
-
-    var isLastSegment: Bool { segmentIndex == segmentCount - 1 }
 }
 
 private let lyricLineMotionCoordinateSpace = "nanoPod.lyrics.lineMotion"
@@ -277,12 +267,12 @@ public struct LyricsView: View {
     var onHide: (() -> Void)?
     var onExpand: (() -> Void)?
 
-    // ── 分组状态 ──
+    // Grouping state.
     @State private var scroll = ScrollState()
     @State private var cache = CacheState()
     @State private var wave = WaveState()
 
-    // ── UI 状态 ──
+    // UI state.
     @State private var isHovering = false
     @State private var isProgressBarHovering = false
     @State private var dragPosition: CGFloat? = nil
@@ -315,18 +305,17 @@ public struct LyricsView: View {
     @State private var cachedDisplayLines: [DisplayLyricLine] = []
     @State private var cachedDisplayLyrics: [LyricLine] = []
     @State private var cachedFirstRealDisplayIndex: Int = 0
-
-    // ── 翻译状态 ──
+    // Translation state.
     @State private var translationSessionConfigAny: Any?
     @State private var localTranslationTrigger: Int = 0
     @State private var translationConfigGeneration = 0
     @State private var translationPreflightTask: Task<Void, Never>?
 
-    // ── 无障碍 ──
+    // Accessibility.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    // ── 设置 ──
+    // Settings.
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
 
     public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil,
@@ -355,7 +344,6 @@ public struct LyricsView: View {
             }
         }
         .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
-        .overlay(alignment: .bottomLeading) { diagnosticMetricsOverlay }
         .overlay(bottomControlsOverlay)
         .modifier(FloatingMenuBackdropBlur(
             isActive: isAudioOutputMenuPresented,
@@ -365,7 +353,7 @@ public struct LyricsView: View {
         .overlay(alignment: .topLeading) { musicButtonOverlay }
         .overlay(alignment: .topTrailing) { windowButtonsOverlay }
         .onHover { hovering in handleHover(hovering) }
-        // ── onChange: 页面切换 ──
+        // Page-switch changes.
         .onChange(of: currentPage) { _, newPage in
             if newPage != .lyrics {
                 bottomControlsMounted = false
@@ -390,7 +378,7 @@ public struct LyricsView: View {
                 startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
             }
         }
-        // ── onAppear + 歌曲切换 ──
+        // Initial mount and track changes.
         .onAppear {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
             refreshDisplayLineCache()
@@ -417,7 +405,7 @@ public struct LyricsView: View {
             cachedFirstRealDisplayIndex = 0
             displayCurrentLineIndex = nil
             pendingLineHeightResetForNextPayload = true
-            // 🔑 Reset manual scroll state — prevents stuck isManualScrolling
+            // Reset manual scroll state to prevent stuck isManualScrolling
             // when track changes during a manual scroll (timer would fire on stale state)
             autoScrollTimer?.invalidate()
             autoScrollTimer = nil
@@ -444,7 +432,7 @@ public struct LyricsView: View {
         }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
-        // ── onChange: 翻译相关 ──
+        // Translation changes.
         .onChange(of: lyricsService.lyrics) { _, newLyrics in
             let newCount = newLyrics.count
             refreshDisplayLineCache()
@@ -514,7 +502,7 @@ public struct LyricsView: View {
                 cache.heightCacheInvalidated = true
             }
         }
-        // ── onChange: 滚动 + 波浪 + 错误 ──
+        // Scroll, wave, and error changes.
         .onChange(of: lyricsService.isManualScrolling) { _, newValue in
             handleExternalManualScroll(newValue)
         }
@@ -525,7 +513,9 @@ public struct LyricsView: View {
                 let oldIndex = oldValue.map { displayIndex(forSourceIndex: $0) } ?? wave.lastCurrentIndex
                 displayCurrentLineIndex = newIndex
                 if newIndex != wave.lastCurrentIndex && !scroll.isManualScrolling {
-                    triggerWaveAnimation(from: oldIndex, to: newIndex)
+                    if !lyricsLayerRendererActive {
+                        triggerWaveAnimation(from: oldIndex, to: newIndex)
+                    }
                     wave.lastCurrentIndex = newIndex
                     startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
                 }
@@ -541,7 +531,7 @@ public struct LyricsView: View {
                 }
             }
         }
-        // ── onChange: 设置 ──
+        // Settings changes.
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
             if newValue != fullscreenAlbumCover {
@@ -576,20 +566,6 @@ public struct LyricsView: View {
                 requestLatestLyricLineMotionCapture()
             }
             .allowsHitTesting(false)
-        }
-    }
-
-    @ViewBuilder
-    private var diagnosticMetricsOverlay: some View {
-        if lineMotionMonitoringEnabled {
-            LyricsMotionDiagnosticsPanel(
-                snapshot: diagnostics.liveMotionSnapshot,
-                isMonitoring: lineMotionMonitoringEnabled
-            )
-            .padding(.leading, 12)
-            .padding(.bottom, showControls ? 78 : 14)
-            .allowsHitTesting(false)
-            .transition(.opacity)
         }
     }
 
@@ -658,6 +634,10 @@ public struct LyricsView: View {
         diagnostics.isLineMotionGeometryEnabled && currentPage == .lyrics && !lyricsService.lyrics.isEmpty
     }
 
+    private var lyricsLayerRendererActive: Bool {
+        LyricsRendererMode.current == .native
+    }
+
     private var scrollableLyricsContent: some View {
         let lyricsViewID = "\(musicController.currentTrackTitle)-\(musicController.currentArtist)"
 
@@ -669,7 +649,7 @@ public struct LyricsView: View {
             let controlBarHeight: CGFloat = 120
             let liveIndex = displayCurrentLineIndex
                 ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0, in: displayLines)
-            // AMLL: 高亮瞬时切换，位移通过 wave spring 过渡
+            // AMLL: highlight switches immediately; Y movement transitions through the wave spring.
             let displayIndex = scroll.isManualScrolling
                 ? (scroll.frozenDisplayIndex ?? liveIndex)
                 : liveIndex
@@ -682,45 +662,119 @@ public struct LyricsView: View {
             let cullingMeasurementThreshold = min(renderedIndices.count, max(8, visibleRange * 2))
             let hasEnoughMeasuredHeights = cache.lineHeights.count >= cullingMeasurementThreshold
             let shouldCull = !scroll.isManualScrolling && hasEnoughMeasuredHeights
+            let layerActive = LyricsRendererMode.current == .native
+            let activeWaveIndices = Set(wave.lineTargetIndices.keys)
+            let visibleIndices = displayLines.enumerated().compactMap { index, _ -> Int? in
+                guard index == 0 || index >= firstRealDisplayIndex else { return nil }
+                guard !shouldCull || abs(index - displayIndex) <= visibleRange || activeWaveIndices.contains(index) else {
+                    return nil
+                }
+                return index
+            }
+            let layerRows = makeLayerBackedRows(from: displayLines).filter { row in
+                guard row.index == 0 || row.index >= firstRealDisplayIndex else { return false }
+                return !shouldCull || abs(row.index - displayIndex) <= 14 || activeWaveIndices.contains(row.index)
+            }
+            let nativeRenderedIndices = layerRows.map(\.index)
+            let layerHeightIndices = Set(nativeRenderedIndices + [displayIndex] + Array(activeWaveIndices))
+            let layerAccumulatedHeights = Dictionary(uniqueKeysWithValues: layerHeightIndices.map {
+                ($0, calculateAccumulatedHeight(upTo: $0))
+            })
 
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(displayLines.enumerated()), id: \.element.id) { index, displayLine in
-                    let line = displayLine.line
-                    let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
-                        ? lyricsService.lyrics[displayLine.sourceIndex]
-                        : line
-                    if index == 0 || index >= firstRealDisplayIndex {
-                        let isVisible = !shouldCull || abs(index - displayIndex) <= visibleRange
-
-                        if isVisible {
-                            let lineOffset = calculateLineOffset(
-                                index: index, currentIndex: displayIndex, anchorY: anchorY
+            Group {
+                if layerActive {
+                    NativeLyricsSurface(
+                        rows: layerRows,
+                        currentIndex: displayIndex,
+                        anchorY: anchorY,
+                        rowWidth: geo.size.width,
+                        renderedIndices: nativeRenderedIndices,
+                        accumulatedHeights: layerAccumulatedHeights,
+                        lineTargetIndices: wave.lineTargetIndices,
+                        lineInterval: estimatedLineInterval(around: displayIndex, in: displayLyrics),
+                        hasSyllableSync: displayLyrics.indices.contains(displayIndex) && displayLyrics[displayIndex].hasSyllableSync,
+                        trackContext: musicController.diagnosticsTrackContext(),
+                        isWaveTimelineDiagnosticsEnabled: diagnostics.isLyricWaveTimelineEnabled,
+                        isManualScrolling: scroll.isManualScrolling,
+                        reduceMotion: reduceMotion,
+                        suppressInitialMotion: suppressInitialLineMotion && !isLineWaveActive,
+                        pendingTranslationLineIndices: pendingTranslationLineIndices,
+                        showTranslation: lyricsService.showTranslation,
+                        isTranslating: lyricsService.isTranslating,
+                        translationFailed: lyricsService.translationFailed,
+                        interludeAfterIndex: lyricsService.interludeAfterIndex,
+                        musicController: musicController,
+                        onLineTap: { line in handleLineTap(line: line) },
+                        onHeightMeasured: { index, height in
+                            if abs((cache.lineHeights[index] ?? 0) - height) > 2.0 {
+                                cache.lineHeights[index] = height
+                                cache.heightCacheInvalidated = true
+                                scheduleHeightCacheUpdate()
+                            }
+                        },
+                        lineMotionFrameCaptureActive: lineMotionFrameCaptureActive,
+                        onLineMotionFrames: { frames, layerTargetIndices in
+                            guard let capture = pendingLineMotionCapture else { return }
+                            pendingLineMotionCapture = nil
+                            recordLyricLineMotion(
+                                frames: frames,
+                                anchorY: anchorY,
+                                containerHeight: containerHeight,
+                                controlBarHeight: controlBarHeight,
+                                displayIndex: displayIndex,
+                                displayLines: displayLines,
+                                displayLyrics: displayLyrics,
+                                firstRealDisplayIndex: firstRealDisplayIndex,
+                                playbackTime: capture.playbackTime,
+                                timestamp: capture.requestedAt,
+                                framesIncludeLineOffset: true,
+                                presentationTargetIndices: layerTargetIndices
                             )
-                            let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
-
-                            lyricLineContent(
-                                line: line,
-                                index: index,
-                                currentIndex: displayIndex,
-                                sourceIndex: displayLine.sourceIndex,
-                                isLastSegment: displayLine.isLastSegment,
-                                isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
-                                    index: displayLine.sourceIndex,
-                                    line: sourceLine,
-                                    pendingLineIndices: pendingTranslationLineIndices,
-                                    isTranslating: lyricsService.isTranslating
+                            DispatchQueue.main.async {
+                                lineMotionFrameCaptureActive = false
+                                latestLineMotionFrames.removeAll()
+                            }
+                        }
+                    )
+                } else {
+                    ZStack(alignment: .topLeading) {
+                        ForEach(Array(displayLines.enumerated()), id: \.element.id) { index, displayLine in
+                            let line = displayLine.line
+                            let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
+                                ? lyricsService.lyrics[displayLine.sourceIndex]
+                                : line
+                            if visibleIndices.contains(index) {
+                                let lineOffset = calculateLineOffset(
+                                    index: index,
+                                    currentIndex: displayIndex,
+                                    anchorY: anchorY
                                 )
-                            )
-                            .background(lineHeightTracker(index: index))
-                            .allowsHitTesting(true)
-                            .offset(y: fullOffset)
-                            .animation(
-                                scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
-                                    mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
-                                ),
-                                value: scroll.isManualScrolling ? 0 : fullOffset
-                            )
-                            .background(lineMotionTracker(index: index))
+                                let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
+
+                                lyricLineContent(
+                                    line: line,
+                                    index: index,
+                                    currentIndex: displayIndex,
+                                    sourceIndex: displayLine.sourceIndex,
+                                    isLastSegment: displayLine.isLastSegment,
+                                    isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
+                                        index: displayLine.sourceIndex,
+                                        line: sourceLine,
+                                        pendingLineIndices: pendingTranslationLineIndices,
+                                        isTranslating: lyricsService.isTranslating
+                                    )
+                                )
+                                .background(lineHeightTracker(index: index))
+                                .allowsHitTesting(true)
+                                .offset(y: fullOffset)
+                                .animation(
+                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
+                                        mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
+                                    ),
+                                    value: scroll.isManualScrolling ? 0 : fullOffset
+                                )
+                                .background(lineMotionTracker(index: index))
+                            }
                         }
                     }
                 }
@@ -729,7 +783,7 @@ public struct LyricsView: View {
             .offset(y: scroll.manualScrollOffset)
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
-                guard lineMotionFrameCaptureActive else {
+                guard lineMotionFrameCaptureActive, !layerActive else {
                     if !latestLineMotionFrames.isEmpty {
                         latestLineMotionFrames.removeAll()
                     }
@@ -773,6 +827,40 @@ public struct LyricsView: View {
     }
 
     // MARK: - Lyric Line Helpers
+
+    private func makeLayerBackedRows(from displayLines: [DisplayLyricLine]) -> [LayerBackedLyricRow] {
+        displayLines.enumerated().map { index, displayLine in
+            let line = displayLine.line
+            let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
+                ? lyricsService.lyrics[displayLine.sourceIndex]
+                : line
+            let isPrelude = isPreludeEllipsis(line.text)
+            let preludeEndTime: TimeInterval = {
+                guard isPrelude else { return line.endTime }
+                if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
+                    return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
+                }
+                for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
+                    let nextLine = lyricsService.lyrics[nextIndex]
+                    if !isPreludeEllipsis(nextLine.text) { return nextLine.startTime }
+                }
+                return line.endTime
+            }()
+            return LayerBackedLyricRow(
+                id: displayLine.id,
+                index: index,
+                displayLine: displayLine,
+                sourceLine: sourceLine,
+                isPrelude: isPrelude,
+                preludeEndTime: preludeEndTime,
+                interlude: displayLine.isLastSegment
+                    ? checkForInterlude(at: displayLine.sourceIndex).map {
+                        LayerBackedLyricInterlude(startTime: $0.startTime, endTime: $0.endTime)
+                    }
+                    : nil
+            )
+        }
+    }
 
     @ViewBuilder
     private func lyricLineContent(
@@ -852,7 +940,7 @@ public struct LyricsView: View {
                 }
             }
             .onChange(of: lineGeo.size.height) { _, newHeight in
-                // 忽略 ≤2pt 的微小变化（scale 动画引起的抖动）
+                // Ignore tiny <=2pt changes caused by scale-animation jitter.
                 if abs((cache.lineHeights[index] ?? 0) - newHeight) > 2.0 {
                     cache.lineHeights[index] = newHeight
                     cache.heightCacheInvalidated = true
@@ -955,7 +1043,9 @@ public struct LyricsView: View {
         displayLyrics: [LyricLine],
         firstRealDisplayIndex: Int,
         playbackTime: TimeInterval,
-        timestamp: Date
+        timestamp: Date,
+        framesIncludeLineOffset: Bool = false,
+        presentationTargetIndices: [Int: Int]? = nil
     ) {
         guard currentPage == .lyrics, diagnostics.isEnabled, !frames.isEmpty else { return }
 
@@ -999,14 +1089,22 @@ public struct LyricsView: View {
             let line = displayLine.line
             let targetIndex = scroll.isManualScrolling
                 ? (scroll.lockedLineIndex ?? displayIndex)
-                : (wave.lineTargetIndices[index] ?? displayIndex)
+                : (presentationTargetIndices?[index] ?? wave.lineTargetIndices[index] ?? displayIndex)
             let accumulatedHeight = calculateAccumulatedHeight(upTo: index)
-            let lineOffset = calculateLineOffset(index: index, currentIndex: displayIndex, anchorY: anchorY)
+            let lineOffset = calculateLineOffset(
+                index: index,
+                currentIndex: displayIndex,
+                anchorY: anchorY,
+                targetIndices: presentationTargetIndices
+            )
             let fullOffset = lineOffset + accumulatedHeight
-            let appliedOffsetY = Double(fullOffset + scroll.manualScrollOffset)
+            let appliedOffsetY = framesIncludeLineOffset
+                ? Double(scroll.manualScrollOffset)
+                : Double(fullOffset + scroll.manualScrollOffset)
             let baseMidY = Double(accumulatedHeight) + Double(frame.height / 2)
-            let targetMinY = Double(accumulatedHeight)
-                + Double(immediateLineOffset + scroll.manualScrollOffset)
+            let targetMinY = framesIncludeLineOffset
+                ? Double(fullOffset + scroll.manualScrollOffset)
+                : Double(accumulatedHeight) + Double(immediateLineOffset + scroll.manualScrollOffset)
             let targetMidY = targetMinY + Double(frame.height / 2)
             return MotionPartial(
                 index: index,
@@ -1083,6 +1181,7 @@ public struct LyricsView: View {
         }
 
         let activeTargetIndex = partials.first { $0.index == activeIndex }?.targetIndex
+            ?? presentationTargetIndices?[activeIndex]
             ?? wave.lineTargetIndices[activeIndex]
             ?? displayIndex
         recordLineBoundaryLagIfNeeded(
@@ -1202,7 +1301,12 @@ public struct LyricsView: View {
         return true
     }
 
-    private func calculateLineOffset(index: Int, currentIndex: Int, anchorY: CGFloat) -> CGFloat {
+    private func calculateLineOffset(
+        index: Int,
+        currentIndex: Int,
+        anchorY: CGFloat,
+        targetIndices: [Int: Int]? = nil
+    ) -> CGFloat {
         if scroll.isManualScrolling {
             let frozenTargetIndex = scroll.lockedLineIndex ?? currentIndex
             return anchorY - calculateAccumulatedHeight(upTo: frozenTargetIndex)
@@ -1210,12 +1314,12 @@ public struct LyricsView: View {
             // GCD wave: each line's target is updated independently via asyncAfter.
             // Lines not yet flipped retain the previous wave's target (= oldIndex),
             // creating the stagger. Fallback to currentIndex for lines never in a wave.
-            let lineTargetIndex = wave.lineTargetIndices[index] ?? currentIndex
+            let lineTargetIndex = targetIndices?[index] ?? wave.lineTargetIndices[index] ?? currentIndex
             return anchorY - calculateAccumulatedHeight(upTo: lineTargetIndex)
         }
     }
 
-    // MARK: - Overlay 组件
+    // MARK: - Overlay Components
 
     private var bottomControlsOverlay: some View {
         VStack {
@@ -1284,7 +1388,7 @@ public struct LyricsView: View {
         }
     }
 
-    // MARK: - 交互处理
+    // MARK: - Interaction Handling
 
     private func animateControlsIn() {
         bottomControlsMounted = true
@@ -1391,7 +1495,7 @@ public struct LyricsView: View {
         if cache.heightCacheInvalidated { updateHeightCache() }
         let currentIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
         scroll.lockedLineIndex = currentIdx
-        scroll.frozenDisplayIndex = currentIdx  // 冻结高亮行
+        scroll.frozenDisplayIndex = currentIdx  // Freeze the highlighted row.
         scroll.isManualScrolling = true
         scroll.lastVelocity = 0
         scroll.scrollLocked = false
@@ -1423,7 +1527,7 @@ public struct LyricsView: View {
         RunLoop.main.add(autoScrollTimer!, forMode: .common)
     }
 
-    // MARK: - 滚动处理
+    // MARK: - Scroll Handling
 
     private func handleScrollStarted() {
         autoScrollTimer?.invalidate()
@@ -1432,7 +1536,7 @@ public struct LyricsView: View {
 
         let currentIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
         scroll.lockedLineIndex = currentIdx
-        scroll.frozenDisplayIndex = currentIdx  // 冻结高亮行
+        scroll.frozenDisplayIndex = currentIdx  // Freeze the highlighted row.
         scroll.rawScrollOffset = scroll.manualScrollOffset
         scroll.isManualScrolling = true
         lyricsService.isManualScrolling = true
@@ -1442,7 +1546,7 @@ public struct LyricsView: View {
     }
 
     private func handleScrollEnded() {
-        // 松手后立即弹回边界
+        // Bounce back to bounds immediately after release.
         let (maxUp, maxDown) = scrollBounds()
         if scroll.rawScrollOffset > maxUp || scroll.rawScrollOffset < -maxDown {
             scroll.rawScrollOffset = min(maxUp, max(-maxDown, scroll.rawScrollOffset))
@@ -1451,7 +1555,7 @@ public struct LyricsView: View {
             }
         }
 
-        // 2 秒后 spring 回当前播放行
+        // Spring back to the currently playing row after 2 seconds.
         autoScrollTimer?.invalidate()
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [self] _ in
             // Sync wave to latest line index BEFORE unfreezing
@@ -1475,14 +1579,14 @@ public struct LyricsView: View {
             scroll.scrollLocked = false
             scroll.hasTriggeredSlowScroll = false
 
-            // 恢复后如果鼠标在窗口内则显示控件
+            // After recovery, show controls if the mouse is still inside the window.
             if isHovering { animateControlsIn() }
             scheduleNextLineAdvanceTimer()
         }
     }
 
     private func handleScrollDelta(_ deltaY: CGFloat, velocity: CGFloat) {
-        // Apple 风格橡皮筋
+        // Apple-style rubber banding.
         scroll.rawScrollOffset += deltaY
         let (maxUp, maxDown) = scrollBounds()
         let dim = max(cache.lyricsContainerHeight * 0.4, 120)
@@ -1516,7 +1620,7 @@ public struct LyricsView: View {
         scroll.lastVelocity = absVelocity
     }
 
-    // MARK: - 翻译
+    // MARK: - Translation
 
     private func updateTranslationSessionConfig(trigger: Int? = nil) {
         if #available(macOS 15.0, *) {
@@ -1556,7 +1660,7 @@ public struct LyricsView: View {
         }
     }
 
-    // MARK: - 工具函数
+    // MARK: - Utilities
 
     private func isPreludeEllipsis(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
@@ -1776,12 +1880,14 @@ public struct LyricsView: View {
         )
         guard displayCurrentLineIndex != newIndex else { return }
         let oldIndex = displayCurrentLineIndex ?? wave.lastCurrentIndex
-        if let newIndex, !scroll.isManualScrolling {
+        if let newIndex, !scroll.isManualScrolling, !lyricsLayerRendererActive {
             seedWaveTargetsForLineAdvance(from: oldIndex, to: newIndex)
         }
         displayCurrentLineIndex = newIndex
         guard let newIndex, !scroll.isManualScrolling else { return }
-        triggerWaveAnimation(from: oldIndex, to: newIndex)
+        if !lyricsLayerRendererActive {
+            triggerWaveAnimation(from: oldIndex, to: newIndex)
+        }
         wave.lastCurrentIndex = newIndex
         startLineMotionSamplingWindow(duration: lyricLineMotionLineAdvanceSampleDuration)
     }
@@ -1809,7 +1915,7 @@ public struct LyricsView: View {
         }
     }
 
-    // MARK: - 滚动边界 + 橡皮筋
+    // MARK: - Scroll Bounds And Rubber Banding
 
     private func rubberBand(_ x: CGFloat, _ d: CGFloat) -> CGFloat {
         let result = (1.0 - (1.0 / ((abs(x) * 0.55 / d) + 1.0))) * d
@@ -1825,7 +1931,7 @@ public struct LyricsView: View {
                 max(0, calculateTotalContentHeight() - curOffset - visibleBottom))
     }
 
-    // MARK: - 高度计算 + 缓存
+    // MARK: - Height Calculation And Cache
 
     /// Self-caching: computes once, serves from cache until invalidated
     private var renderedIndices: [Int] {
@@ -1889,7 +1995,7 @@ public struct LyricsView: View {
         return totalHeight
     }
 
-    /// body 入口调用，确保高度缓存有效（避免 O(N²) 逐行重算）
+    /// Called from body entry to keep the height cache valid and avoid O(N²) row rescans.
     private func ensureHeightCache() {
         if cache.heightCacheInvalidated { updateHeightCache() }
     }
@@ -1933,7 +2039,7 @@ public struct LyricsView: View {
         }
     }
 
-    // MARK: - AMLL 波浪动画（纯计算驱动）
+    // MARK: - AMLL Wave Animation (Calculation-Driven)
 
     /// AMLL wave animation — GCD-driven stagger.
     /// Each line's target is updated independently via DispatchWorkItem + asyncAfter.
@@ -2130,104 +2236,6 @@ public struct LyricsView: View {
         for item in wave.workItems { item.cancel() }
         wave.workItems.removeAll()
         flushPendingLyricWaveTimelineSamples(deferred: true)
-    }
-}
-
-private struct LyricsMotionDiagnosticsPanel: View {
-    let snapshot: DiagnosticLiveMotionSnapshot?
-    let isMonitoring: Bool
-
-    private var status: (label: String, color: Color) {
-        guard let snapshot else {
-            return isMonitoring ? ("WAIT", .yellow) : ("OFF", .gray)
-        }
-        if snapshot.recentFrameStallCount > 0 || snapshot.latestFrameDeltaMs > 80 {
-            return ("FRAME", .orange)
-        }
-        if let missAt = snapshot.latestCaptureMissAt,
-           Date().timeIntervalSince(missAt) < 3 {
-            return ("MISS", .yellow)
-        }
-        if snapshot.lateActiveTarget || snapshot.lingeringWaveBacklog {
-            return ("LATE", .red)
-        }
-        if snapshot.staleStaticLineCount > 0
-            || snapshot.maxInterLineErrorY > 18
-            || snapshot.maxTargetErrorY > 32 {
-            return ("DRIFT", .red)
-        }
-        return ("WAVE", .cyan)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            header
-            if let snapshot {
-                metricsList(snapshot)
-            } else {
-                Text("waiting for line frames")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.62))
-            }
-        }
-        .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.black.opacity(0.42))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
-                )
-        )
-        .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 3)
-        .accessibilityHidden(true)
-    }
-
-    private var header: some View {
-        let currentStatus = status
-        return HStack(spacing: 6) {
-            Circle()
-                .fill(currentStatus.color)
-                .frame(width: 6, height: 6)
-            Text(currentStatus.label)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-            Text(isMonitoring ? "LIVE" : "IDLE")
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.55))
-        }
-    }
-
-    private func metricsList(_ snapshot: DiagnosticLiveMotionSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            metricRow("a/d/t", "\(snapshot.activeIndex)/\(snapshot.displayIndex)/\(snapshot.targetIndex)")
-            metricRow("rows", "\(snapshot.capturedFirstLineIndex)-\(snapshot.capturedLastLineIndex) n\(snapshot.sampleCount)")
-            metricRow("err", "\(number(snapshot.maxTargetErrorY))/\(number(snapshot.maxInterLineErrorY))")
-            metricRow("field", "\(snapshot.fieldTargetMismatchCount) max \(snapshot.maxFieldTargetDistance)")
-            metricRow("wave", "\(snapshot.wavePropagationLineCount) stale \(snapshot.staleStaticLineCount)")
-            metricRow("age", "\(number(snapshot.activeVisualElapsedMs))ms")
-            metricRow("frame", "\(number(snapshot.latestFrameDeltaMs))ms s\(snapshot.recentFrameStallCount)")
-            metricRow("cap", "\(snapshot.captureMissCount)")
-        }
-        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-    }
-
-    private func metricRow(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .foregroundStyle(.white.opacity(0.48))
-                .frame(width: 34, alignment: .leading)
-            Text(value)
-                .foregroundStyle(.white.opacity(0.82))
-        }
-    }
-
-    private func number(_ value: Double) -> String {
-        if abs(value) >= 100 {
-            return String(format: "%.0f", value)
-        }
-        return String(format: "%.1f", value)
     }
 }
 

@@ -1,12 +1,12 @@
 //
 //  RapidSwitchTests.swift
-//  覆盖快速切歌 + 电台封面修复中新增的 3 个原语：
-//    - SBTimeoutRunner: 硬超时释放阻塞 SB 调用
-//    - OBJCCatch:        Swift 不可捕获的 NSException 转 nil
-//    - artworkCacheKey:  统一缓存键（persistentID vs "radio:title|artist"）
+//  Covers the three primitives added for rapid switching and radio artwork fixes:
+//    - SBTimeoutRunner: hard timeout releases blocked ScriptingBridge calls
+//    - OBJCCatch:        converts Swift-uncatchable NSException into nil
+//    - artworkCacheKey:  unified cache key (persistentID vs "radio:title|artist")
 //
-//  说明：完整端到端流程依赖 Music.app + 网络，不可进 CI；此处只测新引入的
-//  原语，它们是这次修复的正确性基石。
+//  Note: the full end-to-end path depends on Music.app and network access, so it
+//  cannot run in CI. These tests cover the new primitives that make the fix safe.
 //
 
 import XCTest
@@ -22,7 +22,7 @@ final class RapidSwitchTests: XCTestCase {
     // MARK: - SBTimeoutRunner
     // ------------------------------------------------------------------
 
-    /// 快速完成的 block 应立即返回值。
+    /// A fast block should return its value immediately.
     func testTimeoutRunnerReturnsValueOnFastBlock() {
         let start = Date()
         let result = SBTimeoutRunner.run(timeout: 1.0) { () -> Int? in
@@ -34,9 +34,9 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertLessThan(elapsed, 0.2, "fast block should return immediately")
     }
 
-    /// 超时的 block 必须在 timeout 窗口内返回 nil，不能无限阻塞调用方。
+    /// A timed-out block must return nil within the timeout window, not block the caller forever.
     ///
-    /// 🔑 `ZZZ` prefix forces this test to run LAST alphabetically within
+    /// The `ZZZ` prefix forces this test to run LAST alphabetically within
     /// this class. The queue is now SERIAL (to prevent concurrent AE crash),
     /// so a 5-second hung block would otherwise block tests that come after
     /// it alphabetically (see rapid-switch SBTimeoutRunner.swift comment).
@@ -45,7 +45,7 @@ final class RapidSwitchTests: XCTestCase {
     func testTimeoutRunnerZZZReturnsNilOnHangingBlock() {
         let start = Date()
         let result = SBTimeoutRunner.run(timeout: 0.3) { () -> Int? in
-            Thread.sleep(forTimeInterval: 5.0)  // 模拟卡死的 SB IPC
+            Thread.sleep(forTimeInterval: 5.0)  // Simulate wedged ScriptingBridge IPC.
             return 42
         }
         let elapsed = Date().timeIntervalSince(start)
@@ -54,7 +54,7 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertLessThan(elapsed, 1.0, "caller must release within timeout window (got \(elapsed)s)")
     }
 
-    /// block 返回 nil 本身不是超时 —— 调用方应拿到 nil 且快速返回。
+    /// A block returning nil is not a timeout; the caller should receive nil quickly.
     func testTimeoutRunnerPassesThroughNilResult() {
         let start = Date()
         let result = SBTimeoutRunner.run(timeout: 1.0) { () -> Int? in return nil }
@@ -64,7 +64,7 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertLessThan(elapsed, 0.2)
     }
 
-    /// 并发多个快速调用共享同一 worker queue 不应互相阻塞。
+    /// Multiple concurrent fast calls sharing one worker queue should not block each other.
     func testTimeoutRunnerHandlesConcurrentCalls() {
         let group = DispatchGroup()
         var results: [Int] = []
@@ -150,7 +150,7 @@ final class RapidSwitchTests: XCTestCase {
     // MARK: - OBJCCatch
     // ------------------------------------------------------------------
 
-    /// 正常执行的 block 应返回 nil（表示无异常）。
+    /// A normally executed block should return nil, meaning no exception occurred.
     func testObjCCatchReturnsNilOnNormalExecution() {
         var ran = false
         let ex = OBJCCatch { ran = true }
@@ -158,8 +158,8 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertTrue(ran)
     }
 
-    /// NSException 必须被捕获并返回，而不是炸掉进程。
-    /// 这是 SBElementArray 迭代在 Music.app 中途变动时的真实崩溃模式。
+    /// NSException must be captured and returned instead of crashing the process.
+    /// This is the real crash pattern when SBElementArray mutates during Music.app iteration.
     func testObjCCatchCapturesNSException() {
         let ex = OBJCCatch {
             NSException(
@@ -177,16 +177,16 @@ final class RapidSwitchTests: XCTestCase {
     // MARK: - artworkCacheKey
     // ------------------------------------------------------------------
 
-    /// 非空 persistentID → 直接用作 key（库内曲目保持原行为）
+    /// Non-empty persistentID is used directly as the key, preserving library-track behavior.
     func testCacheKeyUsesPersistentIDWhenNonEmpty() {
         let c = MusicController.shared
         let key = c.artworkCacheKey(persistentID: "ABC123", title: "Song", artist: "Artist")
         XCTAssertEqual(key, "ABC123" as NSString)
     }
 
-    /// 空 persistentID → 返回 nil（电台不缓存，每次都重新拉取）
-    /// 修复 commit: 之前用 "radio:title|artist" 作 key，导致多个不同歌曲
-    /// 共享同一 title/artist 时命中过期封面。
+    /// Empty persistentID returns nil, so radio artwork is not cached and is fetched each time.
+    /// Previous code used "radio:title|artist", causing different songs with the same title/artist
+    /// to hit stale artwork.
     func testCacheKeyReturnsNilForEmptyPersistentID() {
         let c = MusicController.shared
         XCTAssertNil(c.artworkCacheKey(persistentID: "", title: "Song Name", artist: "Artist Name"))
@@ -857,6 +857,140 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(seeded[40], 39)
     }
 
+    func testLyricsPresentationEngineDirectSnapTargetsEveryRenderedRow() {
+        let targets = LyricsPresentationEngine.directSnapTargets(
+            renderedIndices: [1, 4, 7],
+            targetIndex: 6
+        )
+
+        XCTAssertEqual(targets, [1: 6, 4: 6, 7: 6])
+    }
+
+    func testLyricsPresentationEngineNaturalPlanSeedsRowsToOldTargetBeforeWaveFires() {
+        let plan = LyricsPresentationEngine.makeNaturalWavePlan(
+            existingTargets: [40: 39],
+            renderedIndices: Array(0...24),
+            oldIndex: 8,
+            newIndex: 12,
+            lineInterval: 1.2,
+            hasSyllableSync: true
+        )
+
+        XCTAssertEqual(plan.seededTargets[10], 8)
+        XCTAssertEqual(plan.seededTargets[11], 8)
+        XCTAssertEqual(plan.seededTargets[12], 8)
+        XCTAssertEqual(plan.seededTargets[40], 39)
+        XCTAssertEqual(plan.schedule.filter { $0.delay == 0 }.map(\.lineIndex), Array(0...9))
+        XCTAssertEqual(
+            plan.schedule.first { $0.lineIndex == 12 }?.delay ?? 0,
+            LyricWaveTiming.defaultBaseDelay * 3,
+            accuracy: 0.001
+        )
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineDirectSnapModeDoesNotUseNaturalWaveTargets() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 3,
+                renderedIndices: Array(0...6),
+                anchorY: 100,
+                accumulatedHeights: Dictionary(uniqueKeysWithValues: (0...6).map { ($0, CGFloat($0 * 40)) }),
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.seek)
+            ),
+            onTargetsChanged: {}
+        )
+
+        XCTAssertEqual(Set(engine.lineTargetIndices.values), [3])
+        XCTAssertEqual(engine.targetIndex(for: 0, fallback: -1), 3)
+        XCTAssertEqual(engine.targetIndex(for: 6, fallback: -1), 3)
+        XCTAssertEqual(engine.presentation(for: 0)?.y, -20)
+        XCTAssertEqual(engine.presentation(for: 6)?.y, 220)
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineNaturalModeOwnsSpringPresentation() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...10).map { ($0, CGFloat($0 * 40)) })
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 4,
+                renderedIndices: Array(0...10),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.initialLayout)
+            ),
+            onTargetsChanged: {}
+        )
+        let oldY = engine.presentation(for: 4)?.y
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 5,
+                renderedIndices: Array(0...10),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {}
+        )
+
+        XCTAssertEqual(engine.presentation(for: 5)?.targetIndex, 4)
+        XCTAssertEqual(engine.presentation(for: 5)?.targetY, 140)
+        XCTAssertEqual(engine.presentation(for: 5)?.y, 140)
+        XCTAssertEqual(oldY, 100)
+        XCTAssertEqual(engine.presentation(for: 0)?.targetIndex, 5)
+        XCTAssertEqual(engine.presentation(for: 0)?.targetY, -100)
+        XCTAssertEqual(engine.presentation(for: 0)?.y, -60)
+        XCTAssertTrue(engine.hasActiveMotion)
+        engine.advance(delta: 1.0 / 60.0)
+        XCTAssertLessThan(engine.presentation(for: 0)?.y ?? 0, -60)
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineManualAndReducedMotionUseDirectPresentation() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...6).map { ($0, CGFloat($0 * 40)) })
+
+        for mode in [LyricsPresentationPlaybackMode.directSnap(.manualScroll), .directSnap(.reducedMotion)] {
+            engine.update(
+                LyricsPresentationEngineConfiguration(
+                    currentIndex: 4,
+                    renderedIndices: Array(0...6),
+                    anchorY: 100,
+                    accumulatedHeights: heights,
+                    lineInterval: 1.2,
+                    hasSyllableSync: false,
+                    trackContext: track,
+                    isWaveTimelineDiagnosticsEnabled: false,
+                    playbackMode: mode
+                ),
+                onTargetsChanged: {}
+            )
+
+            XCTAssertEqual(Set(engine.lineTargetIndices.values), [4])
+            XCTAssertEqual(engine.presentation(for: 2)?.targetIndex, 4)
+            XCTAssertEqual(engine.presentation(for: 2)?.y, engine.presentation(for: 2)?.targetY)
+            XCTAssertEqual(engine.presentation(for: 2)?.velocity, 0)
+        }
+    }
+
     func testLyricWaveAnimationSeedsCurrentLineBeforeNaturalAdvance() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -887,6 +1021,73 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testNativeLyricsSurfaceOwnsWaveTimingOnFrameTick() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let engineURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsPresentationEngine.swift")
+        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
+        let modelURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsPresentationModels.swift")
+        let engine = try String(contentsOf: engineURL, encoding: .utf8)
+        let surface = try String(contentsOf: surfaceURL, encoding: .utf8)
+        let model = try String(contentsOf: modelURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            model.contains("case native = \"native\""),
+            "The rebuilt renderer must expose a native renderer mode instead of presenting the old layer path as the final architecture."
+        )
+        XCTAssertTrue(
+            surface.contains("struct NativeLyricsSurface: NSViewRepresentable"),
+            "SwiftUI should host the rebuilt renderer through NativeLyricsSurface."
+        )
+        XCTAssertTrue(
+            engine.contains("advancePendingWave(delta:"),
+            "AMLL-style wave retargeting must be advanced by the native frame loop."
+        )
+        XCTAssertFalse(
+            engine.contains("DispatchWorkItem"),
+            "Wave propagation must not rely on delayed main-queue work items; they drift under scroll/tap/jump load."
+        )
+        XCTAssertFalse(
+            engine.contains("DispatchQueue.main.asyncAfter(deadline: .now() + scheduledDelay"),
+            "Per-row wave timing belongs to the presentation tick, not asyncAfter timers."
+        )
+        XCTAssertTrue(
+            surface.contains("lyrics.presentationFrame.summary"),
+            "Native frame cadence telemetry is required to prove FPS/refresh has not been lowered."
+        )
+    }
+
+    func testExperimentalNativeRendererIsOptInUntilUXGatesPass() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: LyricsRendererMode.userDefaultsKey)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: LyricsRendererMode.userDefaultsKey)
+            } else {
+                defaults.removeObject(forKey: LyricsRendererMode.userDefaultsKey)
+            }
+        }
+
+        defaults.removeObject(forKey: LyricsRendererMode.userDefaultsKey)
+        XCTAssertEqual(
+            LyricsRendererMode.current,
+            .swiftUI,
+            "The native renderer must remain opt-in until manual scroll, hover, tap-to-jump, blur, FPS, drift, and CPU gates pass."
+        )
+
+        defaults.set("native", forKey: LyricsRendererMode.userDefaultsKey)
+        XCTAssertEqual(LyricsRendererMode.current, .native)
+
+        defaults.set("layer", forKey: LyricsRendererMode.userDefaultsKey)
+        XCTAssertEqual(
+            LyricsRendererMode.current,
+            .native,
+            "The old layer name is only a compatibility alias for the experimental native path."
+        )
+    }
+
     func testWordLevelLyricsBypassDisplayChunking() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -911,30 +1112,25 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
-    func testLyricMotionHudDoesNotTreatAlignedDirectScrollAsOkay() throws {
+    func testDeprecatedVisibleLyricMotionHudIsRemoved() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let lyricsView = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
         let source = try String(contentsOf: lyricsView, encoding: .utf8)
-        guard let panelStart = source.range(of: "private struct LyricsMotionDiagnosticsPanel")?.lowerBound else {
-            XCTFail("Could not locate LyricsMotionDiagnosticsPanel in LyricsView.swift")
-            return
-        }
-        let panel = String(source[panelStart...])
 
         XCTAssertFalse(
-            panel.contains("\"OK\""),
-            "The motion HUD must not label fully aligned/direct-scroll geometry as OK; the protected UX is a wave."
+            source.contains("LyricsMotionDiagnosticsPanel"),
+            "The visible lyric motion diagnostics panel is deprecated and must not ship in the app."
         )
         XCTAssertTrue(
-            panel.contains("\"WAVE\""),
-            "The normal HUD state should describe the protected wave shape, not an aligned OK state."
+            source.contains("recordLyricLineMotion"),
+            "Removing the visible panel must not remove invisible line-motion capture."
         )
         XCTAssertTrue(
-            panel.contains("\"LATE\""),
-            "The HUD should reserve red failure for wave propagation that stays late past the allowed window."
+            source.contains("diagnosticLineMotionProbe"),
+            "The hidden sampling probe is still required for motion verification."
         )
     }
 
