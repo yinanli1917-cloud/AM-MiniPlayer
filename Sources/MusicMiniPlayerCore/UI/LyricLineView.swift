@@ -22,7 +22,7 @@ private let activeLyricFrameInterval: TimeInterval = 1.0 / 30.0
 // Our deviations (deliberate, for 250pt window legibility):
 //   • Translation 0.67x not 0.59x — CJK characters need more pixels at small scale.
 //
-// 🔑 Responsive window prep:
+// Responsive window prep:
 //   When the window becomes resizable, replace `mainFontSize` with a function
 //   `mainFontSize(for: windowWidth)` and ALL derived values scale automatically.
 //   Renderer-internal tuning (LyricsTextRenderer.fadeHalfPt = 12pt = font/2,
@@ -71,6 +71,7 @@ struct LyricLineView: View {
     var showTranslation: Bool = false
     var isTranslating: Bool = false
     var translationFailed: Bool = false
+    var usesNativeVisualEffects: Bool = false
     /// True when the song is sitting in a ≥5s interlude gap AFTER this line.
     /// LyricLineView treats itself as past (distance effectively -1) so the
     /// normal past-line animation (blur + dim + scale) plays and the view's
@@ -78,7 +79,7 @@ struct LyricLineView: View {
     var isPrecedingInterlude: Bool = false
 
     @State private var isHovering: Bool = false
-    // 🔑 内部翻译显示状态，用于实现开启时的平滑动画
+    // Internal translation visibility state used for smooth enable animation.
     @State private var internalShowTranslation: Bool = true
     // Interlude transition blend (0 = natural current, 1 = fully past).
     // Mirrors `isPrecedingInterlude` but with an explicit slow ease-out
@@ -95,7 +96,7 @@ struct LyricLineView: View {
     private var isPast: Bool { distance < 0 }
     private var absDistance: Int { abs(distance) }
 
-    // 🔑 清理歌词文本 — strip timestamp tags + TTML-artifact CJK spaces
+    // Clean lyric text by stripping timestamp tags and TTML-artifact CJK spaces.
     private var cleanedText: String {
         var text = line.text
         if text.contains("[") {
@@ -111,7 +112,7 @@ struct LyricLineView: View {
         return text
     }
 
-    // 🔑 翻译文本（如果有）
+    // Translation text, when available.
     private var translationText: String? {
         guard let translation = line.translation, !translation.isEmpty else { return nil }
         return translation
@@ -126,6 +127,7 @@ struct LyricLineView: View {
         let b = isCurrent ? CGFloat(interludeBlend) : 0
 
         let scale: CGFloat = {
+            if usesNativeVisualEffects { return 1 }
             if isScrolling { return 0.95 }
             if isCurrent { return 1.0 - b * 0.05 }
             return 0.95
@@ -138,6 +140,7 @@ struct LyricLineView: View {
         }()
 
         let textOpacity: CGFloat = {
+            if usesNativeVisualEffects { return 1 }
             if isScrolling { return 0.6 }
             if isCurrent { return 1.0 - b * 0.65 }
             return 0.35
@@ -151,7 +154,7 @@ struct LyricLineView: View {
                 if line.hasSyllableSync {
                     if #available(macOS 15.0, *) {
                         let payload = SyllableTextPayload(words: line.words)
-                        if isCurrent, let mc = musicController {
+                        if isCurrent, let mc = musicController, mc.isPlaying {
                             TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
                                 SyllableSyncedLine(
                                     payload: payload,
@@ -160,6 +163,13 @@ struct LyricLineView: View {
                                     staticOpacity: 0
                                 )
                             }
+                        } else if isCurrent, let mc = musicController {
+                            SyllableSyncedLine(
+                                payload: payload,
+                                currentTime: mc.wordFillTime,
+                                isAnimated: true,
+                                staticOpacity: 0
+                            )
                         } else {
                             SyllableSyncedLine(
                                 payload: payload,
@@ -170,7 +180,7 @@ struct LyricLineView: View {
                         }
                     } else {
                         // macOS 14 fallback: per-word WordFillSpan
-                        if isCurrent, let mc = musicController {
+                        if isCurrent, let mc = musicController, mc.isPlaying {
                             TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
                                 WordByWordText(
                                     words: line.words,
@@ -179,6 +189,13 @@ struct LyricLineView: View {
                                     staticOpacity: nil
                                 )
                             }
+                        } else if isCurrent, let mc = musicController {
+                            WordByWordText(
+                                words: line.words,
+                                lineText: cleanedText,
+                                currentTime: mc.wordFillTime,
+                                staticOpacity: nil
+                            )
                         } else {
                             WordByWordText(
                                 words: line.words,
@@ -203,7 +220,7 @@ struct LyricLineView: View {
             // to prevent lag when switching between current/non-current.
             if showTranslation && internalShowTranslation, let translation = translationText {
                 if line.hasSyllableSync {
-                    if isCurrent, let mc = musicController {
+                    if isCurrent, let mc = musicController, mc.isPlaying {
                         TimelineView(.periodic(from: .now, by: activeLyricFrameInterval)) { _ in
                             TranslationSweepText(
                                 text: translation,
@@ -214,6 +231,15 @@ struct LyricLineView: View {
                                 staticOpacity: nil
                             )
                         }
+                    } else if isCurrent, let mc = musicController {
+                        TranslationSweepText(
+                            text: translation,
+                            words: line.words,
+                            lineStartTime: line.startTime,
+                            lineEndTime: line.endTime,
+                            currentTime: mc.wordFillTime,
+                            staticOpacity: nil
+                        )
                     } else {
                         TranslationSweepText(
                             text: translation,
@@ -237,7 +263,7 @@ struct LyricLineView: View {
                     }
                 }
             } else if showTranslation && isTranslating {
-                // 🔑 翻译加载中动画
+                // Translation loading animation.
                 HStack(spacing: 4) {
                     TranslationLoadingDotsView()
                     Spacer(minLength: 0)
@@ -258,25 +284,25 @@ struct LyricLineView: View {
                 interludeBlend = newValue ? 1 : 0
             }
         }
-        // 🔑 监听 showTranslation 变化，触发内部状态更新
+        // Observe showTranslation changes and update internal state.
         .onChange(of: showTranslation) { _, newValue in
-            // 🔑 开启时延迟一帧，让布局系统先完成初始计算，然后动画到新高度
+            // Delay one frame on enable so layout can complete the initial measurement before animating to the new height.
             if newValue {
-                // 开启：延迟一帧添加翻译视图，这样 lineOffset 的变化会被动画捕获
+                // Enable: add the translation view one frame later so lineOffset changes are captured by animation.
                 DispatchQueue.main.async {
                     internalShowTranslation = true
                 }
             } else {
-                // 关闭：立即移除
+                // Disable: remove immediately.
                 internalShowTranslation = false
             }
         }
         .onAppear {
-            // 🔑 初始化时同步状态
+            // Sync state on initialization.
             internalShowTranslation = showTranslation
         }
-        // 🔑 不设固定高度，让内容自然决定高度
-        .padding(.vertical, LyricMetrics.outerVerticalPadding)  // hover 背景 + 渲染溢出
+        // Do not set a fixed height; let content determine natural height.
+        .padding(.vertical, LyricMetrics.outerVerticalPadding)  // hover background and render overflow
         .background(
             Group {
                 if isScrolling && isHovering && line.text != "⋯" {
@@ -288,16 +314,25 @@ struct LyricLineView: View {
         )
         .blur(radius: blur)
         .scaleEffect(scale, anchor: .leading)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: scale)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: blur)
-        .animation(.interpolatingSpring(mass: 1, stiffness: 100, damping: 20), value: textOpacity)
-        // 🔑 翻译动画已移至容器级别，此处不再单独设置（性能优化）
-        // 🔑 无障碍
+        .animation(
+            usesNativeVisualEffects ? nil : .interpolatingSpring(mass: 1, stiffness: 100, damping: 20),
+            value: scale
+        )
+        .animation(
+            usesNativeVisualEffects ? nil : .interpolatingSpring(mass: 1, stiffness: 100, damping: 20),
+            value: blur
+        )
+        .animation(
+            usesNativeVisualEffects ? nil : .interpolatingSpring(mass: 1, stiffness: 100, damping: 20),
+            value: textOpacity
+        )
+        // Translation animation moved to the container level; avoid a per-row animation here.
+        // Accessibility.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(cleanedText + (translationText.map { "，\($0)" } ?? ""))
         .accessibilityValue(isCurrent ? "当前播放" : "")
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
-        // 🔑 点击整个区域触发跳转
+        // Clicking the whole row triggers jump-to-line.
         .contentShape(Rectangle())
         .onTapGesture {
             onTap?()
@@ -384,7 +419,7 @@ private struct TranslationSweepRenderer: TextRenderer {
     private let fadeHalfPt: CGFloat = 8
 
     var displayPadding: EdgeInsets {
-        // 🔑 MUST stay zero vertical. Same reason as LyricsTextRenderer:
+        // MUST stay zero vertical. Same reason as LyricsTextRenderer:
         // displayPadding inflates per visual line, multiplying the gap on
         // wrapped translations. Translation text has no transforms or glow,
         // so zero is also semantically correct.
@@ -687,7 +722,7 @@ private struct LyricsTextRenderer: TextRenderer {
     }
 
     var displayPadding: EdgeInsets {
-        // 🔑 MUST stay zero. SwiftUI applies displayPadding per visual line of
+        // MUST stay zero. SwiftUI applies displayPadding per visual line of
         // wrapped text, not per frame. Any non-zero value inflates the measured
         // height of multi-line wrapped lyrics, creating a phantom gap between
         // the lyric text and its translation that scales with line count.
@@ -714,7 +749,7 @@ private struct LyricsTextRenderer: TextRenderer {
         // ── Pass 1: Dim base layer (non-emphasis words only) ──
         // Emphasis words are fully handled by drawEmphasisBright (single layer
         // with gradient mask for both bright and dim regions). Drawing them here
-        // would create a ghost at the untransformed position — visible 割裂感.
+        // would create a ghost at the untransformed position and visibly split the word.
         for run in runs {
             if let attr = run[WordTimingAttribute.self], attr.isEmphasis { continue }
             var ctx = context
@@ -1212,15 +1247,15 @@ private struct WordFlowLayout: Layout {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MARK: - InterludeDotsView（前奏/间奏统一动画）
+// MARK: - InterludeDotsView (Shared Prelude/Interlude Animation)
 // ═══════════════════════════════════════════════════════════════════════════════
-/// 基于播放时间的三点动画 — 前奏（PreludeDotsView）和间奏共用
+/// Playback-time-driven three-dot animation shared by prelude and interlude.
 
 struct InterludeDotsView: View {
     let startTime: TimeInterval
     let endTime: TimeInterval
     let currentTime: TimeInterval
-    /// 是否需要时间范围检查（间奏需要，前奏始终可见）
+    /// Whether a time-range check is needed. Interludes need it; preludes are always visible.
     var gateByTimeRange: Bool = true
 
     private let fadeOutDuration: TimeInterval = 0.7
@@ -1252,7 +1287,7 @@ struct InterludeDotsView: View {
         let visible = gateByTimeRange ? isInRange : true
         let overallOpacity = visible ? (1.0 - fadeOutProgress) : 0.0
 
-        // 呼吸动画：x * |x| 产生平方缓动效果
+        // Breathing animation: x * |x| creates a quadratic easing feel.
         let rawPhase = sin(currentTime * .pi * 0.8)
         let breathingPhase = rawPhase * abs(rawPhase)
 
@@ -1280,7 +1315,7 @@ struct InterludeDotsView: View {
     }
 }
 
-/// 前奏点视图（InterludeDotsView 的便捷别名，不做时间范围门控）
+/// Prelude dots view. Convenience alias for InterludeDotsView without time-range gating.
 struct PreludeDotsView: View {
     let startTime: TimeInterval
     let endTime: TimeInterval
@@ -1332,7 +1367,7 @@ struct TranslationLoadingDotsView: View {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - SystemTranslationModifier (macOS 15.0+)
 // ═══════════════════════════════════════════════════════════════════════════════
-/// 系统翻译修饰器 - 仅在 macOS 15.0+ 可用时使用
+/// System translation modifier. Use only when macOS 15.0+ is available.
 
 struct SystemTranslationModifier: ViewModifier {
     var translationSessionConfigAny: Any?
@@ -1342,17 +1377,17 @@ struct SystemTranslationModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
             if let config = translationSessionConfigAny as? TranslationSession.Configuration {
-                // 🔑 使用 translationTrigger 作为视图 ID
-                // .translationTask 只在 config 变化时触发，但切歌时 config 可能相同（相同语言对）
-                // 通过 .id() 强制重建视图，从而重新触发 .translationTask
+                // Use translationTrigger as the view ID.
+                // .translationTask only fires when config changes, but track switches may keep the same language pair.
+                // Force view reconstruction with .id() so .translationTask runs again.
                 content
                     .translationTask(config, action: { session in
-                        // 🔑 所有防重复逻辑都在 performSystemTranslation 内部处理
+                        // Duplicate suppression lives inside performSystemTranslation.
                         guard lyricsService.showTranslation,
                               !lyricsService.lyrics.isEmpty else { return }
                         await lyricsService.performSystemTranslation(session: session)
                     })
-                    .id(translationTrigger)  // 🔑 强制在 trigger 变化时重建视图
+                    .id(translationTrigger)  // Force reconstruction when trigger changes.
             } else {
                 content
             }
