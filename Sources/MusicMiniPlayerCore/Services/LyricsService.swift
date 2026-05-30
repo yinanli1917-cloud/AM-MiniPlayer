@@ -219,14 +219,26 @@ public class LyricsService: ObservableObject {
         let hasSourceTranslation: Bool
         let isNoLyrics: Bool
         let isUnsynced: Bool
+        let source: String?
+        let score: Double?
         let timestamp: Date
 
-        init(lyrics: [LyricLine], firstRealLyricIndex: Int = 1, hasSourceTranslation: Bool = false, isNoLyrics: Bool = false, isUnsynced: Bool = false) {
+        init(
+            lyrics: [LyricLine],
+            firstRealLyricIndex: Int = 1,
+            hasSourceTranslation: Bool = false,
+            isNoLyrics: Bool = false,
+            isUnsynced: Bool = false,
+            source: String? = nil,
+            score: Double? = nil
+        ) {
             self.lyrics = lyrics
             self.firstRealLyricIndex = firstRealLyricIndex
             self.hasSourceTranslation = hasSourceTranslation
             self.isNoLyrics = isNoLyrics
             self.isUnsynced = isUnsynced
+            self.source = source
+            self.score = score
             self.timestamp = Date()
         }
 
@@ -235,6 +247,15 @@ public class LyricsService: ObservableObject {
             let expirationTime: TimeInterval = isNoLyrics ? 21600 : 86400
             return Date().timeIntervalSince(timestamp) > expirationTime
         }
+    }
+
+    static func shouldRefreshCachedLyricsForGranularity(
+        lyrics: [LyricLine],
+        isNoLyrics: Bool,
+        isUnsynced: Bool
+    ) -> Bool {
+        guard !isNoLyrics, !isUnsynced, !lyrics.isEmpty else { return false }
+        return !lyrics.contains { $0.hasSyllableSync }
     }
 
     // ========================================================================
@@ -375,9 +396,17 @@ public class LyricsService: ObservableObject {
         currentFetchTask = nil
         cancelCurrentBackfill()
 
+        var appliedProvisionalCache = false
+
         // Check cache with expiration.
         if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
-            DebugLogger.log("LyricsService", "📦 Cache hit: '\(songID)' (isNoLyrics=\(cached.isNoLyrics), lines=\(cached.lyrics.count))")
+            let cachedNeedsGranularityRefresh = Self.shouldRefreshCachedLyricsForGranularity(
+                lyrics: cached.lyrics,
+                isNoLyrics: cached.isNoLyrics,
+                isUnsynced: cached.isUnsynced
+            )
+            let cachedHasSyllableSync = cached.lyrics.contains { $0.hasSyllableSync }
+            DebugLogger.log("LyricsService", "📦 Cache hit: '\(songID)' (source=\(cached.source ?? "unknown"), score=\(cached.score.map { String(format: "%.1f", $0) } ?? "n/a"), isNoLyrics=\(cached.isNoLyrics), unsynced=\(cached.isUnsynced), syllable=\(cachedHasSyllableSync), lines=\(cached.lyrics.count))")
 
             // Clear old lyrics first so old and new lines cannot overlap during track changes.
             lyrics = []
@@ -418,7 +447,32 @@ public class LyricsService: ObservableObject {
                         stableSongID: stableSongID,
                         duration: duration,
                         album: album)
-            return
+            if !cachedNeedsGranularityRefresh {
+                let cachedIdentity = Self.lyricsWorkloadIdentity(
+                    lyrics: cached.lyrics,
+                    firstRealLyricIndex: cached.firstRealLyricIndex
+                )
+                recordDiagnosticsLyricsFetchFinished(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    duration: duration,
+                    source: cached.source.map { "cache:\($0)" } ?? "cache",
+                    score: cached.score,
+                    lineCount: cached.lyrics.count,
+                    hasSyllableSync: cachedIdentity.hasSyllableSync,
+                    firstRealLineSHA256: cachedIdentity.firstRealLineSHA256,
+                    isUnsynced: cached.isUnsynced,
+                    hasSourceTranslation: cachedHasActualTranslation,
+                    translationLineCount: Self.translationCoverageStats(in: cached.lyrics).translated,
+                    translatableLineCount: Self.translationCoverageStats(in: cached.lyrics).eligible,
+                    missingTranslationLineCount: Self.translationCoverageStats(in: cached.lyrics).missing,
+                    translationDisplayRequested: showTranslation
+                )
+                return
+            }
+            appliedProvisionalCache = true
+            DebugLogger.log("LyricsService", "🔄 Cached lyrics are line-sync only; keeping them provisional while refreshing authoritative word-level sources")
         }
 
         currentSongID = songID
@@ -430,8 +484,10 @@ public class LyricsService: ObservableObject {
 
         // Set loading state synchronously to avoid races.
         isLoading = true
-        lyrics = []
-        currentLineIndex = nil
+        if !appliedProvisionalCache {
+            lyrics = []
+            currentLineIndex = nil
+        }
         error = nil
         refreshTranslationAvailability()
 
@@ -757,7 +813,9 @@ public class LyricsService: ObservableObject {
             lyrics: processed.lyrics,
             firstRealLyricIndex: processed.firstRealLyricIndex,
             hasSourceTranslation: hasSourceTranslation,
-            isUnsynced: isUnsynced
+            isUnsynced: isUnsynced,
+            source: bestResult.source,
+            score: bestResult.score
         )
         lyricsCache.setObject(cacheItem, forKey: songID as NSString)
         DebugLogger.log("LyricsService", "📦 Cached: '\(songID)' (\(processed.lyrics.count) lines, unsynced=\(isUnsynced))")
@@ -1528,7 +1586,9 @@ public class LyricsService: ObservableObject {
                     lyrics: processed.lyrics,
                     firstRealLyricIndex: processed.firstRealLyricIndex,
                     hasSourceTranslation: hasSourceTranslation,
-                    isUnsynced: bestResult.kind == .unsynced
+                    isUnsynced: bestResult.kind == .unsynced,
+                    source: bestResult.source,
+                    score: bestResult.score
                 )
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
             }

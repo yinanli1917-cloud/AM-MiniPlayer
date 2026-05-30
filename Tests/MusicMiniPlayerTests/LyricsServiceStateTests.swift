@@ -240,6 +240,43 @@ final class LyricsServiceStateTests: XCTestCase {
         XCTAssertEqual(sample, "悩みなき　きのうのほほえみ\n伤つける人もないけど")
     }
 
+    func testLineSyncCacheIsProvisionalUntilWordLevelRefreshRuns() {
+        let lineSyncLyrics = [
+            LyricLine(text: "浪漫節日燈飾太亮掩蓋了隱憂", startTime: 29.54, endTime: 33.0),
+            LyricLine(text: "情人陪同來到多擠迫的關口", startTime: 33.1, endTime: 37.0)
+        ]
+        let wordLevelLyrics = [
+            LyricLine(
+                text: "浪漫節日燈飾太亮掩蓋了隱憂",
+                startTime: 29.54,
+                endTime: 33.0,
+                words: [LyricWord(word: "浪漫", startTime: 29.54, endTime: 29.9)]
+            )
+        ]
+
+        XCTAssertTrue(
+            LyricsService.shouldRefreshCachedLyricsForGranularity(
+                lyrics: lineSyncLyrics,
+                isNoLyrics: false,
+                isUnsynced: false
+            )
+        )
+        XCTAssertFalse(
+            LyricsService.shouldRefreshCachedLyricsForGranularity(
+                lyrics: wordLevelLyrics,
+                isNoLyrics: false,
+                isUnsynced: false
+            )
+        )
+        XCTAssertFalse(
+            LyricsService.shouldRefreshCachedLyricsForGranularity(
+                lyrics: lineSyncLyrics,
+                isNoLyrics: false,
+                isUnsynced: true
+            )
+        )
+    }
+
     func testSystemTranslationSampleRejectsUnstableShortText() {
         let lyrics = [
             LyricLine(text: "⋯", startTime: 0, endTime: 10),

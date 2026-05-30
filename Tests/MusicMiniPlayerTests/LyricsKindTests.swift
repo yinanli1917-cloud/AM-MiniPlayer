@@ -120,15 +120,35 @@ final class LyricsKindTests: XCTestCase {
         )
     }
 
-    func testImmediateCacheAllowsCJKLyricsForRomanizedTitleOnly() {
+    func testImmediateCacheRequiresWordLevelForRomanizedCJKLyrics() {
         let fetcher = LyricsFetcher.shared
         let cjkLines = [
             LyricLine(text: "也许我可以用一种最温柔的想象", startTime: 28, endTime: 32),
             LyricLine(text: "在转眼的时间里", startTime: 34, endTime: 38)
         ]
+        let wordLevelCJKLines = [
+            LyricLine(
+                text: "也许我可以用一种最温柔的想象",
+                startTime: 28,
+                endTime: 32,
+                words: [LyricWord(word: "也许", startTime: 28, endTime: 28.4)]
+            ),
+            LyricLine(
+                text: "在转眼的时间里",
+                startTime: 34,
+                endTime: 38,
+                words: [LyricWord(word: "在", startTime: 34, endTime: 34.2)]
+            )
+        ]
 
-        XCTAssertTrue(fetcher.canUseImmediateCachedLyrics(
+        XCTAssertFalse(fetcher.canUseImmediateCachedLyrics(
             cjkLines,
+            source: "QQ",
+            title: "Yi Jian Zhong Qing",
+            artist: "Pauline Lan"
+        ))
+        XCTAssertTrue(fetcher.canUseImmediateCachedLyrics(
+            wordLevelCJKLines,
             source: "QQ",
             title: "Yi Jian Zhong Qing",
             artist: "Pauline Lan"

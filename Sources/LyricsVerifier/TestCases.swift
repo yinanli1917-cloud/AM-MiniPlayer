@@ -1,13 +1,13 @@
 /**
- * [INPUT]: 依赖 docs/lyrics_test_cases.json
- * [OUTPUT]: 导出 TestCase, TestExpectation, loadTestCases(), fetchLibraryTracks()
- * [POS]: LyricsVerifier 的测试用例加载器
+ * [INPUT]: docs/lyrics_test_cases.json
+ * [OUTPUT]: Exports TestCase, TestExpectation, loadTestCases(), fetchLibraryTracks()
+ * [POS]: LyricsVerifier test-case loader
  */
 
 import Foundation
 
 // =========================================================================
-// MARK: - 数据模型
+// MARK: - Data Models
 // =========================================================================
 
 struct TestCase: Codable {
@@ -26,6 +26,8 @@ struct TestExpectation: Codable {
     let firstLineContains: String?
     let firstLineSHA256: String?
     let acceptableFirstLineSHA256: [String]?
+    let requiresSyllableSync: Bool?
+    let minRealLineCount: Int?
     let expectedClassification: String?
     let firstLineStartMinS: Double?
     let firstLineStartMaxS: Double?
@@ -40,15 +42,15 @@ struct LibraryTrack {
 }
 
 // =========================================================================
-// MARK: - JSON 加载
+// MARK: - JSON Loading
 // =========================================================================
 
-/// 从 docs/lyrics_test_cases.json 加载预定义测试用例
+/// Load predefined test cases from docs/lyrics_test_cases.json.
 func loadTestCases() -> [TestCase] {
     let fm = FileManager.default
     var dir = URL(fileURLWithPath: fm.currentDirectoryPath)
 
-    // 向上查找项目根目录（含 Package.swift）
+    // Walk upward to find the project root that contains Package.swift.
     for _ in 0..<5 {
         let candidate = dir.appendingPathComponent("docs/lyrics_test_cases.json")
         if fm.fileExists(atPath: candidate.path) {

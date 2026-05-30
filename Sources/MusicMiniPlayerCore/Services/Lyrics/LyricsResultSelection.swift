@@ -172,13 +172,23 @@ extension LyricsFetcher {
             }
             return nil
         }
-        // 🔑 Word-level priority is conditional. Album-scoped catalog evidence
-        // beats word-level timing from a different same-artist song.
-        let hasAlbumMatchedCandidate = usableSynced.contains { $0.albumMatched }
-        let wordLevelPool = hasAlbumMatchedCandidate ? [] : usableSynced.filter { r in
+        // Word-level priority is conditional. Album catalog evidence is a
+        // version signal, but it must not degrade same-identity syllable sync
+        // to line sync. A line-level album hit can beat word-level only when
+        // the word-level candidate lacks comparable catalog evidence and does
+        // not match the album candidate's lyric identity.
+        let albumMatchedCandidates = usableSynced.filter { $0.albumMatched }
+        let wordLevelPool = usableSynced.filter { r in
             guard !r.lyrics.isEmpty else { return false }
             let syllableCount = r.lyrics.filter { $0.hasSyllableSync }.count
-            return Double(syllableCount) / Double(r.lyrics.count) >= 0.3
+            guard Double(syllableCount) / Double(r.lyrics.count) >= 0.3 else { return false }
+            guard !albumMatchedCandidates.isEmpty, !r.albumMatched else { return true }
+            if r.titleMatched, (r.matchedDurationDiff.map { $0 < 1.5 } ?? false) {
+                return true
+            }
+            return albumMatchedCandidates.contains { albumCandidate in
+                lyricSimilarity(r.lyrics, albumCandidate.lyrics) >= 0.28
+            }
         }
         if !wordLevelPool.isEmpty {
             DebugLogger.log("🎯 Word-level pre-filter: keeping \(wordLevelPool.map(\.source)), dropping \(usableSynced.filter { r in !wordLevelPool.contains(where: { $0.source == r.source && $0.score == r.score }) }.map(\.source))")
@@ -709,7 +719,7 @@ extension LyricsFetcher {
         }
 
         if let best = chosen {
-            DebugLogger.log("🏆 最终选择: \(best.source) (score=\(String(format: "%.1f", best.score)), kind=\(best.kind.rawValue))")
+            DebugLogger.log("🏆 Final selection: \(best.source) (score=\(String(format: "%.1f", best.score)), kind=\(best.kind.rawValue))")
             return best
         }
         return nil

@@ -27,6 +27,24 @@
     }
   },
   {
+    "id": "T03_word_winter_trip",
+    "title": "冬天一個遊",
+    "artist": "Gordon Flanders",
+    "duration": 256,
+    "album": "冬天一個遊 - Single",
+    "expectation": {
+      "shouldFindLyrics": true,
+      "acceptableSources": ["NetEase", "AMLL"],
+      "firstLineSHA256": "15ce6b4d94c2f2b4f016cbd746a807825b26fa90608465af1dbb623ad645fee9",
+      "requiresSyllableSync": true,
+      "minRealLineCount": 66,
+      "expectedClassification": "synced",
+      "firstLineStartMinS": 25,
+      "firstLineStartMaxS": 34,
+      "maxTailGapS": 30
+    }
+  },
+  {
     "id": "C01",
     "title": "女爵",
     "artist": "杨乃文",

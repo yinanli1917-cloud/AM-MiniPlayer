@@ -159,6 +159,117 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.source, "NetEase")
     }
 
+    func testSameIdentityWordLevelBeatsAlbumMatchedLineSync() {
+        let fetcher = LyricsFetcher.shared
+        let sharedText = [
+            "浪漫節日燈飾太亮掩蓋了隱憂",
+            "情人陪同來到多擠迫的關口",
+            "沿路有千百人在一起倒數",
+            "霓虹燈照著我一個人走",
+            "寒風中記低未完成的夢",
+            "誰還留在街角等候",
+            "若然明日天色仍舊",
+            "我都想再向前走"
+        ]
+        let albumLineSync = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines(sharedText),
+            source: "LRCLIB-Search",
+            score: 82,
+            kind: .synced,
+            albumMatched: true,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+        let wordLevel = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines(sharedText, wordLevel: true),
+            source: "NetEase",
+            score: 76,
+            kind: .synced,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+
+        let selected = fetcher.selectBestResult(
+            from: [albumLineSync, wordLevel],
+            songDuration: 40
+        )
+
+        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertTrue(selected?.lyrics.contains(where: { $0.hasSyllableSync }) == true)
+    }
+
+    func testAlbumMatchedLineSyncCanBeatUnprovenWordLevelOutlier() {
+        let fetcher = LyricsFetcher.shared
+        let albumLineSync = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "maybe learning how to live without you",
+                "maybe learning how to make it through",
+                "all the quiet rooms are feeling wider",
+                "every little memory points to you",
+                "I keep waiting for the morning",
+                "I keep looking for the truth",
+                "the city keeps the lights on",
+                "but none of them lead back to you"
+            ]),
+            source: "LRCLIB-Search",
+            score: 82,
+            kind: .synced,
+            albumMatched: true,
+            titleMatched: true,
+            matchedDurationDiff: 0.2
+        )
+        let unprovenWordLevel = LyricsFetcher.LyricsFetchResult(
+            lyrics: makeLines([
+                "standing by the doorway under neon light",
+                "dancing with the shadow that keeps me awake",
+                "another glass is empty on the table",
+                "everybody sings but nobody stays",
+                "summer in the city feels borrowed",
+                "the chorus keeps turning away",
+                "there is a train beyond the river",
+                "calling a name I never knew"
+            ], wordLevel: true),
+            source: "NetEase",
+            score: 96,
+            kind: .synced,
+            titleMatched: false,
+            matchedDurationDiff: nil
+        )
+
+        let selected = fetcher.selectBestResult(
+            from: [unprovenWordLevel, albumLineSync],
+            songDuration: 40
+        )
+
+        XCTAssertEqual(selected?.source, "LRCLIB-Search")
+        XCTAssertFalse(selected?.lyrics.contains(where: { $0.hasSyllableSync }) == true)
+    }
+
+    func testLineSyncDiskCacheCannotShortCircuitAuthoritativeWordLevelSearch() {
+        let fetcher = LyricsFetcher.shared
+        let lineSyncLyrics = makeLines([
+            "walking alone through winter lights",
+            "every corner keeps a quiet sign"
+        ])
+        let wordLevelLyrics = makeLines([
+            "walking alone through winter lights",
+            "every corner keeps a quiet sign"
+        ], wordLevel: true)
+
+        XCTAssertFalse(fetcher.canUseImmediateCachedLyrics(
+            lineSyncLyrics,
+            source: "LRCLIB-Search",
+            title: "Winter Solo Walk",
+            artist: "Gordon Flanders"
+        ))
+        XCTAssertTrue(fetcher.canUseImmediateCachedLyrics(
+            wordLevelLyrics,
+            source: "NetEase",
+            title: "Winter Solo Walk",
+            artist: "Gordon Flanders"
+        ))
+    }
+
     func testComparableHumanCuratedSyncedSourceBeatsLibraryFallback() {
         let fetcher = LyricsFetcher.shared
         let libraryFallback = LyricsFetcher.LyricsFetchResult(
