@@ -123,6 +123,18 @@ final class NativeLyricsRenderPlanTests: XCTestCase {
         XCTAssertNil(plan.hitTest(displayPointY: 10))
     }
 
+    func testNativeVisibleRowSelectorKeepsCullingInsideNativeSurface() {
+        let allIndices = Array(0...30)
+        let visible = NativeLyricsVisibleRowSelector.visibleIndices(
+            allIndices: allIndices,
+            currentIndex: 15,
+            activeTargetIndices: [2, 29],
+            radius: 2
+        )
+
+        XCTAssertEqual(visible, [0, 2, 13, 14, 15, 16, 17, 29])
+    }
+
     private func sampleLyrics() -> [LyricLine] {
         [
             LyricLine(text: "zero", startTime: 0, endTime: 2),

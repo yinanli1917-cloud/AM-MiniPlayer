@@ -671,20 +671,20 @@ public struct LyricsView: View {
                 }
                 return index
             }
-            let layerRows = makeLayerBackedRows(from: displayLines).filter { row in
+            let allLayerRows = makeLayerBackedRows(from: displayLines).filter { row in
                 guard row.index == 0 || row.index >= firstRealDisplayIndex else { return false }
-                return !shouldCull || abs(row.index - displayIndex) <= 14 || activeWaveIndices.contains(row.index)
+                return true
             }
-            let nativeRenderedIndices = layerRows.map(\.index)
+            let nativeRenderedIndices = allLayerRows.map(\.index)
             let layerHeightIndices = Set(nativeRenderedIndices + [displayIndex] + Array(activeWaveIndices))
             let layerAccumulatedHeights = Dictionary(uniqueKeysWithValues: layerHeightIndices.map {
-                ($0, calculateAccumulatedHeight(upTo: $0))
+                ($0, cache.cachedAccumulatedHeights[$0] ?? calculateAccumulatedHeight(upTo: $0))
             })
 
             Group {
                 if layerActive {
                     NativeLyricsSurface(
-                        rows: layerRows,
+                        rows: allLayerRows,
                         currentIndex: displayIndex,
                         anchorY: anchorY,
                         rowWidth: geo.size.width,

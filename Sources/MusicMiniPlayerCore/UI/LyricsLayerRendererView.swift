@@ -154,7 +154,8 @@ final class NativeLyricsSurfaceView: NSView {
             }
         )
 
-        let nextIDs = Set(configuration.rows.map(\.id))
+        let visibleRows = visibleRows(for: configuration)
+        let nextIDs = Set(visibleRows.map(\.id))
         var unmountedCount = 0
         for (id, view) in rowViews where !nextIDs.contains(id) {
             view.layer?.removeAllAnimations()
@@ -165,12 +166,12 @@ final class NativeLyricsSurfaceView: NSView {
             unmountedCount += 1
         }
         rowTapHandlers = rowTapHandlers.filter { rowIndex, _ in
-            configuration.rows.contains { $0.index == rowIndex }
+            visibleRows.contains { $0.index == rowIndex }
         }
 
         let shouldSnap = configuration.playbackMode != .natural
         var mountedCount = 0
-        for row in configuration.rows {
+        for row in visibleRows {
             let view = rowViews[row.id] ?? NativeLyricsRowView()
             if rowViews[row.id] == nil {
                 rowViews[row.id] = view
@@ -204,6 +205,16 @@ final class NativeLyricsSurfaceView: NSView {
         if configuration.lineMotionFrameCaptureActive {
             reportLineMotionFrames(configuration: configuration)
         }
+    }
+
+    private func visibleRows(for configuration: LyricsLayerRendererConfiguration) -> [LayerBackedLyricRow] {
+        let visibleIndices = Set(NativeLyricsVisibleRowSelector.visibleIndices(
+            allIndices: configuration.renderedIndices,
+            currentIndex: configuration.currentIndex,
+            activeTargetIndices: presentationEngine.lineTargetIndices.keys,
+            radius: 14
+        ))
+        return configuration.rows.filter { visibleIndices.contains($0.index) }
     }
 
     func stopAnimations() {
@@ -281,7 +292,7 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func reportLineMotionFrames(configuration: LyricsLayerRendererConfiguration) {
         var frames: [Int: CGRect] = [:]
-        for row in configuration.rows {
+        for row in visibleRows(for: configuration) {
             guard let view = rowViews[row.id] else { continue }
             guard view.frame.height > 0 else { continue }
             let y = presentationEngine.presentation(for: row.index)?.y ?? snapY(for: row, configuration: configuration)
@@ -298,7 +309,7 @@ final class NativeLyricsSurfaceView: NSView {
         configuration: LyricsLayerRendererConfiguration
     ) {
         guard !frames.isEmpty else { return }
-        let metricRows = configuration.rows.compactMap { row -> NativeLyricsMotionMetricRow? in
+        let metricRows = visibleRows(for: configuration).compactMap { row -> NativeLyricsMotionMetricRow? in
             guard let frame = frames[row.index], frame.height > 0 else { return nil }
             let targetIndex = presentationEngine.targetIndex(
                 for: row.index,
@@ -563,7 +574,7 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func updateTextPhasesForCurrentConfiguration() {
         guard let configuration else { return }
-        for row in configuration.rows {
+        for row in visibleRows(for: configuration) {
             guard let view = rowViews[row.id] else { continue }
             if let textSample = view.updatePlaybackPhase(configuration: configuration) {
                 renderTelemetry.recordTextPhase(textSample)

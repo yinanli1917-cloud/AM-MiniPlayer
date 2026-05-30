@@ -93,3 +93,17 @@ struct LyricsPresentationPendingWave {
     var nextScheduleIndex: Int = 0
     let schedule: [LyricWaveTiming.StaggerTarget]
 }
+
+enum NativeLyricsVisibleRowSelector {
+    static func visibleIndices(
+        allIndices: [Int],
+        currentIndex: Int,
+        activeTargetIndices: some Sequence<Int>,
+        radius: Int = 14
+    ) -> [Int] {
+        let activeTargets = Set(activeTargetIndices)
+        return allIndices.filter { index in
+            index == 0 || abs(index - currentIndex) <= radius || activeTargets.contains(index)
+        }
+    }
+}
