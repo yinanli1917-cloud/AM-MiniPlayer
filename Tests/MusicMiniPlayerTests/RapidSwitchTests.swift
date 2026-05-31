@@ -203,6 +203,36 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testRecentHistorySnapshotAbortsPlaylistScanWhenTrackGenerationChanges() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/Services/MusicController+Playback.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let start = try XCTUnwrap(text.range(of: "private func getRecentSnapshotFromApp"))
+        let end = try XCTUnwrap(text.range(
+            of: "@discardableResult\n    private func applyUpNextSnapshotIfChanged",
+            range: start.upperBound..<text.endIndex
+        ))
+        let recentSection = String(text[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(
+            recentSection.contains("let gen = artworkFetchGeneration"),
+            "Recent-history snapshots must capture the track generation before timed playlist scanning."
+        )
+        XCTAssertTrue(
+            recentSection.contains("aborting before playlist scan"),
+            "Recent-history snapshots must stop before counting playlist rows if a track change was observed."
+        )
+        let generationGuardCount = recentSection.components(separatedBy: "guard self.artworkFetchGeneration == gen else").count - 1
+        XCTAssertGreaterThanOrEqual(
+            generationGuardCount,
+            3,
+            "Recent-history snapshots must recheck track generation before both playlist scan paths touch SBElementArray rows."
+        )
+    }
+
     func testProductionQueueSyncDoesNotUsePrivateMusicStorageOrAppLocalQueues() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

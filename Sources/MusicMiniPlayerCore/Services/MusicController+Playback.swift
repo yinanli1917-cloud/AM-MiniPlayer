@@ -849,6 +849,8 @@ extension MusicController {
     /// playlist IPC — which previously triggered the removed heartbeat-recreate path
     /// and the EXC_BAD_ACCESS in AEProcessMessage.
     private func getRecentSnapshotFromApp(_ app: SBApplication, limit: Int) -> QueueFetchSnapshot {
+        let gen = artworkFetchGeneration
+
         return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> QueueFetchSnapshot? in
             guard let self else { return nil }
             guard app.isRunning else {
@@ -895,10 +897,20 @@ extension MusicController {
                     return
                 }
 
+                guard self.artworkFetchGeneration == gen else {
+                    debugPrint("⚠️ [getRecentTracksFromApp] Generation changed (\(gen) -> \(self.artworkFetchGeneration)), aborting before playlist scan\n")
+                    return
+                }
+
                 let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
                 if currentIndex >= 0 && currentIndex < tracks.count {
                     let lowerBound = max(0, currentIndex - limit)
                     for i in lowerBound..<currentIndex {
+                        guard self.artworkFetchGeneration == gen else {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Generation changed (\(gen) -> \(self.artworkFetchGeneration)), aborting\n")
+                            return
+                        }
+
                         guard let track = tracks.object(at: i) as? NSObject,
                               let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
@@ -915,6 +927,11 @@ extension MusicController {
                     }
                 } else {
                     for i in 0..<tracks.count {
+                        guard self.artworkFetchGeneration == gen else {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Generation changed (\(gen) -> \(self.artworkFetchGeneration)), aborting\n")
+                            return
+                        }
+
                         guard let track = tracks.object(at: i) as? NSObject,
                               let trackID = track.value(forKey: "persistentID") as? String else { continue }
 

@@ -186,6 +186,11 @@ reads also recheck Music.app availability immediately before sending Apple
 Events, so an app-stop race inside the worker is classified as
 Music.app-unavailable rather than an unresolved or weaker unavailable snapshot
 that would preserve or mislabel stale rows.
+Up Next and recent-history scans also capture the track generation before timed
+ScriptingBridge iteration and abort before or during `SBElementArray` row access
+if a rapid skip changes that generation. The scanners should leave the current
+surface pending for a fresh public read instead of continuing through stale
+Music.app playlist objects.
 The hash probe also separates public-state loss from transient IPC failure. If
 Music.app responds but exposes no current track, no public current playlist, or
 no public playlist-track array, nanoPod clears retained queue/history rows to

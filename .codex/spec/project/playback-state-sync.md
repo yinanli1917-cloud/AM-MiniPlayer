@@ -73,6 +73,10 @@
   timeout closure immediately before sending Apple Events. If Music.app stops
   after the worker is queued, classify the read as Music.app-unavailable rather
   than preserving or relabeling stale rows through a weaker unavailable reason.
+- Up Next and recent-history playlist scans must capture the current track
+  generation before timed ScriptingBridge iteration and abort before or during
+  `SBElementArray` row access if the generation changes. A rapid skip must not
+  leave either scanner walking stale Music.app playlist objects.
 - If the periodic queue-hash probe reaches Music.app but public state cannot
   expose the current track, current playlist, or playlist tracks, do not collapse
   that into the same bucket as an IPC timeout. Clear retained queue/history rows
