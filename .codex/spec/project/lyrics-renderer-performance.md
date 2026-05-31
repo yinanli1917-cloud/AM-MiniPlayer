@@ -14,6 +14,11 @@ The old smooth lyrics page is the behavioral reference. Preserve:
 - held-word emphasis, lift, glow, and float;
 - line spacing, wrapping, CJK behavior, interlude/prelude dots, and rapid page/song transitions.
 
+Native renderer blur parity must use the same distance law as the old
+`LyricLineView`: inactive row blur is `abs(displayIndex - currentIndex) * 1.5`.
+Do not cap the expected or applied native blur radius to make CPU numbers look
+better; that is a UX change and must fail the visual-state parity gate.
+
 Long lyric and translation text may be segmented for compact-window display, but
 the segmentation must remain display-only. Do not split or rewrite parser
 output, cache records, source scoring, or translation state to solve layout

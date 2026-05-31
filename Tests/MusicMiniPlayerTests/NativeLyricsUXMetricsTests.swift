@@ -125,6 +125,15 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertFalse(metrics.falseManualScrollOwnership)
     }
 
+    func testNativeVisualStateKeepsLegacyDistanceBlurWithoutCap() {
+        let visual = NativeLyricsVisualState.make(displayIndex: 12, activeDisplayIndex: 0)
+
+        XCTAssertEqual(visual.opacity, 0.35)
+        XCTAssertEqual(visual.scale, 0.95)
+        XCTAssertEqual(visual.blurRadius, 18.0)
+        XCTAssertFalse(visual.isActive)
+    }
+
     func testNativeRenderTelemetrySummarizesTextAndMotionSignals() {
         var accumulator = NativeLyricsRenderTelemetryAccumulator()
         accumulator.recordLifecycle(mounted: 3, unmounted: 1, mountedRows: 8, renderedRows: 12)

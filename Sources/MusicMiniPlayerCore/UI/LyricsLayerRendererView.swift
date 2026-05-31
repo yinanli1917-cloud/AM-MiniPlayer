@@ -393,7 +393,7 @@ final class NativeLyricsSurfaceView: NSView {
             appliedOpacity: CGFloat(view.layer?.opacity ?? 0),
             expectedScale: scale,
             appliedScale: scale,
-            expectedBlurRadius: blur > 0.1 ? min(blur, 12) : 0,
+            expectedBlurRadius: blur > 0.1 ? blur : 0,
             appliedBlurRadius: appliedBlur,
             isActive: row.index == currentIndex
         ))
@@ -1141,8 +1141,8 @@ private final class NativeLyricsRowView: NSView {
 
     @discardableResult
     func applyBlurRadius(_ radius: CGFloat) -> CGFloat {
-        let clampedRadius = radius > 0.1 ? min(radius, 12) : 0
-        let quantizedRadius = (clampedRadius * 4).rounded(.toNearestOrAwayFromZero) / 4
+        let effectiveRadius = radius > 0.1 ? radius : 0
+        let quantizedRadius = (effectiveRadius * 4).rounded(.toNearestOrAwayFromZero) / 4
         guard abs(appliedBlurRadius - quantizedRadius) > 0.001 else { return quantizedRadius }
         appliedBlurRadius = quantizedRadius
         guard quantizedRadius > 0 else {

@@ -254,7 +254,7 @@ struct NativeLyricsVisualState: Equatable {
         return NativeLyricsVisualState(
             opacity: 0.35,
             scale: 0.95,
-            blurRadius: min(CGFloat(distance) * 1.5, 12),
+            blurRadius: CGFloat(distance) * 1.5,
             isActive: false
         )
     }
