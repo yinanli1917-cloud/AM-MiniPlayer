@@ -162,6 +162,9 @@ def main() -> int:
     probe_script = PUBLIC_SURFACE_PROBE.read_text(encoding="utf-8")
     assert 'publicQueueCandidate is "queue_like_named_playlist"' in probe_script
     assert 'manual_compare_required_queue_like_named_playlist' in probe_script
+    notification_probe = (ROOT / ".codex/workspace/probe_music_distributed_notifications.sh").read_text(encoding="utf-8")
+    assert '"com.apple.Music.playlistChanged"' in notification_probe
+    assert '"com.apple.iTunes.playlistChanged"' in notification_probe
 
     with tempfile.TemporaryDirectory() as tmp:
         session = write_session(

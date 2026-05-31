@@ -128,7 +128,7 @@ fi
   echo "## Compliance preflight"
   echo
   echo "public_surface_rule: Foundation DistributedNotificationCenter, observing known Music.app notification names only."
-  echo "observed_names: com.apple.Music.playerInfo, com.apple.iTunes.playerInfo, com.apple.Music.playlistChanged"
+  echo "observed_names: com.apple.Music.playerInfo, com.apple.iTunes.playerInfo, com.apple.Music.playlistChanged, com.apple.iTunes.playlistChanged"
   echo "excluded_queue_sources: private frameworks; private notification frameworks; private AppleEvents; Music.app private files/databases; accessibility/UI scraping; memory inspection."
   echo "contract_note: these notifications are treated as invalidation/metadata evidence only unless a payload exposes every visible queue row and passes a visible parity check."
   echo "row_carrier_key_rule: only queue/up-next/history/recent/tracks/entries-like keys are treated as possible row carriers; playlist/current-track metadata is context-only."
@@ -187,7 +187,8 @@ let muteDuringTrigger = (args.dropFirst(4).first ?? "false") == "true"
 let names = [
     "com.apple.Music.playerInfo",
     "com.apple.iTunes.playerInfo",
-    "com.apple.Music.playlistChanged"
+    "com.apple.Music.playlistChanged",
+    "com.apple.iTunes.playlistChanged"
 ]
 let rowCarrierTerms = [
     "queue",

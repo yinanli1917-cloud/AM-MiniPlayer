@@ -220,10 +220,13 @@ remained `unavailable_no_current_playlist`.
 
 The distributed-notification probe
 `.codex/workspace/probe_music_distributed_notifications.sh` captures the
-`userInfo` keys from known Music.app notification names. It now records
-`row_carrier_userInfo_keys`, `context_only_userInfo_keys`, and value shapes so
-metadata/context fields cannot be overclassified as real queue rows. The first
-passive run
+`userInfo` keys from known Music.app notification names. It listens to both the
+current `com.apple.Music.*` names and the legacy `com.apple.iTunes.*` names
+that Music.app still emits in some states, including `playlistChanged`, so
+manual proof runs cover the same public invalidation signals nanoPod observes
+at runtime. It now records `row_carrier_userInfo_keys`,
+`context_only_userInfo_keys`, and value shapes so metadata/context fields cannot
+be overclassified as real queue rows. The first passive run
 `.codex/workspace/music-queue-probes/distributed-notifications-distributed-notification-current-state-20260524T043736Z.txt`
 observed no notification during the capture window, with Music.app paused on a
 URL track and `current playlist` unavailable. That result is only a passive

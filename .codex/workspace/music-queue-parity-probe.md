@@ -188,13 +188,14 @@ bash .codex/workspace/probe_music_distributed_notifications.sh \
   --mute-during-trigger
 ```
 
-This probe is passive by default. It listens for known Music.app notification
-names and records their `userInfo` keys. If no notification fires during the
-capture window, the output is inconclusive; rerun it while manually causing
-Music.app to emit a `playerInfo` event or use the opt-in
-`playpause-restore` trigger. The trigger uses public Music.app Apple Events
-after observers are installed, optionally mutes Music.app, and restores the
-original play/pause state and Music.app volume. It never mutates the queue.
+This probe is passive by default. It listens for the known
+`com.apple.Music.*` and legacy `com.apple.iTunes.*` Music.app notification
+names that nanoPod observes at runtime, then records their `userInfo` keys. If
+no notification fires during the capture window, the output is inconclusive;
+rerun it while manually causing Music.app to emit a `playerInfo` event or use
+the opt-in `playpause-restore` trigger. The trigger uses public Music.app Apple
+Events after observers are installed, optionally mutes Music.app, and restores
+the original play/pause state and Music.app volume. It never mutates the queue.
 The probe separates possible row-carrier keys (`queue`, `Up Next`, `history`,
 `tracks`, `entries`) from context-only metadata keys (`playlist`, current
 track, artist, album, playback state). A metadata/context-only payload supports
