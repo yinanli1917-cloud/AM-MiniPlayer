@@ -205,6 +205,15 @@ Likewise, a prior run with `activeTargetSettleTimeMax == 0` and nonzero
 `activeTargetSettleSkippedCount` has not proven instant settle; it has missing
 settle evidence. Do not fail a candidate solely because it reports a real
 nonzero settle duration against that incomplete zero.
+Line-boundary motion sampling must be at least as frequent as focused sampling
+and precise enough for the 0.45s settle gate. A boundary interval that aliases
+to 0.5s on the native timer is invalid because it can turn a fast presentation
+settle into a false gate failure.
+While native presentation motion is active, line-motion diagnostics must be
+eligible from the native presentation tick itself, bounded by the focused
+sampling interval. A separate main-run-loop timer is acceptable for idle
+coverage, but it is not sufficient evidence for scroll/tap settle behavior when
+it coalesces under live interaction.
 Wave timeline comparisons remain valid across old and native renderers when the
 CSV is isolated per run. Compare target radius, lead-in rows, cadence p95,
 order violations, and late-fire count even if line-motion presentation drift is

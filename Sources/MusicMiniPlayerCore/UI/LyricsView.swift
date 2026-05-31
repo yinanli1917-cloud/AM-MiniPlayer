@@ -51,7 +51,7 @@ private struct WaveState {
 
 private let lyricLineMotionCoordinateSpace = "nanoPod.lyrics.lineMotion"
 private let lyricLineMotionSampleInterval: TimeInterval = 0.25
-private let lyricLineMotionBoundarySampleInterval: TimeInterval = 0.40
+private let lyricLineMotionBoundarySampleInterval: TimeInterval = 0.20
 private let lyricLineMotionIdleSampleInterval: TimeInterval = 2.50
 private let lyricLineMotionPageSwitchSampleDuration: TimeInterval = 0.95
 private let lyricLineMotionTrackSwitchSampleDuration: TimeInterval = 1.25

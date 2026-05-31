@@ -616,6 +616,38 @@ final class NativeLyricsSurfaceView: NSView {
         )
     }
 
+    private func sampleNativeLineMotionDuringPresentationTickIfNeeded(
+        runtimeConfiguration: LyricsLayerRendererConfiguration
+    ) {
+        guard runtimeConfiguration.lineMotionSamplingEnabled,
+              presentationEngine.hasActiveMotion else { return }
+
+        let now = Date()
+        let playbackTime = runtimeConfiguration.musicController.lyricRenderTime(at: now)
+        let sortedRows = runtimeConfiguration.rows.sorted { $0.index < $1.index }
+        let lyrics = sortedRows.map(\.displayLine.line)
+        guard !lyrics.isEmpty else { return }
+        let firstRealIndex = min(
+            max(runtimeConfiguration.lineMotionFirstRealDisplayIndex, 0),
+            max(lyrics.count - 1, 0)
+        )
+        let policyInterval = LyricMotionSamplingPolicy.sampleInterval(
+            focusedWindowActive: now <= runtimeConfiguration.lineMotionFocusedSamplingUntil,
+            playbackTime: playbackTime,
+            lyrics: lyrics,
+            firstRealIndex: firstRealIndex
+        )
+        let sampleInterval = min(policyInterval, LyricMotionSamplingPolicy.focusedInterval)
+        guard now.timeIntervalSince(lastNativeLineMotionSampleAt) >= sampleInterval else { return }
+        lastNativeLineMotionSampleAt = now
+
+        reportLineMotionFrames(
+            configuration: runtimeConfiguration,
+            timestamp: now,
+            playbackTime: playbackTime
+        )
+    }
+
     private func nativePresentationSnapshot(
         lineIndices: some Sequence<Int>,
         configuration: LyricsLayerRendererConfiguration
@@ -809,6 +841,7 @@ final class NativeLyricsSurfaceView: NSView {
                 applyFrames(runtimeConfiguration: runtimeConfiguration, snap: false, managesTransaction: false)
             }
         }
+        sampleNativeLineMotionDuringPresentationTickIfNeeded(runtimeConfiguration: runtimeConfiguration)
         stopPresentationLoopIfIdle(runtimeConfiguration: runtimeConfiguration)
     }
 

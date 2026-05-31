@@ -40,6 +40,8 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("if presentationEngine.isNaturalWaveActive"))
         XCTAssertTrue(source.contains("updateNativeLineMotionSamplingTimer"))
         XCTAssertTrue(source.contains("sampleNativeLineMotionIfNeeded"))
+        XCTAssertTrue(source.contains("sampleNativeLineMotionDuringPresentationTickIfNeeded"))
+        XCTAssertTrue(source.contains("let sampleInterval = min(policyInterval, LyricMotionSamplingPolicy.focusedInterval)"))
         XCTAssertTrue(source.contains("configuration: runtimeConfiguration,\n            timestamp: now"))
         XCTAssertTrue(source.contains("final class NativeLyricsSurfaceController"))
         XCTAssertTrue(source.contains("func captureLineMotionFrames(timestamp: Date, playbackTime: TimeInterval) -> Bool"))
