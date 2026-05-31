@@ -32,6 +32,25 @@ class MotionMetrics:
 
 
 @dataclass
+class WaveTimelineMetrics:
+    sample_count: int = 0
+    scheduled_count: int = 0
+    fired_count: int = 0
+    wave_count: int = 0
+    target_radius_min: int = 0
+    target_radius_max: int = 0
+    lead_in_rows_min: int = 0
+    lead_in_rows_max: int = 0
+    cadence_p50: float = 0.0
+    cadence_p95: float = 0.0
+    cadence_max: float = 0.0
+    start_latency_max: float = 0.0
+    completion_overrun_max: float = 0.0
+    late_fire_count: int = 0
+    order_violation_count: int = 0
+
+
+@dataclass
 class EvaluationResult:
     passed: bool
     metrics: MotionMetrics
@@ -57,6 +76,14 @@ def _int(value: str | None, default: int = 0) -> int:
 
 
 def load_line_motion_csv(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        return list(reader)
+
+
+def load_wave_timeline_csv(path: Path) -> list[dict[str, str]]:
     if not path.is_file():
         return []
     with path.open(newline="", encoding="utf-8") as handle:
@@ -124,7 +151,14 @@ def compute_motion_metrics(rows: list[dict[str, str]]) -> MotionMetrics:
 def active_bottom_clip_excess(rows: list[dict[str, str]]) -> list[float]:
     values: list[float] = []
     for row in rows:
-        if _int(row.get("lineIndex")) != _int(row.get("activeIndex")):
+        line_index = _int(row.get("lineIndex"))
+        active_index = _int(row.get("activeIndex"))
+        if line_index != active_index:
+            continue
+        # During the protected top-to-bottom wave, the active lyric can advance
+        # before that row is retargeted. Count that under target lag/settle
+        # metrics, not as settled active-row clipping.
+        if _int(row.get("targetIndex")) != active_index:
             continue
         visible_span = max(0.0, _float(row.get("visibleBottomY")) - _float(row.get("visibleTopY")))
         unavoidable_overflow = max(0.0, _float(row.get("renderedHeight")) - visible_span)
@@ -147,6 +181,7 @@ def settled_motion_rows(
     nearby_radius: int = 3,
     stable_after_target_change_s: float = 0.45,
     velocity_threshold: float = 30.0,
+    max_active_sample_gap_s: float = 0.75,
 ) -> tuple[list[dict[str, str]], list[float], int]:
     parsed = [(ts, row) for row in rows if (ts := _timestamp(row)) is not None]
     parsed.sort(key=lambda item: item[0])
@@ -201,6 +236,14 @@ def settled_motion_rows(
             if _int(row.get("lineIndex")) == active_index and _int(row.get("isManualScrolling")) == 0
         ]
         if len(active_rows) < 2:
+            skipped_settle_count += 1
+            segment_start = segment_end
+            continue
+        active_sample_gap_too_large = any(
+            (current[0] - previous[0]).total_seconds() > max_active_sample_gap_s
+            for previous, current in zip(active_rows, active_rows[1:])
+        )
+        if active_sample_gap_too_large:
             skipped_settle_count += 1
             segment_start = segment_end
             continue
@@ -286,20 +329,155 @@ def count_lingering_backlog(
     return incidents
 
 
+def _is_scheduled_phase(phase: str | None) -> bool:
+    return bool(phase) and str(phase).startswith("scheduled")
+
+
+def _is_fired_phase(phase: str | None) -> bool:
+    return bool(phase) and str(phase).startswith("fired")
+
+
+def compute_wave_timeline_metrics(rows: list[dict[str, str]], tolerance_s: float = 0.05) -> WaveTimelineMetrics:
+    metrics = WaveTimelineMetrics(sample_count=len(rows))
+    if not rows:
+        return metrics
+
+    scheduled = [row for row in rows if _is_scheduled_phase(row.get("phase"))]
+    fired = [row for row in rows if _is_fired_phase(row.get("phase"))]
+    metrics.scheduled_count = len(scheduled)
+    metrics.fired_count = len(fired)
+    wave_ids = sorted({_int(row.get("waveID")) for row in rows})
+    metrics.wave_count = len(wave_ids)
+    radii = [_int(row.get("targetRadius")) for row in scheduled if row.get("targetRadius") not in (None, "")]
+    if radii:
+        metrics.target_radius_min = min(radii)
+        metrics.target_radius_max = max(radii)
+
+    cadences: list[float] = []
+    lead_ins: list[int] = []
+    start_latencies: list[float] = []
+    completion_overruns: list[float] = []
+    late_fire_count = 0
+    order_violations = 0
+
+    for wave_id in wave_ids:
+        wave_scheduled = sorted(
+            [row for row in scheduled if _int(row.get("waveID")) == wave_id],
+            key=lambda row: (_float(row.get("scheduledDelay")), _int(row.get("lineIndex"))),
+        )
+        wave_fired = sorted(
+            [row for row in fired if _int(row.get("waveID")) == wave_id],
+            key=lambda row: (_float(row.get("actualDelay")), _int(row.get("lineIndex"))),
+        )
+        if wave_scheduled:
+            new_index = _int(wave_scheduled[0].get("newIndex"))
+            zero_delay_pre_active_rows = [
+                _int(row.get("lineIndex"))
+                for row in wave_scheduled
+                if _int(row.get("lineIndex")) <= new_index
+                and abs(_float(row.get("scheduledDelay"))) <= 0.001
+            ]
+            if zero_delay_pre_active_rows:
+                lead_ins.append(max(0, new_index - max(zero_delay_pre_active_rows)))
+            delays = sorted({_float(row.get("scheduledDelay")) for row in wave_scheduled})
+            cadences.extend(
+                delay - previous
+                for previous, delay in zip(delays, delays[1:])
+                if delay - previous > 0.001
+            )
+            line_by_delay = [_int(row.get("lineIndex")) for row in wave_scheduled]
+            order_violations += sum(
+                1 for previous, current in zip(line_by_delay, line_by_delay[1:])
+                if current < previous
+            )
+        if wave_fired:
+            start_latencies.append(
+                max(0.0, min(_float(row.get("actualDelay")) for row in wave_fired)
+                    - min(_float(row.get("scheduledDelay")) for row in wave_fired))
+            )
+            completion_overruns.append(
+                max(0.0, max(_float(row.get("actualDelay")) for row in wave_fired)
+                    - max(_float(row.get("scheduledDelay")) for row in wave_fired))
+            )
+            late_fire_count += sum(
+                1 for row in wave_fired
+                if _float(row.get("actualDelay")) - _float(row.get("scheduledDelay")) > tolerance_s
+            )
+            fired_lines = [_int(row.get("lineIndex")) for row in wave_fired]
+            order_violations += sum(
+                1 for previous, current in zip(fired_lines, fired_lines[1:])
+                if current < previous
+            )
+
+    if lead_ins:
+        metrics.lead_in_rows_min = min(lead_ins)
+        metrics.lead_in_rows_max = max(lead_ins)
+    if cadences:
+        metrics.cadence_p50 = percentile(cadences, 50)
+        metrics.cadence_p95 = percentile(cadences, 95)
+        metrics.cadence_max = max(cadences)
+    metrics.start_latency_max = max(start_latencies) if start_latencies else 0.0
+    metrics.completion_overrun_max = max(completion_overruns) if completion_overruns else 0.0
+    metrics.late_fire_count = late_fire_count
+    metrics.order_violation_count = order_violations
+    return metrics
+
+
 def load_wave_timeline_late_fires(path: Path, tolerance_s: float = 0.05) -> int:
-    if not path.is_file():
-        return 0
-    late = 0
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            if row.get("phase") != "fired":
-                continue
-            scheduled = _float(row.get("scheduledDelay"))
-            actual = _float(row.get("actualDelay"))
-            if actual - scheduled > tolerance_s:
-                late += 1
-    return late
+    return compute_wave_timeline_metrics(load_wave_timeline_csv(path), tolerance_s=tolerance_s).late_fire_count
+
+
+def wave_metrics_to_dict(metrics: WaveTimelineMetrics) -> dict[str, Any]:
+    return {
+        "sampleCount": metrics.sample_count,
+        "scheduledCount": metrics.scheduled_count,
+        "firedCount": metrics.fired_count,
+        "waveCount": metrics.wave_count,
+        "targetRadiusMin": metrics.target_radius_min,
+        "targetRadiusMax": metrics.target_radius_max,
+        "leadInRowsMin": metrics.lead_in_rows_min,
+        "leadInRowsMax": metrics.lead_in_rows_max,
+        "cadence": {
+            "p50": metrics.cadence_p50,
+            "p95": metrics.cadence_p95,
+            "max": metrics.cadence_max,
+        },
+        "startLatencyMax": metrics.start_latency_max,
+        "completionOverrunMax": metrics.completion_overrun_max,
+        "lateFireCount": metrics.late_fire_count,
+        "orderViolationCount": metrics.order_violation_count,
+    }
+
+
+def evaluate_wave_timeline_csv(
+    path: Path,
+    *,
+    expected_cadence_s: float = 0.08,
+    cadence_tolerance_s: float = 0.025,
+    max_lead_in_rows: int = 3,
+    max_late_fire_count: int = 0,
+    max_order_violations: int = 0,
+) -> EvaluationResult:
+    metrics = compute_wave_timeline_metrics(load_wave_timeline_csv(path))
+    failures: list[str] = []
+    if metrics.sample_count == 0:
+        failures.append(f"no wave timeline samples in {path}")
+    if metrics.scheduled_count > 0 and metrics.fired_count == 0:
+        failures.append("wave timeline has scheduled rows but no fired rows")
+    if metrics.target_radius_max and metrics.target_radius_max != 14:
+        failures.append(f"wave target radius max {metrics.target_radius_max} != 14")
+    if metrics.lead_in_rows_max > max_lead_in_rows:
+        failures.append(f"wave lead-in rows max {metrics.lead_in_rows_max} > {max_lead_in_rows}")
+    if metrics.cadence_max > 0 and abs(metrics.cadence_max - expected_cadence_s) > cadence_tolerance_s:
+        failures.append(
+            f"wave cadence max {metrics.cadence_max:.3f}s outside {expected_cadence_s:.3f}s ± {cadence_tolerance_s:.3f}s"
+        )
+    if metrics.late_fire_count > max_late_fire_count:
+        failures.append(f"late wave fires {metrics.late_fire_count} > {max_late_fire_count}")
+    if metrics.order_violation_count > max_order_violations:
+        failures.append(f"wave order violations {metrics.order_violation_count} > {max_order_violations}")
+    return EvaluationResult(passed=not failures, metrics=metrics, failures=failures)
+
 
 
 def evaluate_motion_csv(

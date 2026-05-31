@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -24,6 +25,7 @@ import perf_harness as perf
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_DIR = ROOT / "tmp" / "benchmark" / "v2.8-baseline"
+MAIN_CPU_BASELINE_DIR = ROOT / "tmp" / "benchmark" / "main-cpu-baseline"
 OUT_DIR = ROOT / "tmp" / "benchmark"
 
 DEFAULT_FIXTURES = ["line-winter-trip", "line-breakup-truth", "word-seek-fun", "translated-word"]
@@ -32,10 +34,16 @@ MAIN_CPU_BASELINES = {
     "line-winter-trip": {
         "avg": 44.188,
         "p95": 70.82,
+        "max": 70.9,
         "label": "main winter scroll-tap baseline tmp/perf/perf-20260530-024819-lyrics-main-baseline-winter-scrolltap.json",
     },
 }
-SCROLL_TAP_FIXTURES = {"line-winter-trip", "line-breakup-truth"}
+ABSOLUTE_CPU_LIMITS = {
+    "line-breakup-truth": {"avg": 25.0, "p95": 45.0, "max": 65.0},
+    "word-seek-fun": {"avg": 25.0, "p95": 45.0, "max": 65.0},
+    "translated-word": {"avg": 30.0, "p95": 55.0, "max": 75.0},
+}
+SCROLL_TAP_FIXTURES = set(DEFAULT_FIXTURES)
 UNIT_TEST_FILTER = (
     "LyricsScrollEngineTests|LyricWaveTiming|"
     "NativeLyricsTextRenderPlanTests|NativeLyricsUXMetricsTests|"
@@ -58,6 +66,16 @@ def quit_candidate_app() -> None:
         if visual.find_pid() is None:
             return
         time.sleep(0.25)
+    run(["pkill", "-x", "nanoPod"], check=False)
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if visual.find_pid() is None:
+            return
+        time.sleep(0.25)
+
+
+def enable_required_diagnostics() -> None:
+    perf.enable_required_diagnostics()
 
 
 def swift_unit_tests() -> dict[str, Any]:
@@ -104,7 +122,7 @@ def run_perf_fixture(
         str(output_dir),
         "--require-music-playing",
     ]
-    if fixture_name in {"line-winter-trip", "line-breakup-truth"}:
+    if fixture_uses_scroll_tap(fixture_name):
         cmd.extend(["--interaction", "scroll-tap-jump", "--interaction-interval", "2.5"])
     env = {"NANOPOD_APP_PATH": str(app_path)}
     result = subprocess.run(
@@ -134,6 +152,18 @@ def diagnostics_motion_path() -> Path:
     from lyrics_motion_evaluator import diagnostics_motion_path as motion_path
 
     return motion_path("com.yinanli.nanoPod")
+
+
+def diagnostics_wave_timeline_path() -> Path:
+    application_support = Path.home() / "Library" / "Application Support"
+    candidates = [
+        application_support / "nanoPod" / "Diagnostics" / "Live" / "lyrics_wave_timeline.csv",
+        application_support / "com.yinanli.nanoPod" / "Diagnostics" / "Live" / "lyrics_wave_timeline.csv",
+    ]
+    existing = [path for path in candidates if path.exists()]
+    if existing:
+        return max(existing, key=lambda path: path.stat().st_mtime)
+    return candidates[0]
 
 
 def diagnostics_state_path() -> Path:
@@ -181,6 +211,11 @@ def fixture_uses_scroll_tap(fixture_name: str) -> bool:
     return fixture_name in SCROLL_TAP_FIXTURES
 
 
+def fixture_expects_translation(fixture_name: str) -> bool:
+    fixture = visual.FIXTURES[fixture_name]
+    return bool(fixture.get("expect_translation", False))
+
+
 def collect_native_text_parity(
     fixture_name: str,
     *,
@@ -200,9 +235,17 @@ def collect_native_text_parity(
             "textParityGapCount": 0.0,
             "perRunSweepGapCount": 0.0,
             "perGlyphEmphasisGapCount": 0.0,
+            "rowMountCount": 0.0,
+            "rowUnmountCount": 0.0,
+            "maxMountedRows": 0.0,
+            "maxRenderedRows": 0.0,
+            "heightMeasurementCount": 0.0,
+            "heightChangeCount": 0.0,
             "maxExpectedEmphasisGlyphCount": 0.0,
             "maxAppliedEmphasisGlyphCount": 0.0,
             "maxAppliedEmphasisGlyphMotionCount": 0.0,
+            "maxCJKWordRunCount": 0.0,
+            "cjkEmphasisGlyphCount": 0.0,
             "maxAppliedEmphasisScale": 0.0,
             "maxAppliedEmphasisLiftMagnitude": 0.0,
             "maxAppliedEmphasisGlowOpacity": 0.0,
@@ -217,6 +260,12 @@ def collect_native_text_parity(
             "emphasisGlyphScaleErrorMax": 0.0,
             "emphasisGlyphAlphaErrorMax": 0.0,
             "emphasisGlyphGlowErrorMax": 0.0,
+            "textGlyphGeometrySampleCount": 0.0,
+            "textGlyphGeometryCoverageGapCount": 0.0,
+            "textGlyphGeometryPositionErrorMax": 0.0,
+            "translationSweepLineSampleCount": 0.0,
+            "translationSweepLineCoverageGapCount": 0.0,
+            "translationSweepWavefrontErrorMax": 0.0,
             "lineLayoutSampleCount": 0.0,
             "lineLayoutHeightErrorMax": 0.0,
             "lineLayoutWidthErrorMax": 0.0,
@@ -227,8 +276,16 @@ def collect_native_text_parity(
             "visualScaleErrorMax": 0.0,
             "visualBlurErrorMax": 0.0,
             "activeBlurRadiusMax": 0.0,
+            "rowFrameParitySampleCount": 0.0,
+            "rowFrameYErrorMax": 0.0,
+            "rowFrameHeightErrorMax": 0.0,
+            "rowFrameScaleErrorMax": 0.0,
             "manualScrollStartCount": 0.0,
             "manualScrollDeltaCount": 0.0,
+            "ignoredMomentumScrollCount": 0.0,
+            "ignoredOutOfBoundsScrollCount": 0.0,
+            "ignoredHorizontalScrollCount": 0.0,
+            "ignoredSmallScrollCount": 0.0,
             "manualScrollEndCount": 0.0,
             "manualScrollRecoveryCount": 0.0,
             "tapToLineCount": 0.0,
@@ -237,13 +294,39 @@ def collect_native_text_parity(
             "hoverEnterCount": 0.0,
             "hoverExitCount": 0.0,
             "hoverBackgroundVisibleCount": 0.0,
+            "hoverParitySampleCount": 0.0,
+            "hoverFrameErrorMax": 0.0,
+            "hoverCornerRadiusErrorMax": 0.0,
+            "hoverAlphaErrorMax": 0.0,
             "manualScrollCumulativeAbsDeltaY": 0.0,
             "manualScrollMaxVelocityY": 0.0,
             "manualScrollMaxOffsetY": 0.0,
             "tapToLineTargetDistanceMax": 0.0,
             "tapToLineDuringManualScrollCount": 0.0,
+            "tapToLineLatencySampleCount": 0.0,
+            "tapToLineLatencyMaxMs": 0.0,
+            "tapToLineSettleTimeMaxMs": 0.0,
             "mainPhaseErrorMax": 0.0,
             "translationPhaseErrorMax": 0.0,
+            "maxTargetErrorY": 0.0,
+            "maxInterLineSpacingErrorY": 0.0,
+            "maxStaleNearbyTargetCount": 0.0,
+            "maxWaveOrderViolationCount": 0.0,
+            "maxRowVelocityY": 0.0,
+            "maxActiveTopClipY": 0.0,
+            "maxActiveBottomClipY": 0.0,
+            "falseManualScrollOwnershipCount": 0.0,
+            "dotPhaseSampleCount": 0.0,
+            "preludeDotPhaseSampleCount": 0.0,
+            "interludeDotPhaseSampleCount": 0.0,
+            "dotMotionSampleCount": 0.0,
+            "dotOpacityErrorMax": 0.0,
+            "dotScaleErrorMax": 0.0,
+            "dotBlurErrorMax": 0.0,
+            "dotOverallOpacityErrorMax": 0.0,
+            "maxDotOpacity": 0.0,
+            "maxDotScale": 0.0,
+            "maxDotBlur": 0.0,
         }
         for event in load_diagnostics_events():
             if event.get("name") != "lyrics.nativeRenderer.summary":
@@ -295,6 +378,21 @@ def collect_native_text_parity(
             )
         if max_metrics["sweepWavefrontErrorMax"] > 0.5:
             failures.append(f"sweep wavefront error max {max_metrics['sweepWavefrontErrorMax']:.3f} > 0.500")
+        if max_metrics["textGlyphGeometrySampleCount"] <= 0:
+            failures.append("no native text glyph geometry samples")
+        if max_metrics["textGlyphGeometryCoverageGapCount"] > 0:
+            failures.append(
+                f"text glyph geometry coverage gap count {max_metrics['textGlyphGeometryCoverageGapCount']:.0f}"
+            )
+        if max_metrics["textGlyphGeometryPositionErrorMax"] > 0.5:
+            failures.append(
+                "text glyph geometry position error max "
+                f"{max_metrics['textGlyphGeometryPositionErrorMax']:.3f} > 0.500"
+            )
+        if max_metrics["maxCJKWordRunCount"] > 0 and max_metrics["cjkEmphasisGlyphCount"] > 0:
+            failures.append(
+                f"CJK emphasis glyph count {max_metrics['cjkEmphasisGlyphCount']:.0f} must stay 0"
+            )
         if max_metrics["lineLayoutSampleCount"] <= 0:
             failures.append("no native line layout parity samples")
         if max_metrics["lineLayoutHeightErrorMax"] > 1.0:
@@ -316,6 +414,19 @@ def collect_native_text_parity(
             failures.append(
                 f"translation sweep phase error max {max_metrics['translationPhaseErrorMax']:.3f} > 0.020"
             )
+        if fixture_expects_translation(fixture_name):
+            if max_metrics["translationSweepLineSampleCount"] <= 0:
+                failures.append("no native translation visual-line sweep samples")
+            if max_metrics["translationSweepLineCoverageGapCount"] > 0:
+                failures.append(
+                    "translation sweep line coverage gap count "
+                    f"{max_metrics['translationSweepLineCoverageGapCount']:.0f}"
+                )
+            if max_metrics["translationSweepWavefrontErrorMax"] > 0.5:
+                failures.append(
+                    "translation sweep wavefront error max "
+                    f"{max_metrics['translationSweepWavefrontErrorMax']:.3f} > 0.500"
+                )
         if max_metrics["maxExpectedEmphasisGlyphCount"] > 0:
             if max_metrics["maxAppliedEmphasisGlyphMotionCount"] <= 0:
                 failures.append("native emphasis glyph layers exist but no per-glyph motion was measured")
@@ -357,6 +468,41 @@ def collect_native_text_parity(
         failures.append(f"visual blur error max {max_metrics['visualBlurErrorMax']:.3f} > 0.260")
     if max_metrics["activeBlurRadiusMax"] > 0.01:
         failures.append(f"active line blur radius max {max_metrics['activeBlurRadiusMax']:.3f} > 0.010")
+    if max_metrics["rowFrameParitySampleCount"] <= 0:
+        failures.append("no native row-frame parity samples")
+    if max_metrics["rowFrameYErrorMax"] > 0.5:
+        failures.append(f"row-frame Y error max {max_metrics['rowFrameYErrorMax']:.3f} > 0.500")
+    if max_metrics["rowFrameHeightErrorMax"] > 0.5:
+        failures.append(f"row-frame height error max {max_metrics['rowFrameHeightErrorMax']:.3f} > 0.500")
+    if max_metrics["rowFrameScaleErrorMax"] > 0.005:
+        failures.append(f"row-frame scale error max {max_metrics['rowFrameScaleErrorMax']:.3f} > 0.005")
+    if max_metrics["maxRenderedRows"] > 40:
+        failures.append(f"native rendered row count {max_metrics['maxRenderedRows']:.0f} > 40")
+    if max_metrics["falseManualScrollOwnershipCount"] > 0:
+        failures.append(
+            f"false manual-scroll ownership count {max_metrics['falseManualScrollOwnershipCount']:.0f} > 0"
+        )
+    # Wave order is gated by lyrics_wave_timeline.csv because that stream is
+    # emitted by the scheduler at row schedule/fire time. The native summary
+    # still reports presentation-order diagnostics, but it can include
+    # transient direct-snap/manual-scroll states.
+    # Active clipping is gated by lyrics_line_motion_samples.csv because that
+    # stream includes the effective viewport, controls visibility, and native
+    # presentation offset. The native summary still reports clip diagnostics,
+    # but it is not the acceptance source.
+    if max_metrics["dotPhaseSampleCount"] > 0:
+        if max_metrics["dotOpacityErrorMax"] > 0.015:
+            failures.append(f"dot opacity error max {max_metrics['dotOpacityErrorMax']:.3f} > 0.015")
+        if max_metrics["dotScaleErrorMax"] > 0.005:
+            failures.append(f"dot scale error max {max_metrics['dotScaleErrorMax']:.3f} > 0.005")
+        if max_metrics["dotBlurErrorMax"] > 0.26:
+            failures.append(f"dot blur error max {max_metrics['dotBlurErrorMax']:.3f} > 0.260")
+        if max_metrics["dotOverallOpacityErrorMax"] > 0.015:
+            failures.append(
+                f"dot overall opacity error max {max_metrics['dotOverallOpacityErrorMax']:.3f} > 0.015"
+            )
+        if max_metrics["dotMotionSampleCount"] <= 0:
+            failures.append("native dot samples existed but no dot motion was measured")
 
     if fixture_uses_scroll_tap(fixture_name):
         if max_metrics["manualScrollStartCount"] <= 0:
@@ -379,6 +525,22 @@ def collect_native_text_parity(
             failures.append("no native lyric-row hover enter recorded")
         if max_metrics["hoverBackgroundVisibleCount"] <= 0:
             failures.append("no native manual-scroll hover background recorded")
+        if max_metrics["hoverParitySampleCount"] <= 0:
+            failures.append("no native hover background parity samples")
+        if max_metrics["hoverFrameErrorMax"] > 0.5:
+            failures.append(f"hover background frame error max {max_metrics['hoverFrameErrorMax']:.3f} > 0.500")
+        if max_metrics["hoverCornerRadiusErrorMax"] > 0.001:
+            failures.append(
+                f"hover background corner radius error max {max_metrics['hoverCornerRadiusErrorMax']:.3f} > 0.001"
+            )
+        if max_metrics["hoverAlphaErrorMax"] > 0.005:
+            failures.append(f"hover background alpha error max {max_metrics['hoverAlphaErrorMax']:.3f} > 0.005")
+        if max_metrics["tapToLineLatencySampleCount"] <= 0:
+            failures.append("no native tap-to-line latency/settle sample")
+        if max_metrics["tapToLineLatencyMaxMs"] > 50:
+            failures.append(f"tap-to-line direct latency max {max_metrics['tapToLineLatencyMaxMs']:.1f}ms > 50ms")
+        if max_metrics["tapToLineSettleTimeMaxMs"] > 50:
+            failures.append(f"tap-to-line settle time max {max_metrics['tapToLineSettleTimeMaxMs']:.1f}ms > 50ms")
 
     return {
         "statePath": str(diagnostics_state_path()),
@@ -401,13 +563,16 @@ def collect_native_frame_cadence(
         "expectedFPS": 0.0,
         "effectiveFPSMin": 0.0,
         "effectiveFPSMax": 0.0,
+        "frameDeltaP50MsMax": 0.0,
         "frameDeltaP95MsMax": 0.0,
         "frameDeltaP99MsMax": 0.0,
         "frameDeltaMaxMsMax": 0.0,
         "longestFrameStallMsMax": 0.0,
         "droppedFramesOver1_5xRefreshMax": 0.0,
         "droppedFramesOver2xRefreshMax": 0.0,
+        "tickJitterP50MsMax": 0.0,
         "tickJitterP95MsMax": 0.0,
+        "tickJitterMaxMsMax": 0.0,
     }
     effective_values: list[float] = []
 
@@ -431,13 +596,16 @@ def collect_native_frame_cadence(
         if effective_fps > 0:
             effective_values.append(effective_fps)
         for source_key, output_key in [
+            ("frameDeltaP50Ms", "frameDeltaP50MsMax"),
             ("frameDeltaP95Ms", "frameDeltaP95MsMax"),
             ("frameDeltaP99Ms", "frameDeltaP99MsMax"),
             ("frameDeltaMaxMs", "frameDeltaMaxMsMax"),
             ("longestFrameStallMs", "longestFrameStallMsMax"),
             ("droppedFramesOver1_5xRefresh", "droppedFramesOver1_5xRefreshMax"),
             ("droppedFramesOver2xRefresh", "droppedFramesOver2xRefreshMax"),
+            ("tickJitterP50Ms", "tickJitterP50MsMax"),
             ("tickJitterP95Ms", "tickJitterP95MsMax"),
+            ("tickJitterMaxMs", "tickJitterMaxMsMax"),
         ]:
             max_metrics[output_key] = max(max_metrics[output_key], float(metrics.get(source_key, 0) or 0))
 
@@ -450,17 +618,29 @@ def collect_native_frame_cadence(
         failures.append("no native presentation frame cadence summaries")
     expected_fps = max_metrics["expectedFPS"]
     expected_interval_ms = 1000.0 / expected_fps if expected_fps > 0 else 0
-    if expected_fps > 0 and max_metrics["effectiveFPSMin"] < expected_fps * 0.75:
+    if expected_fps > 0 and max_metrics["effectiveFPSMin"] < expected_fps * 0.95:
         failures.append(
-            f"effective FPS min {max_metrics['effectiveFPSMin']:.1f} below 75% of display {expected_fps:.1f}"
+            f"effective FPS min {max_metrics['effectiveFPSMin']:.1f} below 95% of display {expected_fps:.1f}"
         )
-    if expected_interval_ms > 0 and max_metrics["frameDeltaP95MsMax"] > expected_interval_ms * 1.75:
+    if expected_interval_ms > 0 and max_metrics["frameDeltaP95MsMax"] > expected_interval_ms * 1.25:
         failures.append(
-            f"frame delta p95 {max_metrics['frameDeltaP95MsMax']:.2f}ms exceeds 1.75x refresh interval"
+            f"frame delta p95 {max_metrics['frameDeltaP95MsMax']:.2f}ms exceeds 1.25x refresh interval"
         )
-    if max_metrics["droppedFramesOver2xRefreshMax"] > 2:
+    if expected_interval_ms > 0 and max_metrics["frameDeltaP99MsMax"] > expected_interval_ms * 1.5:
         failures.append(
-            f"dropped frames over 2x refresh {max_metrics['droppedFramesOver2xRefreshMax']:.0f} > 2"
+            f"frame delta p99 {max_metrics['frameDeltaP99MsMax']:.2f}ms exceeds 1.5x refresh interval"
+        )
+    if expected_interval_ms > 0 and max_metrics["frameDeltaMaxMsMax"] > expected_interval_ms * 2:
+        failures.append(
+            f"frame delta max {max_metrics['frameDeltaMaxMsMax']:.2f}ms exceeds 2x refresh interval"
+        )
+    if max_metrics["droppedFramesOver1_5xRefreshMax"] > 0:
+        failures.append(
+            f"dropped frames over 1.5x refresh {max_metrics['droppedFramesOver1_5xRefreshMax']:.0f} > 0"
+        )
+    if max_metrics["droppedFramesOver2xRefreshMax"] > 0:
+        failures.append(
+            f"dropped frames over 2x refresh {max_metrics['droppedFramesOver2xRefreshMax']:.0f} > 0"
         )
 
     return {
@@ -472,35 +652,97 @@ def collect_native_frame_cadence(
 
 
 def evaluate_cpu_gate(fixture_name: str, perf_result: dict[str, Any], min_reduction: float) -> dict[str, Any]:
-    baseline = MAIN_CPU_BASELINES.get(fixture_name)
+    baseline = load_main_cpu_baseline(fixture_name)
+    absolute_limit = ABSOLUTE_CPU_LIMITS.get(fixture_name)
     measurement = ((perf_result.get("summary") or {}).get("measurement") or {})
     cpu = measurement.get("cpuPercent") or {}
     failures: list[str] = []
-    if not baseline:
-        return {"baseline": None, "reduction": None, "failures": failures}
     avg = float(cpu.get("avg", 0) or 0)
     p95 = float(cpu.get("p95", 0) or 0)
+    max_cpu = float(cpu.get("max", 0) or 0)
+    if not baseline:
+        failures.append(f"no main CPU baseline for {fixture_name}; absolute caps are advisory only")
+        if absolute_limit is not None:
+            if avg > absolute_limit["avg"]:
+                failures.append(f"CPU avg {avg:.2f}% > absolute limit {absolute_limit['avg']:.2f}%")
+            if p95 > absolute_limit["p95"]:
+                failures.append(f"CPU p95 {p95:.2f}% > absolute limit {absolute_limit['p95']:.2f}%")
+            if max_cpu > absolute_limit["max"]:
+                failures.append(f"CPU max {max_cpu:.2f}% > absolute limit {absolute_limit['max']:.2f}%")
+        return {
+            "baseline": None,
+            "absoluteLimit": absolute_limit,
+            "candidate": {"avg": avg, "p95": p95, "max": max_cpu},
+            "reduction": None,
+            "failures": failures,
+        }
     reduction = 1 - (avg / float(baseline["avg"])) if baseline["avg"] else 0
     p95_reduction = 1 - (p95 / float(baseline["p95"])) if baseline["p95"] else 0
+    max_reduction = 1 - (max_cpu / float(baseline["max"])) if baseline.get("max") else 0
     if reduction < min_reduction:
         failures.append(
             f"CPU avg reduction {reduction * 100:.1f}% < {min_reduction * 100:.1f}% vs {baseline['label']}"
         )
     if p95_reduction <= 0:
         failures.append("CPU p95 did not improve versus main baseline")
+    if max_reduction <= 0:
+        failures.append("CPU max did not improve versus main baseline")
     return {
         "baseline": baseline,
-        "candidate": {"avg": avg, "p95": p95},
+        "candidate": {"avg": avg, "p95": p95, "max": max_cpu},
         "reduction": reduction,
         "p95Reduction": p95_reduction,
+        "maxReduction": max_reduction,
         "failures": failures,
     }
+
+
+def cpu_payload_from_perf_result(fixture_name: str, perf_result: dict[str, Any], label: str) -> dict[str, Any]:
+    summary = perf_result.get("summary") or {}
+    measurement = summary.get("measurement") or {}
+    cpu = measurement.get("cpuPercent") or {}
+    return {
+        "fixture": fixture_name,
+        "label": label,
+        "avg": float(cpu.get("avg", 0) or 0),
+        "p95": float(cpu.get("p95", 0) or 0),
+        "max": float(cpu.get("max", 0) or 0),
+        "summary": (summary.get("files") or {}).get("summary"),
+        "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def load_main_cpu_baseline(fixture_name: str) -> dict[str, Any] | None:
+    path = MAIN_CPU_BASELINE_DIR / f"cpu-{fixture_name}.json"
+    if path.is_file():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            "avg": float(data.get("avg", 0) or 0),
+            "p95": float(data.get("p95", 0) or 0),
+            "max": float(data.get("max", 0) or 0),
+            "label": str(data.get("label", f"main CPU baseline {path}")),
+        }
+    return MAIN_CPU_BASELINES.get(fixture_name)
 
 
 def reset_diagnostics_motion_csv() -> None:
     path = diagnostics_motion_path()
     if path.exists():
         path.unlink()
+
+
+def reset_diagnostics_wave_timeline_csv() -> None:
+    path = diagnostics_wave_timeline_path()
+    if path.exists():
+        path.unlink()
+
+
+def copy_diagnostics_artifact(source: Path, destination: Path) -> str | None:
+    if not source.exists():
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    return str(destination)
 
 
 def collect_motion_summary(label: str, output_dir: Path) -> dict[str, Any]:
@@ -557,6 +799,51 @@ def record_baseline(output_dir: Path, fixtures: list[str]) -> dict[str, Any]:
     return meta
 
 
+def record_main_cpu_baseline(
+    output_dir: Path,
+    fixtures: list[str],
+    *,
+    app_path: Path,
+    duration: float,
+    warmup: float,
+    label: str,
+) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    quit_candidate_app()
+    enable_required_diagnostics()
+    baselines: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for fixture in fixtures:
+        log(f"Recording main CPU baseline for {fixture}…")
+        result = run_perf_fixture(
+            fixture,
+            app_path=app_path,
+            duration=duration,
+            warmup=warmup,
+            label=f"{label}-{fixture}",
+            output_dir=output_dir,
+        )
+        payload = cpu_payload_from_perf_result(fixture, result, label)
+        payload["passed"] = result["passed"]
+        payload["returncode"] = result["returncode"]
+        (output_dir / f"cpu-{fixture}.json").write_text(
+            json.dumps(payload, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        baselines.append(payload)
+        if not result["passed"]:
+            failures.append(f"{fixture}: perf_harness failed while recording main CPU baseline")
+    meta = {
+        "reference": "main",
+        "fixtures": fixtures,
+        "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "baselines": baselines,
+        "failures": failures,
+    }
+    (output_dir / "baseline.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return meta
+
+
 def compare_against_baseline(candidate: motion.MotionMetrics, fixture: str) -> list[str]:
     baseline = load_baseline_metrics(fixture)
     if baseline is None:
@@ -572,6 +859,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-app", type=Path, help="v2.8 nanoPod.app path")
     parser.add_argument("--candidate", type=Path, default=ROOT / "nanoPod.app")
     parser.add_argument("--record-baseline", action="store_true")
+    parser.add_argument("--record-main-cpu-baseline", action="store_true")
     parser.add_argument("--require-beat-reference", action="store_true")
     parser.add_argument(
         "--require-motion-samples",
@@ -616,6 +904,25 @@ def main() -> int:
         log("Baseline recorded.")
         return 0
 
+    if args.record_main_cpu_baseline:
+        log(f"Recording main CPU baselines under {MAIN_CPU_BASELINE_DIR}")
+        summary["mainCpuBaseline"] = record_main_cpu_baseline(
+            MAIN_CPU_BASELINE_DIR,
+            fixtures,
+            app_path=args.candidate,
+            duration=args.perf_duration,
+            warmup=args.perf_warmup,
+            label=args.label,
+        )
+        summary["passed"] = not summary["mainCpuBaseline"]["failures"]
+        summary["failures"] = summary["mainCpuBaseline"]["failures"]
+        (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        if summary["failures"]:
+            log("Main CPU baseline recording failed.")
+            return 1
+        log("Main CPU baselines recorded.")
+        return 0
+
     if not args.skip_unit_tests:
         log("Running LyricsScrollEngine / LyricWaveTiming unit tests…")
         unit = swift_unit_tests()
@@ -631,14 +938,18 @@ def main() -> int:
             failures.append("build_app.sh failed")
 
     if not args.skip_perf:
+        quit_candidate_app()
+        enable_required_diagnostics()
         perf_steps: dict[str, Any] = {}
         motion_steps: dict[str, Any] = {}
+        wave_steps: dict[str, Any] = {}
         text_parity_steps: dict[str, Any] = {}
         frame_cadence_steps: dict[str, Any] = {}
         cpu_gate_steps: dict[str, Any] = {}
         for fixture in fixtures:
             log(f"Running perf + motion gate for {fixture}…")
             reset_diagnostics_motion_csv()
+            reset_diagnostics_wave_timeline_csv()
             started_at = datetime.now(timezone.utc)
             perf_result = run_perf_fixture(
                 fixture,
@@ -653,6 +964,10 @@ def main() -> int:
                 failures.append(f"{fixture}: perf_harness failed")
 
             csv_path = diagnostics_motion_path()
+            motion_artifact = copy_diagnostics_artifact(
+                csv_path,
+                run_dir / f"{fixture}-lyrics_line_motion_samples.csv",
+            )
             metrics = motion.compute_motion_metrics(motion.load_line_motion_csv(csv_path))
             eval_result = motion.evaluate_motion_csv(
                 csv_path,
@@ -666,12 +981,28 @@ def main() -> int:
                 motion_failures = ["no line-motion samples for fixture perf run"]
             motion_steps[fixture] = {
                 "csvPath": str(csv_path),
+                "artifactPath": motion_artifact,
                 "metrics": motion.metrics_to_dict(metrics),
                 "failures": motion_failures,
             }
             failures.extend([f"{fixture}: {failure}" for failure in motion_failures])
 
             quit_candidate_app()
+            wave_path = diagnostics_wave_timeline_path()
+            wave_artifact = copy_diagnostics_artifact(
+                wave_path,
+                run_dir / f"{fixture}-lyrics_wave_timeline.csv",
+            )
+            wave_eval = motion.evaluate_wave_timeline_csv(wave_path)
+            wave_failures = list(wave_eval.failures)
+            wave_steps[fixture] = {
+                "csvPath": str(wave_path),
+                "artifactPath": wave_artifact,
+                "metrics": motion.wave_metrics_to_dict(wave_eval.metrics),
+                "failures": wave_failures,
+            }
+            failures.extend([f"{fixture}: {failure}" for failure in wave_failures])
+
             text_parity = collect_native_text_parity(fixture, started_at=started_at)
             text_parity_steps[fixture] = text_parity
             failures.extend([f"{fixture}: {failure}" for failure in text_parity["failures"]])
@@ -691,6 +1022,7 @@ def main() -> int:
 
         summary["steps"]["perf"] = perf_steps
         summary["steps"]["motion"] = motion_steps
+        summary["steps"]["wave"] = wave_steps
         summary["steps"]["textParity"] = text_parity_steps
         summary["steps"]["frameCadence"] = frame_cadence_steps
         summary["steps"]["cpuGate"] = cpu_gate_steps

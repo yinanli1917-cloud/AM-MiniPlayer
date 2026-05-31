@@ -1,6 +1,56 @@
 import CoreGraphics
 import Foundation
 
+struct NativeLyricsStaticTextRenderPlan: Equatable {
+    let displayText: String
+    let tokens: [LyricTimedDisplayToken]
+    let wordRuns: [NativeLyricsStaticWordRunPlan]
+    let constants: NativeLyricsTextConstants
+
+    static func make(
+        line: LyricLine,
+        constants: NativeLyricsTextConstants = NativeLyricsTextConstants()
+    ) -> NativeLyricsStaticTextRenderPlan {
+        let tokens = LyricDisplaySegmenter.displayTokens(forWords: line.words)
+        return NativeLyricsStaticTextRenderPlan(
+            displayText: NativeLyricsTextRenderPlan.cleanedDisplayText(for: line),
+            tokens: tokens,
+            wordRuns: tokens.map(NativeLyricsStaticWordRunPlan.make(token:)),
+            constants: constants
+        )
+    }
+}
+
+struct NativeLyricsStaticWordRunPlan: Equatable {
+    let text: String
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    let duration: TimeInterval
+    let isCJK: Bool
+    let isEmphasis: Bool
+
+    static func make(token: LyricTimedDisplayToken) -> NativeLyricsStaticWordRunPlan {
+        let duration = token.word.endTime - token.word.startTime
+        let isCJK = LanguageUtils.containsCJK(token.word.word)
+        return NativeLyricsStaticWordRunPlan(
+            text: token.text,
+            startTime: token.word.startTime,
+            endTime: token.word.endTime,
+            duration: duration,
+            isCJK: isCJK,
+            isEmphasis: !isCJK && shouldEmphasize(token.text, duration: duration)
+        )
+    }
+
+    private static func shouldEmphasize(_ text: String, duration: TimeInterval) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.unicodeScalars.contains(where: { $0.value >= 0x4E00 && $0.value <= 0x9FFF }) {
+            return false
+        }
+        return duration >= 1.5 && trimmed.count > 1 && trimmed.count <= 7
+    }
+}
+
 struct NativeLyricsTextRenderPlan: Equatable {
     struct Configuration: Equatable {
         let line: LyricLine
@@ -32,10 +82,16 @@ struct NativeLyricsTextRenderPlan: Equatable {
     let constants: NativeLyricsTextConstants
 
     static func make(configuration: Configuration) -> NativeLyricsTextRenderPlan {
-        let constants = NativeLyricsTextConstants()
+        let staticPlan = NativeLyricsStaticTextRenderPlan.make(line: configuration.line)
+        return make(configuration: configuration, staticPlan: staticPlan)
+    }
+
+    static func make(
+        configuration: Configuration,
+        staticPlan: NativeLyricsStaticTextRenderPlan
+    ) -> NativeLyricsTextRenderPlan {
+        let constants = staticPlan.constants
         let line = configuration.line
-        let displayText = cleanedDisplayText(for: line)
-        let tokens = LyricDisplaySegmenter.displayTokens(forWords: line.words)
         let lineEndTime = line.words.last?.endTime ?? line.endTime
         let mainSweepProgress = configuration.isActive
             ? wordCountProgress(
@@ -46,12 +102,12 @@ struct NativeLyricsTextRenderPlan: Equatable {
             )
             : 1
         let mainPostLineFade = postLineFadeOut(currentTime: configuration.currentTime, lineEndTime: lineEndTime)
-        let runs = tokens.enumerated().map { index, token in
+        let runs = staticPlan.wordRuns.enumerated().map { index, staticRun in
             NativeLyricsWordRunPlan.make(
-                token: token,
+                staticRun: staticRun,
                 tokenIndex: index,
-                tokenCount: tokens.count,
-                lineEndTime: lineEndTime,
+                tokenCount: staticPlan.wordRuns.count,
+                postLineFade: mainPostLineFade,
                 currentTime: configuration.currentTime,
                 isActiveLine: configuration.isActive,
                 staticOpacity: configuration.staticOpacity,
@@ -67,7 +123,7 @@ struct NativeLyricsTextRenderPlan: Equatable {
             constants: constants
         )
         return NativeLyricsTextRenderPlan(
-            displayText: displayText,
+            displayText: staticPlan.displayText,
             wordRuns: runs,
             mainSweepProgress: mainSweepProgress,
             mainPostLineFade: mainPostLineFade,
@@ -76,7 +132,7 @@ struct NativeLyricsTextRenderPlan: Equatable {
         )
     }
 
-    private static func cleanedDisplayText(for line: LyricLine) -> String {
+    fileprivate static func cleanedDisplayText(for line: LyricLine) -> String {
         var text: String
         if line.text.contains("[") {
             let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
@@ -167,6 +223,7 @@ struct NativeLyricsTextRenderPlan: Equatable {
 struct NativeLyricsTextConstants: Equatable {
     let mainFontSize: CGFloat = 24
     let translationFontSize: CGFloat = 24 * 0.67
+    let translationLineSpacing: CGFloat = 2
     let brightAlpha: CGFloat = 0.85
     let dimAlpha: CGFloat = 0.25
     let fadeHalfPoint: CGFloat = 12
@@ -190,48 +247,44 @@ struct NativeLyricsWordRunPlan: Equatable {
     let emphasis: NativeLyricsEmphasisPlan
 
     static func make(
-        token: LyricTimedDisplayToken,
+        staticRun: NativeLyricsStaticWordRunPlan,
         tokenIndex: Int,
         tokenCount: Int,
-        lineEndTime: TimeInterval,
+        postLineFade: CGFloat,
         currentTime: TimeInterval,
         isActiveLine: Bool,
         staticOpacity: CGFloat,
         constants: NativeLyricsTextConstants
     ) -> NativeLyricsWordRunPlan {
-        let word = token.word
-        let duration = word.endTime - word.startTime
-        let progress = CGFloat(word.progress(at: currentTime))
-        let isCJK = LanguageUtils.containsCJK(word.word)
-        let isEmphasis = !isCJK && shouldEmphasize(token.text, duration: duration)
-        let postLineFade = NativeLyricsTextRenderPlan.postLineFadeOut(
+        let progress = wordProgress(
             currentTime: currentTime,
-            lineEndTime: lineEndTime
+            startTime: staticRun.startTime,
+            endTime: staticRun.endTime
         )
         let opacity = isActiveLine ? constants.brightAlpha : staticOpacity
         let baseFloatY = isActiveLine
             ? baseFloat(
                 currentTime: currentTime,
-                startTime: word.startTime,
-                endTime: word.endTime,
+                startTime: staticRun.startTime,
+                endTime: staticRun.endTime,
                 targetY: constants.baseFloatTargetY
             )
             : 0
         let emphasis = NativeLyricsEmphasisPlan.make(
-            text: token.text,
-            duration: duration,
+            text: staticRun.text,
+            duration: staticRun.duration,
             isLastWordOfLine: tokenIndex == tokenCount - 1,
-            isCJK: isCJK,
+            isCJK: staticRun.isCJK,
             currentTime: currentTime,
-            wordStartTime: word.startTime
+            wordStartTime: staticRun.startTime
         )
         return NativeLyricsWordRunPlan(
-            text: token.text,
-            startTime: word.startTime,
-            endTime: word.endTime,
+            text: staticRun.text,
+            startTime: staticRun.startTime,
+            endTime: staticRun.endTime,
             progress: isActiveLine ? progress : 1,
-            isCJK: isCJK,
-            isEmphasis: isEmphasis,
+            isCJK: staticRun.isCJK,
+            isEmphasis: staticRun.isEmphasis,
             baseFloatY: baseFloatY,
             opacity: opacity,
             sweep: NativeLyricsSweepPlan(
@@ -245,12 +298,15 @@ struct NativeLyricsWordRunPlan: Equatable {
         )
     }
 
-    private static func shouldEmphasize(_ text: String, duration: TimeInterval) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        if trimmed.unicodeScalars.contains(where: { $0.value >= 0x4E00 && $0.value <= 0x9FFF }) {
-            return false
-        }
-        return duration >= 1.5 && trimmed.count > 1 && trimmed.count <= 7
+    private static func wordProgress(
+        currentTime: TimeInterval,
+        startTime: TimeInterval,
+        endTime: TimeInterval
+    ) -> CGFloat {
+        guard endTime > startTime else { return currentTime >= startTime ? 1 : 0 }
+        if currentTime <= startTime { return 0 }
+        if currentTime >= endTime { return 1 }
+        return CGFloat((currentTime - startTime) / (endTime - startTime))
     }
 
     private static func baseFloat(

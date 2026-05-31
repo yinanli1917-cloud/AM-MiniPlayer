@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import os
+import plistlib
 import statistics
 import subprocess
 import sys
@@ -35,6 +36,53 @@ def log(message: str) -> None:
 
 def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
+
+def quit_candidate_app() -> None:
+    run(["osascript", "-e", 'tell application id "com.yinanli.nanoPod" to quit'], check=False)
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if visual.find_pid() is None:
+            return
+        time.sleep(0.25)
+    run(["pkill", "-x", "nanoPod"], check=False)
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if visual.find_pid() is None:
+            return
+        time.sleep(0.25)
+
+
+def write_bool_preference_to_plist(path: Path, key: str, value: bool) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data: dict[str, object] = {}
+        if path.exists():
+            with path.open("rb") as handle:
+                loaded = plistlib.load(handle)
+            if isinstance(loaded, dict):
+                data = dict(loaded)
+        data[key] = value
+        with path.open("wb") as handle:
+            plistlib.dump(data, handle)
+    except Exception as error:
+        log(f"Warning: could not write {key} to {path}: {error}")
+
+
+def write_bool_preference(key: str, value: bool) -> None:
+    bool_value = "true" if value else "false"
+    run(["defaults", "write", "com.yinanli.nanoPod", key, "-bool", bool_value], check=False)
+    for path in (
+        Path.home() / "Library/Preferences/com.yinanli.nanoPod.plist",
+        Path.home() / "Library/Containers/com.yinanli.nanoPod/Data/Library/Preferences/com.yinanli.nanoPod.plist",
+    ):
+        write_bool_preference_to_plist(path, key, value)
+
+
+def enable_required_diagnostics() -> None:
+    write_bool_preference("ownerDiagnosticsEnabled", True)
+    write_bool_preference("ownerLineMotionGeometryEnabled", True)
+    write_bool_preference("ownerLyricWaveTimelineEnabled", True)
 
 
 def positive_float(parser: argparse.ArgumentParser, value: float, name: str) -> None:
@@ -295,7 +343,7 @@ def post_scroll_tap_jump(rect: tuple[int, int, int, int]) -> None:
     x, y, width, height = rect
     center_x = int(x + width * 0.48)
     scroll_y = int(y + height * 0.48)
-    tap_y = int(y + height * 0.62)
+    tap_y = scroll_y
     swift_source = f'''
 import CoreGraphics
 import Foundation
@@ -592,6 +640,8 @@ def main() -> None:
         return
 
     log("Validating lyrics workload")
+    quit_candidate_app()
+    enable_required_diagnostics()
     workload = verify_workload(request)
     music = ensure_music_playing(request)
     seek_music_position(request.seek_position)

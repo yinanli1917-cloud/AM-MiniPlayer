@@ -7,6 +7,16 @@ struct NativeLyricsTextSweepMaskLine: Equatable {
     let wavefrontX: CGFloat
 }
 
+struct NativeLyricsTranslationSweepMaskLine: Equatable {
+    let maskRect: CGRect
+    let wavefrontX: CGFloat
+}
+
+struct NativeLyricsTranslationSweepVisualLinePlan: Equatable {
+    let rect: CGRect
+    let width: CGFloat
+}
+
 struct NativeLyricsTextSweepVisualRun: Equatable {
     struct Glyph: Equatable {
         let index: Int
@@ -222,5 +232,77 @@ enum NativeLyricsTextSweepLayout {
             ))
         }
         return glyphs
+    }
+}
+
+enum NativeLyricsTranslationSweepLayout {
+    static func makePlan(
+        text: String,
+        width: CGFloat,
+        fontSize: CGFloat,
+        lineSpacing: CGFloat
+    ) -> [NativeLyricsTranslationSweepVisualLinePlan] {
+        guard !text.isEmpty, width > 1 else { return [] }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = lineSpacing
+        paragraph.lineBreakMode = .byWordWrapping
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+                .paragraphStyle: paragraph
+            ]
+        )
+        let storage = NSTextStorage(attributedString: attributed)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.lineFragmentPadding = 0
+        textContainer.maximumNumberOfLines = 0
+        textContainer.lineBreakMode = .byWordWrapping
+        layoutManager.addTextContainer(textContainer)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var lines: [NativeLyricsTranslationSweepVisualLinePlan] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, _, _ in
+            guard usedRect.width > 0, usedRect.height > 0 else { return }
+            lines.append(NativeLyricsTranslationSweepVisualLinePlan(
+                rect: usedRect,
+                width: usedRect.width
+            ))
+        }
+        return lines
+    }
+
+    static func maskLines(
+        from plan: [NativeLyricsTranslationSweepVisualLinePlan],
+        progress: CGFloat,
+        fadeHalfPoint: CGFloat
+    ) -> [NativeLyricsTranslationSweepMaskLine] {
+        guard !plan.isEmpty else { return [] }
+        let totalWidth = plan.reduce(CGFloat.zero) { $0 + $1.width }
+        guard totalWidth > 0 else { return [] }
+        let filledWidth = min(1, max(0, progress)) * totalWidth
+        var accumulated: CGFloat = 0
+        var lines: [NativeLyricsTranslationSweepMaskLine] = []
+        for line in plan {
+            let localFilled = filledWidth - accumulated
+            defer { accumulated += line.width }
+            let maskRect = line.rect.insetBy(dx: -20, dy: -20)
+            let wavefront: CGFloat
+            if localFilled <= 0 {
+                wavefront = maskRect.minX - fadeHalfPoint
+            } else {
+                let localProgress = min(1, max(0, localFilled / max(1, line.width)))
+                wavefront = line.rect.minX + line.rect.width * localProgress
+            }
+            lines.append(NativeLyricsTranslationSweepMaskLine(
+                maskRect: maskRect,
+                wavefrontX: wavefront
+            ))
+        }
+        return lines
     }
 }

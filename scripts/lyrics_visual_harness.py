@@ -40,6 +40,7 @@ FIXTURES: dict[str, dict[str, object]] = {
         "expect_lyrics_line_count": 25,
         "expect_first_real_line_sha256": "43180988879b1854dfbdc28c2eac68f223c2b4210bda87cd87fed3897fd772e8",
         "purpose": "deterministic translated word-level sweep, active-word timing, spacing, blur, and translation layout",
+        "sample_start_s": 12.0,
         "settle_s": 8.0,
     },
     "word-english-dense": {
@@ -127,6 +128,7 @@ FIXTURES: dict[str, dict[str, object]] = {
         "expect_lyrics_line_count": 42,
         "expect_first_real_line_sha256": "c3925990fd25b5c0a4891ef23968b2acd3d7db1e4d71fbb9cfdfeefdd2231ae9",
         "purpose": "owner-provided Cantonese line-level workload for lag/drift regression gating without word or syllable sync",
+        "sample_start_s": 47.0,
         "settle_s": 8.0,
     },
     "word-seek-fun": {
@@ -139,6 +141,7 @@ FIXTURES: dict[str, dict[str, object]] = {
         "expect_lyrics_line_count": 44,
         "expect_first_real_line_sha256": "8b9a2fd7d0bc2de6d45adeb5758c5f11492b018c1900b67a6afe4002fbda4f3b",
         "purpose": "word-level seek/tap recovery fixture for sweep phase and active-word animation telemetry",
+        "sample_start_s": 55.5,
         "settle_s": 8.0,
     },
 }

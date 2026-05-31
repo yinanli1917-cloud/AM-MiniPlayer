@@ -888,6 +888,41 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testNativeLyricsTimelinePolicyFindsLiveAndNextDisplayLine() {
+        let rows = (0..<5).map { index in
+            let line = LyricLine(
+                text: "Line \(index)",
+                startTime: Double(index) * 2.0,
+                endTime: Double(index) * 2.0 + 1.5
+            )
+            let displayLine = DisplayLyricLine(
+                id: "line-\(index)",
+                sourceIndex: index,
+                segmentIndex: 0,
+                segmentCount: 1,
+                line: line
+            )
+            return LayerBackedLyricRow(
+                id: displayLine.id,
+                index: index,
+                displayLine: displayLine,
+                sourceLine: line,
+                isPrelude: index == 0,
+                preludeEndTime: 0,
+                interlude: nil
+            )
+        }
+
+        XCTAssertEqual(
+            NativeLyricsTimelinePolicy.liveDisplayIndex(at: 4.1, rows: rows, fallback: 0),
+            2
+        )
+        XCTAssertEqual(
+            NativeLyricsTimelinePolicy.nextLineStartTime(after: 4.1, rows: rows),
+            6.0
+        )
+    }
+
     @MainActor
     func testLyricsPresentationEngineDirectSnapModeDoesNotUseNaturalWaveTargets() {
         let engine = LyricsPresentationEngine()

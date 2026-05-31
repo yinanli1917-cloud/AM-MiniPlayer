@@ -81,6 +81,8 @@ struct NativeLyricsFrameCadenceSummary: Equatable {
 struct NativeLyricsTextPhaseSample: Equatable {
     let hasSyllableSync: Bool
     let wordRunCount: Int
+    let cjkWordRunCount: Int
+    let cjkEmphasisGlyphCount: Int
     let mainExpectedProgress: CGFloat
     let mainAppliedProgress: CGFloat
     let translationExpectedProgress: CGFloat?
@@ -106,6 +108,12 @@ struct NativeLyricsTextPhaseSample: Equatable {
     let emphasisGlyphScaleErrorMax: CGFloat
     let emphasisGlyphAlphaErrorMax: CGFloat
     let emphasisGlyphGlowErrorMax: CGFloat
+    let textGlyphGeometrySampleCount: Int
+    let textGlyphGeometryCoverageGapCount: Int
+    let textGlyphGeometryPositionErrorMax: CGFloat
+    let translationSweepLineSampleCount: Int
+    let translationSweepLineCoverageGapCount: Int
+    let translationSweepWavefrontErrorMax: CGFloat
     let lineLayoutSampleCount: Int
     let lineLayoutHeightErrorMax: CGFloat
     let lineLayoutWidthErrorMax: CGFloat
@@ -115,6 +123,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
     init(
         hasSyllableSync: Bool,
         wordRunCount: Int,
+        cjkWordRunCount: Int = 0,
+        cjkEmphasisGlyphCount: Int = 0,
         mainExpectedProgress: CGFloat,
         mainAppliedProgress: CGFloat,
         translationExpectedProgress: CGFloat?,
@@ -140,6 +150,12 @@ struct NativeLyricsTextPhaseSample: Equatable {
         emphasisGlyphScaleErrorMax: CGFloat = 0,
         emphasisGlyphAlphaErrorMax: CGFloat = 0,
         emphasisGlyphGlowErrorMax: CGFloat = 0,
+        textGlyphGeometrySampleCount: Int = 0,
+        textGlyphGeometryCoverageGapCount: Int = 0,
+        textGlyphGeometryPositionErrorMax: CGFloat = 0,
+        translationSweepLineSampleCount: Int = 0,
+        translationSweepLineCoverageGapCount: Int = 0,
+        translationSweepWavefrontErrorMax: CGFloat = 0,
         lineLayoutSampleCount: Int = 0,
         lineLayoutHeightErrorMax: CGFloat = 0,
         lineLayoutWidthErrorMax: CGFloat = 0,
@@ -148,6 +164,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
     ) {
         self.hasSyllableSync = hasSyllableSync
         self.wordRunCount = wordRunCount
+        self.cjkWordRunCount = cjkWordRunCount
+        self.cjkEmphasisGlyphCount = cjkEmphasisGlyphCount
         self.mainExpectedProgress = mainExpectedProgress
         self.mainAppliedProgress = mainAppliedProgress
         self.translationExpectedProgress = translationExpectedProgress
@@ -173,6 +191,12 @@ struct NativeLyricsTextPhaseSample: Equatable {
         self.emphasisGlyphScaleErrorMax = emphasisGlyphScaleErrorMax
         self.emphasisGlyphAlphaErrorMax = emphasisGlyphAlphaErrorMax
         self.emphasisGlyphGlowErrorMax = emphasisGlyphGlowErrorMax
+        self.textGlyphGeometrySampleCount = textGlyphGeometrySampleCount
+        self.textGlyphGeometryCoverageGapCount = textGlyphGeometryCoverageGapCount
+        self.textGlyphGeometryPositionErrorMax = textGlyphGeometryPositionErrorMax
+        self.translationSweepLineSampleCount = translationSweepLineSampleCount
+        self.translationSweepLineCoverageGapCount = translationSweepLineCoverageGapCount
+        self.translationSweepWavefrontErrorMax = translationSweepWavefrontErrorMax
         self.lineLayoutSampleCount = lineLayoutSampleCount
         self.lineLayoutHeightErrorMax = lineLayoutHeightErrorMax
         self.lineLayoutWidthErrorMax = lineLayoutWidthErrorMax
@@ -194,8 +218,93 @@ struct NativeLyricsTextPhaseSample: Equatable {
             || (expectsPerGlyphEmphasis && !appliesPerGlyphEmphasis)
             || textLayoutCoverageGapCount > 0
             || sweepLineCoverageGapCount > 0
+            || textGlyphGeometryCoverageGapCount > 0
+            || textGlyphGeometryPositionErrorMax > 0.5
+            || translationSweepLineCoverageGapCount > 0
+            || translationSweepWavefrontErrorMax > 0.5
             || lineLayoutHeightErrorMax > 1
             || lineLayoutWidthErrorMax > 1
+    }
+}
+
+struct NativeLyricsDotPhasePlan: Equatable {
+    let opacities: [CGFloat]
+    let scales: [CGFloat]
+    let blur: CGFloat
+    let overallOpacity: CGFloat
+
+    static func make(
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        currentTime: TimeInterval,
+        gateByTimeRange: Bool
+    ) -> NativeLyricsDotPhasePlan {
+        let fadeOutDuration: TimeInterval = 0.7
+        let totalDuration = max(0.1, endTime - startTime)
+        let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
+        let segmentDuration = dotsActiveDuration / 3.0
+        let progresses: [CGFloat] = (0..<3).map { index in
+            let dotStart = startTime + segmentDuration * Double(index)
+            let dotEnd = startTime + segmentDuration * Double(index + 1)
+            if currentTime <= dotStart { return 0 }
+            if currentTime >= dotEnd { return 1 }
+            return CGFloat(sin((currentTime - dotStart) / (dotEnd - dotStart) * .pi / 2))
+        }
+        let fadeStart = startTime + dotsActiveDuration
+        let fadeOutProgress: CGFloat = {
+            if currentTime < fadeStart { return 0 }
+            if currentTime >= endTime { return 1 }
+            return CGFloat((currentTime - fadeStart) / fadeOutDuration)
+        }()
+        let visible = gateByTimeRange ? (currentTime >= startTime && currentTime < endTime) : true
+        let overallOpacity = visible ? (1 - fadeOutProgress) : 0
+        let rawPhase = sin(currentTime * .pi * 0.8)
+        let breathingPhase = rawPhase * abs(rawPhase)
+        let opacities = progresses.map { 0.25 + $0 * 0.75 }
+        let scales = progresses.map { progress in
+            let isLightingUp = progress > 0 && progress < 1
+            let breathingScale: CGFloat = isLightingUp ? (1 + CGFloat(breathingPhase) * 0.12) : 1
+            return (0.85 + progress * 0.15) * breathingScale
+        }
+        return NativeLyricsDotPhasePlan(
+            opacities: opacities,
+            scales: scales,
+            blur: fadeOutProgress * 8,
+            overallOpacity: overallOpacity
+        )
+    }
+}
+
+struct NativeLyricsDotPhaseSample: Equatable {
+    let isPrelude: Bool
+    let expectedOpacity: [CGFloat]
+    let appliedOpacity: [CGFloat]
+    let expectedScale: [CGFloat]
+    let appliedScale: [CGFloat]
+    let expectedBlur: CGFloat
+    let appliedBlur: CGFloat
+    let expectedOverallOpacity: CGFloat
+    let appliedOverallOpacity: CGFloat
+
+    var dotCount: Int { expectedOpacity.count }
+    var opacityErrorMax: CGFloat { maxPairError(expectedOpacity, appliedOpacity) }
+    var scaleErrorMax: CGFloat { maxPairError(expectedScale, appliedScale) }
+    var blurError: CGFloat { abs(expectedBlur - appliedBlur) }
+    var overallOpacityError: CGFloat { abs(expectedOverallOpacity - appliedOverallOpacity) }
+    var hasMotion: Bool {
+        zip(expectedOpacity, expectedScale).contains { opacity, scale in
+            opacity > 0.26 || abs(scale - 1) > 0.001
+        } || expectedBlur > 0.001 || expectedOverallOpacity < 0.999
+    }
+
+    private func maxPairError(_ lhs: [CGFloat], _ rhs: [CGFloat]) -> CGFloat {
+        let count = min(lhs.count, rhs.count)
+        guard count > 0 else { return lhs.isEmpty && rhs.isEmpty ? 0 : .greatestFiniteMagnitude }
+        var maxError: CGFloat = lhs.count == rhs.count ? 0 : .greatestFiniteMagnitude
+        for index in 0..<count {
+            maxError = max(maxError, abs(lhs[index] - rhs[index]))
+        }
+        return maxError
     }
 }
 
@@ -213,6 +322,47 @@ struct NativeLyricsVisualParitySample: Equatable {
     var blurError: CGFloat { abs(expectedBlurRadius - appliedBlurRadius) }
 }
 
+struct NativeLyricsRowFrameParitySample: Equatable {
+    let expectedY: CGFloat
+    let appliedY: CGFloat
+    let expectedHeight: CGFloat
+    let appliedHeight: CGFloat
+    let expectedScale: CGFloat
+    let appliedScale: CGFloat
+
+    var yError: CGFloat { abs(expectedY - appliedY) }
+    var heightError: CGFloat { abs(expectedHeight - appliedHeight) }
+    var scaleError: CGFloat { abs(expectedScale - appliedScale) }
+}
+
+struct NativeLyricsHoverParitySample: Equatable {
+    let expectedFrame: CGRect
+    let appliedFrame: CGRect
+    let expectedCornerRadius: CGFloat
+    let appliedCornerRadius: CGFloat
+    let expectedAlpha: CGFloat
+    let appliedAlpha: CGFloat
+
+    var frameError: CGFloat {
+        max(
+            abs(expectedFrame.minX - appliedFrame.minX),
+            abs(expectedFrame.minY - appliedFrame.minY),
+            abs(expectedFrame.width - appliedFrame.width),
+            abs(expectedFrame.height - appliedFrame.height)
+        )
+    }
+
+    var cornerRadiusError: CGFloat { abs(expectedCornerRadius - appliedCornerRadius) }
+    var alphaError: CGFloat { abs(expectedAlpha - appliedAlpha) }
+}
+
+enum NativeLyricsIgnoredScrollReason {
+    case momentumWithoutOwnership
+    case outOfBounds
+    case horizontal
+    case tooSmall
+}
+
 struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var rowMountCount = 0
     private(set) var rowUnmountCount = 0
@@ -227,6 +377,8 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var perRunSweepGapCount = 0
     private(set) var perGlyphEmphasisGapCount = 0
     private(set) var maxActiveWordRunCount = 0
+    private(set) var maxCJKWordRunCount = 0
+    private(set) var cjkEmphasisGlyphCount = 0
     private(set) var maxExpectedEmphasisGlyphCount = 0
     private(set) var maxAppliedEmphasisGlyphCount = 0
     private(set) var maxAppliedEmphasisGlyphMotionCount = 0
@@ -239,10 +391,19 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var maxAppliedSweepLineCount = 0
     private(set) var textSweepLineCoverageGapCount = 0
     private(set) var emphasisGlyphPositionSampleCount = 0
+    private(set) var textGlyphGeometrySampleCount = 0
+    private(set) var textGlyphGeometryCoverageGapCount = 0
+    private(set) var translationSweepLineSampleCount = 0
+    private(set) var translationSweepLineCoverageGapCount = 0
     private(set) var lineLayoutSampleCount = 0
     private(set) var visualParitySampleCount = 0
+    private(set) var rowFrameParitySampleCount = 0
     private(set) var manualScrollStartCount = 0
     private(set) var manualScrollDeltaCount = 0
+    private(set) var ignoredMomentumScrollCount = 0
+    private(set) var ignoredOutOfBoundsScrollCount = 0
+    private(set) var ignoredHorizontalScrollCount = 0
+    private(set) var ignoredSmallScrollCount = 0
     private(set) var manualScrollEndCount = 0
     private(set) var manualScrollRecoveryCount = 0
     private(set) var tapToLineCount = 0
@@ -256,6 +417,7 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var manualScrollMaxOffsetY: CGFloat = 0
     private(set) var tapToLineTargetDistanceMax = 0
     private(set) var tapToLineDuringManualScrollCount = 0
+    private(set) var tapToLineLatencySampleCount = 0
     private var mainPhaseErrors: [CGFloat] = []
     private var translationPhaseErrors: [CGFloat] = []
     private var sweepWavefrontErrors: [CGFloat] = []
@@ -263,6 +425,8 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private var emphasisGlyphScaleErrors: [CGFloat] = []
     private var emphasisGlyphAlphaErrors: [CGFloat] = []
     private var emphasisGlyphGlowErrors: [CGFloat] = []
+    private var textGlyphGeometryPositionErrors: [CGFloat] = []
+    private var translationSweepWavefrontErrors: [CGFloat] = []
     private var lineLayoutHeightErrors: [CGFloat] = []
     private var lineLayoutWidthErrors: [CGFloat] = []
     private var mainTextFrameHeightErrors: [CGFloat] = []
@@ -271,6 +435,26 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private var visualScaleErrors: [CGFloat] = []
     private var visualBlurErrors: [CGFloat] = []
     private var activeBlurRadii: [CGFloat] = []
+    private var rowFrameYErrorMax: CGFloat = 0
+    private var rowFrameHeightErrorMax: CGFloat = 0
+    private var rowFrameScaleErrorMax: CGFloat = 0
+    private var hoverParitySampleCount = 0
+    private var hoverFrameErrorMax: CGFloat = 0
+    private var hoverCornerRadiusErrorMax: CGFloat = 0
+    private var hoverAlphaErrorMax: CGFloat = 0
+    private var tapToLineLatencyMax: CGFloat = 0
+    private var tapToLineSettleTimeMax: CGFloat = 0
+    private var dotPhaseSampleCount = 0
+    private var preludeDotPhaseSampleCount = 0
+    private var interludeDotPhaseSampleCount = 0
+    private var dotMotionSampleCount = 0
+    private var dotOpacityErrorMax: CGFloat = 0
+    private var dotScaleErrorMax: CGFloat = 0
+    private var dotBlurErrorMax: CGFloat = 0
+    private var dotOverallOpacityErrorMax: CGFloat = 0
+    private var maxDotOpacity: CGFloat = 0
+    private var maxDotScale: CGFloat = 1
+    private var maxDotBlur: CGFloat = 0
     private var motionSamples: [NativeLyricsMotionMetrics] = []
 
     mutating func recordLifecycle(mounted: Int, unmounted: Int, mountedRows: Int, renderedRows: Int) {
@@ -306,6 +490,8 @@ struct NativeLyricsRenderTelemetryAccumulator {
             perGlyphEmphasisGapCount += 1
         }
         maxActiveWordRunCount = max(maxActiveWordRunCount, sample.wordRunCount)
+        maxCJKWordRunCount = max(maxCJKWordRunCount, sample.cjkWordRunCount)
+        cjkEmphasisGlyphCount += sample.cjkEmphasisGlyphCount
         maxExpectedEmphasisGlyphCount = max(maxExpectedEmphasisGlyphCount, sample.expectedEmphasisGlyphCount)
         maxAppliedEmphasisGlyphCount = max(maxAppliedEmphasisGlyphCount, sample.appliedEmphasisGlyphCount)
         maxAppliedEmphasisGlyphMotionCount = max(
@@ -342,6 +528,16 @@ struct NativeLyricsRenderTelemetryAccumulator {
         if sample.emphasisGlyphGlowErrorMax > 0 {
             emphasisGlyphGlowErrors.append(sample.emphasisGlyphGlowErrorMax)
         }
+        textGlyphGeometrySampleCount += sample.textGlyphGeometrySampleCount
+        textGlyphGeometryCoverageGapCount += sample.textGlyphGeometryCoverageGapCount
+        if sample.textGlyphGeometryPositionErrorMax > 0 {
+            textGlyphGeometryPositionErrors.append(sample.textGlyphGeometryPositionErrorMax)
+        }
+        translationSweepLineSampleCount += sample.translationSweepLineSampleCount
+        translationSweepLineCoverageGapCount += sample.translationSweepLineCoverageGapCount
+        if sample.translationSweepWavefrontErrorMax > 0 {
+            translationSweepWavefrontErrors.append(sample.translationSweepWavefrontErrorMax)
+        }
         lineLayoutSampleCount += sample.lineLayoutSampleCount
         if sample.lineLayoutHeightErrorMax > 0 {
             lineLayoutHeightErrors.append(sample.lineLayoutHeightErrorMax)
@@ -371,6 +567,20 @@ struct NativeLyricsRenderTelemetryAccumulator {
         }
     }
 
+    mutating func recordRowFrameParity(_ sample: NativeLyricsRowFrameParitySample) {
+        rowFrameParitySampleCount += 1
+        rowFrameYErrorMax = max(rowFrameYErrorMax, sample.yError)
+        rowFrameHeightErrorMax = max(rowFrameHeightErrorMax, sample.heightError)
+        rowFrameScaleErrorMax = max(rowFrameScaleErrorMax, sample.scaleError)
+    }
+
+    mutating func recordHoverParity(_ sample: NativeLyricsHoverParitySample) {
+        hoverParitySampleCount += 1
+        hoverFrameErrorMax = max(hoverFrameErrorMax, sample.frameError)
+        hoverCornerRadiusErrorMax = max(hoverCornerRadiusErrorMax, sample.cornerRadiusError)
+        hoverAlphaErrorMax = max(hoverAlphaErrorMax, sample.alphaError)
+    }
+
     mutating func recordManualScrollStart() {
         manualScrollStartCount += 1
     }
@@ -384,6 +594,19 @@ struct NativeLyricsRenderTelemetryAccumulator {
         manualScrollCumulativeAbsDeltaY += abs(deltaY)
         manualScrollMaxVelocityY = max(manualScrollMaxVelocityY, abs(velocityY))
         manualScrollMaxOffsetY = max(manualScrollMaxOffsetY, abs(manualOffsetY))
+    }
+
+    mutating func recordIgnoredManualScroll(reason: NativeLyricsIgnoredScrollReason) {
+        switch reason {
+        case .momentumWithoutOwnership:
+            ignoredMomentumScrollCount += 1
+        case .outOfBounds:
+            ignoredOutOfBoundsScrollCount += 1
+        case .horizontal:
+            ignoredHorizontalScrollCount += 1
+        case .tooSmall:
+            ignoredSmallScrollCount += 1
+        }
     }
 
     mutating func recordManualScrollEnd() {
@@ -413,6 +636,12 @@ struct NativeLyricsRenderTelemetryAccumulator {
         }
     }
 
+    mutating func recordTapToLineTiming(latency: CGFloat, settleTime: CGFloat) {
+        tapToLineLatencySampleCount += 1
+        tapToLineLatencyMax = max(tapToLineLatencyMax, latency)
+        tapToLineSettleTimeMax = max(tapToLineSettleTimeMax, settleTime)
+    }
+
     mutating func recordHover(hovering: Bool) {
         if hovering {
             hoverEnterCount += 1
@@ -423,6 +652,25 @@ struct NativeLyricsRenderTelemetryAccumulator {
 
     mutating func recordHoverBackgroundVisible() {
         hoverBackgroundVisibleCount += 1
+    }
+
+    mutating func recordDotPhase(_ sample: NativeLyricsDotPhaseSample) {
+        dotPhaseSampleCount += 1
+        if sample.isPrelude {
+            preludeDotPhaseSampleCount += 1
+        } else {
+            interludeDotPhaseSampleCount += 1
+        }
+        if sample.hasMotion {
+            dotMotionSampleCount += 1
+        }
+        dotOpacityErrorMax = max(dotOpacityErrorMax, sample.opacityErrorMax)
+        dotScaleErrorMax = max(dotScaleErrorMax, sample.scaleErrorMax)
+        dotBlurErrorMax = max(dotBlurErrorMax, sample.blurError)
+        dotOverallOpacityErrorMax = max(dotOverallOpacityErrorMax, sample.overallOpacityError)
+        maxDotOpacity = max(maxDotOpacity, sample.appliedOpacity.max() ?? 0)
+        maxDotScale = max(maxDotScale, sample.appliedScale.max() ?? 1)
+        maxDotBlur = max(maxDotBlur, sample.appliedBlur)
     }
 
     mutating func recordMotion(_ metrics: NativeLyricsMotionMetrics) {
@@ -444,6 +692,8 @@ struct NativeLyricsRenderTelemetryAccumulator {
             perRunSweepGapCount: perRunSweepGapCount,
             perGlyphEmphasisGapCount: perGlyphEmphasisGapCount,
             maxActiveWordRunCount: maxActiveWordRunCount,
+            maxCJKWordRunCount: maxCJKWordRunCount,
+            cjkEmphasisGlyphCount: cjkEmphasisGlyphCount,
             maxExpectedEmphasisGlyphCount: maxExpectedEmphasisGlyphCount,
             maxAppliedEmphasisGlyphCount: maxAppliedEmphasisGlyphCount,
             maxAppliedEmphasisGlyphMotionCount: maxAppliedEmphasisGlyphMotionCount,
@@ -462,6 +712,12 @@ struct NativeLyricsRenderTelemetryAccumulator {
             emphasisGlyphScaleErrorMax: emphasisGlyphScaleErrors.max() ?? 0,
             emphasisGlyphAlphaErrorMax: emphasisGlyphAlphaErrors.max() ?? 0,
             emphasisGlyphGlowErrorMax: emphasisGlyphGlowErrors.max() ?? 0,
+            textGlyphGeometrySampleCount: textGlyphGeometrySampleCount,
+            textGlyphGeometryCoverageGapCount: textGlyphGeometryCoverageGapCount,
+            textGlyphGeometryPositionErrorMax: textGlyphGeometryPositionErrors.max() ?? 0,
+            translationSweepLineSampleCount: translationSweepLineSampleCount,
+            translationSweepLineCoverageGapCount: translationSweepLineCoverageGapCount,
+            translationSweepWavefrontErrorMax: translationSweepWavefrontErrors.max() ?? 0,
             lineLayoutSampleCount: lineLayoutSampleCount,
             lineLayoutHeightErrorMax: lineLayoutHeightErrors.max() ?? 0,
             lineLayoutWidthErrorMax: lineLayoutWidthErrors.max() ?? 0,
@@ -475,8 +731,16 @@ struct NativeLyricsRenderTelemetryAccumulator {
             visualBlurErrorP95: percentile(visualBlurErrors.sorted(), 0.95),
             visualBlurErrorMax: visualBlurErrors.max() ?? 0,
             activeBlurRadiusMax: activeBlurRadii.max() ?? 0,
+            rowFrameParitySampleCount: rowFrameParitySampleCount,
+            rowFrameYErrorMax: rowFrameYErrorMax,
+            rowFrameHeightErrorMax: rowFrameHeightErrorMax,
+            rowFrameScaleErrorMax: rowFrameScaleErrorMax,
             manualScrollStartCount: manualScrollStartCount,
             manualScrollDeltaCount: manualScrollDeltaCount,
+            ignoredMomentumScrollCount: ignoredMomentumScrollCount,
+            ignoredOutOfBoundsScrollCount: ignoredOutOfBoundsScrollCount,
+            ignoredHorizontalScrollCount: ignoredHorizontalScrollCount,
+            ignoredSmallScrollCount: ignoredSmallScrollCount,
             manualScrollEndCount: manualScrollEndCount,
             manualScrollRecoveryCount: manualScrollRecoveryCount,
             tapToLineCount: tapToLineCount,
@@ -485,11 +749,29 @@ struct NativeLyricsRenderTelemetryAccumulator {
             hoverEnterCount: hoverEnterCount,
             hoverExitCount: hoverExitCount,
             hoverBackgroundVisibleCount: hoverBackgroundVisibleCount,
+            hoverParitySampleCount: hoverParitySampleCount,
+            hoverFrameErrorMax: hoverFrameErrorMax,
+            hoverCornerRadiusErrorMax: hoverCornerRadiusErrorMax,
+            hoverAlphaErrorMax: hoverAlphaErrorMax,
             manualScrollCumulativeAbsDeltaY: manualScrollCumulativeAbsDeltaY,
             manualScrollMaxVelocityY: manualScrollMaxVelocityY,
             manualScrollMaxOffsetY: manualScrollMaxOffsetY,
             tapToLineTargetDistanceMax: tapToLineTargetDistanceMax,
             tapToLineDuringManualScrollCount: tapToLineDuringManualScrollCount,
+            tapToLineLatencySampleCount: tapToLineLatencySampleCount,
+            tapToLineLatencyMax: tapToLineLatencyMax,
+            tapToLineSettleTimeMax: tapToLineSettleTimeMax,
+            dotPhaseSampleCount: dotPhaseSampleCount,
+            preludeDotPhaseSampleCount: preludeDotPhaseSampleCount,
+            interludeDotPhaseSampleCount: interludeDotPhaseSampleCount,
+            dotMotionSampleCount: dotMotionSampleCount,
+            dotOpacityErrorMax: dotOpacityErrorMax,
+            dotScaleErrorMax: dotScaleErrorMax,
+            dotBlurErrorMax: dotBlurErrorMax,
+            dotOverallOpacityErrorMax: dotOverallOpacityErrorMax,
+            maxDotOpacity: maxDotOpacity,
+            maxDotScale: maxDotScale,
+            maxDotBlur: maxDotBlur,
             mainPhaseErrorP95: percentile(mainPhaseErrors.sorted(), 0.95),
             mainPhaseErrorMax: mainPhaseErrors.max() ?? 0,
             translationPhaseErrorP95: percentile(translationPhaseErrors.sorted(), 0.95),
@@ -498,6 +780,7 @@ struct NativeLyricsRenderTelemetryAccumulator {
             maxInterLineSpacingErrorY: motionSamples.map(\.maxInterLineSpacingErrorY).max() ?? 0,
             maxStaleNearbyTargetCount: motionSamples.map(\.staleNearbyTargetCount).max() ?? 0,
             maxWaveOrderViolationCount: motionSamples.map(\.waveOrderViolationCount).max() ?? 0,
+            maxRowVelocityY: motionSamples.map(\.maxRowVelocityY).max() ?? 0,
             maxActiveTopClipY: motionSamples.map(\.activeTopClipY).max() ?? 0,
             maxActiveBottomClipY: motionSamples.map(\.activeBottomClipY).max() ?? 0,
             falseManualScrollOwnershipCount: motionSamples.filter(\.falseManualScrollOwnership).count
@@ -511,13 +794,19 @@ struct NativeLyricsRenderTelemetryAccumulator {
             || heightMeasurementCount > 0
             || textPhaseSampleCount > 0
             || visualParitySampleCount > 0
+            || rowFrameParitySampleCount > 0
             || manualScrollStartCount > 0
             || manualScrollDeltaCount > 0
+            || ignoredMomentumScrollCount > 0
+            || ignoredOutOfBoundsScrollCount > 0
+            || ignoredHorizontalScrollCount > 0
+            || ignoredSmallScrollCount > 0
             || manualScrollEndCount > 0
             || manualScrollRecoveryCount > 0
             || tapToLineCount > 0
             || hoverEnterCount > 0
             || hoverExitCount > 0
+            || dotPhaseSampleCount > 0
             || !motionSamples.isEmpty
     }
 
@@ -547,6 +836,8 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let perRunSweepGapCount: Int
     let perGlyphEmphasisGapCount: Int
     let maxActiveWordRunCount: Int
+    let maxCJKWordRunCount: Int
+    let cjkEmphasisGlyphCount: Int
     let maxExpectedEmphasisGlyphCount: Int
     let maxAppliedEmphasisGlyphCount: Int
     let maxAppliedEmphasisGlyphMotionCount: Int
@@ -565,6 +856,12 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let emphasisGlyphScaleErrorMax: CGFloat
     let emphasisGlyphAlphaErrorMax: CGFloat
     let emphasisGlyphGlowErrorMax: CGFloat
+    let textGlyphGeometrySampleCount: Int
+    let textGlyphGeometryCoverageGapCount: Int
+    let textGlyphGeometryPositionErrorMax: CGFloat
+    let translationSweepLineSampleCount: Int
+    let translationSweepLineCoverageGapCount: Int
+    let translationSweepWavefrontErrorMax: CGFloat
     let lineLayoutSampleCount: Int
     let lineLayoutHeightErrorMax: CGFloat
     let lineLayoutWidthErrorMax: CGFloat
@@ -578,8 +875,16 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let visualBlurErrorP95: CGFloat
     let visualBlurErrorMax: CGFloat
     let activeBlurRadiusMax: CGFloat
+    let rowFrameParitySampleCount: Int
+    let rowFrameYErrorMax: CGFloat
+    let rowFrameHeightErrorMax: CGFloat
+    let rowFrameScaleErrorMax: CGFloat
     let manualScrollStartCount: Int
     let manualScrollDeltaCount: Int
+    let ignoredMomentumScrollCount: Int
+    let ignoredOutOfBoundsScrollCount: Int
+    let ignoredHorizontalScrollCount: Int
+    let ignoredSmallScrollCount: Int
     let manualScrollEndCount: Int
     let manualScrollRecoveryCount: Int
     let tapToLineCount: Int
@@ -588,11 +893,29 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let hoverEnterCount: Int
     let hoverExitCount: Int
     let hoverBackgroundVisibleCount: Int
+    let hoverParitySampleCount: Int
+    let hoverFrameErrorMax: CGFloat
+    let hoverCornerRadiusErrorMax: CGFloat
+    let hoverAlphaErrorMax: CGFloat
     let manualScrollCumulativeAbsDeltaY: CGFloat
     let manualScrollMaxVelocityY: CGFloat
     let manualScrollMaxOffsetY: CGFloat
     let tapToLineTargetDistanceMax: Int
     let tapToLineDuringManualScrollCount: Int
+    let tapToLineLatencySampleCount: Int
+    let tapToLineLatencyMax: CGFloat
+    let tapToLineSettleTimeMax: CGFloat
+    let dotPhaseSampleCount: Int
+    let preludeDotPhaseSampleCount: Int
+    let interludeDotPhaseSampleCount: Int
+    let dotMotionSampleCount: Int
+    let dotOpacityErrorMax: CGFloat
+    let dotScaleErrorMax: CGFloat
+    let dotBlurErrorMax: CGFloat
+    let dotOverallOpacityErrorMax: CGFloat
+    let maxDotOpacity: CGFloat
+    let maxDotScale: CGFloat
+    let maxDotBlur: CGFloat
     let mainPhaseErrorP95: CGFloat
     let mainPhaseErrorMax: CGFloat
     let translationPhaseErrorP95: CGFloat
@@ -601,6 +924,7 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let maxInterLineSpacingErrorY: CGFloat
     let maxStaleNearbyTargetCount: Int
     let maxWaveOrderViolationCount: Int
+    let maxRowVelocityY: CGFloat
     let maxActiveTopClipY: CGFloat
     let maxActiveBottomClipY: CGFloat
     let falseManualScrollOwnershipCount: Int
@@ -620,6 +944,8 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "perRunSweepGapCount": Double(perRunSweepGapCount),
             "perGlyphEmphasisGapCount": Double(perGlyphEmphasisGapCount),
             "maxActiveWordRunCount": Double(maxActiveWordRunCount),
+            "maxCJKWordRunCount": Double(maxCJKWordRunCount),
+            "cjkEmphasisGlyphCount": Double(cjkEmphasisGlyphCount),
             "maxExpectedEmphasisGlyphCount": Double(maxExpectedEmphasisGlyphCount),
             "maxAppliedEmphasisGlyphCount": Double(maxAppliedEmphasisGlyphCount),
             "maxAppliedEmphasisGlyphMotionCount": Double(maxAppliedEmphasisGlyphMotionCount),
@@ -638,6 +964,12 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "emphasisGlyphScaleErrorMax": Double(emphasisGlyphScaleErrorMax),
             "emphasisGlyphAlphaErrorMax": Double(emphasisGlyphAlphaErrorMax),
             "emphasisGlyphGlowErrorMax": Double(emphasisGlyphGlowErrorMax),
+            "textGlyphGeometrySampleCount": Double(textGlyphGeometrySampleCount),
+            "textGlyphGeometryCoverageGapCount": Double(textGlyphGeometryCoverageGapCount),
+            "textGlyphGeometryPositionErrorMax": Double(textGlyphGeometryPositionErrorMax),
+            "translationSweepLineSampleCount": Double(translationSweepLineSampleCount),
+            "translationSweepLineCoverageGapCount": Double(translationSweepLineCoverageGapCount),
+            "translationSweepWavefrontErrorMax": Double(translationSweepWavefrontErrorMax),
             "lineLayoutSampleCount": Double(lineLayoutSampleCount),
             "lineLayoutHeightErrorMax": Double(lineLayoutHeightErrorMax),
             "lineLayoutWidthErrorMax": Double(lineLayoutWidthErrorMax),
@@ -651,8 +983,16 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "visualBlurErrorP95": Double(visualBlurErrorP95),
             "visualBlurErrorMax": Double(visualBlurErrorMax),
             "activeBlurRadiusMax": Double(activeBlurRadiusMax),
+            "rowFrameParitySampleCount": Double(rowFrameParitySampleCount),
+            "rowFrameYErrorMax": Double(rowFrameYErrorMax),
+            "rowFrameHeightErrorMax": Double(rowFrameHeightErrorMax),
+            "rowFrameScaleErrorMax": Double(rowFrameScaleErrorMax),
             "manualScrollStartCount": Double(manualScrollStartCount),
             "manualScrollDeltaCount": Double(manualScrollDeltaCount),
+            "ignoredMomentumScrollCount": Double(ignoredMomentumScrollCount),
+            "ignoredOutOfBoundsScrollCount": Double(ignoredOutOfBoundsScrollCount),
+            "ignoredHorizontalScrollCount": Double(ignoredHorizontalScrollCount),
+            "ignoredSmallScrollCount": Double(ignoredSmallScrollCount),
             "manualScrollEndCount": Double(manualScrollEndCount),
             "manualScrollRecoveryCount": Double(manualScrollRecoveryCount),
             "tapToLineCount": Double(tapToLineCount),
@@ -661,11 +1001,29 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "hoverEnterCount": Double(hoverEnterCount),
             "hoverExitCount": Double(hoverExitCount),
             "hoverBackgroundVisibleCount": Double(hoverBackgroundVisibleCount),
+            "hoverParitySampleCount": Double(hoverParitySampleCount),
+            "hoverFrameErrorMax": Double(hoverFrameErrorMax),
+            "hoverCornerRadiusErrorMax": Double(hoverCornerRadiusErrorMax),
+            "hoverAlphaErrorMax": Double(hoverAlphaErrorMax),
             "manualScrollCumulativeAbsDeltaY": Double(manualScrollCumulativeAbsDeltaY),
             "manualScrollMaxVelocityY": Double(manualScrollMaxVelocityY),
             "manualScrollMaxOffsetY": Double(manualScrollMaxOffsetY),
             "tapToLineTargetDistanceMax": Double(tapToLineTargetDistanceMax),
             "tapToLineDuringManualScrollCount": Double(tapToLineDuringManualScrollCount),
+            "tapToLineLatencySampleCount": Double(tapToLineLatencySampleCount),
+            "tapToLineLatencyMaxMs": Double(tapToLineLatencyMax * 1000),
+            "tapToLineSettleTimeMaxMs": Double(tapToLineSettleTimeMax * 1000),
+            "dotPhaseSampleCount": Double(dotPhaseSampleCount),
+            "preludeDotPhaseSampleCount": Double(preludeDotPhaseSampleCount),
+            "interludeDotPhaseSampleCount": Double(interludeDotPhaseSampleCount),
+            "dotMotionSampleCount": Double(dotMotionSampleCount),
+            "dotOpacityErrorMax": Double(dotOpacityErrorMax),
+            "dotScaleErrorMax": Double(dotScaleErrorMax),
+            "dotBlurErrorMax": Double(dotBlurErrorMax),
+            "dotOverallOpacityErrorMax": Double(dotOverallOpacityErrorMax),
+            "maxDotOpacity": Double(maxDotOpacity),
+            "maxDotScale": Double(maxDotScale),
+            "maxDotBlur": Double(maxDotBlur),
             "mainPhaseErrorP95": Double(mainPhaseErrorP95),
             "mainPhaseErrorMax": Double(mainPhaseErrorMax),
             "translationPhaseErrorP95": Double(translationPhaseErrorP95),
@@ -674,6 +1032,7 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "maxInterLineSpacingErrorY": Double(maxInterLineSpacingErrorY),
             "maxStaleNearbyTargetCount": Double(maxStaleNearbyTargetCount),
             "maxWaveOrderViolationCount": Double(maxWaveOrderViolationCount),
+            "maxRowVelocityY": Double(maxRowVelocityY),
             "maxActiveTopClipY": Double(maxActiveTopClipY),
             "maxActiveBottomClipY": Double(maxActiveBottomClipY),
             "falseManualScrollOwnershipCount": Double(falseManualScrollOwnershipCount)
@@ -700,6 +1059,9 @@ struct NativeLyricsMotionMetricConfiguration: Equatable {
     let isManualScrolling: Bool
     let frozenDisplayIndex: Int?
     let staleNearbyRadius: Int
+    let participatingWaveDisplayIndices: Set<Int>
+    let isNaturalWaveActive: Bool
+    let isDirectSnap: Bool
 
     init(
         activeDisplayIndex: Int,
@@ -707,7 +1069,10 @@ struct NativeLyricsMotionMetricConfiguration: Equatable {
         visibleBottomY: CGFloat,
         isManualScrolling: Bool = false,
         frozenDisplayIndex: Int? = nil,
-        staleNearbyRadius: Int = 3
+        staleNearbyRadius: Int = 3,
+        participatingWaveDisplayIndices: Set<Int> = [],
+        isNaturalWaveActive: Bool = false,
+        isDirectSnap: Bool = false
     ) {
         self.activeDisplayIndex = activeDisplayIndex
         self.visibleTopY = visibleTopY
@@ -715,6 +1080,9 @@ struct NativeLyricsMotionMetricConfiguration: Equatable {
         self.isManualScrolling = isManualScrolling
         self.frozenDisplayIndex = frozenDisplayIndex
         self.staleNearbyRadius = staleNearbyRadius
+        self.participatingWaveDisplayIndices = participatingWaveDisplayIndices
+        self.isNaturalWaveActive = isNaturalWaveActive
+        self.isDirectSnap = isDirectSnap
     }
 }
 
@@ -725,6 +1093,7 @@ struct NativeLyricsMotionMetrics: Equatable {
     let waveOrderViolationCount: Int
     let activeTopClipY: CGFloat
     let activeBottomClipY: CGFloat
+    let maxRowVelocityY: CGFloat
     let falseManualScrollOwnership: Bool
 
     static func evaluate(
@@ -738,15 +1107,20 @@ struct NativeLyricsMotionMetrics: Equatable {
             abs($0.displayIndex - configuration.activeDisplayIndex) <= configuration.staleNearbyRadius
                 && $0.targetIndex != configuration.activeDisplayIndex
         }.count
-        let waveOrderViolations = waveOrderViolationCount(
-            rows: sorted,
-            activeDisplayIndex: configuration.activeDisplayIndex
-        )
+        let waveOrderViolations = configuration.isNaturalWaveActive
+            ? waveOrderViolationCount(
+                rows: sorted,
+                participatingWaveDisplayIndices: configuration.participatingWaveDisplayIndices,
+                activeDisplayIndex: configuration.activeDisplayIndex
+            )
+            : 0
+        let maxVelocity = sorted.map { abs($0.velocityY) }.max() ?? 0
         let active = sorted.first { $0.displayIndex == configuration.activeDisplayIndex }
-        let activeTopClip = configuration.isManualScrolling
+        let activeClipIsMeasurable = active.map { abs($0.targetErrorY) <= 1 && abs($0.velocityY) <= 1 } ?? false
+        let activeTopClip = configuration.isManualScrolling || configuration.isDirectSnap || !activeClipIsMeasurable
             ? 0
             : active.map { max(0, configuration.visibleTopY - $0.renderedMinY) } ?? 0
-        let activeBottomClip = configuration.isManualScrolling
+        let activeBottomClip = configuration.isManualScrolling || configuration.isDirectSnap || !activeClipIsMeasurable
             ? 0
             : active.map { max(0, $0.renderedMaxY - configuration.visibleBottomY) } ?? 0
         return NativeLyricsMotionMetrics(
@@ -756,6 +1130,7 @@ struct NativeLyricsMotionMetrics: Equatable {
             waveOrderViolationCount: waveOrderViolations,
             activeTopClipY: activeTopClip,
             activeBottomClipY: activeBottomClip,
+            maxRowVelocityY: maxVelocity,
             falseManualScrollOwnership: falseManualScrollOwnership(
                 rows: sorted,
                 configuration: configuration
@@ -778,11 +1153,15 @@ struct NativeLyricsMotionMetrics: Equatable {
 
     private static func waveOrderViolationCount(
         rows: [NativeLyricsMotionMetricRow],
+        participatingWaveDisplayIndices: Set<Int>,
         activeDisplayIndex: Int
     ) -> Int {
+        let waveRows = participatingWaveDisplayIndices.isEmpty
+            ? rows
+            : rows.filter { participatingWaveDisplayIndices.contains($0.displayIndex) }
         var hasUnfiredEarlierRow = false
         var violations = 0
-        for row in rows {
+        for row in waveRows {
             let fired = row.targetIndex == activeDisplayIndex
             if !fired {
                 hasUnfiredEarlierRow = true

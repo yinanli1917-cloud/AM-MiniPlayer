@@ -2,6 +2,40 @@ import XCTest
 @testable import MusicMiniPlayerCore
 
 final class NativeLyricsTextRenderPlanTests: XCTestCase {
+    func testStaticTextRenderPlanProducesEquivalentDynamicPlan() {
+        let line = LyricLine(
+            text: "shine through the night",
+            startTime: 10,
+            endTime: 15,
+            words: [
+                LyricWord(word: "shine", startTime: 10, endTime: 12),
+                LyricWord(word: " through", startTime: 12, endTime: 13),
+                LyricWord(word: " the", startTime: 13, endTime: 14),
+                LyricWord(word: " night", startTime: 14, endTime: 15)
+            ],
+            translation: "照亮黑夜"
+        )
+        let configuration = NativeLyricsTextRenderPlan.Configuration(
+            line: line,
+            currentTime: 12.5,
+            isActive: true,
+            staticOpacity: 0.35,
+            showTranslation: true
+        )
+
+        let uncached = NativeLyricsTextRenderPlan.make(configuration: configuration)
+        let staticPlan = NativeLyricsStaticTextRenderPlan.make(line: line)
+        let cached = NativeLyricsTextRenderPlan.make(configuration: configuration, staticPlan: staticPlan)
+
+        XCTAssertEqual(cached.displayText, uncached.displayText)
+        XCTAssertEqual(cached.wordRuns.map(\.text), uncached.wordRuns.map(\.text))
+        XCTAssertEqual(cached.wordRuns.map(\.progress), uncached.wordRuns.map(\.progress))
+        XCTAssertEqual(cached.wordRuns.map(\.baseFloatY), uncached.wordRuns.map(\.baseFloatY))
+        XCTAssertEqual(cached.mainSweepProgress, uncached.mainSweepProgress)
+        XCTAssertEqual(cached.translation?.text, uncached.translation?.text)
+        XCTAssertEqual(cached.translation?.progress, uncached.translation?.progress)
+    }
+
     func testCJKWordLevelPlanRemovesProviderSpacingWithoutSyntheticSpaces() {
         let line = LyricLine(
             text: "冬 天 一 個 遊",

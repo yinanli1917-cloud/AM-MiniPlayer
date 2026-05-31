@@ -7,7 +7,9 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
+        let lyricsViewURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
         let source = try String(contentsOf: surfaceURL, encoding: .utf8)
+        let lyricsViewSource = try String(contentsOf: lyricsViewURL, encoding: .utf8)
 
         XCTAssertFalse(source.contains("NSHostingView"))
         XCTAssertFalse(source.contains("AnyView"))
@@ -26,7 +28,18 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("updatePerRunSweepMask"))
         XCTAssertTrue(source.contains("translationSweepMaskLayer"))
         XCTAssertTrue(source.contains("lyricRenderTime()"))
+        XCTAssertTrue(source.contains("runtimeConfiguration.nativeDirectSnapIndex = targetIndex"))
+        XCTAssertTrue(source.contains("renderTelemetry.recordTapToLineTiming"))
+        XCTAssertTrue(source.contains("cachedStaticTextPlan"))
+        XCTAssertTrue(source.contains("NativeLyricsStaticTextRenderPlan.make"))
+        XCTAssertTrue(source.contains("nativeSemanticCurrentIndex"))
+        XCTAssertTrue(source.contains("scheduleNativeLineAdvanceTimerIfNeeded"))
+        XCTAssertTrue(source.contains("NativeLyricsTimelinePolicy.liveDisplayIndex"))
+        XCTAssertTrue(source.contains("waveTimelineEnabled"))
+        XCTAssertTrue(source.contains("rowTapHandlers[hoveredRowIndex]"))
+        XCTAssertTrue(source.contains("if presentationEngine.isNaturalWaveActive"))
         XCTAssertFalse(source.contains("fallback: configuration.lineTargetIndices[row.index]"))
         XCTAssertFalse(source.contains("wordFillBucket"))
+        XCTAssertFalse(lyricsViewSource.contains("scroll.lastVelocity = absVelocity"))
     }
 }

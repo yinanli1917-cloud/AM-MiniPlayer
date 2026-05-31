@@ -182,6 +182,37 @@ struct LyricsPresentationPendingWave {
     let schedule: [LyricWaveTiming.StaggerTarget]
 }
 
+enum NativeLyricsTimelinePolicy {
+    static let lineAdvanceEpsilon: TimeInterval = 0.006
+
+    static func liveDisplayIndex(
+        at playbackTime: TimeInterval,
+        rows: [LayerBackedLyricRow],
+        fallback: Int
+    ) -> Int {
+        let candidates = rows
+            .filter { !$0.isPrelude && $0.displayLine.line.startTime <= playbackTime }
+            .sorted { lhs, rhs in
+                if lhs.displayLine.line.startTime == rhs.displayLine.line.startTime {
+                    return lhs.index < rhs.index
+                }
+                return lhs.displayLine.line.startTime < rhs.displayLine.line.startTime
+            }
+        return candidates.last?.index ?? fallback
+    }
+
+    static func nextLineStartTime(
+        after playbackTime: TimeInterval,
+        rows: [LayerBackedLyricRow]
+    ) -> TimeInterval? {
+        rows
+            .lazy
+            .filter { !$0.isPrelude && $0.displayLine.line.startTime > playbackTime + lineAdvanceEpsilon }
+            .map(\.displayLine.line.startTime)
+            .min()
+    }
+}
+
 enum NativeLyricsVisibleRowSelector {
     static func visibleIndices(
         allIndices: [Int],

@@ -295,6 +295,7 @@ public struct LyricsView: View {
     @State private var lineMotionSamplingActive = false
     @State private var lineMotionSamplingUntil: Date = .distantPast
     @State private var lineMotionFrameCaptureActive = false
+    @State private var nativeLineMotionFrameCaptureSequence = -1
     @State private var pendingLineMotionCapture: LyricLineMotionCaptureRequest?
     @State private var lastLineBoundaryLagEventAt: Date = .distantPast
     @State private var lastLineBoundaryLagSignature: String?
@@ -551,6 +552,7 @@ public struct LyricsView: View {
         }
         .onReceive(musicController.timePublisher.$currentTime) { _ in
             guard currentPage == .lyrics else { return }
+            guard !lyricsLayerRendererActive else { return }
             updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
             scheduleNextLineAdvanceTimer()
         }
@@ -716,6 +718,7 @@ public struct LyricsView: View {
                         translationFailed: lyricsService.translationFailed,
                         interludeAfterIndex: lyricsService.interludeAfterIndex,
                         directSnapRequest: nativeLyricsDirectSnapRequest,
+                        controlsVisible: showControls || isAudioOutputMenuPresented,
                         musicController: musicController,
                         onLineTap: { line in handleLineTap(line: line) },
                         onDirectSnapConsumed: { requestID in
@@ -743,9 +746,14 @@ public struct LyricsView: View {
                             }
                         },
                         lineMotionFrameCaptureActive: lineMotionFrameCaptureActive,
+                        lineMotionFrameCaptureSequence: nativeLineMotionFrameCaptureSequence,
                         onLineMotionFrames: { frames, nativePresentationSnapshot in
-                            guard let capture = pendingLineMotionCapture else { return }
-                            pendingLineMotionCapture = nil
+                            let capture = pendingLineMotionCapture
+                            if capture != nil {
+                                pendingLineMotionCapture = nil
+                            }
+                            let sampleTimestamp = capture?.requestedAt ?? Date()
+                            let samplePlaybackTime = capture?.playbackTime ?? musicController.lyricRenderTime(at: sampleTimestamp)
                             let nativeManualSnapshot = nativePresentationSnapshot.manualScrollSnapshot
                             let nativeDisplayIndex = nativeManualSnapshot?.frozenDisplayIndex ?? displayIndex
                             recordLyricLineMotion(
@@ -757,16 +765,18 @@ public struct LyricsView: View {
                                 displayLines: displayLines,
                                 displayLyrics: displayLyrics,
                                 firstRealDisplayIndex: firstRealDisplayIndex,
-                                playbackTime: capture.playbackTime,
-                                timestamp: capture.requestedAt,
+                                playbackTime: samplePlaybackTime,
+                                timestamp: sampleTimestamp,
                                 framesIncludeLineOffset: true,
                                 presentationTargetIndices: nativePresentationSnapshot.targetIndices,
                                 nativeManualScrollSnapshot: nativeManualSnapshot,
                                 nativePresentationSnapshot: nativePresentationSnapshot
                             )
-                            DispatchQueue.main.async {
-                                lineMotionFrameCaptureActive = false
-                                latestLineMotionFrames.removeAll()
+                            if capture != nil {
+                                DispatchQueue.main.async {
+                                    lineMotionFrameCaptureActive = false
+                                    latestLineMotionFrames.removeAll()
+                                }
                             }
                         }
                     )
@@ -1014,7 +1024,11 @@ public struct LyricsView: View {
 
         let capture = LyricLineMotionCaptureRequest(requestedAt: now, playbackTime: playbackTime)
         pendingLineMotionCapture = capture
-        lineMotionFrameCaptureActive = true
+        if lyricsLayerRendererActive {
+            nativeLineMotionFrameCaptureSequence &+= 1
+        } else {
+            lineMotionFrameCaptureActive = true
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + lyricLineMotionCaptureTimeout) {
             guard pendingLineMotionCapture == capture else { return }
@@ -1686,7 +1700,7 @@ public struct LyricsView: View {
 
         if deltaY < 0 {
             if showControls { animateControlsOut() }
-            scroll.scrollLocked = true
+            if !scroll.scrollLocked { scroll.scrollLocked = true }
         } else if absVelocity >= threshold {
             if !scroll.scrollLocked { scroll.scrollLocked = true }
             if showControls { animateControlsOut() }
@@ -1694,8 +1708,6 @@ public struct LyricsView: View {
             scroll.hasTriggeredSlowScroll = true
             if !showControls { animateControlsIn() }
         }
-
-        scroll.lastVelocity = absVelocity
     }
 
     private func handleNativeManualScrollStarted(frozenDisplayIndex: Int) {

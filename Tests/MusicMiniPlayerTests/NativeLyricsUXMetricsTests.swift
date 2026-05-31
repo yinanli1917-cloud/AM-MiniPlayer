@@ -2,6 +2,31 @@ import XCTest
 @testable import MusicMiniPlayerCore
 
 final class NativeLyricsUXMetricsTests: XCTestCase {
+    func testDotPhasePlanMatchesLegacyInterludeTimingLaw() {
+        let plan = NativeLyricsDotPhasePlan.make(
+            startTime: 10,
+            endTime: 13.7,
+            currentTime: 11.0,
+            gateByTimeRange: true
+        )
+
+        XCTAssertEqual(plan.opacities.count, 3)
+        XCTAssertEqual(plan.scales.count, 3)
+        XCTAssertGreaterThan(plan.opacities[0], 0.25)
+        XCTAssertLessThanOrEqual(plan.opacities[2], 0.25)
+        XCTAssertEqual(plan.overallOpacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(plan.blur, 0, accuracy: 0.0001)
+
+        let fading = NativeLyricsDotPhasePlan.make(
+            startTime: 10,
+            endTime: 13.7,
+            currentTime: 13.35,
+            gateByTimeRange: true
+        )
+        XCTAssertLessThan(fading.overallOpacity, 1)
+        XCTAssertGreaterThan(fading.blur, 0)
+    }
+
     func testFrameCadenceSummaryReportsRefreshPreservingMetrics() {
         var accumulator = NativeLyricsFrameCadenceAccumulator()
         let expected = 1.0 / 60.0
@@ -57,7 +82,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             configuration: NativeLyricsMotionMetricConfiguration(
                 activeDisplayIndex: 4,
                 visibleTopY: 0,
-                visibleBottomY: 180
+                visibleBottomY: 180,
+                isNaturalWaveActive: true
             )
         )
 
@@ -85,9 +111,31 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertTrue(metrics.falseManualScrollOwnership)
     }
 
+    func testMotionMetricsMeasureWaveOrderOnlyForParticipatingRows() {
+        let rows = [
+            NativeLyricsMotionMetricRow(displayIndex: 0, targetIndex: 4, renderedMinY: 0, renderedHeight: 30, targetMinY: 0, velocityY: 0),
+            NativeLyricsMotionMetricRow(displayIndex: 1, targetIndex: 1, renderedMinY: 36, renderedHeight: 30, targetMinY: 36, velocityY: 0),
+            NativeLyricsMotionMetricRow(displayIndex: 2, targetIndex: 4, renderedMinY: 72, renderedHeight: 30, targetMinY: 72, velocityY: 0),
+            NativeLyricsMotionMetricRow(displayIndex: 3, targetIndex: 4, renderedMinY: 108, renderedHeight: 30, targetMinY: 108, velocityY: 0)
+        ]
+
+        let metrics = NativeLyricsMotionMetrics.evaluate(
+            rows: rows,
+            configuration: NativeLyricsMotionMetricConfiguration(
+                activeDisplayIndex: 4,
+                visibleTopY: 0,
+                visibleBottomY: 180,
+                participatingWaveDisplayIndices: [0, 2, 3],
+                isNaturalWaveActive: true
+            )
+        )
+
+        XCTAssertEqual(metrics.waveOrderViolationCount, 0)
+    }
+
     func testMotionMetricsMeasureActiveClipping() {
         let rows = [
-            NativeLyricsMotionMetricRow(displayIndex: 5, targetIndex: 5, renderedMinY: -12, renderedHeight: 40, targetMinY: 0, velocityY: 0),
+            NativeLyricsMotionMetricRow(displayIndex: 5, targetIndex: 5, renderedMinY: -12, renderedHeight: 40, targetMinY: -12, velocityY: 0),
             NativeLyricsMotionMetricRow(displayIndex: 6, targetIndex: 5, renderedMinY: 70, renderedHeight: 50, targetMinY: 70, velocityY: 0)
         ]
 
@@ -102,6 +150,26 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
 
         XCTAssertEqual(metrics.activeTopClipY, 12)
         XCTAssertEqual(metrics.activeBottomClipY, 4)
+    }
+
+    func testMotionMetricsDoNotTreatUnsettledActiveRowAsClipFailure() {
+        let rows = [
+            NativeLyricsMotionMetricRow(displayIndex: 5, targetIndex: 5, renderedMinY: -12, renderedHeight: 40, targetMinY: 0, velocityY: 240)
+        ]
+
+        let metrics = NativeLyricsMotionMetrics.evaluate(
+            rows: rows,
+            configuration: NativeLyricsMotionMetricConfiguration(
+                activeDisplayIndex: 5,
+                visibleTopY: 0,
+                visibleBottomY: 24,
+                participatingWaveDisplayIndices: [5],
+                isNaturalWaveActive: true
+            )
+        )
+
+        XCTAssertEqual(metrics.activeTopClipY, 0)
+        XCTAssertEqual(metrics.activeBottomClipY, 0)
     }
 
     func testMotionMetricsDoNotTreatManualScrollOffsetAsActiveClipFailure() {
@@ -125,6 +193,27 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertFalse(metrics.falseManualScrollOwnership)
     }
 
+    func testMotionMetricsDoNotTreatDirectSnapAsWaveOrderOrClipFailure() {
+        let rows = [
+            NativeLyricsMotionMetricRow(displayIndex: 5, targetIndex: 4, renderedMinY: -80, renderedHeight: 40, targetMinY: 0, velocityY: 0),
+            NativeLyricsMotionMetricRow(displayIndex: 6, targetIndex: 6, renderedMinY: 10, renderedHeight: 40, targetMinY: 42, velocityY: 0)
+        ]
+
+        let metrics = NativeLyricsMotionMetrics.evaluate(
+            rows: rows,
+            configuration: NativeLyricsMotionMetricConfiguration(
+                activeDisplayIndex: 6,
+                visibleTopY: 42,
+                visibleBottomY: 760,
+                isDirectSnap: true
+            )
+        )
+
+        XCTAssertEqual(metrics.waveOrderViolationCount, 0)
+        XCTAssertEqual(metrics.activeTopClipY, 0)
+        XCTAssertEqual(metrics.activeBottomClipY, 0)
+    }
+
     func testNativeVisualStateKeepsLegacyDistanceBlurWithoutCap() {
         let visual = NativeLyricsVisualState.make(displayIndex: 12, activeDisplayIndex: 0)
 
@@ -143,6 +232,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         accumulator.recordTextPhase(NativeLyricsTextPhaseSample(
             hasSyllableSync: true,
             wordRunCount: 7,
+            cjkWordRunCount: 2,
+            cjkEmphasisGlyphCount: 0,
             mainExpectedProgress: 0.45,
             mainAppliedProgress: 0.40,
             translationExpectedProgress: 0.50,
@@ -168,6 +259,12 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             emphasisGlyphScaleErrorMax: 0.001,
             emphasisGlyphAlphaErrorMax: 0.01,
             emphasisGlyphGlowErrorMax: 0.01,
+            textGlyphGeometrySampleCount: 7,
+            textGlyphGeometryCoverageGapCount: 0,
+            textGlyphGeometryPositionErrorMax: 0.2,
+            translationSweepLineSampleCount: 2,
+            translationSweepLineCoverageGapCount: 0,
+            translationSweepWavefrontErrorMax: 0.1,
             lineLayoutSampleCount: 1,
             lineLayoutHeightErrorMax: 0.5,
             lineLayoutWidthErrorMax: 0.25,
@@ -192,20 +289,53 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             appliedBlurRadius: 0,
             isActive: true
         ))
+        accumulator.recordRowFrameParity(NativeLyricsRowFrameParitySample(
+            expectedY: 64,
+            appliedY: 64.1,
+            expectedHeight: 42,
+            appliedHeight: 42.2,
+            expectedScale: 0.95,
+            appliedScale: 0.951
+        ))
         accumulator.recordManualScrollStart()
         accumulator.recordManualScrollDelta(deltaY: -12, velocityY: 180, manualOffsetY: -36)
+        accumulator.recordIgnoredManualScroll(reason: .momentumWithoutOwnership)
+        accumulator.recordIgnoredManualScroll(reason: .outOfBounds)
+        accumulator.recordIgnoredManualScroll(reason: .horizontal)
+        accumulator.recordIgnoredManualScroll(reason: .tooSmall)
         accumulator.recordManualScrollEnd()
         accumulator.recordManualScrollRecovery()
         accumulator.recordDirectSnap(reason: .tapToLine)
         accumulator.recordDirectSnap(reason: .manualScroll)
         accumulator.recordTapToLine(targetDistance: 4, duringManualScroll: true)
+        accumulator.recordTapToLineTiming(latency: 0.01, settleTime: 0.015)
         accumulator.recordHover(hovering: true)
         accumulator.recordHover(hovering: false)
         accumulator.recordHoverBackgroundVisible()
+        accumulator.recordHoverParity(NativeLyricsHoverParitySample(
+            expectedFrame: CGRect(x: 24, y: 0, width: 220, height: 42),
+            appliedFrame: CGRect(x: 24.1, y: 0, width: 220, height: 42),
+            expectedCornerRadius: 12,
+            appliedCornerRadius: 12,
+            expectedAlpha: 0.08,
+            appliedAlpha: 0.08
+        ))
+        accumulator.recordDotPhase(NativeLyricsDotPhaseSample(
+            isPrelude: false,
+            expectedOpacity: [0.25, 0.6, 1.0],
+            appliedOpacity: [0.25, 0.6, 0.99],
+            expectedScale: [0.85, 0.95, 1.0],
+            appliedScale: [0.85, 0.95, 1.0],
+            expectedBlur: 2,
+            appliedBlur: 2,
+            expectedOverallOpacity: 0.8,
+            appliedOverallOpacity: 0.79
+        ))
         accumulator.recordMotion(NativeLyricsMotionMetrics.evaluate(
             rows: [
                 NativeLyricsMotionMetricRow(displayIndex: 0, targetIndex: 1, renderedMinY: 0, renderedHeight: 30, targetMinY: 0, velocityY: 0),
-                NativeLyricsMotionMetricRow(displayIndex: 1, targetIndex: 1, renderedMinY: 50, renderedHeight: 30, targetMinY: 36, velocityY: 0)
+                NativeLyricsMotionMetricRow(displayIndex: 1, targetIndex: 1, renderedMinY: 50, renderedHeight: 30, targetMinY: 50, velocityY: 0),
+                NativeLyricsMotionMetricRow(displayIndex: 2, targetIndex: 1, renderedMinY: 100, renderedHeight: 30, targetMinY: 86, velocityY: 0)
             ],
             configuration: NativeLyricsMotionMetricConfiguration(
                 activeDisplayIndex: 1,
@@ -227,6 +357,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.perRunSweepGapCount, 1)
         XCTAssertEqual(summary.perGlyphEmphasisGapCount, 1)
         XCTAssertEqual(summary.maxActiveWordRunCount, 7)
+        XCTAssertEqual(summary.maxCJKWordRunCount, 2)
+        XCTAssertEqual(summary.cjkEmphasisGlyphCount, 0)
         XCTAssertEqual(summary.maxExpectedEmphasisGlyphCount, 5)
         XCTAssertEqual(summary.maxAppliedEmphasisGlyphCount, 0)
         XCTAssertEqual(summary.maxAppliedEmphasisGlyphMotionCount, 0)
@@ -241,6 +373,12 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.emphasisGlyphScaleErrorMax, 0.001, accuracy: 0.0001)
         XCTAssertEqual(summary.emphasisGlyphAlphaErrorMax, 0.01, accuracy: 0.0001)
         XCTAssertEqual(summary.emphasisGlyphGlowErrorMax, 0.01, accuracy: 0.0001)
+        XCTAssertEqual(summary.textGlyphGeometrySampleCount, 7)
+        XCTAssertEqual(summary.textGlyphGeometryCoverageGapCount, 0)
+        XCTAssertEqual(summary.textGlyphGeometryPositionErrorMax, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(summary.translationSweepLineSampleCount, 2)
+        XCTAssertEqual(summary.translationSweepLineCoverageGapCount, 0)
+        XCTAssertEqual(summary.translationSweepWavefrontErrorMax, 0.1, accuracy: 0.0001)
         XCTAssertEqual(summary.lineLayoutSampleCount, 1)
         XCTAssertEqual(summary.lineLayoutHeightErrorMax, 0.5, accuracy: 0.0001)
         XCTAssertEqual(summary.lineLayoutWidthErrorMax, 0.25, accuracy: 0.0001)
@@ -251,8 +389,16 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.visualScaleErrorMax, 0.001, accuracy: 0.0001)
         XCTAssertEqual(summary.visualBlurErrorMax, 0)
         XCTAssertEqual(summary.activeBlurRadiusMax, 0)
+        XCTAssertEqual(summary.rowFrameParitySampleCount, 1)
+        XCTAssertEqual(summary.rowFrameYErrorMax, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(summary.rowFrameHeightErrorMax, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(summary.rowFrameScaleErrorMax, 0.001, accuracy: 0.0001)
         XCTAssertEqual(summary.manualScrollStartCount, 1)
         XCTAssertEqual(summary.manualScrollDeltaCount, 1)
+        XCTAssertEqual(summary.ignoredMomentumScrollCount, 1)
+        XCTAssertEqual(summary.ignoredOutOfBoundsScrollCount, 1)
+        XCTAssertEqual(summary.ignoredHorizontalScrollCount, 1)
+        XCTAssertEqual(summary.ignoredSmallScrollCount, 1)
         XCTAssertEqual(summary.manualScrollEndCount, 1)
         XCTAssertEqual(summary.manualScrollRecoveryCount, 1)
         XCTAssertEqual(summary.tapToLineCount, 1)
@@ -266,18 +412,41 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.hoverEnterCount, 1)
         XCTAssertEqual(summary.hoverExitCount, 1)
         XCTAssertEqual(summary.hoverBackgroundVisibleCount, 1)
+        XCTAssertEqual(summary.hoverParitySampleCount, 1)
+        XCTAssertEqual(summary.hoverFrameErrorMax, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(summary.hoverCornerRadiusErrorMax, 0)
+        XCTAssertEqual(summary.hoverAlphaErrorMax, 0)
+        XCTAssertEqual(summary.tapToLineLatencySampleCount, 1)
+        XCTAssertEqual(summary.tapToLineLatencyMax, 0.01, accuracy: 0.0001)
+        XCTAssertEqual(summary.tapToLineSettleTimeMax, 0.015, accuracy: 0.0001)
+        XCTAssertEqual(summary.dotPhaseSampleCount, 1)
+        XCTAssertEqual(summary.interludeDotPhaseSampleCount, 1)
+        XCTAssertEqual(summary.dotMotionSampleCount, 1)
+        XCTAssertEqual(summary.dotOpacityErrorMax, 0.01, accuracy: 0.0001)
+        XCTAssertEqual(summary.dotScaleErrorMax, 0, accuracy: 0.0001)
+        XCTAssertEqual(summary.dotBlurErrorMax, 0, accuracy: 0.0001)
+        XCTAssertEqual(summary.dotOverallOpacityErrorMax, 0.01, accuracy: 0.0001)
+        XCTAssertEqual(summary.maxDotOpacity, 0.99, accuracy: 0.0001)
+        XCTAssertEqual(summary.maxDotScale, 1, accuracy: 0.0001)
+        XCTAssertEqual(summary.maxDotBlur, 2, accuracy: 0.0001)
         XCTAssertEqual(summary.mainPhaseErrorMax, 0.05, accuracy: 0.0001)
         XCTAssertEqual(summary.translationPhaseErrorMax, 0.02, accuracy: 0.0001)
         XCTAssertEqual(summary.maxTargetErrorY, 14)
         XCTAssertEqual(summary.maxActiveBottomClipY, 10)
         XCTAssertEqual(summary.metrics["maxActiveWordRunCount"], 7)
+        XCTAssertEqual(summary.metrics["maxCJKWordRunCount"], 2)
         XCTAssertEqual(summary.metrics["textParityGapCount"], 1)
         XCTAssertEqual(summary.metrics["textLayoutCoverageGapCount"], 2)
         XCTAssertEqual(summary.metrics["textSweepLineCoverageGapCount"], 1)
         XCTAssertEqual(summary.metrics["emphasisGlyphPositionSampleCount"], 5)
+        XCTAssertEqual(summary.metrics["textGlyphGeometrySampleCount"], 7)
+        XCTAssertEqual(summary.metrics["translationSweepLineSampleCount"], 2)
         XCTAssertEqual(summary.metrics["lineLayoutSampleCount"], 1)
         XCTAssertEqual(summary.metrics["visualParitySampleCount"], 2)
+        XCTAssertEqual(summary.metrics["rowFrameParitySampleCount"], 1)
         XCTAssertEqual(summary.metrics["tapToLineCount"], 1)
         XCTAssertEqual(summary.metrics["tapToLineDuringManualScrollCount"], 1)
+        XCTAssertEqual(summary.metrics["tapToLineLatencySampleCount"], 1)
+        XCTAssertEqual(summary.metrics["dotPhaseSampleCount"], 1)
     }
 }

@@ -659,10 +659,42 @@ public final class DiagnosticsService: ObservableObject {
     public var latestIncident: DiagnosticIncident? { incidents.first }
     public var latestInteraction: DiagnosticInteractionTrace? { interactions.first }
     public var isLyricWaveTimelineEnabled: Bool {
-        isEnabled && UserDefaults.standard.bool(forKey: Self.lyricWaveTimelineEnabledKey)
+        _ = UserDefaults.standard.synchronize()
+        return isEnabled && Self.boolPreference(Self.lyricWaveTimelineEnabledKey)
     }
     public var isLineMotionGeometryEnabled: Bool {
-        isEnabled && UserDefaults.standard.bool(forKey: Self.lineMotionGeometryEnabledKey)
+        _ = UserDefaults.standard.synchronize()
+        return isEnabled && Self.boolPreference(Self.lineMotionGeometryEnabledKey)
+    }
+
+    private static func boolPreference(_ key: String) -> Bool {
+        if UserDefaults.standard.bool(forKey: key) { return true }
+        for url in localDeveloperPreferenceURLs() {
+            guard let dictionary = NSDictionary(contentsOf: url) as? [String: Any],
+                  let value = dictionary[key] else {
+                continue
+            }
+            if let bool = value as? Bool { return bool }
+            if let number = value as? NSNumber { return number.boolValue }
+        }
+        return false
+    }
+
+    private static func localDeveloperPreferenceURLs() -> [URL] {
+        var urls = [
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/com.yinanli.nanoPod.plist")
+        ]
+        if let bundleIdentifier = Bundle.main.bundleIdentifier {
+            urls.append(
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Containers")
+                    .appendingPathComponent(bundleIdentifier)
+                    .appendingPathComponent("Data/Library/Preferences")
+                    .appendingPathComponent("\(bundleIdentifier).plist")
+            )
+        }
+        return urls
     }
 
     public var severeOrRepeatedIssue: DiagnosticIncident? {

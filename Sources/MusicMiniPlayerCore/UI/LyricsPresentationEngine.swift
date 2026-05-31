@@ -31,6 +31,10 @@ final class LyricsPresentationEngine {
         }
     }
 
+    var isNaturalWaveActive: Bool {
+        pendingWave != nil
+    }
+
     func update(
         _ configuration: LyricsPresentationEngineConfiguration,
         onTargetsChanged: @escaping () -> Void
