@@ -1122,6 +1122,48 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
     }
 
+    func testNoCurrentTrackInvalidatesQueueGenerationAndPendingFetch() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueFetchPending = true
+        c.queueFetchPendingForceRecent = true
+        c.queueFetchPendingQueueGeneration = 7
+        c.queueFetchPendingTrackGeneration = 3
+        c.queueSyncGeneration = 7
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 3
+        c.recentRawRowCount = 2
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-stop")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-stop")
+
+        c.markQueueUnavailableForNoCurrentTrack()
+
+        XCTAssertEqual(c.queueSyncGeneration, 8)
+        XCTAssertFalse(c.queueFetchPending)
+        XCTAssertFalse(c.queueFetchPendingForceRecent)
+        XCTAssertNil(c.queueFetchPendingQueueGeneration)
+        XCTAssertNil(c.queueFetchPendingTrackGeneration)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .noCurrentTrack))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .noCurrentTrack))
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 7,
+            currentQueueGeneration: c.queueSyncGeneration,
+            requestTrackGeneration: 3,
+            currentTrackGeneration: 3
+        ))
+    }
+
     func testObservedTrackChangeQueueRefreshRequiresCurrentTrackGeneration() {
         XCTAssertTrue(MusicController.shouldRunObservedTrackChangeQueueRefresh(
             requestTrackGeneration: 9,

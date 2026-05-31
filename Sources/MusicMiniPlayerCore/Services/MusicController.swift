@@ -376,6 +376,25 @@ public class MusicController: ObservableObject {
         }
     }
 
+    func markQueueUnavailableForNoCurrentTrack() {
+        if !isPreview {
+            queueSyncGeneration &+= 1
+        }
+        queueRefreshTimer?.invalidate()
+        queueRefreshTimer = nil
+        queueFetchPending = false
+        queueFetchPendingForceRecent = false
+        queueFetchPendingQueueGeneration = nil
+        queueFetchPendingTrackGeneration = nil
+        lastRecentHistoryFetchAt = .distantPast
+        upNextTracks = []
+        recentTracks = []
+        upNextRawRowCount = 0
+        recentRawRowCount = 0
+        upNextProvenance = .unavailable(reason: .noCurrentTrack)
+        recentTracksProvenance = .unavailable(reason: .noCurrentTrack)
+    }
+
     @inline(__always)
     func syncPlaybackClock(to time: TimeInterval, playing: Bool? = nil, at date: Date = Date()) {
         let clamped = duration > 0 ? min(max(0, time), duration) : max(0, time)
@@ -1575,12 +1594,7 @@ public class MusicController: ObservableObject {
         currentTrackClass = ""
         currentPlaylistName = ""
         currentTrackIsURLTrack = false
-        upNextTracks = []
-        recentTracks = []
-        upNextRawRowCount = 0
-        recentRawRowCount = 0
-        upNextProvenance = .unavailable(reason: .noCurrentTrack)
-        recentTracksProvenance = .unavailable(reason: .noCurrentTrack)
+        markQueueUnavailableForNoCurrentTrack()
         setArtwork(nil)
     }
 }
