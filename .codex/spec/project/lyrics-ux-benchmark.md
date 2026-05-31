@@ -1,6 +1,6 @@
 # Lyrics UX Benchmark (LUXB)
 
-Last updated: 2026-05-30
+Last updated: 2026-05-31
 
 ## Reference release (must be surpassed)
 
@@ -73,6 +73,40 @@ gap:
 - scroll-tap fixtures must record real manual-scroll delta/offset, hover
   feedback, tap-to-line during manual-scroll ownership, and a tapped target
   different from the current lyric row.
+- frame cadence must report the active display refresh expectation, effective
+  FPS, p50/p95/p99/max frame delta, dropped frames over 1.5x and 2x refresh,
+  longest frame stall, and tick jitter. CPU improvements are invalid if these
+  metrics are achieved by reducing active lyric cadence.
+
+## Final Native Rebuild Gate Snapshot
+
+The 2026-05-31 signed native rebuild gate is:
+
+```bash
+python3 scripts/lyrics_ux_benchmark.py \
+  --skip-build \
+  --skip-unit-tests \
+  --candidate nanoPod.app \
+  --label final-progress-batched-active \
+  --output-dir tmp/benchmark \
+  --min-cpu-reduction 0.50
+```
+
+Passing summary:
+`tmp/benchmark/luxb-20260531-052716-final-progress-batched-active/summary.json`
+
+CPU reductions versus same-machine `origin/main` baseline:
+
+| Fixture | Avg CPU | Avg reduction | p95 CPU | Max CPU |
+|---------|---------|---------------|---------|---------|
+| `line-winter-trip` | 13.352 | 64.25% | 28.56 | 30.8 |
+| `line-breakup-truth` | 12.261 | 54.57% | 26.4 | 29.7 |
+| `word-seek-fun` | 11.230 | 52.99% | 25.18 | 26.2 |
+| `translated-word` | 11.909 | 57.42% | 26.86 | 29.3 |
+
+The gate reported no motion, wave, text parity, frame cadence, or CPU failures.
+Frame cadence stayed at the expected 60 FPS with zero dropped frames over 1.5x
+or 2x refresh interval.
 
 ## Contract (always)
 

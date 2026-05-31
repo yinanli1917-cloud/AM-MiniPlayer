@@ -22,3 +22,17 @@
   Music.app navigation origins, such as whether a song came from a search view
   versus another private UI route, are not exposed through the public API and
   should be reported as unavailable rather than guessed.
+
+## Lyrics Interaction Budget
+
+- User seek and lyric tap-to-jump should apply an optimistic local clock update
+  immediately and set a short position-poll cooldown. The next backend poll must
+  not collide with the visible tap recovery animation.
+- While native lyrics manual-scroll ownership is active, defer lightweight
+  ScriptingBridge position polling briefly. Manual-scroll recovery and tap
+  recovery are presentation-critical; backend correction can resume after the
+  gesture settles.
+- Full state sync should avoid re-reading stable track metadata when the
+  persistent ID matches the current non-URL library track. Preserve the current
+  audio-quality badge for that same-track fast path by using negative
+  bitrate/sample-rate sentinels internally.

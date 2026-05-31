@@ -1,6 +1,6 @@
 # Lyrics Renderer Performance
 
-Last updated: 2026-05-30
+Last updated: 2026-05-31
 
 ## Protected UX
 
@@ -109,6 +109,32 @@ Fixes that worked:
    playback time while lyrics are visible; if the correction is large enough to
    move `wordFillTime`, it must also trigger the line-level lyric clock so the
    highlight does not visibly lead the row movement.
+
+10. Keep native lyrics presentation work inside the native layer surface.
+    The SwiftUI page shell may host the native view, controls, settings,
+    accessibility, and lifecycle state, but the renderer owns timeline,
+    row layout, text render plans, scroll/tap handling, frame cadence telemetry,
+    and motion/text parity emission. Layout and text render plans should
+    recompute on semantic changes, not every frame.
+
+11. Do not force Core Animation commits from high-frequency controls. The
+    AppKit playback progress view should install disabled layer actions and let
+    AppKit batch layer commits with the run loop. Explicit per-tick
+    `CATransaction.commit()` calls produced album/playlist idle p95 spikes even
+    when the lyrics renderer itself was clean.
+
+12. Hide non-lyrics backend work from the lyrics interaction path only when the
+    user action owns the timeline. Position polling may defer briefly during
+    native manual-scroll ownership or immediately after user seek/tap-to-jump,
+    but active lyric row motion, word sweep, translation sweep, interlude dots,
+    and scroll/tap recovery must continue at display cadence.
+
+13. Full state sync should use a same-track fast path. When the ScriptingBridge
+    persistent ID matches the current non-URL library track, reuse known title,
+    artist, album, duration, and track class, and preserve the current audio
+    quality badge instead of re-reading every metadata field on the 30s safety
+    sync. Seed the initial queue hash after a recent queue fetch so the first
+    hash poll does not force a redundant queue refresh.
 
 ## Verification Pattern
 
@@ -232,6 +258,10 @@ The reference fixture is `Stardust Night` by `JADOES`, selected from NetEase wit
 ```
 
 Also check album and playlist pages on the same fixture. They should stay near idle CPU compared with the active lyrics page.
+The current idle gate for the final native rebuild uses `word-seek-fun` on
+album and playlist pages for 45s after 12s warmup. Passing signed-bundle results
+from 2026-05-31 were album avg 0.491% / p95 0.8% / max 2.4%, and playlist avg
+0.464% / p95 0.9% / max 1.7%.
 
 For lyrics-animation-specific CPU verification, do not only sample passive
 playback and do not tap the same stale screen position. The stricter gate is:
