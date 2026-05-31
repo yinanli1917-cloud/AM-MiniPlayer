@@ -99,6 +99,12 @@
   stale ScriptingBridge playlist-context scan must not replace a newer pending,
   unavailable, or exact queue state. Capture both generations when scheduling
   the fetch; do not recapture track generation inside the async worker.
+- Recent-history unavailable results must use the same generation-gated
+  whole-surface cleanup as Up Next. If Music.app is gone before a recent-history
+  read is queued or stops before the ScriptingBridge worker executes, clear both
+  queue surfaces to Music.app-unavailable only when the captured queue and track
+  generations still match; stale unavailable callbacks must not erase newer
+  state.
 - Unavailable-state transitions must treat an in-flight queue fetch as unsettled
   even when rows are already empty and provenance already matches the same
   unavailable reason. Advance the queue generation so the older in-flight

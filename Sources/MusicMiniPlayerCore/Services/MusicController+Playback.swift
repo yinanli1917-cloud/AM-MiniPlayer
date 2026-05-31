@@ -665,14 +665,11 @@ extension MusicController {
         requestTrackGeneration: Int
     ) {
         guard let app = queueApp, app.isRunning else {
-            if Self.shouldApplyRecentHistorySnapshot(
+            _ = applyRecentHistoryUnavailableSnapshotIfCurrent(
+                reason: .musicAppUnavailable,
                 requestQueueGeneration: requestQueueGeneration,
-                currentQueueGeneration: queueSyncGeneration,
-                requestTrackGeneration: requestTrackGeneration,
-                currentTrackGeneration: artworkFetchGeneration
-            ) {
-                _ = applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable))
-            }
+                requestTrackGeneration: requestTrackGeneration
+            )
             return
         }
 
@@ -726,12 +723,38 @@ extension MusicController {
         requestQueueGeneration: UInt64,
         requestTrackGeneration: Int
     ) {
-        guard app.isRunning else { return }
+        guard app.isRunning else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.applyRecentHistoryUnavailableSnapshotIfCurrent(
+                    reason: .musicAppUnavailable,
+                    requestQueueGeneration: requestQueueGeneration,
+                    requestTrackGeneration: requestTrackGeneration
+                ) {
+                    self.logger.info("Marked queue unavailable because Music.app stopped before recent history read")
+                }
+            }
+            return
+        }
 
         // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
         scriptingBridgeQueue.async { [weak self, app] in
             guard let self = self else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
+
+            guard app.isRunning else {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    if self.applyRecentHistoryUnavailableSnapshotIfCurrent(
+                        reason: .musicAppUnavailable,
+                        requestQueueGeneration: requestQueueGeneration,
+                        requestTrackGeneration: requestTrackGeneration
+                    ) {
+                        self.logger.info("Marked queue unavailable because Music.app stopped during recent history read")
+                    }
+                }
+                return
+            }
 
             let snapshot = self.getRecentSnapshotFromApp(app, limit: 10)
 

@@ -230,7 +230,10 @@ queue invalidation resets the recent-history refresh timestamp so a stale
 in-flight history result cannot suppress the next fresh read for the new
 context. Up Next and recent history must both use the queue and track
 generations captured when the fetch was scheduled, including early unavailable
-results.
+results. The recent-history ScriptingBridge path now also rechecks Music.app
+availability at the point the queued worker starts; if Music.app stopped after
+the read was scheduled, the unavailable result clears both queue surfaces only
+when those captured generations still match current state.
 Unavailable-state fast paths now include in-flight queue work in their
 settled-state checks. If Music.app is already displayed as no-current,
 Music.app-unavailable, or public-state-unavailable, but an older queue fetch is

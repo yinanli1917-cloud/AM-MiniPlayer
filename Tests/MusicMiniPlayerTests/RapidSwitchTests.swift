@@ -1389,6 +1389,97 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
+    func testRecentHistoryUnavailableGuardClearsRowsWhenRequestIsCurrent() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueFetchPending = true
+        c.queueFetchPendingForceRecent = true
+        c.queueFetchPendingQueueGeneration = 41
+        c.queueFetchPendingTrackGeneration = 6
+        c.queueSyncGeneration = 41
+        c.artworkFetchGeneration = 6
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-recent-history-loss")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-recent-history-loss")
+
+        XCTAssertTrue(c.applyRecentHistoryUnavailableSnapshotIfCurrent(
+            reason: .musicAppUnavailable,
+            requestQueueGeneration: 41,
+            requestTrackGeneration: 6
+        ))
+
+        XCTAssertEqual(c.queueSyncGeneration, 42)
+        XCTAssertFalse(c.queueFetchPending)
+        XCTAssertFalse(c.queueFetchPendingForceRecent)
+        XCTAssertNil(c.queueFetchPendingQueueGeneration)
+        XCTAssertNil(c.queueFetchPendingTrackGeneration)
+        XCTAssertNil(c.currentPersistentID)
+        XCTAssertFalse(c.currentTrackIsURLTrack)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .musicAppUnavailable))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .musicAppUnavailable))
+        XCTAssertFalse(MusicController.shouldApplyRecentHistorySnapshot(
+            requestQueueGeneration: 41,
+            currentQueueGeneration: c.queueSyncGeneration,
+            requestTrackGeneration: 6,
+            currentTrackGeneration: 6
+        ))
+    }
+
+    func testRecentHistoryUnavailableGuardIgnoresStaleRequests() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 51
+        c.artworkFetchGeneration = 7
+        c.currentPersistentID = "old-track"
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-stale-recent-history-loss")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-stale-recent-history-loss")
+
+        XCTAssertFalse(c.applyRecentHistoryUnavailableSnapshotIfCurrent(
+            reason: .musicAppUnavailable,
+            requestQueueGeneration: 50,
+            requestTrackGeneration: 7
+        ))
+        XCTAssertFalse(c.applyRecentHistoryUnavailableSnapshotIfCurrent(
+            reason: .musicAppUnavailable,
+            requestQueueGeneration: 51,
+            requestTrackGeneration: 6
+        ))
+
+        XCTAssertEqual(c.queueSyncGeneration, 51)
+        XCTAssertEqual(c.currentPersistentID, "old-track")
+        XCTAssertEqual(c.upNextTracks.map { $0.persistentID }, ["next"])
+        XCTAssertEqual(c.recentTracks.map { $0.persistentID }, ["recent"])
+        XCTAssertEqual(c.upNextRawRowCount, 1)
+        XCTAssertEqual(c.recentRawRowCount, 1)
+        XCTAssertNotEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .exactPublicMusicQueue(context: "verified-before-stale-recent-history-loss"))
+        XCTAssertEqual(c.recentTracksProvenance, .exactPublicMusicQueue(context: "verified-before-stale-recent-history-loss"))
+    }
+
     func testQueueHashProbeUnavailableClearsStaleRowsAndResetsHashBaseline() {
         let c = MusicController(preview: true)
         c.isPreview = false
