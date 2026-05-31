@@ -39,7 +39,10 @@ struct NativeLyricsSurface: NSViewRepresentable {
     let onHeightMeasured: (Int, CGFloat) -> Void
     let lineMotionFrameCaptureActive: Bool
     let lineMotionFrameCaptureSequence: Int
-    let onLineMotionFrames: ([Int: CGRect], NativeLyricsPresentationSnapshot) -> Void
+    let lineMotionSamplingEnabled: Bool
+    let lineMotionFocusedSamplingUntil: Date
+    let lineMotionFirstRealDisplayIndex: Int
+    let onLineMotionFrames: ([Int: CGRect], NativeLyricsPresentationSnapshot, Date?, TimeInterval?) -> Void
 
     func makeNSView(context: Context) -> NativeLyricsSurfaceView {
         NativeLyricsSurfaceView()
@@ -79,6 +82,9 @@ struct NativeLyricsSurface: NSViewRepresentable {
                 onHeightMeasured: onHeightMeasured,
                 lineMotionFrameCaptureActive: lineMotionFrameCaptureActive,
                 lineMotionFrameCaptureSequence: lineMotionFrameCaptureSequence,
+                lineMotionSamplingEnabled: lineMotionSamplingEnabled,
+                lineMotionFocusedSamplingUntil: lineMotionFocusedSamplingUntil,
+                lineMotionFirstRealDisplayIndex: lineMotionFirstRealDisplayIndex,
                 onLineMotionFrames: onLineMotionFrames
             )
         )
@@ -121,7 +127,10 @@ struct LyricsLayerRendererConfiguration {
     let onHeightMeasured: (Int, CGFloat) -> Void
     let lineMotionFrameCaptureActive: Bool
     let lineMotionFrameCaptureSequence: Int
-    let onLineMotionFrames: ([Int: CGRect], NativeLyricsPresentationSnapshot) -> Void
+    let lineMotionSamplingEnabled: Bool
+    let lineMotionFocusedSamplingUntil: Date
+    let lineMotionFirstRealDisplayIndex: Int
+    let onLineMotionFrames: ([Int: CGRect], NativeLyricsPresentationSnapshot, Date?, TimeInterval?) -> Void
     var nativeManualScrollSnapshot: NativeLyricsManualScrollSnapshot? = nil
     var nativeDirectSnapIndex: Int? = nil
     var nativeDirectSnapReason: LyricsPresentationDirectSnapReason? = nil
@@ -172,6 +181,8 @@ final class NativeLyricsSurfaceView: NSView {
     private var manualScrollRecoveryTimer: Timer?
     private var nativeLineAdvanceTimer: Timer?
     private var nativeLineAdvanceTimerTargetPlaybackTime: TimeInterval?
+    private var nativeLineMotionSamplingTimer: Timer?
+    private var lastNativeLineMotionSampleAt: Date = .distantPast
     private var nativeSemanticCurrentIndex: Int?
     private var lastScrollWheelTime: CFTimeInterval = 0
     private var hoveredRowIndex: Int?
@@ -201,6 +212,7 @@ final class NativeLyricsSurfaceView: NSView {
         }
         self.configuration = configuration
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        updateNativeLineMotionSamplingTimer(configuration: runtimeConfiguration)
         consumeDirectSnapRequestIfNeeded(runtimeConfiguration)
         recordConfigureEventIfNeeded(configuration: runtimeConfiguration)
         presentationEngine.update(
@@ -391,6 +403,7 @@ final class NativeLyricsSurfaceView: NSView {
         cancelNativeLineAdvanceTimer()
         manualScrollState.reset()
         nativeSemanticCurrentIndex = nil
+        stopNativeLineMotionSamplingTimer()
         presentationEngine.stop()
         stopPresentationLoop()
         for view in rowViews.values {
@@ -485,7 +498,11 @@ final class NativeLyricsSurfaceView: NSView {
         reportLineMotionFrames(configuration: configuration)
     }
 
-    private func reportLineMotionFrames(configuration: LyricsLayerRendererConfiguration) {
+    private func reportLineMotionFrames(
+        configuration: LyricsLayerRendererConfiguration,
+        timestamp: Date? = nil,
+        playbackTime: TimeInterval? = nil
+    ) {
         var frames: [Int: CGRect] = [:]
         for row in visibleRows(for: configuration) {
             guard let view = rowViews[row.id] else { continue }
@@ -502,9 +519,69 @@ final class NativeLyricsSurfaceView: NSView {
         DispatchQueue.main.async {
             configuration.onLineMotionFrames(
                 frames,
-                presentationSnapshot
+                presentationSnapshot,
+                timestamp,
+                playbackTime
             )
         }
+    }
+
+    private func updateNativeLineMotionSamplingTimer(configuration: LyricsLayerRendererConfiguration) {
+        guard configuration.lineMotionSamplingEnabled else {
+            stopNativeLineMotionSamplingTimer()
+            return
+        }
+        guard nativeLineMotionSamplingTimer == nil else { return }
+        lastNativeLineMotionSampleAt = .distantPast
+        let timer = Timer(timeInterval: LyricMotionSamplingPolicy.focusedInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.sampleNativeLineMotionIfNeeded()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        nativeLineMotionSamplingTimer = timer
+    }
+
+    private func stopNativeLineMotionSamplingTimer() {
+        nativeLineMotionSamplingTimer?.invalidate()
+        nativeLineMotionSamplingTimer = nil
+        lastNativeLineMotionSampleAt = .distantPast
+    }
+
+    private func sampleNativeLineMotionIfNeeded() {
+        guard let baseConfiguration = configuration else {
+            stopNativeLineMotionSamplingTimer()
+            return
+        }
+        let runtimeConfiguration = runtimeConfiguration(from: baseConfiguration)
+        guard runtimeConfiguration.lineMotionSamplingEnabled else {
+            stopNativeLineMotionSamplingTimer()
+            return
+        }
+
+        let now = Date()
+        let playbackTime = runtimeConfiguration.musicController.lyricRenderTime(at: now)
+        let sortedRows = runtimeConfiguration.rows.sorted { $0.index < $1.index }
+        let lyrics = sortedRows.map(\.displayLine.line)
+        guard !lyrics.isEmpty else { return }
+        let firstRealIndex = min(
+            max(runtimeConfiguration.lineMotionFirstRealDisplayIndex, 0),
+            max(lyrics.count - 1, 0)
+        )
+        let sampleInterval = LyricMotionSamplingPolicy.sampleInterval(
+            focusedWindowActive: now <= runtimeConfiguration.lineMotionFocusedSamplingUntil,
+            playbackTime: playbackTime,
+            lyrics: lyrics,
+            firstRealIndex: firstRealIndex
+        )
+        guard now.timeIntervalSince(lastNativeLineMotionSampleAt) >= sampleInterval else { return }
+        lastNativeLineMotionSampleAt = now
+
+        reportLineMotionFrames(
+            configuration: runtimeConfiguration,
+            timestamp: now,
+            playbackTime: playbackTime
+        )
     }
 
     private func nativePresentationSnapshot(

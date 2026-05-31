@@ -38,8 +38,13 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("waveTimelineEnabled"))
         XCTAssertTrue(source.contains("rowTapHandlers[hoveredRowIndex]"))
         XCTAssertTrue(source.contains("if presentationEngine.isNaturalWaveActive"))
+        XCTAssertTrue(source.contains("updateNativeLineMotionSamplingTimer"))
+        XCTAssertTrue(source.contains("sampleNativeLineMotionIfNeeded"))
+        XCTAssertTrue(source.contains("reportLineMotionFrames(configuration: runtimeConfiguration"))
         XCTAssertFalse(source.contains("fallback: configuration.lineTargetIndices[row.index]"))
         XCTAssertFalse(source.contains("wordFillBucket"))
+        XCTAssertFalse(lyricsViewSource.contains("Timer.publish"))
+        XCTAssertTrue(lyricsViewSource.contains("lineMotionMonitoringEnabled && !lyricsLayerRendererActive"))
         XCTAssertFalse(lyricsViewSource.contains("scroll.lastVelocity = absVelocity"))
     }
 }

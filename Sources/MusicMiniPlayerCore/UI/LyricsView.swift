@@ -242,17 +242,62 @@ private struct LyricLineMotionFramePreferenceKey: PreferenceKey {
     }
 }
 
-private struct LyricLineMotionSamplingProbe: View {
+private struct LyricLineMotionSamplingProbe: NSViewRepresentable {
     let interval: TimeInterval
     let onTick: () -> Void
 
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
-            .onReceive(Timer.publish(every: interval, on: .main, in: .common).autoconnect()) { _ in
-                onTick()
+    final class Coordinator {
+        var interval: TimeInterval
+        var onTick: () -> Void
+        private var timer: Timer?
+
+        init(interval: TimeInterval, onTick: @escaping () -> Void) {
+            self.interval = interval
+            self.onTick = onTick
+        }
+
+        func start() {
+            guard timer == nil else { return }
+            let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+                self?.onTick()
             }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        }
+
+        func update(interval: TimeInterval, onTick: @escaping () -> Void) {
+            let shouldRestart = abs(self.interval - interval) > 0.001
+            self.interval = interval
+            self.onTick = onTick
+            if shouldRestart {
+                stop()
+                start()
+            }
+        }
+
+        func stop() {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(interval: interval, onTick: onTick)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.setFrameSize(.zero)
+        context.coordinator.start()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.update(interval: interval, onTick: onTick)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
     }
 }
 
@@ -574,7 +619,7 @@ public struct LyricsView: View {
 
     @ViewBuilder
     private var diagnosticLineMotionProbe: some View {
-        if lineMotionMonitoringEnabled {
+        if lineMotionMonitoringEnabled && !lyricsLayerRendererActive {
             LyricLineMotionSamplingProbe(interval: lyricLineMotionSampleInterval) {
                 requestLatestLyricLineMotionCapture()
             }
@@ -747,13 +792,18 @@ public struct LyricsView: View {
                         },
                         lineMotionFrameCaptureActive: lineMotionFrameCaptureActive,
                         lineMotionFrameCaptureSequence: nativeLineMotionFrameCaptureSequence,
-                        onLineMotionFrames: { frames, nativePresentationSnapshot in
+                        lineMotionSamplingEnabled: lineMotionMonitoringEnabled,
+                        lineMotionFocusedSamplingUntil: lineMotionSamplingUntil,
+                        lineMotionFirstRealDisplayIndex: firstRealDisplayIndex,
+                        onLineMotionFrames: { frames, nativePresentationSnapshot, nativeSampleTimestamp, nativeSamplePlaybackTime in
                             let capture = pendingLineMotionCapture
                             if capture != nil {
                                 pendingLineMotionCapture = nil
                             }
-                            let sampleTimestamp = capture?.requestedAt ?? Date()
-                            let samplePlaybackTime = capture?.playbackTime ?? musicController.lyricRenderTime(at: sampleTimestamp)
+                            let sampleTimestamp = capture?.requestedAt ?? nativeSampleTimestamp ?? Date()
+                            let samplePlaybackTime = capture?.playbackTime
+                                ?? nativeSamplePlaybackTime
+                                ?? musicController.lyricRenderTime(at: sampleTimestamp)
                             let nativeManualSnapshot = nativePresentationSnapshot.manualScrollSnapshot
                             let nativeDisplayIndex = nativeManualSnapshot?.frozenDisplayIndex ?? displayIndex
                             recordLyricLineMotion(

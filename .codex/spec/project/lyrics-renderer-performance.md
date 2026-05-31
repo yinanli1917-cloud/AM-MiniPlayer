@@ -138,6 +138,14 @@ Fixes that worked:
     sync. Seed the initial queue hash after a recent queue fetch so the first
     hash poll does not force a redundant queue refresh.
 
+14. Keep native renderer diagnostics inside the native surface. The native
+    line-motion sampler should be driven by `NativeLyricsSurfaceView` and report
+    rendered row geometry from native presentation state. Do not use a SwiftUI
+    `Timer.publish` overlay or `@State` sequence as the regular native sampling
+    path; that reintroduces SwiftUI display-list/SDF churn into the workload
+    being measured. The SwiftUI geometry sampler is only for the legacy SwiftUI
+    renderer path.
+
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:
@@ -166,7 +174,9 @@ such as bottom-clipped next lines or top-crowded active lines are detectable fro
 reports. Do not diagnose wave timing only from playback timestamps or source
 lyric timing. The geometry preference path may update cached frames, but must
 not write diagnostics on every layout pass; line-motion recording should happen
-only from the bounded sampling timer.
+only from the bounded sampling timer. In native renderer mode, that bounded
+timer belongs to `NativeLyricsSurfaceView`; SwiftUI should not tick merely to
+request native geometry samples.
 
 Prior-build comparisons must verify the diagnostic signal before comparing
 metrics. `origin/main` at `2e073592` emits nonzero row velocity but zero
