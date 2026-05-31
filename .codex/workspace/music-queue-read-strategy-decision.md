@@ -149,6 +149,13 @@ the visible Music.app queue different, nanoPod clears retained queue/history
 rows and marks both surfaces as `pendingPublicRefresh` until a fresh public
 snapshot is applied. This avoids showing stale rows from the previous context
 as if they were still exact.
+Music.app `playlistChanged` distributed notifications, including the legacy
+`com.apple.iTunes.playlistChanged` name still observed from Music.app, now
+invalidate retained queue/history rows immediately instead of waiting for a
+containing-playlist hash change. This is required because Play Next/Play Later
+can mutate the visible Up Next queue without changing the public
+`currentPlaylist` name, count, or current track ID. The notification is still
+only an invalidation signal; it is not a queue row source.
 When Music.app reports no readable current track, nanoPod now also advances the
 queue generation, clears any pending queue fetch, and marks both queue surfaces
 as `noCurrentTrack`. This blocks an older in-flight public snapshot from

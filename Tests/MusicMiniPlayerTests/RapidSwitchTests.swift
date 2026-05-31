@@ -1190,6 +1190,46 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
+    func testDistributedPlaylistChangeInvalidatesRowsWithoutPlaylistHashChange() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 3
+        c.recentRawRowCount = 2
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-external-edit")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-external-edit")
+        let previousGeneration = c.queueSyncGeneration
+
+        c.handleExternalQueueMutationNotification(
+            name: "com.apple.Music.playlistChanged",
+            scheduleRefresh: false
+        )
+
+        XCTAssertEqual(c.queueSyncGeneration, previousGeneration + 1)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+    }
+
+    func testDistributedNotificationNamesSeparateMetadataFromQueueMutation() {
+        XCTAssertTrue(MusicController.playerInfoNotificationNames.contains("com.apple.Music.playerInfo"))
+        XCTAssertTrue(MusicController.playerInfoNotificationNames.contains("com.apple.iTunes.playerInfo"))
+        XCTAssertTrue(MusicController.isDistributedQueueMutationNotification("com.apple.Music.playlistChanged"))
+        XCTAssertTrue(MusicController.isDistributedQueueMutationNotification("com.apple.iTunes.playlistChanged"))
+        XCTAssertFalse(MusicController.isDistributedQueueMutationNotification("com.apple.Music.playerInfo"))
+        XCTAssertFalse(MusicController.isDistributedQueueMutationNotification("com.apple.iTunes.playerInfo"))
+    }
+
     func testMusicControlUnavailableStillExitsPendingViaPublicRefreshAttempt() async throws {
         let c = MusicController(preview: true)
         c.isPreview = false

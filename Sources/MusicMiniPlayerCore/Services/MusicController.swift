@@ -611,12 +611,15 @@ public class MusicController: ObservableObject {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     private func setupNotifications() {
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(playerInfoChanged),
-            name: NSNotification.Name("com.apple.Music.playerInfo"),
-            object: nil
-        )
+        let dnc = DistributedNotificationCenter.default()
+        for name in Self.playerInfoNotificationNames {
+            dnc.addObserver(
+                self,
+                selector: #selector(playerInfoChanged),
+                name: NSNotification.Name(name),
+                object: nil
+            )
+        }
     }
 
     private func setupPreviewData() {
@@ -677,7 +680,7 @@ public class MusicController: ObservableObject {
             }
             RunLoop.main.add(self.queueCheckTimer!, forMode: .common)
 
-            self.setupMusicKitQueueObserver()
+            self.setupExternalQueueMutationObserver()
             self.setupWindowMovementObserver()
         }
     }
@@ -793,18 +796,50 @@ public class MusicController: ObservableObject {
         }
     }
 
-    private func setupMusicKitQueueObserver() {
+    static let playerInfoNotificationNames = [
+        "com.apple.Music.playerInfo",
+        "com.apple.iTunes.playerInfo"
+    ]
+
+    static let queueMutationNotificationNames = [
+        "com.apple.Music.playlistChanged",
+        "com.apple.iTunes.playlistChanged"
+    ]
+
+    static func isDistributedQueueMutationNotification(_ name: String) -> Bool {
+        queueMutationNotificationNames.contains(name)
+    }
+
+    private func setupExternalQueueMutationObserver() {
         guard !isPreview else { return }
         let dnc = DistributedNotificationCenter.default()
-        for name in ["com.apple.Music.playerInfo", "com.apple.Music.playlistChanged"] {
+        for name in Self.queueMutationNotificationNames {
             dnc.addObserver(self, selector: #selector(queueMayHaveChanged), name: .init(name), object: nil)
         }
     }
 
     @objc private func queueMayHaveChanged(_ notification: Notification) {
-        guard Date().timeIntervalSince(lastPollTime) >= 1.0 else { return }
+        handleExternalQueueMutationNotification(name: notification.name.rawValue)
+    }
+
+    func handleExternalQueueMutationNotification(
+        name: String,
+        scheduleRefresh: Bool = true
+    ) {
+        guard Self.isDistributedQueueMutationNotification(name) else { return }
+        guard !isPreview else { return }
+
+        markQueueMayHaveChanged()
+        let queueGeneration = queueSyncGeneration
+        guard scheduleRefresh else { return }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.checkQueueHashAndRefresh()
+            guard let self,
+                  Self.shouldRunMusicControlQueueRefresh(
+                    requestQueueGeneration: queueGeneration,
+                    currentQueueGeneration: self.queueSyncGeneration
+                  ) else { return }
+            self.fetchUpNextQueue()
         }
     }
 
