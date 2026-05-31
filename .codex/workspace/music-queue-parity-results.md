@@ -193,6 +193,14 @@ Music.app queue/history parity.
 The matrix validator now applies the same rigor to unavailable claims: a
 context cannot be called unavailable without completed visible Music.app notes
 and a public-probe failure or explicit visible/probe row mismatch.
+The current environment also has a setup blocker for collecting a fresh
+user-playlist playback row:
+`.codex/workspace/music-queue-probes/setup-blockers-20260531T104026Z/SETUP_BLOCKER.md`.
+Music.app showed an authorization alert when attempting to play the existing
+4-track user playlist `New Playlist 1`, then remained stopped with no readable
+current track. This is not user-playlist unavailability evidence and must not be
+added to `SUMMARY.md`; it means active playlist parity collection needs Music.app
+authorization on this Mac first.
 The current recorded matrix intentionally fails
 `validate_music_queue_parity_matrix.py --require-complete`: radio/station is
 now resolved unavailable, while album, user playlist, Apple Music playlist,
