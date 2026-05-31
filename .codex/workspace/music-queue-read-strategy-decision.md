@@ -153,6 +153,10 @@ When Music.app reports no readable current track, nanoPod now also advances the
 queue generation, clears any pending queue fetch, and marks both queue surfaces
 as `noCurrentTrack`. This blocks an older in-flight public snapshot from
 reappearing after playback has stopped or Music.app exposes no current item.
+That transition also clears the previous `currentPersistentID`, track class,
+playlist name, and URL-track marker so the next readable Music.app item is
+treated as a fresh first track and schedules queue/artwork refresh work even if
+it has the same persistent ID as the item that was visible before stopping.
 User controls that can advance or reorder playback now schedule a public queue
 refresh after the Music.app command returns, fails, or cannot reach Music.app.
 Those scheduled reads are guarded by the queue generation captured when the

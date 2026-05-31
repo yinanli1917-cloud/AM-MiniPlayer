@@ -380,6 +380,10 @@ public class MusicController: ObservableObject {
         if !isPreview {
             queueSyncGeneration &+= 1
         }
+        currentPersistentID = nil
+        currentTrackClass = ""
+        currentPlaylistName = ""
+        currentTrackIsURLTrack = false
         queueRefreshTimer?.invalidate()
         queueRefreshTimer = nil
         queueFetchPending = false

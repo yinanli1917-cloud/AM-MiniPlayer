@@ -1130,6 +1130,8 @@ final class RapidSwitchTests: XCTestCase {
         c.queueFetchPendingQueueGeneration = 7
         c.queueFetchPendingTrackGeneration = 3
         c.queueSyncGeneration = 7
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
         c.upNextTracks = [
             (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
         ]
@@ -1149,6 +1151,8 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertFalse(c.queueFetchPendingForceRecent)
         XCTAssertNil(c.queueFetchPendingQueueGeneration)
         XCTAssertNil(c.queueFetchPendingTrackGeneration)
+        XCTAssertNil(c.currentPersistentID)
+        XCTAssertFalse(c.currentTrackIsURLTrack)
         XCTAssertTrue(c.upNextTracks.isEmpty)
         XCTAssertTrue(c.recentTracks.isEmpty)
         XCTAssertEqual(c.upNextRawRowCount, 0)
