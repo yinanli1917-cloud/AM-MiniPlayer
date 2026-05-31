@@ -2151,7 +2151,7 @@ public final class DiagnosticsService: ObservableObject {
             atomically: true,
             encoding: .utf8
         )
-        try lyricLineMotionCSV(samples: reportLineMotionSamples.reversed()).write(
+        try Self.lyricLineMotionCSV(samples: reportLineMotionSamples.reversed()).write(
             to: reportDir.appendingPathComponent("lyrics_line_motion_samples.csv"),
             atomically: true,
             encoding: .utf8
@@ -3709,75 +3709,77 @@ public final class DiagnosticsService: ObservableObject {
         return rows.joined(separator: "\n")
     }
 
-    private func lyricLineMotionCSV<S: Sequence>(
+    nonisolated private static func lyricLineMotionCSV<S: Sequence>(
         samples: S,
         includeHeader: Bool = true
     ) -> String where S.Element == DiagnosticLyricLineMotionSample {
+        let dateFormatter = makeCSVDateFormatter()
         var rows = includeHeader ? [
             "timestamp,page,trackTitle,trackArtist,lineIndex,lineID,lineStartTime,lineEndTime,playbackTime,activeIndex,displayIndex,targetIndex,renderedMinY,renderedMidY,renderedHeight,targetMinY,targetMidY,targetErrorY,velocityY,observedInterLineDeltaY,expectedInterLineDeltaY,interLineDeltaErrorY,waveOffsetY,manualScrollOffsetY,isManualScrolling,isInitialMotionSuppressed,visibleTopY,visibleBottomY,lineTopClipY,lineBottomClipY,activeTopClipY,activeBottomClipY,controlsVisible"
         ] : []
         for sample in samples {
             rows.append([
-                Self.csvDateFormatter.string(from: sample.timestamp),
-                csv(sample.page),
-                csv(sample.trackTitle),
-                csv(sample.trackArtist),
+                dateFormatter.string(from: sample.timestamp),
+                csvEscaped(sample.page),
+                csvEscaped(sample.trackTitle),
+                csvEscaped(sample.trackArtist),
                 "\(sample.lineIndex)",
-                csv(sample.lineID),
-                csvNumber(sample.lineStartTime),
-                csvNumber(sample.lineEndTime),
-                csvNumber(sample.playbackTime),
+                csvEscaped(sample.lineID),
+                csvNumberFormatted(sample.lineStartTime),
+                csvNumberFormatted(sample.lineEndTime),
+                csvNumberFormatted(sample.playbackTime),
                 "\(sample.activeIndex)",
                 "\(sample.displayIndex)",
                 "\(sample.targetIndex)",
-                csvNumber(sample.renderedMinY),
-                csvNumber(sample.renderedMidY),
-                csvNumber(sample.renderedHeight),
-                csvNumber(sample.targetMinY),
-                csvNumber(sample.targetMidY),
-                csvNumber(sample.targetErrorY),
-                csvNumber(sample.velocityY),
-                csvNumber(sample.observedInterLineDeltaY),
-                csvNumber(sample.expectedInterLineDeltaY),
-                csvNumber(sample.interLineDeltaErrorY),
-                csvNumber(sample.waveOffsetY),
-                csvNumber(sample.manualScrollOffsetY),
+                csvNumberFormatted(sample.renderedMinY),
+                csvNumberFormatted(sample.renderedMidY),
+                csvNumberFormatted(sample.renderedHeight),
+                csvNumberFormatted(sample.targetMinY),
+                csvNumberFormatted(sample.targetMidY),
+                csvNumberFormatted(sample.targetErrorY),
+                csvNumberFormatted(sample.velocityY),
+                csvNumberFormatted(sample.observedInterLineDeltaY),
+                csvNumberFormatted(sample.expectedInterLineDeltaY),
+                csvNumberFormatted(sample.interLineDeltaErrorY),
+                csvNumberFormatted(sample.waveOffsetY),
+                csvNumberFormatted(sample.manualScrollOffsetY),
                 sample.isManualScrolling ? "1" : "0",
                 sample.isInitialMotionSuppressed ? "1" : "0",
-                csvNumber(sample.visibleTopY),
-                csvNumber(sample.visibleBottomY),
-                csvNumber(sample.lineTopClipY),
-                csvNumber(sample.lineBottomClipY),
-                csvNumber(sample.activeTopClipY),
-                csvNumber(sample.activeBottomClipY),
+                csvNumberFormatted(sample.visibleTopY),
+                csvNumberFormatted(sample.visibleBottomY),
+                csvNumberFormatted(sample.lineTopClipY),
+                csvNumberFormatted(sample.lineBottomClipY),
+                csvNumberFormatted(sample.activeTopClipY),
+                csvNumberFormatted(sample.activeBottomClipY),
                 sample.controlsVisible ? "1" : "0"
             ].joined(separator: ","))
         }
         return rows.joined(separator: "\n")
     }
 
-    private func lyricWaveTimelineCSV<S: Sequence>(
+    nonisolated private static func lyricWaveTimelineCSV<S: Sequence>(
         samples: S,
         includeHeader: Bool = true
     ) -> String where S.Element == DiagnosticLyricWaveTimelineSample {
+        let dateFormatter = makeCSVDateFormatter()
         var rows = includeHeader ? [
             "timestamp,page,trackTitle,trackArtist,waveID,phase,lineIndex,oldIndex,newIndex,displayIndex,scheduledDelay,actualDelay,lineInterval,targetRadius,scheduleCount,renderedCount,isActiveLine"
         ] : []
         for sample in samples {
             rows.append([
-                Self.csvDateFormatter.string(from: sample.timestamp),
-                csv(sample.page),
-                csv(sample.trackTitle),
-                csv(sample.trackArtist),
+                dateFormatter.string(from: sample.timestamp),
+                csvEscaped(sample.page),
+                csvEscaped(sample.trackTitle),
+                csvEscaped(sample.trackArtist),
                 "\(sample.waveID)",
-                csv(sample.phase),
+                csvEscaped(sample.phase),
                 "\(sample.lineIndex)",
                 "\(sample.oldIndex)",
                 "\(sample.newIndex)",
                 "\(sample.displayIndex)",
-                csvNumber(sample.scheduledDelay),
-                csvNumber(sample.actualDelay),
-                csvNumber(sample.lineInterval),
+                csvNumberFormatted(sample.scheduledDelay),
+                csvNumberFormatted(sample.actualDelay),
+                csvNumberFormatted(sample.lineInterval),
                 "\(sample.targetRadius)",
                 "\(sample.scheduleCount)",
                 "\(sample.renderedCount)",
@@ -3789,14 +3791,13 @@ public final class DiagnosticsService: ObservableObject {
 
     private func writeLiveLyricLineMotionSamples(_ samples: [DiagnosticLyricLineMotionSample]) {
         guard !samples.isEmpty else { return }
-        let header = lyricLineMotionCSV(samples: [])
-        let rows = lyricLineMotionCSV(samples: samples, includeHeader: false)
-        guard let data = (rows + "\n").data(using: .utf8) else { return }
-
         do {
             let url = try liveLyricLineMotionSamplesURL()
             liveMotionWriteQueue.async {
                 do {
+                    let header = Self.lyricLineMotionCSV(samples: [])
+                    let rows = Self.lyricLineMotionCSV(samples: samples, includeHeader: false)
+                    guard let data = (rows + "\n").data(using: .utf8) else { return }
                     let fileExists = FileManager.default.fileExists(atPath: url.path)
                     if !fileExists {
                         try (header + "\n").write(to: url, atomically: true, encoding: .utf8)
@@ -3818,14 +3819,13 @@ public final class DiagnosticsService: ObservableObject {
 
     private func writeLiveLyricWaveTimelineSamples(_ samples: [DiagnosticLyricWaveTimelineSample]) {
         guard !samples.isEmpty else { return }
-        let header = lyricWaveTimelineCSV(samples: [])
-        let rows = lyricWaveTimelineCSV(samples: samples, includeHeader: false)
-        guard let data = (rows + "\n").data(using: .utf8) else { return }
-
         do {
             let url = try liveLyricWaveTimelineSamplesURL()
             liveWaveTimelineWriteQueue.async {
                 do {
+                    let header = Self.lyricWaveTimelineCSV(samples: [])
+                    let rows = Self.lyricWaveTimelineCSV(samples: samples, includeHeader: false)
+                    guard let data = (rows + "\n").data(using: .utf8) else { return }
                     let fileExists = FileManager.default.fileExists(atPath: url.path)
                     if !fileExists {
                         try (header + "\n").write(to: url, atomically: true, encoding: .utf8)
@@ -3846,7 +3846,7 @@ public final class DiagnosticsService: ObservableObject {
     }
 
     private func repairLiveLyricLineMotionCSVIfNeeded() {
-        let header = lyricLineMotionCSV(samples: [])
+        let header = Self.lyricLineMotionCSV(samples: [])
         do {
             let url = try liveLyricLineMotionSamplesURL()
             liveMotionWriteQueue.async {
@@ -4159,6 +4159,21 @@ public final class DiagnosticsService: ObservableObject {
     private func csvNumber(_ value: Double?) -> String {
         guard let value else { return "" }
         return String(format: "%.4f", value)
+    }
+
+    nonisolated private static func csvEscaped(_ value: String) -> String {
+        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    nonisolated private static func csvNumberFormatted(_ value: Double?) -> String {
+        guard let value else { return "" }
+        return String(format: "%.4f", value)
+    }
+
+    nonisolated private static func makeCSVDateFormatter() -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
     }
 
     private func lyricsKey(for track: DiagnosticTrackContext) -> String {

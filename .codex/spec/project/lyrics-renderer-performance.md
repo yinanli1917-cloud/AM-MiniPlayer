@@ -155,6 +155,13 @@ Fixes that worked:
     on every native scroll burst caused AppKit `NSHostingView.layout` and
     SwiftUI display-list work to dominate the interaction sample again.
 
+16. Serialize live diagnostics off the main interaction path. Line-motion and
+    wave-timeline samples may be collected on the main actor so they can update
+    rolling diagnostics, but CSV row formatting and file appends belong on the
+    dedicated utility write queues. A live profiler sample should not show
+    `lyricLineMotionCSV` under `recordLyricsLineMotionSamples` on the main
+    thread during scroll/tap/jump verification.
+
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:
