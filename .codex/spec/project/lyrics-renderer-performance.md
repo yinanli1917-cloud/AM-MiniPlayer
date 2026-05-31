@@ -179,6 +179,10 @@ Likewise, a prior run with `activeTargetSettleTimeMax == 0` and nonzero
 `activeTargetSettleSkippedCount` has not proven instant settle; it has missing
 settle evidence. Do not fail a candidate solely because it reports a real
 nonzero settle duration against that incomplete zero.
+Wave timeline comparisons remain valid across old and native renderers when the
+CSV is isolated per run. Compare target radius, lead-in rows, cadence p95,
+order violations, and late-fire count even if line-motion presentation drift is
+not comparable.
 
 False manual-scroll state is a first-class lyrics stutter cause even when CPU is
 low. Scroll-wheel monitors must not let momentum-only events or events outside

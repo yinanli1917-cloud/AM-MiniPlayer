@@ -179,7 +179,9 @@ def run_role(
     kill_all_nanopod()
 
     line_motion_path = Path(copied["lineMotionCsv"]) if copied["lineMotionCsv"] else role_dir / "lyrics_line_motion_samples.csv"
+    wave_timeline_path = Path(copied["waveTimelineCsv"]) if copied["waveTimelineCsv"] else role_dir / "lyrics_wave_timeline.csv"
     motion_metrics = motion.compute_motion_metrics(motion.load_line_motion_csv(line_motion_path))
+    wave_metrics = motion.compute_wave_timeline_metrics(motion.load_wave_timeline_csv(wave_timeline_path))
 
     return {
         "role": role,
@@ -192,6 +194,7 @@ def run_role(
         "perfSummary": parse_perf_summary(result.stdout),
         "diagnostics": copied,
         "motion": motion.metrics_to_dict(motion_metrics),
+        "wave": motion.wave_metrics_to_dict(wave_metrics),
     }
 
 
@@ -228,6 +231,35 @@ def motion_reference_comparability(metrics: motion.MotionMetrics) -> dict[str, A
         "comparable": True,
         "reason": "presentation drift signal present",
     }
+
+
+def compare_wave_metrics(candidate: motion.WaveTimelineMetrics, reference: motion.WaveTimelineMetrics) -> list[str]:
+    failures: list[str] = []
+    if candidate.sample_count == 0:
+        failures.append("candidate emitted no wave timeline samples")
+        return failures
+    if candidate.scheduled_count > 0 and candidate.fired_count == 0:
+        failures.append("candidate wave timeline has scheduled rows but no fired rows")
+    if reference.sample_count == 0:
+        failures.append("reference emitted no wave timeline samples")
+        return failures
+    if reference.target_radius_max and candidate.target_radius_max != reference.target_radius_max:
+        failures.append(
+            f"candidate wave target radius {candidate.target_radius_max} != reference {reference.target_radius_max}"
+        )
+    if reference.lead_in_rows_max and candidate.lead_in_rows_max > reference.lead_in_rows_max:
+        failures.append(
+            f"candidate wave lead-in rows {candidate.lead_in_rows_max} > reference {reference.lead_in_rows_max}"
+        )
+    if candidate.order_violation_count > reference.order_violation_count:
+        failures.append("candidate wave order violations worse than reference")
+    if reference.cadence_p95 and candidate.cadence_p95 > reference.cadence_p95 + 0.005:
+        failures.append(
+            f"candidate wave cadence p95 {candidate.cadence_p95:.4f}s > reference {reference.cadence_p95:.4f}s"
+        )
+    if candidate.late_fire_count > reference.late_fire_count:
+        failures.append("candidate wave late-fire count worse than reference")
+    return failures
 
 
 def resolve_reference_app(path_text: str | None) -> Path:
@@ -316,6 +348,14 @@ def main() -> int:
         motion.load_line_motion_csv(Path(candidate["diagnostics"]["lineMotionCsv"]))
         if candidate["diagnostics"]["lineMotionCsv"] else []
     )
+    ref_wave = motion.compute_wave_timeline_metrics(
+        motion.load_wave_timeline_csv(Path(reference["diagnostics"]["waveTimelineCsv"]))
+        if reference["diagnostics"]["waveTimelineCsv"] else []
+    )
+    cand_wave = motion.compute_wave_timeline_metrics(
+        motion.load_wave_timeline_csv(Path(candidate["diagnostics"]["waveTimelineCsv"]))
+        if candidate["diagnostics"]["waveTimelineCsv"] else []
+    )
     reference_motion_signal = motion_reference_comparability(ref_motion)
     reference_motion_comparable = bool(reference_motion_signal["comparable"])
     motion_failures = (
@@ -323,6 +363,7 @@ def main() -> int:
         if reference_motion_comparable
         else []
     )
+    wave_failures = compare_wave_metrics(cand_wave, ref_wave)
 
     failures: list[str] = []
     if not reference["passed"]:
@@ -340,6 +381,7 @@ def main() -> int:
     if cand_motion.sample_count == 0:
         failures.append("candidate emitted no line-motion samples")
     failures.extend(motion_failures)
+    failures.extend(wave_failures)
 
     ref_cpu = cpu_avg(reference)
     cand_cpu = cpu_avg(candidate)
@@ -374,6 +416,7 @@ def main() -> int:
             "candidateCpuRatio": cpu_ratio,
             "referenceMotionSignal": reference_motion_signal,
             "motionFailures": motion_failures,
+            "waveFailures": wave_failures,
         },
         "failures": failures,
         "passed": not failures,

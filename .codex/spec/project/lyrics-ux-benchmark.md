@@ -144,14 +144,19 @@ Observed mandatory Winter fixture evidence:
 
 - v2.8 release reference: no line-motion CSV, so it is usable only for
   process-level CPU/crash evidence, not motion parity.
-- `origin/main` reference at `2e073592`: CPU avg `29.985`; candidate CPU avg
-  `13.158`; candidate ratio `0.439` (about `56.1%` lower) on the same
+- `origin/main` reference at `2e073592`: latest CPU avg `30.248`; candidate
+  CPU avg `12.991`; candidate ratio `0.429` (about `57.1%` lower) on the same
   scroll-tap-jump workload.
+- Artifact:
+  `tmp/benchmark/sequential-reference/sequential-20260531-064043-winter-origin-main-wave-reference-line-winter-trip/summary.json`
 - `origin/main` line-motion CSV reports zero target/inter-line error for every
   row even while velocity is nonzero. Treat that as target-layout diagnostics,
   not presentation-layer drift evidence. The sequential comparator must report
   this as an incomparable reference motion signal instead of calling candidate
   presentation drift a regression against impossible zero-error reference data.
+- Wave schedule parity passed: target radius `14`, lead-in `3`, cadence p95
+  `0.08s`, and order violations `0` for both prior-main and candidate; candidate
+  late fires improved from `18` to `0`.
 
 Observed owner line-level fixture evidence:
 
@@ -197,6 +202,9 @@ the run must not be used as direct presentation drift parity evidence.
 If the reference reports `activeTargetSettleTimeMax == 0` while also recording
 settle skips, do not treat that zero as a perfect settle baseline; it is
 incomplete settle evidence.
+The monitor also compares wave timeline CSVs because wave schedule data remains
+usable even when prior line-motion drift is target-layout-only. Candidate must
+not regress radius, lead-in, cadence p95, order violations, or late-fire count.
 
 ## Commands
 

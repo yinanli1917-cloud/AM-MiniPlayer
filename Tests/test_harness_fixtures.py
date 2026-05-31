@@ -142,6 +142,32 @@ class HarnessFixtureTests(unittest.TestCase):
 
         self.assertEqual(sequential_reference.motion.compare_metrics(candidate, baseline), [])
 
+    def test_sequential_reference_compares_wave_cadence_and_order(self) -> None:
+        baseline = sequential_reference.motion.WaveTimelineMetrics(
+            sample_count=20,
+            scheduled_count=10,
+            fired_count=10,
+            target_radius_max=14,
+            lead_in_rows_max=3,
+            cadence_p95=0.08,
+        )
+        candidate = sequential_reference.motion.WaveTimelineMetrics(
+            sample_count=20,
+            scheduled_count=10,
+            fired_count=10,
+            target_radius_max=14,
+            lead_in_rows_max=3,
+            cadence_p95=0.08,
+        )
+
+        self.assertEqual(sequential_reference.compare_wave_metrics(candidate, baseline), [])
+
+        candidate.order_violation_count = 1
+        self.assertIn(
+            "candidate wave order violations worse than reference",
+            sequential_reference.compare_wave_metrics(candidate, baseline),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
