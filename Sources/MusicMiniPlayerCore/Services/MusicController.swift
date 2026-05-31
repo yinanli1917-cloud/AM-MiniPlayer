@@ -351,6 +351,57 @@ public class MusicController: ObservableObject {
         requestTrackGeneration == currentTrackGeneration
     }
 
+    static func shouldInvalidateQueueForPlayerStateContextChange(
+        trackChanged: Bool,
+        previousTrackClass: String,
+        newTrackClass: String,
+        previousPlaylistName: String,
+        newPlaylistName: String,
+        previousIsURLTrack: Bool,
+        newIsURLTrack: Bool
+    ) -> Bool {
+        guard !trackChanged else { return false }
+
+        let previousClass = previousTrackClass.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newClass = newTrackClass.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousPlaylist = previousPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newPlaylist = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return previousIsURLTrack != newIsURLTrack
+            || previousClass != newClass
+            || previousPlaylist != newPlaylist
+    }
+
+    @discardableResult
+    func applyPlayerStateQueueContextChangeIfNeeded(
+        trackChanged: Bool,
+        previousTrackClass: String,
+        newTrackClass: String,
+        previousPlaylistName: String,
+        newPlaylistName: String,
+        previousIsURLTrack: Bool,
+        newIsURLTrack: Bool,
+        scheduleRefresh: Bool = true
+    ) -> Bool {
+        guard Self.shouldInvalidateQueueForPlayerStateContextChange(
+            trackChanged: trackChanged,
+            previousTrackClass: previousTrackClass,
+            newTrackClass: newTrackClass,
+            previousPlaylistName: previousPlaylistName,
+            newPlaylistName: newPlaylistName,
+            previousIsURLTrack: previousIsURLTrack,
+            newIsURLTrack: newIsURLTrack
+        ) else {
+            return false
+        }
+
+        markQueueMayHaveChanged()
+        if scheduleRefresh {
+            scheduleQueueRefreshAfterObservedTrackChange(generation: artworkFetchGeneration)
+        }
+        return true
+    }
+
     private func invalidatePublishedQueueRowsForPendingPublicRefresh() {
         guard !isPreview else { return }
 
@@ -1656,6 +1707,9 @@ public class MusicController: ObservableObject {
         if currentTrackTitle != s.trackName { currentTrackTitle = s.trackName }
         if currentArtist != s.trackArtist { currentArtist = s.trackArtist }
         if currentAlbum != s.trackAlbum { currentAlbum = s.trackAlbum }
+        let previousIsURLTrack = currentTrackIsURLTrack
+        let previousTrackClass = currentTrackClass
+        let previousPlaylistName = currentPlaylistName
         let snapshotIsURLTrack = s.trackClass == "URL track" || (s.trackClass.isEmpty && s.persistentID.isEmpty)
         if currentTrackIsURLTrack != snapshotIsURLTrack { currentTrackIsURLTrack = snapshotIsURLTrack }
         if currentTrackClass != s.trackClass { currentTrackClass = s.trackClass }
@@ -1663,6 +1717,16 @@ public class MusicController: ObservableObject {
         if duration != s.trackDuration { duration = s.trackDuration }
         if trackChanged {
             markQueueMayHaveChanged()
+        } else {
+            applyPlayerStateQueueContextChangeIfNeeded(
+                trackChanged: trackChanged,
+                previousTrackClass: previousTrackClass,
+                newTrackClass: s.trackClass,
+                previousPlaylistName: previousPlaylistName,
+                newPlaylistName: s.playlistName,
+                previousIsURLTrack: previousIsURLTrack,
+                newIsURLTrack: snapshotIsURLTrack
+            )
         }
         Task { @MainActor in
             DiagnosticsService.shared.enrichTrackContext(self.diagnosticsTrackContext())

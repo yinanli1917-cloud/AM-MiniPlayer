@@ -1122,6 +1122,65 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
     }
 
+    func testPlayerStateContextChangeInvalidatesRowsForSameTrackSourceChange() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 101
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 2
+        c.recentRawRowCount = 2
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-context-change")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-context-change")
+
+        XCTAssertTrue(c.applyPlayerStateQueueContextChangeIfNeeded(
+            trackChanged: false,
+            previousTrackClass: "shared track",
+            newTrackClass: "URL track",
+            previousPlaylistName: "Library Songs",
+            newPlaylistName: "Apple Music Radio",
+            previousIsURLTrack: false,
+            newIsURLTrack: true,
+            scheduleRefresh: false
+        ))
+
+        XCTAssertEqual(c.queueSyncGeneration, 102)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+    }
+
+    func testPlayerStateContextChangeIgnoresStableContextAndTrackChanges() {
+        XCTAssertFalse(MusicController.shouldInvalidateQueueForPlayerStateContextChange(
+            trackChanged: false,
+            previousTrackClass: " shared track ",
+            newTrackClass: "shared track",
+            previousPlaylistName: "Library Songs",
+            newPlaylistName: " Library Songs ",
+            previousIsURLTrack: false,
+            newIsURLTrack: false
+        ))
+
+        XCTAssertFalse(MusicController.shouldInvalidateQueueForPlayerStateContextChange(
+            trackChanged: true,
+            previousTrackClass: "shared track",
+            newTrackClass: "URL track",
+            previousPlaylistName: "Library Songs",
+            newPlaylistName: "Apple Music Radio",
+            previousIsURLTrack: false,
+            newIsURLTrack: true
+        ))
+    }
+
     func testNoCurrentTrackInvalidatesQueueGenerationAndPendingFetch() {
         let c = MusicController(preview: true)
         c.isPreview = false

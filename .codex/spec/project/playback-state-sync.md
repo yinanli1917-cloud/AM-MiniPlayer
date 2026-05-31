@@ -77,6 +77,10 @@
   radio/backstop fallback detection, must also schedule a generation-gated
   public queue refresh. If a newer track generation supersedes the scheduled
   read, the stale refresh must not run.
+- Full-state sync must also treat same-track Music.app source-context changes
+  as queue-affecting. If the track stays the same but public state reports a
+  different playlist name, track class, or URL-track status, clear retained
+  queue/history rows to pending public refresh and schedule a fresh public read.
 - Async Up Next and recent-history snapshots must both be gated by queue and
   track generation before applying. A stale Apple Music API history response or
   stale ScriptingBridge playlist-context scan must not replace a newer pending,

@@ -203,6 +203,10 @@ Observed track-change paths now also schedule the same delayed, generation-gated
 queue refresh. This includes notification handling, full-state sync, and
 radio/backstop fallback detection; if a newer track generation arrives before
 the timer fires, the stale refresh is skipped.
+If a full public player-state snapshot reports the same track but a different
+Music.app playback context, such as playlist name, track class, or URL-track
+status, nanoPod now treats that as a queue-affecting source change: retained
+queue/history rows are cleared to pending and a fresh public read is scheduled.
 Both Up Next and recent-history snapshot application are generation-gated, and
 queue invalidation resets the recent-history refresh timestamp so a stale
 in-flight history result cannot suppress the next fresh read for the new
