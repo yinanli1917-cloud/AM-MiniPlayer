@@ -467,19 +467,16 @@ extension MusicController {
         guard let app = queueApp, app.isRunning else {
             debugPrint("⚠️ [fetchUpNextViaBridge] queueApp not available\n")
             await MainActor.run {
-                guard Self.shouldApplyQueueSnapshot(
+                if self.applyWholeQueueUnavailableSnapshotIfCurrent(
+                    reason: .musicAppUnavailable,
                     requestQueueGeneration: requestQueueGeneration,
-                    currentQueueGeneration: self.queueSyncGeneration,
-                    requestTrackGeneration: requestTrackGeneration,
-                    currentTrackGeneration: self.artworkFetchGeneration
-                ) else {
-                    self.logger.info("Discarded stale Up Next unavailable snapshot for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
-                    return
-                }
-                if self.applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable)) {
+                    requestTrackGeneration: requestTrackGeneration
+                ) {
                     self.lastQueueFetchCompletedAt = Date()
                     self.lastQueueFetchCompletedGeneration = self.queueSyncGeneration
                     self.logger.info("Marked queue unavailable because Music.app is unavailable")
+                } else {
+                    self.logger.info("Discarded stale Up Next unavailable snapshot for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
                 }
             }
             return
@@ -497,6 +494,13 @@ extension MusicController {
                     return
                 }
                 defer { DispatchQueue.main.async { controller.value?.lastSBQueueHeartbeat = Date() } }
+                guard app.isRunning else {
+                    continuation.resume(returning: QueueFetchSnapshot(
+                        tracks: [],
+                        provenance: .unavailable(reason: .musicAppUnavailable)
+                    ))
+                    return
+                }
                 let limit = self.currentPage == .playlist ? 10 : 2
                 let result = self.getUpNextSnapshotFromApp(app, limit: limit)
                 continuation.resume(returning: result)

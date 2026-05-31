@@ -138,6 +138,20 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testUpNextWorkerRechecksMusicAppAvailabilityBeforeSnapshotScan() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/Services/MusicController+Playback.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertTrue(
+            text.contains("guard app.isRunning else {\n                    continuation.resume(returning: QueueFetchSnapshot("),
+            "Queued Up Next reads must recheck Music.app availability inside the ScriptingBridge worker before scanning playlist rows."
+        )
+    }
+
     func testProductionQueueSyncDoesNotUsePrivateMusicStorageOrAppLocalQueues() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1387,6 +1401,97 @@ final class RapidSwitchTests: XCTestCase {
             requestTrackGeneration: 5,
             currentTrackGeneration: 5
         ))
+    }
+
+    func testWholeQueueUnavailableGuardClearsRowsWhenUpNextRequestIsCurrent() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueFetchPending = true
+        c.queueFetchPendingForceRecent = true
+        c.queueFetchPendingQueueGeneration = 36
+        c.queueFetchPendingTrackGeneration = 8
+        c.queueSyncGeneration = 36
+        c.artworkFetchGeneration = 8
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-up-next-loss")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-up-next-loss")
+
+        XCTAssertTrue(c.applyWholeQueueUnavailableSnapshotIfCurrent(
+            reason: .musicAppUnavailable,
+            requestQueueGeneration: 36,
+            requestTrackGeneration: 8
+        ))
+
+        XCTAssertEqual(c.queueSyncGeneration, 37)
+        XCTAssertFalse(c.queueFetchPending)
+        XCTAssertFalse(c.queueFetchPendingForceRecent)
+        XCTAssertNil(c.queueFetchPendingQueueGeneration)
+        XCTAssertNil(c.queueFetchPendingTrackGeneration)
+        XCTAssertNil(c.currentPersistentID)
+        XCTAssertFalse(c.currentTrackIsURLTrack)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .musicAppUnavailable))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .musicAppUnavailable))
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 36,
+            currentQueueGeneration: c.queueSyncGeneration,
+            requestTrackGeneration: 8,
+            currentTrackGeneration: 8
+        ))
+    }
+
+    func testWholeQueueUnavailableGuardIgnoresStaleUpNextRequests() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 56
+        c.artworkFetchGeneration = 9
+        c.currentPersistentID = "old-track"
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-stale-up-next-loss")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-stale-up-next-loss")
+
+        XCTAssertFalse(c.applyWholeQueueUnavailableSnapshotIfCurrent(
+            reason: .musicAppUnavailable,
+            requestQueueGeneration: 55,
+            requestTrackGeneration: 9
+        ))
+        XCTAssertFalse(c.applyWholeQueueUnavailableSnapshotIfCurrent(
+            reason: .musicAppUnavailable,
+            requestQueueGeneration: 56,
+            requestTrackGeneration: 8
+        ))
+
+        XCTAssertEqual(c.queueSyncGeneration, 56)
+        XCTAssertEqual(c.currentPersistentID, "old-track")
+        XCTAssertEqual(c.upNextTracks.map { $0.persistentID }, ["next"])
+        XCTAssertEqual(c.recentTracks.map { $0.persistentID }, ["recent"])
+        XCTAssertEqual(c.upNextRawRowCount, 1)
+        XCTAssertEqual(c.recentRawRowCount, 1)
+        XCTAssertNotEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .exactPublicMusicQueue(context: "verified-before-stale-up-next-loss"))
+        XCTAssertEqual(c.recentTracksProvenance, .exactPublicMusicQueue(context: "verified-before-stale-up-next-loss"))
     }
 
     func testRecentHistoryUnavailableGuardClearsRowsWhenRequestIsCurrent() {

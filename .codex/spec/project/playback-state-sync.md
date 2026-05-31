@@ -105,6 +105,11 @@
   queue surfaces to Music.app-unavailable only when the captured queue and track
   generations still match; stale unavailable callbacks must not erase newer
   state.
+- Queued Up Next workers must also recheck Music.app availability immediately
+  before scanning playlist rows. If Music.app stopped after the read was
+  scheduled, return a Music.app-unavailable snapshot through the normal
+  generation-gated apply path instead of scanning a dead ScriptingBridge proxy
+  or collapsing the result into ambiguous public-source-unverified state.
 - Unavailable-state transitions must treat an in-flight queue fetch as unsettled
   even when rows are already empty and provenance already matches the same
   unavailable reason. Advance the queue generation so the older in-flight

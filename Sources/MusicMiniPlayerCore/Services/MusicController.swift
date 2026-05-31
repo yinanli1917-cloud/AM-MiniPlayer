@@ -565,12 +565,12 @@ public class MusicController: ObservableObject {
     }
 
     @discardableResult
-    func applyRecentHistoryUnavailableSnapshotIfCurrent(
+    func applyWholeQueueUnavailableSnapshotIfCurrent(
         reason: MusicQueueUnavailableReason,
         requestQueueGeneration: UInt64,
         requestTrackGeneration: Int
     ) -> Bool {
-        guard Self.shouldApplyRecentHistorySnapshot(
+        guard Self.shouldApplyQueueSnapshot(
             requestQueueGeneration: requestQueueGeneration,
             currentQueueGeneration: queueSyncGeneration,
             requestTrackGeneration: requestTrackGeneration,
@@ -580,6 +580,19 @@ public class MusicController: ObservableObject {
         }
 
         return applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: reason))
+    }
+
+    @discardableResult
+    func applyRecentHistoryUnavailableSnapshotIfCurrent(
+        reason: MusicQueueUnavailableReason,
+        requestQueueGeneration: UInt64,
+        requestTrackGeneration: Int
+    ) -> Bool {
+        applyWholeQueueUnavailableSnapshotIfCurrent(
+            reason: reason,
+            requestQueueGeneration: requestQueueGeneration,
+            requestTrackGeneration: requestTrackGeneration
+        )
     }
 
     @discardableResult

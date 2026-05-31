@@ -233,7 +233,11 @@ generations captured when the fetch was scheduled, including early unavailable
 results. The recent-history ScriptingBridge path now also rechecks Music.app
 availability at the point the queued worker starts; if Music.app stopped after
 the read was scheduled, the unavailable result clears both queue surfaces only
-when those captured generations still match current state.
+when those captured generations still match current state. The Up Next
+ScriptingBridge worker follows the same availability rule before scanning
+playlist rows, returning a Music.app-unavailable snapshot through the normal
+generation-gated apply path instead of treating a stopped Music.app proxy as an
+ambiguous public-source failure.
 Unavailable-state fast paths now include in-flight queue work in their
 settled-state checks. If Music.app is already displayed as no-current,
 Music.app-unavailable, or public-state-unavailable, but an older queue fetch is
