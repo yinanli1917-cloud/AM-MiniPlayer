@@ -40,6 +40,9 @@ For each context:
    complete and prove either that the public probe was unavailable for a
    visible queue state or that the public rows mismatched the visible queue by
    order and identity.
+   Resolved public-surface rows must also come from an active Music.app
+   playback context: `player_state` cannot be `stopped`, and the probe must
+   include a readable `current_track.name`.
    Resolved rows backed by a fixed-indexing probe must also show
    `fixed_indexing.restored=true`; otherwise the probe changed a public
    Music.app setting and cannot support an exact or unavailable claim.

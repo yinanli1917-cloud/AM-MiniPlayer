@@ -120,6 +120,10 @@ def is_distributed_notification_probe(text: str) -> bool:
     )
 
 
+def is_public_surface_probe(text: str) -> bool:
+    return "# Music.app Public Queue Surface Probe" in text
+
+
 def is_fixed_indexing_probe(text: str) -> bool:
     return (
         "fixed_indexing_variant_probe: true" in text
@@ -168,6 +172,35 @@ def notes_have_completed_visible_context(notes_text: str) -> bool:
     return visible_open in {"yes", "true"} and visible_rows_are_filled(notes_text)
 
 
+def validate_public_playback_context(row: SummaryRow, probe_text: str) -> list[str]:
+    if row.manual_outcome not in COMPLETE_OUTCOMES or not is_public_surface_probe(probe_text):
+        return []
+
+    prefix = f"SUMMARY.md:{row.line_number} [{row.context}]"
+    errors: list[str] = []
+    player_state = extract_probe_value(probe_text, "player_state")
+    current_track_name = extract_probe_value(probe_text, "current_track.name")
+    current_track_error = extract_probe_value(probe_text, "current_track.error")
+
+    if not player_state:
+        errors.append(f"{prefix}: resolved public-surface claim is missing player_state")
+    elif player_state.lower() == "stopped":
+        errors.append(
+            f"{prefix}: resolved public-surface claim must use an active Music.app "
+            "playback context, not player_state=stopped"
+        )
+
+    if current_track_error:
+        errors.append(
+            f"{prefix}: resolved public-surface claim has no readable current track "
+            f"({current_track_error})"
+        )
+    elif not current_track_name:
+        errors.append(f"{prefix}: resolved public-surface claim is missing current_track.name")
+
+    return errors
+
+
 def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -192,6 +225,7 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
             )
         if "excluded_queue_sources:" not in probe_text:
             errors.append(f"{prefix}: probe output is missing public-surface exclusion preflight")
+        errors.extend(validate_public_playback_context(row, probe_text))
 
     notes_text = ""
     if not notes_path.exists():

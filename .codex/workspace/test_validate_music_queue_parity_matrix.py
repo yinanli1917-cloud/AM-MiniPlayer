@@ -36,6 +36,8 @@ def write_session(
             [
                 "# Music.app Public Queue Surface Probe",
                 "excluded_queue_sources: private frameworks; private AppleEvents",
+                "player_state=playing",
+                "current_track.name=Song A",
                 f"classification.outcome={probe_classification}",
                 probe_extra,
             ]
@@ -77,6 +79,8 @@ def write_multi_context_session(root: Path, *, outcomes: dict[str, str]) -> Path
                 [
                     "# Music.app Public Queue Surface Probe",
                     "excluded_queue_sources: private frameworks; private AppleEvents",
+                    "player_state=playing",
+                    "current_track.name=Song A",
                     f"classification.outcome={probe_classification}",
                 ]
             ),
@@ -190,6 +194,26 @@ def main() -> int:
             ),
         )
         assert_fails(session, "unavailable claim must include completed visible Music.app queue notes")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="unavailable",
+            probe_classification="unavailable_no_current_playlist",
+            notes_text=completed_notes(rows_match="no"),
+            probe_extra="player_state=stopped",
+        )
+        assert_fails(session, "resolved public-surface claim must use an active Music.app playback context")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="unavailable",
+            probe_classification="unavailable_no_current_playlist",
+            notes_text=completed_notes(rows_match="no"),
+            probe_extra="current_track.error=Music got an error: Can’t get current track.",
+        )
+        assert_fails(session, "resolved public-surface claim has no readable current track")
 
     with tempfile.TemporaryDirectory() as tmp:
         session = write_multi_context_session(

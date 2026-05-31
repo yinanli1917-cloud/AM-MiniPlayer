@@ -219,6 +219,7 @@ manual_outcome: $manual_outcome
 - Required setup: ${setup:-Describe the current Music.app setup.}
 - Expected proof: ${expected:-Describe what visible queue parity would prove.}
 - Music.app visible Up Next/history UI open: TODO yes/no
+- Music.app playback state is active with a current track: TODO yes/no
 - Playback source visible in Music.app: TODO
 - Current visible track: TODO
 - Manual Play Next/Play Later edits present: TODO yes/no
@@ -245,6 +246,7 @@ TODO paste visible queue rows here
 Only mark this context exact when:
 
 - visible Music.app rows are recorded above;
+- Music.app is playing or paused on a readable current track;
 - public probe rows are recorded in the probe output;
 - public probe rows cover every visible queue/history row, not only a truncated
   neighbor window;
@@ -270,7 +272,8 @@ public, App Store-safe surfaces. It does not change Music.app playback.
 
 Do not mark any context exact unless the public probe covers every visible
 Music.app Up Next/history row and those rows match by order and identity. Probe
-output alone is not proof.
+output alone is not proof. Do not mark any context exact or unavailable from a
+stopped Music.app state or from a probe that cannot read the current track.
 
 ## Commands
 
