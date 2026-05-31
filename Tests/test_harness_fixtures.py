@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import lyrics_visual_harness as visual  # noqa: E402
+import luxb_sequential_reference as sequential_reference  # noqa: E402
 import perf_harness as perf  # noqa: E402
 
 
@@ -99,6 +100,34 @@ class HarnessFixtureTests(unittest.TestCase):
             },
             request,
         ))
+
+    def test_sequential_reference_extracts_cpu_average(self) -> None:
+        self.assertEqual(
+            sequential_reference.cpu_avg({
+                "perfSummary": {
+                    "measurement": {
+                        "cpuPercent": {
+                            "avg": 12.5,
+                        },
+                    },
+                },
+            }),
+            12.5,
+        )
+        self.assertIsNone(sequential_reference.cpu_avg({"perfSummary": {}}))
+
+    def test_sequential_reference_rejects_zero_error_motion_reference(self) -> None:
+        signal = sequential_reference.motion_reference_comparability(
+            sequential_reference.motion.MotionMetrics(
+                sample_count=10,
+                target_error_y_max=0,
+                inter_line_delta_error_y_max=0,
+                active_target_settle_time_max=0,
+            )
+        )
+
+        self.assertFalse(signal["comparable"])
+        self.assertIn("target-layout", signal["reason"])
 
 
 if __name__ == "__main__":

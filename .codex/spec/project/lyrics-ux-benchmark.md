@@ -134,6 +134,25 @@ candidate-only LUXB motion/text/frame gates above for UX parity:
 | `word-seek-fun` | 21.275 | 5.425 | 44.2 | 13.9 |
 | `translated-word` | 19.300 | 7.515 | 33.4 | 26.6 |
 
+Sequential reference checks should be preferred for prior-version comparisons.
+`scripts/luxb_sequential_reference.py` runs one app at a time, deletes the live
+diagnostics CSV before each run, copies the resulting CSV into the artifact
+folder, then kills the app before starting the next app. This makes same-bundle
+`origin/main` comparisons valid without cross-process CSV contamination.
+
+Observed mandatory Winter fixture evidence:
+
+- v2.8 release reference: no line-motion CSV, so it is usable only for
+  process-level CPU/crash evidence, not motion parity.
+- `origin/main` reference at `2e073592`: CPU avg `29.985`; candidate CPU avg
+  `13.158`; candidate ratio `0.439` (about `56.1%` lower) on the same
+  scroll-tap-jump workload.
+- `origin/main` line-motion CSV reports zero target/inter-line error for every
+  row even while velocity is nonzero. Treat that as target-layout diagnostics,
+  not presentation-layer drift evidence. The sequential comparator must report
+  this as an incomparable reference motion signal instead of calling candidate
+  presentation drift a regression against impossible zero-error reference data.
+
 ## Contract (always)
 
 - AMLL wave: 0.08s stagger, 3-row lead-in, radius 14, top-to-bottom order
@@ -148,6 +167,20 @@ python3 scripts/luxb_dual_monitor.py --fixture line-breakup-truth --duration 60 
 ```
 
 Clones v2.8 to `tmp/reference-app/nanoPod-v28-reference.app` with bundle id `com.yinanli.nanoPod.v28reference` so both processes can run. Fails if either app crashes or candidate motion metrics regress vs reference (when live CSV exists).
+
+## Sequential reference monitor
+
+```bash
+python3 scripts/luxb_sequential_reference.py \
+  --reference-app /Users/yinanli/Documents/MusicMiniPlayer-main-cpu-baseline/nanoPod.app \
+  --fixture line-winter-trip \
+  --duration 16 \
+  --warmup 8
+```
+
+Use this when comparing current candidate against `origin/main` or any other
+same-bundle prior build. If the reference emits target-layout-only motion data,
+the run must not be used as direct presentation drift parity evidence.
 
 ## Commands
 

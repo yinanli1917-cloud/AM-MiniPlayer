@@ -168,6 +168,14 @@ lyric timing. The geometry preference path may update cached frames, but must
 not write diagnostics on every layout pass; line-motion recording should happen
 only from the bounded sampling timer.
 
+Prior-build comparisons must verify the diagnostic signal before comparing
+metrics. `origin/main` at `2e073592` emits nonzero row velocity but zero
+target/inter-line error for every sampled Winter row, which means that build is
+recording target layout rather than presentation-layer drift. Do not compare the
+native renderer's presentation-layer drift values against that impossible
+zero-error baseline. Mark the prior motion reference as incomparable and use it
+for CPU/workload evidence plus wave schedule metadata only.
+
 False manual-scroll state is a first-class lyrics stutter cause even when CPU is
 low. Scroll-wheel monitors must not let momentum-only events or events outside
 the lyrics detector bounds start lyrics manual-scroll mode. Momentum may only
