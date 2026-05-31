@@ -167,6 +167,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var configuration: LyricsLayerRendererConfiguration?
     private let presentationEngine = LyricsPresentationEngine()
     private var rowViews: [String: NativeLyricsRowView] = [:]
+    private var rowIDByIndex: [Int: String] = [:]
     private var rowRenderKeys: [String: RowRenderKey] = [:]
     private var visualParitySignatures: [String: VisualParitySignature] = [:]
     private var rowTapHandlers: [Int: () -> Void] = [:]
@@ -189,6 +190,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastConfigureEventSignature: String?
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastReportedLineMotionCaptureSequence: Int = -1
+    private var lastConfiguredTextPhaseIndex: Int?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -245,11 +247,15 @@ final class NativeLyricsSurfaceView: NSView {
             measuredHeightsByIndex.removeValue(forKey: view.displayIndex)
             unmountedCount += 1
         }
+        rowIDByIndex = Dictionary(uniqueKeysWithValues: visibleRows.map { ($0.index, $0.id) })
         rowTapHandlers = rowTapHandlers.filter { rowIndex, _ in
             visibleRows.contains { $0.index == rowIndex }
         }
 
         let shouldSnap = runtimeConfiguration.playbackMode != .natural
+        let previousTextPhaseIndex = lastConfiguredTextPhaseIndex
+        let activeTextPhaseIndex = runtimeConfiguration.effectiveCurrentIndex
+        let textPhaseIndexChanged = previousTextPhaseIndex != activeTextPhaseIndex
         var mountedCount = 0
         withDisabledLayerActions {
             for row in visibleRows {
@@ -270,13 +276,20 @@ final class NativeLyricsSurfaceView: NSView {
                 }
                 view.onTap = tapHandler
                 rowTapHandlers[row.index] = tapHandler
-                updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
-                if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
+                let contentUpdated = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
+                let needsActivationRefresh = textPhaseIndexChanged
+                    && (row.index == activeTextPhaseIndex || row.index == previousTextPhaseIndex)
+                if needsActivationRefresh && !contentUpdated {
+                    view.configure(row: row, configuration: runtimeConfiguration)
+                } else if row.index == activeTextPhaseIndex,
+                          !contentUpdated,
+                          let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
                     renderTelemetry.recordTextPhase(textSample)
                 }
                 applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: shouldSnap)
             }
         }
+        lastConfiguredTextPhaseIndex = activeTextPhaseIndex
         renderTelemetry.recordLifecycle(
             mounted: mountedCount,
             unmounted: unmountedCount,
@@ -409,13 +422,16 @@ final class NativeLyricsSurfaceView: NSView {
         for view in rowViews.values {
             view.layer?.removeAllAnimations()
         }
+        rowIDByIndex.removeAll()
+        lastConfiguredTextPhaseIndex = nil
     }
 
+    @discardableResult
     private func updateContentIfNeeded(
         view: NativeLyricsRowView,
         row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration
-    ) {
+    ) -> Bool {
         let key = RowRenderKey(row: row, configuration: configuration)
         let needsContentUpdate = rowRenderKeys[row.id] != key
         if needsContentUpdate {
@@ -424,7 +440,7 @@ final class NativeLyricsSurfaceView: NSView {
             view.configure(row: row, configuration: configuration)
         }
 
-        guard needsContentUpdate || measuredHeightsByIndex[row.index] == nil else { return }
+        guard needsContentUpdate || measuredHeightsByIndex[row.index] == nil else { return false }
         let height = view.measuredHeight(width: configuration.rowWidth)
         let heightChanged = abs((measuredHeightsByIndex[row.index] ?? 0) - height) > 2
         renderTelemetry.recordHeightMeasurement(changed: heightChanged)
@@ -434,6 +450,7 @@ final class NativeLyricsSurfaceView: NSView {
                 configuration.onHeightMeasured(row.index, height)
             }
         }
+        return needsContentUpdate
     }
 
     private func applyFrame(
@@ -670,9 +687,11 @@ final class NativeLyricsSurfaceView: NSView {
         return configuration.anchorY - targetOffset + rowOffset
     }
 
-    private func applyFramesForCurrentConfiguration(snap: Bool, managesTransaction: Bool = true) {
-        guard let configuration else { return }
-        let runtimeConfiguration = runtimeConfiguration(from: configuration)
+    private func applyFrames(
+        runtimeConfiguration: LyricsLayerRendererConfiguration,
+        snap: Bool,
+        managesTransaction: Bool = true
+    ) {
         let applyFrames = {
             for view in self.rowViews.values {
                 guard let row = view.currentRow else { continue }
@@ -684,6 +703,15 @@ final class NativeLyricsSurfaceView: NSView {
         } else {
             applyFrames()
         }
+    }
+
+    private func applyFramesForCurrentConfiguration(snap: Bool, managesTransaction: Bool = true) {
+        guard let configuration else { return }
+        applyFrames(
+            runtimeConfiguration: runtimeConfiguration(from: configuration),
+            snap: snap,
+            managesTransaction: managesTransaction
+        )
     }
 
     private func startPresentationLoop() {
@@ -763,7 +791,7 @@ final class NativeLyricsSurfaceView: NSView {
         withDisabledLayerActions {
             updateTextPhasesForCurrentConfiguration(runtimeConfiguration: runtimeConfiguration)
             if semanticChanged || motionChanged || presentationEngine.hasActiveMotion {
-                applyFramesForCurrentConfiguration(snap: false, managesTransaction: false)
+                applyFrames(runtimeConfiguration: runtimeConfiguration, snap: false, managesTransaction: false)
             }
         }
         reportPendingLineMotionFramesIfNeeded(configuration: runtimeConfiguration)
@@ -1033,7 +1061,7 @@ final class NativeLyricsSurfaceView: NSView {
                 }
             )
         }
-        applyFramesForCurrentConfiguration(snap: true)
+        applyFrames(runtimeConfiguration: runtimeConfiguration, snap: true)
         if runtimeConfiguration.lineMotionFrameCaptureActive {
             reportLineMotionFrames(configuration: runtimeConfiguration)
         }
@@ -1346,23 +1374,35 @@ final class NativeLyricsSurfaceView: NSView {
     private func updateTextPhasesForCurrentConfiguration(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
-        for row in textPhaseRows(for: runtimeConfiguration) {
-            guard let view = rowViews[row.id] else { continue }
-            if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false) {
-                renderTelemetry.recordTextPhase(textSample)
-            }
+        guard let (_, view) = activeTextPhaseRow(for: runtimeConfiguration),
+              let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false) else {
+            return
         }
+        renderTelemetry.recordTextPhase(textSample)
     }
 
-    private func textPhaseRows(for configuration: LyricsLayerRendererConfiguration) -> [LayerBackedLyricRow] {
-        rowViews.values.compactMap(\.currentRow).filter { row in
-            row.index == configuration.effectiveCurrentIndex
+    private func activeTextPhaseRow(
+        for configuration: LyricsLayerRendererConfiguration
+    ) -> (LayerBackedLyricRow, NativeLyricsRowView)? {
+        let activeIndex = configuration.effectiveCurrentIndex
+        if let rowID = rowIDByIndex[activeIndex],
+           let view = rowViews[rowID],
+           let row = view.currentRow,
+           row.index == activeIndex {
+            return (row, view)
         }
+        guard let view = rowViews.values.first(where: { $0.currentRow?.index == activeIndex }),
+              let row = view.currentRow else {
+            return nil
+        }
+        rowIDByIndex[activeIndex] = row.id
+        return (row, view)
     }
 
     private func hasActiveTextAnimation(configuration: LyricsLayerRendererConfiguration) -> Bool {
         guard configuration.musicController.isPlaying else { return false }
-        guard let activeRow = configuration.rows.first(where: { $0.index == configuration.effectiveCurrentIndex }) else {
+        guard let activeRow = activeTextPhaseRow(for: configuration)?.0
+            ?? configuration.rows.first(where: { $0.index == configuration.effectiveCurrentIndex }) else {
             return false
         }
         return activeRow.displayLine.line.hasSyllableSync

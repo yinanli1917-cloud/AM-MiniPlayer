@@ -1321,11 +1321,11 @@ public struct LyricsView: View {
 
         diagnostics.recordLyricsLineMotionSamples(samples)
 
-        let visibleTranslationPartials = partials.filter {
-            shouldConsiderVisibleTranslationLine($0.line.text)
-        }
         if lyricsService.showTranslation,
            !lyricsService.isTranslating {
+            let visibleTranslationPartials = partials.filter {
+                shouldConsiderVisibleTranslationLine($0.line.text)
+            }
             let missingTranslatedSourcePartial = visibleTranslationPartials.first { partial in
                 guard !partial.line.hasTranslation,
                       partial.displayLine.segmentCount > 1,

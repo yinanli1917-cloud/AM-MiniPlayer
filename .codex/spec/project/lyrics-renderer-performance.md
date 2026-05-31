@@ -460,6 +460,21 @@ sweep is still the dominant bottleneck after row movement, manual-scroll
 ownership, and shell chrome transitions have left SwiftUI, add a second pass for
 a custom active text surface rather than simplifying the protected wave.
 
+The native display tick must reuse the runtime configuration it already
+computed for the frame. Do not call back through `runtimeConfiguration(from:)`
+inside frame application from `presentationTick`; that re-reads lyric time and
+semantic index on the active display path. Active text phase updates should use
+the native row index cache, not scan all mounted row views every tick. Configure
+time should refresh playback phase only for the active row and the row whose
+active state changed; inactive visible rows must not re-run text phase work on
+every SwiftUI representable update.
+
+Line-motion diagnostics must not add unrelated work to the renderer being
+measured. Translation-gap filtering only runs when translation is visible and
+not currently being filled; line-level or word-level fixtures with translation
+off must not scan visible lines for translation eligibility during every motion
+sample.
+
 This surface is still not accepted as complete until blur parity, text sweep
 parity, live scroll-tap-jump, FPS, drift, and CPU gates pass on the locked
 fixtures.
