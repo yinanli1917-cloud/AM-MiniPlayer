@@ -1168,6 +1168,37 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
+    func testRepeatedNoCurrentTrackTransitionDoesNotChurnQueueGenerationAfterSettled() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 50
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-stop")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-stop")
+
+        XCTAssertTrue(c.markQueueUnavailableForNoCurrentTrack())
+        XCTAssertEqual(c.queueSyncGeneration, 51)
+
+        XCTAssertFalse(c.markQueueUnavailableForNoCurrentTrack())
+
+        XCTAssertEqual(c.queueSyncGeneration, 51)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .noCurrentTrack))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .noCurrentTrack))
+    }
+
     func testNoCurrentTrackQueueSnapshotClearsRecentRowsEvenWhenRecentFetchIsThrottled() {
         let c = MusicController(preview: true)
         c.isPreview = false
@@ -1271,6 +1302,37 @@ final class RapidSwitchTests: XCTestCase {
             requestTrackGeneration: 5,
             currentTrackGeneration: 5
         ))
+    }
+
+    func testRepeatedMusicAppUnavailableSnapshotIsHandledWithoutGenerationChurn() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 61
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-unavailable")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-unavailable")
+
+        XCTAssertTrue(c.applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable)))
+        XCTAssertEqual(c.queueSyncGeneration, 62)
+
+        XCTAssertTrue(c.applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable)))
+
+        XCTAssertEqual(c.queueSyncGeneration, 62)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .musicAppUnavailable))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .musicAppUnavailable))
     }
 
     func testNonWholeQueueUnavailableSnapshotDoesNotClearRowsThroughWholeQueuePath() {

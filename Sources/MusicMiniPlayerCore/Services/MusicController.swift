@@ -376,7 +376,31 @@ public class MusicController: ObservableObject {
         }
     }
 
-    private func markQueueUnavailable(reason: MusicQueueUnavailableReason) {
+    @discardableResult
+    private func markQueueUnavailable(reason: MusicQueueUnavailableReason) -> Bool {
+        let unavailable: MusicQueueProvenance = .unavailable(reason: reason)
+        let alreadySettled = currentPersistentID == nil
+            && currentTrackClass.isEmpty
+            && currentPlaylistName.isEmpty
+            && !currentTrackIsURLTrack
+            && !queueFetchPending
+            && !queueFetchPendingForceRecent
+            && queueFetchPendingQueueGeneration == nil
+            && queueFetchPendingTrackGeneration == nil
+            && upNextTracks.isEmpty
+            && recentTracks.isEmpty
+            && upNextRawRowCount == 0
+            && recentRawRowCount == 0
+            && lastRecentHistoryFetchAt == .distantPast
+            && upNextProvenance == unavailable
+            && recentTracksProvenance == unavailable
+
+        if alreadySettled {
+            queueRefreshTimer?.invalidate()
+            queueRefreshTimer = nil
+            return false
+        }
+
         if !isPreview {
             queueSyncGeneration &+= 1
         }
@@ -395,15 +419,18 @@ public class MusicController: ObservableObject {
         recentTracks = []
         upNextRawRowCount = 0
         recentRawRowCount = 0
-        upNextProvenance = .unavailable(reason: reason)
-        recentTracksProvenance = .unavailable(reason: reason)
+        upNextProvenance = unavailable
+        recentTracksProvenance = unavailable
+        return true
     }
 
-    func markQueueUnavailableForNoCurrentTrack() {
+    @discardableResult
+    func markQueueUnavailableForNoCurrentTrack() -> Bool {
         markQueueUnavailable(reason: .noCurrentTrack)
     }
 
-    func markQueueUnavailableForMusicAppUnavailable() {
+    @discardableResult
+    func markQueueUnavailableForMusicAppUnavailable() -> Bool {
         markQueueUnavailable(reason: .musicAppUnavailable)
     }
 
