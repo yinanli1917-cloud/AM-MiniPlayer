@@ -1358,6 +1358,60 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .musicAppUnavailable))
     }
 
+    func testUnavailablePlayerStateFallbackFailureClearsStaleQueueSurfaces() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 81
+        c.currentTrackTitle = "Old Song"
+        c.currentArtist = "Old Artist"
+        c.currentPersistentID = "old-track"
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-state-unavailable")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-state-unavailable")
+
+        c.applyPlayerStateFallbackFailure(reason: "unavailable")
+
+        XCTAssertEqual(c.queueSyncGeneration, 82)
+        XCTAssertEqual(c.currentTrackTitle, "Failed to Connect")
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .musicAppUnavailable))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .musicAppUnavailable))
+    }
+
+    func testTimeoutPlayerStateFallbackFailureDoesNotClearQueueSurfaces() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 91
+        c.currentTrackTitle = "Old Song"
+        c.currentArtist = "Old Artist"
+        c.currentPersistentID = "old-track"
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.upNextRawRowCount = 1
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-timeout")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-timeout")
+
+        c.applyPlayerStateFallbackFailure(reason: "timeout")
+
+        XCTAssertEqual(c.queueSyncGeneration, 91)
+        XCTAssertEqual(c.currentTrackTitle, "Old Song")
+        XCTAssertEqual(c.upNextTracks.map { $0.persistentID }, ["next"])
+        XCTAssertEqual(c.upNextRawRowCount, 1)
+        XCTAssertEqual(c.upNextProvenance, .exactPublicMusicQueue(context: "verified-before-timeout"))
+        XCTAssertEqual(c.recentTracksProvenance, .exactPublicMusicQueue(context: "verified-before-timeout"))
+    }
+
     func testRepeatedMusicAppUnavailableSnapshotIsHandledWithoutGenerationChurn() {
         let c = MusicController(preview: true)
         c.isPreview = false

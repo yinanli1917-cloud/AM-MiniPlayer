@@ -1394,6 +1394,17 @@ public class MusicController: ObservableObject {
     private static let sbPlaying: Int  = 0x6B505350  // 'kPSP'
     private static let sbStopped: Int  = 0x6B505353  // 'kPSS'
 
+    static func shouldClearQueueAfterPlayerStateFallbackFailure(reason: String) -> Bool {
+        reason == "unavailable"
+    }
+
+    func applyPlayerStateFallbackFailure(reason: String) {
+        guard Self.shouldClearQueueAfterPlayerStateFallbackFailure(reason: reason) else {
+            return
+        }
+        applyMusicAppConnectionUnavailable()
+    }
+
     private func updatePlayerStateViaAppleScriptFallback(reason: String) {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
@@ -1424,7 +1435,10 @@ public class MusicController: ObservableObject {
                         metrics: ["fallbackMs": elapsed * 1000]
                     )
                 }
-                guard let snapshot else { return }
+                guard let snapshot else {
+                    self.applyPlayerStateFallbackFailure(reason: reason)
+                    return
+                }
                 self.processPlayerState(snapshot)
             }
         }

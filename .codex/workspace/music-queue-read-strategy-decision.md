@@ -178,6 +178,10 @@ the other surface until its own refresh runs.
 Music.app connection failures now enter that same unavailable state during
 connect/reconnect instead of only changing the visible track label, so a failed
 automation connection cannot leave previously exact queue rows retained.
+If the full-state ScriptingBridge proxy is unavailable and the public
+AppleScript fallback also fails, nanoPod applies the same cleanup. Timeout
+fallback failures remain conservative so transient slow IPC does not erase a
+queue unless Music.app is actually unavailable through the public state path.
 Whole-surface unavailable transitions are idempotent after the queue is already
 empty, pending fetch metadata is clear, and both surfaces carry the same
 unavailable reason. Repeated no-current or Music.app-unavailable polls therefore
