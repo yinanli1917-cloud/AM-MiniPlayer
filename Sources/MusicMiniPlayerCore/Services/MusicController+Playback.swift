@@ -735,6 +735,11 @@ extension MusicController {
                     self.logger.info("Discarded stale recent history fetch for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
                     return
                 }
+                if self.applyNoCurrentTrackQueueSnapshotIfNeeded(snapshot.provenance) {
+                    self.logger.info("Marked queue unavailable because Music.app exposed no current track during recent history read")
+                    return
+                }
+
                 let didChange = self.applyRecentSnapshotIfChanged(snapshot)
                 self.logger.info("✅ Fetched \(snapshot.tracks.count) recent tracks via ScriptingBridge")
                 if Self.shouldPreloadNearbyAssets(

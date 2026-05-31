@@ -168,6 +168,9 @@ If the public queue fetch itself discovers that Music.app exposes no current
 track, nanoPod now applies that same no-current transition instead of updating
 only Up Next. This keeps recent history from retaining old exact rows when the
 recent-history fetch is throttled or superseded.
+The recent-history read path uses the same no-current transition, so a history
+snapshot that discovers no current Music.app track cannot leave old Up Next rows
+visible while waiting for the separate Up Next fetch to finish.
 User controls that can advance or reorder playback now schedule a public queue
 refresh after the Music.app command returns, fails, or cannot reach Music.app.
 Those scheduled reads are guarded by the queue generation captured when the

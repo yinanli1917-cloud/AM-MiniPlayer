@@ -1198,6 +1198,35 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .noCurrentTrack))
     }
 
+    func testNoCurrentTrackRecentSnapshotClearsUpNextRowsEvenWhenUpNextFetchIsDelayed() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 21
+        c.currentPersistentID = "old-track"
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-recent-no-current-snapshot")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-recent-no-current-snapshot")
+
+        XCTAssertTrue(c.applyNoCurrentTrackQueueSnapshotIfNeeded(.unavailable(reason: .noCurrentTrack)))
+
+        XCTAssertEqual(c.queueSyncGeneration, 22)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .noCurrentTrack))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .noCurrentTrack))
+    }
+
     func testNonNoCurrentQueueSnapshotDoesNotClearRowsThroughNoCurrentPath() {
         let c = MusicController(preview: true)
         c.isPreview = false
