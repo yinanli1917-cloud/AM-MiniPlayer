@@ -1467,6 +1467,72 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
     }
 
+    func testQueueHashProbeMissingCurrentPlaylistClearsRowsWithoutClearingTrackIdentity() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        XCTAssertTrue(c.applyDetectedQueueHash("Music:10:current"))
+        c.queueFetchPending = true
+        c.queueFetchPendingForceRecent = true
+        c.queueFetchPendingQueueGeneration = c.queueSyncGeneration
+        c.queueFetchPendingTrackGeneration = 6
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-missing-playlist")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-missing-playlist")
+        let unavailableGeneration = c.queueSyncGeneration
+
+        XCTAssertTrue(c.applyQueueHashProbePublicStateUnavailable(reason: .noCurrentPlaylistForTrackClass("URL track")))
+
+        XCTAssertEqual(c.queueSyncGeneration, unavailableGeneration + 1)
+        XCTAssertFalse(c.queueFetchPending)
+        XCTAssertFalse(c.queueFetchPendingForceRecent)
+        XCTAssertNil(c.queueFetchPendingQueueGeneration)
+        XCTAssertNil(c.queueFetchPendingTrackGeneration)
+        XCTAssertEqual(c.currentPersistentID, "old-track")
+        XCTAssertTrue(c.currentTrackIsURLTrack)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")))
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: unavailableGeneration,
+            currentQueueGeneration: c.queueSyncGeneration,
+            requestTrackGeneration: 6,
+            currentTrackGeneration: 6
+        ))
+
+        XCTAssertTrue(c.applyDetectedQueueHash("Music:10:current"))
+        XCTAssertEqual(c.queueSyncGeneration, unavailableGeneration + 2)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+    }
+
+    func testRepeatedQueueHashProbePublicStateUnavailableDoesNotChurnAfterSettled() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+
+        XCTAssertTrue(c.applyQueueHashProbePublicStateUnavailable(reason: .publicSourceUnverified))
+        let unavailableGeneration = c.queueSyncGeneration
+
+        XCTAssertFalse(c.applyQueueHashProbePublicStateUnavailable(reason: .publicSourceUnverified))
+
+        XCTAssertEqual(c.queueSyncGeneration, unavailableGeneration)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .publicSourceUnverified))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .publicSourceUnverified))
+    }
+
     func testMusicAppConnectionUnavailableClearsStaleQueueSurfaces() {
         let c = MusicController(preview: true)
         c.isPreview = false

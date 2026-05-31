@@ -182,6 +182,12 @@ The periodic queue-hash probe follows the same rule when its public Music.app
 queue proxy is unavailable or not running. It clears retained queue/history rows
 and resets the queue-hash baseline so a later recovered hash cannot be mistaken
 for an already-observed queue.
+The hash probe also separates public-state loss from transient IPC failure. If
+Music.app responds but exposes no current track, no public current playlist, or
+no public playlist-track array, nanoPod clears retained queue/history rows to
+the matching unavailable provenance and resets the hash baseline. If the probe
+times out or is otherwise unresolved, it preserves state for that tick because a
+slow Apple Event is not proof that Music.app's queue state changed.
 The Music.app launch path now follows the pending-refresh side of the same
 rule. If `connect()` can create public Music.app automation proxies but finds
 Music.app not running, nanoPod clears retained queue/history rows immediately,

@@ -12,6 +12,12 @@ import MusicKit
 import os
 import ObjCSupport
 
+private enum QueueHashProbeResult {
+    case hash(String)
+    case publicStateUnavailable(MusicQueueUnavailableReason)
+    case unresolved
+}
+
 // MARK: - 窗口移动通知（SnappablePanel ↔ MusicController）
 public extension Notification.Name {
     static let windowMovementBegan = Notification.Name("windowMovementBegan")
@@ -562,6 +568,55 @@ public class MusicController: ObservableObject {
         applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable))
     }
 
+    @discardableResult
+    func applyQueueHashProbePublicStateUnavailable(reason: MusicQueueUnavailableReason) -> Bool {
+        switch reason {
+        case .noCurrentTrack:
+            return markQueueUnavailableForNoCurrentTrack()
+        case .musicAppUnavailable:
+            return markQueueUnavailableForMusicAppUnavailable()
+        default:
+            let unavailable: MusicQueueProvenance = .unavailable(reason: reason)
+            let alreadySettled = !queueFetchPending
+                && !queueFetchPendingForceRecent
+                && queueFetchPendingQueueGeneration == nil
+                && queueFetchPendingTrackGeneration == nil
+                && upNextTracks.isEmpty
+                && recentTracks.isEmpty
+                && upNextRawRowCount == 0
+                && recentRawRowCount == 0
+                && lastRecentHistoryFetchAt == .distantPast
+                && lastQueueHash.isEmpty
+                && upNextProvenance == unavailable
+                && recentTracksProvenance == unavailable
+
+            if alreadySettled {
+                queueRefreshTimer?.invalidate()
+                queueRefreshTimer = nil
+                return false
+            }
+
+            if !isPreview {
+                queueSyncGeneration &+= 1
+            }
+            queueRefreshTimer?.invalidate()
+            queueRefreshTimer = nil
+            queueFetchPending = false
+            queueFetchPendingForceRecent = false
+            queueFetchPendingQueueGeneration = nil
+            queueFetchPendingTrackGeneration = nil
+            lastRecentHistoryFetchAt = .distantPast
+            lastQueueHash = ""
+            upNextTracks = []
+            recentTracks = []
+            upNextRawRowCount = 0
+            recentRawRowCount = 0
+            upNextProvenance = unavailable
+            recentTracksProvenance = unavailable
+            return true
+        }
+    }
+
     @inline(__always)
     func syncPlaybackClock(to time: TimeInterval, playing: Bool? = nil, at date: Date = Date()) {
         let clamped = duration > 0 ? min(max(0, time), duration) : max(0, time)
@@ -921,14 +976,45 @@ public class MusicController: ObservableObject {
                 return
             }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
-            guard let hash = self.getQueueHashFromApp(app) else { return }
+            let result = self.getQueueHashProbeResultFromApp(app)
 
             DispatchQueue.main.async {
-                if self.applyDetectedQueueHash(hash) {
-                    self.fetchUpNextQueue()
+                switch result {
+                case .hash(let hash):
+                    if self.applyDetectedQueueHash(hash) {
+                        self.fetchUpNextQueue()
+                    }
+                case .publicStateUnavailable(let reason):
+                    if self.applyQueueHashProbePublicStateUnavailable(reason: reason) {
+                        self.logger.info("Marked queue unavailable because queue hash probe found public state unavailable")
+                    }
+                case .unresolved:
+                    break
                 }
             }
         }
+    }
+
+    private func getQueueHashProbeResultFromApp(_ app: SBApplication) -> QueueHashProbeResult {
+        // 🔑 Hard 1.5s timeout — SB queue hash reads can hang alongside playlist
+        // transitions. Timeout → unresolved → caller preserves state for this tick.
+        return SBTimeoutRunner.run(timeout: 1.5, lane: "queueSnapshot") { () -> QueueHashProbeResult? in
+            guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject else {
+                return .publicStateUnavailable(.noCurrentTrack)
+            }
+            let currentID = currentTrack.value(forKey: "persistentID") as? String ?? ""
+            let trackClass = Self.musicTrackClassName(from: currentTrack)
+
+            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject else {
+                let normalizedClass = trackClass.trimmingCharacters(in: .whitespacesAndNewlines)
+                return .publicStateUnavailable(.noCurrentPlaylistForTrackClass(normalizedClass.isEmpty ? "unknown" : normalizedClass))
+            }
+            guard let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+                return .publicStateUnavailable(.publicSourceUnverified)
+            }
+            let playlistName = playlist.value(forKey: "name") as? String ?? ""
+            return .hash("\(playlistName):\(tracks.count):\(currentID)")
+        } ?? .unresolved
     }
 
     @discardableResult
@@ -948,21 +1034,6 @@ public class MusicController: ObservableObject {
 
     static func shouldInvalidateForDetectedQueueHash(previousHash: String, newHash: String) -> Bool {
         newHash != previousHash
-    }
-
-    private func getQueueHashFromApp(_ app: SBApplication) -> String? {
-        // 🔑 Hard 1.5s timeout — SB queue hash reads can hang alongside playlist
-        // transitions. Timeout → nil → caller silently skips this hash check tick.
-        return SBTimeoutRunner.run(timeout: 1.5, lane: "queueSnapshot") { () -> String? in
-            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-                  let playlistName = playlist.value(forKey: "name") as? String,
-                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-                  let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
-                  let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-                return nil
-            }
-            return "\(playlistName):\(tracks.count):\(currentID)"
-        }
     }
 
     static let playerInfoNotificationNames = [
