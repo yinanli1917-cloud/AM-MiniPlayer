@@ -1032,6 +1032,9 @@ public class MusicController: ObservableObject {
         // 🔑 Hard 1.5s timeout — SB queue hash reads can hang alongside playlist
         // transitions. Timeout → unresolved → caller preserves state for this tick.
         return SBTimeoutRunner.run(timeout: 1.5, lane: "queueSnapshot") { () -> QueueHashProbeResult? in
+            guard app.isRunning else {
+                return .publicStateUnavailable(.musicAppUnavailable)
+            }
             guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject else {
                 return .publicStateUnavailable(.noCurrentTrack)
             }

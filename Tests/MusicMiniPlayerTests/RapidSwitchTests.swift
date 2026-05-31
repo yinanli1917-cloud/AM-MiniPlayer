@@ -152,6 +152,20 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testQueueHashProbeRechecksMusicAppAvailabilityInsideTimeoutRead() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/Services/MusicController.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertTrue(
+            text.contains("guard app.isRunning else {\n                return .publicStateUnavailable(.musicAppUnavailable)\n            }\n            guard let currentTrack"),
+            "Queue hash probes must recheck Music.app availability inside the timed public-state read before sending Apple Events."
+        )
+    }
+
     func testProductionQueueSyncDoesNotUsePrivateMusicStorageOrAppLocalQueues() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

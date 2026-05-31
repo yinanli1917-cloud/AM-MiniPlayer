@@ -68,6 +68,10 @@
   proxy, clear retained queue/history rows to Music.app-unavailable and reset
   the queue-hash baseline. A hash from a recovered Music.app session must be
   treated as fresh evidence, not compared against stale pre-unavailable state.
+- The queue-hash probe must recheck Music.app availability inside the timed
+  public-state read immediately before sending Apple Events. If Music.app stops
+  after the worker is queued, classify the probe as Music.app-unavailable
+  rather than preserving stale rows as an unresolved timeout.
 - If the periodic queue-hash probe reaches Music.app but public state cannot
   expose the current track, current playlist, or playlist tracks, do not collapse
   that into the same bucket as an IPC timeout. Clear retained queue/history rows
