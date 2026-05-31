@@ -208,6 +208,20 @@ def collect_native_text_parity(
             "maxAppliedEmphasisGlowOpacity": 0.0,
             "maxAppliedEmphasisAlpha": 0.0,
             "textLayoutCoverageGapCount": 0.0,
+            "maxExpectedSweepLineCount": 0.0,
+            "maxAppliedSweepLineCount": 0.0,
+            "textSweepLineCoverageGapCount": 0.0,
+            "sweepWavefrontErrorMax": 0.0,
+            "emphasisGlyphPositionSampleCount": 0.0,
+            "emphasisGlyphPositionErrorMax": 0.0,
+            "emphasisGlyphScaleErrorMax": 0.0,
+            "emphasisGlyphAlphaErrorMax": 0.0,
+            "emphasisGlyphGlowErrorMax": 0.0,
+            "lineLayoutSampleCount": 0.0,
+            "lineLayoutHeightErrorMax": 0.0,
+            "lineLayoutWidthErrorMax": 0.0,
+            "mainTextFrameHeightErrorMax": 0.0,
+            "translationTextFrameHeightErrorMax": 0.0,
             "visualParitySampleCount": 0.0,
             "visualOpacityErrorMax": 0.0,
             "visualScaleErrorMax": 0.0,
@@ -223,6 +237,11 @@ def collect_native_text_parity(
             "hoverEnterCount": 0.0,
             "hoverExitCount": 0.0,
             "hoverBackgroundVisibleCount": 0.0,
+            "manualScrollCumulativeAbsDeltaY": 0.0,
+            "manualScrollMaxVelocityY": 0.0,
+            "manualScrollMaxOffsetY": 0.0,
+            "tapToLineTargetDistanceMax": 0.0,
+            "tapToLineDuringManualScrollCount": 0.0,
             "mainPhaseErrorMax": 0.0,
             "translationPhaseErrorMax": 0.0,
         }
@@ -270,6 +289,27 @@ def collect_native_text_parity(
             failures.append(f"per-glyph emphasis gap count {max_metrics['perGlyphEmphasisGapCount']:.0f}")
         if max_metrics["textLayoutCoverageGapCount"] > 0:
             failures.append(f"text layout coverage gap count {max_metrics['textLayoutCoverageGapCount']:.0f}")
+        if max_metrics["textSweepLineCoverageGapCount"] > 0:
+            failures.append(
+                f"text sweep line coverage gap count {max_metrics['textSweepLineCoverageGapCount']:.0f}"
+            )
+        if max_metrics["sweepWavefrontErrorMax"] > 0.5:
+            failures.append(f"sweep wavefront error max {max_metrics['sweepWavefrontErrorMax']:.3f} > 0.500")
+        if max_metrics["lineLayoutSampleCount"] <= 0:
+            failures.append("no native line layout parity samples")
+        if max_metrics["lineLayoutHeightErrorMax"] > 1.0:
+            failures.append(f"line layout height error max {max_metrics['lineLayoutHeightErrorMax']:.3f} > 1.000")
+        if max_metrics["lineLayoutWidthErrorMax"] > 1.0:
+            failures.append(f"line layout width error max {max_metrics['lineLayoutWidthErrorMax']:.3f} > 1.000")
+        if max_metrics["mainTextFrameHeightErrorMax"] > 1.0:
+            failures.append(
+                f"main text frame height error max {max_metrics['mainTextFrameHeightErrorMax']:.3f} > 1.000"
+            )
+        if max_metrics["translationTextFrameHeightErrorMax"] > 1.0:
+            failures.append(
+                "translation text frame height error max "
+                f"{max_metrics['translationTextFrameHeightErrorMax']:.3f} > 1.000"
+            )
         if max_metrics["mainPhaseErrorMax"] > 0.02:
             failures.append(f"main sweep phase error max {max_metrics['mainPhaseErrorMax']:.3f} > 0.020")
         if max_metrics["translationPhaseErrorMax"] > 0.02:
@@ -279,6 +319,25 @@ def collect_native_text_parity(
         if max_metrics["maxExpectedEmphasisGlyphCount"] > 0:
             if max_metrics["maxAppliedEmphasisGlyphMotionCount"] <= 0:
                 failures.append("native emphasis glyph layers exist but no per-glyph motion was measured")
+            if max_metrics["emphasisGlyphPositionSampleCount"] <= 0:
+                failures.append("native emphasis glyphs exist but no per-character geometry was measured")
+            if max_metrics["emphasisGlyphPositionErrorMax"] > 0.5:
+                failures.append(
+                    "emphasis glyph position error max "
+                    f"{max_metrics['emphasisGlyphPositionErrorMax']:.3f} > 0.500"
+                )
+            if max_metrics["emphasisGlyphScaleErrorMax"] > 0.002:
+                failures.append(
+                    f"emphasis glyph scale error max {max_metrics['emphasisGlyphScaleErrorMax']:.4f} > 0.0020"
+                )
+            if max_metrics["emphasisGlyphAlphaErrorMax"] > 0.015:
+                failures.append(
+                    f"emphasis glyph alpha error max {max_metrics['emphasisGlyphAlphaErrorMax']:.3f} > 0.015"
+                )
+            if max_metrics["emphasisGlyphGlowErrorMax"] > 0.015:
+                failures.append(
+                    f"emphasis glyph glow error max {max_metrics['emphasisGlyphGlowErrorMax']:.3f} > 0.015"
+                )
             if max_metrics["maxAppliedEmphasisScale"] <= 1.001:
                 failures.append("native emphasis scale never exceeded static text")
             if max_metrics["maxAppliedEmphasisLiftMagnitude"] <= 0.001:
@@ -304,10 +363,18 @@ def collect_native_text_parity(
             failures.append("no native manual scroll start recorded")
         if max_metrics["manualScrollDeltaCount"] <= 0:
             failures.append("no native manual scroll delta recorded")
+        if max_metrics["manualScrollCumulativeAbsDeltaY"] <= 0:
+            failures.append("native manual scroll recorded no measurable delta")
+        if max_metrics["manualScrollMaxOffsetY"] <= 0:
+            failures.append("native manual scroll recorded no surface offset")
         if max_metrics["tapToLineCount"] <= 0:
             failures.append("no native tap-to-line recorded")
         if max_metrics["tapDirectSnapCount"] <= 0:
             failures.append("no native tap direct-snap recorded")
+        if max_metrics["tapToLineTargetDistanceMax"] <= 0:
+            failures.append("native tap-to-line did not target a different visible lyric row")
+        if max_metrics["tapToLineDuringManualScrollCount"] <= 0:
+            failures.append("native tap-to-line was not recorded during manual-scroll ownership")
         if max_metrics["hoverEnterCount"] <= 0:
             failures.append("no native lyric-row hover enter recorded")
         if max_metrics["hoverBackgroundVisibleCount"] <= 0:

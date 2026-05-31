@@ -97,6 +97,88 @@ struct NativeLyricsTextPhaseSample: Equatable {
     let maxAppliedEmphasisGlowOpacity: CGFloat
     let maxAppliedEmphasisAlpha: CGFloat
     let textLayoutCoverageGapCount: Int
+    let expectedSweepLineCount: Int
+    let appliedSweepLineCount: Int
+    let sweepLineCoverageGapCount: Int
+    let sweepWavefrontErrorMax: CGFloat
+    let emphasisGlyphPositionSampleCount: Int
+    let emphasisGlyphPositionErrorMax: CGFloat
+    let emphasisGlyphScaleErrorMax: CGFloat
+    let emphasisGlyphAlphaErrorMax: CGFloat
+    let emphasisGlyphGlowErrorMax: CGFloat
+    let lineLayoutSampleCount: Int
+    let lineLayoutHeightErrorMax: CGFloat
+    let lineLayoutWidthErrorMax: CGFloat
+    let mainTextFrameHeightErrorMax: CGFloat
+    let translationTextFrameHeightErrorMax: CGFloat
+
+    init(
+        hasSyllableSync: Bool,
+        wordRunCount: Int,
+        mainExpectedProgress: CGFloat,
+        mainAppliedProgress: CGFloat,
+        translationExpectedProgress: CGFloat?,
+        translationAppliedProgress: CGFloat?,
+        expectsPerRunSweep: Bool,
+        appliesPerRunSweep: Bool,
+        expectsPerGlyphEmphasis: Bool,
+        appliesPerGlyphEmphasis: Bool,
+        expectedEmphasisGlyphCount: Int,
+        appliedEmphasisGlyphCount: Int,
+        appliedEmphasisGlyphMotionCount: Int,
+        maxAppliedEmphasisScale: CGFloat,
+        maxAppliedEmphasisLiftMagnitude: CGFloat,
+        maxAppliedEmphasisGlowOpacity: CGFloat,
+        maxAppliedEmphasisAlpha: CGFloat,
+        textLayoutCoverageGapCount: Int,
+        expectedSweepLineCount: Int = 0,
+        appliedSweepLineCount: Int = 0,
+        sweepLineCoverageGapCount: Int = 0,
+        sweepWavefrontErrorMax: CGFloat = 0,
+        emphasisGlyphPositionSampleCount: Int = 0,
+        emphasisGlyphPositionErrorMax: CGFloat = 0,
+        emphasisGlyphScaleErrorMax: CGFloat = 0,
+        emphasisGlyphAlphaErrorMax: CGFloat = 0,
+        emphasisGlyphGlowErrorMax: CGFloat = 0,
+        lineLayoutSampleCount: Int = 0,
+        lineLayoutHeightErrorMax: CGFloat = 0,
+        lineLayoutWidthErrorMax: CGFloat = 0,
+        mainTextFrameHeightErrorMax: CGFloat = 0,
+        translationTextFrameHeightErrorMax: CGFloat = 0
+    ) {
+        self.hasSyllableSync = hasSyllableSync
+        self.wordRunCount = wordRunCount
+        self.mainExpectedProgress = mainExpectedProgress
+        self.mainAppliedProgress = mainAppliedProgress
+        self.translationExpectedProgress = translationExpectedProgress
+        self.translationAppliedProgress = translationAppliedProgress
+        self.expectsPerRunSweep = expectsPerRunSweep
+        self.appliesPerRunSweep = appliesPerRunSweep
+        self.expectsPerGlyphEmphasis = expectsPerGlyphEmphasis
+        self.appliesPerGlyphEmphasis = appliesPerGlyphEmphasis
+        self.expectedEmphasisGlyphCount = expectedEmphasisGlyphCount
+        self.appliedEmphasisGlyphCount = appliedEmphasisGlyphCount
+        self.appliedEmphasisGlyphMotionCount = appliedEmphasisGlyphMotionCount
+        self.maxAppliedEmphasisScale = maxAppliedEmphasisScale
+        self.maxAppliedEmphasisLiftMagnitude = maxAppliedEmphasisLiftMagnitude
+        self.maxAppliedEmphasisGlowOpacity = maxAppliedEmphasisGlowOpacity
+        self.maxAppliedEmphasisAlpha = maxAppliedEmphasisAlpha
+        self.textLayoutCoverageGapCount = textLayoutCoverageGapCount
+        self.expectedSweepLineCount = expectedSweepLineCount
+        self.appliedSweepLineCount = appliedSweepLineCount
+        self.sweepLineCoverageGapCount = sweepLineCoverageGapCount
+        self.sweepWavefrontErrorMax = sweepWavefrontErrorMax
+        self.emphasisGlyphPositionSampleCount = emphasisGlyphPositionSampleCount
+        self.emphasisGlyphPositionErrorMax = emphasisGlyphPositionErrorMax
+        self.emphasisGlyphScaleErrorMax = emphasisGlyphScaleErrorMax
+        self.emphasisGlyphAlphaErrorMax = emphasisGlyphAlphaErrorMax
+        self.emphasisGlyphGlowErrorMax = emphasisGlyphGlowErrorMax
+        self.lineLayoutSampleCount = lineLayoutSampleCount
+        self.lineLayoutHeightErrorMax = lineLayoutHeightErrorMax
+        self.lineLayoutWidthErrorMax = lineLayoutWidthErrorMax
+        self.mainTextFrameHeightErrorMax = mainTextFrameHeightErrorMax
+        self.translationTextFrameHeightErrorMax = translationTextFrameHeightErrorMax
+    }
 
     var mainPhaseError: CGFloat {
         abs(mainExpectedProgress - mainAppliedProgress)
@@ -111,6 +193,9 @@ struct NativeLyricsTextPhaseSample: Equatable {
         (expectsPerRunSweep && !appliesPerRunSweep)
             || (expectsPerGlyphEmphasis && !appliesPerGlyphEmphasis)
             || textLayoutCoverageGapCount > 0
+            || sweepLineCoverageGapCount > 0
+            || lineLayoutHeightErrorMax > 1
+            || lineLayoutWidthErrorMax > 1
     }
 }
 
@@ -150,6 +235,11 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var maxAppliedEmphasisGlowOpacity: CGFloat = 0
     private(set) var maxAppliedEmphasisAlpha: CGFloat = 0
     private(set) var textLayoutCoverageGapCount = 0
+    private(set) var maxExpectedSweepLineCount = 0
+    private(set) var maxAppliedSweepLineCount = 0
+    private(set) var textSweepLineCoverageGapCount = 0
+    private(set) var emphasisGlyphPositionSampleCount = 0
+    private(set) var lineLayoutSampleCount = 0
     private(set) var visualParitySampleCount = 0
     private(set) var manualScrollStartCount = 0
     private(set) var manualScrollDeltaCount = 0
@@ -161,8 +251,22 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var hoverEnterCount = 0
     private(set) var hoverExitCount = 0
     private(set) var hoverBackgroundVisibleCount = 0
+    private(set) var manualScrollCumulativeAbsDeltaY: CGFloat = 0
+    private(set) var manualScrollMaxVelocityY: CGFloat = 0
+    private(set) var manualScrollMaxOffsetY: CGFloat = 0
+    private(set) var tapToLineTargetDistanceMax = 0
+    private(set) var tapToLineDuringManualScrollCount = 0
     private var mainPhaseErrors: [CGFloat] = []
     private var translationPhaseErrors: [CGFloat] = []
+    private var sweepWavefrontErrors: [CGFloat] = []
+    private var emphasisGlyphPositionErrors: [CGFloat] = []
+    private var emphasisGlyphScaleErrors: [CGFloat] = []
+    private var emphasisGlyphAlphaErrors: [CGFloat] = []
+    private var emphasisGlyphGlowErrors: [CGFloat] = []
+    private var lineLayoutHeightErrors: [CGFloat] = []
+    private var lineLayoutWidthErrors: [CGFloat] = []
+    private var mainTextFrameHeightErrors: [CGFloat] = []
+    private var translationTextFrameHeightErrors: [CGFloat] = []
     private var visualOpacityErrors: [CGFloat] = []
     private var visualScaleErrors: [CGFloat] = []
     private var visualBlurErrors: [CGFloat] = []
@@ -219,6 +323,38 @@ struct NativeLyricsRenderTelemetryAccumulator {
         )
         maxAppliedEmphasisAlpha = max(maxAppliedEmphasisAlpha, sample.maxAppliedEmphasisAlpha)
         textLayoutCoverageGapCount += sample.textLayoutCoverageGapCount
+        maxExpectedSweepLineCount = max(maxExpectedSweepLineCount, sample.expectedSweepLineCount)
+        maxAppliedSweepLineCount = max(maxAppliedSweepLineCount, sample.appliedSweepLineCount)
+        textSweepLineCoverageGapCount += sample.sweepLineCoverageGapCount
+        if sample.sweepWavefrontErrorMax > 0 {
+            sweepWavefrontErrors.append(sample.sweepWavefrontErrorMax)
+        }
+        emphasisGlyphPositionSampleCount += sample.emphasisGlyphPositionSampleCount
+        if sample.emphasisGlyphPositionErrorMax > 0 {
+            emphasisGlyphPositionErrors.append(sample.emphasisGlyphPositionErrorMax)
+        }
+        if sample.emphasisGlyphScaleErrorMax > 0 {
+            emphasisGlyphScaleErrors.append(sample.emphasisGlyphScaleErrorMax)
+        }
+        if sample.emphasisGlyphAlphaErrorMax > 0 {
+            emphasisGlyphAlphaErrors.append(sample.emphasisGlyphAlphaErrorMax)
+        }
+        if sample.emphasisGlyphGlowErrorMax > 0 {
+            emphasisGlyphGlowErrors.append(sample.emphasisGlyphGlowErrorMax)
+        }
+        lineLayoutSampleCount += sample.lineLayoutSampleCount
+        if sample.lineLayoutHeightErrorMax > 0 {
+            lineLayoutHeightErrors.append(sample.lineLayoutHeightErrorMax)
+        }
+        if sample.lineLayoutWidthErrorMax > 0 {
+            lineLayoutWidthErrors.append(sample.lineLayoutWidthErrorMax)
+        }
+        if sample.mainTextFrameHeightErrorMax > 0 {
+            mainTextFrameHeightErrors.append(sample.mainTextFrameHeightErrorMax)
+        }
+        if sample.translationTextFrameHeightErrorMax > 0 {
+            translationTextFrameHeightErrors.append(sample.translationTextFrameHeightErrorMax)
+        }
         mainPhaseErrors.append(sample.mainPhaseError)
         if let translationError = sample.translationPhaseError {
             translationPhaseErrors.append(translationError)
@@ -239,8 +375,15 @@ struct NativeLyricsRenderTelemetryAccumulator {
         manualScrollStartCount += 1
     }
 
-    mutating func recordManualScrollDelta() {
+    mutating func recordManualScrollDelta(
+        deltaY: CGFloat = 0,
+        velocityY: CGFloat = 0,
+        manualOffsetY: CGFloat = 0
+    ) {
         manualScrollDeltaCount += 1
+        manualScrollCumulativeAbsDeltaY += abs(deltaY)
+        manualScrollMaxVelocityY = max(manualScrollMaxVelocityY, abs(velocityY))
+        manualScrollMaxOffsetY = max(manualScrollMaxOffsetY, abs(manualOffsetY))
     }
 
     mutating func recordManualScrollEnd() {
@@ -262,8 +405,12 @@ struct NativeLyricsRenderTelemetryAccumulator {
         }
     }
 
-    mutating func recordTapToLine() {
+    mutating func recordTapToLine(targetDistance: Int = 0, duringManualScroll: Bool = false) {
         tapToLineCount += 1
+        tapToLineTargetDistanceMax = max(tapToLineTargetDistanceMax, abs(targetDistance))
+        if duringManualScroll {
+            tapToLineDuringManualScrollCount += 1
+        }
     }
 
     mutating func recordHover(hovering: Bool) {
@@ -305,6 +452,21 @@ struct NativeLyricsRenderTelemetryAccumulator {
             maxAppliedEmphasisGlowOpacity: maxAppliedEmphasisGlowOpacity,
             maxAppliedEmphasisAlpha: maxAppliedEmphasisAlpha,
             textLayoutCoverageGapCount: textLayoutCoverageGapCount,
+            maxExpectedSweepLineCount: maxExpectedSweepLineCount,
+            maxAppliedSweepLineCount: maxAppliedSweepLineCount,
+            textSweepLineCoverageGapCount: textSweepLineCoverageGapCount,
+            sweepWavefrontErrorP95: percentile(sweepWavefrontErrors.sorted(), 0.95),
+            sweepWavefrontErrorMax: sweepWavefrontErrors.max() ?? 0,
+            emphasisGlyphPositionSampleCount: emphasisGlyphPositionSampleCount,
+            emphasisGlyphPositionErrorMax: emphasisGlyphPositionErrors.max() ?? 0,
+            emphasisGlyphScaleErrorMax: emphasisGlyphScaleErrors.max() ?? 0,
+            emphasisGlyphAlphaErrorMax: emphasisGlyphAlphaErrors.max() ?? 0,
+            emphasisGlyphGlowErrorMax: emphasisGlyphGlowErrors.max() ?? 0,
+            lineLayoutSampleCount: lineLayoutSampleCount,
+            lineLayoutHeightErrorMax: lineLayoutHeightErrors.max() ?? 0,
+            lineLayoutWidthErrorMax: lineLayoutWidthErrors.max() ?? 0,
+            mainTextFrameHeightErrorMax: mainTextFrameHeightErrors.max() ?? 0,
+            translationTextFrameHeightErrorMax: translationTextFrameHeightErrors.max() ?? 0,
             visualParitySampleCount: visualParitySampleCount,
             visualOpacityErrorP95: percentile(visualOpacityErrors.sorted(), 0.95),
             visualOpacityErrorMax: visualOpacityErrors.max() ?? 0,
@@ -323,6 +485,11 @@ struct NativeLyricsRenderTelemetryAccumulator {
             hoverEnterCount: hoverEnterCount,
             hoverExitCount: hoverExitCount,
             hoverBackgroundVisibleCount: hoverBackgroundVisibleCount,
+            manualScrollCumulativeAbsDeltaY: manualScrollCumulativeAbsDeltaY,
+            manualScrollMaxVelocityY: manualScrollMaxVelocityY,
+            manualScrollMaxOffsetY: manualScrollMaxOffsetY,
+            tapToLineTargetDistanceMax: tapToLineTargetDistanceMax,
+            tapToLineDuringManualScrollCount: tapToLineDuringManualScrollCount,
             mainPhaseErrorP95: percentile(mainPhaseErrors.sorted(), 0.95),
             mainPhaseErrorMax: mainPhaseErrors.max() ?? 0,
             translationPhaseErrorP95: percentile(translationPhaseErrors.sorted(), 0.95),
@@ -388,6 +555,21 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let maxAppliedEmphasisGlowOpacity: CGFloat
     let maxAppliedEmphasisAlpha: CGFloat
     let textLayoutCoverageGapCount: Int
+    let maxExpectedSweepLineCount: Int
+    let maxAppliedSweepLineCount: Int
+    let textSweepLineCoverageGapCount: Int
+    let sweepWavefrontErrorP95: CGFloat
+    let sweepWavefrontErrorMax: CGFloat
+    let emphasisGlyphPositionSampleCount: Int
+    let emphasisGlyphPositionErrorMax: CGFloat
+    let emphasisGlyphScaleErrorMax: CGFloat
+    let emphasisGlyphAlphaErrorMax: CGFloat
+    let emphasisGlyphGlowErrorMax: CGFloat
+    let lineLayoutSampleCount: Int
+    let lineLayoutHeightErrorMax: CGFloat
+    let lineLayoutWidthErrorMax: CGFloat
+    let mainTextFrameHeightErrorMax: CGFloat
+    let translationTextFrameHeightErrorMax: CGFloat
     let visualParitySampleCount: Int
     let visualOpacityErrorP95: CGFloat
     let visualOpacityErrorMax: CGFloat
@@ -406,6 +588,11 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let hoverEnterCount: Int
     let hoverExitCount: Int
     let hoverBackgroundVisibleCount: Int
+    let manualScrollCumulativeAbsDeltaY: CGFloat
+    let manualScrollMaxVelocityY: CGFloat
+    let manualScrollMaxOffsetY: CGFloat
+    let tapToLineTargetDistanceMax: Int
+    let tapToLineDuringManualScrollCount: Int
     let mainPhaseErrorP95: CGFloat
     let mainPhaseErrorMax: CGFloat
     let translationPhaseErrorP95: CGFloat
@@ -441,6 +628,21 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "maxAppliedEmphasisGlowOpacity": Double(maxAppliedEmphasisGlowOpacity),
             "maxAppliedEmphasisAlpha": Double(maxAppliedEmphasisAlpha),
             "textLayoutCoverageGapCount": Double(textLayoutCoverageGapCount),
+            "maxExpectedSweepLineCount": Double(maxExpectedSweepLineCount),
+            "maxAppliedSweepLineCount": Double(maxAppliedSweepLineCount),
+            "textSweepLineCoverageGapCount": Double(textSweepLineCoverageGapCount),
+            "sweepWavefrontErrorP95": Double(sweepWavefrontErrorP95),
+            "sweepWavefrontErrorMax": Double(sweepWavefrontErrorMax),
+            "emphasisGlyphPositionSampleCount": Double(emphasisGlyphPositionSampleCount),
+            "emphasisGlyphPositionErrorMax": Double(emphasisGlyphPositionErrorMax),
+            "emphasisGlyphScaleErrorMax": Double(emphasisGlyphScaleErrorMax),
+            "emphasisGlyphAlphaErrorMax": Double(emphasisGlyphAlphaErrorMax),
+            "emphasisGlyphGlowErrorMax": Double(emphasisGlyphGlowErrorMax),
+            "lineLayoutSampleCount": Double(lineLayoutSampleCount),
+            "lineLayoutHeightErrorMax": Double(lineLayoutHeightErrorMax),
+            "lineLayoutWidthErrorMax": Double(lineLayoutWidthErrorMax),
+            "mainTextFrameHeightErrorMax": Double(mainTextFrameHeightErrorMax),
+            "translationTextFrameHeightErrorMax": Double(translationTextFrameHeightErrorMax),
             "visualParitySampleCount": Double(visualParitySampleCount),
             "visualOpacityErrorP95": Double(visualOpacityErrorP95),
             "visualOpacityErrorMax": Double(visualOpacityErrorMax),
@@ -459,6 +661,11 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "hoverEnterCount": Double(hoverEnterCount),
             "hoverExitCount": Double(hoverExitCount),
             "hoverBackgroundVisibleCount": Double(hoverBackgroundVisibleCount),
+            "manualScrollCumulativeAbsDeltaY": Double(manualScrollCumulativeAbsDeltaY),
+            "manualScrollMaxVelocityY": Double(manualScrollMaxVelocityY),
+            "manualScrollMaxOffsetY": Double(manualScrollMaxOffsetY),
+            "tapToLineTargetDistanceMax": Double(tapToLineTargetDistanceMax),
+            "tapToLineDuringManualScrollCount": Double(tapToLineDuringManualScrollCount),
             "mainPhaseErrorP95": Double(mainPhaseErrorP95),
             "mainPhaseErrorMax": Double(mainPhaseErrorMax),
             "translationPhaseErrorP95": Double(translationPhaseErrorP95),

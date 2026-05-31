@@ -751,14 +751,22 @@ final class NativeLyricsSurfaceView: NSView {
             bounds: manualScrollBounds(for: runtimeConfiguration(from: configuration))
         )
         updateNativeHover(from: point, configuration: runtimeConfiguration(from: configuration))
-        renderTelemetry.recordManualScrollDelta()
+        renderTelemetry.recordManualScrollDelta(
+            deltaY: deltaY,
+            velocityY: velocity,
+            manualOffsetY: manualScrollState.manualOffset
+        )
         configuration.onManualScrollDelta(deltaY, velocity)
         applyNativeManualScrollPresentation()
         scheduleNativeScrollEnd(delay: isMomentum ? 0.4 : 0.16)
     }
 
     private func handleNativeLineTap(rowIndex: Int, line: LyricLine) {
-        renderTelemetry.recordTapToLine()
+        let currentIndex = configuration?.effectiveCurrentIndex ?? rowIndex
+        renderTelemetry.recordTapToLine(
+            targetDistance: rowIndex - currentIndex,
+            duringManualScroll: manualScrollState.isActive
+        )
         cancelManualScrollTimers()
         if manualScrollState.isActive {
             manualScrollState.reset()
@@ -1092,6 +1100,7 @@ private final class NativeLyricsRowView: NSView {
     private var cachedMainSweepLinePlan: [NativeLyricsTextSweepVisualLinePlan] = []
     private var emphasisGlyphLayers: [CATextLayer] = []
     private var activeHiddenEmphasisSignature: String?
+    private var lastLineLayoutMetrics = LineLayoutAppliedMetrics.inactive
     private let blurFilter = CIFilter(name: "CIGaussianBlur")
     private var appliedBlurRadius: CGFloat = -.greatestFiniteMagnitude
     private var lastHoverBackgroundVisible = false
@@ -1201,6 +1210,7 @@ private final class NativeLyricsRowView: NSView {
             translationBrightTextLayer.frame = .zero
             translationSweepMaskLayer.frame = .zero
             interludeTextLayer.frame = .zero
+            lastLineLayoutMetrics = .inactive
             return
         }
 
@@ -1215,17 +1225,22 @@ private final class NativeLyricsRowView: NSView {
         mainPerRunSweepMaskLayer.frame = mainBrightTextLayer.bounds
         mainEmphasisLayer.frame = mainBrightTextLayer.frame
         y += mainHeight
+        var translationExpectedHeight: CGFloat = 0
+        var translationFrameHeightError: CGFloat = 0
+        var translationFrameWidthError: CGFloat = 0
         if let translation = plan.translation {
             y += plan.constants.mainFontSize * 0.33
-            let translationHeight = measuredTextHeight(
+            translationExpectedHeight = measuredTextHeight(
                 translation.text,
                 width: textWidth,
                 font: .systemFont(ofSize: plan.constants.translationFontSize, weight: .semibold)
             )
-            translationTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: translationHeight)
+            translationTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: translationExpectedHeight)
             translationBrightTextLayer.frame = translationTextLayer.frame
             translationSweepMaskLayer.frame = translationBrightTextLayer.bounds
-            y += translationHeight
+            translationFrameHeightError = abs(translationTextLayer.frame.height - translationExpectedHeight)
+            translationFrameWidthError = abs(translationTextLayer.frame.width - textWidth)
+            y += translationExpectedHeight
         } else {
             translationTextLayer.frame = .zero
             translationBrightTextLayer.frame = .zero
@@ -1236,6 +1251,15 @@ private final class NativeLyricsRowView: NSView {
         } else {
             interludeTextLayer.frame = .zero
         }
+        let mainFrameHeightError = abs(mainTextLayer.frame.height - mainHeight)
+        let mainFrameWidthError = abs(mainTextLayer.frame.width - textWidth)
+        lastLineLayoutMetrics = LineLayoutAppliedMetrics(
+            sampleCount: 1,
+            heightErrorMax: max(mainFrameHeightError, translationFrameHeightError),
+            widthErrorMax: max(mainFrameWidthError, translationFrameWidthError),
+            mainFrameHeightError: mainFrameHeightError,
+            translationFrameHeightError: translationFrameHeightError
+        )
     }
 
     override func updateTrackingAreas() {
@@ -1417,7 +1441,21 @@ private final class NativeLyricsRowView: NSView {
                     maxAppliedEmphasisLiftMagnitude: appliedMainProgress.maxAppliedEmphasisLiftMagnitude,
                     maxAppliedEmphasisGlowOpacity: appliedMainProgress.maxAppliedEmphasisGlowOpacity,
                     maxAppliedEmphasisAlpha: appliedMainProgress.maxAppliedEmphasisAlpha,
-                    textLayoutCoverageGapCount: appliedMainProgress.textLayoutCoverageGapCount
+                    textLayoutCoverageGapCount: appliedMainProgress.textLayoutCoverageGapCount,
+                    expectedSweepLineCount: appliedMainProgress.expectedSweepLineCount,
+                    appliedSweepLineCount: appliedMainProgress.appliedSweepLineCount,
+                    sweepLineCoverageGapCount: appliedMainProgress.sweepLineCoverageGapCount,
+                    sweepWavefrontErrorMax: appliedMainProgress.sweepWavefrontErrorMax,
+                    emphasisGlyphPositionSampleCount: appliedMainProgress.emphasisGlyphPositionSampleCount,
+                    emphasisGlyphPositionErrorMax: appliedMainProgress.emphasisGlyphPositionErrorMax,
+                    emphasisGlyphScaleErrorMax: appliedMainProgress.emphasisGlyphScaleErrorMax,
+                    emphasisGlyphAlphaErrorMax: appliedMainProgress.emphasisGlyphAlphaErrorMax,
+                    emphasisGlyphGlowErrorMax: appliedMainProgress.emphasisGlyphGlowErrorMax,
+                    lineLayoutSampleCount: appliedMainProgress.lineLayoutSampleCount,
+                    lineLayoutHeightErrorMax: appliedMainProgress.lineLayoutHeightErrorMax,
+                    lineLayoutWidthErrorMax: appliedMainProgress.lineLayoutWidthErrorMax,
+                    mainTextFrameHeightErrorMax: appliedMainProgress.mainTextFrameHeightErrorMax,
+                    translationTextFrameHeightErrorMax: appliedMainProgress.translationTextFrameHeightErrorMax
                 )
             }
         } else {
@@ -1450,7 +1488,21 @@ private final class NativeLyricsRowView: NSView {
         maxAppliedEmphasisLiftMagnitude: CGFloat,
         maxAppliedEmphasisGlowOpacity: CGFloat,
         maxAppliedEmphasisAlpha: CGFloat,
-        textLayoutCoverageGapCount: Int
+        textLayoutCoverageGapCount: Int,
+        expectedSweepLineCount: Int,
+        appliedSweepLineCount: Int,
+        sweepLineCoverageGapCount: Int,
+        sweepWavefrontErrorMax: CGFloat,
+        emphasisGlyphPositionSampleCount: Int,
+        emphasisGlyphPositionErrorMax: CGFloat,
+        emphasisGlyphScaleErrorMax: CGFloat,
+        emphasisGlyphAlphaErrorMax: CGFloat,
+        emphasisGlyphGlowErrorMax: CGFloat,
+        lineLayoutSampleCount: Int,
+        lineLayoutHeightErrorMax: CGFloat,
+        lineLayoutWidthErrorMax: CGFloat,
+        mainTextFrameHeightErrorMax: CGFloat,
+        translationTextFrameHeightErrorMax: CGFloat
     ) {
         let activeRun = plan.wordRuns.last { $0.startTime <= currentTime }
             ?? plan.wordRuns.first
@@ -1459,13 +1511,13 @@ private final class NativeLyricsRowView: NSView {
         mainBrightTextLayer.setAffineTransform(CGAffineTransform(translationX: 0, y: y))
         mainBrightTextLayer.opacity = Float(plan.mainPostLineFade)
         mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || plan.mainPostLineFade <= 0.001
-        let appliedPerRunSweep = updatePerRunSweepMask(
+        let sweepResult = updatePerRunSweepMask(
             plan: plan,
             currentTime: currentTime,
             bounds: mainBrightTextLayer.bounds
         )
         let appliedProgress: CGFloat
-        if appliedPerRunSweep {
+        if sweepResult.applied {
             appliedProgress = plan.mainSweepProgress
         } else {
             mainBrightTextLayer.mask = mainSweepMaskLayer
@@ -1490,9 +1542,10 @@ private final class NativeLyricsRowView: NSView {
             currentTime: currentTime,
             linePlan: mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
         )
+        let layoutResult = lastLineLayoutMetrics
         return (
             appliedProgress,
-            appliedPerRunSweep,
+            sweepResult.applied,
             emphasisResult.applied,
             emphasisResult.expectedGlyphCount,
             emphasisResult.appliedGlyphCount,
@@ -1501,7 +1554,21 @@ private final class NativeLyricsRowView: NSView {
             emphasisResult.maxLiftMagnitude,
             emphasisResult.maxGlowOpacity,
             emphasisResult.maxAlpha,
-            emphasisResult.layoutCoverageGapCount
+            emphasisResult.layoutCoverageGapCount,
+            sweepResult.expectedLineCount,
+            sweepResult.appliedLineCount,
+            sweepResult.coverageGapCount,
+            sweepResult.wavefrontErrorMax,
+            emphasisResult.positionSampleCount,
+            emphasisResult.positionErrorMax,
+            emphasisResult.scaleErrorMax,
+            emphasisResult.alphaErrorMax,
+            emphasisResult.glowErrorMax,
+            layoutResult.sampleCount,
+            layoutResult.heightErrorMax,
+            layoutResult.widthErrorMax,
+            layoutResult.mainFrameHeightError,
+            layoutResult.translationFrameHeightError
         )
     }
 
@@ -1520,38 +1587,90 @@ private final class NativeLyricsRowView: NSView {
         )
     }
 
+    private struct LineLayoutAppliedMetrics {
+        let sampleCount: Int
+        let heightErrorMax: CGFloat
+        let widthErrorMax: CGFloat
+        let mainFrameHeightError: CGFloat
+        let translationFrameHeightError: CGFloat
+
+        static let inactive = LineLayoutAppliedMetrics(
+            sampleCount: 0,
+            heightErrorMax: 0,
+            widthErrorMax: 0,
+            mainFrameHeightError: 0,
+            translationFrameHeightError: 0
+        )
+    }
+
+    private struct PerRunSweepAppliedMetrics {
+        let applied: Bool
+        let expectedLineCount: Int
+        let appliedLineCount: Int
+        let coverageGapCount: Int
+        let wavefrontErrorMax: CGFloat
+
+        static let inactive = PerRunSweepAppliedMetrics(
+            applied: false,
+            expectedLineCount: 0,
+            appliedLineCount: 0,
+            coverageGapCount: 0,
+            wavefrontErrorMax: 0
+        )
+    }
+
     private func updatePerRunSweepMask(
         plan: NativeLyricsTextRenderPlan,
         currentTime: TimeInterval,
         bounds: CGRect
-    ) -> Bool {
-        guard !plan.wordRuns.isEmpty, bounds.width > 1, bounds.height > 1 else { return false }
+    ) -> PerRunSweepAppliedMetrics {
+        guard !plan.wordRuns.isEmpty, bounds.width > 1, bounds.height > 1 else { return .inactive }
         let linePlan = mainSweepLinePlan(for: plan, bounds: bounds)
         let lines = NativeLyricsTextSweepLayout.maskLines(
             from: linePlan,
             fadeHalfPoint: plan.constants.fadeHalfPoint,
             currentTime: currentTime
         )
-        guard !lines.isEmpty else { return false }
+        guard !lines.isEmpty else {
+            return PerRunSweepAppliedMetrics(
+                applied: false,
+                expectedLineCount: linePlan.count,
+                appliedLineCount: 0,
+                coverageGapCount: linePlan.count,
+                wavefrontErrorMax: 0
+            )
+        }
 
         mainBrightTextLayer.mask = mainPerRunSweepMaskLayer
         mainPerRunSweepMaskLayer.frame = bounds
         ensurePerRunSweepMaskLayerCount(lines.count)
+        var maxWavefrontError: CGFloat = 0
         for (index, line) in lines.enumerated() {
             let maskLayer = mainPerRunSweepLineLayers[index]
             maskLayer.isHidden = false
             maskLayer.frame = line.maskRect
-            applySweepGradient(
+            let expectedLocalWavefront = line.wavefrontX - line.maskRect.minX
+            let appliedLocalWavefront = applySweepGradient(
                 maskLayer,
-                wavefrontX: line.wavefrontX - line.maskRect.minX,
+                wavefrontX: expectedLocalWavefront,
                 fadeHalfPoint: plan.constants.fadeHalfPoint,
                 width: line.maskRect.width
             )
+            if expectedLocalWavefront >= plan.constants.fadeHalfPoint,
+               expectedLocalWavefront <= line.maskRect.width - plan.constants.fadeHalfPoint {
+                maxWavefrontError = max(maxWavefrontError, abs(appliedLocalWavefront - expectedLocalWavefront))
+            }
         }
         for index in lines.count..<mainPerRunSweepLineLayers.count {
             mainPerRunSweepLineLayers[index].isHidden = true
         }
-        return true
+        return PerRunSweepAppliedMetrics(
+            applied: true,
+            expectedLineCount: linePlan.count,
+            appliedLineCount: lines.count,
+            coverageGapCount: max(0, linePlan.count - lines.count),
+            wavefrontErrorMax: maxWavefrontError
+        )
     }
 
     private func applyEmphasisGlyphLayers(
@@ -1567,7 +1686,12 @@ private final class NativeLyricsRowView: NSView {
         maxLiftMagnitude: CGFloat,
         maxGlowOpacity: CGFloat,
         maxAlpha: CGFloat,
-        layoutCoverageGapCount: Int
+        layoutCoverageGapCount: Int,
+        positionSampleCount: Int,
+        positionErrorMax: CGFloat,
+        scaleErrorMax: CGFloat,
+        alphaErrorMax: CGFloat,
+        glowErrorMax: CGFloat
     ) {
         let emphasisOrders = Set(plan.wordRuns.enumerated().compactMap { order, run in
             (run.isEmphasis || run.emphasis != .inactive) ? order : nil
@@ -1575,7 +1699,7 @@ private final class NativeLyricsRowView: NSView {
         guard !emphasisOrders.isEmpty else {
             restoreMainTextIfNeeded(plan: plan)
             hideEmphasisGlyphLayers()
-            return (false, 0, 0, 0, 1, 0, 0, 0, 0)
+            return (false, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         }
 
         applyHiddenEmphasisText(plan: plan, hiddenOrders: emphasisOrders)
@@ -1604,7 +1728,7 @@ private final class NativeLyricsRowView: NSView {
         let layoutCoverageGapCount = missingRunCount + max(0, expectedGlyphCount - appliedGlyphCount)
         guard appliedGlyphCount > 0 else {
             hideEmphasisGlyphLayers()
-            return (false, expectedGlyphCount, 0, 0, 1, 0, 0, 0, layoutCoverageGapCount)
+            return (false, expectedGlyphCount, 0, 0, 1, 0, 0, 0, layoutCoverageGapCount, 0, 0, 0, 0, 0)
         }
 
         ensureEmphasisGlyphLayerCount(appliedGlyphCount)
@@ -1614,6 +1738,10 @@ private final class NativeLyricsRowView: NSView {
         var maxLiftMagnitude: CGFloat = 0
         var maxGlowOpacity: CGFloat = 0
         var maxAlpha: CGFloat = 0
+        var maxPositionError: CGFloat = 0
+        var maxScaleError: CGFloat = 0
+        var maxAlphaError: CGFloat = 0
+        var maxGlowError: CGFloat = 0
         for (visualRun, run, wavefront) in glyphInputs {
             let glyphCount = max(1, visualRun.glyphs.count)
             let duration = max(0, run.endTime - run.startTime)
@@ -1640,6 +1768,10 @@ private final class NativeLyricsRowView: NSView {
                 maxLiftMagnitude = max(maxLiftMagnitude, metrics.liftMagnitude)
                 maxGlowOpacity = max(maxGlowOpacity, metrics.glowOpacity)
                 maxAlpha = max(maxAlpha, metrics.alpha)
+                maxPositionError = max(maxPositionError, metrics.positionError)
+                maxScaleError = max(maxScaleError, metrics.scaleError)
+                maxAlphaError = max(maxAlphaError, metrics.alphaError)
+                maxGlowError = max(maxGlowError, metrics.glowError)
             }
         }
         for index in layerIndex..<emphasisGlyphLayers.count {
@@ -1654,7 +1786,12 @@ private final class NativeLyricsRowView: NSView {
             maxLiftMagnitude,
             maxGlowOpacity,
             maxAlpha,
-            layoutCoverageGapCount
+            layoutCoverageGapCount,
+            appliedGlyphCount,
+            maxPositionError,
+            maxScaleError,
+            maxAlphaError,
+            maxGlowError
         )
     }
 
@@ -1724,10 +1861,23 @@ private final class NativeLyricsRowView: NSView {
         let liftMagnitude: CGFloat
         let glowOpacity: CGFloat
         let alpha: CGFloat
+        let positionError: CGFloat
+        let scaleError: CGFloat
+        let alphaError: CGFloat
+        let glowError: CGFloat
 
         var hasMotion: Bool {
             scale > 1.001 || liftMagnitude > 0.001 || glowOpacity > 0.001
         }
+    }
+
+    private struct EmphasisGlyphExpectedMetrics {
+        let position: CGPoint
+        let scale: CGFloat
+        let liftMagnitude: CGFloat
+        let glowOpacity: CGFloat
+        let alpha: CGFloat
+        let shadowRadius: CGFloat
     }
 
     private func applyEmphasisGlyph(
@@ -1742,6 +1892,63 @@ private final class NativeLyricsRowView: NSView {
         dimAlpha: CGFloat,
         currentTime: TimeInterval
     ) -> EmphasisGlyphAppliedMetrics {
+        let expected = expectedEmphasisGlyphMetrics(
+            glyph: glyph,
+            run: run,
+            glyphCount: glyphCount,
+            du: du,
+            wavefrontX: wavefrontX,
+            fadeHalfPoint: fadeHalfPoint,
+            brightAlpha: brightAlpha,
+            dimAlpha: dimAlpha,
+            currentTime: currentTime
+        )
+        layer.isHidden = false
+        layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        layer.string = attributedText(glyph.text, fontSize: NativeLyricsTextConstants().mainFontSize, alpha: expected.alpha)
+        layer.bounds = CGRect(origin: .zero, size: glyph.rect.size)
+        layer.position = expected.position
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.setAffineTransform(CGAffineTransform(scaleX: expected.scale, y: expected.scale))
+
+        if expected.glowOpacity > 0 {
+            layer.shadowColor = NSColor.white.cgColor
+            layer.shadowOpacity = Float(min(1, expected.glowOpacity))
+            layer.shadowRadius = expected.shadowRadius
+            layer.shadowOffset = .zero
+        } else {
+            layer.shadowOpacity = 0
+            layer.shadowRadius = 0
+            layer.shadowOffset = .zero
+        }
+
+        let appliedTransform = layer.affineTransform()
+        let appliedScale = sqrt(appliedTransform.a * appliedTransform.a + appliedTransform.c * appliedTransform.c)
+        let appliedAlpha = attributedForegroundAlpha(from: layer.string) ?? expected.alpha
+        let appliedGlowOpacity = CGFloat(layer.shadowOpacity)
+        return EmphasisGlyphAppliedMetrics(
+            scale: appliedScale,
+            liftMagnitude: expected.liftMagnitude,
+            glowOpacity: appliedGlowOpacity,
+            alpha: appliedAlpha,
+            positionError: hypot(layer.position.x - expected.position.x, layer.position.y - expected.position.y),
+            scaleError: abs(appliedScale - expected.scale),
+            alphaError: abs(appliedAlpha - expected.alpha),
+            glowError: abs(appliedGlowOpacity - min(1, expected.glowOpacity))
+        )
+    }
+
+    private func expectedEmphasisGlyphMetrics(
+        glyph: NativeLyricsTextSweepVisualRun.Glyph,
+        run: NativeLyricsWordRunPlan,
+        glyphCount: Int,
+        du: TimeInterval,
+        wavefrontX: CGFloat,
+        fadeHalfPoint: CGFloat,
+        brightAlpha: CGFloat,
+        dimAlpha: CGFloat,
+        currentTime: TimeInterval
+    ) -> EmphasisGlyphExpectedMetrics {
         let charDelay = (du / 2.5 / Double(max(1, glyphCount))) * Double(glyph.index)
         let t1 = CGFloat(min(1, max(0, (currentTime - run.startTime - charDelay) / du)))
         let easing = NativeLyricsEasing.emphasis(t1)
@@ -1764,35 +1971,25 @@ private final class NativeLyricsRowView: NSView {
             brightWeight = (right - glyph.rect.midX) / max(1, right - left)
         }
         let alpha = dimAlpha + (max(dimAlpha, brightAlpha) - dimAlpha) * min(1, max(0, brightWeight))
-
-        layer.isHidden = false
-        layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        layer.string = attributedText(glyph.text, fontSize: NativeLyricsTextConstants().mainFontSize, alpha: alpha)
-        layer.bounds = CGRect(origin: .zero, size: glyph.rect.size)
-        layer.position = CGPoint(
-            x: glyph.rect.midX + spreadX,
-            y: glyph.rect.midY + run.baseFloatY + charFloat + liftY
-        )
-        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        layer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-
         let glowOpacity = easing * run.emphasis.blurLevel
-        if glowOpacity > 0 {
-            layer.shadowColor = NSColor.white.cgColor
-            layer.shadowOpacity = Float(min(1, glowOpacity))
-            layer.shadowRadius = min(0.3 * 24, run.emphasis.blurLevel * 0.3 * 24)
-            layer.shadowOffset = .zero
-        } else {
-            layer.shadowOpacity = 0
-            layer.shadowRadius = 0
-            layer.shadowOffset = .zero
-        }
-        return EmphasisGlyphAppliedMetrics(
+        return EmphasisGlyphExpectedMetrics(
+            position: CGPoint(
+                x: glyph.rect.midX + spreadX,
+                y: glyph.rect.midY + run.baseFloatY + charFloat + liftY
+            ),
             scale: scale,
             liftMagnitude: abs(charFloat + liftY),
             glowOpacity: glowOpacity,
-            alpha: alpha
+            alpha: alpha,
+            shadowRadius: min(0.3 * 24, run.emphasis.blurLevel * 0.3 * 24)
         )
+    }
+
+    private func attributedForegroundAlpha(from value: Any?) -> CGFloat? {
+        guard let attributed = value as? NSAttributedString,
+              attributed.length > 0 else { return nil }
+        let color = attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        return color?.alphaComponent
     }
 
     private func mainSweepLinePlan(
@@ -1846,25 +2043,28 @@ private final class NativeLyricsRowView: NSView {
         wavefrontX: CGFloat,
         fadeHalfPoint: CGFloat,
         width: CGFloat
-    ) {
+    ) -> CGFloat {
         let width = max(1, width)
         let left = (wavefrontX - fadeHalfPoint) / width
         let right = (wavefrontX + fadeHalfPoint) / width
         if right <= 0 {
             mask.opacity = 0
-            return
+            return 0
         }
         mask.opacity = 1
         if left >= 1 {
             mask.locations = [0, 1, 1, 1]
-            return
+            return width
         }
+        let clampedLeft = max(0, min(1, left))
+        let clampedRight = max(0, min(1, right))
         mask.locations = [
             0,
-            NSNumber(value: Double(max(0, min(1, left)))),
-            NSNumber(value: Double(max(0, min(1, right)))),
+            NSNumber(value: Double(clampedLeft)),
+            NSNumber(value: Double(clampedRight)),
             1
         ]
+        return ((clampedLeft + clampedRight) / 2) * width
     }
 
     private func updateSweepMask(

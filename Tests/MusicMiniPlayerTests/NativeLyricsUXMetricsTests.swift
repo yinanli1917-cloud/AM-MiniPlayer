@@ -158,7 +158,21 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             maxAppliedEmphasisLiftMagnitude: 0,
             maxAppliedEmphasisGlowOpacity: 0,
             maxAppliedEmphasisAlpha: 0,
-            textLayoutCoverageGapCount: 2
+            textLayoutCoverageGapCount: 2,
+            expectedSweepLineCount: 2,
+            appliedSweepLineCount: 1,
+            sweepLineCoverageGapCount: 1,
+            sweepWavefrontErrorMax: 0.25,
+            emphasisGlyphPositionSampleCount: 5,
+            emphasisGlyphPositionErrorMax: 0.2,
+            emphasisGlyphScaleErrorMax: 0.001,
+            emphasisGlyphAlphaErrorMax: 0.01,
+            emphasisGlyphGlowErrorMax: 0.01,
+            lineLayoutSampleCount: 1,
+            lineLayoutHeightErrorMax: 0.5,
+            lineLayoutWidthErrorMax: 0.25,
+            mainTextFrameHeightErrorMax: 0.5,
+            translationTextFrameHeightErrorMax: 0.25
         ))
         accumulator.recordVisualParity(NativeLyricsVisualParitySample(
             expectedOpacity: 0.35,
@@ -179,12 +193,12 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             isActive: true
         ))
         accumulator.recordManualScrollStart()
-        accumulator.recordManualScrollDelta()
+        accumulator.recordManualScrollDelta(deltaY: -12, velocityY: 180, manualOffsetY: -36)
         accumulator.recordManualScrollEnd()
         accumulator.recordManualScrollRecovery()
         accumulator.recordDirectSnap(reason: .tapToLine)
         accumulator.recordDirectSnap(reason: .manualScroll)
-        accumulator.recordTapToLine()
+        accumulator.recordTapToLine(targetDistance: 4, duringManualScroll: true)
         accumulator.recordHover(hovering: true)
         accumulator.recordHover(hovering: false)
         accumulator.recordHoverBackgroundVisible()
@@ -218,6 +232,20 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.maxAppliedEmphasisGlyphMotionCount, 0)
         XCTAssertEqual(summary.maxAppliedEmphasisScale, 1)
         XCTAssertEqual(summary.textLayoutCoverageGapCount, 2)
+        XCTAssertEqual(summary.maxExpectedSweepLineCount, 2)
+        XCTAssertEqual(summary.maxAppliedSweepLineCount, 1)
+        XCTAssertEqual(summary.textSweepLineCoverageGapCount, 1)
+        XCTAssertEqual(summary.sweepWavefrontErrorMax, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphPositionSampleCount, 5)
+        XCTAssertEqual(summary.emphasisGlyphPositionErrorMax, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphScaleErrorMax, 0.001, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphAlphaErrorMax, 0.01, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphGlowErrorMax, 0.01, accuracy: 0.0001)
+        XCTAssertEqual(summary.lineLayoutSampleCount, 1)
+        XCTAssertEqual(summary.lineLayoutHeightErrorMax, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(summary.lineLayoutWidthErrorMax, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(summary.mainTextFrameHeightErrorMax, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(summary.translationTextFrameHeightErrorMax, 0.25, accuracy: 0.0001)
         XCTAssertEqual(summary.visualParitySampleCount, 2)
         XCTAssertEqual(summary.visualOpacityErrorMax, 0.01, accuracy: 0.0001)
         XCTAssertEqual(summary.visualScaleErrorMax, 0.001, accuracy: 0.0001)
@@ -230,6 +258,11 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.tapToLineCount, 1)
         XCTAssertEqual(summary.tapDirectSnapCount, 1)
         XCTAssertEqual(summary.manualRecoveryDirectSnapCount, 1)
+        XCTAssertEqual(summary.manualScrollCumulativeAbsDeltaY, 12)
+        XCTAssertEqual(summary.manualScrollMaxVelocityY, 180)
+        XCTAssertEqual(summary.manualScrollMaxOffsetY, 36)
+        XCTAssertEqual(summary.tapToLineTargetDistanceMax, 4)
+        XCTAssertEqual(summary.tapToLineDuringManualScrollCount, 1)
         XCTAssertEqual(summary.hoverEnterCount, 1)
         XCTAssertEqual(summary.hoverExitCount, 1)
         XCTAssertEqual(summary.hoverBackgroundVisibleCount, 1)
@@ -240,7 +273,11 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.metrics["maxActiveWordRunCount"], 7)
         XCTAssertEqual(summary.metrics["textParityGapCount"], 1)
         XCTAssertEqual(summary.metrics["textLayoutCoverageGapCount"], 2)
+        XCTAssertEqual(summary.metrics["textSweepLineCoverageGapCount"], 1)
+        XCTAssertEqual(summary.metrics["emphasisGlyphPositionSampleCount"], 5)
+        XCTAssertEqual(summary.metrics["lineLayoutSampleCount"], 1)
         XCTAssertEqual(summary.metrics["visualParitySampleCount"], 2)
         XCTAssertEqual(summary.metrics["tapToLineCount"], 1)
+        XCTAssertEqual(summary.metrics["tapToLineDuringManualScrollCount"], 1)
     }
 }

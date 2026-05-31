@@ -1,6 +1,6 @@
 # Lyrics UX Benchmark (LUXB)
 
-Last updated: 2026-05-28
+Last updated: 2026-05-30
 
 ## Reference release (must be surpassed)
 
@@ -54,6 +54,25 @@ word/syllable lyrics or selects a lighter/different line workload.
 | Layout clip | `lineBottomClipY` / `activeBottomClipY` on active row | ≤ baseline |
 | CPU | `perf_harness` 16s lyrics avg | ≤ baseline |
 | Soak | `soak_harness` stallCount, RSS slope, tail incidents | Strictly better |
+
+## Native UX Parity Gate
+
+`lyrics.nativeRenderer.summary` is a code-based UX parity gate, not a visual
+capture. Candidate CPU/FPS numbers are invalid if any protected UX metric has a
+gap:
+
+- word sweep must report active syllable samples, zero phase error over 0.02,
+  zero per-run sweep coverage gaps, and wavefront error no higher than 0.5pt;
+- translation sweep phase error must stay at or below 0.02 when translations
+  are present;
+- held non-CJK word emphasis must report per-character geometry samples with
+  position error no higher than 0.5pt, scale/alpha/glow error inside their
+  benchmark tolerances, and nonzero scale/lift/glow motion when expected;
+- line layout must emit frame parity samples and keep main/translation height
+  and text width errors within 1pt;
+- scroll-tap fixtures must record real manual-scroll delta/offset, hover
+  feedback, tap-to-line during manual-scroll ownership, and a tapped target
+  different from the current lyric row.
 
 ## Contract (always)
 

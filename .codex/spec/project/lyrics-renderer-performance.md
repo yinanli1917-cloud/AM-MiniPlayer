@@ -340,14 +340,17 @@ Telemetry-only gates must cover:
 
 - manual scroll start/end, frozen display index, false ownership, and recovery;
 - row hover enter/exit and hover target identity;
-- tap-to-jump target line, tap latency, settle time, and final playback line;
+- tap-to-jump target line, whether the tap happened while manual-scroll owned
+  the surface, tap latency, settle time, and final playback line;
 - blur radius/effect path used by active and inactive rows;
 - frame cadence: display refresh interval, effective FPS, p50/p95/p99/max
   frame delta, dropped frames above 1.5x and 2x refresh, longest stall, jitter;
 - drift: target Y error, inter-line spacing error, stale nearby targets, wave
   start latency, completion time, order violations, row velocity, clipping;
-- text/backend: word sweep phase, translation sweep phase, height cache
-  invalidations, accumulated-height recomputes, row mount/unmount counts,
+- text/backend: word sweep phase, per-visual-line sweep mask coverage,
+  wavefront position error, translation sweep phase, per-character emphasis
+  geometry/alpha/scale/glow error, line layout frame height/width error, height
+  cache invalidations, accumulated-height recomputes, row mount/unmount counts,
   lyrics fetch/cache/parse/translation duration, ScriptingBridge latency, Music
   clock correction.
 
