@@ -144,11 +144,12 @@ Observed mandatory Winter fixture evidence:
 
 - v2.8 release reference: no line-motion CSV, so it is usable only for
   process-level CPU/crash evidence, not motion parity.
-- `origin/main` reference at `2e073592`: latest CPU avg `30.248`; candidate
-  CPU avg `12.991`; candidate ratio `0.429` (about `57.1%` lower) on the same
-  scroll-tap-jump workload.
+- `origin/main` reference at `2e073592`: latest stricter CPU gate records avg
+  `30.182 -> 13.412`, p95 `44.1 -> 28.74`, and max `45.4 -> 32.6`.
+  Candidate ratios are avg `0.444` (about `55.6%` lower), p95 `0.652`, and max
+  `0.718` on the same scroll-tap-jump workload.
 - Artifact:
-  `tmp/benchmark/sequential-reference/sequential-20260531-064043-winter-origin-main-wave-reference-line-winter-trip/summary.json`
+  `tmp/benchmark/sequential-reference/sequential-20260531-064404-winter-origin-main-cpu-spike-reference-line-winter-trip/summary.json`
 - `origin/main` line-motion CSV reports zero target/inter-line error for every
   row even while velocity is nonzero. Treat that as target-layout diagnostics,
   not presentation-layer drift evidence. The sequential comparator must report
@@ -205,6 +206,8 @@ incomplete settle evidence.
 The monitor also compares wave timeline CSVs because wave schedule data remains
 usable even when prior line-motion drift is target-layout-only. Candidate must
 not regress radius, lead-in, cadence p95, order violations, or late-fire count.
+CPU comparison must check avg, p95, and max. Avg-only wins are not acceptable
+because scroll-tap-jump spikes are part of the user-visible stuck feeling.
 
 ## Commands
 

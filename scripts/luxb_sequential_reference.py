@@ -199,17 +199,26 @@ def run_role(
 
 
 def cpu_avg(run_summary: dict[str, Any]) -> float | None:
+    stats = cpu_stats(run_summary)
+    return stats.get("avg")
+
+
+def cpu_stats(run_summary: dict[str, Any]) -> dict[str, float]:
     perf_summary = run_summary.get("perfSummary")
     if not isinstance(perf_summary, dict):
-        return None
+        return {}
     measurement = perf_summary.get("measurement")
     if not isinstance(measurement, dict):
-        return None
+        return {}
     cpu = measurement.get("cpuPercent")
     if not isinstance(cpu, dict):
-        return None
-    value = cpu.get("avg")
-    return float(value) if isinstance(value, (int, float)) else None
+        return {}
+    stats: dict[str, float] = {}
+    for key in ("avg", "median", "p95", "max"):
+        value = cpu.get(key)
+        if isinstance(value, (int, float)):
+            stats[key] = float(value)
+    return stats
 
 
 def motion_reference_comparability(metrics: motion.MotionMetrics) -> dict[str, Any]:
@@ -260,6 +269,31 @@ def compare_wave_metrics(candidate: motion.WaveTimelineMetrics, reference: motio
     if candidate.late_fire_count > reference.late_fire_count:
         failures.append("candidate wave late-fire count worse than reference")
     return failures
+
+
+def compare_cpu_stats(reference: dict[str, float], candidate: dict[str, float], max_avg_ratio: float) -> tuple[float | None, dict[str, float], list[str]]:
+    failures: list[str] = []
+    ratios: dict[str, float] = {}
+    avg_ratio: float | None = None
+
+    ref_avg = reference.get("avg")
+    cand_avg = candidate.get("avg")
+    if ref_avg is not None and cand_avg is not None and ref_avg > 0:
+        avg_ratio = cand_avg / ref_avg
+        if avg_ratio > max_avg_ratio:
+            failures.append(f"candidate avg CPU ratio {avg_ratio:.3f} > allowed {max_avg_ratio:.3f}")
+
+    for key in ("p95", "max"):
+        ref_value = reference.get(key)
+        cand_value = candidate.get(key)
+        if ref_value is None or cand_value is None or ref_value <= 0:
+            continue
+        ratio = cand_value / ref_value
+        ratios[key] = ratio
+        if ratio > 1.0:
+            failures.append(f"candidate CPU {key} {cand_value:.3f} > reference {ref_value:.3f}")
+
+    return avg_ratio, ratios, failures
 
 
 def resolve_reference_app(path_text: str | None) -> Path:
@@ -385,13 +419,14 @@ def main() -> int:
 
     ref_cpu = cpu_avg(reference)
     cand_cpu = cpu_avg(candidate)
-    cpu_ratio = None
-    if ref_cpu is not None and cand_cpu is not None and ref_cpu > 0:
-        cpu_ratio = cand_cpu / ref_cpu
-        if cpu_ratio > args.max_candidate_cpu_ratio:
-            failures.append(
-                f"candidate avg CPU ratio {cpu_ratio:.3f} > allowed {args.max_candidate_cpu_ratio:.3f}"
-            )
+    ref_cpu_stats = cpu_stats(reference)
+    cand_cpu_stats = cpu_stats(candidate)
+    cpu_ratio, cpu_stat_ratios, cpu_failures = compare_cpu_stats(
+        ref_cpu_stats,
+        cand_cpu_stats,
+        args.max_candidate_cpu_ratio,
+    )
+    failures.extend(cpu_failures)
 
     summary = {
         "fixture": args.fixture,
@@ -414,6 +449,9 @@ def main() -> int:
             "referenceCpuAvg": ref_cpu,
             "candidateCpuAvg": cand_cpu,
             "candidateCpuRatio": cpu_ratio,
+            "referenceCpu": ref_cpu_stats,
+            "candidateCpu": cand_cpu_stats,
+            "candidateCpuRatios": cpu_stat_ratios,
             "referenceMotionSignal": reference_motion_signal,
             "motionFailures": motion_failures,
             "waveFailures": wave_failures,

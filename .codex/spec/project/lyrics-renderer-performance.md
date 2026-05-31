@@ -183,6 +183,9 @@ Wave timeline comparisons remain valid across old and native renderers when the
 CSV is isolated per run. Compare target radius, lead-in rows, cadence p95,
 order violations, and late-fire count even if line-motion presentation drift is
 not comparable.
+When comparing CPU against a prior build, avg CPU is insufficient. The
+scroll-tap-jump acceptance gate must also require p95 and max CPU to improve,
+because those spikes are where the lyrics page feels stuck.
 
 False manual-scroll state is a first-class lyrics stutter cause even when CPU is
 low. Scroll-wheel monitors must not let momentum-only events or events outside

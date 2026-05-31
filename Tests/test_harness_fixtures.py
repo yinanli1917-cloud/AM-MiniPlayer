@@ -102,19 +102,63 @@ class HarnessFixtureTests(unittest.TestCase):
         ))
 
     def test_sequential_reference_extracts_cpu_average(self) -> None:
-        self.assertEqual(
-            sequential_reference.cpu_avg({
-                "perfSummary": {
-                    "measurement": {
-                        "cpuPercent": {
-                            "avg": 12.5,
-                        },
+        run_summary = {
+            "perfSummary": {
+                "measurement": {
+                    "cpuPercent": {
+                        "avg": 12.5,
+                        "p95": 28.0,
+                        "max": 32.0,
                     },
                 },
-            }),
-            12.5,
+            },
+        }
+
+        self.assertEqual(sequential_reference.cpu_avg(run_summary), 12.5)
+        self.assertEqual(
+            sequential_reference.cpu_stats(run_summary),
+            {
+                "avg": 12.5,
+                "p95": 28.0,
+                "max": 32.0,
+            },
         )
-        self.assertIsNone(sequential_reference.cpu_avg({"perfSummary": {}}))
+        self.assertEqual(sequential_reference.cpu_stats({"perfSummary": {}}), {})
+
+    def test_sequential_reference_fails_cpu_spike_regression(self) -> None:
+        reference = {
+            "perfSummary": {
+                "measurement": {
+                    "cpuPercent": {
+                        "avg": 20.0,
+                        "p95": 40.0,
+                        "max": 45.0,
+                    },
+                },
+            },
+        }
+        candidate = {
+            "perfSummary": {
+                "measurement": {
+                    "cpuPercent": {
+                        "avg": 10.0,
+                        "p95": 30.0,
+                        "max": 46.0,
+                    },
+                },
+            },
+        }
+
+        avg_ratio, ratios, failures = sequential_reference.compare_cpu_stats(
+            sequential_reference.cpu_stats(reference),
+            sequential_reference.cpu_stats(candidate),
+            max_avg_ratio=1.0,
+        )
+
+        self.assertEqual(avg_ratio, 0.5)
+        self.assertEqual(ratios["p95"], 0.75)
+        self.assertGreater(ratios["max"], 1.0)
+        self.assertEqual(failures, ["candidate CPU max 46.000 > reference 45.000"])
 
     def test_sequential_reference_rejects_zero_error_motion_reference(self) -> None:
         signal = sequential_reference.motion_reference_comparability(
