@@ -40,7 +40,10 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("if presentationEngine.isNaturalWaveActive"))
         XCTAssertTrue(source.contains("updateNativeLineMotionSamplingTimer"))
         XCTAssertTrue(source.contains("sampleNativeLineMotionIfNeeded"))
-        XCTAssertTrue(source.contains("reportLineMotionFrames(configuration: runtimeConfiguration"))
+        XCTAssertTrue(source.contains("configuration: runtimeConfiguration,\n            timestamp: now"))
+        XCTAssertTrue(source.contains("final class NativeLyricsSurfaceController"))
+        XCTAssertTrue(source.contains("func captureLineMotionFrames(timestamp: Date, playbackTime: TimeInterval) -> Bool"))
+        XCTAssertTrue(lyricsViewSource.contains("@State private var nativeLyricsSurfaceController = NativeLyricsSurfaceController()"))
         XCTAssertTrue(source.contains("private var rowIDByIndex: [Int: String]"))
         XCTAssertTrue(source.contains("private var lastConfiguredTextPhaseIndex: Int?"))
         XCTAssertTrue(source.contains("activeTextPhaseRow(for: runtimeConfiguration)"))
@@ -61,6 +64,8 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertFalse(source.contains("wordFillBucket"))
         XCTAssertFalse(lyricsViewSource.contains("Timer.publish"))
         XCTAssertTrue(lyricsViewSource.contains("lineMotionMonitoringEnabled && !lyricsLayerRendererActive"))
+        XCTAssertFalse(lyricsViewSource.contains("nativeLineMotionFrameCaptureSequence"))
+        XCTAssertFalse(source.contains("lineMotionFrameCaptureSequence"))
         XCTAssertFalse(lyricsViewSource.contains("scroll.lastVelocity = absVelocity"))
     }
 }

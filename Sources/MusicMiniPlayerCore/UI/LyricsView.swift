@@ -340,7 +340,6 @@ public struct LyricsView: View {
     @State private var lineMotionSamplingActive = false
     @State private var lineMotionSamplingUntil: Date = .distantPast
     @State private var lineMotionFrameCaptureActive = false
-    @State private var nativeLineMotionFrameCaptureSequence = -1
     @State private var pendingLineMotionCapture: LyricLineMotionCaptureRequest?
     @State private var lastLineBoundaryLagEventAt: Date = .distantPast
     @State private var lastLineBoundaryLagSignature: String?
@@ -355,6 +354,7 @@ public struct LyricsView: View {
     @State private var cachedNativeRenderedIndices: [Int] = []
     @State private var nativeLyricsManualScrollActive = false
     @State private var nativeLyricsDirectSnapRequest: NativeLyricsDirectSnapRequest?
+    @State private var nativeLyricsSurfaceController = NativeLyricsSurfaceController()
     @State private var lastRendererModeEventSignature: String?
     // Translation state.
     @State private var translationSessionConfigAny: Any?
@@ -783,6 +783,7 @@ public struct LyricsView: View {
                         interludeAfterIndex: lyricsService.interludeAfterIndex,
                         directSnapRequest: nativeLyricsDirectSnapRequest,
                         controlsVisible: showControls || isAudioOutputMenuPresented,
+                        surfaceController: nativeLyricsSurfaceController,
                         musicController: musicController,
                         onLineTap: { line in handleLineTap(line: line) },
                         onDirectSnapConsumed: { requestID in
@@ -809,8 +810,6 @@ public struct LyricsView: View {
                                 scheduleHeightCacheUpdate()
                             }
                         },
-                        lineMotionFrameCaptureActive: lineMotionFrameCaptureActive,
-                        lineMotionFrameCaptureSequence: nativeLineMotionFrameCaptureSequence,
                         lineMotionSamplingEnabled: lineMotionMonitoringEnabled,
                         lineMotionFocusedSamplingUntil: lineMotionSamplingUntil,
                         lineMotionFirstRealDisplayIndex: firstRealDisplayIndex,
@@ -1091,13 +1090,20 @@ public struct LyricsView: View {
         guard now.timeIntervalSince(lastLineMotionSampleAt) >= sampleInterval else { return }
         lastLineMotionSampleAt = now
 
+        if lyricsLayerRendererActive {
+            let captured = nativeLyricsSurfaceController.captureLineMotionFrames(
+                timestamp: now,
+                playbackTime: playbackTime
+            )
+            if !captured {
+                recordLineMotionCaptureMissIfNeeded(timestamp: now, playbackTime: playbackTime)
+            }
+            return
+        }
+
         let capture = LyricLineMotionCaptureRequest(requestedAt: now, playbackTime: playbackTime)
         pendingLineMotionCapture = capture
-        if lyricsLayerRendererActive {
-            nativeLineMotionFrameCaptureSequence &+= 1
-        } else {
-            lineMotionFrameCaptureActive = true
-        }
+        lineMotionFrameCaptureActive = true
 
         DispatchQueue.main.asyncAfter(deadline: .now() + lyricLineMotionCaptureTimeout) {
             guard pendingLineMotionCapture == capture else { return }

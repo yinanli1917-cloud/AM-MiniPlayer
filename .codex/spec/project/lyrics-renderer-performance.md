@@ -475,6 +475,12 @@ not currently being filled; line-level or word-level fixtures with translation
 off must not scan visible lines for translation eligibility during every motion
 sample.
 
+Native line-motion frame capture must stay on the native surface. Do not use a
+SwiftUI `@State` sequence or representable update as a capture signal; it
+invalidates the lyrics page and reintroduces display-list work into the
+diagnostic loop. Use the native surface controller/direct view method for
+explicit captures and the surface-owned timer for periodic native samples.
+
 This surface is still not accepted as complete until blur parity, text sweep
 parity, live scroll-tap-jump, FPS, drift, and CPU gates pass on the locked
 fixtures.

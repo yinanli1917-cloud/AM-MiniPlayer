@@ -29,6 +29,7 @@ struct NativeLyricsSurface: NSViewRepresentable {
     let interludeAfterIndex: Int?
     let directSnapRequest: NativeLyricsDirectSnapRequest?
     let controlsVisible: Bool
+    let surfaceController: NativeLyricsSurfaceController
     let musicController: MusicController
     let onLineTap: (LyricLine) -> Void
     let onDirectSnapConsumed: (UUID) -> Void
@@ -37,18 +38,19 @@ struct NativeLyricsSurface: NSViewRepresentable {
     let onManualScrollEnded: () -> Void
     let onManualScrollRecovered: () -> Void
     let onHeightMeasured: (Int, CGFloat) -> Void
-    let lineMotionFrameCaptureActive: Bool
-    let lineMotionFrameCaptureSequence: Int
     let lineMotionSamplingEnabled: Bool
     let lineMotionFocusedSamplingUntil: Date
     let lineMotionFirstRealDisplayIndex: Int
     let onLineMotionFrames: ([Int: CGRect], NativeLyricsPresentationSnapshot, Date?, TimeInterval?) -> Void
 
     func makeNSView(context: Context) -> NativeLyricsSurfaceView {
-        NativeLyricsSurfaceView()
+        let view = NativeLyricsSurfaceView()
+        surfaceController.attach(view)
+        return view
     }
 
     func updateNSView(_ nsView: NativeLyricsSurfaceView, context: Context) {
+        surfaceController.attach(nsView)
         nsView.configure(
             LyricsLayerRendererConfiguration(
                 rows: rows,
@@ -80,8 +82,6 @@ struct NativeLyricsSurface: NSViewRepresentable {
                 onManualScrollEnded: onManualScrollEnded,
                 onManualScrollRecovered: onManualScrollRecovered,
                 onHeightMeasured: onHeightMeasured,
-                lineMotionFrameCaptureActive: lineMotionFrameCaptureActive,
-                lineMotionFrameCaptureSequence: lineMotionFrameCaptureSequence,
                 lineMotionSamplingEnabled: lineMotionSamplingEnabled,
                 lineMotionFocusedSamplingUntil: lineMotionFocusedSamplingUntil,
                 lineMotionFirstRealDisplayIndex: lineMotionFirstRealDisplayIndex,
@@ -92,6 +92,20 @@ struct NativeLyricsSurface: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NativeLyricsSurfaceView, coordinator: ()) {
         nsView.stopAnimations()
+    }
+}
+
+@MainActor
+final class NativeLyricsSurfaceController {
+    private weak var surfaceView: NativeLyricsSurfaceView?
+
+    func attach(_ view: NativeLyricsSurfaceView) {
+        surfaceView = view
+    }
+
+    @discardableResult
+    func captureLineMotionFrames(timestamp: Date, playbackTime: TimeInterval) -> Bool {
+        surfaceView?.captureLineMotionFrames(timestamp: timestamp, playbackTime: playbackTime) ?? false
     }
 }
 
@@ -125,8 +139,6 @@ struct LyricsLayerRendererConfiguration {
     let onManualScrollEnded: () -> Void
     let onManualScrollRecovered: () -> Void
     let onHeightMeasured: (Int, CGFloat) -> Void
-    let lineMotionFrameCaptureActive: Bool
-    let lineMotionFrameCaptureSequence: Int
     let lineMotionSamplingEnabled: Bool
     let lineMotionFocusedSamplingUntil: Date
     let lineMotionFirstRealDisplayIndex: Int
@@ -189,7 +201,6 @@ final class NativeLyricsSurfaceView: NSView {
     private var hoveredRowIndex: Int?
     private var lastConfigureEventSignature: String?
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
-    private var lastReportedLineMotionCaptureSequence: Int = -1
     private var lastConfiguredTextPhaseIndex: Int?
 
     override init(frame frameRect: NSRect) {
@@ -307,7 +318,6 @@ final class NativeLyricsSurfaceView: NSView {
             startPresentationLoop()
         }
 
-        reportPendingLineMotionFramesIfNeeded(configuration: runtimeConfiguration)
         scheduleNativeLineAdvanceTimerIfNeeded(configuration: runtimeConfiguration)
     }
 
@@ -508,13 +518,6 @@ final class NativeLyricsSurfaceView: NSView {
         CATransaction.commit()
     }
 
-    private func reportPendingLineMotionFramesIfNeeded(configuration: LyricsLayerRendererConfiguration) {
-        guard configuration.lineMotionFrameCaptureSequence >= 0,
-              configuration.lineMotionFrameCaptureSequence != lastReportedLineMotionCaptureSequence else { return }
-        lastReportedLineMotionCaptureSequence = configuration.lineMotionFrameCaptureSequence
-        reportLineMotionFrames(configuration: configuration)
-    }
-
     private func reportLineMotionFrames(
         configuration: LyricsLayerRendererConfiguration,
         timestamp: Date? = nil,
@@ -541,6 +544,18 @@ final class NativeLyricsSurfaceView: NSView {
                 playbackTime
             )
         }
+    }
+
+    @discardableResult
+    func captureLineMotionFrames(timestamp: Date, playbackTime: TimeInterval) -> Bool {
+        guard let configuration else { return false }
+        let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        reportLineMotionFrames(
+            configuration: runtimeConfiguration,
+            timestamp: timestamp,
+            playbackTime: playbackTime
+        )
+        return true
     }
 
     private func updateNativeLineMotionSamplingTimer(configuration: LyricsLayerRendererConfiguration) {
@@ -794,7 +809,6 @@ final class NativeLyricsSurfaceView: NSView {
                 applyFrames(runtimeConfiguration: runtimeConfiguration, snap: false, managesTransaction: false)
             }
         }
-        reportPendingLineMotionFramesIfNeeded(configuration: runtimeConfiguration)
         stopPresentationLoopIfIdle(runtimeConfiguration: runtimeConfiguration)
     }
 
@@ -1062,9 +1076,6 @@ final class NativeLyricsSurfaceView: NSView {
             )
         }
         applyFrames(runtimeConfiguration: runtimeConfiguration, snap: true)
-        if runtimeConfiguration.lineMotionFrameCaptureActive {
-            reportLineMotionFrames(configuration: runtimeConfiguration)
-        }
     }
 
     private func forceDirectSnap(to index: Int, reason: LyricsPresentationDirectSnapReason) {
