@@ -434,6 +434,26 @@ public class MusicController: ObservableObject {
         markQueueUnavailable(reason: .musicAppUnavailable)
     }
 
+    func applyMusicAppConnectionUnavailable() {
+        musicApp = nil
+        stateApp = nil
+        metadataApp = nil
+        queueApp = nil
+        positionApp = nil
+        artworkApp = nil
+        controlApp = nil
+        currentTrackTitle = "Failed to Connect"
+        currentArtist = "Please ensure Music.app is installed"
+        currentAlbum = ""
+        isPlaying = false
+        duration = 0
+        currentTime = 0
+        internalCurrentTime = 0
+        syncPlaybackClock(to: 0, playing: false)
+        markQueueUnavailableForMusicAppUnavailable()
+        setArtwork(nil)
+    }
+
     @discardableResult
     func applyNoCurrentTrackQueueSnapshotIfNeeded(_ provenance: MusicQueueProvenance) -> Bool {
         guard provenance == .unavailable(reason: .noCurrentTrack) else {
@@ -562,8 +582,7 @@ public class MusicController: ObservableObject {
             debugPrint("❌ [MusicController] Failed to create SBApplication\n")
             logger.error("❌ Failed to create SBApplication for Music.app")
             DispatchQueue.main.async {
-                self.currentTrackTitle = "Failed to Connect"
-                self.currentArtist = "Please ensure Music.app is installed"
+                self.applyMusicAppConnectionUnavailable()
             }
             return
         }

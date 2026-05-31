@@ -175,6 +175,9 @@ Music.app-unavailable queue snapshots use the same whole-surface cleanup. If
 one read path discovers that Music.app is unavailable, both History and Up Next
 are cleared and marked unavailable instead of letting old exact rows remain on
 the other surface until its own refresh runs.
+Music.app connection failures now enter that same unavailable state during
+connect/reconnect instead of only changing the visible track label, so a failed
+automation connection cannot leave previously exact queue rows retained.
 Whole-surface unavailable transitions are idempotent after the queue is already
 empty, pending fetch metadata is clear, and both surfaces carry the same
 unavailable reason. Repeated no-current or Music.app-unavailable polls therefore

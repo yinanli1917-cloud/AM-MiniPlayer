@@ -1304,6 +1304,60 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
+    func testMusicAppConnectionUnavailableClearsStaleQueueSurfaces() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueFetchPending = true
+        c.queueFetchPendingForceRecent = true
+        c.queueFetchPendingQueueGeneration = 71
+        c.queueFetchPendingTrackGeneration = 8
+        c.queueSyncGeneration = 71
+        c.currentTrackTitle = "Old Song"
+        c.currentArtist = "Old Artist"
+        c.currentAlbum = "Old Album"
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.isPlaying = true
+        c.duration = 240
+        c.currentTime = 99
+        c.internalCurrentTime = 99
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-connection-loss")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-connection-loss")
+
+        c.applyMusicAppConnectionUnavailable()
+
+        XCTAssertEqual(c.queueSyncGeneration, 72)
+        XCTAssertEqual(c.currentTrackTitle, "Failed to Connect")
+        XCTAssertEqual(c.currentArtist, "Please ensure Music.app is installed")
+        XCTAssertEqual(c.currentAlbum, "")
+        XCTAssertFalse(c.isPlaying)
+        XCTAssertEqual(c.duration, 0)
+        XCTAssertEqual(c.currentTime, 0)
+        XCTAssertEqual(c.internalCurrentTime, 0)
+        XCTAssertFalse(c.queueFetchPending)
+        XCTAssertFalse(c.queueFetchPendingForceRecent)
+        XCTAssertNil(c.queueFetchPendingQueueGeneration)
+        XCTAssertNil(c.queueFetchPendingTrackGeneration)
+        XCTAssertNil(c.currentPersistentID)
+        XCTAssertFalse(c.currentTrackIsURLTrack)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .musicAppUnavailable))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .musicAppUnavailable))
+    }
+
     func testRepeatedMusicAppUnavailableSnapshotIsHandledWithoutGenerationChurn() {
         let c = MusicController(preview: true)
         c.isPreview = false
