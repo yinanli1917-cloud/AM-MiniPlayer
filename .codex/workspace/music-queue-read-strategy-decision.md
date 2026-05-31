@@ -178,6 +178,10 @@ the other surface until its own refresh runs.
 Music.app connection failures now enter that same unavailable state during
 connect/reconnect instead of only changing the visible track label, so a failed
 automation connection cannot leave previously exact queue rows retained.
+The periodic queue-hash probe follows the same rule when its public Music.app
+queue proxy is unavailable or not running. It clears retained queue/history rows
+and resets the queue-hash baseline so a later recovered hash cannot be mistaken
+for an already-observed queue.
 If the full-state ScriptingBridge proxy is unavailable and the public
 AppleScript fallback also fails, nanoPod applies the same cleanup. Timeout
 fallback failures remain conservative so transient slow IPC does not erase a

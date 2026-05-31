@@ -64,6 +64,10 @@
   must invalidate retained queue/history rows immediately and mark them as
   pending public refresh. Do not keep previously exact rows visible while the
   next public Music.app snapshot is still in flight.
+- If the periodic queue-hash probe cannot reach its public Music.app queue
+  proxy, clear retained queue/history rows to Music.app-unavailable and reset
+  the queue-hash baseline. A hash from a recovered Music.app session must be
+  treated as fresh evidence, not compared against stale pre-unavailable state.
 - User controls that can advance or reorder Music.app playback must schedule a
   public queue refresh after the Music.app command returns, fails, or cannot
   reach Music.app. Guard those scheduled reads by the queue generation captured

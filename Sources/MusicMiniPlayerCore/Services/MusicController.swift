@@ -443,6 +443,7 @@ public class MusicController: ObservableObject {
             && upNextRawRowCount == 0
             && recentRawRowCount == 0
             && lastRecentHistoryFetchAt == .distantPast
+            && lastQueueHash.isEmpty
             && upNextProvenance == unavailable
             && recentTracksProvenance == unavailable
 
@@ -466,6 +467,7 @@ public class MusicController: ObservableObject {
         queueFetchPendingQueueGeneration = nil
         queueFetchPendingTrackGeneration = nil
         lastRecentHistoryFetchAt = .distantPast
+        lastQueueHash = ""
         upNextTracks = []
         recentTracks = []
         upNextRawRowCount = 0
@@ -525,6 +527,11 @@ public class MusicController: ObservableObject {
             return false
         }
         return true
+    }
+
+    @discardableResult
+    func applyQueueHashProbeUnavailable() -> Bool {
+        applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable))
     }
 
     @inline(__always)
@@ -877,7 +884,13 @@ public class MusicController: ObservableObject {
         guard !isPreview else { return }
 
         scriptingBridgeQueue.async { [weak self] in
-            guard let self = self, let app = self.queueApp, app.isRunning else { return }
+            guard let self = self else { return }
+            guard let app = self.queueApp, app.isRunning else {
+                DispatchQueue.main.async {
+                    self.applyQueueHashProbeUnavailable()
+                }
+                return
+            }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
             guard let hash = self.getQueueHashFromApp(app) else { return }
 
