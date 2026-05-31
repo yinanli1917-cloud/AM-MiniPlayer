@@ -231,6 +231,11 @@ in-flight history result cannot suppress the next fresh read for the new
 context. Up Next and recent history must both use the queue and track
 generations captured when the fetch was scheduled, including early unavailable
 results.
+Unavailable-state fast paths now include in-flight queue work in their
+settled-state checks. If Music.app is already displayed as no-current,
+Music.app-unavailable, or public-state-unavailable, but an older queue fetch is
+still running, nanoPod still advances the queue generation so that older
+snapshot cannot reapply after the unavailable transition.
 Coalesced pending refreshes carry the same queue and track generations. A
 throttled delayed callback may only consume the pending request if those
 generations still match current state; stale pending refreshes are discarded

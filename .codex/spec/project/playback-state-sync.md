@@ -99,6 +99,11 @@
   stale ScriptingBridge playlist-context scan must not replace a newer pending,
   unavailable, or exact queue state. Capture both generations when scheduling
   the fetch; do not recapture track generation inside the async worker.
+- Unavailable-state transitions must treat an in-flight queue fetch as unsettled
+  even when rows are already empty and provenance already matches the same
+  unavailable reason. Advance the queue generation so the older in-flight
+  snapshot cannot apply after Music.app has become no-current or public-state
+  unavailable.
 - Coalesced pending queue refreshes must carry the queue and track generations
   captured when they were marked pending. Throttled delayed callbacks must
   consume the pending refresh only if those generations still match current

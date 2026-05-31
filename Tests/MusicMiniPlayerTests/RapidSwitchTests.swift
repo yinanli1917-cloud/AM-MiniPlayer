@@ -1258,6 +1258,32 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .noCurrentTrack))
     }
 
+    func testSettledNoCurrentTrackStillInvalidatesInFlightQueueFetch() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 70
+        c.queueFetchInFlight = true
+        c.upNextProvenance = .unavailable(reason: .noCurrentTrack)
+        c.recentTracksProvenance = .unavailable(reason: .noCurrentTrack)
+
+        XCTAssertTrue(c.markQueueUnavailableForNoCurrentTrack())
+
+        XCTAssertEqual(c.queueSyncGeneration, 71)
+        XCTAssertTrue(c.queueFetchInFlight)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .noCurrentTrack))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .noCurrentTrack))
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: 70,
+            currentQueueGeneration: c.queueSyncGeneration,
+            requestTrackGeneration: 4,
+            currentTrackGeneration: 4
+        ))
+
+        c.queueFetchInFlight = false
+        XCTAssertFalse(c.markQueueUnavailableForNoCurrentTrack())
+        XCTAssertEqual(c.queueSyncGeneration, 71)
+    }
+
     func testNoCurrentTrackQueueSnapshotClearsRecentRowsEvenWhenRecentFetchIsThrottled() {
         let c = MusicController(preview: true)
         c.isPreview = false
@@ -1531,6 +1557,32 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.queueSyncGeneration, unavailableGeneration)
         XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .publicSourceUnverified))
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .publicSourceUnverified))
+    }
+
+    func testSettledQueueHashProbePublicStateUnavailableStillInvalidatesInFlightFetch() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.queueSyncGeneration = 90
+        c.queueFetchInFlight = true
+        c.upNextProvenance = .unavailable(reason: .publicSourceUnverified)
+        c.recentTracksProvenance = .unavailable(reason: .publicSourceUnverified)
+
+        XCTAssertTrue(c.applyQueueHashProbePublicStateUnavailable(reason: .publicSourceUnverified))
+
+        XCTAssertEqual(c.queueSyncGeneration, 91)
+        XCTAssertTrue(c.queueFetchInFlight)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .publicSourceUnverified))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .publicSourceUnverified))
+        XCTAssertFalse(MusicController.shouldApplyRecentHistorySnapshot(
+            requestQueueGeneration: 90,
+            currentQueueGeneration: c.queueSyncGeneration,
+            requestTrackGeneration: 4,
+            currentTrackGeneration: 4
+        ))
+
+        c.queueFetchInFlight = false
+        XCTAssertFalse(c.applyQueueHashProbePublicStateUnavailable(reason: .publicSourceUnverified))
+        XCTAssertEqual(c.queueSyncGeneration, 91)
     }
 
     func testMusicAppConnectionUnavailableClearsStaleQueueSurfaces() {

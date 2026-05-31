@@ -468,6 +468,7 @@ public class MusicController: ObservableObject {
             && currentTrackClass.isEmpty
             && currentPlaylistName.isEmpty
             && !currentTrackIsURLTrack
+            && !queueFetchInFlight
             && !queueFetchPending
             && !queueFetchPendingForceRecent
             && queueFetchPendingQueueGeneration == nil
@@ -577,7 +578,8 @@ public class MusicController: ObservableObject {
             return markQueueUnavailableForMusicAppUnavailable()
         default:
             let unavailable: MusicQueueProvenance = .unavailable(reason: reason)
-            let alreadySettled = !queueFetchPending
+            let alreadySettled = !queueFetchInFlight
+                && !queueFetchPending
                 && !queueFetchPendingForceRecent
                 && queueFetchPendingQueueGeneration == nil
                 && queueFetchPendingTrackGeneration == nil
