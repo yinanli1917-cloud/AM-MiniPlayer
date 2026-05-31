@@ -1,7 +1,7 @@
 # Music Queue Read Strategy Decision
 
 Status: foundation implemented, proof-gated
-Last updated: 2026-05-24
+Last updated: 2026-05-31
 
 ## Decision
 
@@ -36,7 +36,7 @@ Until that proof exists, the only honest product states are:
 | MusicKit `SystemMusicPlayer` | unavailable on current macOS SDK; future candidate only with proof | Apple's public documentation identifies this as the Music.app-controlling MusicKit player, but local SDK compiler probe marks it unavailable on macOS. Documentation also says it shares only some Music.app state, so future availability would still require visible Up Next/history parity proof. |
 | MediaPlayer `MPMusicPlayerController` / `applicationQueuePlayer` / `systemMusicPlayer` | unavailable on current macOS SDK; future candidate only for system player with proof | Local Xcode 26.2 macOS SDK marks `MPMusicPlayerController` unavailable on macOS, so its queue APIs cannot be compiled for nanoPod today. Public docs and headers also classify application players as app-local, while system player sharing is limited and would still need visible queue parity proof if macOS availability changes. |
 | MediaPlayer `MPNowPlayingInfoCenter.default()` | current-app metadata only | Public docs and headers describe it as the current application's Now Playing info center. Local runtime returned `nowPlayingInfo=nil` and playback state `unknown`, with no Music.app queue rows. Queue index/count keys refer to the application's playback queue, not Music.app's Up Next/history panel. |
-| Public SDK/API surface probe | supplemental availability evidence only | `.codex/workspace/probe_music_queue_sdk_surface.sh` records public MusicKit and MediaPlayer compiler/runtime availability without talking to Music.app, requesting authorization, or mutating playback. The first matrix-wrapped run classified the Xcode 26.2 SDK as `application_player_queue_only_not_music_app_session`: `ApplicationMusicPlayer.queue` and insertion positions compile, `SystemMusicPlayer` and `MPMusicPlayerController` fail on macOS, and `MPNowPlayingInfoCenter` is current-app metadata. |
+| Public SDK/API surface probe | supplemental availability evidence only | `.codex/workspace/probe_music_queue_sdk_surface.sh` records public MusicKit and MediaPlayer compiler/runtime availability without talking to Music.app, requesting authorization, or mutating playback. The 2026-05-31 refresh still classifies Xcode 26.2 as `application_player_queue_only_not_music_app_session`: `ApplicationMusicPlayer.queue` and insertion positions compile, `SystemMusicPlayer` and `MPMusicPlayerController` fail on native macOS, and `MPNowPlayingInfoCenter` is current-app metadata. |
 | SiriKit Cloud Media `Queue` | rejected; service-provider API only | Apple's Cloud Media docs define a queue that a developer's media service returns to compatible devices for Siri playback fulfillment. It is not a macOS client API for reading or editing the user's local Music.app Up Next/history panel. |
 | Music.app private files/caches/playback sessions | rejected | Not a public App Store-safe queue source. Existing artwork use does not make it acceptable for queue parity. |
 | Accessibility/UI scraping | rejected for product implementation | Useful only for manual proof notes; not a shippable queue source. |

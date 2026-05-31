@@ -1,6 +1,6 @@
 # Music Queue Official API Audit
 
-Last checked: 2026-05-24
+Last checked: 2026-05-31
 
 This audit records what Apple's public documentation says about MusicKit,
 Apple Music API, and Music.app control surfaces for nanoPod's real-time queue
@@ -35,6 +35,35 @@ surfaces are worth probing and which ones are ruled out by public API contract.
   https://developer.apple.com/documentation/sirikitcloudmedia/queue
 - SiriKit Cloud Media Get a Media Queue:
   https://developer.apple.com/documentation/sirikitcloudmedia/get-a-media-queue
+
+## 2026-05-31 Refresh
+
+Apple's public documentation and the local Xcode 26.2 macOS SDK still do not
+expose a public macOS client API that reads Music.app's visible Up Next/history
+queue.
+
+- Apple's current documentation data for `SystemMusicPlayer.queue` lists the
+  queue property for iOS, iPadOS, Mac Catalyst, tvOS, and visionOS, but not
+  native macOS.
+- Apple's current documentation data for MediaPlayer `systemMusicPlayer` and
+  `applicationQueuePlayer` similarly lists iOS, iPadOS, Mac Catalyst, tvOS, and
+  visionOS, but not native macOS.
+- `MusicPlayer.Queue` remains a queue for a `MusicPlayer`; it is available on
+  macOS, but the only local macOS-compilable player remains
+  `ApplicationMusicPlayer`, which is app-local and not proven to be Music.app's
+  session.
+- Apple Music API `GET /v1/me/recent/played/tracks` remains a recently played
+  history endpoint for the user, not a live local Up Next/history queue reader.
+- SiriKit Cloud Media `Queue` remains a provider-side queue payload for Siri
+  Cloud Media, not a local Music.app queue reader.
+
+Fresh local evidence is recorded at
+`.codex/workspace/music-queue-probes/sdk-refresh-20260531/SDK_SUMMARY.md`.
+That Xcode 26.2 probe again classified the SDK as
+`application_player_queue_only_not_music_app_session`: `ApplicationMusicPlayer.queue`
+and queue insertion positions compile, `SystemMusicPlayer` fails on macOS,
+`MPMusicPlayerController` and both MediaPlayer queue players fail on macOS, and
+`MPNowPlayingInfoCenter` is current-app metadata only.
 
 ## Findings
 

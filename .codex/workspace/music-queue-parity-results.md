@@ -95,6 +95,12 @@ live Music.app queue proof.
   `SystemMusicPlayer` and `MPMusicPlayerController` fail on macOS, and
   `MPNowPlayingInfoCenter.default()` compiles as current-app metadata. Its
   matrix wrapper writes only supplemental `SDK_SUMMARY.md` evidence.
+- SDK refresh probe:
+  `.codex/workspace/music-queue-probes/sdk-refresh-20260531/SDK_SUMMARY.md`
+  repeats the public SDK/API availability check on 2026-05-31 with the same
+  classification: no native macOS `SystemMusicPlayer` or MediaPlayer music
+  player controller path is available, and the only compiling queue remains
+  app-local `ApplicationMusicPlayer.queue`.
 - Official API audit records SiriKit Cloud Media `Queue` as a service-provider
   fulfillment surface for compatible Siri devices, not a client-side Music.app
   queue reader. It should not be added to the runtime parity matrix unless
