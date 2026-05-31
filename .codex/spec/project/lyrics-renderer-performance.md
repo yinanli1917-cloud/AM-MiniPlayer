@@ -162,6 +162,14 @@ Fixes that worked:
     `lyricLineMotionCSV` under `recordLyricsLineMotionSamples` on the main
     thread during scroll/tap/jump verification.
 
+17. Use downsampled artwork only for blur/background/effect surfaces.
+    Album and playlist shells may keep the clear hero cover at full source
+    quality, but fluid backgrounds, fullscreen blurred backdrops, and
+    progressive blur overlays should share a cached effect-size image. Rendering
+    the same full-resolution `NSImage` through several large blurred SwiftUI
+    layers inflated RSS during album/playlist transitions without improving the
+    inspectable cover UX.
+
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:

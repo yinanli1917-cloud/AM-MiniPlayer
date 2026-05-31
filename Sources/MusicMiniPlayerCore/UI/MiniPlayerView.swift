@@ -1,13 +1,13 @@
 import SwiftUI
 
-// 移除自定义transition，使用SwiftUI官方transition避免icon消失bug
-// PlayerPage enum 已移至 MusicController 以支持状态共享
+// Use the system SwiftUI transition to avoid the disappearing icon bug.
+// PlayerPage lives in MusicController so the floating window and menu bar stay in sync.
 
 public struct MiniPlayerView: View {
     @EnvironmentObject var musicController: MusicController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    // 🔑 使用 musicController.currentPage 替代本地状态，实现浮窗/菜单栏同步
+    // Use musicController.currentPage instead of local page state so every surface stays synchronized.
     @State private var isHovering: Bool = false
     @State private var showControls: Bool = false
     @State private var isProgressBarHovering: Bool = false
@@ -15,29 +15,28 @@ public struct MiniPlayerView: View {
     @State private var playlistSelectedTab: Int = 1  // 0 = History, 1 = Up Next
     @Namespace private var animation
 
-    // 🔑 Clip 逻辑 - 从 PlaylistView 传递的滚动偏移量
-
-    // 🔑 封面页hover后文字和遮罩延迟显示
+    // Album text and masks fade in after hover begins.
     @State private var showOverlayContent: Bool = false
 
-    // 🔑 封面页控件模糊渐入效果（除歌曲信息外）
+    // Album controls blur/move in separately from song metadata.
     @State private var controlsBlurAmount: CGFloat = 10
-    // 🔑 封面页控件从下往上移入（10% 距离）
-    @State private var controlsOffsetY: CGFloat = 30  // 约 300px * 10% = 30
+    @State private var controlsOffsetY: CGFloat = 30
 
-    // 🔑 全屏封面模式（从 UserDefaults 读取）
+    // Fullscreen album cover mode is mirrored from UserDefaults.
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
 
-    // 🔑 封面亮度（用于动态调整按钮样式）
+    // Artwork luminance drives button contrast.
     @State private var artworkBrightness: CGFloat = 0.5
     @State private var topLeftLuminance: CGFloat = 0.5
     @State private var topRightLuminance: CGFloat = 0.5
     @State private var artworkTone: ArtworkBackgroundToneMap = .neutral
+    @State private var effectArtwork: NSImage?
+    @State private var effectArtworkSignature: String = ""
 
-    // 🔑 Shuffle/Repeat 流动动画进度
+    // Shuffle/repeat feedback animation progress.
     @State private var repeatFlow: Double = 0
 
-    // 🔑 页面切换后短暂锁定 hover 状态，防止 onHover(false) 覆盖
+    // Temporarily lock hover after page switches so onHover(false) does not cancel the transition.
     @State private var hoverLocked: Bool = false
     @State private var isAudioOutputMenuPresented: Bool = false
 
@@ -60,17 +59,16 @@ public struct MiniPlayerView: View {
         GeometryReader { geometry in
             ZStack {
                 // Background (Artwork-derived fluid gradient — no system glass)
-                FluidGradientBackground(artwork: musicController.currentArtwork)
+                FluidGradientBackground(artwork: effectArtwork ?? musicController.currentArtwork)
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
 
-                // 🔑 窗口拖动层 - 允许从空白区域拖动窗口
+                // Window drag layer: lets the user move the panel from empty areas.
                 WindowDraggableView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityHidden(true)
 
-                // 🔑 使用ZStack叠加所有页面，通过opacity和zIndex控制显示
-                // matchedGeometryEffect: 使用单个浮动Image + invisible placeholders避免crossfade
+                // Pages are stacked so matchedGeometryEffect can move a single artwork image.
 
                 // Lyrics is the only page with frame-driven word rendering. Keep it
                 // unmounted while hidden so album/playlist pages do not pay that CPU cost.
@@ -80,37 +78,36 @@ public struct MiniPlayerView: View {
                         .transition(.opacity)
                 }
 
-                // Playlist View - 始终存在以支持matchedGeometryEffect
-                PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent)
+                // Playlist stays mounted to support matchedGeometryEffect.
+                PlaylistView(currentPage: $musicController.currentPage, animationNamespace: animation, selectedTab: $playlistSelectedTab, showControls: $showControls, isHovering: $isHovering, showOverlayContent: $showOverlayContent, effectArtwork: effectArtwork)
                     .opacity(musicController.currentPage == .playlist ? 1 : 0)
-                    .zIndex(musicController.currentPage == .playlist ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
+                    .zIndex(musicController.currentPage == .playlist ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .playlist)
                     .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
-                // Album View - 始终存在以支持matchedGeometryEffect
+                // Album stays mounted to support matchedGeometryEffect.
                 albumPageContent(geometry: geometry)
                     .opacity(musicController.currentPage == .album ? 1 : 0)
-                    .zIndex(musicController.currentPage == .album ? 1 : 0)  // 🔑 降低到 zIndex 1（和封面同层）
+                    .zIndex(musicController.currentPage == .album ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .album)
                     .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
 
-                // 🎯 浮动的Artwork - 单个Image实例，通过matchedGeometry移动
+                // Floating artwork: one clear hero image moved through matchedGeometryEffect.
                 if let artwork = musicController.currentArtwork {
-                    floatingArtwork(artwork: artwork, geometry: geometry)
-                        .zIndex(musicController.currentPage == .album ? 50 : 1)  // 🔑 歌单页 1（同层），专辑页 50（遮住文字）
+                    floatingArtwork(artwork: artwork, effectArtwork: effectArtwork ?? artwork, geometry: geometry)
+                        .zIndex(musicController.currentPage == .album ? 50 : 1)
                         .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
-                        .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
+                        .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
                         .accessibilityHidden(true)
                 }
 
-                // 🎨 Album页面的文字和遮罩 - 必须在浮动artwork之上
-                // 🔑 始终存在，使用 opacity 控制显示，确保丝滑过渡
+                // Album text and masks stay above floating artwork and fade for smooth transitions.
                 albumOverlayContent(geometry: geometry)
-                    .zIndex(101)  // 在浮动artwork之上
+                    .zIndex(101)
                     .opacity(musicController.currentPage == .album ? 1 : 0)
                     .allowsHitTesting(musicController.currentPage == .album)
                     .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: 0.25, dampingFraction: 0.9), value: musicController.currentPage)
-                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)  // 🔑 监听 isHovering 变化
+                    .animation(reduceMotion ? .linear(duration: 0.1) : .spring(response: fullscreenAlbumCover ? 0.5 : 0.4, dampingFraction: 0.85), value: isHovering)
 
 
             }
@@ -120,7 +117,7 @@ public struct MiniPlayerView: View {
                 reduceMotion: reduceMotion
             ))
         }
-        // 移除固定尺寸，让视图自动填充窗口以支持缩放
+        // Fill the window so resizing keeps the same layout rules.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
@@ -185,7 +182,7 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 监听全屏封面设置变化
+        // Mirror fullscreen album-cover preference changes.
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             let newValue = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
             if newValue != fullscreenAlbumCover {
@@ -194,8 +191,9 @@ public struct MiniPlayerView: View {
                 }
             }
         }
-        // 🔑 监听封面变化，计算整图 + 底部区域亮度
+        // Artwork changes update luminance and the smaller effect-only render image.
         .onChange(of: musicController.currentArtwork) { _, newArtwork in
+            refreshEffectArtwork()
             if newArtwork != nil {
                 syncArtworkLuminance()
                 if let artwork = newArtwork {
@@ -227,13 +225,23 @@ public struct MiniPlayerView: View {
         .onChange(of: musicController.topRightArtworkLuminance) { _, _ in
             syncArtworkLuminance()
         }
+        .onChange(of: musicController.currentPersistentID) { _, _ in
+            refreshEffectArtwork()
+        }
+        .onChange(of: musicController.currentTrackTitle) { _, _ in
+            refreshEffectArtwork()
+        }
+        .onChange(of: musicController.currentArtist) { _, _ in
+            refreshEffectArtwork()
+        }
         .onAppear {
+            refreshEffectArtwork()
             syncArtworkLuminance()
             if let artwork = musicController.currentArtwork {
                 artworkTone = ArtworkBackgroundToneMap.forMetrics(artwork.artworkVisualMetrics())
             }
         }
-        // 🔑 监听页面切换：从其他页面切回专辑页时，同步所有 hover 相关状态
+        // Keep hover state coherent when returning to the album page.
         .onChange(of: musicController.currentPage) { oldPage, newPage in
             // 从歌单/歌词页切换到专辑页时，强制同步 hover 状态
             if newPage == .playlist {
@@ -270,6 +278,24 @@ public struct MiniPlayerView: View {
         artworkBrightness = musicController.artworkLuminance
         topLeftLuminance = musicController.topLeftArtworkLuminance
         topRightLuminance = musicController.topRightArtworkLuminance
+    }
+
+    private func refreshEffectArtwork() {
+        let signature = ArtworkDisplayImageFactory.signature(
+            for: musicController.currentArtwork,
+            trackID: musicController.currentPersistentID,
+            title: musicController.currentTrackTitle,
+            artist: musicController.currentArtist
+        )
+        guard signature != effectArtworkSignature else { return }
+        effectArtworkSignature = signature
+
+        guard let artwork = musicController.currentArtwork else {
+            effectArtwork = nil
+            return
+        }
+
+        effectArtwork = ArtworkDisplayImageFactory.makeEffectArtwork(from: artwork)
     }
 }
 
@@ -439,31 +465,26 @@ extension MiniPlayerView {
         }
     }
 
-    // MARK: - Floating Artwork (单个Image实例避免crossfade)
+    // MARK: - Floating Artwork
     @ViewBuilder
-    private func floatingArtwork(artwork: NSImage, geometry: GeometryProxy) -> some View {
-        // 🔑 单个Image实例，通过计算位置实现流畅动画
+    private func floatingArtwork(artwork: NSImage, effectArtwork: NSImage, geometry: GeometryProxy) -> some View {
+        // Use one hero image for matched movement; blurred/effect layers use a smaller render image.
         GeometryReader { geo in
-            // 控件区域高度（与albumOverlayContent一致）
             let controlsHeight: CGFloat = 80
             let availableHeight = geo.size.height - (showControls ? controlsHeight : 0)
 
-            // 根据当前页面计算尺寸和位置
             let (artSize, cornerRadius, shadowRadius, xPosition, yPosition): (CGFloat, CGFloat, CGFloat, CGFloat, CGFloat) = {
                 if musicController.currentPage == .album {
                     if fullscreenAlbumCover {
-                        // 🔑 全屏封面模式：封面占满窗口宽度，hover时尺寸不变
                         let size = geo.size.width
                         return (
                             size,
-                            0.0,    // 无圆角
-                            0.0,    // 无阴影
+                            0.0,
+                            0.0,
                             geo.size.width / 2,
-                            size / 2  // 顶部对齐
+                            size / 2
                         )
                     } else {
-                        // 普通模式：居中大图（在可用区域内居中）
-                        // 🔑 与albumOverlayContent保持一致的尺寸
                         let size = isHovering ? geo.size.width * 0.48 : geo.size.width * 0.68
                         return (
                             size,
@@ -474,19 +495,13 @@ extension MiniPlayerView {
                         )
                     }
                 } else if musicController.currentPage == .playlist {
-                    // 🔑 与 PlaylistView 中的 artSize 完全一致
                     let size = min(geo.size.width * 0.18, 60.0)
 
-                    // 🔑 计算在 Now Playing 卡片内的位置：
-                    // - "Now Playing" header 高度: 36 (非 sticky，但仍占空间)
-                    // - 卡片上 padding(.top, 8): 8
-                    // - 卡片内 padding(12): 12
                     let headerHeight: CGFloat = 36
                     let cardTopPadding: CGFloat = 8
                     let cardInnerPadding: CGFloat = 12
                     let topOffset = headerHeight + cardTopPadding + cardInnerPadding + size/2
 
-                    // X 位置：外 padding 12 + 卡片内 padding 12 + size/2
                     let xOffset = 12 + 12 + size/2
 
                     return (
@@ -503,24 +518,20 @@ extension MiniPlayerView {
             }()
 
             if musicController.currentPage != .lyrics {
-                // 🔑 全屏模式：整图模糊背景 + 清晰封面覆盖
                 if fullscreenAlbumCover {
                     let coverSize = geo.size.width
-                    // 羽化区域高度
                     let blendHeight: CGFloat = 100
 
-                    // 🔑 根据当前页面决定封面尺寸和位置
                     let isAlbumPage = musicController.currentPage == .album
                     let displaySize = isAlbumPage ? coverSize : artSize
                     let displayCornerRadius: CGFloat = isAlbumPage ? 0 : cornerRadius
                     let displayX = isAlbumPage ? geo.size.width / 2 : xPosition
                     let displayY = isAlbumPage ? coverSize / 2 : yPosition
 
-                    // 🔑 羽化遮罩高度用动画值过渡，避免接缝
                     let animatedBlendHeight: CGFloat = isAlbumPage ? blendHeight : 0
 
-                    // ===== Layer 1: 整图模糊背景 - 用 opacity 淡入淡出 =====
-                    Image(nsImage: artwork)
+                    // Layer 1: blurred full-window backing image.
+                    Image(nsImage: effectArtwork)
                         .resizable()
                         .scaledToFill()
                         .frame(width: geo.size.width, height: geo.size.height)
@@ -530,16 +541,15 @@ extension MiniPlayerView {
                         .contrast(artworkTone.textureContrast)
                         .brightness(artworkTone.textureBrightness)
                         .overlay(Color.black.opacity(artworkTone.textureDimmingOpacity))
-                        .opacity(isAlbumPage ? 1 : 0)  // 🔑 opacity 动画过渡
+                        .opacity(isAlbumPage ? 1 : 0)
                         .accessibilityHidden(true)
 
-                    // ===== Layer 2: 正方形封面（Hero）- 参与 matchedGeometryEffect =====
+                    // Layer 2: clear hero cover participating in matchedGeometryEffect.
                     Image(nsImage: artwork)
                         .resizable()
                         .scaledToFill()
                         .frame(width: displaySize, height: displaySize)
                         .clipped()
-                        // 🔑 底部羽化遮罩 - 高度用动画值过渡
                         .mask(
                             VStack(spacing: 0) {
                                 Rectangle().fill(Color.black)
@@ -551,7 +561,7 @@ extension MiniPlayerView {
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
-                                .frame(height: animatedBlendHeight)  // 🔑 动画过渡高度
+                                .frame(height: animatedBlendHeight)
                             }
                         )
                         .cornerRadius(displayCornerRadius)
@@ -570,9 +580,7 @@ extension MiniPlayerView {
                         .allowsHitTesting(false)
                         .accessibilityLabel("专辑封面")
                 } else {
-                    // 🎯 普通模式：封面图片 + 底部渐进模糊
                     ZStack {
-                        // 原图始终存在
                         Image(nsImage: artwork)
                             .resizable()
                             .scaledToFill()
@@ -580,11 +588,11 @@ extension MiniPlayerView {
                             .clipped()
                             .accessibilityLabel("专辑封面")
 
-                        // 🔑 底部渐进模糊（15-25%）— 3 层递进
+                        // Bottom progressive blur.
                         Group {
-                            progressiveBlurLayer(artwork: artwork, size: artSize, expand: 24, blurRadius: 8, fadeStart: 0.82, fadeEnd: 0.92)
-                            progressiveBlurLayer(artwork: artwork, size: artSize, expand: 16, blurRadius: 5, fadeStart: 0.77, fadeEnd: 0.87)
-                            progressiveBlurLayer(artwork: artwork, size: artSize, expand: 8, blurRadius: 2, fadeStart: 0.72, fadeEnd: 0.82)
+                            progressiveBlurLayer(artwork: effectArtwork, size: artSize, expand: 24, blurRadius: 8, fadeStart: 0.82, fadeEnd: 0.92)
+                            progressiveBlurLayer(artwork: effectArtwork, size: artSize, expand: 16, blurRadius: 5, fadeStart: 0.77, fadeEnd: 0.87)
+                            progressiveBlurLayer(artwork: effectArtwork, size: artSize, expand: 8, blurRadius: 2, fadeStart: 0.72, fadeEnd: 0.82)
                         }
                         .opacity(musicController.currentPage == .album && !isHovering ? 1 : 0)
                         .animation(.easeInOut(duration: 0.25), value: isHovering)

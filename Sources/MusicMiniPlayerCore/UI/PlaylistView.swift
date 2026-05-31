@@ -40,6 +40,7 @@ public struct PlaylistView: View {
     @Binding var showOverlayContent: Bool
 
     var animationNamespace: Namespace.ID
+    var effectArtwork: NSImage?
 
     // ═══════════════════════════════════════════
     // MARK: - Local State
@@ -83,7 +84,8 @@ public struct PlaylistView: View {
         selectedTab: Binding<Int>,
         showControls: Binding<Bool>,
         isHovering: Binding<Bool>,
-        showOverlayContent: Binding<Bool>
+        showOverlayContent: Binding<Bool>,
+        effectArtwork: NSImage? = nil
     ) {
         self._currentPage = currentPage
         self.animationNamespace = animationNamespace
@@ -91,6 +93,7 @@ public struct PlaylistView: View {
         self._showControls = showControls
         self._isHovering = isHovering
         self._showOverlayContent = showOverlayContent
+        self.effectArtwork = effectArtwork
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -105,7 +108,7 @@ public struct PlaylistView: View {
                 // ═══════════════════════════════════════════
                 // MARK: - Background
                 // ═══════════════════════════════════════════
-                AdaptiveFluidBackground(artwork: musicController.currentArtwork)
+                AdaptiveFluidBackground(artwork: effectArtwork ?? musicController.currentArtwork)
                     .ignoresSafeArea()
 
                 // ═══════════════════════════════════════════
