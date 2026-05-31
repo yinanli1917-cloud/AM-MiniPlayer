@@ -938,7 +938,7 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertFalse(MusicController.shouldMaterializeQueueRows(provenance: .unavailable(reason: .publicSourceUnverified)))
     }
 
-    func testPlaylistOpenOnlyForcesRecentFetchForEmptyDisplayableHistory() {
+    func testPlaylistOpenForcesRecentFetchForEmptyOrUnprovenHistory() {
         XCTAssertTrue(MusicController.shouldForceRecentHistoryForPlaylistOpen(
             provenance: .preview,
             rowsAreEmpty: true
@@ -947,13 +947,13 @@ final class RapidSwitchTests: XCTestCase {
             provenance: .preview,
             rowsAreEmpty: false
         ))
-        XCTAssertFalse(MusicController.shouldForceRecentHistoryForPlaylistOpen(
+        XCTAssertTrue(MusicController.shouldForceRecentHistoryForPlaylistOpen(
             provenance: .appleMusicAccountRecentlyPlayed,
-            rowsAreEmpty: true
+            rowsAreEmpty: false
         ))
-        XCTAssertFalse(MusicController.shouldForceRecentHistoryForPlaylistOpen(
+        XCTAssertTrue(MusicController.shouldForceRecentHistoryForPlaylistOpen(
             provenance: .unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")),
-            rowsAreEmpty: true
+            rowsAreEmpty: false
         ))
     }
 

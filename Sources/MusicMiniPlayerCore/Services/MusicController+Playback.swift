@@ -1105,7 +1105,7 @@ extension MusicController {
         provenance: MusicQueueProvenance,
         rowsAreEmpty: Bool
     ) -> Bool {
-        provenance.canDisplayAsRealTimeQueueRows && rowsAreEmpty
+        !provenance.canDisplayAsRealTimeQueueRows || rowsAreEmpty
     }
 
     static func canPlayTrackViaMusicAppPersistentID(_ persistentID: String) -> Bool {
