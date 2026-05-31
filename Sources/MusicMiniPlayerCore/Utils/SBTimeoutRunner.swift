@@ -21,9 +21,10 @@
  *     no longer blocks the caller. The serial queue avoids concurrent Apple
  *     Event calls against the same ScriptingBridge proxy.
  *
- * Lanes are intentionally explicit: different SBApplication proxies can use
- * different lanes, so a slow playlist/artwork metadata read does not starve the
- * lightweight playback-position lane that keeps lyrics aligned.
+ * Lanes are intentionally explicit. Production Music read lanes are grouped
+ * onto one serial Apple Event worker because macOS 26 crash logs showed
+ * AEProcessMessage can still corrupt state when independent SBApplication
+ * proxies read Music.app concurrently. Non-Music/test lanes remain isolated.
  */
 
 import Foundation
@@ -37,6 +38,13 @@ public enum SBTimeoutRunner {
     }
 
     private static let defaultLane = "shared"
+    private static let musicReadLane = "musicRead"
+    private static let musicReadLanes: Set<String> = [
+        "positionPoll",
+        "queueSnapshot",
+        "stateSync",
+        "trackMetadata"
+    ]
     private static let queuesLock = NSLock()
     private static var workerQueues: [String: DispatchQueue] = [
         defaultLane: DispatchQueue(label: "com.nanoPod.sbTimeout.worker.shared", qos: .utility)
@@ -62,7 +70,7 @@ public enum SBTimeoutRunner {
     /// that lane. Independent SBApplication proxies should use distinct lanes
     /// so heavyweight metadata work cannot starve lightweight position polling.
     private static func workerQueue(for lane: String) -> DispatchQueue {
-        let normalizedLane = lane.isEmpty ? defaultLane : lane
+        let normalizedLane = normalizedLane(for: lane)
         queuesLock.lock()
         defer { queuesLock.unlock() }
         if let queue = workerQueues[normalizedLane] {
@@ -80,6 +88,11 @@ public enum SBTimeoutRunner {
         )
         workerQueues[normalizedLane] = queue
         return queue
+    }
+
+    private static func normalizedLane(for lane: String) -> String {
+        guard !lane.isEmpty else { return defaultLane }
+        return musicReadLanes.contains(lane) ? musicReadLane : lane
     }
 
     /// Execute `block` with a wall-clock deadline. Returns the block's value

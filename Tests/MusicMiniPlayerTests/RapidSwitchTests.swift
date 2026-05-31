@@ -83,11 +83,11 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(results.sorted(), Array(0..<10))
     }
 
-    /// A hung metadata lane must not block an independent position-poll lane.
-    /// This protects lyric timing from playlist/artwork ScriptingBridge stalls.
+    /// A hung non-Music lane must not block an independent test lane.
+    /// Production Music read lanes are grouped separately by the source guard below.
     func testTimeoutRunnerLaneIsolationBypassesHungLane() {
         DispatchQueue.global().async {
-            let _: Int? = SBTimeoutRunner.run(timeout: 0.2, lane: "test-hung-metadata") {
+            let _: Int? = SBTimeoutRunner.run(timeout: 0.2, lane: "test-hung-artwork") {
                 Thread.sleep(forTimeInterval: 3.0)
                 return 1
             }
@@ -102,6 +102,21 @@ final class RapidSwitchTests: XCTestCase {
 
         XCTAssertEqual(result, 2)
         XCTAssertLessThan(elapsed, 0.2, "independent lanes should not wait behind a hung lane")
+    }
+
+    func testProductionMusicReadLanesShareCrashSafeWorkerGroup() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/Utils/SBTimeoutRunner.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private static let musicReadLane = \"musicRead\""))
+        for lane in ["positionPoll", "queueSnapshot", "stateSync", "trackMetadata"] {
+            XCTAssertTrue(source.contains("\"\(lane)\""))
+        }
+        XCTAssertTrue(source.contains("musicReadLanes.contains(lane) ? musicReadLane : lane"))
     }
 
     func testPositionPollTimeoutCooldownBacksOffRepeatedTimeouts() {
@@ -1673,6 +1688,17 @@ final class RapidSwitchTests: XCTestCase {
             ),
             LyricMotionSamplingPolicy.focusedInterval,
             accuracy: 0.0001
+        )
+    }
+
+    func testLyricMotionBoundarySamplingIsPreciseEnoughForSettleGate() {
+        XCTAssertLessThanOrEqual(
+            LyricMotionSamplingPolicy.boundaryInterval,
+            LyricMotionSamplingPolicy.focusedInterval
+        )
+        XCTAssertLessThan(
+            LyricMotionSamplingPolicy.boundaryInterval * 2,
+            0.45
         )
     }
 }

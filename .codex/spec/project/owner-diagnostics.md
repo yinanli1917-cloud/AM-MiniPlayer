@@ -132,6 +132,16 @@ technical causes.
   interactions should summarize overlapping stalls in the interaction trace;
   standalone frame-stall incidents must be rate-limited instead of appended on
   every slow frame while the diagnostics window is visible.
+- Process-health CPU telemetry must not walk every thread on a fixed timer.
+  Use a cheap process CPU-time delta so owner diagnostics do not create the
+  same periodic idle CPU spikes they are supposed to measure. Treat
+  `process.health.sample` as high-frequency for persistence batching; it must
+  not force a rolling-state write shortly after every sample.
+- Music.app ScriptingBridge read lanes that touch playback, track metadata, or
+  queue snapshots must share one crash-safe serial Apple Event worker group.
+  The apparent parallelism of independent `SBApplication` proxies is not safe
+  enough on macOS 26; crash logs show concurrent read lanes can fault inside
+  `AEProcessMessage`.
 - A few standalone warning-level frame intervals during idle playback are
   detector noise, not user-visible incidents. Record a standalone warning burst
   only after six stalls with the same page/window signature inside the
