@@ -117,11 +117,13 @@ Fixes that worked:
     and motion/text parity emission. Layout and text render plans should
     recompute on semantic changes, not every frame.
 
-11. Do not force Core Animation commits from high-frequency controls. The
-    AppKit playback progress view should install disabled layer actions and let
-    AppKit batch layer commits with the run loop. Explicit per-tick
-    `CATransaction.commit()` calls produced album/playlist idle p95 spikes even
-    when the lyrics renderer itself was clean.
+11. Do not force Core Animation commits or AppKit text drawing from
+    high-frequency controls. The AppKit playback progress view should install
+    disabled layer actions, render progress/time labels with `CALayer` /
+    `CATextLayer`, and let AppKit batch layer commits with the run loop.
+    Explicit per-tick `CATransaction.commit()` calls and `NSTextField`
+    subviews both produced album/playlist idle p95 spikes even when the lyrics
+    renderer itself was clean.
 
 12. Hide non-lyrics backend work from the lyrics interaction path only when the
     user action owns the timeline. Position polling may defer briefly during
@@ -260,8 +262,8 @@ The reference fixture is `Stardust Night` by `JADOES`, selected from NetEase wit
 Also check album and playlist pages on the same fixture. They should stay near idle CPU compared with the active lyrics page.
 The current idle gate for the final native rebuild uses `word-seek-fun` on
 album and playlist pages for 45s after 12s warmup. Passing signed-bundle results
-from 2026-05-31 were album avg 0.491% / p95 0.8% / max 2.4%, and playlist avg
-0.464% / p95 0.9% / max 1.7%.
+from 2026-05-31 after the `CATextLayer` progress-strip fix were album avg
+0.411% / p95 0.9% / max 1.6%, and playlist avg 0.482% / p95 1.15% / max 1.7%.
 
 For lyrics-animation-specific CPU verification, do not only sample passive
 playback and do not tap the same stale screen position. The stricter gate is:

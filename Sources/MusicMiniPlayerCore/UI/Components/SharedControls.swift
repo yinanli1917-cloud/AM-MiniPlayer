@@ -369,9 +369,10 @@ private final class NativePlaybackProgressView: NSView {
     private let labelHeight: CGFloat = 13
     private let trackLayer = CALayer()
     private let fillLayer = CALayer()
-    private let currentLabel = NSTextField(labelWithString: "0:00")
-    private let remainingLabel = NSTextField(labelWithString: "-0:00")
-    private let qualityBadge = NSTextField(labelWithString: "")
+    private let currentLabelLayer = CATextLayer()
+    private let remainingLabelLayer = CATextLayer()
+    private let qualityBadgeLayer = CALayer()
+    private let qualityBadgeTextLayer = CATextLayer()
     private var currentTime: Double = 0
     private var cancellable: AnyCancellable?
     private var trackingArea: NSTrackingArea?
@@ -470,28 +471,46 @@ private final class NativePlaybackProgressView: NSView {
             "position": NSNull(),
             "frame": NSNull(),
             "cornerRadius": NSNull(),
-            "backgroundColor": NSNull()
+            "backgroundColor": NSNull(),
+            "foregroundColor": NSNull(),
+            "string": NSNull(),
+            "hidden": NSNull()
         ]
-        trackLayer.actions = disabledActions
-        fillLayer.actions = disabledActions
+        for progressLayer in [trackLayer, fillLayer, qualityBadgeLayer] {
+            progressLayer.actions = disabledActions
+        }
+        for textLayer in [currentLabelLayer, remainingLabelLayer, qualityBadgeTextLayer] {
+            textLayer.actions = disabledActions
+            textLayer.isWrapped = false
+            textLayer.truncationMode = .end
+            textLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        }
+        currentLabelLayer.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        currentLabelLayer.fontSize = 10
+        currentLabelLayer.foregroundColor = NSColor.white.withAlphaComponent(0.68).cgColor
+        currentLabelLayer.alignmentMode = .left
+
+        remainingLabelLayer.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        remainingLabelLayer.fontSize = 10
+        remainingLabelLayer.foregroundColor = NSColor.white.withAlphaComponent(0.68).cgColor
+        remainingLabelLayer.alignmentMode = .right
+
+        qualityBadgeLayer.cornerRadius = 6
+        qualityBadgeLayer.backgroundColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        qualityBadgeTextLayer.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
+        qualityBadgeTextLayer.fontSize = 9
+        qualityBadgeTextLayer.foregroundColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        qualityBadgeTextLayer.alignmentMode = .center
+        qualityBadgeLayer.addSublayer(qualityBadgeTextLayer)
+
         layer?.addSublayer(trackLayer)
         layer?.addSublayer(fillLayer)
+        layer?.addSublayer(currentLabelLayer)
+        layer?.addSublayer(remainingLabelLayer)
+        layer?.addSublayer(qualityBadgeLayer)
     }
 
     private func setupLabels() {
-        for label in [currentLabel, remainingLabel, qualityBadge] {
-            label.isBordered = false
-            label.isEditable = false
-            label.drawsBackground = false
-            label.font = .systemFont(ofSize: label === qualityBadge ? 9 : 10, weight: label === qualityBadge ? .semibold : .medium)
-            label.textColor = NSColor.white.withAlphaComponent(label === qualityBadge ? 0.9 : 0.68)
-            label.alignment = label === remainingLabel ? .right : .left
-            addSubview(label)
-        }
-        qualityBadge.alignment = .center
-        qualityBadge.wantsLayer = true
-        qualityBadge.layer?.cornerRadius = 6
-        qualityBadge.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.15).cgColor
         updateQualityBadge()
     }
 
@@ -539,36 +558,43 @@ private final class NativePlaybackProgressView: NSView {
         let currentSecond = max(0, Int(currentTime))
         let remainingSecond = max(0, Int(duration - currentTime))
         if currentSecond != lastLabelCurrentSecond {
-            currentLabel.stringValue = Self.formatTime(seconds: currentSecond)
+            currentLabelLayer.string = Self.formatTime(seconds: currentSecond)
             lastLabelCurrentSecond = currentSecond
         }
         if remainingSecond != lastLabelRemainingSecond {
-            remainingLabel.stringValue = "-" + Self.formatTime(seconds: remainingSecond)
+            remainingLabelLayer.string = "-" + Self.formatTime(seconds: remainingSecond)
             lastLabelRemainingSecond = remainingSecond
         }
         if bounds != lastLaidOutBounds {
-            currentLabel.frame = CGRect(x: horizontalInset, y: labelY, width: 70, height: labelHeight)
-            remainingLabel.frame = CGRect(x: bounds.width - horizontalInset - 70, y: labelY, width: 70, height: labelHeight)
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            currentLabelLayer.contentsScale = scale
+            remainingLabelLayer.contentsScale = scale
+            qualityBadgeTextLayer.contentsScale = scale
+            currentLabelLayer.frame = CGRect(x: horizontalInset, y: labelY, width: 70, height: labelHeight)
+            remainingLabelLayer.frame = CGRect(x: bounds.width - horizontalInset - 70, y: labelY, width: 70, height: labelHeight)
             updateQualityBadgeFrame()
             lastLaidOutBounds = bounds
         }
     }
 
     private func updateQualityBadge() {
-        qualityBadge.stringValue = audioQuality ?? ""
-        qualityBadge.isHidden = audioQuality == nil
+        qualityBadgeTextLayer.string = audioQuality ?? ""
+        let hidden = audioQuality == nil
+        qualityBadgeLayer.isHidden = hidden
+        qualityBadgeTextLayer.isHidden = hidden
         updateQualityBadgeFrame()
     }
 
     private func updateQualityBadgeFrame() {
         guard let audioQuality, !audioQuality.isEmpty else { return }
         let width = min(max(CGFloat(audioQuality.count) * 6.0 + 14, 42), max(42, bounds.width - 160))
-        qualityBadge.frame = CGRect(
+        qualityBadgeLayer.frame = CGRect(
             x: (bounds.width - width) / 2,
             y: labelY - 1,
             width: width,
             height: labelHeight + 2
         )
+        qualityBadgeTextLayer.frame = qualityBadgeLayer.bounds.insetBy(dx: 4, dy: 1)
     }
 
     private func currentProgress() -> CGFloat {
