@@ -399,6 +399,15 @@ public class MusicController: ObservableObject {
         recentTracksProvenance = .unavailable(reason: .noCurrentTrack)
     }
 
+    @discardableResult
+    func applyNoCurrentTrackQueueSnapshotIfNeeded(_ provenance: MusicQueueProvenance) -> Bool {
+        guard provenance == .unavailable(reason: .noCurrentTrack) else {
+            return false
+        }
+        markQueueUnavailableForNoCurrentTrack()
+        return true
+    }
+
     @inline(__always)
     func syncPlaybackClock(to time: TimeInterval, playing: Bool? = nil, at date: Date = Date()) {
         let clamped = duration > 0 ? min(max(0, time), duration) : max(0, time)

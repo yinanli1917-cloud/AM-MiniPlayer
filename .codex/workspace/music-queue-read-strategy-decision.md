@@ -164,6 +164,10 @@ That transition also clears the previous `currentPersistentID`, track class,
 playlist name, and URL-track marker so the next readable Music.app item is
 treated as a fresh first track and schedules queue/artwork refresh work even if
 it has the same persistent ID as the item that was visible before stopping.
+If the public queue fetch itself discovers that Music.app exposes no current
+track, nanoPod now applies that same no-current transition instead of updating
+only Up Next. This keeps recent history from retaining old exact rows when the
+recent-history fetch is throttled or superseded.
 User controls that can advance or reorder playback now schedule a public queue
 refresh after the Music.app command returns, fails, or cannot reach Music.app.
 Those scheduled reads are guarded by the queue generation captured when the

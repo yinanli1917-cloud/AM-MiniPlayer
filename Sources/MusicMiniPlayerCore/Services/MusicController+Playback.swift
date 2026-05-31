@@ -500,6 +500,13 @@ extension MusicController {
                 self.logger.info("Discarded stale Up Next fetch for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
                 return
             }
+            if self.applyNoCurrentTrackQueueSnapshotIfNeeded(snapshot.provenance) {
+                self.lastQueueFetchCompletedAt = Date()
+                self.lastQueueFetchCompletedGeneration = self.queueSyncGeneration
+                self.logger.info("Marked queue unavailable because Music.app exposed no current track")
+                return
+            }
+
             let didChange = self.applyUpNextSnapshotIfChanged(snapshot)
             self.lastQueueFetchCompletedAt = Date()
             self.lastQueueFetchCompletedGeneration = requestQueueGeneration
