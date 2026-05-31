@@ -787,26 +787,55 @@ final class RapidSwitchTests: XCTestCase {
     func testPlaylistOpenCachedQueueRequiresCurrentGeneration() {
         XCTAssertTrue(MusicController.shouldUseCachedQueueForPlaylistOpen(
             recentlyCompletedQueue: true,
-            completedCurrentQueueGeneration: true
+            completedCurrentQueueGeneration: true,
+            upNextProvenance: .exactPublicMusicQueue(context: "verified"),
+            recentTracksProvenance: .exactPublicMusicQueue(context: "verified")
         ))
 
         XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
             recentlyCompletedQueue: true,
-            completedCurrentQueueGeneration: false
+            completedCurrentQueueGeneration: false,
+            upNextProvenance: .exactPublicMusicQueue(context: "verified"),
+            recentTracksProvenance: .exactPublicMusicQueue(context: "verified")
         ))
     }
 
     func testPlaylistOpenCachedQueueRequiresRecentCompletedSnapshot() {
         XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
             recentlyCompletedQueue: false,
-            completedCurrentQueueGeneration: true
+            completedCurrentQueueGeneration: true,
+            upNextProvenance: .exactPublicMusicQueue(context: "verified"),
+            recentTracksProvenance: .exactPublicMusicQueue(context: "verified")
         ))
     }
 
-    func testPlaylistOpenReusesFreshCompletedSnapshotEvenWhenRowsAreNotDisplayable() {
+    func testPlaylistOpenCachedQueueRequiresDisplayableQueueAndHistoryProvenance() {
         XCTAssertTrue(MusicController.shouldUseCachedQueueForPlaylistOpen(
             recentlyCompletedQueue: true,
-            completedCurrentQueueGeneration: true
+            completedCurrentQueueGeneration: true,
+            upNextProvenance: .preview,
+            recentTracksProvenance: .preview
+        ))
+
+        XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: true,
+            upNextProvenance: .playlistContextOnly(playlistName: "Music"),
+            recentTracksProvenance: .exactPublicMusicQueue(context: "verified")
+        ))
+
+        XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: true,
+            upNextProvenance: .exactPublicMusicQueue(context: "verified"),
+            recentTracksProvenance: .appleMusicAccountRecentlyPlayed
+        ))
+
+        XCTAssertFalse(MusicController.shouldUseCachedQueueForPlaylistOpen(
+            recentlyCompletedQueue: true,
+            completedCurrentQueueGeneration: true,
+            upNextProvenance: .unavailable(reason: .noCurrentTrack),
+            recentTracksProvenance: .exactPublicMusicQueue(context: "verified")
         ))
     }
 
