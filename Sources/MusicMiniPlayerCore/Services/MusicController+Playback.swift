@@ -600,6 +600,11 @@ extension MusicController {
                 return
             }
 
+            guard self.artworkFetchGeneration == gen else {
+                debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting before playlist scan\n")
+                return
+            }
+
             let trackCount = tracks.count
             let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
             let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
@@ -902,8 +907,9 @@ extension MusicController {
                     return
                 }
 
+                let trackCount = tracks.count
                 let currentIndex = ((currentTrack.value(forKey: "index") as? Int) ?? 0) - 1
-                if currentIndex >= 0 && currentIndex < tracks.count {
+                if currentIndex >= 0 && currentIndex < trackCount {
                     let lowerBound = max(0, currentIndex - limit)
                     for i in lowerBound..<currentIndex {
                         guard self.artworkFetchGeneration == gen else {
@@ -926,7 +932,7 @@ extension MusicController {
                         }
                     }
                 } else {
-                    for i in 0..<tracks.count {
+                    for i in 0..<trackCount {
                         guard self.artworkFetchGeneration == gen else {
                             debugPrint("⚠️ [getRecentTracksFromApp] Generation changed (\(gen) -> \(self.artworkFetchGeneration)), aborting\n")
                             return

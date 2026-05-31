@@ -233,6 +233,47 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testQueueSnapshotScansGuardTrackGenerationBeforePlaylistRowCounts() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/Services/MusicController+Playback.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+
+        func sourceSection(from startMarker: String, to endMarker: String) throws -> String {
+            let start = try XCTUnwrap(text.range(of: startMarker))
+            let end = try XCTUnwrap(text.range(of: endMarker, range: start.upperBound..<text.endIndex))
+            return String(text[start.lowerBound..<end.lowerBound])
+        }
+
+        func assertGenerationGuardBeforeRowCount(in section: String, label: String) throws {
+            let guardRange = try XCTUnwrap(section.range(of: "aborting before playlist scan"))
+            let rowCountRange = try XCTUnwrap(section.range(of: "let trackCount = tracks.count"))
+            XCTAssertLessThan(
+                guardRange.lowerBound,
+                rowCountRange.lowerBound,
+                "\(label) must recheck track generation before asking Music.app for playlist row count."
+            )
+        }
+
+        try assertGenerationGuardBeforeRowCount(
+            in: sourceSection(
+                from: "private func getUpNextSnapshotFromApp",
+                to: "/// 使用 ScriptingBridge 获取播放历史"
+            ),
+            label: "Up Next"
+        )
+
+        try assertGenerationGuardBeforeRowCount(
+            in: sourceSection(
+                from: "private func getRecentSnapshotFromApp",
+                to: "@discardableResult\n    private func applyUpNextSnapshotIfChanged"
+            ),
+            label: "Recent history"
+        )
+    }
+
     func testProductionQueueSyncDoesNotUsePrivateMusicStorageOrAppLocalQueues() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
