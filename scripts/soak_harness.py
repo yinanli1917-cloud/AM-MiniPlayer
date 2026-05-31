@@ -43,7 +43,8 @@ def summarize(values: list[float]) -> dict[str, float]:
     }
 
 
-def rss_slope_mb_per_hour(samples: list[dict[str, object]]) -> float:
+def value_slope_mb_per_hour(samples: list[dict[str, object]], key: str) -> float:
+    samples = [sample for sample in samples if sample.get(key) not in (None, "")]
     if len(samples) < 2:
         return 0.0
     first = samples[0]
@@ -51,7 +52,7 @@ def rss_slope_mb_per_hour(samples: list[dict[str, object]]) -> float:
     elapsed = float(last["elapsedS"]) - float(first["elapsedS"])
     if elapsed <= 0:
         return 0.0
-    return round((float(last["rssMB"]) - float(first["rssMB"])) / elapsed * 3600, 3)
+    return round((float(last[key]) - float(first[key])) / elapsed * 3600, 3)
 
 
 def fixture_request(fixture_name: str, allow_unverified: bool) -> SimpleNamespace | None:
@@ -95,6 +96,7 @@ def write_csv(path: Path, samples: list[dict[str, object]]) -> None:
                 "artist",
                 "cpuPercent",
                 "rssMB",
+                "physicalFootprintMB",
                 "sampleDelayS",
             ],
         )
@@ -174,6 +176,7 @@ def main() -> None:
         delay = sample_started - last_sample_at
         try:
             raw = perf.read_process_sample(pid)
+            physical_footprint = raw.get("physical_footprint_mb")
             samples.append({
                 "elapsedS": round(sample_started - start, 3),
                 "wallTime": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -183,6 +186,9 @@ def main() -> None:
                 "artist": current_request.play_artist,
                 "cpuPercent": raw["cpu_percent"],
                 "rssMB": round(float(raw["rss_mb"]), 3),
+                "physicalFootprintMB": round(float(physical_footprint), 3)
+                if physical_footprint is not None
+                else "",
                 "sampleDelayS": round(delay, 3),
             })
         except SystemExit as error:
@@ -200,6 +206,11 @@ def main() -> None:
     write_csv(csv_path, samples)
     cpu_values = [float(sample["cpuPercent"]) for sample in samples]
     rss_values = [float(sample["rssMB"]) for sample in samples]
+    physical_values = [
+        float(sample["physicalFootprintMB"])
+        for sample in samples
+        if sample.get("physicalFootprintMB") not in (None, "")
+    ]
     delay_values = [float(sample["sampleDelayS"]) for sample in samples[1:]]
     stalls = [
         sample for sample in samples[1:]
@@ -214,7 +225,7 @@ def main() -> None:
         "sampleCount": len(samples),
         "cpuPercent": summarize(cpu_values),
         "rssMB": summarize(rss_values),
-        "rssSlopeMBPerHour": rss_slope_mb_per_hour(samples),
+        "rssSlopeMBPerHour": value_slope_mb_per_hour(samples, "rssMB"),
         "sampleDelaySeconds": summarize(delay_values),
         "stallCount": len(stalls),
         "stallSamples": stalls[:20],
@@ -224,6 +235,9 @@ def main() -> None:
             "summary": str(summary_path),
         },
     }
+    if physical_values:
+        summary["physicalFootprintMB"] = summarize(physical_values)
+        summary["physicalFootprintSlopeMBPerHour"] = value_slope_mb_per_hour(samples, "physicalFootprintMB")
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 

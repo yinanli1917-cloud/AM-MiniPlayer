@@ -11,8 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import lyrics_visual_harness as visual  # noqa: E402
+import lyrics_motion_evaluator as motion  # noqa: E402
 import luxb_sequential_reference as sequential_reference  # noqa: E402
 import perf_harness as perf  # noqa: E402
+import soak_harness as soak  # noqa: E402
 
 
 class HarnessFixtureTests(unittest.TestCase):
@@ -87,6 +89,31 @@ class HarnessFixtureTests(unittest.TestCase):
         self.assertTrue(status["automationUnavailableAllowed"])
         self.assertFalse(status["acceptanceEligible"])
         self.assertEqual(status["error"], "automation denied")
+
+    def test_perf_harness_summarizes_physical_footprint_when_available(self) -> None:
+        summary = perf.summarize_samples([
+            {
+                "cpu_percent": 1.0,
+                "rss_mb": 210.0,
+                "physical_footprint_mb": 120.0,
+            },
+            {
+                "cpu_percent": 3.0,
+                "rss_mb": 230.0,
+                "physical_footprint_mb": 140.0,
+            },
+        ])
+
+        self.assertEqual(summary["physicalFootprintMB"]["avg"], 130.0)
+        self.assertEqual(summary["physicalFootprintMB"]["max"], 140.0)
+
+    def test_soak_harness_can_compute_physical_footprint_slope(self) -> None:
+        samples = [
+            {"elapsedS": 0.0, "physicalFootprintMB": 100.0},
+            {"elapsedS": 1800.0, "physicalFootprintMB": 130.0},
+        ]
+
+        self.assertEqual(soak.value_slope_mb_per_hour(samples, "physicalFootprintMB"), 60.0)
 
     def test_perf_harness_requires_album_when_fixture_has_album(self) -> None:
         request = SimpleNamespace(
@@ -196,6 +223,44 @@ class HarnessFixtureTests(unittest.TestCase):
         )
 
         self.assertEqual(sequential_reference.motion.compare_metrics(candidate, baseline), [])
+
+    def test_motion_settle_interpolates_threshold_crossing_between_samples(self) -> None:
+        rows = [
+            {
+                "timestamp": "2026-05-31T20:44:25.063000+00:00",
+                "lineIndex": "4",
+                "activeIndex": "4",
+                "targetIndex": "4",
+                "targetErrorY": "76.4532",
+                "velocityY": "-6.0611",
+                "isManualScrolling": "0",
+            },
+            {
+                "timestamp": "2026-05-31T20:44:25.314000+00:00",
+                "lineIndex": "4",
+                "activeIndex": "4",
+                "targetIndex": "4",
+                "targetErrorY": "12.3825",
+                "velocityY": "-255.2607",
+                "isManualScrolling": "0",
+            },
+            {
+                "timestamp": "2026-05-31T20:44:25.564000+00:00",
+                "lineIndex": "4",
+                "activeIndex": "4",
+                "targetIndex": "4",
+                "targetErrorY": "-0.2969",
+                "velocityY": "-50.5961",
+                "isManualScrolling": "0",
+            },
+        ]
+
+        _, settle_times, skipped = motion.settled_motion_rows(rows)
+
+        self.assertEqual(skipped, 0)
+        self.assertEqual(len(settle_times), 1)
+        self.assertLess(settle_times[0], 0.27)
+        self.assertGreater(settle_times[0], 0.25)
 
     def test_sequential_reference_compares_wave_cadence_and_order(self) -> None:
         baseline = sequential_reference.motion.WaveTimelineMetrics(

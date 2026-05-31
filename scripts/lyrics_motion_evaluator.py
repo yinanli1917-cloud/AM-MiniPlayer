@@ -248,11 +248,24 @@ def settled_motion_rows(
             segment_start = segment_end
             continue
 
+        previous_active: tuple[datetime, dict[str, str]] | None = None
         for ts, row in active_rows:
-            if abs(_float(row.get("targetErrorY"))) <= active_error_threshold:
+            error = abs(_float(row.get("targetErrorY")))
+            if error <= active_error_threshold:
                 settle_ts = ts
+                if previous_active is not None:
+                    previous_ts, previous_row = previous_active
+                    previous_error = abs(_float(previous_row.get("targetErrorY")))
+                    if previous_error > active_error_threshold and previous_error != error:
+                        segment_duration = (ts - previous_ts).total_seconds()
+                        crossing_ratio = (previous_error - active_error_threshold) / (previous_error - error)
+                        crossing_ratio = min(max(crossing_ratio, 0.0), 1.0)
+                        settle_offset = (previous_ts - start_ts).total_seconds() + segment_duration * crossing_ratio
+                        settle_times.append(max(0.0, settle_offset))
+                        break
                 settle_times.append(max(0.0, (settle_ts - start_ts).total_seconds()))
                 break
+            previous_active = (ts, row)
 
         if settle_ts is None and segment:
             if any(_int(row.get("isManualScrolling")) == 1 for _, row in segment):

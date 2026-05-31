@@ -9,6 +9,7 @@ to a target page, and records bounded CPU/RSS samples under tmp/perf.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import csv
 import json
 import math
@@ -28,6 +29,50 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "tmp" / "perf"
 if os.environ.get("NANOPOD_APP_PATH"):
     visual.APP = Path(os.environ["NANOPOD_APP_PATH"]).expanduser().resolve()
+
+
+class RUsageInfoV2(ctypes.Structure):
+    _fields_ = [
+        ("ri_uuid", ctypes.c_uint8 * 16),
+        ("ri_user_time", ctypes.c_uint64),
+        ("ri_system_time", ctypes.c_uint64),
+        ("ri_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_interrupt_wkups", ctypes.c_uint64),
+        ("ri_pageins", ctypes.c_uint64),
+        ("ri_wired_size", ctypes.c_uint64),
+        ("ri_resident_size", ctypes.c_uint64),
+        ("ri_phys_footprint", ctypes.c_uint64),
+        ("ri_proc_start_abstime", ctypes.c_uint64),
+        ("ri_proc_exit_abstime", ctypes.c_uint64),
+        ("ri_child_user_time", ctypes.c_uint64),
+        ("ri_child_system_time", ctypes.c_uint64),
+        ("ri_child_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_child_interrupt_wkups", ctypes.c_uint64),
+        ("ri_child_pageins", ctypes.c_uint64),
+        ("ri_child_elapsed_abstime", ctypes.c_uint64),
+        ("ri_diskio_bytesread", ctypes.c_uint64),
+        ("ri_diskio_byteswritten", ctypes.c_uint64),
+    ]
+
+
+_LIBPROC: ctypes.CDLL | None = None
+RUSAGE_INFO_V2 = 2
+
+
+def libproc() -> ctypes.CDLL | None:
+    global _LIBPROC
+    if sys.platform != "darwin":
+        return None
+    if _LIBPROC is not None:
+        return _LIBPROC
+    try:
+        loaded = ctypes.CDLL("/usr/lib/libproc.dylib")
+        loaded.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        loaded.proc_pid_rusage.restype = ctypes.c_int
+        _LIBPROC = loaded
+    except OSError:
+        return None
+    return _LIBPROC
 
 
 def log(message: str) -> None:
@@ -345,11 +390,26 @@ def read_process_sample(pid: int) -> dict[str, object]:
         raise SystemExit(f"Unexpected ps output for nanoPod process {pid}: {result.stdout!r}")
     cpu = float(parts[0])
     rss_kb = int(float(parts[1]))
-    return {
+    sample: dict[str, object] = {
         "cpu_percent": cpu,
         "rss_kb": rss_kb,
         "rss_mb": rss_kb / 1024.0,
     }
+    physical_footprint = read_physical_footprint_mb(pid)
+    if physical_footprint is not None:
+        sample["physical_footprint_mb"] = physical_footprint
+    return sample
+
+
+def read_physical_footprint_mb(pid: int) -> float | None:
+    proc = libproc()
+    if proc is None:
+        return None
+    info = RUsageInfoV2()
+    result = proc.proc_pid_rusage(int(pid), RUSAGE_INFO_V2, ctypes.byref(info))
+    if result != 0:
+        return None
+    return info.ri_phys_footprint / 1024.0 / 1024.0
 
 
 def post_scroll_tap_jump(rect: tuple[int, int, int, int]) -> None:
@@ -448,7 +508,7 @@ def percentile(values: list[float], percent: float) -> float:
 def summarize_samples(samples: list[dict[str, object]]) -> dict[str, object]:
     cpu = [float(sample["cpu_percent"]) for sample in samples]
     rss = [float(sample["rss_mb"]) for sample in samples]
-    return {
+    summary: dict[str, object] = {
         "sampleCount": len(samples),
         "cpuPercent": {
             "avg": round(statistics.fmean(cpu), 3),
@@ -463,6 +523,19 @@ def summarize_samples(samples: list[dict[str, object]]) -> dict[str, object]:
             "max": round(max(rss), 3),
         },
     }
+    physical = [
+        float(sample["physical_footprint_mb"])
+        for sample in samples
+        if sample.get("physical_footprint_mb") is not None
+    ]
+    if physical:
+        summary["physicalFootprintMB"] = {
+            "avg": round(statistics.fmean(physical), 3),
+            "median": round(statistics.median(physical), 3),
+            "p95": round(percentile(physical, 95), 3),
+            "max": round(max(physical), 3),
+        }
+    return summary
 
 
 def write_csv(path: Path, request: SimpleNamespace, samples: list[dict[str, object]]) -> None:
@@ -478,6 +551,7 @@ def write_csv(path: Path, request: SimpleNamespace, samples: list[dict[str, obje
                 "cpu_percent",
                 "rss_kb",
                 "rss_mb",
+                "physical_footprint_mb",
             ],
         )
         writer.writeheader()
@@ -490,6 +564,9 @@ def write_csv(path: Path, request: SimpleNamespace, samples: list[dict[str, obje
                 "cpu_percent": sample["cpu_percent"],
                 "rss_kb": sample["rss_kb"],
                 "rss_mb": round(float(sample["rss_mb"]), 3),
+                "physical_footprint_mb": round(float(sample["physical_footprint_mb"]), 3)
+                if sample.get("physical_footprint_mb") is not None
+                else "",
             })
 
 
