@@ -87,7 +87,10 @@ def write_multi_context_session(root: Path, *, outcomes: dict[str, str]) -> Path
             ),
             encoding="utf-8",
         )
-        (session_dir / notes_name).write_text(completed_notes(rows_match="no"), encoding="utf-8")
+        (session_dir / notes_name).write_text(
+            completed_notes(rows_match="no", context=context, manual_outcome=manual_outcome),
+            encoding="utf-8",
+        )
         summary_lines.append(
             f"| `{context}` | `{manual_outcome}` | `{probe_classification}` | `{probe_name}` | `{notes_name}` |"
         )
@@ -96,10 +99,20 @@ def write_multi_context_session(root: Path, *, outcomes: dict[str, str]) -> Path
     return session_dir
 
 
-def completed_notes(*, rows_match: str, full_probe_coverage: str = "yes") -> str:
+def completed_notes(
+    *,
+    rows_match: str,
+    full_probe_coverage: str = "yes",
+    context: str = "radio-station-url-track",
+    manual_outcome: str = "unavailable",
+) -> str:
     return "\n".join(
         [
             "# Visible Music.app Queue Notes",
+            "",
+            f"context_label: {context}",
+            "created_utc: 20260524T000000Z",
+            f"manual_outcome: {manual_outcome}",
             "",
             "- Music.app visible Up Next/history UI open: yes",
             "- Public probe rows cover every visible queue/history row: " + full_probe_coverage,
@@ -221,6 +234,45 @@ def main() -> int:
         assert_fails(session, "resolved public-surface claim has no readable current track")
 
     with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=completed_notes(
+                rows_match="yes",
+                context="album-playback",
+                manual_outcome="exact",
+            ),
+            probe_extra="neighbor[1]=*|Song A|Artist A|Album|ABC",
+        )
+        assert_fails(session, "does not match visible notes context_label")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=completed_notes(rows_match="yes", manual_outcome="unavailable"),
+            probe_extra="neighbor[1]=*|Song A|Artist A|Album|ABC",
+        )
+        assert_fails(session, "does not match visible notes manual_outcome")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        notes_without_metadata = "\n".join(
+            line
+            for line in completed_notes(rows_match="yes", manual_outcome="exact").splitlines()
+            if not line.startswith(("context_label:", "manual_outcome:"))
+        )
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=notes_without_metadata,
+            probe_extra="neighbor[1]=*|Song A|Artist A|Album|ABC",
+        )
+        assert_fails(session, "resolved claim is missing context_label in visible notes")
+
+    with tempfile.TemporaryDirectory() as tmp:
         session = write_multi_context_session(
             Path(tmp),
             outcomes={"radio-station-url-track": "unavailable"},
@@ -245,7 +297,7 @@ def main() -> int:
             Path(tmp),
             manual_outcome="exact",
             probe_classification="manual_compare_required_queue_like_named_playlist",
-            notes_text=completed_notes(rows_match="yes"),
+            notes_text=completed_notes(rows_match="yes", manual_outcome="exact"),
             probe_extra="classification.public_queue_candidate=queue_like_named_playlist",
         )
         assert_fails(session, "exact claim has no public probe queue rows")
@@ -255,7 +307,7 @@ def main() -> int:
             Path(tmp),
             manual_outcome="exact",
             probe_classification="manual_compare_required_queue_like_named_playlist",
-            notes_text=completed_notes(rows_match="yes"),
+            notes_text=completed_notes(rows_match="yes", manual_outcome="exact"),
             probe_extra="\n".join(
                 [
                     "classification.public_queue_candidate=queue_like_named_playlist",
@@ -293,7 +345,7 @@ def main() -> int:
             Path(tmp),
             manual_outcome="exact",
             probe_classification="partial_current_playlist_neighbors_only",
-            notes_text=completed_notes(rows_match="yes"),
+            notes_text=completed_notes(rows_match="yes", manual_outcome="exact"),
             probe_extra=fixed_indexing_probe_rows,
         )
         assert_passes(session)
@@ -303,7 +355,7 @@ def main() -> int:
             Path(tmp),
             manual_outcome="exact",
             probe_classification="partial_current_playlist_neighbors_only",
-            notes_text=completed_notes(rows_match="yes", full_probe_coverage="no"),
+            notes_text=completed_notes(rows_match="yes", full_probe_coverage="no", manual_outcome="exact"),
             probe_extra=fixed_indexing_probe_rows,
         )
         assert_fails(session, "exact claim must state public probe rows covered every visible queue/history row")
@@ -313,7 +365,7 @@ def main() -> int:
             Path(tmp),
             manual_outcome="exact",
             probe_classification="partial_current_playlist_neighbors_only",
-            notes_text=completed_notes(rows_match="yes"),
+            notes_text=completed_notes(rows_match="yes", manual_outcome="exact"),
             probe_extra=fixed_indexing_probe_rows.replace("fixed_indexing.restored=true", "fixed_indexing.restored.error=failed"),
         )
         assert_fails(session, "exact fixed-indexing claim did not restore Music.app fixed indexing")

@@ -235,6 +235,10 @@ Before any matrix result is used as implementation evidence, run
 `.codex/workspace/validate_music_queue_parity_matrix.py` on that session. Exact
 rows must have visible rows, explicit row-match confirmation, and a
 non-unavailable public probe classification.
+Resolved rows must also have visible notes whose `context_label` and
+`manual_outcome` metadata match the `SUMMARY.md` row. This prevents a resolved
+`exact` or `unavailable` claim from pointing at notes prepared for a different
+playback context or outcome.
 Before claiming that the read strategy is complete, run the same validator with
 `--require-complete`. That mode requires all product contexts from the parity
 matrix to have a resolved `exact` or `unavailable` row, so missing album,

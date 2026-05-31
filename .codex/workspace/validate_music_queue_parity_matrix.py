@@ -147,6 +147,12 @@ def extract_note_field(text: str, label: str) -> str | None:
     return matches[-1].strip() if matches else None
 
 
+def extract_note_metadata(text: str, key: str) -> str | None:
+    pattern = rf"^{re.escape(key)}:\s*(.+)$"
+    matches = re.findall(pattern, text, flags=re.MULTILINE | re.IGNORECASE)
+    return matches[-1].strip() if matches else None
+
+
 def normalized_note_field(text: str, label: str) -> str:
     return (extract_note_field(text, label) or "").strip().lower()
 
@@ -170,6 +176,34 @@ def notes_have_completed_visible_context(notes_text: str) -> bool:
         return False
     visible_open = normalized_note_field(notes_text, "Music.app visible Up Next/history UI open")
     return visible_open in {"yes", "true"} and visible_rows_are_filled(notes_text)
+
+
+def validate_resolved_notes_metadata(row: SummaryRow, notes_text: str) -> list[str]:
+    if row.manual_outcome not in COMPLETE_OUTCOMES:
+        return []
+
+    prefix = f"SUMMARY.md:{row.line_number} [{row.context}]"
+    errors: list[str] = []
+
+    note_context = extract_note_metadata(notes_text, "context_label")
+    if not note_context:
+        errors.append(f"{prefix}: resolved claim is missing context_label in visible notes")
+    elif note_context != row.context:
+        errors.append(
+            f"{prefix}: summary context '{row.context}' does not match visible notes "
+            f"context_label '{note_context}'"
+        )
+
+    note_outcome = extract_note_metadata(notes_text, "manual_outcome")
+    if not note_outcome:
+        errors.append(f"{prefix}: resolved claim is missing manual_outcome in visible notes")
+    elif note_outcome != row.manual_outcome:
+        errors.append(
+            f"{prefix}: summary manual outcome '{row.manual_outcome}' does not match "
+            f"visible notes manual_outcome '{note_outcome}'"
+        )
+
+    return errors
 
 
 def validate_public_playback_context(row: SummaryRow, probe_text: str) -> list[str]:
@@ -232,6 +266,7 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
         errors.append(f"{prefix}: missing visible notes: {row.visible_notes}")
     else:
         notes_text = notes_path.read_text(encoding="utf-8", errors="replace")
+        errors.extend(validate_resolved_notes_metadata(row, notes_text))
 
     if row.manual_outcome == "exact":
         is_notification_probe = is_distributed_notification_probe(probe_text)
