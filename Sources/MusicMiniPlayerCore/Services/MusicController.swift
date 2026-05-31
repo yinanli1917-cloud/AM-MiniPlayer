@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 ScriptingBridge, MusicKit, LyricsService, AppleScriptRunner
- * [OUTPUT]: 导出 MusicController（播放状态 + 队列同步）
- * [POS]: MusicMiniPlayerCore 的核心状态管理器（薄门面）
+ * [INPUT]: Depends on ScriptingBridge, MusicKit, LyricsService, AppleScriptRunner
+ * [OUTPUT]: Exports MusicController (playback state + queue sync)
+ * [POS]: Core MusicMiniPlayerCore state manager (thin facade)
  */
 
 import Foundation
@@ -12,18 +12,18 @@ import MusicKit
 import os
 import ObjCSupport
 
-// MARK: - 窗口移动通知（SnappablePanel ↔ MusicController）
+// MARK: - Window Movement Notifications (SnappablePanel ↔ MusicController)
 public extension Notification.Name {
     static let windowMovementBegan = Notification.Name("windowMovementBegan")
     static let windowMovementEnded = Notification.Name("windowMovementEnded")
 }
 
-// MARK: - 共享常量
+// MARK: - Shared Constants
 
-/// 未播放时的哨兵值 — 各模块用此判断"无有效曲目"
+/// Sentinel used by other modules to identify "no valid track".
 public let kNotPlayingSentinel = "Not Playing"
 
-// MARK: - PlayerPage Enum (共享页面状态)
+// MARK: - PlayerPage Enum (shared page state)
 public enum PlayerPage {
     case album
     case lyrics
@@ -81,7 +81,7 @@ public class MusicController: ObservableObject {
     let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "MusicController")
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - @Published 状态（SwiftUI 视图绑定层）
+    // MARK: - @Published State (SwiftUI view binding layer)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @Published public var isPlaying: Bool = false
@@ -127,7 +127,7 @@ public class MusicController: ObservableObject {
     public private(set) var currentPlaylistName: String = ""
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - 内部状态
+    // MARK: - Internal State
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     var musicApp: SBApplication?
@@ -186,22 +186,21 @@ public class MusicController: ObservableObject {
     var assetPreloadTask: Task<Void, Never>?
     let performanceLog = OSLog(subsystem: "com.yinanli.MusicMiniPlayer", category: "Performance")
 
-    /// SB 封面已应用的代数 — SB 是权威源（与 Apple Music 一致），API 不可覆盖
+    /// Artwork generation already applied from ScriptingBridge. SB is authoritative and must not be overwritten by API artwork.
     var sbAppliedForGeneration: Int = -1
-    /// 当前屏幕上的封面属于哪一次切歌请求。切歌时不再清空旧封面，
-    /// 但失败兜底需要知道是否已经为当前 generation 应用过新封面。
+    /// Generation for the currently displayed artwork. Track changes keep the old artwork visible,
+    /// but fallback logic still needs to know whether new artwork was applied for this generation.
     var appliedArtworkGeneration: Int = -1
-    /// 当前封面是否只是兜底占位图。占位图不能算作“当前 generation 已拿到封面”，
-    /// 否则后续 fetch failure 会被误判为已解决，诊断也看不到缺失封面。
+    /// True when the current artwork is only a placeholder. Placeholders must not count as
+    /// successful artwork for the current generation, otherwise fetch failures are hidden.
     var currentArtworkIsPlaceholder = false
-    /// artworkQueue 最近一次响应时间 — 超过 5s 未响应视为卡死，需重建
+    /// Last artworkQueue heartbeat. More than 5s without a heartbeat is treated as a stall.
     var lastArtworkQueueHeartbeat = Date()
-    /// scriptingBridgeQueue 最近一次响应时间 — 同样的心跳保护
-    /// Radio URL track 对象的 SB IPC 可能无限挂起，阻塞所有后续 poll
+    /// Last scriptingBridgeQueue heartbeat. Radio URL track SB IPC may hang indefinitely and block later polls.
     var lastSBQueueHeartbeat = Date()
 
-    /// 封面获取代数：线程安全，用 os_unfair_lock 保护
-    /// 每次切歌递增，旧代任务在 SB 队列排到时直接跳过
+    /// Thread-safe artwork fetch generation guarded by os_unfair_lock.
+    /// Incremented on each track change so stale SB queue work can be skipped.
     private var _artworkFetchGeneration: Int = 0
     private var _generationLock = os_unfair_lock()
 
@@ -218,7 +217,7 @@ public class MusicController: ObservableObject {
         }
     }
 
-    /// 递增并返回新代数（原子操作）
+    /// Atomically increments and returns a new artwork generation.
     func incrementGeneration() -> Int {
         os_unfair_lock_lock(&_generationLock)
         _artworkFetchGeneration += 1
@@ -233,7 +232,7 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - Timer 管理
+    // MARK: - Timer Management
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     private var pollingTimer: Timer?          // 2s — lightweight SB position reads
@@ -249,7 +248,7 @@ public class MusicController: ObservableObject {
     /// every 16ms by the interpolation timer itself — immune to SB starvation.
     var lastFrameTime: Date = Date()
 
-    // 窗口移动期间暂停 interpolation（避免 60Hz Timer 和 DisplayLink 争帧预算）
+    // Pause interpolation while the window is moving so timers and display refresh do not compete for frame budget.
     private var windowMovementPaused = false
 
     // Position-jump track change detection (radio stations)
@@ -257,9 +256,11 @@ public class MusicController: ObservableObject {
     // A backward position jump (e.g. 180s→2s while playing) signals a new track.
     private var lastPolledPosition: Double = 0
     private var sbPositionPollInFlight: Bool = false
-    private var positionPollCooldownUntil: Date = .distantPast
+    var positionPollCooldownUntil: Date = .distantPast
     private var positionPollTimeoutStreak: Int = 0
     private var lastPositionPollFallbackAt: Date = .distantPast
+    private var lastPositionPollStateReadAt: Date = .distantPast
+    private var cachedPositionPollStateRaw: Int = MusicController.sbStopped
     private var transientPositionResetDeferrals: Int = 0
     private var transientPositionResetVerificationInFlight = false
 
@@ -302,15 +303,17 @@ public class MusicController: ObservableObject {
     }
     private static let timingDiagnosticsEnabled =
         ProcessInfo.processInfo.environment["NANOPOD_TIMING_DIAGNOSTICS"] == "1"
-    private static let diagnosticsEnabledUserDefaultsKey = "ownerDiagnosticsEnabled"
+    private static let ownerDiagnosticsEnabledKey = "ownerDiagnosticsEnabled"
 
     private var playbackClockBaseTime: TimeInterval = 0
     private var playbackClockBaseDate: Date = Date()
     private var playbackClockIsPlaying: Bool = false
 
-    // 防止 AppleScript 轮询重叠
+    // Prevent overlapping AppleScript polling.
     private var lastUpdateTime: Date = .distantPast
     private let updateTimeout: TimeInterval = 0.4
+    private let ownerDiagnosticsFrameTicksEnabled =
+        UserDefaults.standard.bool(forKey: MusicController.ownerDiagnosticsEnabledKey)
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Init / Deinit
@@ -483,7 +486,7 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - MusicKit 授权
+    // MARK: - MusicKit Authorization
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @MainActor
@@ -584,7 +587,7 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - Timer 生命周期
+    // MARK: - Timer Lifecycle
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     private func startTimers() {
@@ -662,7 +665,7 @@ public class MusicController: ObservableObject {
         }
     }
 
-    /// 窗口移动开始/结束通知（SnappablePanel 发出）
+    /// Window movement start/end notifications emitted by SnappablePanel.
     func setupWindowMovementObserver() {
         NotificationCenter.default.addObserver(
             forName: .windowMovementBegan, object: nil, queue: .main
@@ -679,7 +682,7 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - Queue Sync (双层检测)
+    // MARK: - Queue Sync (Two-Layer Detection)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     private func checkQueueHashAndRefresh() {
@@ -691,6 +694,11 @@ public class MusicController: ObservableObject {
             guard let hash = self.getQueueHashFromApp(app) else { return }
 
             DispatchQueue.main.async {
+                if self.lastQueueHash.isEmpty,
+                   Date().timeIntervalSince(self.lastQueueFetchCompletedAt) < 45.0 {
+                    self.lastQueueHash = hash
+                    return
+                }
                 if hash != self.lastQueueHash {
                     debugPrint("🔄 [checkQueueHash] Queue changed: \(self.lastQueueHash) -> \(hash)\n")
                     self.lastQueueHash = hash
@@ -731,7 +739,7 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - 时间插值
+    // MARK: - Time Interpolation
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     // 🔬 Diagnostic: track interpolation frame timing for stall detection
@@ -774,7 +782,7 @@ public class MusicController: ObservableObject {
             }
         }
         #if DEBUG || LOCAL_DEVELOPER_BUILD
-        if UserDefaults.standard.bool(forKey: Self.diagnosticsEnabledUserDefaultsKey) {
+        if ownerDiagnosticsFrameTicksEnabled {
             let page = String(describing: currentPage)
             Task { @MainActor in
                 DiagnosticsService.shared.recordFrameTick(delta: dt, page: page)
@@ -803,7 +811,7 @@ public class MusicController: ObservableObject {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MARK: - 通知处理（playerInfoChanged 拆分）
+    // MARK: - Notification Handling (split playerInfoChanged)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @objc private func playerInfoChanged(_ notification: Notification) {
@@ -831,7 +839,7 @@ public class MusicController: ObservableObject {
         }
     }
 
-    /// 从通知 userInfo 应用播放状态（Playing/Paused）
+    /// Applies playback state from playerInfo userInfo (Playing/Paused).
     private func applyPlaybackState(from userInfo: [String: Any]) {
         guard let state = userInfo["Player State"] as? String,
               Date().timeIntervalSince(lastUserActionTime) > userActionLockDuration else { return }
@@ -841,10 +849,11 @@ public class MusicController: ObservableObject {
         let now = Date()
         let renderTime = lyricRenderTime(at: now)
         isPlaying = newIsPlaying
+        cachedPositionPollStateRaw = newIsPlaying ? Self.sbPlaying : Self.sbStopped
         syncPlaybackClock(to: renderTime, playing: newIsPlaying, at: now)
     }
 
-    /// 从通知 userInfo 应用曲目元信息，返回 (是否切歌, 新标题, 新艺术家, 新专辑)
+    /// Applies track metadata from playerInfo userInfo and returns track-change state plus new metadata.
     private func applyTrackMetadata(from userInfo: [String: Any]) -> (Bool, String?, String?, String?) {
         let newName = userInfo["Name"] as? String
         let newArtist = userInfo["Artist"] as? String
@@ -863,7 +872,7 @@ public class MusicController: ObservableObject {
         return (trackChanged, newName, newArtist, newAlbum)
     }
 
-    /// 切歌时：封面 + 歌词立即启动，persistentID 异步补充
+    /// On track change, starts artwork and lyrics immediately, then fills persistentID asynchronously.
     /// 🔑 DESIGN INVARIANT: artwork and lyrics must NEVER wait for scriptingBridgeQueue.
     /// The notification provides title/artist/album — that's all we need to start fetching.
     /// persistentID is only for caching and is read in parallel on the SB queue.
@@ -1039,11 +1048,19 @@ public class MusicController: ObservableObject {
         // currentTrack reads below; stuck AE calls leak a thread but do not crash.
 
         guard Date() >= positionPollCooldownUntil else { return }
+        if currentPage == .lyrics,
+           LyricsRendererMode.current == .native,
+           lyricsService.isManualScrolling {
+            positionPollCooldownUntil = Date().addingTimeInterval(1.0)
+            return
+        }
         guard let app = positionApp, app.isRunning else { return }
         guard !sbPositionPollInFlight else { return }
         sbPositionPollInFlight = true
 
         let pollEnqueueTime = Date()
+        let shouldReadPlayerState = Date().timeIntervalSince(lastPositionPollStateReadAt) >= 10.0
+        let fallbackStateRaw = cachedPositionPollStateRaw
         positionPollQueue.async { [weak self] in
             guard let self = self else { return }
             defer {
@@ -1065,7 +1082,9 @@ public class MusicController: ObservableObject {
             typealias PollSnap = (position: Double, stateRaw: Int)
             guard let snap: PollSnap = SBTimeoutRunner.run(timeout: 1.5, lane: "positionPoll", { () -> PollSnap? in
                 let p = app.value(forKey: "playerPosition") as? Double ?? 0
-                let s = app.value(forKey: "playerState") as? Int ?? 0
+                let s = shouldReadPlayerState
+                    ? (app.value(forKey: "playerState") as? Int ?? fallbackStateRaw)
+                    : fallbackStateRaw
                 return (p, s)
             }) else {
                 DebugLogger.log("Poll", "⏳ pollPositionViaSB timed out — skipping cycle, preserving state")
@@ -1178,6 +1197,10 @@ public class MusicController: ObservableObject {
             DispatchQueue.main.async {
                 self.positionPollTimeoutStreak = 0
                 self.positionPollCooldownUntil = .distantPast
+                if shouldReadPlayerState {
+                    self.cachedPositionPollStateRaw = stateRaw
+                    self.lastPositionPollStateReadAt = measurementTime
+                }
 
                 // Update playing state (respect user action lock)
                 if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
@@ -1399,10 +1422,17 @@ public class MusicController: ObservableObject {
             return
         }
 
-        // 超时节流
+        // Timeout throttle.
         let now = Date()
         guard now.timeIntervalSince(lastUpdateTime) >= updateTimeout else { return }
         lastUpdateTime = now
+        let knownTrackID = currentPersistentID ?? ""
+        let knownTrackIsURL = currentTrackIsURLTrack
+        let knownTrackName = currentTrackTitle
+        let knownArtist = currentArtist
+        let knownAlbum = currentAlbum
+        let knownDuration = duration
+        let knownTrackClass = currentTrackClass
 
         stateSyncQueue.async { [weak self] in
             guard let self = self else { return }
@@ -1473,11 +1503,24 @@ public class MusicController: ObservableObject {
             }
 
             let trackFields = SBTimeoutRunner.run(timeout: 1.5, lane: "stateSync") { () -> (name: String, artist: String, album: String, duration: Double, pid: String, trackClass: String, bitRate: Int, sampleRate: Int)? in
+                let pid = track.value(forKey: "persistentID") as? String ?? ""
+                let sameLibraryTrack = !knownTrackIsURL && !knownTrackID.isEmpty && pid == knownTrackID
+                if sameLibraryTrack {
+                    return (
+                        knownTrackName,
+                        knownArtist,
+                        knownAlbum,
+                        knownDuration,
+                        pid,
+                        knownTrackClass,
+                        -1,
+                        -1
+                    )
+                }
                 let n = track.value(forKey: "name") as? String ?? ""
                 let a = track.value(forKey: "artist") as? String ?? ""
                 let al = track.value(forKey: "album") as? String ?? ""
                 let d = track.value(forKey: "duration") as? Double ?? 0
-                let pid = track.value(forKey: "persistentID") as? String ?? ""
                 let cls = Self.musicTrackClassName(from: track)
                 let br = track.value(forKey: "bitRate") as? Int ?? 0
                 let sr = track.value(forKey: "sampleRate") as? Int ?? 0
@@ -1542,17 +1585,22 @@ public class MusicController: ObservableObject {
         return ""
     }
 
-    /// 处理播放器状态更新（共用逻辑）
+    /// Handles playback state updates through the shared path.
     private func processPlayerState(_ s: PlayerStateSnapshot) {
-        // 音质判定
-        var quality: String? = nil
-        if s.sampleRate >= 176400 || s.bitRate >= 3000 {
-            quality = "Hi-Res Lossless"
-        } else if s.sampleRate >= 44100 && s.bitRate >= 1000 {
-            quality = "Lossless"
-        }
+        // Negative bitrate/sample-rate means the same-track fast path intentionally
+        // skipped quality fields, so keep the existing badge.
+        let quality: String? = {
+            guard s.sampleRate >= 0, s.bitRate >= 0 else { return audioQuality }
+            if s.sampleRate >= 176400 || s.bitRate >= 3000 {
+                return "Hi-Res Lossless"
+            }
+            if s.sampleRate >= 44100 && s.bitRate >= 1000 {
+                return "Lossless"
+            }
+            return nil
+        }()
 
-        // 切歌检测
+        // Track-change detection.
         let isFirstTrack = self.currentPersistentID == nil && !s.persistentID.isEmpty
         let isURLTrack = s.trackClass == "URL track" || (s.trackClass.isEmpty && s.persistentID.isEmpty)
         let trackChangedByID = !isURLTrack && !s.persistentID.isEmpty && s.persistentID != self.currentPersistentID
@@ -1566,11 +1614,12 @@ public class MusicController: ObservableObject {
         }
     }
 
-    /// 将快照应用到 @Published 属性（主线程，由 processPlayerState 在 DispatchQueue.main.async 中调用）
+    /// Applies the snapshot to @Published properties on the main thread.
     private func applySnapshot(_ s: PlayerStateSnapshot, quality: String?, trackChanged: Bool) {
-        // 值守卫：只在值变化时赋值，避免无谓的 SwiftUI 重绘
+        // Value guards: assign only when values change to avoid unnecessary SwiftUI redraws.
         if Date().timeIntervalSince(lastUserActionTime) > userActionLockDuration {
             if isPlaying != s.isPlaying { isPlaying = s.isPlaying }
+            cachedPositionPollStateRaw = s.isPlaying ? Self.sbPlaying : Self.sbStopped
             if shuffleEnabled != s.shuffle { shuffleEnabled = s.shuffle }
             if repeatMode != s.repeatMode { repeatMode = s.repeatMode }
         }
@@ -1593,7 +1642,7 @@ public class MusicController: ObservableObject {
             DiagnosticsService.shared.enrichTrackContext(self.diagnosticsTrackContext())
         }
 
-        // 时间同步
+        // Time synchronization.
         // 🔑 Use measurementTime (captured before AppleScript ran) instead of Date()
         // Eliminates systematic lag from AS execution + thread dispatch
         let timeDiff = abs(s.position - currentTime)
@@ -1620,7 +1669,7 @@ public class MusicController: ObservableObject {
             currentPersistentID = s.persistentID
             let artworkPersistentID = currentTrackIsURLTrack ? "" : s.persistentID
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: artworkPersistentID, generation: generation)
-            // 🔑 切歌时主动触发歌词获取（不依赖 SwiftUI onChange 时序）
+            // 🔑 Actively fetch lyrics on track changes; do not depend on SwiftUI onChange timing.
             Task { @MainActor in
                 self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum)
             }
@@ -1631,7 +1680,7 @@ public class MusicController: ObservableObject {
         updateTimerState()
     }
 
-    /// 无曲目播放时重置状态
+    /// Resets state when no track is playing.
     private func applyNoTrack() {
         if currentTrackTitle != kNotPlayingSentinel {
             logger.info("⏹️ No track playing")

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 // NSView wrapper that prevents window dragging
 struct NonDraggableView: NSViewRepresentable {
@@ -36,7 +37,7 @@ class DraggableNSView: NSView {
 // MARK: - Custom Transitions
 
 extension AnyTransition {
-    // 圆角矩形从下往上渐现的动画
+    // Rounded rectangle reveal from the bottom.
     static var customSlideUpWithRoundedCorners: AnyTransition {
         AnyTransition.asymmetric(
             insertion: .roundedCornerSlideIn,
@@ -51,7 +52,7 @@ extension AnyTransition {
 
 struct RoundedCornerSlideModifier: ViewModifier {
     let isVisible: Bool
-    private let travelDistance: CGFloat = 80  // 滑动距离
+    private let travelDistance: CGFloat = 80
 
     func body(content: Content) -> some View {
         content
@@ -70,9 +71,9 @@ struct SharedBottomControls: View {
     @Binding var showControls: Bool
     @Binding var isProgressBarHovering: Bool
     @Binding var dragPosition: CGFloat?
-    var onControlsHoverChanged: ((Bool) -> Void)? = nil  // 🔑 可选回调：控件hover状态变化
-    var translationButton: AnyView? = nil  // 🔑 可选的翻译按钮
-    @State private var isControlAreaHovering: Bool = false  // 🔑 整个控件区域的hover状态
+    var onControlsHoverChanged: ((Bool) -> Void)? = nil
+    var translationButton: AnyView? = nil
+    @State private var isControlAreaHovering: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -88,7 +89,7 @@ struct SharedBottomControls: View {
                 .padding(.bottom, 10)
             }
 
-            VStack(spacing: 4) {  // 🔑 进度条区域与播放按钮间距=4
+            VStack(spacing: 4) {
                 PlaybackProgressSection(
                     timePublisher: timePublisher,
                     isProgressBarHovering: $isProgressBarHovering,
@@ -101,7 +102,7 @@ struct SharedBottomControls: View {
                     reduceMotion: reduceMotion
                 )
 
-                // Playback Controls
+                // Playback controls
                 HStack(spacing: 10) {
                 // Left navigation button
                 leftNavigationButton
@@ -110,7 +111,7 @@ struct SharedBottomControls: View {
 
                 Spacer()
 
-                // Playback cluster — wrapped in GlassEffectContainer for shared sampling
+                // Playback cluster, wrapped in GlassEffectContainer for shared sampling.
                 playbackCluster
 
                 Spacer()
@@ -123,18 +124,16 @@ struct SharedBottomControls: View {
                 .foregroundStyle(ink)
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12)  // 🔑 与 PlaylistView Now Playing 卡片一致
+            .padding(.horizontal, 12)
             .padding(.bottom, 16)
             .contentShape(Rectangle())
             .background(NonDraggableView())
         }
         .frame(maxWidth: .infinity, alignment: .bottom)
-        // 🔑 跟踪整个控件区域的hover状态
         .onHover { hovering in
             isControlAreaHovering = hovering
             onControlsHoverChanged?(hovering)
         }
-        // 🔑 移除clipShape transition，避免方形遮罩问题
         .transition(.opacity)
     }
 
@@ -150,13 +149,11 @@ struct SharedBottomControls: View {
             let animation: Animation? = reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 1.0)
             withAnimation(animation) {
                 if currentPage == .album {
-                    // 🔑 用户手动打开歌词页面
                     musicController.userManuallyOpenedLyrics = true
                     currentPage = .lyrics
                 } else if currentPage == .lyrics {
                     currentPage = .album
                 } else if currentPage == .playlist {
-                    // 🔑 用户手动打开歌词页面
                     musicController.userManuallyOpenedLyrics = true
                     currentPage = .lyrics
                 }
@@ -282,7 +279,7 @@ struct SharedBottomControls: View {
 
 private struct PlaybackProgressSection: View {
     @EnvironmentObject var musicController: MusicController
-    @ObservedObject var timePublisher: TimePublisher
+    let timePublisher: TimePublisher
     @Binding var isProgressBarHovering: Bool
     @Binding var dragPosition: CGFloat?
     let ink: Color
@@ -293,123 +290,306 @@ private struct PlaybackProgressSection: View {
     let reduceMotion: Bool
 
     var body: some View {
-        let currentTime = timePublisher.currentTime
-        let duration = musicController.duration
-        VStack(spacing: 2) {
-            progressBar(currentTime: currentTime, duration: duration)
-
-            HStack {
-                Text(formatTime(currentTime))
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(subduedInk)
-                    .shadow(color: shadowColor, radius: shadowRadius)
-                    .accessibilityHidden(true)
-
-                Spacer()
-
-                if let quality = musicController.audioQuality {
-                    qualityBadge(quality)
-                }
-
-                Spacer()
-
-                Text("-" + formatTime(duration - currentTime))
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(subduedInk)
-                    .shadow(color: shadowColor, radius: shadowRadius)
-                    .accessibilityHidden(true)
-            }
-            .padding(.horizontal, 20)
-        }
-    }
-
-    private func progressBar(currentTime: Double, duration: Double) -> some View {
-        let barHeight: CGFloat = isProgressBarHovering ? 12 : 7  // 🔑 hover前7px，hover后12px
-
-        return GeometryReader { geo in
-            let currentProgress: CGFloat = {
-                if duration > 0 {
-                    return dragPosition ?? CGFloat(currentTime / duration)
-                }
-                return 0
-            }()
-
-            // 🔑 使用遮罩实现圆角不拉伸效果
-            ZStack {
-                // Background Track
-                Capsule()
-                    .fill(.ultraThinMaterial)
-                    .environment(\.colorScheme, .light)
-                    .frame(height: barHeight)
-
-                // Active Progress
-                Capsule()
-                    .fill(ink.opacity(lightControlSurface ? 0.78 : 1.0))
-                    .frame(height: barHeight)
-                    .mask(
-                        HStack(spacing: 0) {
-                            Rectangle()
-                                .frame(width: geo.size.width * currentProgress)
-                            Spacer(minLength: 0)
-                        }
-                    )
-            }
-            .frame(maxHeight: .infinity)  // 🔑 让ZStack在GeometryReader中垂直居中
-            .contentShape(Capsule())
-            .onHover { hovering in
-                let animation: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
-                withAnimation(animation) {
-                    isProgressBarHovering = hovering
-                }
-            }
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged({ value in
-                        let percentage = min(max(0, value.location.x / geo.size.width), 1)
-                        dragPosition = percentage
-                    })
-                    .onEnded({ value in
-                        let percentage = min(max(0, value.location.x / geo.size.width), 1)
-                        let time = percentage * musicController.duration
-                        musicController.seek(to: time)
-                        dragPosition = nil
-                    })
-            )
-        }
-        .frame(height: 14)  // 🔑 容器高度略大于最大bar高度，确保居中效果
-        .padding(.horizontal, 20)  // 🔑 进度条额外padding
+        NativePlaybackProgressSection(
+            timePublisher: timePublisher,
+            duration: musicController.duration,
+            audioQuality: musicController.audioQuality,
+            isProgressBarHovering: $isProgressBarHovering,
+            dragPosition: $dragPosition,
+            reduceMotion: reduceMotion,
+            seek: { musicController.seek(to: $0) }
+        )
+        .frame(height: 32)
         .accessibilityLabel("播放进度")
-        .accessibilityValue("\(formatTime(currentTime)) / \(formatTime(duration))")
         .accessibilityAddTraits(.allowsDirectInteraction)
     }
+}
 
-    private func qualityBadge(_ quality: String) -> some View {
-        return HStack(spacing: 2) {
-            if quality == "Hi-Res Lossless" {
-                Image(systemName: "waveform.badge.magnifyingglass").font(.system(size: 8))
-                    .accessibilityHidden(true)
-            } else if quality == "Dolby Atmos" {
-                Image(systemName: "spatial.audio.badge.checkmark").font(.system(size: 8))
-                    .accessibilityHidden(true)
+private struct NativePlaybackProgressSection: NSViewRepresentable {
+    let timePublisher: TimePublisher
+    let duration: Double
+    let audioQuality: String?
+    @Binding var isProgressBarHovering: Bool
+    @Binding var dragPosition: CGFloat?
+    let reduceMotion: Bool
+    let seek: (Double) -> Void
+
+    func makeNSView(context: Context) -> NativePlaybackProgressView {
+        let view = NativePlaybackProgressView()
+        view.bind(to: timePublisher)
+        view.onHoverChanged = { isHovering in
+            if reduceMotion {
+                isProgressBarHovering = isHovering
             } else {
-                Image(systemName: "waveform").font(.system(size: 8))
-                    .accessibilityHidden(true)
+                withAnimation(.smooth(duration: 0.25)) {
+                    isProgressBarHovering = isHovering
+                }
             }
-            Text(quality).font(.system(size: 9, weight: .semibold))
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .modifier(GlassCapsule(fallbackOpacity: 0.15))
-        .foregroundStyle(ink.opacity(0.9))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("音频质量：\(quality)")
+        view.onDragChanged = { dragPosition = $0 }
+        view.onSeek = seek
+        return view
     }
 
-    private func formatTime(_ time: Double) -> String {
-        let totalSeconds = max(0, Int(time))
+    func updateNSView(_ nsView: NativePlaybackProgressView, context: Context) {
+        nsView.duration = duration
+        nsView.audioQuality = audioQuality
+        nsView.externalDragPosition = dragPosition
+        nsView.isProgressHovering = isProgressBarHovering
+        nsView.needsLayout = true
+    }
+}
+
+private final class NativePlaybackProgressView: NSView {
+    override var isFlipped: Bool { true }
+
+    var onHoverChanged: ((Bool) -> Void)?
+    var onDragChanged: ((CGFloat?) -> Void)?
+    var onSeek: ((Double) -> Void)?
+
+    var duration: Double = 0 {
+        didSet { updateDisplay() }
+    }
+
+    var audioQuality: String? {
+        didSet { updateQualityBadge() }
+    }
+
+    var externalDragPosition: CGFloat? {
+        didSet { updateDisplay() }
+    }
+
+    var isProgressHovering = false {
+        didSet { updateDisplay() }
+    }
+
+    private let horizontalInset: CGFloat = 20
+    private let progressSlotHeight: CGFloat = 14
+    private let labelY: CGFloat = 17
+    private let labelHeight: CGFloat = 13
+    private let trackLayer = CALayer()
+    private let fillLayer = CALayer()
+    private let currentLabel = NSTextField(labelWithString: "0:00")
+    private let remainingLabel = NSTextField(labelWithString: "-0:00")
+    private let qualityBadge = NSTextField(labelWithString: "")
+    private var currentTime: Double = 0
+    private var cancellable: AnyCancellable?
+    private var trackingArea: NSTrackingArea?
+    private var lastLabelCurrentSecond: Int?
+    private var lastLabelRemainingSecond: Int?
+    private var lastLaidOutBounds: CGRect = .null
+    private var lastProgressSignature: ProgressSignature?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        setupLayers()
+        setupLabels()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        setupLayers()
+        setupLabels()
+    }
+
+    deinit {
+        cancellable?.cancel()
+    }
+
+    func bind(to timePublisher: TimePublisher) {
+        cancellable?.cancel()
+        currentTime = timePublisher.currentTime
+        cancellable = timePublisher.$currentTime
+            .sink { [weak self] time in
+                guard let self else { return }
+                if Thread.isMainThread {
+                    self.currentTime = time
+                    self.updateDisplay()
+                } else {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.currentTime = time
+                        self?.updateDisplay()
+                    }
+                }
+            }
+        updateDisplay()
+    }
+
+    override func layout() {
+        super.layout()
+        updateDisplay()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: progressRect(),
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        trackingArea = area
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isProgressHovering = true
+        onHoverChanged?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isProgressHovering = false
+        onHoverChanged?(false)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        updateDrag(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        updateDrag(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let progress = progressValue(for: event.locationInWindow)
+        onSeek?(Double(progress) * duration)
+        onDragChanged?(nil)
+        externalDragPosition = nil
+    }
+
+    private func setupLayers() {
+        trackLayer.backgroundColor = NSColor.white.withAlphaComponent(0.22).cgColor
+        fillLayer.backgroundColor = NSColor.white.withAlphaComponent(1.0).cgColor
+        let disabledActions: [String: CAAction] = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "frame": NSNull(),
+            "cornerRadius": NSNull(),
+            "backgroundColor": NSNull()
+        ]
+        trackLayer.actions = disabledActions
+        fillLayer.actions = disabledActions
+        layer?.addSublayer(trackLayer)
+        layer?.addSublayer(fillLayer)
+    }
+
+    private func setupLabels() {
+        for label in [currentLabel, remainingLabel, qualityBadge] {
+            label.isBordered = false
+            label.isEditable = false
+            label.drawsBackground = false
+            label.font = .systemFont(ofSize: label === qualityBadge ? 9 : 10, weight: label === qualityBadge ? .semibold : .medium)
+            label.textColor = NSColor.white.withAlphaComponent(label === qualityBadge ? 0.9 : 0.68)
+            label.alignment = label === remainingLabel ? .right : .left
+            addSubview(label)
+        }
+        qualityBadge.alignment = .center
+        qualityBadge.wantsLayer = true
+        qualityBadge.layer?.cornerRadius = 6
+        qualityBadge.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        updateQualityBadge()
+    }
+
+    private func updateDrag(with event: NSEvent) {
+        let progress = progressValue(for: event.locationInWindow)
+        externalDragPosition = progress
+        onDragChanged?(progress)
+    }
+
+    private func progressValue(for windowPoint: NSPoint) -> CGFloat {
+        let point = convert(windowPoint, from: nil)
+        let rect = progressRect()
+        guard rect.width > 0 else { return 0 }
+        return min(max(0, (point.x - rect.minX) / rect.width), 1)
+    }
+
+    private func progressRect() -> CGRect {
+        CGRect(
+            x: horizontalInset,
+            y: 0,
+            width: max(0, bounds.width - horizontalInset * 2),
+            height: progressSlotHeight
+        )
+    }
+
+    private func updateDisplay() {
+        let progress = currentProgress()
+        let rect = progressRect()
+        let barHeight: CGFloat = isProgressHovering ? 12 : 7
+        let barY = rect.minY + (progressSlotHeight - barHeight) / 2
+        let progressSignature = ProgressSignature(
+            rect: rect,
+            progress: progress,
+            barHeight: barHeight,
+            barY: barY
+        )
+        if progressSignature != lastProgressSignature {
+            trackLayer.frame = CGRect(x: rect.minX, y: barY, width: rect.width, height: barHeight)
+            trackLayer.cornerRadius = barHeight / 2
+            fillLayer.frame = CGRect(x: rect.minX, y: barY, width: rect.width * progress, height: barHeight)
+            fillLayer.cornerRadius = barHeight / 2
+            lastProgressSignature = progressSignature
+        }
+
+        let currentSecond = max(0, Int(currentTime))
+        let remainingSecond = max(0, Int(duration - currentTime))
+        if currentSecond != lastLabelCurrentSecond {
+            currentLabel.stringValue = Self.formatTime(seconds: currentSecond)
+            lastLabelCurrentSecond = currentSecond
+        }
+        if remainingSecond != lastLabelRemainingSecond {
+            remainingLabel.stringValue = "-" + Self.formatTime(seconds: remainingSecond)
+            lastLabelRemainingSecond = remainingSecond
+        }
+        if bounds != lastLaidOutBounds {
+            currentLabel.frame = CGRect(x: horizontalInset, y: labelY, width: 70, height: labelHeight)
+            remainingLabel.frame = CGRect(x: bounds.width - horizontalInset - 70, y: labelY, width: 70, height: labelHeight)
+            updateQualityBadgeFrame()
+            lastLaidOutBounds = bounds
+        }
+    }
+
+    private func updateQualityBadge() {
+        qualityBadge.stringValue = audioQuality ?? ""
+        qualityBadge.isHidden = audioQuality == nil
+        updateQualityBadgeFrame()
+    }
+
+    private func updateQualityBadgeFrame() {
+        guard let audioQuality, !audioQuality.isEmpty else { return }
+        let width = min(max(CGFloat(audioQuality.count) * 6.0 + 14, 42), max(42, bounds.width - 160))
+        qualityBadge.frame = CGRect(
+            x: (bounds.width - width) / 2,
+            y: labelY - 1,
+            width: width,
+            height: labelHeight + 2
+        )
+    }
+
+    private func currentProgress() -> CGFloat {
+        if let externalDragPosition {
+            return min(max(0, externalDragPosition), 1)
+        }
+        guard duration > 0 else { return 0 }
+        return min(max(0, CGFloat(currentTime / duration)), 1)
+    }
+
+    private static func formatTime(seconds totalSeconds: Int) -> String {
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return seconds < 10 ? "\(minutes):0\(seconds)" : "\(minutes):\(seconds)"
+    }
+
+    private struct ProgressSignature: Equatable {
+        var rect: CGRect
+        var progress: CGFloat
+        var barHeight: CGFloat
+        var barY: CGFloat
     }
 }
 

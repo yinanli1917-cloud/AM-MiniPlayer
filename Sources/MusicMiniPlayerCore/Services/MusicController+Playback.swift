@@ -132,9 +132,11 @@ extension MusicController {
         currentTime = position
         internalCurrentTime = position
         lastPollTime = Date()
-        lastFrameTime = Date()  // 🔑 Reset frame clock so next interpolation adds ~0, not pre-seek delta
+        lastFrameTime = Date()  // Reset frame clock so next interpolation adds ~0, not pre-seek delta.
+        lastUserActionTime = lastFrameTime
+        positionPollCooldownUntil = lastFrameTime.addingTimeInterval(1.0)
         syncPlaybackClock(to: position, playing: isPlaying, at: lastFrameTime)
-        // 🔑 标记 seek 执行中，下次轮询时立即同步
+        // Mark seek as in-flight so the next poll performs a direct sync.
         seekPending = true
         // 🔑 Immediately update lyrics line index while seekPending is true.
         // interpolateTime() may skip this if diff < 0.1 (recent poll race),
@@ -357,7 +359,7 @@ extension MusicController {
         lastQueueFetchStartedAt = now
         let requestQueueGeneration = queueSyncGeneration
 
-        // 使用 ScriptingBridge 获取队列（App Store 合规）
+        // Fetch the queue through ScriptingBridge; this remains App Store-compliant.
         Task {
             await fetchUpNextViaBridge(requestQueueGeneration: requestQueueGeneration)
             await MainActor.run {
@@ -373,7 +375,7 @@ extension MusicController {
             }
         }
 
-        // 获取播放历史
+        // Fetch recent playback history.
         let shouldRefreshRecent = forceRecent || now.timeIntervalSince(lastRecentHistoryFetchAt) >= recentHistoryRefreshInterval
         if shouldRefreshRecent {
             lastRecentHistoryFetchAt = now
@@ -397,7 +399,7 @@ extension MusicController {
         fetchUpNextQueue(forceRecent: recentTracks.isEmpty)
     }
 
-    /// 使用 ScriptingBridge 获取 Up Next（使用自己的 musicApp 实例）
+    /// Fetches Up Next through ScriptingBridge using this controller's dedicated app instance.
     private func fetchUpNextViaBridge(requestQueueGeneration: UInt64) async {
         debugPrint("📋 [fetchUpNextViaBridge] Called, queueApp=\(queueApp != nil)\n")
         guard let app = queueApp, app.isRunning else {
@@ -407,7 +409,7 @@ extension MusicController {
 
         let requestGeneration = artworkFetchGeneration
 
-        // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
+        // 🔑 Use one serial queue so concurrent ScriptingBridge requests cannot crash.
         let controller = WeakSendableReference(self)
         let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
             scriptingBridgeQueue.async {
@@ -442,7 +444,7 @@ extension MusicController {
         }
     }
 
-    /// 从 SBApplication 获取 Up Next tracks
+    /// Fetches Up Next tracks from SBApplication.
     /// 🔑 Must be called on scriptingBridgeQueue. Each SBElementArray access fires an
     /// Apple Event — during rapid switching, the playlist/track objects become stale and
     /// cause EXC_BAD_ACCESS (pointer authentication failure). The generation check bails
@@ -539,7 +541,7 @@ extension MusicController {
         } ?? []
     }
 
-    /// 使用 ScriptingBridge 获取播放历史（使用自己的 musicApp 实例）
+    /// Fetches recent playback history through ScriptingBridge using this controller's dedicated app instance.
     private func fetchRecentHistoryViaBridge() {
         guard let app = queueApp, app.isRunning else { return }
 
@@ -567,7 +569,7 @@ extension MusicController {
     private func fetchRecentHistoryViaScriptingBridge(_ app: SBApplication) {
         guard app.isRunning else { return }
 
-        // 🔑 使用统一的串行队列防止并发 ScriptingBridge 请求导致崩溃
+        // 🔑 Use one serial queue so concurrent ScriptingBridge requests cannot crash.
         scriptingBridgeQueue.async { [weak self, app] in
             guard let self = self else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
@@ -633,7 +635,7 @@ extension MusicController {
         }
     }
 
-    /// 从 SBApplication 获取播放历史
+    /// Fetches playback history from SBApplication.
     /// 🔑 Hard 3s timeout prevents scriptingBridgeQueue from hanging indefinitely on
     /// playlist IPC — which previously triggered the removed heartbeat-recreate path
     /// and the EXC_BAD_ACCESS in AEProcessMessage.
@@ -696,7 +698,7 @@ extension MusicController {
                 DebugLogger.log("Playback", "⚠️ [getRecentTracksFromApp] NSException swallowed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
             }
 
-            // 返回最后 limit 个，倒序（最近播放的在前）
+            // Return the last `limit` items in reverse order so the most recent item comes first.
             return Array(recentList.suffix(limit).reversed())
         } ?? []
     }
@@ -877,7 +879,7 @@ extension MusicController {
         }
     }
 
-    /// 歌曲名有效性验证（过滤空名、纯数字ID、与 persistentID 相同的异常数据）
+    /// Validates track names by filtering empty names, numeric-only IDs, and values that duplicate the persistent ID.
     private func isValidTrackName(_ name: String, trackID: String) -> Bool {
         !name.isEmpty && name != trackID && !name.allSatisfy({ $0.isNumber })
     }

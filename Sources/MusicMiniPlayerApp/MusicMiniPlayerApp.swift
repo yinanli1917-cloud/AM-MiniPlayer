@@ -1,8 +1,8 @@
 /**
- * [INPUT]: 依赖 MusicMiniPlayerCore 的 MusicController/LyricsService/SnappablePanel/MiniPlayerView
- *          依赖 SettingsView 的 SettingsWindowView
- * [OUTPUT]: 导出 AppMain（应用入口）
- * [POS]: MusicMiniPlayerApp 的 AppDelegate + 窗口管理
+ * [INPUT]: Depends on MusicMiniPlayerCore MusicController/LyricsService/SnappablePanel/MiniPlayerView
+ *          and SettingsView SettingsWindowView.
+ * [OUTPUT]: Exports AppMain, the application entry point.
+ * [POS]: MusicMiniPlayerApp AppDelegate and window management.
  */
 
 import AppKit
@@ -13,8 +13,7 @@ import MusicMiniPlayerCore
 // MARK: - App Entry
 // ──────────────────────────────────────────────
 
-/// macOS 菜单栏迷你播放器应用
-/// 支持：菜单栏迷你视图 + 浮动窗口模式切换
+/// macOS menu bar mini player with floating-window support.
 @main
 class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static var shared: AppMain!
@@ -34,10 +33,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var diagnosticsWindowDelegate: SettingsWindowDelegate?
     #endif
 
-    // 状态：是否显示为浮窗（true）还是菜单栏视图（false）
+    // Whether playback is shown as a floating window instead of only through the menu bar.
     @Published var isFloatingMode: Bool = true
 
-    // 设置：是否在 Dock 显示图标
+    // Whether the app should appear in the Dock.
     var showInDock: Bool {
         get { UserDefaults.standard.bool(forKey: "showInDock") }
         set {
@@ -52,7 +51,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AppMain.shared = delegate
         app.delegate = delegate
 
-        // 首次启动默认值（用户未手动设置前生效）
+        // First-launch defaults, used until the user changes them.
         UserDefaults.standard.register(defaults: [
             "showInDock": true,
             "fullscreenAlbumCover": true
@@ -74,10 +73,6 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateDockVisibility()
         setupStatusItem()
         createFloatingWindow()
-        createSettingsWindow()
-        #if DEBUG || LOCAL_DEVELOPER_BUILD
-        createDiagnosticsWindow()
-        #endif
         setupMainMenu()
         setupURLHandling()
         showFloatingWindow()
@@ -194,7 +189,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Status Item (菜单栏)
+    // MARK: - Status Item
 
     func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -242,7 +237,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Floating Window (浮动窗口)
+    // MARK: - Floating Window
 
     func createFloatingWindow() {
         let windowSize = NSSize(width: 250, height: 316)
@@ -275,22 +270,22 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         snappableWindow.acceptsMouseMovedEvents = true
         snappableWindow.becomesKeyOnlyIfNeeded = false
 
-        // 窗口比例和尺寸限制
+        // Window aspect ratio and size limits.
         snappableWindow.aspectRatio = NSSize(width: 250, height: 316)
         snappableWindow.minSize = NSSize(width: 180, height: 228)
         snappableWindow.maxSize = NSSize(width: 400, height: 506)
 
-        // 当前页面 provider（判断双指拖拽是否生效）
+        // Current page provider, used to decide whether two-finger dragging applies.
         snappableWindow.currentPageProvider = { [weak self] in
             return self?.musicController.currentPage ?? .album
         }
 
-        // 手动滚动状态 provider（两次滑动逻辑）
+        // Manual-scroll provider for the two-swipe interaction logic.
         snappableWindow.isManualScrollingProvider = {
             return LyricsService.shared.isManualScrolling
         }
 
-        // 触发进入手动滚动状态
+        // Enters manual-scroll mode.
         snappableWindow.onTriggerManualScroll = {
             LyricsService.shared.isManualScrolling = true
         }
@@ -339,14 +334,14 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// 收起浮窗到菜单栏
+    /// Collapses the floating window back to the menu bar.
     func collapseToMenuBar() {
         isFloatingMode = false
         floatingWindow?.orderOut(nil)
         showMenuBarMenu()
     }
 
-    /// 从菜单栏显示浮窗；不再作为菜单栏/浮窗模式切换的一半。
+    /// Shows the floating window from the menu bar; no longer toggles between menu-bar and floating modes.
     func revealFloatingWindowFromMenuBar() {
         isFloatingMode = true
         showFloatingWindow(revealNearbySnapPosition: true)
@@ -486,9 +481,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         LyricsService.shared.translationLanguage = code == "system" ? L10n.systemLanguageCode : code
     }
 
-    // MARK: - Settings Window (设置窗口)
+    // MARK: - Settings Window
 
     func createSettingsWindow() {
+        guard settingsWindow == nil else { return }
         let settingsContent = SettingsWindowView(state: settingsWindowState)
             .environmentObject(musicController)
 
@@ -509,6 +505,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     func createDiagnosticsWindow() {
+        guard diagnosticsWindow == nil else { return }
         let diagnosticsContent = DiagnosticsDebugPanel(musicController: musicController)
             .frame(minWidth: 680, minHeight: 620)
 
@@ -530,6 +527,9 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     #endif
 
     func showSettingsWindow(selectedTab: SettingsTab? = nil) {
+        if settingsWindow == nil {
+            createSettingsWindow()
+        }
         guard let window = settingsWindow else { return }
         if let selectedTab {
             settingsWindowState.selectedTab = selectedTab
@@ -541,6 +541,9 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     func showDiagnosticsWindow() {
+        if diagnosticsWindow == nil {
+            createDiagnosticsWindow()
+        }
         guard let window = diagnosticsWindow else { return }
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -558,12 +561,12 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     #endif
 
-    // MARK: - Main Menu (主菜单)
+    // MARK: - Main Menu
 
     func setupMainMenu() {
         let mainMenu = NSMenu()
 
-        // 应用菜单
+        // App menu
         let appMenu = NSMenu()
         let appMenuItem = NSMenuItem()
         appMenuItem.submenu = appMenu
@@ -596,7 +599,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         mainMenu.addItem(appMenuItem)
 
-        // Window 菜单
+        // Window menu
         let windowMenu = NSMenu(title: "Window")
         let windowMenuItem = NSMenuItem()
         windowMenuItem.submenu = windowMenu
