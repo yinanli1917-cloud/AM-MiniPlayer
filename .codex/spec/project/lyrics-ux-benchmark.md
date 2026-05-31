@@ -153,6 +153,19 @@ Observed mandatory Winter fixture evidence:
   this as an incomparable reference motion signal instead of calling candidate
   presentation drift a regression against impossible zero-error reference data.
 
+Observed owner line-level fixture evidence:
+
+- `line-breakup-truth` (`分手真相` / Alvin Kwok) sequential `origin/main`
+  comparison passed after ignoring unusable zero-settle baselines that also
+  skipped settle windows.
+- Artifact:
+  `tmp/benchmark/sequential-reference/sequential-20260531-063834-breakup-origin-main-reference-fixed-line-breakup-truth/summary.json`
+- CPU avg `26.697` -> `11.755` (candidate ratio `0.440`, about `56.0%`
+  lower).
+- Motion improved: reference settled target p95 `50.0` and settled inter-line
+  p95 `50.0`; candidate settled target p95 `0.142` and settled inter-line p95
+  `0.060`; lingering backlog `1` -> `0`.
+
 ## Contract (always)
 
 - AMLL wave: 0.08s stagger, 3-row lead-in, radius 14, top-to-bottom order
@@ -181,6 +194,9 @@ python3 scripts/luxb_sequential_reference.py \
 Use this when comparing current candidate against `origin/main` or any other
 same-bundle prior build. If the reference emits target-layout-only motion data,
 the run must not be used as direct presentation drift parity evidence.
+If the reference reports `activeTargetSettleTimeMax == 0` while also recording
+settle skips, do not treat that zero as a perfect settle baseline; it is
+incomplete settle evidence.
 
 ## Commands
 

@@ -542,7 +542,14 @@ def compare_metrics(candidate: MotionMetrics, baseline: MotionMetrics) -> list[s
         failures.append(
             "settled interLineDeltaErrorY p95 worse than baseline"
         )
-    if candidate.active_target_settle_time_max > baseline.active_target_settle_time_max + 0.05:
+    baseline_has_usable_settle_time = not (
+        baseline.active_target_settle_time_max == 0
+        and baseline.active_target_settle_skipped_count > 0
+    )
+    if (
+        baseline_has_usable_settle_time
+        and candidate.active_target_settle_time_max > baseline.active_target_settle_time_max + 0.05
+    ):
         failures.append("active target settle time worse than baseline")
     if candidate.lingering_backlog_incidents > baseline.lingering_backlog_incidents:
         failures.append("lingering backlog worse than baseline")

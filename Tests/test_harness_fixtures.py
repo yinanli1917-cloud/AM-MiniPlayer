@@ -129,6 +129,19 @@ class HarnessFixtureTests(unittest.TestCase):
         self.assertFalse(signal["comparable"])
         self.assertIn("target-layout", signal["reason"])
 
+    def test_motion_compare_ignores_unusable_zero_settle_baseline(self) -> None:
+        baseline = sequential_reference.motion.MotionMetrics(
+            sample_count=20,
+            active_target_settle_time_max=0,
+            active_target_settle_skipped_count=3,
+        )
+        candidate = sequential_reference.motion.MotionMetrics(
+            sample_count=40,
+            active_target_settle_time_max=0.25,
+        )
+
+        self.assertEqual(sequential_reference.motion.compare_metrics(candidate, baseline), [])
+
 
 if __name__ == "__main__":
     unittest.main()

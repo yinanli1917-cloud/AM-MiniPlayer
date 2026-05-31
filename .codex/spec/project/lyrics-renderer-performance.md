@@ -175,6 +175,10 @@ recording target layout rather than presentation-layer drift. Do not compare the
 native renderer's presentation-layer drift values against that impossible
 zero-error baseline. Mark the prior motion reference as incomparable and use it
 for CPU/workload evidence plus wave schedule metadata only.
+Likewise, a prior run with `activeTargetSettleTimeMax == 0` and nonzero
+`activeTargetSettleSkippedCount` has not proven instant settle; it has missing
+settle evidence. Do not fail a candidate solely because it reports a real
+nonzero settle duration against that incomplete zero.
 
 False manual-scroll state is a first-class lyrics stutter cause even when CPU is
 low. Scroll-wheel monitors must not let momentum-only events or events outside
