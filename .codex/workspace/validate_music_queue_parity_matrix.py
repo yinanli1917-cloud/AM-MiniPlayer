@@ -214,6 +214,14 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
         rows_match = normalized_note_field(notes_text, "Do visible rows match probe rows by order and identity")
         if rows_match not in {"yes", "true"}:
             errors.append(f"{prefix}: exact claim must state visible rows matched probe rows by order and identity")
+        full_probe_coverage = normalized_note_field(
+            notes_text,
+            "Public probe rows cover every visible queue/history row",
+        )
+        if full_probe_coverage not in {"yes", "true"}:
+            errors.append(
+                f"{prefix}: exact claim must state public probe rows covered every visible queue/history row"
+            )
         if row.probe_classification.startswith(UNAVAILABLE_PREFIXES):
             errors.append(f"{prefix}: exact claim points to unavailable probe classification '{row.probe_classification}'")
         if fixed_indexing_probe and extract_probe_value(probe_text, "fixed_indexing.restored") != "true":

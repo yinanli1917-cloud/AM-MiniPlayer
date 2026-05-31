@@ -91,12 +91,13 @@ def write_multi_context_session(root: Path, *, outcomes: dict[str, str]) -> Path
     return session_dir
 
 
-def completed_notes(*, rows_match: str) -> str:
+def completed_notes(*, rows_match: str, full_probe_coverage: str = "yes") -> str:
     return "\n".join(
         [
             "# Visible Music.app Queue Notes",
             "",
             "- Music.app visible Up Next/history UI open: yes",
+            "- Public probe rows cover every visible queue/history row: " + full_probe_coverage,
             "- Do visible rows match probe rows by order and identity: " + rows_match,
             "",
             "## Visible Rows",
@@ -242,6 +243,16 @@ def main() -> int:
             probe_extra=fixed_indexing_probe_rows,
         )
         assert_passes(session)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="partial_current_playlist_neighbors_only",
+            notes_text=completed_notes(rows_match="yes", full_probe_coverage="no"),
+            probe_extra=fixed_indexing_probe_rows,
+        )
+        assert_fails(session, "exact claim must state public probe rows covered every visible queue/history row")
 
     with tempfile.TemporaryDirectory() as tmp:
         session = write_session(

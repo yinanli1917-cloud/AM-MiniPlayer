@@ -20,8 +20,8 @@ For each context:
    supplemental rows to `SDK_SUMMARY.md`, not the exact-claim `SUMMARY.md`.
 3. Save the generated probe path.
 4. Save a screenshot or written notes of the visible Music.app queue/history.
-5. Mark `exact` only if the visible rows and public-surface rows match by order
-   and identity.
+5. Mark `exact` only if the public-surface rows cover every visible
+   Up Next/history row and match those visible rows by order and identity.
 6. Run `python3 .codex/workspace/validate_music_queue_parity_matrix.py <session-dir>`
    before using the matrix as implementation evidence.
    Add `--coverage-report` when you need the resolved/pending/missing status
@@ -33,6 +33,9 @@ For each context:
    distributed-notification artifacts that observed no events, contain only
    metadata/context payloads, have no row-carrier keys, or lack non-empty
    array/dictionary row-like payload shapes.
+   It also rejects exact claims unless the visible notes explicitly confirm
+   that the public probe rows covered every visible queue/history row, so a
+   truncated neighbor window cannot be promoted to full parity proof.
    It also rejects `unavailable` claims unless visible Music.app notes are
    complete and prove either that the public probe was unavailable for a
    visible queue state or that the public rows mismatched the visible queue by

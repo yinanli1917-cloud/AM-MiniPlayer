@@ -236,6 +236,7 @@ TODO paste visible queue rows here
 
 - Probe output file: TODO filled by runner or by hand
 - Probe classification.outcome: TODO filled by runner or by hand
+- Public probe rows cover every visible queue/history row: TODO yes/no
 - Do visible rows match probe rows by order and identity: TODO yes/no
 - Mismatch notes: TODO
 
@@ -245,6 +246,8 @@ Only mark this context exact when:
 
 - visible Music.app rows are recorded above;
 - public probe rows are recorded in the probe output;
+- public probe rows cover every visible queue/history row, not only a truncated
+  neighbor window;
 - visible rows and probe rows match by order and identity;
 - no private storage, UI scraping, or private AppleEvent source was used.
 EOF_NOTES
@@ -265,9 +268,9 @@ public, App Store-safe surfaces. It does not change Music.app playback.
 
 ## Rule
 
-Do not mark any context exact unless the visible Music.app Up Next/history rows
-match the public probe output by order and identity. Probe output alone is not
-proof.
+Do not mark any context exact unless the public probe covers every visible
+Music.app Up Next/history row and those rows match by order and identity. Probe
+output alone is not proof.
 
 ## Commands
 
