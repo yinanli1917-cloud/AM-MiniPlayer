@@ -59,6 +59,7 @@ class HarnessFixtureTests(unittest.TestCase):
             output_dir=str(ROOT / "tmp" / "perf"),
             require_music_playing=True,
             skip_playback_control=False,
+            allow_music_automation_unavailable=False,
             dry_run=True,
         )
 
@@ -76,6 +77,16 @@ class HarnessFixtureTests(unittest.TestCase):
             resolved.expect_first_real_line_sha256,
             "c3925990fd25b5c0a4891ef23968b2acd3d7db1e4d71fbb9cfdfeefdd2231ae9",
         )
+        self.assertFalse(resolved.allow_music_automation_unavailable)
+
+    def test_perf_harness_marks_unverified_music_status_as_non_acceptance(self) -> None:
+        status = perf.unverified_music_status("automation denied")
+
+        self.assertEqual(status["state"], "unverified")
+        self.assertFalse(status["matchesRequestedTrack"])
+        self.assertTrue(status["automationUnavailableAllowed"])
+        self.assertFalse(status["acceptanceEligible"])
+        self.assertEqual(status["error"], "automation denied")
 
     def test_perf_harness_requires_album_when_fixture_has_album(self) -> None:
         request = SimpleNamespace(

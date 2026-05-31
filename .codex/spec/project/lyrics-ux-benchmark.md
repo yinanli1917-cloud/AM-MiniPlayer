@@ -44,6 +44,12 @@ improvement. `line-breakup-truth` is intentionally line-level and protects the
 dense plain-line lag/drift path; it must fail if the resolver upgrades it to
 word/syllable lyrics or selects a lighter/different line workload.
 
+`perf_harness.py --allow-music-automation-unavailable` is diagnostics-only. It
+exists so local iteration can continue when macOS denies shell Apple Events to
+Music.app, but its summaries must set `music.acceptanceEligible=false` and must
+not satisfy LUXB, main-vs-candidate CPU, scroll-tap-jump, or workload integrity
+acceptance gates.
+
 ## Smoothness proxies (no literal FPS gate)
 
 | Proxy | Source | Beat v2.8 |

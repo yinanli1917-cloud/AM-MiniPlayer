@@ -177,6 +177,7 @@ def resolve_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> S
         output_dir=Path(args.output_dir).expanduser(),
         require_music_playing=args.require_music_playing,
         skip_playback_control=args.skip_playback_control,
+        allow_music_automation_unavailable=args.allow_music_automation_unavailable,
         interaction=args.interaction,
         interaction_interval=args.interaction_interval,
         dry_run=args.dry_run,
@@ -305,6 +306,18 @@ end tell
     if result.returncode != 0:
         raise SystemExit(f"Could not seek Music.app to {position:.3f}s: {result.stderr.strip()}")
     time.sleep(0.5)
+
+
+def unverified_music_status(reason: str) -> dict[str, object]:
+    return {
+        "state": "unverified",
+        "matchesRequestedTrack": False,
+        "duration": None,
+        "album": None,
+        "automationUnavailableAllowed": True,
+        "acceptanceEligible": False,
+        "error": reason,
+    }
 
 
 def route_app(page: str) -> int:
@@ -505,6 +518,7 @@ def build_summary(
             "lyricsLineCount": request.expect_lyrics_line_count,
             "firstRealLineSHA256": request.expect_first_real_line_sha256,
             "musicPlayingRequired": request.require_music_playing,
+            "allowMusicAutomationUnavailable": request.allow_music_automation_unavailable,
         },
         "featureState": {
             "pageRoute": f"nanopod://page/{request.page}",
@@ -593,6 +607,15 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
         action="store_true",
         help="do not ask Music.app to play the requested track before measuring",
     )
+    parser.add_argument(
+        "--allow-music-automation-unavailable",
+        action="store_true",
+        help=(
+            "degraded diagnostics-only mode: when used with --skip-playback-control, "
+            "sample nanoPod even if Music.app Apple Events are unavailable. "
+            "This is not an acceptance gate."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the resolved plan without touching apps")
     return parser, parser.parse_args()
 
@@ -600,6 +623,10 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
 def main() -> None:
     parser, args = parse_args()
     request = resolve_args(parser, args)
+    if request.allow_music_automation_unavailable and request.require_music_playing:
+        parser.error("--allow-music-automation-unavailable cannot be combined with --require-music-playing")
+    if request.allow_music_automation_unavailable and not request.skip_playback_control:
+        parser.error("--allow-music-automation-unavailable requires --skip-playback-control")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     file_stem = f"perf-{stamp}-{request.page}-{visual.slug(request.label)}"
@@ -623,6 +650,7 @@ def main() -> None:
                 "lyricsLineCount": request.expect_lyrics_line_count,
                 "firstRealLineSHA256": request.expect_first_real_line_sha256,
                 "musicPlayingRequired": request.require_music_playing,
+                "allowMusicAutomationUnavailable": request.allow_music_automation_unavailable,
             },
             "measurement": {
                 "warmupSeconds": request.warmup,
@@ -643,8 +671,13 @@ def main() -> None:
     quit_candidate_app()
     enable_required_diagnostics()
     workload = verify_workload(request)
-    music = ensure_music_playing(request)
-    seek_music_position(request.seek_position)
+    if request.allow_music_automation_unavailable:
+        music = unverified_music_status(
+            "Music.app Apple Events were intentionally skipped for diagnostics-only sampling"
+        )
+    else:
+        music = ensure_music_playing(request)
+        seek_music_position(request.seek_position)
     if request.require_music_playing:
         music = ensure_music_playing(SimpleNamespace(**{
             **request.__dict__,
