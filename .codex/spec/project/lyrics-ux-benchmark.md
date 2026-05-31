@@ -108,6 +108,32 @@ The gate reported no motion, wave, text parity, frame cadence, or CPU failures.
 Frame cadence stayed at the expected 60 FPS with zero dropped frames over 1.5x
 or 2x refresh interval.
 
+Passing idle summaries on the same signed candidate:
+
+| Page | Fixture | Avg CPU | p95 CPU | Max CPU |
+|------|---------|---------|---------|---------|
+| album | `word-seek-fun` | 0.411 | 0.9 | 1.6 |
+| playlist | `word-seek-fun` | 0.482 | 1.15 | 1.7 |
+
+Passing 30-minute soak summary:
+`tmp/soak-cattext-progress-30min/soak-20260531-054927-cattext-progress-30min.json`
+
+| Duration | Fixtures | Pages | Avg CPU | p95 CPU | Max CPU | RSS slope | Stalls |
+|----------|----------|-------|---------|---------|---------|-----------|--------|
+| 1800s | Winter Trip, Breakup Truth, Seek Fun, Translated Word | lyrics, album, playlist, lyrics | 3.703 | 11.3 | 27.2 | +10.529 MB/hour | 0 |
+
+Dual-app v2.8 reference checks were run for process-level evidence. The current
+dual monitor's motion CSV is not independent when both apps write to the same
+diagnostics directory, so use its CPU/crash result as authoritative and use the
+candidate-only LUXB motion/text/frame gates above for UX parity:
+
+| Fixture | v2.8 avg CPU | Candidate avg CPU | v2.8 max CPU | Candidate max CPU |
+|---------|--------------|-------------------|--------------|-------------------|
+| `line-winter-trip` | 14.652 | 7.077 | 33.7 | 22.4 |
+| `line-breakup-truth` | 18.044 | 4.931 | 39.2 | 22.9 |
+| `word-seek-fun` | 21.275 | 5.425 | 44.2 | 13.9 |
+| `translated-word` | 19.300 | 7.515 | 33.4 | 26.6 |
+
 ## Contract (always)
 
 - AMLL wave: 0.08s stagger, 3-row lead-in, radius 14, top-to-bottom order
