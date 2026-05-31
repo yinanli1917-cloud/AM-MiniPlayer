@@ -464,10 +464,11 @@ extension MusicController {
                     self.logger.info("Discarded stale Up Next unavailable snapshot for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
                     return
                 }
-                _ = self.applyUpNextSnapshotIfChanged(QueueFetchSnapshot(
-                    tracks: [],
-                    provenance: .unavailable(reason: .musicAppUnavailable)
-                ))
+                if self.applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable)) {
+                    self.lastQueueFetchCompletedAt = Date()
+                    self.lastQueueFetchCompletedGeneration = self.queueSyncGeneration
+                    self.logger.info("Marked queue unavailable because Music.app is unavailable")
+                }
             }
             return
         }
@@ -500,10 +501,10 @@ extension MusicController {
                 self.logger.info("Discarded stale Up Next fetch for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
                 return
             }
-            if self.applyNoCurrentTrackQueueSnapshotIfNeeded(snapshot.provenance) {
+            if self.applyWholeQueueUnavailableSnapshotIfNeeded(snapshot.provenance) {
                 self.lastQueueFetchCompletedAt = Date()
                 self.lastQueueFetchCompletedGeneration = self.queueSyncGeneration
-                self.logger.info("Marked queue unavailable because Music.app exposed no current track")
+                self.logger.info("Marked queue unavailable because Music.app exposed no whole-queue source")
                 return
             }
 
@@ -658,10 +659,7 @@ extension MusicController {
                 requestTrackGeneration: requestTrackGeneration,
                 currentTrackGeneration: artworkFetchGeneration
             ) {
-                _ = applyRecentSnapshotIfChanged(QueueFetchSnapshot(
-                    tracks: [],
-                    provenance: .unavailable(reason: .musicAppUnavailable)
-                ))
+                _ = applyWholeQueueUnavailableSnapshotIfNeeded(.unavailable(reason: .musicAppUnavailable))
             }
             return
         }
@@ -735,8 +733,8 @@ extension MusicController {
                     self.logger.info("Discarded stale recent history fetch for queue generation \(requestQueueGeneration), track generation \(requestTrackGeneration)")
                     return
                 }
-                if self.applyNoCurrentTrackQueueSnapshotIfNeeded(snapshot.provenance) {
-                    self.logger.info("Marked queue unavailable because Music.app exposed no current track during recent history read")
+                if self.applyWholeQueueUnavailableSnapshotIfNeeded(snapshot.provenance) {
+                    self.logger.info("Marked queue unavailable because Music.app exposed no whole-queue source during recent history read")
                     return
                 }
 

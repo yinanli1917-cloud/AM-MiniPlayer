@@ -376,7 +376,7 @@ public class MusicController: ObservableObject {
         }
     }
 
-    func markQueueUnavailableForNoCurrentTrack() {
+    private func markQueueUnavailable(reason: MusicQueueUnavailableReason) {
         if !isPreview {
             queueSyncGeneration &+= 1
         }
@@ -395,8 +395,16 @@ public class MusicController: ObservableObject {
         recentTracks = []
         upNextRawRowCount = 0
         recentRawRowCount = 0
-        upNextProvenance = .unavailable(reason: .noCurrentTrack)
-        recentTracksProvenance = .unavailable(reason: .noCurrentTrack)
+        upNextProvenance = .unavailable(reason: reason)
+        recentTracksProvenance = .unavailable(reason: reason)
+    }
+
+    func markQueueUnavailableForNoCurrentTrack() {
+        markQueueUnavailable(reason: .noCurrentTrack)
+    }
+
+    func markQueueUnavailableForMusicAppUnavailable() {
+        markQueueUnavailable(reason: .musicAppUnavailable)
     }
 
     @discardableResult
@@ -405,6 +413,19 @@ public class MusicController: ObservableObject {
             return false
         }
         markQueueUnavailableForNoCurrentTrack()
+        return true
+    }
+
+    @discardableResult
+    func applyWholeQueueUnavailableSnapshotIfNeeded(_ provenance: MusicQueueProvenance) -> Bool {
+        switch provenance {
+        case .unavailable(reason: .noCurrentTrack):
+            markQueueUnavailableForNoCurrentTrack()
+        case .unavailable(reason: .musicAppUnavailable):
+            markQueueUnavailableForMusicAppUnavailable()
+        default:
+            return false
+        }
         return true
     }
 

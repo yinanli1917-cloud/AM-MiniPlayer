@@ -171,6 +171,10 @@ recent-history fetch is throttled or superseded.
 The recent-history read path uses the same no-current transition, so a history
 snapshot that discovers no current Music.app track cannot leave old Up Next rows
 visible while waiting for the separate Up Next fetch to finish.
+Music.app-unavailable queue snapshots use the same whole-surface cleanup. If
+one read path discovers that Music.app is unavailable, both History and Up Next
+are cleared and marked unavailable instead of letting old exact rows remain on
+the other surface until its own refresh runs.
 User controls that can advance or reorder playback now schedule a public queue
 refresh after the Music.app command returns, fails, or cannot reach Music.app.
 Those scheduled reads are guarded by the queue generation captured when the
