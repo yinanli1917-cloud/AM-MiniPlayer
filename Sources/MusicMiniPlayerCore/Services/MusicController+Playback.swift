@@ -72,8 +72,14 @@ extension MusicController {
         // heavyweight scriptingBridgeQueue work (polls, queue scans, state syncs).
         // Each SBApplication is an independent Apple Event proxy, safe on its own serial queue.
         controlQueue.async { [weak self] in
-            guard let app = self?.controlApp, app.isRunning else {
+            guard let self else { return }
+            guard let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] togglePlayPause: app not available\n")
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.markQueueMayHaveChanged()
+                    self.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: self.queueSyncGeneration)
+                }
                 return
             }
             debugPrint("▶️ [MusicController] togglePlayPause() executing\n")
@@ -161,8 +167,14 @@ extension MusicController {
 
         // 🔑 User-initiated seek uses dedicated controlQueue for instant response
         controlQueue.async { [weak self] in
-            guard let app = self?.controlApp, app.isRunning else {
+            guard let self else { return }
+            guard let app = self.controlApp, app.isRunning else {
                 debugPrint("⚠️ [MusicController] seek: app not available\n")
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.markQueueMayHaveChanged()
+                    self.scheduleQueueRefreshAfterMusicControlChange(queueGeneration: self.queueSyncGeneration)
+                }
                 return
             }
             debugPrint("⏩ [MusicController] seek(to: \(position)) executing\n")

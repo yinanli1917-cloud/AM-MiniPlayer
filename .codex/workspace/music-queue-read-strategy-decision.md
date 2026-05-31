@@ -184,6 +184,10 @@ refresh after the Music.app command returns, fails, or cannot reach Music.app.
 Those scheduled reads are guarded by the queue generation captured when the
 rows were invalidated, so a control completion or failure cannot refresh a
 newer queue state after another detector has already superseded it.
+Play/pause and seek failure paths now follow the same stale-row rule when
+Music.app cannot be reached: they clear retained queue/history rows to
+`pendingPublicRefresh` and force a public queue refresh attempt, which then
+settles to Music.app-unavailable if no public Music.app connection exists.
 Playlist row playback remains limited to non-empty hexadecimal Music.app
 `persistent ID` values, matching the public scripting dictionary. Catalog IDs,
 placeholders, whitespace, and arbitrary strings are rejected instead of being

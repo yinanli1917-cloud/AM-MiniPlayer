@@ -1465,6 +1465,66 @@ final class RapidSwitchTests: XCTestCase {
         XCTFail("Unavailable control path should attempt a public refresh and exit pending state")
     }
 
+    func testTogglePlayPauseUnavailableStillExitsStaleQueueViaPublicRefreshAttempt() async throws {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.controlApp = nil
+        c.queueApp = nil
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-control-unavailable")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-control-unavailable")
+
+        c.togglePlayPause()
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if c.upNextProvenance == .unavailable(reason: .musicAppUnavailable),
+               c.recentTracksProvenance == .unavailable(reason: .musicAppUnavailable),
+               c.upNextTracks.isEmpty,
+               c.recentTracks.isEmpty {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTFail("Unavailable play/pause path should attempt a public refresh and exit stale queue state")
+    }
+
+    func testSeekUnavailableStillExitsStaleQueueViaPublicRefreshAttempt() async throws {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        c.controlApp = nil
+        c.queueApp = nil
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-control-unavailable")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-control-unavailable")
+
+        c.seek(to: 42)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if c.upNextProvenance == .unavailable(reason: .musicAppUnavailable),
+               c.recentTracksProvenance == .unavailable(reason: .musicAppUnavailable),
+               c.upNextTracks.isEmpty,
+               c.recentTracks.isEmpty {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTFail("Unavailable seek path should attempt a public refresh and exit stale queue state")
+    }
+
     func testDetectedQueueHashChangeInvalidatesPublishedRowsUntilFreshPublicSnapshot() {
         let c = MusicController(preview: true)
         c.isPreview = false
