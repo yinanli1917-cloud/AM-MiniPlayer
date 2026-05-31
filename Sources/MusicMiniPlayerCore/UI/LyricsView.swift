@@ -305,6 +305,8 @@ public struct LyricsView: View {
     @State private var cachedDisplayLines: [DisplayLyricLine] = []
     @State private var cachedDisplayLyrics: [LyricLine] = []
     @State private var cachedFirstRealDisplayIndex: Int = 0
+    @State private var cachedLayerRows: [LayerBackedLyricRow] = []
+    @State private var cachedNativeRenderedIndices: [Int] = []
     @State private var nativeLyricsManualScrollActive = false
     @State private var nativeLyricsDirectSnapRequest: NativeLyricsDirectSnapRequest?
     @State private var lastRendererModeEventSignature: String?
@@ -408,6 +410,8 @@ public struct LyricsView: View {
             cache.renderedIndicesValid = false
             cachedDisplayLines.removeAll()
             cachedDisplayLyrics.removeAll()
+            cachedLayerRows.removeAll()
+            cachedNativeRenderedIndices.removeAll()
             cachedFirstRealDisplayIndex = 0
             displayCurrentLineIndex = nil
             pendingLineHeightResetForNextPayload = true
@@ -682,11 +686,8 @@ public struct LyricsView: View {
                 }
                 return index
             }
-            let allLayerRows = makeLayerBackedRows(from: displayLines).filter { row in
-                guard row.index == 0 || row.index >= firstRealDisplayIndex else { return false }
-                return true
-            }
-            let nativeRenderedIndices = allLayerRows.map(\.index)
+            let allLayerRows = cachedLayerRows
+            let nativeRenderedIndices = cachedNativeRenderedIndices
             let layerHeightIndices = Set(nativeRenderedIndices + [displayIndex] + Array(activeWaveIndices))
             let layerAccumulatedHeights = Dictionary(uniqueKeysWithValues: layerHeightIndices.map {
                 ($0, cache.cachedAccumulatedHeights[$0] ?? calculateAccumulatedHeight(upTo: $0))
@@ -1905,6 +1906,11 @@ public struct LyricsView: View {
         cachedDisplayLines = displayLines
         cachedDisplayLyrics = displayLines.map(\.line)
         cachedFirstRealDisplayIndex = firstRealDisplayIndex
+        let layerRows = makeLayerBackedRows(from: displayLines).filter { row in
+            row.index == 0 || row.index >= firstRealDisplayIndex
+        }
+        cachedLayerRows = layerRows
+        cachedNativeRenderedIndices = layerRows.map(\.index)
         displayCurrentLineIndex = displayIndex(
             forSourceIndex: lyricsService.currentLineIndex ?? lyricsService.firstRealLyricIndex,
             in: displayLines

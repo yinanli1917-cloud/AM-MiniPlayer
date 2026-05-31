@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 MusicController 的属性（musicApp, isPreview, seekPending 等）
- * [OUTPUT]: 导出播放控制/音量/收藏能力
- * [POS]: MusicController 的播放控制分片
+ * [INPUT]: Depends on MusicController state such as musicApp, isPreview, and seekPending.
+ * [OUTPUT]: Exports playback controls, volume control, and favorite actions.
+ * [POS]: Playback-control slice of MusicController.
  */
 
 import Foundation
@@ -12,7 +12,7 @@ import ObjCSupport
 import os
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// MARK: - Apple Event 常量（Music.app ScriptingBridge 返回值）
+// MARK: - Apple Event Constants (Music.app ScriptingBridge Values)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 enum AppleEventCode {
@@ -40,8 +40,14 @@ enum AppleEventCode {
     }
 }
 
+struct NearbyAssetPreloadPolicy {
+    static func shouldPreloadLyrics(currentPage: PlayerPage, rendererMode: LyricsRendererMode) -> Bool {
+        !(currentPage == .lyrics && rendererMode == .native)
+    }
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// MARK: - Playback Controls (用户交互优先，使用高优先级队列)
+// MARK: - Playback Controls (User Interactions On High-Priority Lanes)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 extension MusicController {
@@ -731,11 +737,24 @@ extension MusicController {
                 os_signpost(.begin, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID, "count=%{public}d", validTracks.count)
                 defer { os_signpost(.end, log: self.performanceLog, name: "PreloadNearbyApply", signpostID: signpostID) }
                 self.preloadArtwork(for: validTracks)
-                LyricsService.shared.preloadNextSongs(
-                    tracks: validTracks.map {
-                        (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
-                    }
-                )
+                if NearbyAssetPreloadPolicy.shouldPreloadLyrics(
+                    currentPage: self.currentPage,
+                    rendererMode: LyricsRendererMode.current
+                ) {
+                    LyricsService.shared.preloadNextSongs(
+                        tracks: validTracks.map {
+                            (title: $0.title, artist: $0.artist, duration: $0.duration, album: $0.album)
+                        }
+                    )
+                } else {
+                    os_signpost(
+                        .event,
+                        log: self.performanceLog,
+                        name: "LyricsPreloadSkippedForNativeRenderer",
+                        "count=%{public}d",
+                        validTracks.count
+                    )
+                }
             }
         }
     }

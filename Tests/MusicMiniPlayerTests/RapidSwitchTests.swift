@@ -1446,6 +1446,57 @@ final class RapidSwitchTests: XCTestCase {
         ))
     }
 
+    func testNativeLyricsPageDefersBackgroundLyricsPreload() {
+        XCTAssertFalse(NearbyAssetPreloadPolicy.shouldPreloadLyrics(
+            currentPage: .lyrics,
+            rendererMode: .native
+        ))
+        XCTAssertTrue(NearbyAssetPreloadPolicy.shouldPreloadLyrics(
+            currentPage: .lyrics,
+            rendererMode: .swiftUI
+        ))
+        XCTAssertTrue(NearbyAssetPreloadPolicy.shouldPreloadLyrics(
+            currentPage: .album,
+            rendererMode: .native
+        ))
+        XCTAssertTrue(NearbyAssetPreloadPolicy.shouldPreloadLyrics(
+            currentPage: .playlist,
+            rendererMode: .native
+        ))
+    }
+
+    func testNativeLayerRowsAreCachedOutsideSwiftUIBody() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let lyricsView = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let source = try String(contentsOf: lyricsView, encoding: .utf8)
+        guard let bodyStart = source.range(of: "private var scrollableLyricsContent")?.lowerBound,
+              let bodyEnd = source.range(of: "// MARK: - Lyric Line Helpers")?.lowerBound,
+              let refreshStart = source.range(of: "private func refreshDisplayLineCache")?.lowerBound,
+              let refreshEnd = source.range(of: "private func displayIndex(forSourceIndex sourceIndex: Int)")?.lowerBound else {
+            XCTFail("Could not locate native lyrics row cache sections")
+            return
+        }
+
+        let body = String(source[bodyStart..<bodyEnd])
+        let refreshBody = String(source[refreshStart..<refreshEnd])
+
+        XCTAssertTrue(
+            source.contains("@State private var cachedLayerRows"),
+            "Native row models should be semantic cached state, not rebuilt by SwiftUI shell invalidations."
+        )
+        XCTAssertFalse(
+            body.contains("makeLayerBackedRows(from:"),
+            "The SwiftUI body must not rebuild native row models on progress, hover, or layout ticks."
+        )
+        XCTAssertTrue(
+            refreshBody.contains("makeLayerBackedRows(from: displayLines)"),
+            "Native row models should be rebuilt when the display lyrics payload changes."
+        )
+    }
+
     func testPlaybackPositionCorrectionDefersLargeBackwardResetWhileLyricsAreVisible() {
         XCTAssertTrue(
             PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
