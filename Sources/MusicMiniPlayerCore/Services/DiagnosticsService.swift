@@ -628,6 +628,7 @@ public final class DiagnosticsService: ObservableObject {
     private var lastLyricLineMotionIncidentAt: Date?
     private var lastLyricLineMotionIncidentSignature: String?
     private var recentCPUSamples: [(timestamp: Date, cpu: Double)] = []
+    private var lastProcessCPUUsageSample: (timestamp: Date, cpuSeconds: Double)?
     private var recentMemorySamples: [(timestamp: Date, rss: Double)] = []
     private var lastHighCPUIncidentAt: Date?
     private var suppressStandaloneFrameStallsUntil: Date = .distantPast
@@ -731,6 +732,7 @@ public final class DiagnosticsService: ObservableObject {
         lastLyricLineMotionIncidentAt = nil
         lastLyricLineMotionIncidentSignature = nil
         recentCPUSamples.removeAll()
+        lastProcessCPUUsageSample = nil
         recentMemorySamples.removeAll()
         lastHighCPUIncidentAt = nil
         pendingStandaloneFrameStalls.removeAll()
@@ -812,6 +814,7 @@ public final class DiagnosticsService: ObservableObject {
     private func isHighFrequencyEvent(_ name: String) -> Bool {
         name == "lyrics.presentationFrame.summary"
             || name == "lyrics.nativeRenderer.summary"
+            || name == "process.health.sample"
     }
 
     public func enrichTrackContext(_ context: DiagnosticTrackContext) {
@@ -3347,6 +3350,8 @@ public final class DiagnosticsService: ObservableObject {
         lyricLineMotionSampleCount = 0
         previousLyricLineMotionSamples.removeAll()
         pendingStandaloneFrameStalls.removeAll()
+        recentCPUSamples.removeAll()
+        lastProcessCPUUsageSample = nil
         recentMemorySamples.removeAll()
         baselineStats.removeAll()
         artworkFetchStarts.removeAll()
@@ -3526,32 +3531,23 @@ public final class DiagnosticsService: ObservableObject {
     }
 
     private func currentProcessCPUPercent() -> Double? {
-        var threadList: thread_act_array_t?
-        var threadCount: mach_msg_type_number_t = 0
-        guard task_threads(mach_task_self_, &threadList, &threadCount) == KERN_SUCCESS,
-              let threadList else {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else {
             return nil
         }
+        let now = Date()
+        let cpuSeconds = Self.seconds(from: usage.ru_utime) + Self.seconds(from: usage.ru_stime)
         defer {
-            let size = vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride)
-            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: threadList), size)
+            lastProcessCPUUsageSample = (timestamp: now, cpuSeconds: cpuSeconds)
         }
+        guard let previous = lastProcessCPUUsageSample else { return nil }
+        let wallSeconds = now.timeIntervalSince(previous.timestamp)
+        guard wallSeconds > 0.05, cpuSeconds >= previous.cpuSeconds else { return nil }
+        return ((cpuSeconds - previous.cpuSeconds) / wallSeconds) * 100.0
+    }
 
-        var total: Double = 0
-        for index in 0..<Int(threadCount) {
-            var info = thread_basic_info()
-            var infoCount = mach_msg_type_number_t(THREAD_INFO_MAX)
-            let result = withUnsafeMutablePointer(to: &info) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(infoCount)) {
-                    thread_info(threadList[index], thread_flavor_t(THREAD_BASIC_INFO), $0, &infoCount)
-                }
-            }
-            guard result == KERN_SUCCESS else { continue }
-            if info.flags & TH_FLAGS_IDLE == 0 {
-                total += Double(info.cpu_usage) / Double(TH_USAGE_SCALE) * 100.0
-            }
-        }
-        return total
+    private static func seconds(from timeval: Darwin.timeval) -> Double {
+        Double(timeval.tv_sec) + Double(timeval.tv_usec) / 1_000_000.0
     }
 
     private func diagnosticsReportsDirectory() throws -> URL {

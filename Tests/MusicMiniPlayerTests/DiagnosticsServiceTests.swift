@@ -5,6 +5,21 @@ import XCTest
 final class DiagnosticsServiceTests: XCTestCase {
     private var diagnosticsStorageRoot: URL?
 
+    func testProcessHealthCPUUsesCheapUsageDeltaInsteadOfThreadWalk() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/Services/DiagnosticsService.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("getrusage(RUSAGE_SELF"))
+        XCTAssertTrue(source.contains("lastProcessCPUUsageSample"))
+        XCTAssertTrue(source.contains("|| name == \"process.health.sample\""))
+        XCTAssertFalse(source.contains("task_threads(mach_task_self_"))
+        XCTAssertFalse(source.contains("thread_info(threadList"))
+    }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         let diagnosticsStorageRoot = FileManager.default.temporaryDirectory
