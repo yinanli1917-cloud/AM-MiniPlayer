@@ -182,6 +182,14 @@ The periodic queue-hash probe follows the same rule when its public Music.app
 queue proxy is unavailable or not running. It clears retained queue/history rows
 and resets the queue-hash baseline so a later recovered hash cannot be mistaken
 for an already-observed queue.
+The Music.app launch path now follows the pending-refresh side of the same
+rule. If `connect()` can create public Music.app automation proxies but finds
+Music.app not running, nanoPod clears retained queue/history rows immediately,
+marks both surfaces as pending public refresh, resets the queue-hash baseline,
+then launches Music.app and waits for the delayed public state/queue read. This
+prevents old exact rows from staying visible during the launch window while
+still allowing the refresh to settle to exact or unavailable after Music.app
+responds.
 If the full-state ScriptingBridge proxy is unavailable and the public
 AppleScript fallback also fails, nanoPod applies the same cleanup. Timeout
 fallback failures remain conservative so transient slow IPC does not erase a

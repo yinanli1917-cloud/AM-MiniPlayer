@@ -1409,6 +1409,64 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
     }
 
+    func testMusicAppLaunchPreparationClearsStaleRowsAndResetsHashBaseline() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+        XCTAssertTrue(c.applyDetectedQueueHash("Music:10:current"))
+        c.queueFetchPending = true
+        c.queueFetchPendingForceRecent = true
+        c.queueFetchPendingQueueGeneration = c.queueSyncGeneration
+        c.queueFetchPendingTrackGeneration = 6
+        c.currentPersistentID = "old-track"
+        c.currentTrackIsURLTrack = true
+        c.upNextTracks = [
+            (title: "Old Next", artist: "Artist", album: "Album", persistentID: "next", duration: 180)
+        ]
+        c.recentTracks = [
+            (title: "Old Recent", artist: "Artist", album: "Album", persistentID: "recent", duration: 181)
+        ]
+        c.upNextRawRowCount = 1
+        c.recentRawRowCount = 1
+        c.lastRecentHistoryFetchAt = Date()
+        c.upNextProvenance = .exactPublicMusicQueue(context: "verified-before-launch")
+        c.recentTracksProvenance = .exactPublicMusicQueue(context: "verified-before-launch")
+        let launchGeneration = c.queueSyncGeneration
+
+        XCTAssertTrue(c.prepareQueueForMusicAppLaunch())
+
+        XCTAssertEqual(c.queueSyncGeneration, launchGeneration + 1)
+        XCTAssertTrue(c.upNextTracks.isEmpty)
+        XCTAssertTrue(c.recentTracks.isEmpty)
+        XCTAssertEqual(c.upNextRawRowCount, 0)
+        XCTAssertEqual(c.recentRawRowCount, 0)
+        XCTAssertEqual(c.lastRecentHistoryFetchAt, .distantPast)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertFalse(MusicController.shouldApplyQueueSnapshot(
+            requestQueueGeneration: launchGeneration,
+            currentQueueGeneration: c.queueSyncGeneration,
+            requestTrackGeneration: 6,
+            currentTrackGeneration: 6
+        ))
+
+        XCTAssertTrue(c.applyDetectedQueueHash("Music:10:current"))
+        XCTAssertEqual(c.queueSyncGeneration, launchGeneration + 2)
+    }
+
+    func testRepeatedMusicAppLaunchPreparationDoesNotChurnAfterPendingEmptyState() {
+        let c = MusicController(preview: true)
+        c.isPreview = false
+
+        XCTAssertTrue(c.prepareQueueForMusicAppLaunch())
+        let pendingGeneration = c.queueSyncGeneration
+
+        XCTAssertFalse(c.prepareQueueForMusicAppLaunch())
+
+        XCTAssertEqual(c.queueSyncGeneration, pendingGeneration)
+        XCTAssertEqual(c.upNextProvenance, .unavailable(reason: .pendingPublicRefresh))
+        XCTAssertEqual(c.recentTracksProvenance, .unavailable(reason: .pendingPublicRefresh))
+    }
+
     func testMusicAppConnectionUnavailableClearsStaleQueueSurfaces() {
         let c = MusicController(preview: true)
         c.isPreview = false

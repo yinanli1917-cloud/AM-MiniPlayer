@@ -319,6 +319,34 @@ public class MusicController: ObservableObject {
     }
 
     @discardableResult
+    func prepareQueueForMusicAppLaunch() -> Bool {
+        guard !isPreview else { return false }
+
+        let pending: MusicQueueProvenance = .unavailable(reason: .pendingPublicRefresh)
+        let alreadySettledForLaunch = !queueFetchInFlight
+            && !queueFetchPending
+            && !queueFetchPendingForceRecent
+            && queueFetchPendingQueueGeneration == nil
+            && queueFetchPendingTrackGeneration == nil
+            && upNextTracks.isEmpty
+            && recentTracks.isEmpty
+            && upNextRawRowCount == 0
+            && recentRawRowCount == 0
+            && lastRecentHistoryFetchAt == .distantPast
+            && lastQueueHash.isEmpty
+            && upNextProvenance == pending
+            && recentTracksProvenance == pending
+
+        if alreadySettledForLaunch {
+            return false
+        }
+
+        markQueueMayHaveChanged()
+        lastQueueHash = ""
+        return true
+    }
+
+    @discardableResult
     func beginObservedTrackChangeForPendingQueueRefresh() -> Int {
         lastPolledPosition = 0
         currentPersistentID = nil
@@ -658,6 +686,7 @@ public class MusicController: ObservableObject {
         let isRunning = app.isRunning
         if !isRunning {
             debugPrint("🚀 [connect] Music.app is not running, launching it...\n")
+            prepareQueueForMusicAppLaunch()
             app.activate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.updatePlayerState()

@@ -68,6 +68,10 @@
   proxy, clear retained queue/history rows to Music.app-unavailable and reset
   the queue-hash baseline. A hash from a recovered Music.app session must be
   treated as fresh evidence, not compared against stale pre-unavailable state.
+- When `connect()` finds that Music.app is not running and launches it, clear
+  retained queue/history rows to pending public refresh before the delayed
+  state/queue read. Also reset the queue-hash baseline so the relaunched
+  Music.app session is treated as fresh public evidence.
 - User controls that can advance or reorder Music.app playback must schedule a
   public queue refresh after the Music.app command returns, fails, or cannot
   reach Music.app. Guard those scheduled reads by the queue generation captured
