@@ -306,7 +306,7 @@ private struct LyricLineMotionSamplingProbe: NSViewRepresentable {
 public struct LyricsView: View {
     @EnvironmentObject var musicController: MusicController
     @StateObject private var lyricsService = LyricsService.shared
-    @StateObject private var diagnostics = DiagnosticsService.shared
+    private let diagnostics = DiagnosticsService.shared
     @Binding var currentPage: PlayerPage
     var openWindow: OpenWindowAction?
     var onHide: (() -> Void)?
@@ -368,6 +368,9 @@ public struct LyricsView: View {
 
     // Settings.
     @State private var fullscreenAlbumCover: Bool = UserDefaults.standard.bool(forKey: "fullscreenAlbumCover")
+    @State private var diagnosticsEnabledSnapshot: Bool = DiagnosticsService.shared.isEnabled
+    @State private var lineMotionDiagnosticsEnabledSnapshot: Bool = DiagnosticsService.shared.isLineMotionGeometryEnabled
+    @State private var lyricWaveTimelineDiagnosticsEnabledSnapshot: Bool = DiagnosticsService.shared.isLyricWaveTimelineEnabled
 
     public init(currentPage: Binding<PlayerPage>, openWindow: OpenWindowAction? = nil,
                 onHide: (() -> Void)? = nil, onExpand: (() -> Void)? = nil) {
@@ -434,6 +437,7 @@ public struct LyricsView: View {
         // Initial mount and track changes.
         .onAppear {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
+            refreshDiagnosticsRuntimeState(applyLifecycle: false)
             recordLyricsRendererModeEvent(reason: "appear")
             refreshDisplayLineCache()
             refreshPendingTranslationLineIndices()
@@ -518,16 +522,6 @@ public struct LyricsView: View {
                 lineAdvanceTimerTargetPlaybackTime = nil
             }
         }
-        .onChange(of: diagnostics.isEnabled) { _, isEnabled in
-            if isEnabled {
-                startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
-            } else {
-                lineMotionSamplingActive = false
-                lineMotionFrameCaptureActive = false
-                pendingLineMotionCapture = nil
-                latestLineMotionFrames.removeAll()
-            }
-        }
         .onChange(of: lyricsService.isLoading) { oldValue, newValue in
             if #available(macOS 15.0, *) {
                 if oldValue && !newValue && !lyricsService.lyrics.isEmpty {
@@ -594,6 +588,7 @@ public struct LyricsView: View {
             if newValue != fullscreenAlbumCover {
                 withAnimation(.easeInOut(duration: 0.3)) { fullscreenAlbumCover = newValue }
             }
+            refreshDiagnosticsRuntimeState(applyLifecycle: true)
         }
         .onReceive(musicController.timePublisher.$currentTime) { _ in
             guard currentPage == .lyrics else { return }
@@ -689,7 +684,7 @@ public struct LyricsView: View {
     }
 
     private var lineMotionMonitoringEnabled: Bool {
-        diagnostics.isLineMotionGeometryEnabled && currentPage == .lyrics && !lyricsService.lyrics.isEmpty
+        lineMotionDiagnosticsEnabledSnapshot && currentPage == .lyrics && !lyricsService.lyrics.isEmpty
     }
 
     private var lyricsLayerRendererActive: Bool {
@@ -698,6 +693,30 @@ public struct LyricsView: View {
 
     private var isAnyLyricsManualScrolling: Bool {
         scroll.isManualScrolling || nativeLyricsManualScrollActive
+    }
+
+    private func refreshDiagnosticsRuntimeState(applyLifecycle: Bool) {
+        let previousEnabled = diagnosticsEnabledSnapshot
+        let previousLineMotionEnabled = lineMotionDiagnosticsEnabledSnapshot
+        let nextEnabled = diagnostics.isEnabled
+        let nextLineMotionEnabled = diagnostics.isLineMotionGeometryEnabled
+
+        diagnosticsEnabledSnapshot = nextEnabled
+        lineMotionDiagnosticsEnabledSnapshot = nextLineMotionEnabled
+        lyricWaveTimelineDiagnosticsEnabledSnapshot = diagnostics.isLyricWaveTimelineEnabled
+
+        guard applyLifecycle else { return }
+
+        if nextEnabled && !previousEnabled {
+            startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
+        } else if !nextEnabled && previousEnabled {
+            lineMotionSamplingActive = false
+            lineMotionFrameCaptureActive = false
+            pendingLineMotionCapture = nil
+            latestLineMotionFrames.removeAll()
+        } else if nextLineMotionEnabled && !previousLineMotionEnabled {
+            startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
+        }
     }
 
     private var scrollableLyricsContent: some View {
@@ -753,7 +772,7 @@ public struct LyricsView: View {
                         lineInterval: estimatedLineInterval(around: displayIndex, in: displayLyrics),
                         hasSyllableSync: displayLyrics.indices.contains(displayIndex) && displayLyrics[displayIndex].hasSyllableSync,
                         trackContext: musicController.diagnosticsTrackContext(),
-                        isWaveTimelineDiagnosticsEnabled: diagnostics.isLyricWaveTimelineEnabled,
+                        isWaveTimelineDiagnosticsEnabled: lyricWaveTimelineDiagnosticsEnabledSnapshot,
                         isManualScrolling: false,
                         reduceMotion: reduceMotion,
                         suppressInitialMotion: suppressInitialLineMotion && !isLineWaveActive,
@@ -775,7 +794,7 @@ public struct LyricsView: View {
                             handleNativeManualScrollStarted(frozenDisplayIndex: frozenIndex)
                         },
                         onManualScrollDelta: { deltaY, velocity in
-                            handleScrollChromeDelta(deltaY, velocity: velocity)
+                            handleNativeScrollChromeDelta(deltaY, velocity: velocity)
                         },
                         onManualScrollEnded: {
                             handleNativeManualScrollEnded()
@@ -1105,7 +1124,7 @@ public struct LyricsView: View {
     }
 
     private func startLineMotionSamplingWindow(duration: TimeInterval) {
-        guard diagnostics.isEnabled else { return }
+        guard diagnosticsEnabledSnapshot else { return }
         let until = Date().addingTimeInterval(duration)
         if until > lineMotionSamplingUntil {
             lineMotionSamplingUntil = until
@@ -1147,7 +1166,7 @@ public struct LyricsView: View {
         nativeManualScrollSnapshot: NativeLyricsManualScrollSnapshot? = nil,
         nativePresentationSnapshot: NativeLyricsPresentationSnapshot? = nil
     ) {
-        guard currentPage == .lyrics, diagnostics.isEnabled, !frames.isEmpty else { return }
+        guard currentPage == .lyrics, diagnosticsEnabledSnapshot, !frames.isEmpty else { return }
 
         let lyrics = displayLyrics
         guard !lyrics.isEmpty else { return }
@@ -1547,7 +1566,7 @@ public struct LyricsView: View {
     }
 
     private func recordLyricsRendererModeEvent(reason: String) {
-        guard diagnostics.isEnabled else { return }
+        guard diagnosticsEnabledSnapshot else { return }
         let resolution = LyricsRendererMode.currentResolution
         let mode = resolution.mode
         let signature = [
@@ -1760,39 +1779,42 @@ public struct LyricsView: View {
         }
     }
 
+    private func handleNativeScrollChromeDelta(_ deltaY: CGFloat, velocity: CGFloat) {
+        let shouldHideControls = deltaY < 0 || abs(velocity) >= 800
+        let shouldShowControls = deltaY > 0 && abs(velocity) < 800
+        guard (shouldHideControls && showControls) || (shouldShowControls && !showControls) else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if shouldHideControls {
+                showControls = false
+                controlsBlurAmount = 10
+                controlsOffsetY = 30
+                bottomControlsMounted = false
+            } else {
+                bottomControlsMounted = true
+                showControls = true
+                controlsBlurAmount = 0
+                controlsOffsetY = 0
+            }
+        }
+    }
+
     private func handleNativeManualScrollStarted(frozenDisplayIndex: Int) {
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
         cancelLineAdvanceTimer()
         if cache.heightCacheInvalidated { updateHeightCache() }
-        nativeLyricsManualScrollActive = true
-        lyricsService.isManualScrolling = true
-        scroll.lockedLineIndex = frozenDisplayIndex
-        scroll.frozenDisplayIndex = frozenDisplayIndex
-        scroll.lastVelocity = 0
-        scroll.scrollLocked = false
-        scroll.hasTriggeredSlowScroll = false
     }
 
     private func handleNativeManualScrollEnded() {
-        scroll.scrollLocked = false
-        scroll.hasTriggeredSlowScroll = false
     }
 
     private func handleNativeManualScrollRecovered() {
-        nativeLyricsManualScrollActive = false
-        lyricsService.isManualScrolling = false
-        scroll.lockedLineIndex = nil
-        scroll.frozenDisplayIndex = nil
-        scroll.rawScrollOffset = 0
-        scroll.manualScrollOffset = 0
-        scroll.scrollLocked = false
-        scroll.hasTriggeredSlowScroll = false
         updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
         if let idx = displayCurrentLineIndex {
             wave.lastCurrentIndex = idx
         }
-        if isHovering { animateControlsIn() }
         scheduleNextLineAdvanceTimer()
     }
 
@@ -2277,7 +2299,7 @@ public struct LyricsView: View {
         let track = musicController.diagnosticsTrackContext()
         let renderedCount = renderedIndices.count
 
-        if diagnostics.isLyricWaveTimelineEnabled {
+        if lyricWaveTimelineDiagnosticsEnabledSnapshot {
             wave.pendingTimelineSamples = schedule.map { target in
                 DiagnosticLyricWaveTimelineSample(
                     timestamp: scheduledAt,
@@ -2308,7 +2330,7 @@ public struct LyricsView: View {
 
             if target.delay < 0.01 {
                 wave.lineTargetIndices[lineIndex] = newIndex
-                if diagnostics.isLyricWaveTimelineEnabled {
+                if lyricWaveTimelineDiagnosticsEnabledSnapshot {
                     let firedAt = Date()
                     wave.pendingTimelineSamples.append(DiagnosticLyricWaveTimelineSample(
                         timestamp: firedAt,
@@ -2335,7 +2357,7 @@ public struct LyricsView: View {
                 let workItem = DispatchWorkItem { [self] in
                     guard !scroll.isManualScrolling else { return }
                     wave.lineTargetIndices[lineIndex] = newIndex
-                    if diagnostics.isLyricWaveTimelineEnabled {
+                    if lyricWaveTimelineDiagnosticsEnabledSnapshot {
                         let firedAt = Date()
                         wave.pendingTimelineSamples.append(DiagnosticLyricWaveTimelineSample(
                             timestamp: firedAt,
@@ -2383,7 +2405,7 @@ public struct LyricsView: View {
     }
 
     private func flushPendingLyricWaveTimelineSamples(deferred: Bool) {
-        guard diagnostics.isLyricWaveTimelineEnabled, !wave.pendingTimelineSamples.isEmpty else {
+        guard lyricWaveTimelineDiagnosticsEnabledSnapshot, !wave.pendingTimelineSamples.isEmpty else {
             wave.pendingTimelineSamples.removeAll()
             return
         }

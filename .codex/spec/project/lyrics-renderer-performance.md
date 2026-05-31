@@ -146,6 +146,15 @@ Fixes that worked:
     being measured. The SwiftUI geometry sampler is only for the legacy SwiftUI
     renderer path.
 
+15. Keep native scroll ownership out of SwiftUI observable state. During native
+    manual scroll, scroll delta, and tap-to-jump recovery, `LyricsView` must not
+    mirror native frozen-row/manual-offset state into SwiftUI `@State` or
+    `ObservableObject` properties. SwiftUI may coordinate timers, seek commands,
+    and non-animated shell chrome visibility, but the native surface owns the
+    tactile scroll state. Reintroducing SwiftUI spring/blur chrome transitions
+    on every native scroll burst caused AppKit `NSHostingView.layout` and
+    SwiftUI display-list work to dominate the interaction sample again.
+
 ## Verification Pattern
 
 Use the same fixture identity before and after a performance change. The accepted deterministic gate is:
@@ -437,11 +446,12 @@ reset, initial layout, and reduced motion.
 hover/click hit testing, `scrollWheel` manual-scroll capture, frozen display
 index, rubber-banded manual offset, tap-to-jump direct snap, recovery direct
 snap, frame cadence telemetry, text phase telemetry, and native motion metrics.
-Do not move these responsibilities back into SwiftUI body invalidation. If a
-future profile shows the active word or translation sweep is still the dominant
-bottleneck after row movement and manual-scroll ownership have left SwiftUI,
-add a second pass for a custom active text surface rather than simplifying the
-protected wave.
+Do not move these responsibilities back into SwiftUI body invalidation. Native
+scroll callbacks should not update SwiftUI manual-scroll ownership or animated
+control chrome state. If a future profile shows the active word or translation
+sweep is still the dominant bottleneck after row movement, manual-scroll
+ownership, and shell chrome transitions have left SwiftUI, add a second pass for
+a custom active text surface rather than simplifying the protected wave.
 
 This surface is still not accepted as complete until blur parity, text sweep
 parity, live scroll-tap-jump, FPS, drift, and CPU gates pass on the locked
