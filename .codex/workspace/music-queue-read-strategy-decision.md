@@ -27,6 +27,7 @@ Until that proof exists, the only honest product states are:
 | --- | --- | --- |
 | Music.app public Apple Events `current playlist` | `playlistContextOnly` when available; `unavailable` when absent | The SDEF describes it as the playlist containing the current targeted track, not the Up Next queue. Station/URL-track proof shows it can be absent while Music.app visibly has queue rows. |
 | Music.app public Apple Events `fixed indexing` variants | probe-only candidate for album/playlist order | The SDEF says fixed indexing controls whether AppleScript track indices are independent of the play order of the owning playlist. The public probe can now opt into toggling this setting, recording current-playlist neighbor rows for both values, then restoring the original value. The validator rejects resolved rows if restoration is not recorded. This may help test album/playlist play order, but it is not exact proof without visible Up Next/history parity. In the current URL-track smoke run, both variants still failed because Music.app exposed no public current playlist. |
+| Music.app public Apple Events queue-like named playlists | discovery candidate only | The probe now scans public playlist names for `Up Next`, `Playing Next`, `Play Queue`, and localized queue terms, then records summaries and current-track neighbor windows for any candidate. A name match is not exact proof; it only identifies a public object that still needs full visible Up Next/history row coverage. |
 | Music.app public Apple Events `selection` / window selection | selected-items evidence only | The SDEF exposes the visible user selection and selected tracks in windows, so the probe now records it. A current URL-track run showed empty selection and no queue candidate. Even when non-empty, this surface is not exact queue proof unless it exposes every visible history/current/upcoming row in order. |
 | Music.app public Apple Events `browser window.view` / `playlist window.view` | partial public view candidate | The SDEF exposes each window's displayed playlist. The probe now records view metadata and neighbor rows around the current track when the view contains it. This can discover whether Music.app exposes a visible queue-like playlist view, but it remains partial until visible Up Next/history rows match by order and identity. |
 | Music.app public Apple Events queue object | `unavailable` | Local SDEF probe found no public `queue`, `Up Next`, or history object declaration. |
@@ -90,9 +91,11 @@ without showing synthetic queue rows.
 The production snapshot apply path now applies the same gate before storing
 published queue/history rows. Non-displayable snapshots may record raw row
 counts for diagnostics, but they do not retain playlist-context or
-account-history rows in `upNextTracks`/`recentTracks`; playlist-open refreshes
-also avoid forcing Apple Music recent-history fetches just because those hidden
-rows were intentionally dropped.
+account-history rows in `upNextTracks`/`recentTracks`. Playlist-open refreshes
+only reuse a recent snapshot when both queue and history provenance are
+displayable; non-displayable history forces another public refresh attempt
+instead of letting a throttled account-history or playlist-context result look
+like a reusable real-time queue proof.
 Production fetches now also avoid materializing track rows from sources already
 classified as non-displayable. For example, once `currentPlaylist` is classified
 as `playlistContextOnly`, nanoPod records the provenance and returns without
@@ -175,6 +178,10 @@ and window-selection properties. Use that evidence to reject or continue
 investigating selection-based surfaces, but do not treat selected rows as a
 complete queue unless the visible parity notes prove every visible queue row is
 exposed by order and identity.
+The probe also records queue-like named playlist candidates, including localized
+queue terms, and captures a neighbor window if that public playlist contains the
+current track. Treat these as public discovery candidates only; a matching name
+or neighbor window is not enough without full visible Up Next/history parity.
 The probe also records public browser/playlist window `view` playlists and, if
 the view contains the current track, a neighbor window around that item. Treat
 these as another public candidate surface to compare against the visible

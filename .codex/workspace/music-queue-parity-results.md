@@ -115,6 +115,15 @@ live Music.app queue proof.
   probe now records them as selected visible-item evidence, not as complete
   queue proof unless a visible parity pass shows every queue row is exposed by
   order and identity.
+- Public Apple Events expose playlist objects by name, so the probe now scans
+  queue-like playlist names (`Up Next`, `Playing Next`, `Play Queue`, and
+  localized queue terms) as discovery candidates. The current stopped-state
+  smoke artifact
+  `.codex/workspace/music-queue-probes/public-surface-queue-like-candidate-current-state-20260531T105323Z.txt`
+  recorded `queue_like_playlist_count=0`, `player_state=stopped`, and no
+  readable current track. This validates the new report fields but is not a
+  resolved context row and must not be used as exact or unavailable playback
+  evidence.
 - Public Apple Events also expose browser/playlist window `view` playlists. The
   probe now records those view summaries and neighbor rows when a view contains
   the current track; these are candidate public surfaces only until visible

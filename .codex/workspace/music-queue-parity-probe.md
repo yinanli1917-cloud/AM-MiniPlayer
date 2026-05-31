@@ -259,6 +259,11 @@ Each report includes:
 - A runtime AppleScript snapshot, including the public `selection` surface.
 - Public browser/playlist window `view` playlist summaries and neighbor rows
   around the current track when those views expose the current item.
+- Public queue-like playlist-name candidates, including `Up Next`,
+  `Playing Next`, `Play Queue`, localized queue terms, and their summaries plus
+  current-track neighbor windows when present. These are discovery candidates
+  only; they still require visible row coverage before they can support an
+  exact claim.
 - Optional restored `fixed indexing` variant rows for current-playlist probes,
   used to test whether public AppleScript play-order indexing can explain
   album/playlist Up Next order. These rows still require visible parity proof.

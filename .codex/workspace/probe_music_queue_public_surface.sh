@@ -277,6 +277,17 @@ on playlistContainsPersistentID(playlistRef, currentID)
     return false
 end playlistContainsPersistentID
 
+on isQueueLikePlaylistName(playlistName)
+    set candidateName to playlistName as text
+    set queuePatterns to {"Up Next", "up next", "Playing Next", "playing next", "Play Queue", "play queue", "Queue", "queue", "队列", "待播", "接着播放", "播放队列", "次に再生", "다음"}
+    repeat with queuePattern in queuePatterns
+        try
+            if candidateName contains (queuePattern as text) then return true
+        end try
+    end repeat
+    return false
+end isQueueLikePlaylistName
+
 on appendPlaylistNeighborWindow(rows, label, playlistRef, currentID)
     tell application "Music"
         try
@@ -462,16 +473,26 @@ tell application "Music"
     end try
 
     try
-        set queueNamedPlaylists to {}
+        set upNextNamedPlaylists to {}
+        set queueLikePlaylistNames to {}
         repeat with p in (get every playlist)
             try
                 set playlistName to name of p
-                if playlistName contains "Up Next" then set end of queueNamedPlaylists to playlistName
+                if playlistName contains "Up Next" then set end of upNextNamedPlaylists to playlistName
+                if my isQueueLikePlaylistName(playlistName) then
+                    set end of queueLikePlaylistNames to playlistName
+                    set candidateIndex to count of queueLikePlaylistNames
+                    set candidateLabel to "queue_like_playlist[" & (candidateIndex as text) & "]"
+                    set rows to my appendPlaylistSummary(rows, candidateLabel, p)
+                    set rows to my appendPlaylistNeighborWindow(rows, candidateLabel, p, currentTrackPersistentIDValue)
+                end if
             end try
         end repeat
-        set end of rows to "playlists_named_up_next=" & (queueNamedPlaylists as text)
-        if (count of queueNamedPlaylists) > 0 then
-            set publicQueueCandidate to "named_playlist"
+        set end of rows to "playlists_named_up_next=" & (upNextNamedPlaylists as text)
+        set end of rows to "queue_like_playlists=" & (queueLikePlaylistNames as text)
+        set end of rows to "queue_like_playlist_count=" & ((count of queueLikePlaylistNames) as text)
+        if (count of queueLikePlaylistNames) > 0 then
+            set publicQueueCandidate to "queue_like_named_playlist"
         else
             set publicQueueCandidate to "none"
         end if
@@ -681,11 +702,13 @@ APPLESCRIPT
   echo
   echo "- Context label is only a test label; it is not proof of playback origin."
   echo "- Compare the visible Music.app Up Next panel manually against neighbor[...] rows."
+  echo "- Compare queue_like_playlist[*].neighbor[...] rows when testing whether public queue-like named playlists expose the visible queue."
   echo "- Compare browser_window[*].view.neighbor[...] and playlist_window[*].view.neighbor[...] rows when testing whether public window views expose the visible queue."
   echo "- Compare application.selection[...] and window selection rows when testing whether Music.app exposes visible queue selections through public AppleEvents."
   echo "- When --probe-fixed-indexing is used, compare fixed_indexing.variant[...] rows against visible Up Next before considering whether AppleScript play-order indexing helps a context."
   echo "- The fixed-indexing variant is probe-only and must restore the original fixed indexing value before its output can be considered."
   echo "- A window view surface is still only a public playlist view; it is not exact queue proof unless it exposes every visible history/current/upcoming row by order and identity."
+  echo "- A queue-like named playlist is still only a candidate public playlist; it is not exact queue proof unless it exposes every visible history/current/upcoming row by order and identity."
   echo "- A selection surface is selected visible items only; it is not exact queue proof unless it exposes every visible history/current/upcoming row by order and identity."
   echo "- If Play Next / Play Later edits appear in Music.app but not in this snapshot, currentPlaylist scanning is not a real queue mirror."
   echo "- If radio/station playback has no current playlist tracks or unrelated neighbors, mark that context unavailable."
