@@ -241,6 +241,31 @@ playback and do not tap the same stale screen position. The stricter gate is:
 This catches the expensive path that users feel when manually browsing lyrics
 and jumping to a line.
 
+Dense line-level lyrics have their own locked lag/drift gate. Use the
+owner-provided `line-breakup-truth` fixture (`分手真相` by Alvin Kwok,
+`Steel Box Collection: Alvin Kwok`, about 250s) with `--expect-lyrics line`.
+The fixture is selected from NetEase with no syllable sync, 42 lyric lines, and
+first real line SHA:
+
+```text
+c3925990fd25b5c0a4891ef23968b2acd3d7db1e4d71fbb9cfdfeefdd2231ae9
+```
+
+Run it as a scroll-then-visible-row-jump workload whenever changing row motion,
+manual-scroll recovery, native renderer mode, or line-level display behavior:
+
+```bash
+python3 scripts/perf_harness.py \
+  --page lyrics \
+  --fixture line-breakup-truth \
+  --expect-lyrics line \
+  --duration 16 \
+  --warmup 8 \
+  --interval 0.5 \
+  --interaction scroll-tap-jump \
+  --require-music-playing
+```
+
 ## Native Renderer Rebuild Gate
 
 The Native macOS AMLL rebuild is not allowed to ship as the default renderer

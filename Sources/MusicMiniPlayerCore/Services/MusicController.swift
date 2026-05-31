@@ -636,10 +636,13 @@ public class MusicController: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let shouldRun = self.isPlaying && !self.windowMovementPaused
-            let targetInterval: TimeInterval = self.currentPage == .lyrics ? 0.05 : 0.1
+            let usesNativeLyricsRenderer = self.currentPage == .lyrics && LyricsRendererMode.current == .native
+            let targetInterval: TimeInterval = usesNativeLyricsRenderer
+                ? 0.1
+                : (self.currentPage == .lyrics ? 0.05 : 0.1)
             if shouldRun && (!self.interpolationTimerActive || self.interpolationTimerInterval != targetInterval) {
                 self.interpolationTimer?.invalidate()
-                // 🔑 Reset frame clock so first dt is ~0, not time-since-last-stop
+                // Reset the frame clock so first dt is near zero, not time since last stop.
                 self.lastFrameTime = Date()
                 self.syncPlaybackClock(to: self.internalCurrentTime, playing: true, at: self.lastFrameTime)
                 self.interpolationTimer = Timer.scheduledTimer(withTimeInterval: targetInterval, repeats: true) { [weak self] _ in

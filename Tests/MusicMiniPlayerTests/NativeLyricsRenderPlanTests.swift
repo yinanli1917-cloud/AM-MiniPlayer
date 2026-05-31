@@ -132,7 +132,7 @@ final class NativeLyricsRenderPlanTests: XCTestCase {
             radius: 2
         )
 
-        XCTAssertEqual(visible, [0, 2, 13, 14, 15, 16, 17, 29])
+        XCTAssertEqual(visible, [2, 13, 14, 15, 16, 17, 29])
     }
 
     func testNativeManualScrollStateFreezesIndexAndRubberBandsInsideSurface() {

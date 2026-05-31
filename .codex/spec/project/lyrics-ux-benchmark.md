@@ -19,9 +19,10 @@ Candidate builds must **beat** recorded v2.8 baselines on every smoothness proxy
 | Key | Title | Artist | Duration | Mode |
 |-----|-------|--------|----------|------|
 | `line-winter-trip` | 冬天一個遊 | Gordon Flanders | 256s | syllable |
+| `line-breakup-truth` | 分手真相 | Alvin Kwok | 250s | line |
 | `word-seek-fun` | 尋開心 | Bondy Chiu | 265s | syllable |
 
-Default harness list: `line-winter-trip,word-seek-fun,translated-word`
+Default harness list: `line-winter-trip,line-breakup-truth,word-seek-fun,translated-word`
 
 ## Workload Integrity Gate
 
@@ -32,13 +33,16 @@ when any locked fixture changes:
 | Fixture | Source | Syllable | Lines | First real line SHA-256 |
 |---------|--------|----------|-------|--------------------------|
 | `line-winter-trip` | NetEase | yes | 67 | `15ce6b4d94c2f2b4f016cbd746a807825b26fa90608465af1dbb623ad645fee9` |
+| `line-breakup-truth` | NetEase | no | 42 | `c3925990fd25b5c0a4891ef23968b2acd3d7db1e4d71fbb9cfdfeefdd2231ae9` |
 | `word-seek-fun` | NetEase | yes | 44 | `8b9a2fd7d0bc2de6d45adeb5758c5f11492b018c1900b67a6afe4002fbda4f3b` |
 | `translated-word` | NetEase | yes | 25 | `43180988879b1854dfbdc28c2eac68f223c2b4210bda87cd87fed3897fd772e8` |
 
-Do not accept a CPU reduction if the resolver switched from syllable/word-level
-lyrics to line-level lyrics, changed source, changed line count, or changed the
+Do not accept a CPU reduction if the resolver switched between line-level and
+syllable/word-level lyrics, changed source, changed line count, or changed the
 first real lyric identity. That is a workload change, not a renderer
-improvement.
+improvement. `line-breakup-truth` is intentionally line-level and protects the
+dense plain-line lag/drift path; it must fail if the resolver upgrades it to
+word/syllable lyrics or selects a lighter/different line workload.
 
 ## Smoothness proxies (no literal FPS gate)
 
@@ -61,6 +65,7 @@ improvement.
 ```bash
 python3 scripts/luxb_dual_monitor.py --fixture word-seek-fun --duration 60 --warmup 15
 python3 scripts/luxb_dual_monitor.py --fixture line-winter-trip --duration 60 --warmup 15
+python3 scripts/luxb_dual_monitor.py --fixture line-breakup-truth --duration 60 --warmup 15
 ```
 
 Clones v2.8 to `tmp/reference-app/nanoPod-v28-reference.app` with bundle id `com.yinanli.nanoPod.v28reference` so both processes can run. Fails if either app crashes or candidate motion metrics regress vs reference (when live CSV exists).
@@ -80,8 +85,7 @@ python3 scripts/lyrics_ux_benchmark.py \
 
 # Long session
 python3 scripts/soak_harness.py --duration 1800 \
-  --fixtures line-winter-trip,word-seek-fun \
-  --compare-baseline tmp/benchmark/v2.8-baseline
+  --fixtures line-winter-trip,line-breakup-truth,word-seek-fun
 ```
 
 ## Stopping rule

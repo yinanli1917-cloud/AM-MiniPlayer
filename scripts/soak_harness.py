@@ -56,14 +56,7 @@ def rss_slope_mb_per_hour(samples: list[dict[str, object]]) -> float:
 
 def fixture_request(fixture_name: str, allow_unverified: bool) -> SimpleNamespace | None:
     fixture = visual.FIXTURES[fixture_name]
-    request = SimpleNamespace(
-        expect_lyrics=str(fixture["expect_lyrics"]),
-        expect_translation=bool(fixture.get("expect_translation", False)),
-        play_title=str(fixture["title"]),
-        play_artist=str(fixture["artist"]),
-        play_album="",
-        play_duration=float(fixture["duration"]),
-    )
+    request = visual.workload_args(fixture)
     if allow_unverified:
         return request
     visual.verify_lyrics_workload(request)
@@ -163,7 +156,11 @@ def main() -> None:
                 "artist": current_request.play_artist,
             }
             try:
-                visual.play_music_library_track(current_request.play_title, current_request.play_artist)
+                visual.play_music_library_track(
+                    current_request.play_title,
+                    current_request.play_artist,
+                    current_request.play_album,
+                )
                 pid = perf.route_app(current_page)
                 time.sleep(args.settle)
                 event["status"] = "ok"

@@ -907,9 +907,9 @@ final class RapidSwitchTests: XCTestCase {
             onTargetsChanged: {}
         )
 
-        XCTAssertEqual(Set(engine.lineTargetIndices.values), [3])
-        XCTAssertEqual(engine.targetIndex(for: 0, fallback: -1), 3)
-        XCTAssertEqual(engine.targetIndex(for: 6, fallback: -1), 3)
+        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.targetIndex(for: 0, fallback: 3), 3)
+        XCTAssertEqual(engine.targetIndex(for: 6, fallback: 3), 3)
         XCTAssertEqual(engine.presentation(for: 0)?.y, -20)
         XCTAssertEqual(engine.presentation(for: 6)?.y, 220)
     }
@@ -984,11 +984,254 @@ final class RapidSwitchTests: XCTestCase {
                 onTargetsChanged: {}
             )
 
-            XCTAssertEqual(Set(engine.lineTargetIndices.values), [4])
+            XCTAssertTrue(engine.lineTargetIndices.isEmpty)
             XCTAssertEqual(engine.presentation(for: 2)?.targetIndex, 4)
             XCTAssertEqual(engine.presentation(for: 2)?.y, engine.presentation(for: 2)?.targetY)
             XCTAssertEqual(engine.presentation(for: 2)?.velocity, 0)
         }
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineDoesNotCarryDirectSnapTargetsIntoNativeCulling() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...66).map { ($0, CGFloat($0 * 40)) })
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 4,
+                renderedIndices: Array(0...66),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.initialLayout)
+            ),
+            onTargetsChanged: {}
+        )
+        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 5,
+                renderedIndices: Array(0...66),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {}
+        )
+
+        XCTAssertLessThan(engine.lineTargetIndices.count, 40)
+        XCTAssertFalse(Set(engine.lineTargetIndices.keys).isSuperset(of: Set(0...66)))
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineLargeNaturalJumpUsesDirectSnapRecovery() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...30).map { ($0, CGFloat($0 * 40)) })
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 4,
+                renderedIndices: Array(0...30),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.initialLayout)
+            ),
+            onTargetsChanged: {}
+        )
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 9,
+                renderedIndices: Array(0...30),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {
+                XCTFail("Large seek-style jumps must not schedule a natural wave.")
+            }
+        )
+
+        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.presentation(for: 9)?.targetIndex, 9)
+        XCTAssertEqual(engine.presentation(for: 9)?.y, engine.presentation(for: 9)?.targetY)
+        XCTAssertEqual(engine.presentation(for: 14)?.targetIndex, 9)
+        XCTAssertEqual(engine.presentation(for: 14)?.velocity, 0)
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineSnapsShortNaturalAdvanceSequenceAfterTapRecovery() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...42).map { ($0, CGFloat($0 * 50)) })
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 31,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.tapToLine)
+            ),
+            onTargetsChanged: {}
+        )
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 32,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {
+                XCTFail("First advance after tap recovery should snap, not start a stale wave.")
+            }
+        )
+
+        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.presentation(for: 32)?.targetIndex, 32)
+        XCTAssertEqual(engine.presentation(for: 32)?.y, engine.presentation(for: 32)?.targetY)
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 33,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {
+                XCTFail("Second advance after tap recovery should still snap.")
+            }
+        )
+
+        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.presentation(for: 33)?.targetIndex, 33)
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 34,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {
+                XCTFail("Third advance after tap recovery should still snap.")
+            }
+        )
+
+        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.presentation(for: 34)?.targetIndex, 34)
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 35,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {}
+        )
+
+        XCTAssertFalse(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.lineTargetIndices[35], 34)
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineDirectSnapsWhenNaturalBacklogFallsBehind() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...42).map { ($0, CGFloat($0 * 50)) })
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 31,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.initialLayout)
+            ),
+            onTargetsChanged: {}
+        )
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 32,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {}
+        )
+
+        XCTAssertFalse(engine.lineTargetIndices.isEmpty)
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 33,
+                renderedIndices: Array(0...42),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: false,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {
+                XCTFail("Stale target backlog should snap instead of scheduling another wave.")
+            }
+        )
+
+        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.presentation(for: 33)?.targetIndex, 33)
+        XCTAssertEqual(engine.presentation(for: 33)?.y, engine.presentation(for: 33)?.targetY)
     }
 
     func testLyricWaveAnimationSeedsCurrentLineBeforeNaturalAdvance() throws {
@@ -1085,6 +1328,45 @@ final class RapidSwitchTests: XCTestCase {
             LyricsRendererMode.current,
             .native,
             "The old layer name is only a compatibility alias for the experimental native path."
+        )
+    }
+
+    func testLyricsRendererModeResolutionUsesExplicitDomainsBeforeDeveloperFallback() {
+        XCTAssertEqual(
+            LyricsRendererMode.resolve(
+                environmentRawValue: nil,
+                standardRawValue: nil,
+                developerRawValue: "native",
+                isLocalDeveloperBuild: false
+            ),
+            LyricsRendererMode.Resolution(mode: .swiftUI, rawValue: nil, source: "default")
+        )
+        XCTAssertEqual(
+            LyricsRendererMode.resolve(
+                environmentRawValue: nil,
+                standardRawValue: nil,
+                developerRawValue: "native",
+                isLocalDeveloperBuild: true
+            ),
+            LyricsRendererMode.Resolution(mode: .native, rawValue: "native", source: "developerContainerDefaults")
+        )
+        XCTAssertEqual(
+            LyricsRendererMode.resolve(
+                environmentRawValue: nil,
+                standardRawValue: "swiftui",
+                developerRawValue: "native",
+                isLocalDeveloperBuild: true
+            ),
+            LyricsRendererMode.Resolution(mode: .swiftUI, rawValue: "swiftui", source: "userDefaults")
+        )
+        XCTAssertEqual(
+            LyricsRendererMode.resolve(
+                environmentRawValue: "engine",
+                standardRawValue: "swiftui",
+                developerRawValue: nil,
+                isLocalDeveloperBuild: true
+            ),
+            LyricsRendererMode.Resolution(mode: .native, rawValue: "engine", source: "environment")
         )
     }
 

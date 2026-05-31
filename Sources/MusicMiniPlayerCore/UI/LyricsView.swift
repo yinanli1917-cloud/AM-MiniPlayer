@@ -306,6 +306,8 @@ public struct LyricsView: View {
     @State private var cachedDisplayLyrics: [LyricLine] = []
     @State private var cachedFirstRealDisplayIndex: Int = 0
     @State private var nativeLyricsManualScrollActive = false
+    @State private var nativeLyricsDirectSnapRequest: NativeLyricsDirectSnapRequest?
+    @State private var lastRendererModeEventSignature: String?
     // Translation state.
     @State private var translationSessionConfigAny: Any?
     @State private var localTranslationTrigger: Int = 0
@@ -375,6 +377,7 @@ public struct LyricsView: View {
                 isHovering = true
                 bottomControlsMounted = true
                 animateControlsIn()
+                recordLyricsRendererModeEvent(reason: "page")
                 updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
                 scheduleNextLineAdvanceTimer()
                 startLineMotionSamplingWindow(duration: lyricLineMotionPageSwitchSampleDuration)
@@ -383,6 +386,7 @@ public struct LyricsView: View {
         // Initial mount and track changes.
         .onAppear {
             debugPrint("📝 [LyricsView] onAppear - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
+            recordLyricsRendererModeEvent(reason: "appear")
             refreshDisplayLineCache()
             refreshPendingTranslationLineIndices()
             suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
@@ -710,8 +714,14 @@ public struct LyricsView: View {
                         isTranslating: lyricsService.isTranslating,
                         translationFailed: lyricsService.translationFailed,
                         interludeAfterIndex: lyricsService.interludeAfterIndex,
+                        directSnapRequest: nativeLyricsDirectSnapRequest,
                         musicController: musicController,
                         onLineTap: { line in handleLineTap(line: line) },
+                        onDirectSnapConsumed: { requestID in
+                            if nativeLyricsDirectSnapRequest?.id == requestID {
+                                nativeLyricsDirectSnapRequest = nil
+                            }
+                        },
                         onManualScrollStarted: { frozenIndex in
                             handleNativeManualScrollStarted(frozenDisplayIndex: frozenIndex)
                         },
@@ -732,9 +742,10 @@ public struct LyricsView: View {
                             }
                         },
                         lineMotionFrameCaptureActive: lineMotionFrameCaptureActive,
-                        onLineMotionFrames: { frames, layerTargetIndices, nativeManualSnapshot in
+                        onLineMotionFrames: { frames, nativePresentationSnapshot in
                             guard let capture = pendingLineMotionCapture else { return }
                             pendingLineMotionCapture = nil
+                            let nativeManualSnapshot = nativePresentationSnapshot.manualScrollSnapshot
                             let nativeDisplayIndex = nativeManualSnapshot?.frozenDisplayIndex ?? displayIndex
                             recordLyricLineMotion(
                                 frames: frames,
@@ -748,8 +759,9 @@ public struct LyricsView: View {
                                 playbackTime: capture.playbackTime,
                                 timestamp: capture.requestedAt,
                                 framesIncludeLineOffset: true,
-                                presentationTargetIndices: layerTargetIndices,
-                                nativeManualScrollSnapshot: nativeManualSnapshot
+                                presentationTargetIndices: nativePresentationSnapshot.targetIndices,
+                                nativeManualScrollSnapshot: nativeManualSnapshot,
+                                nativePresentationSnapshot: nativePresentationSnapshot
                             )
                             DispatchQueue.main.async {
                                 lineMotionFrameCaptureActive = false
@@ -1067,7 +1079,8 @@ public struct LyricsView: View {
         timestamp: Date,
         framesIncludeLineOffset: Bool = false,
         presentationTargetIndices: [Int: Int]? = nil,
-        nativeManualScrollSnapshot: NativeLyricsManualScrollSnapshot? = nil
+        nativeManualScrollSnapshot: NativeLyricsManualScrollSnapshot? = nil,
+        nativePresentationSnapshot: NativeLyricsPresentationSnapshot? = nil
     ) {
         guard currentPage == .lyrics, diagnostics.isEnabled, !frames.isEmpty else { return }
 
@@ -1126,9 +1139,11 @@ public struct LyricsView: View {
             let appliedOffsetY = framesIncludeLineOffset
                 ? 0
                 : Double(fullOffset + effectiveManualOffset)
+            let nativeTargetMinY = nativePresentationSnapshot?.targetMinYByIndex[index]
+            let targetLineOffset = nativeTargetMinY.map { $0 - accumulatedHeight } ?? lineOffset
             let baseMidY = Double(accumulatedHeight) + Double(frame.height / 2)
             let targetMinY = framesIncludeLineOffset
-                ? Double(fullOffset + effectiveManualOffset)
+                ? Double((nativeTargetMinY ?? fullOffset) + effectiveManualOffset)
                 : Double(accumulatedHeight) + Double(immediateLineOffset + effectiveManualOffset)
             let targetMidY = targetMinY + Double(frame.height / 2)
             return MotionPartial(
@@ -1141,7 +1156,7 @@ public struct LyricsView: View {
                 baseMidY: baseMidY,
                 targetMinY: targetMinY,
                 targetMidY: targetMidY,
-                waveOffsetY: Double(lineOffset - immediateLineOffset)
+                waveOffsetY: Double(targetLineOffset - immediateLineOffset)
             )
         }
 
@@ -1186,6 +1201,7 @@ public struct LyricsView: View {
                 targetMinY: partial.targetMinY,
                 targetMidY: partial.targetMidY,
                 targetErrorY: renderedMinY - partial.targetMinY,
+                velocityY: Double(nativePresentationSnapshot?.velocityYByIndex[partial.index] ?? 0),
                 observedInterLineDeltaY: observedDelta,
                 expectedInterLineDeltaY: expectedDelta,
                 interLineDeltaErrorY: deltaError,
@@ -1465,6 +1481,30 @@ public struct LyricsView: View {
         animateControlsOut()
     }
 
+    private func recordLyricsRendererModeEvent(reason: String) {
+        guard diagnostics.isEnabled else { return }
+        let resolution = LyricsRendererMode.currentResolution
+        let mode = resolution.mode
+        let signature = [
+            reason,
+            mode.rawValue,
+            resolution.source,
+            resolution.rawValue ?? "nil",
+            musicController.currentTrackTitle,
+            musicController.currentArtist
+        ].joined(separator: "|")
+        guard signature != lastRendererModeEventSignature else { return }
+        lastRendererModeEventSignature = signature
+        diagnostics.recordEvent(
+            "lyrics.rendererMode",
+            detail: "Lyrics renderer mode selected (\(reason), mode: \(mode.rawValue), source: \(resolution.source), raw: \(resolution.rawValue ?? "nil"))",
+            track: musicController.diagnosticsTrackContext(),
+            metrics: [
+                "isNative": mode == .native ? 1 : 0
+            ]
+        )
+    }
+
     private func handleLineTap(line: LyricLine) {
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
@@ -1482,6 +1522,12 @@ public struct LyricsView: View {
         wave.workItems.removeAll()
         let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
         for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
+        if lyricsLayerRendererActive {
+            nativeLyricsDirectSnapRequest = NativeLyricsDirectSnapRequest(
+                displayIndex: newIdx,
+                reason: .tapToLine
+            )
+        }
         // Unfreeze — no withAnimation! The .animation(value: fullOffset) on each line
         // handles the spring transition naturally when fullOffset changes.
         scroll.isManualScrolling = false

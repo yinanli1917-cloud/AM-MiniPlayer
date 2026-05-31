@@ -35,6 +35,7 @@ local `nanoPod.app`.
 | `word-level-alt` | `Stardust Night` - JADOES, 234s | syllable/word-level + translation | alternate translated word-level workload and Japanese catalog behavior |
 | `line-english` | `Uptown Funk` - Mark Ronson, 270s | line-synced | English line-synced layout, active-line anchoring, translated line baseline |
 | `line-cjk` | `女爵` - `杨乃文`, 252s | line-synced | CJK wrapping, font metrics, active/non-active emphasis |
+| `line-breakup-truth` | `分手真相` - Alvin Kwok, 250s | line-synced | owner-provided Cantonese plain-line lag/drift regression gate |
 | `interlude` | `Bohemian Rhapsody` - Queen, 355s | line-synced | long gaps, interlude/prelude dots, scroll continuity |
 
 The harness validates the expected workload with `LyricsVerifier` before
@@ -55,6 +56,9 @@ Current fixture evidence:
   fallback layout fixtures, not word-level gates.
 - `Uptown Funk` verified on 2026-05-18 as LRCLIB-Search line-synced lyrics.
 - `女爵` verified on 2026-05-18 as NetEase line-synced lyrics.
+- `分手真相` verified on 2026-05-30 as NetEase, 42 lines, no syllable sync,
+  first real line `雾里的街灯`, SHA
+  `c3925990fd25b5c0a4891ef23968b2acd3d7db1e4d71fbb9cfdfeefdd2231ae9`.
 
 ## Commands
 
@@ -104,6 +108,20 @@ python3 scripts/perf_harness.py \
   --duration 16 \
   --warmup 8 \
   --interval 0.5 \
+  --require-music-playing
+```
+
+Run the line-level lag/drift gate with scroll-then-visible-row-jump input:
+
+```bash
+python3 scripts/perf_harness.py \
+  --page lyrics \
+  --fixture line-breakup-truth \
+  --expect-lyrics line \
+  --duration 16 \
+  --warmup 8 \
+  --interval 0.5 \
+  --interaction scroll-tap-jump \
   --require-music-playing
 ```
 

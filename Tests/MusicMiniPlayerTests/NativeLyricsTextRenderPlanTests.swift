@@ -107,6 +107,75 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertEqual(fading.translation?.postLineFade ?? 0, 0.75, accuracy: 0.0001)
     }
 
+    func testNativeSweepLayoutBuildsSeparateMasksForWrappedVisualLines() {
+        let line = LyricLine(
+            text: "hello world again",
+            startTime: 0,
+            endTime: 6,
+            words: [
+                LyricWord(word: "hello", startTime: 0, endTime: 2),
+                LyricWord(word: "world", startTime: 2, endTime: 4),
+                LyricWord(word: "again", startTime: 4, endTime: 6)
+            ]
+        )
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
+            line: line,
+            currentTime: 2.5,
+            isActive: true
+        ))
+
+        let masks = NativeLyricsTextSweepLayout.make(
+            displayText: plan.displayText,
+            wordRuns: plan.wordRuns,
+            width: 76,
+            fontSize: plan.constants.mainFontSize,
+            fadeHalfPoint: plan.constants.fadeHalfPoint,
+            currentTime: 2.5
+        )
+
+        XCTAssertGreaterThanOrEqual(masks.count, 2)
+        XCTAssertEqual(masks.map(\.maskRect.minY), masks.map(\.maskRect.minY).sorted())
+        XCTAssertTrue(masks.allSatisfy { $0.maskRect.width > 0 && $0.maskRect.height > 0 })
+    }
+
+    func testNativeSweepLayoutMapsEmphasisRunsToGlyphRects() {
+        let line = LyricLine(
+            text: "shine",
+            startTime: 0,
+            endTime: 2,
+            words: [
+                LyricWord(word: "shine", startTime: 0, endTime: 2)
+            ]
+        )
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
+            line: line,
+            currentTime: 0.7,
+            isActive: true
+        ))
+
+        let linePlan = NativeLyricsTextSweepLayout.makePlan(
+            displayText: plan.displayText,
+            wordRuns: plan.wordRuns,
+            width: 240,
+            fontSize: plan.constants.mainFontSize,
+            fadeHalfPoint: plan.constants.fadeHalfPoint
+        )
+        let emphasisRuns = linePlan.flatMap(\.runs).filter(\.isEmphasis)
+
+        XCTAssertEqual(emphasisRuns.count, 1)
+        XCTAssertEqual(emphasisRuns[0].text, "shine")
+        XCTAssertEqual(emphasisRuns[0].glyphs.count, 5)
+        XCTAssertTrue(emphasisRuns[0].glyphs.allSatisfy { !$0.text.isEmpty && $0.rect.width > 0 })
+        XCTAssertGreaterThan(
+            NativeLyricsTextSweepLayout.wavefrontX(
+                for: linePlan[0],
+                fadeHalfPoint: plan.constants.fadeHalfPoint,
+                currentTime: 0.7
+            ),
+            emphasisRuns[0].rect.minX
+        )
+    }
+
     func testInactiveLineKeepsStaticRunsWithoutAnimatedEmphasis() {
         let line = LyricLine(
             text: "shine",

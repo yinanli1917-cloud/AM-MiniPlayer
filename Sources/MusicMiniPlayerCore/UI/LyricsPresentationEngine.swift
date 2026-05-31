@@ -21,6 +21,7 @@ final class LyricsPresentationEngine {
     private var pendingWaveTimelineSamples: [DiagnosticLyricWaveTimelineSample] = []
     private var waveSequence = 0
     private var lastCurrentIndex: Int?
+    private var recoverySnapAdvancesRemaining = 0
     private var latestConfiguration: LyricsPresentationEngineConfiguration?
     private let spring = LyricsPresentationSpring()
 
@@ -37,13 +38,11 @@ final class LyricsPresentationEngine {
         latestConfiguration = configuration
         let newIndex = configuration.currentIndex
         switch configuration.playbackMode {
-        case .directSnap:
+        case .directSnap(let reason):
             cancelPendingWave(deferred: true)
             lastCurrentIndex = newIndex
-            lineTargetIndices = directSnapTargets(
-                renderedIndices: configuration.renderedIndices,
-                targetIndex: newIndex
-            )
+            recoverySnapAdvancesRemaining = recoverySnapAdvanceCount(for: reason)
+            lineTargetIndices = [:]
             reconcileRows(configuration: configuration, snap: true)
             return
         case .natural:
@@ -52,22 +51,40 @@ final class LyricsPresentationEngine {
 
         guard let oldIndex = lastCurrentIndex else {
             lastCurrentIndex = newIndex
-            lineTargetIndices = directSnapTargets(
-                renderedIndices: configuration.renderedIndices,
-                targetIndex: newIndex
-            )
+            lineTargetIndices = [:]
             reconcileRows(configuration: configuration, snap: true)
             return
         }
 
         guard oldIndex != newIndex else {
-            if lineTargetIndices.isEmpty {
-                lineTargetIndices = directSnapTargets(
-                    renderedIndices: configuration.renderedIndices,
-                    targetIndex: newIndex
-                )
-            }
             reconcileRows(configuration: configuration, snap: false)
+            return
+        }
+
+        if recoverySnapAdvancesRemaining > 0 {
+            cancelPendingWave(deferred: true)
+            lastCurrentIndex = newIndex
+            recoverySnapAdvancesRemaining -= 1
+            lineTargetIndices = [:]
+            reconcileRows(configuration: configuration, snap: true)
+            return
+        }
+
+        if hasStaleTargetBacklog(for: newIndex) {
+            cancelPendingWave(deferred: true)
+            lastCurrentIndex = newIndex
+            recoverySnapAdvancesRemaining = 0
+            lineTargetIndices = [:]
+            reconcileRows(configuration: configuration, snap: true)
+            return
+        }
+
+        if abs(newIndex - oldIndex) > 1 {
+            cancelPendingWave(deferred: true)
+            lastCurrentIndex = newIndex
+            recoverySnapAdvancesRemaining = 0
+            lineTargetIndices = [:]
+            reconcileRows(configuration: configuration, snap: true)
             return
         }
 
@@ -87,6 +104,12 @@ final class LyricsPresentationEngine {
 
     func presentation(for lineIndex: Int) -> LyricsPresentationRowState? {
         rowStates[lineIndex]
+    }
+
+    func targetIndices(for lineIndices: some Sequence<Int>, fallback currentIndex: Int) -> [Int: Int] {
+        Dictionary(uniqueKeysWithValues: lineIndices.map { index in
+            (index, rowStates[index]?.targetIndex ?? targetIndex(for: index, fallback: currentIndex))
+        })
     }
 
     @discardableResult
@@ -246,12 +269,7 @@ final class LyricsPresentationEngine {
                 flushPendingWaveTimelineSamples(deferred: false)
                 return changed
             }
-            var keep = Set<Int>()
-            for index in configuration.renderedIndices where abs(index - wave.newIndex) <= 18 {
-                keep.insert(index)
-                lineTargetIndices[index] = wave.newIndex
-            }
-            lineTargetIndices = lineTargetIndices.filter { keep.contains($0.key) }
+            lineTargetIndices = [:]
             pendingWave = nil
             flushPendingWaveTimelineSamples(deferred: false)
             return true
@@ -361,6 +379,21 @@ final class LyricsPresentationEngine {
     private func cancelPendingWave(deferred: Bool) {
         pendingWave = nil
         flushPendingWaveTimelineSamples(deferred: deferred)
+    }
+
+    private func recoverySnapAdvanceCount(for reason: LyricsPresentationDirectSnapReason) -> Int {
+        switch reason {
+        case .tapToLine, .manualScroll, .seek:
+            return 3
+        case .initialLayout, .trackReset, .reducedMotion:
+            return 0
+        }
+    }
+
+    private func hasStaleTargetBacklog(for newIndex: Int) -> Bool {
+        let staleWaveTarget = lineTargetIndices.values.contains { abs($0 - newIndex) > 1 }
+        if staleWaveTarget { return true }
+        return rowStates.values.contains { abs($0.targetIndex - newIndex) > 1 }
     }
 
     private func flushPendingWaveTimelineSamples(deferred: Bool) {

@@ -548,7 +548,9 @@ public final class DiagnosticsService: ObservableObject {
     }
 
     @Published public private(set) var incidents: [DiagnosticIncident] = []
-    @Published public private(set) var events: [DiagnosticEvent] = []
+    // Event rows can be emitted once per frame-summary interval; keep them off
+    // ObservableObject publishing so diagnostics do not invalidate active pages.
+    public private(set) var events: [DiagnosticEvent] = []
     @Published public private(set) var interactions: [DiagnosticInteractionTrace] = []
     public private(set) var lyricLineMotionSamples: [DiagnosticLyricLineMotionSample] = []
     public private(set) var lyricWaveTimelineSamples: [DiagnosticLyricWaveTimelineSample] = []
@@ -768,7 +770,16 @@ public final class DiagnosticsService: ObservableObject {
         guard isEnabled else { return }
         events.insert(DiagnosticEvent(name: name, detail: detail, track: track, metrics: metrics), at: 0)
         trimBuffers()
-        schedulePersistenceSave()
+        if isHighFrequencyEvent(name) {
+            scheduleHighFrequencyPersistenceSave()
+        } else {
+            schedulePersistenceSave()
+        }
+    }
+
+    private func isHighFrequencyEvent(_ name: String) -> Bool {
+        name == "lyrics.presentationFrame.summary"
+            || name == "lyrics.nativeRenderer.summary"
     }
 
     public func enrichTrackContext(_ context: DiagnosticTrackContext) {
@@ -1727,6 +1738,7 @@ public final class DiagnosticsService: ObservableObject {
     public func recordLyricsLineMotionSamples(_ samples: [DiagnosticLyricLineMotionSample]) {
         guard isEnabled, !samples.isEmpty else { return }
 
+        let previousSampleCount = lyricLineMotionSamples.count
         var enriched: [DiagnosticLyricLineMotionSample] = []
         enriched.reserveCapacity(samples.count)
         for sample in samples {
@@ -1746,7 +1758,7 @@ public final class DiagnosticsService: ObservableObject {
         if lyricLineMotionSamples.count > maxLyricLineMotionSamples {
             lyricLineMotionSamples.removeLast(lyricLineMotionSamples.count - maxLyricLineMotionSamples)
         }
-        updateLyricLineMotionSampleCount()
+        updateLyricLineMotionSampleCount(force: lyricLineMotionSamples.count != previousSampleCount)
 
         let maxTargetError = enriched.map { abs($0.targetErrorY) }.max() ?? 0
         let maxInterLineError = enriched.compactMap { $0.interLineDeltaErrorY.map(abs) }.max() ?? 0
@@ -2586,9 +2598,16 @@ public final class DiagnosticsService: ObservableObject {
 
     private func trimBuffers() {
         let cutoff = Date().addingTimeInterval(-retention)
+        let previousMotionSampleCount = lyricLineMotionSamples.count
         events.removeAll { $0.timestamp < cutoff }
-        incidents.removeAll { $0.timestamp < cutoff }
-        interactions.removeAll { $0.startedAt < cutoff }
+        let freshIncidents = incidents.filter { $0.timestamp >= cutoff }
+        if freshIncidents.count != incidents.count {
+            incidents = freshIncidents
+        }
+        let freshInteractions = interactions.filter { $0.startedAt >= cutoff }
+        if freshInteractions.count != interactions.count {
+            interactions = freshInteractions
+        }
         lyricLineMotionSamples.removeAll { $0.timestamp < cutoff }
         normalizeLegacyHighCPUIncidents()
         coalesceStandaloneFrameStallIncidents()
@@ -2599,15 +2618,15 @@ public final class DiagnosticsService: ObservableObject {
             events.removeLast(events.count - maxEvents)
         }
         if incidents.count > maxIncidents {
-            incidents.removeLast(incidents.count - maxIncidents)
+            incidents = Array(incidents.prefix(maxIncidents))
         }
         if interactions.count > maxInteractions {
-            interactions.removeLast(interactions.count - maxInteractions)
+            interactions = Array(interactions.prefix(maxInteractions))
         }
         if lyricLineMotionSamples.count > maxLyricLineMotionSamples {
             lyricLineMotionSamples.removeLast(lyricLineMotionSamples.count - maxLyricLineMotionSamples)
         }
-        updateLyricLineMotionSampleCount(force: true)
+        updateLyricLineMotionSampleCount(force: lyricLineMotionSamples.count != previousMotionSampleCount)
         refreshLastWarningAfterIncidentNormalization()
     }
 
@@ -2632,7 +2651,7 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
 
-        incidents = compacted.filter { shouldRecordStandaloneFrameStallIncident($0) }
+        replaceIncidentsIfChanged(compacted.filter { shouldRecordStandaloneFrameStallIncident($0) })
     }
 
     private func coalesceLyricLineMotionIncidents() {
@@ -2656,7 +2675,7 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
 
-        incidents = compacted
+        replaceIncidentsIfChanged(compacted)
     }
 
     private func coalesceScriptingBridgeIncidents() {
@@ -2680,7 +2699,7 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
 
-        incidents = compacted
+        replaceIncidentsIfChanged(compacted)
     }
 
     private func coalesceMemoryIncidents() {
@@ -2704,16 +2723,20 @@ public final class DiagnosticsService: ObservableObject {
             }
         }
 
-        incidents = compacted
+        replaceIncidentsIfChanged(compacted)
     }
 
     private func refreshLastWarningAfterIncidentNormalization() {
         guard let lastWarning else { return }
-        if let current = incidents.first(where: { $0.id == lastWarning.id }) {
-            self.lastWarning = current
-        } else {
-            self.lastWarning = severeOrRepeatedIssue
+        let nextWarning = incidents.first(where: { $0.id == lastWarning.id }) ?? severeOrRepeatedIssue
+        if self.lastWarning != nextWarning {
+            self.lastWarning = nextWarning
         }
+    }
+
+    private func replaceIncidentsIfChanged(_ nextIncidents: [DiagnosticIncident]) {
+        guard incidents != nextIncidents else { return }
+        incidents = nextIncidents
     }
 
     private func standaloneFrameStallCoalesceSignature(for incident: DiagnosticIncident) -> String? {
@@ -3139,7 +3162,7 @@ public final class DiagnosticsService: ObservableObject {
         guard isEnabled else { return }
         guard persistenceSaveTask == nil else { return }
         persistenceSaveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard !Task.isCancelled else { return }
             self?.performScheduledPersistenceSave()
         }

@@ -77,9 +77,14 @@ struct NativeLyricsTextRenderPlan: Equatable {
     }
 
     private static func cleanedDisplayText(for line: LyricLine) -> String {
-        let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
-        var text = line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
+        var text: String
+        if line.text.contains("[") {
+            let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
+            text = line.text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+        } else {
+            text = line.text.trimmingCharacters(in: .whitespaces)
+        }
         if line.hasSyllableSync && !line.words.isEmpty {
             let totalCharacters = line.words.reduce(0) { $0 + $1.word.count }
             let averageLength = Double(totalCharacters) / Double(line.words.count)

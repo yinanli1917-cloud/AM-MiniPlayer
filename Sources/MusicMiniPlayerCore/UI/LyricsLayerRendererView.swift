@@ -27,15 +27,17 @@ struct NativeLyricsSurface: NSViewRepresentable {
     let isTranslating: Bool
     let translationFailed: Bool
     let interludeAfterIndex: Int?
+    let directSnapRequest: NativeLyricsDirectSnapRequest?
     let musicController: MusicController
     let onLineTap: (LyricLine) -> Void
+    let onDirectSnapConsumed: (UUID) -> Void
     let onManualScrollStarted: (Int) -> Void
     let onManualScrollDelta: (CGFloat, CGFloat) -> Void
     let onManualScrollEnded: () -> Void
     let onManualScrollRecovered: () -> Void
     let onHeightMeasured: (Int, CGFloat) -> Void
     let lineMotionFrameCaptureActive: Bool
-    let onLineMotionFrames: ([Int: CGRect], [Int: Int], NativeLyricsManualScrollSnapshot?) -> Void
+    let onLineMotionFrames: ([Int: CGRect], NativeLyricsPresentationSnapshot) -> Void
 
     func makeNSView(context: Context) -> NativeLyricsSurfaceView {
         NativeLyricsSurfaceView()
@@ -63,8 +65,10 @@ struct NativeLyricsSurface: NSViewRepresentable {
                 isTranslating: isTranslating,
                 translationFailed: translationFailed,
                 interludeAfterIndex: interludeAfterIndex,
+                directSnapRequest: directSnapRequest,
                 musicController: musicController,
                 onLineTap: onLineTap,
+                onDirectSnapConsumed: onDirectSnapConsumed,
                 onManualScrollStarted: onManualScrollStarted,
                 onManualScrollDelta: onManualScrollDelta,
                 onManualScrollEnded: onManualScrollEnded,
@@ -101,15 +105,17 @@ struct LyricsLayerRendererConfiguration {
     let isTranslating: Bool
     let translationFailed: Bool
     let interludeAfterIndex: Int?
+    let directSnapRequest: NativeLyricsDirectSnapRequest?
     let musicController: MusicController
     let onLineTap: (LyricLine) -> Void
+    let onDirectSnapConsumed: (UUID) -> Void
     let onManualScrollStarted: (Int) -> Void
     let onManualScrollDelta: (CGFloat, CGFloat) -> Void
     let onManualScrollEnded: () -> Void
     let onManualScrollRecovered: () -> Void
     let onHeightMeasured: (Int, CGFloat) -> Void
     let lineMotionFrameCaptureActive: Bool
-    let onLineMotionFrames: ([Int: CGRect], [Int: Int], NativeLyricsManualScrollSnapshot?) -> Void
+    let onLineMotionFrames: ([Int: CGRect], NativeLyricsPresentationSnapshot) -> Void
     var nativeManualScrollSnapshot: NativeLyricsManualScrollSnapshot? = nil
     var nativeDirectSnapIndex: Int? = nil
     var nativeDirectSnapReason: LyricsPresentationDirectSnapReason? = nil
@@ -143,6 +149,7 @@ final class NativeLyricsSurfaceView: NSView {
     private let presentationEngine = LyricsPresentationEngine()
     private var rowViews: [String: NativeLyricsRowView] = [:]
     private var rowRenderKeys: [String: RowRenderKey] = [:]
+    private var visualParitySignatures: [String: VisualParitySignature] = [:]
     private var rowTapHandlers: [Int: () -> Void] = [:]
     private var measuredHeightsByIndex: [Int: CGFloat] = [:]
     private var displayLink: CVDisplayLink?
@@ -154,6 +161,9 @@ final class NativeLyricsSurfaceView: NSView {
     private var manualScrollEndTimer: Timer?
     private var manualScrollRecoveryTimer: Timer?
     private var lastScrollWheelTime: CFTimeInterval = 0
+    private var hoveredRowIndex: Int?
+    private var lastConfigureEventSignature: String?
+    private var consumedDirectSnapRequestIDs: Set<UUID> = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -168,12 +178,15 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     func configure(_ configuration: LyricsLayerRendererConfiguration) {
-        if self.configuration?.trackContext != configuration.trackContext {
+        if let previous = self.configuration?.trackContext,
+           !Self.isSameTrackIdentity(previous, configuration.trackContext) {
             cancelManualScrollTimers()
             manualScrollState.reset()
         }
         self.configuration = configuration
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        consumeDirectSnapRequestIfNeeded(runtimeConfiguration)
+        recordConfigureEventIfNeeded(configuration: runtimeConfiguration)
         presentationEngine.update(
             LyricsPresentationEngineConfiguration(
                 currentIndex: runtimeConfiguration.effectiveCurrentIndex,
@@ -199,6 +212,7 @@ final class NativeLyricsSurfaceView: NSView {
             view.removeFromSuperview()
             rowViews[id] = nil
             rowRenderKeys[id] = nil
+            visualParitySignatures[id] = nil
             measuredHeightsByIndex.removeValue(forKey: view.displayIndex)
             unmountedCount += 1
         }
@@ -208,27 +222,35 @@ final class NativeLyricsSurfaceView: NSView {
 
         let shouldSnap = runtimeConfiguration.playbackMode != .natural
         var mountedCount = 0
-        for row in visibleRows {
-            let view = rowViews[row.id] ?? NativeLyricsRowView()
-            if rowViews[row.id] == nil {
-                rowViews[row.id] = view
-                addSubview(view)
-                mountedCount += 1
+        withDisabledLayerActions {
+            for row in visibleRows {
+                let view = rowViews[row.id] ?? NativeLyricsRowView()
+                if rowViews[row.id] == nil {
+                    rowViews[row.id] = view
+                    addSubview(view)
+                    mountedCount += 1
+                }
+                view.onHoverChanged = { [weak self] hovering in
+                    self?.renderTelemetry.recordHover(hovering: hovering)
+                }
+                view.onHoverBackgroundVisible = { [weak self] in
+                    self?.renderTelemetry.recordHoverBackgroundVisible()
+                }
+                rowTapHandlers[row.index] = { [weak self] in
+                    self?.handleNativeLineTap(rowIndex: row.index, line: row.displayLine.line)
+                }
+                updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
+                if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
+                    renderTelemetry.recordTextPhase(textSample)
+                }
+                applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: shouldSnap)
             }
-            rowTapHandlers[row.index] = { [weak self] in
-                self?.handleNativeLineTap(rowIndex: row.index, line: row.displayLine.line)
-            }
-            updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
-            if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
-                renderTelemetry.recordTextPhase(textSample)
-            }
-            applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: shouldSnap)
         }
         renderTelemetry.recordLifecycle(
             mounted: mountedCount,
             unmounted: unmountedCount,
             mountedRows: rowViews.count,
-            renderedRows: configuration.rows.count
+            renderedRows: visibleRows.count
         )
 
         if shouldSnap {
@@ -251,7 +273,47 @@ final class NativeLyricsSurfaceView: NSView {
     ) -> LyricsLayerRendererConfiguration {
         var runtimeConfiguration = configuration
         runtimeConfiguration.nativeManualScrollSnapshot = manualScrollState.activeSnapshot
+        if let request = configuration.directSnapRequest,
+           !consumedDirectSnapRequestIDs.contains(request.id) {
+            runtimeConfiguration.nativeDirectSnapIndex = request.displayIndex
+            runtimeConfiguration.nativeDirectSnapReason = request.reason
+        }
         return runtimeConfiguration
+    }
+
+    private func consumeDirectSnapRequestIfNeeded(_ configuration: LyricsLayerRendererConfiguration) {
+        guard let request = configuration.directSnapRequest,
+              configuration.nativeDirectSnapIndex == request.displayIndex,
+              !consumedDirectSnapRequestIDs.contains(request.id) else {
+            return
+        }
+        consumedDirectSnapRequestIDs.insert(request.id)
+        DispatchQueue.main.async {
+            configuration.onDirectSnapConsumed(request.id)
+        }
+    }
+
+    private func recordConfigureEventIfNeeded(configuration: LyricsLayerRendererConfiguration) {
+        guard DiagnosticsService.shared.isEnabled else { return }
+        let signature = [
+            configuration.trackContext.title,
+            configuration.trackContext.artist,
+            "\(configuration.rows.count)",
+            "\(configuration.renderedIndices.count)"
+        ].joined(separator: "|")
+        guard signature != lastConfigureEventSignature else { return }
+        lastConfigureEventSignature = signature
+        DiagnosticsService.shared.recordEvent(
+            "lyrics.nativeRenderer.configure",
+            detail: "Native lyrics surface configured",
+            track: configuration.trackContext,
+            metrics: [
+                "rowCount": Double(configuration.rows.count),
+                "renderedIndexCount": Double(configuration.renderedIndices.count),
+                "currentIndex": Double(configuration.effectiveCurrentIndex),
+                "isManualScrolling": configuration.effectiveIsManualScrolling ? 1 : 0
+            ]
+        )
     }
 
     private func visibleRows(for configuration: LyricsLayerRendererConfiguration) -> [LayerBackedLyricRow] {
@@ -287,6 +349,7 @@ final class NativeLyricsSurfaceView: NSView {
             view.configure(row: row, configuration: configuration)
         }
 
+        guard needsContentUpdate || measuredHeightsByIndex[row.index] == nil else { return }
         let height = view.measuredHeight(width: configuration.rowWidth)
         let heightChanged = abs((measuredHeightsByIndex[row.index] ?? 0) - height) > 2
         renderTelemetry.recordHeightMeasurement(changed: heightChanged)
@@ -304,9 +367,10 @@ final class NativeLyricsSurfaceView: NSView {
         configuration: LyricsLayerRendererConfiguration,
         snap: Bool
     ) {
-        let y = snap
+        let baseY = snap
             ? snapY(for: row, configuration: configuration)
             : (presentationEngine.presentation(for: row.index)?.y ?? snapY(for: row, configuration: configuration))
+        let y = baseY + configuration.effectiveManualOffset
         let visual = presentationEngine.presentation(for: row.index)
         let currentIndex = configuration.effectiveCurrentIndex
         let opacity = visual?.opacity ?? (row.index == currentIndex ? 1 : 0.35)
@@ -315,8 +379,6 @@ final class NativeLyricsSurfaceView: NSView {
         let height = measuredHeightsByIndex[row.index] ?? max(1, view.frame.height)
         let frame = CGRect(x: 0, y: 0, width: configuration.rowWidth, height: max(1, height))
 
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         if view.frame.size != frame.size || view.frame.origin != .zero {
             view.frame = frame
         }
@@ -325,19 +387,23 @@ final class NativeLyricsSurfaceView: NSView {
             CGAffineTransform(translationX: 0, y: y)
                 .scaledBy(x: scale, y: scale)
         )
-        applyBlur(blur, to: view.layer)
-        CATransaction.commit()
+        let appliedBlur = view.applyBlurRadius(blur)
+        recordVisualParityIfChanged(rowID: row.id, sample: NativeLyricsVisualParitySample(
+            expectedOpacity: opacity,
+            appliedOpacity: CGFloat(view.layer?.opacity ?? 0),
+            expectedScale: scale,
+            appliedScale: scale,
+            expectedBlurRadius: blur > 0.1 ? min(blur, 12) : 0,
+            appliedBlurRadius: appliedBlur,
+            isActive: row.index == currentIndex
+        ))
     }
 
-    private func applyBlur(_ radius: CGFloat, to layer: CALayer?) {
-        guard let layer else { return }
-        guard radius > 0.1 else {
-            layer.filters = nil
-            return
-        }
-        let filter = CIFilter(name: "CIGaussianBlur")
-        filter?.setValue(Double(min(radius, 12)), forKey: kCIInputRadiusKey)
-        layer.filters = filter.map { [$0] }
+    private func withDisabledLayerActions(_ body: () -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        body()
+        CATransaction.commit()
     }
 
     private func reportLineMotionFrames(configuration: LyricsLayerRendererConfiguration) {
@@ -345,17 +411,52 @@ final class NativeLyricsSurfaceView: NSView {
         for row in visibleRows(for: configuration) {
             guard let view = rowViews[row.id] else { continue }
             guard view.frame.height > 0 else { continue }
-            let y = presentationEngine.presentation(for: row.index)?.y ?? snapY(for: row, configuration: configuration)
+            let baseY = presentationEngine.presentation(for: row.index)?.y ?? snapY(for: row, configuration: configuration)
+            let y = baseY + configuration.effectiveManualOffset
             frames[row.index] = CGRect(x: 0, y: y, width: view.frame.width, height: view.frame.height)
         }
         recordNativeMotionMetrics(frames: frames, configuration: configuration)
+        let presentationSnapshot = nativePresentationSnapshot(
+            lineIndices: frames.keys,
+            configuration: configuration
+        )
         DispatchQueue.main.async {
             configuration.onLineMotionFrames(
                 frames,
-                self.presentationEngine.lineTargetIndices,
-                configuration.nativeManualScrollSnapshot
+                presentationSnapshot
             )
         }
+    }
+
+    private func nativePresentationSnapshot(
+        lineIndices: some Sequence<Int>,
+        configuration: LyricsLayerRendererConfiguration
+    ) -> NativeLyricsPresentationSnapshot {
+        var targetMinYByIndex: [Int: CGFloat] = [:]
+        var velocityYByIndex: [Int: CGFloat] = [:]
+        var targetIndices: [Int: Int] = [:]
+        for index in lineIndices {
+            if let presentation = presentationEngine.presentation(for: index) {
+                targetIndices[index] = presentation.targetIndex
+                targetMinYByIndex[index] = presentation.targetY
+                velocityYByIndex[index] = presentation.velocity
+            } else {
+                let targetIndex = presentationEngine.targetIndex(
+                    for: index,
+                    fallback: configuration.effectiveCurrentIndex
+                )
+                targetIndices[index] = targetIndex
+                let rowOffset = configuration.accumulatedHeights[index] ?? 0
+                let targetOffset = configuration.accumulatedHeights[targetIndex] ?? 0
+                targetMinYByIndex[index] = configuration.anchorY - targetOffset + rowOffset
+            }
+        }
+        return NativeLyricsPresentationSnapshot(
+            targetIndices: targetIndices,
+            targetMinYByIndex: targetMinYByIndex,
+            velocityYByIndex: velocityYByIndex,
+            manualScrollSnapshot: configuration.nativeManualScrollSnapshot
+        )
     }
 
     private func recordNativeMotionMetrics(
@@ -365,20 +466,18 @@ final class NativeLyricsSurfaceView: NSView {
         guard !frames.isEmpty else { return }
         let metricRows = visibleRows(for: configuration).compactMap { row -> NativeLyricsMotionMetricRow? in
             guard let frame = frames[row.index], frame.height > 0 else { return nil }
-            let targetIndex = presentationEngine.targetIndex(
-                for: row.index,
-                fallback: configuration.lineTargetIndices[row.index] ?? configuration.effectiveCurrentIndex
-            )
-            let rowOffset = configuration.accumulatedHeights[row.index] ?? 0
-            let targetOffset = configuration.accumulatedHeights[targetIndex] ?? 0
-            let targetMinY = configuration.anchorY - targetOffset + rowOffset + configuration.effectiveManualOffset
+            let presentation = presentationEngine.presentation(for: row.index)
+            let targetIndex = presentation?.targetIndex
+                ?? presentationEngine.targetIndex(for: row.index, fallback: configuration.effectiveCurrentIndex)
+            let targetMinY = (presentation?.targetY ?? snapY(for: row, configuration: configuration))
+                + configuration.effectiveManualOffset
             return NativeLyricsMotionMetricRow(
                 displayIndex: row.index,
                 targetIndex: targetIndex,
                 renderedMinY: frame.minY,
                 renderedHeight: frame.height,
                 targetMinY: targetMinY,
-                velocityY: presentationEngine.presentation(for: row.index)?.velocity ?? 0
+                velocityY: presentation?.velocity ?? 0
             )
         }
         guard !metricRows.isEmpty else { return }
@@ -405,19 +504,21 @@ final class NativeLyricsSurfaceView: NSView {
             ? configuration.effectiveCurrentIndex
             : presentationEngine.targetIndex(
                 for: row.index,
-                fallback: configuration.lineTargetIndices[row.index] ?? configuration.effectiveCurrentIndex
+                fallback: configuration.effectiveCurrentIndex
             )
         let rowOffset = configuration.accumulatedHeights[row.index] ?? 0
         let targetOffset = configuration.accumulatedHeights[targetIndex] ?? 0
-        return configuration.anchorY - targetOffset + rowOffset + configuration.effectiveManualOffset
+        return configuration.anchorY - targetOffset + rowOffset
     }
 
     private func applyFramesForCurrentConfiguration(snap: Bool) {
         guard let configuration else { return }
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
-        for row in runtimeConfiguration.rows {
-            guard let view = rowViews[row.id] else { continue }
-            applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snap)
+        withDisabledLayerActions {
+            for view in rowViews.values {
+                guard let row = view.currentRow else { continue }
+                applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snap)
+            }
         }
     }
 
@@ -458,10 +559,9 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private func stopPresentationLoop() {
-        if let displayLink {
-            CVDisplayLinkStop(displayLink)
-        }
-        displayLink = nil
+        guard let activeDisplayLink = displayLink else { return }
+        CVDisplayLinkStop(activeDisplayLink)
+        self.displayLink = nil
         lastPresentationTick = nil
         flushFrameSummary(reason: "stop")
     }
@@ -481,9 +581,11 @@ final class NativeLyricsSurfaceView: NSView {
             ?? 0
         lastPresentationTick = tickTimestamp
         recordFrameDelta(delta, expectedRefreshInterval: displayInterval, now: now)
-        _ = presentationEngine.advance(delta: delta)
+        let motionChanged = presentationEngine.advance(delta: delta)
         updateTextPhasesForCurrentConfiguration()
-        applyFramesForCurrentConfiguration(snap: false)
+        if motionChanged || presentationEngine.hasActiveMotion {
+            applyFramesForCurrentConfiguration(snap: false)
+        }
         if configuration?.lineMotionFrameCaptureActive == true, let configuration {
             reportLineMotionFrames(configuration: configuration)
         }
@@ -585,8 +687,9 @@ final class NativeLyricsSurfaceView: NSView {
         let hit = runtimeConfiguration.rows
             .compactMap { row -> (Int, CGRect)? in
                 guard let view = rowViews[row.id] else { return nil }
-                let y = presentationEngine.presentation(for: row.index)?.y
+                let baseY = presentationEngine.presentation(for: row.index)?.y
                     ?? snapY(for: row, configuration: runtimeConfiguration)
+                let y = baseY + runtimeConfiguration.effectiveManualOffset
                 return (row.index, CGRect(x: 0, y: y, width: view.frame.width, height: view.frame.height))
             }
             .sorted { lhs, rhs in abs(lhs.1.midY - point.y) < abs(rhs.1.midY - point.y) }
@@ -647,15 +750,22 @@ final class NativeLyricsSurfaceView: NSView {
             velocity: velocity,
             bounds: manualScrollBounds(for: runtimeConfiguration(from: configuration))
         )
+        updateNativeHover(from: point, configuration: runtimeConfiguration(from: configuration))
+        renderTelemetry.recordManualScrollDelta()
         configuration.onManualScrollDelta(deltaY, velocity)
         applyNativeManualScrollPresentation()
         scheduleNativeScrollEnd(delay: isMomentum ? 0.4 : 0.16)
     }
 
     private func handleNativeLineTap(rowIndex: Int, line: LyricLine) {
+        renderTelemetry.recordTapToLine()
         cancelManualScrollTimers()
         if manualScrollState.isActive {
             manualScrollState.reset()
+            renderTelemetry.recordManualScrollRecovery()
+            if let configuration {
+                refreshRowInteractionState(configuration: runtimeConfiguration(from: configuration))
+            }
             configuration?.onManualScrollRecovered()
         }
         forceDirectSnap(to: rowIndex, reason: .tapToLine)
@@ -665,6 +775,8 @@ final class NativeLyricsSurfaceView: NSView {
     private func beginNativeManualScrollIfNeeded(configuration: LyricsLayerRendererConfiguration) {
         guard !manualScrollState.isActive else { return }
         manualScrollState.begin(frozenDisplayIndex: configuration.effectiveCurrentIndex)
+        renderTelemetry.recordManualScrollStart()
+        refreshRowInteractionState(configuration: runtimeConfiguration(from: configuration))
         configuration.onManualScrollStarted(configuration.effectiveCurrentIndex)
         applyNativeManualScrollPresentation()
     }
@@ -674,6 +786,7 @@ final class NativeLyricsSurfaceView: NSView {
         manualScrollEndTimer?.invalidate()
         lastScrollWheelTime = 0
         manualScrollState.clampToBounds(manualScrollBounds(for: runtimeConfiguration(from: configuration)))
+        renderTelemetry.recordManualScrollEnd()
         configuration.onManualScrollEnded()
         applyNativeManualScrollPresentation()
         manualScrollRecoveryTimer?.invalidate()
@@ -702,6 +815,8 @@ final class NativeLyricsSurfaceView: NSView {
         cancelManualScrollTimers()
         let liveIndex = liveDisplayIndex(configuration: configuration)
         manualScrollState.reset()
+        renderTelemetry.recordManualScrollRecovery()
+        refreshRowInteractionState(configuration: runtimeConfiguration(from: configuration))
         configuration.onManualScrollRecovered()
         forceDirectSnap(to: liveIndex, reason: .manualScroll)
     }
@@ -724,23 +839,69 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func forceDirectSnap(to index: Int, reason: LyricsPresentationDirectSnapReason) {
         guard let configuration else { return }
+        renderTelemetry.recordDirectSnap(reason: reason)
         var runtimeConfiguration = runtimeConfiguration(from: configuration)
         runtimeConfiguration.nativeDirectSnapIndex = index
         runtimeConfiguration.nativeDirectSnapReason = reason
+        refreshRowInteractionState(configuration: runtimeConfiguration)
         presentationEngine.update(
             engineConfiguration(from: runtimeConfiguration),
             onTargetsChanged: { [weak self] in
                 self?.startPresentationLoop()
             }
         )
-        for row in visibleRows(for: runtimeConfiguration) {
-            guard let view = rowViews[row.id] else { continue }
-            updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
-            applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: true)
+        withDisabledLayerActions {
+            for row in visibleRows(for: runtimeConfiguration) {
+                guard let view = rowViews[row.id] else { continue }
+                updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
+                applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: true)
+            }
         }
         if hasActiveTextAnimation(configuration: runtimeConfiguration) {
             startPresentationLoop()
         }
+    }
+
+    private func refreshRowInteractionState(configuration: LyricsLayerRendererConfiguration) {
+        for view in rowViews.values {
+            view.refreshInteractionState(configuration: configuration)
+        }
+    }
+
+    private func updateNativeHover(from point: CGPoint, configuration: LyricsLayerRendererConfiguration) {
+        let hoveredIndex = visibleRows(for: configuration)
+            .compactMap { row -> (Int, CGRect)? in
+                guard let view = rowViews[row.id] else { return nil }
+                let baseY = presentationEngine.presentation(for: row.index)?.y
+                    ?? snapY(for: row, configuration: configuration)
+                let y = baseY + configuration.effectiveManualOffset
+                return (row.index, CGRect(x: 0, y: y, width: view.frame.width, height: view.frame.height))
+            }
+            .sorted { lhs, rhs in abs(lhs.1.midY - point.y) < abs(rhs.1.midY - point.y) }
+            .first { _, frame in frame.contains(point) }?
+            .0
+
+        guard hoveredIndex != hoveredRowIndex else {
+            if let hoveredIndex,
+               let row = configuration.rows.first(where: { $0.index == hoveredIndex }),
+               let view = rowViews[row.id] {
+                view.refreshInteractionState(configuration: configuration)
+            }
+            return
+        }
+
+        if let previous = hoveredRowIndex,
+           let row = configuration.rows.first(where: { $0.index == previous }),
+           let view = rowViews[row.id] {
+            view.setPointerHovering(false)
+        }
+        if let hoveredIndex,
+           let row = configuration.rows.first(where: { $0.index == hoveredIndex }),
+           let view = rowViews[row.id] {
+            view.refreshInteractionState(configuration: configuration)
+            view.setPointerHovering(true)
+        }
+        hoveredRowIndex = hoveredIndex
     }
 
     private func engineConfiguration(
@@ -826,14 +987,53 @@ final class NativeLyricsSurfaceView: NSView {
         }
     }
 
+    private struct VisualParitySignature: Equatable {
+        let expectedOpacity: Int
+        let appliedOpacity: Int
+        let expectedScale: Int
+        let appliedScale: Int
+        let expectedBlur: Int
+        let appliedBlur: Int
+        let isActive: Bool
+
+        init(_ sample: NativeLyricsVisualParitySample) {
+            expectedOpacity = Self.quantize(sample.expectedOpacity, scale: 1000)
+            appliedOpacity = Self.quantize(sample.appliedOpacity, scale: 1000)
+            expectedScale = Self.quantize(sample.expectedScale, scale: 1000)
+            appliedScale = Self.quantize(sample.appliedScale, scale: 1000)
+            expectedBlur = Self.quantize(sample.expectedBlurRadius, scale: 4)
+            appliedBlur = Self.quantize(sample.appliedBlurRadius, scale: 4)
+            isActive = sample.isActive
+        }
+
+        private static func quantize(_ value: CGFloat, scale: CGFloat) -> Int {
+            Int((value * scale).rounded(.toNearestOrAwayFromZero))
+        }
+    }
+
+    private func recordVisualParityIfChanged(rowID: String, sample: NativeLyricsVisualParitySample) {
+        let signature = VisualParitySignature(sample)
+        guard visualParitySignatures[rowID] != signature else { return }
+        visualParitySignatures[rowID] = signature
+        renderTelemetry.recordVisualParity(sample)
+    }
+
     private func updateTextPhasesForCurrentConfiguration() {
         guard let configuration else { return }
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
-        for row in visibleRows(for: runtimeConfiguration) {
+        for row in textPhaseRows(for: runtimeConfiguration) {
             guard let view = rowViews[row.id] else { continue }
             if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
                 renderTelemetry.recordTextPhase(textSample)
             }
+        }
+    }
+
+    private func textPhaseRows(for configuration: LyricsLayerRendererConfiguration) -> [LayerBackedLyricRow] {
+        rowViews.values.compactMap(\.currentRow).filter { row in
+            row.index == configuration.effectiveCurrentIndex
+                || row.interlude != nil
+                || row.isPrelude
         }
     }
 
@@ -847,6 +1047,27 @@ final class NativeLyricsSurfaceView: NSView {
             || activeRow.interlude != nil
             || activeRow.isPrelude
     }
+
+    private static func isSameTrackIdentity(
+        _ lhs: DiagnosticTrackContext,
+        _ rhs: DiagnosticTrackContext
+    ) -> Bool {
+        let lhsID = lhs.persistentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rhsID = rhs.persistentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !lhsID.isEmpty || !rhsID.isEmpty {
+            return lhsID == rhsID
+        }
+        return normalizedTrackIdentity(lhs.title) == normalizedTrackIdentity(rhs.title)
+            && normalizedTrackIdentity(lhs.artist) == normalizedTrackIdentity(rhs.artist)
+            && normalizedTrackIdentity(lhs.album) == normalizedTrackIdentity(rhs.album)
+            && abs(lhs.duration - rhs.duration) <= 2.0
+    }
+
+    private static func normalizedTrackIdentity(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .lowercased()
+    }
 }
 
 private final class NativeLyricsRowView: NSView {
@@ -856,6 +1077,8 @@ private final class NativeLyricsRowView: NSView {
     private let mainTextLayer = CATextLayer()
     private let mainBrightTextLayer = CATextLayer()
     private let mainSweepMaskLayer = CAGradientLayer()
+    private let mainPerRunSweepMaskLayer = CALayer()
+    private let mainEmphasisLayer = CALayer()
     private let translationTextLayer = CATextLayer()
     private let translationBrightTextLayer = CATextLayer()
     private let translationSweepMaskLayer = CAGradientLayer()
@@ -864,8 +1087,33 @@ private final class NativeLyricsRowView: NSView {
     private var row: LayerBackedLyricRow?
     private var configuration: LyricsLayerRendererConfiguration?
     private var isHovering = false
+    private var mainPerRunSweepLineLayers: [CAGradientLayer] = []
+    private var cachedMainSweepLayoutKey: SweepLayoutCacheKey?
+    private var cachedMainSweepLinePlan: [NativeLyricsTextSweepVisualLinePlan] = []
+    private var emphasisGlyphLayers: [CATextLayer] = []
+    private var activeHiddenEmphasisSignature: String?
+    private let blurFilter = CIFilter(name: "CIGaussianBlur")
+    private var appliedBlurRadius: CGFloat = -.greatestFiniteMagnitude
+    private var lastHoverBackgroundVisible = false
+    var onHoverChanged: ((Bool) -> Void)?
+    var onHoverBackgroundVisible: (() -> Void)?
 
     var displayIndex: Int { row?.index ?? -1 }
+    var currentRow: LayerBackedLyricRow? { row }
+
+    private struct SweepLayoutCacheKey: Equatable {
+        let rowID: String
+        let width: CGFloat
+        let fontSize: CGFloat
+        let fadeHalfPoint: CGFloat
+
+        init(rowID: String?, plan: NativeLyricsTextRenderPlan, width: CGFloat) {
+            self.rowID = rowID ?? plan.displayText
+            self.width = width.rounded(.toNearestOrAwayFromZero)
+            fontSize = plan.constants.mainFontSize
+            fadeHalfPoint = plan.constants.fadeHalfPoint
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -884,6 +1132,26 @@ private final class NativeLyricsRowView: NSView {
         updateTextLayers()
         updateHoverBackground()
         needsLayout = true
+    }
+
+    func refreshInteractionState(configuration: LyricsLayerRendererConfiguration) {
+        self.configuration = configuration
+        updateHoverBackground()
+    }
+
+    @discardableResult
+    func applyBlurRadius(_ radius: CGFloat) -> CGFloat {
+        let clampedRadius = radius > 0.1 ? min(radius, 12) : 0
+        let quantizedRadius = (clampedRadius * 4).rounded(.toNearestOrAwayFromZero) / 4
+        guard abs(appliedBlurRadius - quantizedRadius) > 0.001 else { return quantizedRadius }
+        appliedBlurRadius = quantizedRadius
+        guard quantizedRadius > 0 else {
+            layer?.filters = nil
+            return quantizedRadius
+        }
+        blurFilter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
+        layer?.filters = blurFilter.map { [$0] }
+        return quantizedRadius
     }
 
     func measuredHeight(width: CGFloat) -> CGFloat {
@@ -927,6 +1195,8 @@ private final class NativeLyricsRowView: NSView {
             mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: 30)
             mainBrightTextLayer.frame = mainTextLayer.frame
             mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
+            mainPerRunSweepMaskLayer.frame = mainBrightTextLayer.bounds
+            mainEmphasisLayer.frame = mainBrightTextLayer.frame
             translationTextLayer.frame = .zero
             translationBrightTextLayer.frame = .zero
             translationSweepMaskLayer.frame = .zero
@@ -942,6 +1212,8 @@ private final class NativeLyricsRowView: NSView {
         mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight)
         mainBrightTextLayer.frame = mainTextLayer.frame
         mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
+        mainPerRunSweepMaskLayer.frame = mainBrightTextLayer.bounds
+        mainEmphasisLayer.frame = mainBrightTextLayer.frame
         y += mainHeight
         if let translation = plan.translation {
             y += plan.constants.mainFontSize * 0.33
@@ -982,13 +1254,21 @@ private final class NativeLyricsRowView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        isHovering = true
-        updateHoverBackground()
+        setPointerHovering(true)
     }
 
     override func mouseExited(with event: NSEvent) {
-        isHovering = false
+        setPointerHovering(false)
+    }
+
+    func setPointerHovering(_ hovering: Bool) {
+        guard isHovering != hovering else {
+            updateHoverBackground()
+            return
+        }
+        isHovering = hovering
         updateHoverBackground()
+        onHoverChanged?(hovering)
     }
 
     private func commonInit() {
@@ -998,6 +1278,7 @@ private final class NativeLyricsRowView: NSView {
             backgroundLayer,
             mainTextLayer,
             mainBrightTextLayer,
+            mainEmphasisLayer,
             translationTextLayer,
             translationBrightTextLayer,
             interludeTextLayer
@@ -1007,6 +1288,10 @@ private final class NativeLyricsRowView: NSView {
             layer?.addSublayer($0)
         }
         mainBrightTextLayer.mask = mainSweepMaskLayer
+        mainPerRunSweepMaskLayer.masksToBounds = false
+        mainPerRunSweepMaskLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        mainEmphasisLayer.masksToBounds = false
+        mainEmphasisLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         translationBrightTextLayer.mask = translationSweepMaskLayer
         backgroundLayer.cornerRadius = 12
         backgroundLayer.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
@@ -1038,6 +1323,8 @@ private final class NativeLyricsRowView: NSView {
                 alpha: 0.7
             )
             mainBrightTextLayer.string = nil
+            hideEmphasisGlyphLayers()
+            activeHiddenEmphasisSignature = nil
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
             interludeTextLayer.string = nil
@@ -1055,6 +1342,8 @@ private final class NativeLyricsRowView: NSView {
         mainBrightTextLayer.string = isActive
             ? attributedText(plan.displayText, fontSize: plan.constants.mainFontSize, alpha: plan.constants.brightAlpha)
             : nil
+        activeHiddenEmphasisSignature = nil
+        hideEmphasisGlyphLayers()
         if let translation = plan.translation {
             let translationBaseAlpha = isActive ? translation.dimAlpha : translation.opacity
             translationTextLayer.string = attributedText(
@@ -1080,7 +1369,12 @@ private final class NativeLyricsRowView: NSView {
     }
 
     private func updateHoverBackground() {
-        backgroundLayer.isHidden = !(isHovering && configuration?.effectiveIsManualScrolling == true && row?.displayLine.line.text != "⋯")
+        let visible = isHovering && configuration?.effectiveIsManualScrolling == true && row?.displayLine.line.text != "⋯"
+        backgroundLayer.isHidden = !visible
+        if visible && !lastHoverBackgroundVisible {
+            onHoverBackgroundVisible?()
+        }
+        lastHoverBackgroundVisible = visible
     }
 
     @discardableResult
@@ -1088,28 +1382,50 @@ private final class NativeLyricsRowView: NSView {
         guard let row else { return nil }
         let renderTime = configuration.musicController.lyricRenderTime()
         let isActive = row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying
-        let plan = NativeLyricsTextRenderPlan.make(configuration: textConfiguration(
-            row: row,
-            configuration: configuration,
-            currentTime: renderTime
-        ))
 
         var sample: NativeLyricsTextPhaseSample?
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if isActive {
+            let plan = NativeLyricsTextRenderPlan.make(configuration: textConfiguration(
+                row: row,
+                configuration: configuration,
+                currentTime: renderTime
+            ))
             let appliedMainProgress = applyActiveMainPhase(plan: plan, currentTime: renderTime)
             let appliedTranslationProgress = applyActiveTranslationPhase(plan: plan)
-            sample = NativeLyricsTextPhaseSample(
-                hasSyllableSync: row.displayLine.line.hasSyllableSync,
-                wordRunCount: plan.wordRuns.count,
-                mainExpectedProgress: plan.mainSweepProgress,
-                mainAppliedProgress: appliedMainProgress,
-                translationExpectedProgress: plan.translation?.progress,
-                translationAppliedProgress: appliedTranslationProgress
-            )
+            let expectsPerRunSweep = row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
+            let expectsPerGlyphEmphasis = plan.wordRuns.contains { run in
+                run.isEmphasis || run.emphasis != .inactive
+            }
+            if !expectsPerRunSweep || (mainBrightTextLayer.bounds.width > 1 && mainBrightTextLayer.bounds.height > 1) {
+                sample = NativeLyricsTextPhaseSample(
+                    hasSyllableSync: row.displayLine.line.hasSyllableSync,
+                    wordRunCount: plan.wordRuns.count,
+                    mainExpectedProgress: plan.mainSweepProgress,
+                    mainAppliedProgress: appliedMainProgress.progress,
+                    translationExpectedProgress: plan.translation?.progress,
+                    translationAppliedProgress: appliedTranslationProgress,
+                    expectsPerRunSweep: expectsPerRunSweep,
+                    appliesPerRunSweep: appliedMainProgress.appliedPerRunSweep,
+                    expectsPerGlyphEmphasis: expectsPerGlyphEmphasis,
+                    appliesPerGlyphEmphasis: appliedMainProgress.appliedPerGlyphEmphasis,
+                    expectedEmphasisGlyphCount: appliedMainProgress.expectedEmphasisGlyphCount,
+                    appliedEmphasisGlyphCount: appliedMainProgress.appliedEmphasisGlyphCount,
+                    appliedEmphasisGlyphMotionCount: appliedMainProgress.appliedEmphasisGlyphMotionCount,
+                    maxAppliedEmphasisScale: appliedMainProgress.maxAppliedEmphasisScale,
+                    maxAppliedEmphasisLiftMagnitude: appliedMainProgress.maxAppliedEmphasisLiftMagnitude,
+                    maxAppliedEmphasisGlowOpacity: appliedMainProgress.maxAppliedEmphasisGlowOpacity,
+                    maxAppliedEmphasisAlpha: appliedMainProgress.maxAppliedEmphasisAlpha,
+                    textLayoutCoverageGapCount: appliedMainProgress.textLayoutCoverageGapCount
+                )
+            }
         } else {
             mainBrightTextLayer.isHidden = true
+            mainBrightTextLayer.mask = mainSweepMaskLayer
+            hidePerRunSweepMaskLayers()
+            hideEmphasisGlyphLayers()
+            activeHiddenEmphasisSignature = nil
             translationBrightTextLayer.isHidden = true
             mainTextLayer.setAffineTransform(.identity)
             mainBrightTextLayer.setAffineTransform(.identity)
@@ -1120,7 +1436,22 @@ private final class NativeLyricsRowView: NSView {
         return sample
     }
 
-    private func applyActiveMainPhase(plan: NativeLyricsTextRenderPlan, currentTime: TimeInterval) -> CGFloat {
+    private func applyActiveMainPhase(
+        plan: NativeLyricsTextRenderPlan,
+        currentTime: TimeInterval
+    ) -> (
+        progress: CGFloat,
+        appliedPerRunSweep: Bool,
+        appliedPerGlyphEmphasis: Bool,
+        expectedEmphasisGlyphCount: Int,
+        appliedEmphasisGlyphCount: Int,
+        appliedEmphasisGlyphMotionCount: Int,
+        maxAppliedEmphasisScale: CGFloat,
+        maxAppliedEmphasisLiftMagnitude: CGFloat,
+        maxAppliedEmphasisGlowOpacity: CGFloat,
+        maxAppliedEmphasisAlpha: CGFloat,
+        textLayoutCoverageGapCount: Int
+    ) {
         let activeRun = plan.wordRuns.last { $0.startTime <= currentTime }
             ?? plan.wordRuns.first
         let y = activeRun?.baseFloatY ?? 0
@@ -1128,12 +1459,24 @@ private final class NativeLyricsRowView: NSView {
         mainBrightTextLayer.setAffineTransform(CGAffineTransform(translationX: 0, y: y))
         mainBrightTextLayer.opacity = Float(plan.mainPostLineFade)
         mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || plan.mainPostLineFade <= 0.001
-        let appliedProgress = updateSweepMask(
-            mainSweepMaskLayer,
-            progress: plan.mainSweepProgress,
-            fadeHalfPoint: plan.constants.fadeHalfPoint,
+        let appliedPerRunSweep = updatePerRunSweepMask(
+            plan: plan,
+            currentTime: currentTime,
             bounds: mainBrightTextLayer.bounds
         )
+        let appliedProgress: CGFloat
+        if appliedPerRunSweep {
+            appliedProgress = plan.mainSweepProgress
+        } else {
+            mainBrightTextLayer.mask = mainSweepMaskLayer
+            hidePerRunSweepMaskLayers()
+            appliedProgress = updateSweepMask(
+                mainSweepMaskLayer,
+                progress: plan.mainSweepProgress,
+                fadeHalfPoint: plan.constants.fadeHalfPoint,
+                bounds: mainBrightTextLayer.bounds
+            )
+        }
         if let activeRun, activeRun.emphasis.glowOpacity > 0 {
             mainBrightTextLayer.shadowColor = NSColor.white.cgColor
             mainBrightTextLayer.shadowOpacity = Float(min(1, activeRun.emphasis.glowOpacity))
@@ -1142,7 +1485,24 @@ private final class NativeLyricsRowView: NSView {
         } else {
             clearEmphasis(from: mainBrightTextLayer)
         }
-        return appliedProgress
+        let emphasisResult = applyEmphasisGlyphLayers(
+            plan: plan,
+            currentTime: currentTime,
+            linePlan: mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
+        )
+        return (
+            appliedProgress,
+            appliedPerRunSweep,
+            emphasisResult.applied,
+            emphasisResult.expectedGlyphCount,
+            emphasisResult.appliedGlyphCount,
+            emphasisResult.appliedMotionGlyphCount,
+            emphasisResult.maxScale,
+            emphasisResult.maxLiftMagnitude,
+            emphasisResult.maxGlowOpacity,
+            emphasisResult.maxAlpha,
+            emphasisResult.layoutCoverageGapCount
+        )
     }
 
     private func applyActiveTranslationPhase(plan: NativeLyricsTextRenderPlan) -> CGFloat? {
@@ -1158,6 +1518,353 @@ private final class NativeLyricsRowView: NSView {
             fadeHalfPoint: translation.fadeHalfPoint,
             bounds: translationBrightTextLayer.bounds
         )
+    }
+
+    private func updatePerRunSweepMask(
+        plan: NativeLyricsTextRenderPlan,
+        currentTime: TimeInterval,
+        bounds: CGRect
+    ) -> Bool {
+        guard !plan.wordRuns.isEmpty, bounds.width > 1, bounds.height > 1 else { return false }
+        let linePlan = mainSweepLinePlan(for: plan, bounds: bounds)
+        let lines = NativeLyricsTextSweepLayout.maskLines(
+            from: linePlan,
+            fadeHalfPoint: plan.constants.fadeHalfPoint,
+            currentTime: currentTime
+        )
+        guard !lines.isEmpty else { return false }
+
+        mainBrightTextLayer.mask = mainPerRunSweepMaskLayer
+        mainPerRunSweepMaskLayer.frame = bounds
+        ensurePerRunSweepMaskLayerCount(lines.count)
+        for (index, line) in lines.enumerated() {
+            let maskLayer = mainPerRunSweepLineLayers[index]
+            maskLayer.isHidden = false
+            maskLayer.frame = line.maskRect
+            applySweepGradient(
+                maskLayer,
+                wavefrontX: line.wavefrontX - line.maskRect.minX,
+                fadeHalfPoint: plan.constants.fadeHalfPoint,
+                width: line.maskRect.width
+            )
+        }
+        for index in lines.count..<mainPerRunSweepLineLayers.count {
+            mainPerRunSweepLineLayers[index].isHidden = true
+        }
+        return true
+    }
+
+    private func applyEmphasisGlyphLayers(
+        plan: NativeLyricsTextRenderPlan,
+        currentTime: TimeInterval,
+        linePlan: [NativeLyricsTextSweepVisualLinePlan]
+    ) -> (
+        applied: Bool,
+        expectedGlyphCount: Int,
+        appliedGlyphCount: Int,
+        appliedMotionGlyphCount: Int,
+        maxScale: CGFloat,
+        maxLiftMagnitude: CGFloat,
+        maxGlowOpacity: CGFloat,
+        maxAlpha: CGFloat,
+        layoutCoverageGapCount: Int
+    ) {
+        let emphasisOrders = Set(plan.wordRuns.enumerated().compactMap { order, run in
+            (run.isEmphasis || run.emphasis != .inactive) ? order : nil
+        })
+        guard !emphasisOrders.isEmpty else {
+            restoreMainTextIfNeeded(plan: plan)
+            hideEmphasisGlyphLayers()
+            return (false, 0, 0, 0, 1, 0, 0, 0, 0)
+        }
+
+        applyHiddenEmphasisText(plan: plan, hiddenOrders: emphasisOrders)
+
+        var glyphInputs: [(NativeLyricsTextSweepVisualRun, NativeLyricsWordRunPlan, CGFloat)] = []
+        glyphInputs.reserveCapacity(emphasisOrders.count)
+        for line in linePlan {
+            let wavefront = NativeLyricsTextSweepLayout.wavefrontX(
+                for: line,
+                fadeHalfPoint: plan.constants.fadeHalfPoint,
+                currentTime: currentTime
+            )
+            for visualRun in line.runs where emphasisOrders.contains(visualRun.order) {
+                guard visualRun.order < plan.wordRuns.count else { continue }
+                glyphInputs.append((visualRun, plan.wordRuns[visualRun.order], wavefront))
+            }
+        }
+
+        let expectedGlyphCount = plan.wordRuns.enumerated().reduce(0) { partial, item in
+            emphasisOrders.contains(item.offset)
+                ? partial + max(1, (item.element.text as NSString).length)
+                : partial
+        }
+        let appliedGlyphCount = glyphInputs.reduce(0) { $0 + $1.0.glyphs.count }
+        let missingRunCount = emphasisOrders.subtracting(glyphInputs.map(\.0.order)).count
+        let layoutCoverageGapCount = missingRunCount + max(0, expectedGlyphCount - appliedGlyphCount)
+        guard appliedGlyphCount > 0 else {
+            hideEmphasisGlyphLayers()
+            return (false, expectedGlyphCount, 0, 0, 1, 0, 0, 0, layoutCoverageGapCount)
+        }
+
+        ensureEmphasisGlyphLayerCount(appliedGlyphCount)
+        var layerIndex = 0
+        var appliedMotionGlyphCount = 0
+        var maxScale: CGFloat = 1
+        var maxLiftMagnitude: CGFloat = 0
+        var maxGlowOpacity: CGFloat = 0
+        var maxAlpha: CGFloat = 0
+        for (visualRun, run, wavefront) in glyphInputs {
+            let glyphCount = max(1, visualRun.glyphs.count)
+            let duration = max(0, run.endTime - run.startTime)
+            let du = max(1.0, duration) * (visualRun.order == plan.wordRuns.count - 1 ? 1.2 : 1.0)
+            for glyph in visualRun.glyphs {
+                let layer = emphasisGlyphLayers[layerIndex]
+                layerIndex += 1
+                let metrics = applyEmphasisGlyph(
+                    layer,
+                    glyph: glyph,
+                    run: run,
+                    glyphCount: glyphCount,
+                    du: du,
+                    wavefrontX: wavefront,
+                    fadeHalfPoint: plan.constants.fadeHalfPoint,
+                    brightAlpha: plan.constants.brightAlpha * plan.mainPostLineFade,
+                    dimAlpha: plan.constants.dimAlpha,
+                    currentTime: currentTime
+                )
+                if metrics.hasMotion {
+                    appliedMotionGlyphCount += 1
+                }
+                maxScale = max(maxScale, metrics.scale)
+                maxLiftMagnitude = max(maxLiftMagnitude, metrics.liftMagnitude)
+                maxGlowOpacity = max(maxGlowOpacity, metrics.glowOpacity)
+                maxAlpha = max(maxAlpha, metrics.alpha)
+            }
+        }
+        for index in layerIndex..<emphasisGlyphLayers.count {
+            emphasisGlyphLayers[index].isHidden = true
+        }
+        return (
+            true,
+            expectedGlyphCount,
+            appliedGlyphCount,
+            appliedMotionGlyphCount,
+            maxScale,
+            maxLiftMagnitude,
+            maxGlowOpacity,
+            maxAlpha,
+            layoutCoverageGapCount
+        )
+    }
+
+    private func applyHiddenEmphasisText(
+        plan: NativeLyricsTextRenderPlan,
+        hiddenOrders: Set<Int>
+    ) {
+        let signature = "\(plan.displayText)|\(hiddenOrders.sorted().map(String.init).joined(separator: ","))"
+        guard activeHiddenEmphasisSignature != signature else { return }
+        activeHiddenEmphasisSignature = signature
+        mainTextLayer.string = attributedText(
+            plan.displayText,
+            fontSize: plan.constants.mainFontSize,
+            alpha: plan.constants.dimAlpha,
+            hiddenOrders: hiddenOrders,
+            wordRuns: plan.wordRuns
+        )
+        mainBrightTextLayer.string = attributedText(
+            plan.displayText,
+            fontSize: plan.constants.mainFontSize,
+            alpha: plan.constants.brightAlpha,
+            hiddenOrders: hiddenOrders,
+            wordRuns: plan.wordRuns
+        )
+    }
+
+    private func restoreMainTextIfNeeded(plan: NativeLyricsTextRenderPlan) {
+        guard activeHiddenEmphasisSignature != nil else { return }
+        activeHiddenEmphasisSignature = nil
+        mainTextLayer.string = attributedText(
+            plan.displayText,
+            fontSize: plan.constants.mainFontSize,
+            alpha: plan.constants.dimAlpha
+        )
+        mainBrightTextLayer.string = attributedText(
+            plan.displayText,
+            fontSize: plan.constants.mainFontSize,
+            alpha: plan.constants.brightAlpha
+        )
+    }
+
+    private func ensureEmphasisGlyphLayerCount(_ count: Int) {
+        guard emphasisGlyphLayers.count < count else { return }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        while emphasisGlyphLayers.count < count {
+            let layer = CATextLayer()
+            layer.contentsScale = scale
+            layer.isWrapped = false
+            layer.alignmentMode = .center
+            layer.truncationMode = .none
+            layer.masksToBounds = false
+            mainEmphasisLayer.addSublayer(layer)
+            emphasisGlyphLayers.append(layer)
+        }
+    }
+
+    private func hideEmphasisGlyphLayers() {
+        for layer in emphasisGlyphLayers {
+            layer.isHidden = true
+            layer.shadowOpacity = 0
+            layer.setAffineTransform(.identity)
+        }
+    }
+
+    private struct EmphasisGlyphAppliedMetrics {
+        let scale: CGFloat
+        let liftMagnitude: CGFloat
+        let glowOpacity: CGFloat
+        let alpha: CGFloat
+
+        var hasMotion: Bool {
+            scale > 1.001 || liftMagnitude > 0.001 || glowOpacity > 0.001
+        }
+    }
+
+    private func applyEmphasisGlyph(
+        _ layer: CATextLayer,
+        glyph: NativeLyricsTextSweepVisualRun.Glyph,
+        run: NativeLyricsWordRunPlan,
+        glyphCount: Int,
+        du: TimeInterval,
+        wavefrontX: CGFloat,
+        fadeHalfPoint: CGFloat,
+        brightAlpha: CGFloat,
+        dimAlpha: CGFloat,
+        currentTime: TimeInterval
+    ) -> EmphasisGlyphAppliedMetrics {
+        let charDelay = (du / 2.5 / Double(max(1, glyphCount))) * Double(glyph.index)
+        let t1 = CGFloat(min(1, max(0, (currentTime - run.startTime - charDelay) / du)))
+        let easing = NativeLyricsEasing.emphasis(t1)
+        let scale = 1 + easing * 0.1 * run.emphasis.amount
+        let relativeIndex = CGFloat(glyphCount) / 2 - CGFloat(glyph.index)
+        let spreadX = -easing * 0.03 * run.emphasis.amount * relativeIndex * 24
+        let floatDu = du * 1.4
+        let floatDelay = max(0, charDelay - 0.4)
+        let t2 = CGFloat(min(1, max(0, (currentTime - run.startTime - floatDelay) / floatDu)))
+        let charFloat: CGFloat = (t2 > 0 && t2 < 1) ? -sin(t2 * .pi) * 1.2 : 0
+        let liftY = -easing * 0.6 * run.emphasis.amount
+        let left = wavefrontX - fadeHalfPoint
+        let right = wavefrontX + fadeHalfPoint
+        let brightWeight: CGFloat
+        if glyph.rect.midX <= left {
+            brightWeight = 1
+        } else if glyph.rect.midX >= right {
+            brightWeight = 0
+        } else {
+            brightWeight = (right - glyph.rect.midX) / max(1, right - left)
+        }
+        let alpha = dimAlpha + (max(dimAlpha, brightAlpha) - dimAlpha) * min(1, max(0, brightWeight))
+
+        layer.isHidden = false
+        layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        layer.string = attributedText(glyph.text, fontSize: NativeLyricsTextConstants().mainFontSize, alpha: alpha)
+        layer.bounds = CGRect(origin: .zero, size: glyph.rect.size)
+        layer.position = CGPoint(
+            x: glyph.rect.midX + spreadX,
+            y: glyph.rect.midY + run.baseFloatY + charFloat + liftY
+        )
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
+
+        let glowOpacity = easing * run.emphasis.blurLevel
+        if glowOpacity > 0 {
+            layer.shadowColor = NSColor.white.cgColor
+            layer.shadowOpacity = Float(min(1, glowOpacity))
+            layer.shadowRadius = min(0.3 * 24, run.emphasis.blurLevel * 0.3 * 24)
+            layer.shadowOffset = .zero
+        } else {
+            layer.shadowOpacity = 0
+            layer.shadowRadius = 0
+            layer.shadowOffset = .zero
+        }
+        return EmphasisGlyphAppliedMetrics(
+            scale: scale,
+            liftMagnitude: abs(charFloat + liftY),
+            glowOpacity: glowOpacity,
+            alpha: alpha
+        )
+    }
+
+    private func mainSweepLinePlan(
+        for plan: NativeLyricsTextRenderPlan,
+        bounds: CGRect
+    ) -> [NativeLyricsTextSweepVisualLinePlan] {
+        let key = SweepLayoutCacheKey(rowID: row?.id, plan: plan, width: bounds.width)
+        if cachedMainSweepLayoutKey == key {
+            return cachedMainSweepLinePlan
+        }
+        let linePlan = NativeLyricsTextSweepLayout.makePlan(
+            displayText: plan.displayText,
+            wordRuns: plan.wordRuns,
+            width: bounds.width,
+            fontSize: plan.constants.mainFontSize,
+            fadeHalfPoint: plan.constants.fadeHalfPoint
+        )
+        cachedMainSweepLayoutKey = key
+        cachedMainSweepLinePlan = linePlan
+        return linePlan
+    }
+
+    private func ensurePerRunSweepMaskLayerCount(_ count: Int) {
+        guard mainPerRunSweepLineLayers.count < count else { return }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        while mainPerRunSweepLineLayers.count < count {
+            let layer = CAGradientLayer()
+            layer.contentsScale = scale
+            layer.startPoint = CGPoint(x: 0, y: 0.5)
+            layer.endPoint = CGPoint(x: 1, y: 0.5)
+            layer.colors = [
+                NSColor.black.cgColor,
+                NSColor.black.cgColor,
+                NSColor.clear.cgColor,
+                NSColor.clear.cgColor
+            ]
+            layer.locations = [0, 0, 0, 1]
+            mainPerRunSweepMaskLayer.addSublayer(layer)
+            mainPerRunSweepLineLayers.append(layer)
+        }
+    }
+
+    private func hidePerRunSweepMaskLayers() {
+        for layer in mainPerRunSweepLineLayers {
+            layer.isHidden = true
+        }
+    }
+
+    private func applySweepGradient(
+        _ mask: CAGradientLayer,
+        wavefrontX: CGFloat,
+        fadeHalfPoint: CGFloat,
+        width: CGFloat
+    ) {
+        let width = max(1, width)
+        let left = (wavefrontX - fadeHalfPoint) / width
+        let right = (wavefrontX + fadeHalfPoint) / width
+        if right <= 0 {
+            mask.opacity = 0
+            return
+        }
+        mask.opacity = 1
+        if left >= 1 {
+            mask.locations = [0, 1, 1, 1]
+            return
+        }
+        mask.locations = [
+            0,
+            NSNumber(value: Double(max(0, min(1, left)))),
+            NSNumber(value: Double(max(0, min(1, right)))),
+            1
+        ]
     }
 
     private func updateSweepMask(
@@ -1218,6 +1925,31 @@ private final class NativeLyricsRowView: NSView {
                 .foregroundColor: NSColor.white.withAlphaComponent(alpha)
             ]
         )
+    }
+
+    private func attributedText(
+        _ text: String,
+        fontSize: CGFloat,
+        alpha: CGFloat,
+        hiddenOrders: Set<Int>,
+        wordRuns: [NativeLyricsWordRunPlan]
+    ) -> NSAttributedString {
+        let attributed = NSMutableAttributedString(
+            attributedString: attributedText(text, fontSize: fontSize, alpha: alpha)
+        )
+        var location = 0
+        let textLength = (text as NSString).length
+        for (order, run) in wordRuns.enumerated() {
+            let length = (run.text as NSString).length
+            defer { location += length }
+            guard hiddenOrders.contains(order), length > 0, location < textLength else { continue }
+            attributed.addAttribute(
+                .foregroundColor,
+                value: NSColor.clear,
+                range: NSRange(location: location, length: min(length, textLength - location))
+            )
+        }
+        return attributed
     }
 
     private func measuredTextHeight(_ text: String, width: CGFloat, font: NSFont) -> CGFloat {

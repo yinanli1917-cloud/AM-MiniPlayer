@@ -83,6 +83,8 @@ def resolve_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> S
     positive_float(parser, args.interval, "--interval")
     positive_float(parser, args.interaction_interval, "--interaction-interval")
     non_negative_float(parser, args.warmup, "--warmup")
+    if args.seek_position is not None:
+        non_negative_float(parser, args.seek_position, "--seek-position")
 
     expect_lyrics = args.expect_lyrics
     if expect_lyrics == "fixture":
@@ -108,8 +110,13 @@ def resolve_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> S
         fixture=args.fixture,
         play_title=title,
         play_artist=artist,
-        play_album="",
+        play_album=str(fixture.get("album", "")) if fixture else "",
         play_duration=float(duration),
+        seek_position=args.seek_position if args.seek_position is not None else (
+            float(fixture["sample_start_s"])
+            if fixture and fixture.get("sample_start_s") is not None
+            else None
+        ),
         expect_lyrics=expect_lyrics,
         expect_translation=bool(expect_translation),
         expect_selected_source=fixture.get("expect_selected_source") if fixture else None,
@@ -147,19 +154,21 @@ tell application "Music"
     set trackName to ""
     set trackArtist to ""
     set trackDuration to ""
+    set trackAlbum to ""
     try
         set trackName to name of current track
         set trackArtist to artist of current track
         set trackDuration to duration of current track as string
+        set trackAlbum to album of current track
     end try
-    return stateText & tab & trackName & tab & trackArtist & tab & trackDuration
+    return stateText & tab & trackName & tab & trackArtist & tab & trackDuration & tab & trackAlbum
 end tell
 '''
     result = run(["osascript", "-e", script], check=False)
     if result.returncode != 0:
         raise SystemExit(f"Could not read Music.app state: {result.stderr.strip()}")
     parts = result.stdout.rstrip("\n").split("\t")
-    parts += [""] * (4 - len(parts))
+    parts += [""] * (5 - len(parts))
     duration_text = parts[3]
     try:
         duration = float(duration_text) if duration_text else None
@@ -170,19 +179,24 @@ end tell
         "title": parts[1],
         "artist": parts[2],
         "duration": duration,
+        "album": parts[4],
     }
 
 
 def track_matches_request(status: dict[str, object], request: SimpleNamespace) -> bool:
     title = str(status.get("title") or "").casefold()
     artist = str(status.get("artist") or "").casefold()
-    return title == request.play_title.casefold() and artist == request.play_artist.casefold()
+    album = str(status.get("album") or "").casefold()
+    expected_album = str(getattr(request, "play_album", "") or "").casefold()
+    if title != request.play_title.casefold() or artist != request.play_artist.casefold():
+        return False
+    return not expected_album or album == expected_album
 
 
 def ensure_music_playing(request: SimpleNamespace) -> dict[str, object]:
     if not request.skip_playback_control:
         log(f'Playing Music.app track: "{request.play_title}" - {request.play_artist}')
-        visual.play_music_library_track(request.play_title, request.play_artist)
+        visual.play_music_library_track(request.play_title, request.play_artist, request.play_album)
 
     deadline = time.time() + 8
     try:
@@ -224,7 +238,25 @@ def ensure_music_playing(request: SimpleNamespace) -> dict[str, object]:
         "state": last_status["state"],
         "matchesRequestedTrack": track_matches_request(last_status, request),
         "duration": last_status["duration"],
+        "album": last_status.get("album"),
     }
+
+
+def seek_music_position(position: float | None) -> None:
+    if position is None:
+        return
+    script = f'''
+tell application "Music"
+    if it is running then
+        set player position to {position:.3f}
+        if player state is not playing then play
+    end if
+end tell
+'''
+    result = run(["osascript", "-e", script], check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"Could not seek Music.app to {position:.3f}s: {result.stderr.strip()}")
+    time.sleep(0.5)
 
 
 def route_app(page: str) -> int:
@@ -271,6 +303,11 @@ import Foundation
 let source = CGEventSource(stateID: .hidSystemState)
 let scrollPoint = CGPoint(x: {center_x}, y: {scroll_y})
 let tapPoint = CGPoint(x: {center_x}, y: {tap_y})
+
+if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: scrollPoint, mouseButton: .left) {{
+    move.post(tap: .cghidEventTap)
+}}
+usleep(70_000)
 
 for _ in 0..<3 {{
     if let event = CGEvent(
@@ -409,6 +446,7 @@ def build_summary(
         "track": {
             "title": request.play_title,
             "artist": request.play_artist,
+            "album": request.play_album,
             "duration": request.play_duration,
         },
         "lyricsWorkload": workload,
@@ -434,6 +472,7 @@ def build_summary(
             "warmupSeconds": request.warmup,
             "durationSeconds": request.duration,
             "intervalSeconds": request.interval,
+            "seekPositionSeconds": request.seek_position,
             "interaction": request.interaction,
             "interactionIntervalSeconds": request.interaction_interval,
             **summarize_samples(samples),
@@ -481,6 +520,7 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument("--duration", type=float, default=16.0, help="measurement duration in seconds")
     parser.add_argument("--warmup", type=float, default=8.0, help="warmup seconds after routing to the page")
     parser.add_argument("--interval", type=float, default=0.5, help="sampling interval in seconds")
+    parser.add_argument("--seek-position", type=float, help="Music.app playback position before warmup/sampling")
     parser.add_argument(
         "--interaction",
         choices=["passive", "scroll-tap-jump"],
@@ -525,6 +565,7 @@ def main() -> None:
             "track": {
                 "title": request.play_title,
                 "artist": request.play_artist,
+                "album": request.play_album,
                 "duration": request.play_duration,
             },
             "expectations": {
@@ -539,6 +580,7 @@ def main() -> None:
                 "warmupSeconds": request.warmup,
                 "durationSeconds": request.duration,
                 "intervalSeconds": request.interval,
+                "seekPositionSeconds": request.seek_position,
                 "interaction": request.interaction,
                 "interactionIntervalSeconds": request.interaction_interval,
             },
@@ -552,6 +594,12 @@ def main() -> None:
     log("Validating lyrics workload")
     workload = verify_workload(request)
     music = ensure_music_playing(request)
+    seek_music_position(request.seek_position)
+    if request.require_music_playing:
+        music = ensure_music_playing(SimpleNamespace(**{
+            **request.__dict__,
+            "skip_playback_control": True,
+        }))
 
     log(f"Routing nanoPod to {request.page} page")
     pid = route_app(request.page)

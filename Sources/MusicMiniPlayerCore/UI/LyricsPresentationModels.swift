@@ -7,15 +7,91 @@ enum LyricsRendererMode: String {
     case native = "native"
 
     static let userDefaultsKey = "nanoPodLyricsRendererMode"
+    static let environmentKey = "NANOPOD_LYRICS_RENDERER_MODE"
+
+    struct Resolution: Equatable {
+        let mode: LyricsRendererMode
+        let rawValue: String?
+        let source: String
+    }
 
     static var current: LyricsRendererMode {
-        guard let rawValue = UserDefaults.standard.string(forKey: userDefaultsKey) else {
-            return .swiftUI
+        currentResolution.mode
+    }
+
+    static var currentResolution: Resolution {
+        let standardRawValue = UserDefaults.standard.string(forKey: userDefaultsKey)
+        let developerRawValue = standardRawValue == nil && isLocalDeveloperBuild
+            ? localDeveloperContainerRawValue()
+            : nil
+        let resolution = resolve(
+            environmentRawValue: ProcessInfo.processInfo.environment[environmentKey],
+            standardRawValue: standardRawValue,
+            developerRawValue: developerRawValue,
+            isLocalDeveloperBuild: isLocalDeveloperBuild
+        )
+        if standardRawValue == nil,
+           resolution.source == "developerContainerDefaults",
+           let rawValue = resolution.rawValue {
+            UserDefaults.standard.set(rawValue, forKey: userDefaultsKey)
         }
-        let normalized = rawValue.lowercased()
+        return resolution
+    }
+
+    static func resolve(
+        environmentRawValue: String?,
+        standardRawValue: String?,
+        developerRawValue: String?,
+        isLocalDeveloperBuild: Bool
+    ) -> Resolution {
+        if let mode = parse(environmentRawValue) {
+            return Resolution(mode: mode, rawValue: environmentRawValue, source: "environment")
+        }
+        if let standardRawValue {
+            return Resolution(
+                mode: parse(standardRawValue) ?? .swiftUI,
+                rawValue: standardRawValue,
+                source: "userDefaults"
+            )
+        }
+        if isLocalDeveloperBuild, let mode = parse(developerRawValue) {
+            return Resolution(mode: mode, rawValue: developerRawValue, source: "developerContainerDefaults")
+        }
+        return Resolution(mode: .swiftUI, rawValue: nil, source: "default")
+    }
+
+    static func parse(_ rawValue: String?) -> LyricsRendererMode? {
+        guard let rawValue else { return nil }
+        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized == "engine" || normalized == "layer" { return .native }
-        guard let mode = LyricsRendererMode(rawValue: normalized) else { return .swiftUI }
-        return mode
+        return LyricsRendererMode(rawValue: normalized)
+    }
+
+    private static var isLocalDeveloperBuild: Bool {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "NPLocalDeveloperBuild") else {
+            return false
+        }
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber { return number.boolValue }
+        if let string = value as? String {
+            return ["1", "true", "yes"].contains(string.lowercased())
+        }
+        return false
+    }
+
+    private static func localDeveloperContainerRawValue() -> String? {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return nil }
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers")
+            .appendingPathComponent(bundleIdentifier)
+            .appendingPathComponent("Data/Library/Preferences")
+            .appendingPathComponent("\(bundleIdentifier).plist")
+        guard let data = try? Data(contentsOf: url),
+              let propertyList = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dictionary = propertyList as? [String: Any] else {
+            return nil
+        }
+        return dictionary[userDefaultsKey] as? String
     }
 }
 
@@ -56,6 +132,18 @@ enum LyricsPresentationDirectSnapReason: Equatable {
 enum LyricsPresentationPlaybackMode: Equatable {
     case natural
     case directSnap(LyricsPresentationDirectSnapReason)
+}
+
+struct NativeLyricsDirectSnapRequest: Equatable {
+    let id: UUID
+    let displayIndex: Int
+    let reason: LyricsPresentationDirectSnapReason
+
+    init(id: UUID = UUID(), displayIndex: Int, reason: LyricsPresentationDirectSnapReason) {
+        self.id = id
+        self.displayIndex = displayIndex
+        self.reason = reason
+    }
 }
 
 struct LyricsPresentationRowState: Equatable {
@@ -103,7 +191,7 @@ enum NativeLyricsVisibleRowSelector {
     ) -> [Int] {
         let activeTargets = Set(activeTargetIndices)
         return allIndices.filter { index in
-            index == 0 || abs(index - currentIndex) <= radius || activeTargets.contains(index)
+            abs(index - currentIndex) <= radius || activeTargets.contains(index)
         }
     }
 }
@@ -118,6 +206,13 @@ struct NativeLyricsManualScrollSnapshot: Equatable {
     let isActive: Bool
     let frozenDisplayIndex: Int?
     let manualOffset: CGFloat
+}
+
+struct NativeLyricsPresentationSnapshot: Equatable {
+    let targetIndices: [Int: Int]
+    let targetMinYByIndex: [Int: CGFloat]
+    let velocityYByIndex: [Int: CGFloat]
+    let manualScrollSnapshot: NativeLyricsManualScrollSnapshot?
 }
 
 struct NativeLyricsManualScrollState: Equatable {

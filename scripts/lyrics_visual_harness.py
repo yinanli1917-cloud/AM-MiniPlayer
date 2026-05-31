@@ -103,6 +103,8 @@ FIXTURES: dict[str, dict[str, object]] = {
     "line-winter-trip": {
         "title": "冬天一個遊",
         "artist": "Gordon Flanders",
+        "album": "冬天一個遊 - Single",
+        "genre": "R&B/Soul",
         "duration": 256,
         "expect_lyrics": "syllable",
         "expect_translation": False,
@@ -110,6 +112,21 @@ FIXTURES: dict[str, dict[str, object]] = {
         "expect_lyrics_line_count": 67,
         "expect_first_real_line_sha256": "15ce6b4d94c2f2b4f016cbd746a807825b26fa90608465af1dbb623ad645fee9",
         "purpose": "mandatory winter word-level fixture for passive playback plus scroll-tap-jump CPU, drift, and refresh telemetry",
+        "sample_start_s": 42.0,
+        "settle_s": 8.0,
+    },
+    "line-breakup-truth": {
+        "title": "分手真相",
+        "artist": "Alvin Kwok",
+        "album": "Steel Box Collection: Alvin Kwok",
+        "genre": "Cantopop/HK-Pop",
+        "duration": 250,
+        "expect_lyrics": "line",
+        "expect_translation": False,
+        "expect_selected_source": "NetEase",
+        "expect_lyrics_line_count": 42,
+        "expect_first_real_line_sha256": "c3925990fd25b5c0a4891ef23968b2acd3d7db1e4d71fbb9cfdfeefdd2231ae9",
+        "purpose": "owner-provided Cantonese line-level workload for lag/drift regression gating without word or syllable sync",
         "settle_s": 8.0,
     },
     "word-seek-fun": {
@@ -142,7 +159,7 @@ def workload_args(fixture: dict[str, object]) -> SimpleNamespace:
         expect_translation=bool(fixture.get("expect_translation", False)),
         play_title=str(fixture["title"]),
         play_artist=str(fixture["artist"]),
-        play_album="",
+        play_album=str(fixture.get("album", "")),
         play_duration=float(fixture["duration"]),
         expect_selected_source=fixture.get("expect_selected_source"),
         expect_lyrics_line_count=fixture.get("expect_lyrics_line_count"),
@@ -181,11 +198,13 @@ def activate_app() -> None:
     run(["osascript", "-e", 'tell application "nanoPod" to activate'], check=False)
 
 
-def play_music_library_track(title: str, artist: str) -> str:
+def play_music_library_track(title: str, artist: str, album: str = "") -> str:
     script = r'''
 on run argv
     set targetTitle to item 1 of argv
     set targetArtist to item 2 of argv
+    set targetAlbum to ""
+    if (count of argv) >= 3 then set targetAlbum to item 3 of argv
     tell application "Music"
         if it is not running then run
         set targetTrack to missing value
@@ -195,14 +214,22 @@ on run argv
             set searchResults to {}
         end try
         repeat with candidateTrack in searchResults
-            if (name of candidateTrack is targetTitle) and (artist of candidateTrack is targetArtist) then
+            set candidateAlbum to ""
+            try
+                set candidateAlbum to album of candidateTrack
+            end try
+            if (name of candidateTrack is targetTitle) and (artist of candidateTrack is targetArtist) and (targetAlbum is "" or candidateAlbum is targetAlbum) then
                 set targetTrack to candidateTrack
                 exit repeat
             end if
         end repeat
         if targetTrack is missing value then
             repeat with candidateTrack in searchResults
-                if (name of candidateTrack contains targetTitle) and (artist of candidateTrack contains targetArtist) then
+                set candidateAlbum to ""
+                try
+                    set candidateAlbum to album of candidateTrack
+                end try
+                if (name of candidateTrack contains targetTitle) and (artist of candidateTrack contains targetArtist) and (targetAlbum is "" or candidateAlbum is targetAlbum) then
                     set targetTrack to candidateTrack
                     exit repeat
                 end if
@@ -210,14 +237,42 @@ on run argv
         end if
         if targetTrack is missing value then return "NOT_FOUND"
         play targetTrack
+        delay 0.2
+        if player state is not playing then play
+        delay 0.3
+        set currentMatchesTarget to false
+        try
+            set currentAlbum to ""
+            try
+                set currentAlbum to album of current track
+            end try
+            set currentMatchesTarget to (name of current track is targetTitle) and (artist of current track is targetArtist) and (targetAlbum is "" or currentAlbum is targetAlbum)
+        end try
+        if currentMatchesTarget is false then
+            set harnessPlaylistName to "nanoPod Test Playback"
+            if not (exists user playlist harnessPlaylistName) then
+                make new user playlist with properties {name:harnessPlaylistName}
+            end if
+            set harnessPlaylist to user playlist harnessPlaylistName
+            try
+                delete every track of harnessPlaylist
+            end try
+            duplicate targetTrack to harnessPlaylist
+            play harnessPlaylist
+            delay 0.5
+        end if
         set trackID to persistent ID of targetTrack
         set trackName to name of targetTrack
         set trackArtist to artist of targetTrack
-        return trackID & "\t" & trackName & "\t" & trackArtist
+        set trackAlbum to ""
+        try
+            set trackAlbum to album of targetTrack
+        end try
+        return trackID & "\t" & trackName & "\t" & trackArtist & "\t" & trackAlbum
     end tell
 end run
 '''
-    result = run(["osascript", "-e", script, title, artist], check=False)
+    result = run(["osascript", "-e", script, title, artist, album], check=False)
     output = result.stdout.strip()
     if result.returncode != 0:
         raise SystemExit(f"Music.app failed to play requested track: {result.stderr.strip()}")
