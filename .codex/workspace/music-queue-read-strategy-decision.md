@@ -96,6 +96,12 @@ only reuse a recent snapshot when both queue and history provenance are
 displayable; non-displayable history forces another public refresh attempt
 instead of letting a throttled account-history or playlist-context result look
 like a reusable real-time queue proof.
+`RapidSwitchTests.testProductionQueueSyncDoesNotUsePrivateMusicStorageOrAppLocalQueues`
+now enforces this at the production queue-sync file level: the real-time queue
+path may not reference Music private storage/cache paths, app-local
+`ApplicationMusicPlayer.queue`, `MPNowPlayingInfoCenter.default`, or
+`MPMusicPlayerController` as queue sources. Artwork-specific local cache use
+remains outside this queue-source test.
 Production fetches now also avoid materializing track rows from sources already
 classified as non-displayable. For example, once `currentPlaylist` is classified
 as `playlistContextOnly`, nanoPod records the provenance and returns without

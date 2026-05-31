@@ -138,6 +138,44 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testProductionQueueSyncDoesNotUsePrivateMusicStorageOrAppLocalQueues() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let files = [
+            "Sources/MusicMiniPlayerCore/Services/MusicController.swift",
+            "Sources/MusicMiniPlayerCore/Services/MusicController+Playback.swift",
+            "Sources/MusicMiniPlayerCore/UI/PlaylistView.swift",
+            "Sources/MusicMiniPlayerCore/Models/MusicQueueProvenance.swift"
+        ]
+        let forbiddenQueueSourceTokens = [
+            "PlaybackSessions",
+            "MusicUIArtworkCache",
+            "SubscriptionPlayCache",
+            "Library/Application Support/Music",
+            "ApplicationMusicPlayer.shared.queue",
+            "MPNowPlayingInfoCenter.default",
+            "MPMusicPlayerController"
+        ]
+
+        var offenders: [String] = []
+        for path in files {
+            let url = repoRoot.appendingPathComponent(path)
+            let text = try String(contentsOf: url, encoding: .utf8)
+            for (lineIndex, line) in text.components(separatedBy: .newlines).enumerated() {
+                for token in forbiddenQueueSourceTokens where line.contains(token) {
+                    offenders.append("\(path):\(lineIndex + 1): \(token)")
+                }
+            }
+        }
+
+        XCTAssertTrue(
+            offenders.isEmpty,
+            "Production queue sync must stay on public Music.app surfaces and must not use private Music storage, app-local MusicKit queues, or current-app metadata centers as real queue sources: \(offenders.joined(separator: "; "))"
+        )
+    }
+
     func testMusicTrackClassNameMapsAppleEventDescriptorCodes() {
         XCTAssertEqual(MusicController.musicTrackClassName(fromObjectClassDescription: "<NSAppleEventDescriptor: 'cURL'>"), "URL track")
         XCTAssertEqual(MusicController.musicTrackClassName(fromObjectClassDescription: "<NSAppleEventDescriptor: 'cFlT'>"), "file track")
