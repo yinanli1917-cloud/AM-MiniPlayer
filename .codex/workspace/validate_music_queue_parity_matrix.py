@@ -291,13 +291,9 @@ def validate_row(row: SummaryRow, session_dir: Path) -> tuple[list[str], list[st
             if trigger_mode != "none" and trigger_finished != "true":
                 errors.append(f"{prefix}: exact triggered notification claim did not finish restoring trigger state")
 
-        has_public_rows = (
-            "neighbor[" in probe_text
-            or "classification.public_queue_candidate=named_playlist" in probe_text
-            or notification_has_possible_rows
-        )
+        has_public_rows = "neighbor[" in probe_text or notification_has_possible_rows
         if probe_text and not has_public_rows:
-            errors.append(f"{prefix}: exact claim has no public probe queue rows or named public queue candidate")
+            errors.append(f"{prefix}: exact claim has no public probe queue rows")
     elif row.manual_outcome == "pending":
         if "TODO" in notes_text:
             warnings.append(f"{prefix}: pending row still has TODO markers, which is expected before manual comparison")

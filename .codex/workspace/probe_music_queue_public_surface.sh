@@ -547,8 +547,8 @@ tell application "Music"
     end try
 
     set outcome to "partial"
-    if publicQueueCandidate is "named_playlist" then
-        set outcome to "manual_compare_required"
+    if publicQueueCandidate is "queue_like_named_playlist" then
+        set outcome to "manual_compare_required_queue_like_named_playlist"
     else if windowViewSurfaceCandidate is not "none" then
         set outcome to "partial_window_view_neighbors_only"
     else if currentPlaylistAvailable is "false" then

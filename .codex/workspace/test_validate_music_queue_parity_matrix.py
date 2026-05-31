@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = ROOT / ".codex/workspace/validate_music_queue_parity_matrix.py"
+PUBLIC_SURFACE_PROBE = ROOT / ".codex/workspace/probe_music_queue_public_surface.sh"
 REQUIRED_CONTEXTS = (
     "album-playback",
     "user-playlist-playback",
@@ -145,6 +146,10 @@ def assert_fails(session_dir: Path, expected: str, *args: str) -> None:
 
 
 def main() -> int:
+    probe_script = PUBLIC_SURFACE_PROBE.read_text(encoding="utf-8")
+    assert 'publicQueueCandidate is "queue_like_named_playlist"' in probe_script
+    assert 'manual_compare_required_queue_like_named_playlist' in probe_script
+
     with tempfile.TemporaryDirectory() as tmp:
         session = write_session(
             Path(tmp),
@@ -234,6 +239,31 @@ def main() -> int:
         )
         assert_fails(session, "coverage.summary=resolved:1 pending:0 missing:6", "--require-complete")
         assert_fails(session, "missing required context(s):", "--require-complete")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="manual_compare_required_queue_like_named_playlist",
+            notes_text=completed_notes(rows_match="yes"),
+            probe_extra="classification.public_queue_candidate=queue_like_named_playlist",
+        )
+        assert_fails(session, "exact claim has no public probe queue rows")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = write_session(
+            Path(tmp),
+            manual_outcome="exact",
+            probe_classification="manual_compare_required_queue_like_named_playlist",
+            notes_text=completed_notes(rows_match="yes"),
+            probe_extra="\n".join(
+                [
+                    "classification.public_queue_candidate=queue_like_named_playlist",
+                    "queue_like_playlist[1].neighbor[1]=*|Song A|Artist A|Album|ABC",
+                ]
+            ),
+        )
+        assert_passes(session)
 
     with tempfile.TemporaryDirectory() as tmp:
         session = write_multi_context_session(

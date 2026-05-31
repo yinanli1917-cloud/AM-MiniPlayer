@@ -188,6 +188,11 @@ The probe also records queue-like named playlist candidates, including localized
 queue terms, and captures a neighbor window if that public playlist contains the
 current track. Treat these as public discovery candidates only; a matching name
 or neighbor window is not enough without full visible Up Next/history parity.
+The probe classification now reports queue-like named playlists as
+`manual_compare_required_queue_like_named_playlist` when they exist. The
+validator still rejects exact claims unless the probe output contains actual
+public row lines and the visible notes confirm complete row coverage and
+identity/order parity.
 The probe also records public browser/playlist window `view` playlists and, if
 the view contains the current track, a neighbor window around that item. Treat
 these as another public candidate surface to compare against the visible
