@@ -551,6 +551,12 @@ extension MusicController {
         // AEProcessMessage (ARC-freed app with pending AE replies).
         return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> QueueFetchSnapshot? in
             guard let self else { return nil }
+            guard app.isRunning else {
+                return QueueFetchSnapshot(
+                    tracks: [],
+                    provenance: .unavailable(reason: .musicAppUnavailable)
+                )
+            }
             var result: [MusicQueueTrackRow] = []
             var provenance: MusicQueueProvenance = .unavailable(reason: .publicSourceUnverified)
 
@@ -845,6 +851,12 @@ extension MusicController {
     private func getRecentSnapshotFromApp(_ app: SBApplication, limit: Int) -> QueueFetchSnapshot {
         return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> QueueFetchSnapshot? in
             guard let self else { return nil }
+            guard app.isRunning else {
+                return QueueFetchSnapshot(
+                    tracks: [],
+                    provenance: .unavailable(reason: .musicAppUnavailable)
+                )
+            }
             var recentList: [MusicQueueTrackRow] = []
             var provenance: MusicQueueProvenance = .unavailable(reason: .publicSourceUnverified)
 

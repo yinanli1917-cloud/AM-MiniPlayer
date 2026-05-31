@@ -166,6 +166,43 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    func testTimedQueueSnapshotReadsRecheckMusicAppAvailabilityInsideTimeoutRead() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/Services/MusicController+Playback.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+
+        func sourceSection(from startMarker: String, to endMarker: String) -> String? {
+            guard let start = text.range(of: startMarker),
+                  let end = text.range(of: endMarker, range: start.upperBound..<text.endIndex) else {
+                return nil
+            }
+            return String(text[start.lowerBound..<end.lowerBound])
+        }
+
+        let guardPattern = "guard app.isRunning else {\n                return QueueFetchSnapshot(\n                    tracks: [],\n                    provenance: .unavailable(reason: .musicAppUnavailable)\n                )\n            }"
+
+        let upNextSection = try XCTUnwrap(sourceSection(
+            from: "private func getUpNextSnapshotFromApp",
+            to: "/// 使用 ScriptingBridge 获取播放历史"
+        ))
+        XCTAssertTrue(
+            upNextSection.contains("\(guardPattern)\n            var result"),
+            "Timed Up Next reads must classify an app-stop race as Music.app unavailable before sending Apple Events."
+        )
+
+        let recentSection = try XCTUnwrap(sourceSection(
+            from: "private func getRecentSnapshotFromApp",
+            to: "@discardableResult\n    private func applyUpNextSnapshotIfChanged"
+        ))
+        XCTAssertTrue(
+            recentSection.contains("\(guardPattern)\n            var recentList"),
+            "Timed recent-history reads must classify an app-stop race as Music.app unavailable before sending Apple Events."
+        )
+    }
+
     func testProductionQueueSyncDoesNotUsePrivateMusicStorageOrAppLocalQueues() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

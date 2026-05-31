@@ -181,10 +181,11 @@ automation connection cannot leave previously exact queue rows retained.
 The periodic queue-hash probe follows the same rule when its public Music.app
 queue proxy is unavailable or not running. It clears retained queue/history rows
 and resets the queue-hash baseline so a later recovered hash cannot be mistaken
-for an already-observed queue. The timed queue-hash read also rechecks
-Music.app availability immediately before sending Apple Events, so an app-stop
-race inside the worker is classified as Music.app-unavailable rather than an
-unresolved probe tick that would preserve stale rows.
+for an already-observed queue. Timed queue-hash, Up Next, and recent-history
+reads also recheck Music.app availability immediately before sending Apple
+Events, so an app-stop race inside the worker is classified as
+Music.app-unavailable rather than an unresolved or weaker unavailable snapshot
+that would preserve or mislabel stale rows.
 The hash probe also separates public-state loss from transient IPC failure. If
 Music.app responds but exposes no current track, no public current playlist, or
 no public playlist-track array, nanoPod clears retained queue/history rows to
