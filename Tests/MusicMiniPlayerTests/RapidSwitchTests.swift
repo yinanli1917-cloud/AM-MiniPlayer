@@ -1352,7 +1352,7 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
-    func testExperimentalNativeRendererIsOptInUntilUXGatesPass() {
+    func testNativeRendererIsDefaultAfterUXGatesPass() {
         let defaults = UserDefaults.standard
         let previous = defaults.string(forKey: LyricsRendererMode.userDefaultsKey)
         defer {
@@ -1366,8 +1366,8 @@ final class RapidSwitchTests: XCTestCase {
         defaults.removeObject(forKey: LyricsRendererMode.userDefaultsKey)
         XCTAssertEqual(
             LyricsRendererMode.current,
-            .swiftUI,
-            "The native renderer must remain opt-in until manual scroll, hover, tap-to-jump, blur, FPS, drift, and CPU gates pass."
+            .native,
+            "The native renderer is the default once manual scroll, hover, tap-to-jump, blur, FPS, drift, and CPU gates pass."
         )
 
         defaults.set("native", forKey: LyricsRendererMode.userDefaultsKey)
@@ -1389,7 +1389,7 @@ final class RapidSwitchTests: XCTestCase {
                 developerRawValue: "native",
                 isLocalDeveloperBuild: false
             ),
-            LyricsRendererMode.Resolution(mode: .swiftUI, rawValue: nil, source: "default")
+            LyricsRendererMode.Resolution(mode: .native, rawValue: nil, source: "default")
         )
         XCTAssertEqual(
             LyricsRendererMode.resolve(

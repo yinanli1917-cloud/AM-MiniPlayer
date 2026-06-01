@@ -372,10 +372,10 @@ python3 scripts/perf_harness.py \
 
 ## Native Renderer Rebuild Gate
 
-The Native macOS AMLL rebuild is not allowed to ship as the default renderer
-until it passes the same-machine `main` baseline on the protected UX and
-telemetry gates. A partial native shell is not enough. The known-good SwiftUI
-renderer remains the default until the native path passes all gates.
+The Native macOS AMLL rebuild may ship as the default renderer only after it
+passes the same-machine `main` baseline on the protected UX and telemetry gates.
+A partial native shell is not enough. After the 2026-05-31 native full gate,
+native is the default renderer and SwiftUI remains an explicit fallback mode.
 
 The renderer modes are controlled through:
 
@@ -431,7 +431,8 @@ regresses passive UX/performance. Do not cite it as completed work.
   tap-to-jump line identity, interlude/prelude dots, active/non-active
   blur/scale/opacity, word sweep, translation sweep, held-word glow/lift/float,
   CJK spacing, and compact long-line behavior before CPU numbers are accepted.
-- Native must be opt-in until all protected UX gates and CPU/FPS gates pass.
+- Native must not become or remain the default unless protected UX gates and
+  CPU/FPS gates pass; keep an explicit SwiftUI fallback for emergency rollback.
 
 ### Required Objective UX Gates
 

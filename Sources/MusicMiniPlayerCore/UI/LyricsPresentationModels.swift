@@ -57,7 +57,7 @@ enum LyricsRendererMode: String {
         if isLocalDeveloperBuild, let mode = parse(developerRawValue) {
             return Resolution(mode: mode, rawValue: developerRawValue, source: "developerContainerDefaults")
         }
-        return Resolution(mode: .swiftUI, rawValue: nil, source: "default")
+        return Resolution(mode: .native, rawValue: nil, source: "default")
     }
 
     static func parse(_ rawValue: String?) -> LyricsRendererMode? {
