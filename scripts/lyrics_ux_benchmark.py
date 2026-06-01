@@ -216,6 +216,59 @@ def fixture_expects_translation(fixture_name: str) -> bool:
     return bool(fixture.get("expect_translation", False))
 
 
+def collect_renderer_mode(
+    fixture_name: str,
+    *,
+    started_at: datetime,
+) -> dict[str, Any]:
+    fixture = visual.FIXTURES[fixture_name]
+    expected_title = str(fixture["title"])
+    events: list[dict[str, Any]] = []
+    native_count = 0
+    fallback_count = 0
+    latest_detail = ""
+
+    for event in load_diagnostics_events():
+        if event.get("name") != "lyrics.rendererMode":
+            continue
+        event_ts = parse_event_timestamp(event.get("timestamp"))
+        if event_ts is None or event_ts < started_at:
+            continue
+        track = event.get("track") or {}
+        if track.get("title") != expected_title:
+            continue
+        metrics = event.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            metrics = {}
+        events.append(event)
+        latest_detail = str(event.get("detail") or "")
+        try:
+            is_native = float(metrics.get("isNative", 0) or 0)
+        except (TypeError, ValueError):
+            is_native = 0
+        if is_native >= 0.5:
+            native_count += 1
+        else:
+            fallback_count += 1
+
+    failures: list[str] = []
+    if not events:
+        failures.append("no lyrics renderer mode event")
+    if native_count <= 0:
+        failures.append("lyrics renderer never reported native mode")
+    if fallback_count > 0:
+        failures.append(f"lyrics renderer reported non-native fallback mode {fallback_count} time(s)")
+
+    return {
+        "statePath": str(diagnostics_state_path()),
+        "eventCount": len(events),
+        "nativeCount": native_count,
+        "fallbackCount": fallback_count,
+        "latestDetail": latest_detail,
+        "failures": failures,
+    }
+
+
 def collect_native_text_parity(
     fixture_name: str,
     *,
@@ -946,6 +999,7 @@ def main() -> int:
         wave_steps: dict[str, Any] = {}
         text_parity_steps: dict[str, Any] = {}
         frame_cadence_steps: dict[str, Any] = {}
+        renderer_mode_steps: dict[str, Any] = {}
         cpu_gate_steps: dict[str, Any] = {}
         for fixture in fixtures:
             log(f"Running perf + motion gate for {fixture}…")
@@ -1012,6 +1066,10 @@ def main() -> int:
             frame_cadence_steps[fixture] = frame_cadence
             failures.extend([f"{fixture}: {failure}" for failure in frame_cadence["failures"]])
 
+            renderer_mode = collect_renderer_mode(fixture, started_at=started_at)
+            renderer_mode_steps[fixture] = renderer_mode
+            failures.extend([f"{fixture}: {failure}" for failure in renderer_mode["failures"]])
+
             cpu_gate = evaluate_cpu_gate(fixture, perf_result, args.min_cpu_reduction)
             cpu_gate_steps[fixture] = cpu_gate
             failures.extend([f"{fixture}: {failure}" for failure in cpu_gate["failures"]])
@@ -1026,6 +1084,7 @@ def main() -> int:
         summary["steps"]["wave"] = wave_steps
         summary["steps"]["textParity"] = text_parity_steps
         summary["steps"]["frameCadence"] = frame_cadence_steps
+        summary["steps"]["rendererMode"] = renderer_mode_steps
         summary["steps"]["cpuGate"] = cpu_gate_steps
     else:
         csv_path = diagnostics_motion_path()

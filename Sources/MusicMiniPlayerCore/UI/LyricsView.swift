@@ -453,6 +453,9 @@ public struct LyricsView: View {
         }
         .onChange(of: musicController.currentTrackTitle) {
             debugPrint("📝 [LyricsView] onChange(currentTrackTitle) - track: '\(musicController.currentTrackTitle)' by '\(musicController.currentArtist)'\n")
+            if currentPage == .lyrics {
+                recordLyricsRendererModeEvent(reason: "track")
+            }
             cancelWaveAnimations()
             wave.lineTargetIndices.removeAll()
             wave.lastCurrentIndex = -1

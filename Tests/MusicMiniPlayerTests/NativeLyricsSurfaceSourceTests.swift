@@ -75,5 +75,21 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertFalse(lyricsViewSource.contains("nativeLineMotionFrameCaptureSequence"))
         XCTAssertFalse(source.contains("lineMotionFrameCaptureSequence"))
         XCTAssertFalse(lyricsViewSource.contains("scroll.lastVelocity = absVelocity"))
+        XCTAssertTrue(lyricsViewSource.contains("recordLyricsRendererModeEvent(reason: \"track\")"))
+    }
+
+    func testLyricsUXBenchmarkRequiresNativeRendererModeEvidence() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let scriptURL = repoRoot.appendingPathComponent("scripts/lyrics_ux_benchmark.py")
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("def collect_renderer_mode("))
+        XCTAssertTrue(source.contains("\"lyrics.rendererMode\""))
+        XCTAssertTrue(source.contains("lyrics renderer never reported native mode"))
+        XCTAssertTrue(source.contains("renderer_mode_steps"))
+        XCTAssertTrue(source.contains("summary[\"steps\"][\"rendererMode\"]"))
     }
 }

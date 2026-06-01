@@ -1,6 +1,6 @@
 # Lyrics UX Benchmark (LUXB)
 
-Last updated: 2026-05-31
+Last updated: 2026-06-01
 
 ## Reference release (must be surpassed)
 
@@ -67,6 +67,9 @@ acceptance gates.
 capture. Candidate CPU/FPS numbers are invalid if any protected UX metric has a
 gap:
 
+- each fixture must record a `lyrics.rendererMode` event for the actual tested
+  track, with `isNative=1` and zero fallback-mode events, so a local default or
+  environment override cannot make a benchmark silently test SwiftUI fallback;
 - word sweep must report active syllable samples, zero phase error over 0.02,
   zero per-run sweep coverage gaps, and wavefront error no higher than 0.5pt;
 - translation sweep phase error must stay at or below 0.02 when translations
@@ -83,6 +86,46 @@ gap:
   FPS, p50/p95/p99/max frame delta, dropped frames over 1.5x and 2x refresh,
   longest frame stall, and tick jitter. CPU improvements are invalid if these
   metrics are achieved by reducing active lyric cadence.
+
+## Default Native Renderer Gate Snapshot
+
+The 2026-06-01 default-renderer gate must prove that the runtime lyrics page is
+actually native, not only that native telemetry happened to exist:
+
+```bash
+python3 scripts/lyrics_ux_benchmark.py \
+  --skip-build \
+  --skip-unit-tests \
+  --candidate nanoPod.app \
+  --fixtures line-winter-trip,line-breakup-truth,word-seek-fun,translated-word \
+  --label native-default-renderer-mode-gate-v2 \
+  --output-dir tmp/benchmark \
+  --perf-duration 24 \
+  --perf-warmup 8 \
+  --min-cpu-reduction 0.50
+```
+
+Passing summary:
+`tmp/benchmark/luxb-20260531-183340-native-default-renderer-mode-gate-v2/summary.json`
+
+Renderer mode evidence: all four fixtures reported one current-track
+`lyrics.rendererMode` event with `mode: native`, `source: userDefaults`, and
+zero fallback events.
+
+CPU reductions versus same-machine `origin/main` baseline:
+
+| Fixture | Avg CPU | Avg reduction | p95 CPU | p95 reduction | Max CPU | Max reduction |
+|---------|---------|---------------|---------|---------------|---------|---------------|
+| `line-winter-trip` | 12.316 | 75.4% | 21.46 | 72.6% | 22.9 | 75.6% |
+| `line-breakup-truth` | 8.124 | 80.9% | 15.32 | 80.9% | 25.8 | 77.6% |
+| `word-seek-fun` | 8.722 | 76.5% | 14.92 | 75.3% | 18.6 | 73.0% |
+| `translated-word` | 9.239 | 77.4% | 17.08 | 73.2% | 24.0 | 68.4% |
+
+Frame cadence stayed at the expected 120 FPS with p95/max frame delta
+`8.333ms` and zero dropped frames over 1.5x or 2x refresh interval. Settled
+target-Y p95 stayed at or below `0.251pt`, settled inter-line spacing p95 at or
+below `0.095pt`, and all motion/text/frame/CPU/renderer-mode failure lists were
+empty.
 
 ## Final Native Rebuild Gate Snapshot
 

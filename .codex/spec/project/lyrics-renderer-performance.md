@@ -433,11 +433,16 @@ regresses passive UX/performance. Do not cite it as completed work.
   CJK spacing, and compact long-line behavior before CPU numbers are accepted.
 - Native must not become or remain the default unless protected UX gates and
   CPU/FPS gates pass; keep an explicit SwiftUI fallback for emergency rollback.
+- LUXB must record a `lyrics.rendererMode` event for the actual fixture track
+  and fail if any fixture reports SwiftUI fallback or lacks native-mode
+  evidence. Native summary telemetry alone is not enough to prove the app is
+  running the default native renderer.
 
 ### Required Objective UX Gates
 
 Telemetry-only gates must cover:
 
+- renderer mode selected for the current track, including fallback detection;
 - manual scroll start/end, frozen display index, false ownership, and recovery;
 - row hover enter/exit and hover target identity;
 - tap-to-jump target line, whether the tap happened while manual-scroll owned
