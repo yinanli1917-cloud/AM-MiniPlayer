@@ -316,6 +316,7 @@ struct NativeLyricsVisualParitySample: Equatable {
     let expectedBlurRadius: CGFloat
     let appliedBlurRadius: CGFloat
     let isActive: Bool
+    var isSettled: Bool = true
 
     var opacityError: CGFloat { abs(expectedOpacity - appliedOpacity) }
     var scaleError: CGFloat { abs(expectedScale - appliedScale) }
@@ -435,6 +436,7 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private var visualScaleErrors: [CGFloat] = []
     private var visualBlurErrors: [CGFloat] = []
     private var activeBlurRadii: [CGFloat] = []
+    private var activeTransitionBlurRadii: [CGFloat] = []
     private var rowFrameYErrorMax: CGFloat = 0
     private var rowFrameHeightErrorMax: CGFloat = 0
     private var rowFrameScaleErrorMax: CGFloat = 0
@@ -563,7 +565,11 @@ struct NativeLyricsRenderTelemetryAccumulator {
         visualScaleErrors.append(sample.scaleError)
         visualBlurErrors.append(sample.blurError)
         if sample.isActive {
-            activeBlurRadii.append(sample.appliedBlurRadius)
+            if sample.isSettled {
+                activeBlurRadii.append(sample.appliedBlurRadius)
+            } else {
+                activeTransitionBlurRadii.append(sample.appliedBlurRadius)
+            }
         }
     }
 
@@ -731,6 +737,7 @@ struct NativeLyricsRenderTelemetryAccumulator {
             visualBlurErrorP95: percentile(visualBlurErrors.sorted(), 0.95),
             visualBlurErrorMax: visualBlurErrors.max() ?? 0,
             activeBlurRadiusMax: activeBlurRadii.max() ?? 0,
+            activeTransitionBlurRadiusMax: activeTransitionBlurRadii.max() ?? 0,
             rowFrameParitySampleCount: rowFrameParitySampleCount,
             rowFrameYErrorMax: rowFrameYErrorMax,
             rowFrameHeightErrorMax: rowFrameHeightErrorMax,
@@ -875,6 +882,7 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let visualBlurErrorP95: CGFloat
     let visualBlurErrorMax: CGFloat
     let activeBlurRadiusMax: CGFloat
+    let activeTransitionBlurRadiusMax: CGFloat
     let rowFrameParitySampleCount: Int
     let rowFrameYErrorMax: CGFloat
     let rowFrameHeightErrorMax: CGFloat
@@ -983,6 +991,7 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "visualBlurErrorP95": Double(visualBlurErrorP95),
             "visualBlurErrorMax": Double(visualBlurErrorMax),
             "activeBlurRadiusMax": Double(activeBlurRadiusMax),
+            "activeTransitionBlurRadiusMax": Double(activeTransitionBlurRadiusMax),
             "rowFrameParitySampleCount": Double(rowFrameParitySampleCount),
             "rowFrameYErrorMax": Double(rowFrameYErrorMax),
             "rowFrameHeightErrorMax": Double(rowFrameHeightErrorMax),

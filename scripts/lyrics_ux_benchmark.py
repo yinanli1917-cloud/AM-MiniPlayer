@@ -276,6 +276,7 @@ def collect_native_text_parity(
             "visualScaleErrorMax": 0.0,
             "visualBlurErrorMax": 0.0,
             "activeBlurRadiusMax": 0.0,
+            "activeTransitionBlurRadiusMax": 0.0,
             "rowFrameParitySampleCount": 0.0,
             "rowFrameYErrorMax": 0.0,
             "rowFrameHeightErrorMax": 0.0,

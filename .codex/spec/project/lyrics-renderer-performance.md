@@ -18,6 +18,11 @@ Native renderer blur parity must use the same distance law as the old
 `LyricLineView`: inactive row blur is `abs(displayIndex - currentIndex) * 1.5`.
 Do not cap the expected or applied native blur radius to make CPU numbers look
 better; that is a UX change and must fail the visual-state parity gate.
+Because the protected old line state uses spring animation, a row that has just
+become active may briefly carry transitional blur while it settles to zero.
+Telemetry must therefore gate `activeBlurRadiusMax` on settled active samples
+and report transitional active blur separately; otherwise the gate protects an
+instant visual jump instead of the old spring feel.
 
 Long lyric and translation text may be segmented for compact-window display, but
 the segmentation must remain display-only. Do not split or rewrite parser

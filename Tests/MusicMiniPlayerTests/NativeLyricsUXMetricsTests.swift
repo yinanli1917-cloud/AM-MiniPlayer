@@ -223,6 +223,62 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertFalse(visual.isActive)
     }
 
+    func testNativeVisualTargetRestoresManualScrollVisualLaw() {
+        let current = NativeLyricsVisualTarget.legacyTarget(
+            displayIndex: 5,
+            currentIndex: 5,
+            isManualScrolling: true
+        )
+        let nearby = NativeLyricsVisualTarget.legacyTarget(
+            displayIndex: 7,
+            currentIndex: 5,
+            isManualScrolling: true
+        )
+
+        XCTAssertEqual(current.opacity, 0.6)
+        XCTAssertEqual(current.scale, 0.95)
+        XCTAssertEqual(current.blur, 0)
+        XCTAssertTrue(current.isActive)
+        XCTAssertEqual(nearby.opacity, 0.6)
+        XCTAssertEqual(nearby.scale, 0.95)
+        XCTAssertEqual(nearby.blur, 0)
+        XCTAssertFalse(nearby.isActive)
+    }
+
+    func testNativeVisualTargetRestoresInterludeBlendLaw() {
+        let visual = NativeLyricsVisualTarget.legacyTarget(
+            displayIndex: 4,
+            currentIndex: 4,
+            isManualScrolling: false,
+            interludeBlend: 1
+        )
+
+        XCTAssertEqual(visual.opacity, 0.35, accuracy: 0.0001)
+        XCTAssertEqual(visual.scale, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(visual.blur, 1.5, accuracy: 0.0001)
+        XCTAssertTrue(visual.isActive)
+    }
+
+    func testNativeVisualMotionUsesSpringInsteadOfImmediateJump() {
+        var state = NativeLyricsVisualMotionState(target: NativeLyricsVisualTarget.legacyTarget(
+            displayIndex: 1,
+            currentIndex: 1,
+            isManualScrolling: false
+        ))
+        let next = NativeLyricsVisualTarget.legacyTarget(
+            displayIndex: 1,
+            currentIndex: 2,
+            isManualScrolling: false
+        )
+
+        XCTAssertTrue(state.setTarget(next))
+        XCTAssertTrue(state.advance(delta: 1.0 / 60.0))
+        XCTAssertGreaterThan(state.opacity, next.opacity)
+        XCTAssertLessThan(state.scale, 1)
+        XCTAssertLessThan(state.blur, next.blur)
+        XCTAssertFalse(state.isSettled)
+    }
+
     func testNativeRenderTelemetrySummarizesTextAndMotionSignals() {
         var accumulator = NativeLyricsRenderTelemetryAccumulator()
         accumulator.recordLifecycle(mounted: 3, unmounted: 1, mountedRows: 8, renderedRows: 12)
@@ -389,6 +445,7 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.visualScaleErrorMax, 0.001, accuracy: 0.0001)
         XCTAssertEqual(summary.visualBlurErrorMax, 0)
         XCTAssertEqual(summary.activeBlurRadiusMax, 0)
+        XCTAssertEqual(summary.activeTransitionBlurRadiusMax, 0)
         XCTAssertEqual(summary.rowFrameParitySampleCount, 1)
         XCTAssertEqual(summary.rowFrameYErrorMax, 0.1, accuracy: 0.0001)
         XCTAssertEqual(summary.rowFrameHeightErrorMax, 0.2, accuracy: 0.0001)
@@ -443,10 +500,42 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.metrics["translationSweepLineSampleCount"], 2)
         XCTAssertEqual(summary.metrics["lineLayoutSampleCount"], 1)
         XCTAssertEqual(summary.metrics["visualParitySampleCount"], 2)
+        XCTAssertEqual(summary.metrics["activeTransitionBlurRadiusMax"], 0)
         XCTAssertEqual(summary.metrics["rowFrameParitySampleCount"], 1)
         XCTAssertEqual(summary.metrics["tapToLineCount"], 1)
         XCTAssertEqual(summary.metrics["tapToLineDuringManualScrollCount"], 1)
         XCTAssertEqual(summary.metrics["tapToLineLatencySampleCount"], 1)
         XCTAssertEqual(summary.metrics["dotPhaseSampleCount"], 1)
+    }
+
+    func testActiveBlurGateUsesSettledSamplesAndStillReportsTransitionBlur() {
+        var accumulator = NativeLyricsRenderTelemetryAccumulator()
+
+        accumulator.recordVisualParity(NativeLyricsVisualParitySample(
+            expectedOpacity: 0.8,
+            appliedOpacity: 0.8,
+            expectedScale: 0.98,
+            appliedScale: 0.98,
+            expectedBlurRadius: 1.5,
+            appliedBlurRadius: 1.5,
+            isActive: true,
+            isSettled: false
+        ))
+        accumulator.recordVisualParity(NativeLyricsVisualParitySample(
+            expectedOpacity: 1,
+            appliedOpacity: 1,
+            expectedScale: 1,
+            appliedScale: 1,
+            expectedBlurRadius: 0,
+            appliedBlurRadius: 0,
+            isActive: true,
+            isSettled: true
+        ))
+
+        let summary = accumulator.summary()
+
+        XCTAssertEqual(summary.activeBlurRadiusMax, 0)
+        XCTAssertEqual(summary.activeTransitionBlurRadiusMax, 1.5)
+        XCTAssertEqual(summary.metrics["activeTransitionBlurRadiusMax"], 1.5)
     }
 }

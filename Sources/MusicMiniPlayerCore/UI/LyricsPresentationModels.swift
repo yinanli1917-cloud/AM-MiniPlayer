@@ -158,6 +158,143 @@ struct LyricsPresentationRowState: Equatable {
     let isCurrent: Bool
 }
 
+struct NativeLyricsVisualTarget: Equatable {
+    let opacity: CGFloat
+    let scale: CGFloat
+    let blur: CGFloat
+    let isActive: Bool
+
+    static func legacyTarget(
+        displayIndex: Int,
+        currentIndex: Int,
+        isManualScrolling: Bool,
+        interludeBlend: CGFloat = 0
+    ) -> NativeLyricsVisualTarget {
+        let isActive = displayIndex == currentIndex
+        if isManualScrolling {
+            return NativeLyricsVisualTarget(
+                opacity: 0.6,
+                scale: 0.95,
+                blur: 0,
+                isActive: isActive
+            )
+        }
+        if isActive {
+            let blend = min(1, max(0, interludeBlend))
+            return NativeLyricsVisualTarget(
+                opacity: 1.0 - blend * 0.65,
+                scale: 1.0 - blend * 0.05,
+                blur: blend * 1.5,
+                isActive: true
+            )
+        }
+        return NativeLyricsVisualTarget(
+            opacity: 0.35,
+            scale: 0.95,
+            blur: CGFloat(abs(displayIndex - currentIndex)) * 1.5,
+            isActive: false
+        )
+    }
+}
+
+struct NativeLyricsVisualMotionState: Equatable {
+    private(set) var opacity: CGFloat
+    private(set) var scale: CGFloat
+    private(set) var blur: CGFloat
+    private(set) var target: NativeLyricsVisualTarget
+    private var opacityVelocity: CGFloat = 0
+    private var scaleVelocity: CGFloat = 0
+    private var blurVelocity: CGFloat = 0
+
+    private static let mass: CGFloat = 1
+    private static let stiffness: CGFloat = 100
+    private static let damping: CGFloat = 20
+    private static let maxStep: TimeInterval = 1.0 / 90.0
+    private static let maxDelta: TimeInterval = 1.0 / 20.0
+
+    init(target: NativeLyricsVisualTarget) {
+        opacity = target.opacity
+        scale = target.scale
+        blur = target.blur
+        self.target = target
+    }
+
+    var isSettled: Bool {
+        abs(opacity - target.opacity) < 0.002
+            && abs(scale - target.scale) < 0.001
+            && abs(blur - target.blur) < 0.03
+            && abs(opacityVelocity) < 0.002
+            && abs(scaleVelocity) < 0.001
+            && abs(blurVelocity) < 0.03
+    }
+
+    mutating func setTarget(_ nextTarget: NativeLyricsVisualTarget) -> Bool {
+        guard target != nextTarget else { return false }
+        target = nextTarget
+        return true
+    }
+
+    mutating func snap(to nextTarget: NativeLyricsVisualTarget) {
+        target = nextTarget
+        opacity = nextTarget.opacity
+        scale = nextTarget.scale
+        blur = nextTarget.blur
+        opacityVelocity = 0
+        scaleVelocity = 0
+        blurVelocity = 0
+    }
+
+    @discardableResult
+    mutating func advance(delta: TimeInterval) -> Bool {
+        let before = self
+        let boundedDelta = min(max(delta, 0), Self.maxDelta)
+        guard boundedDelta > 0 else { return false }
+        var remaining = boundedDelta
+        while remaining > 0 {
+            let step = CGFloat(min(remaining, Self.maxStep))
+            opacity = Self.advanceScalar(
+                value: opacity,
+                target: target.opacity,
+                velocity: &opacityVelocity,
+                step: step
+            )
+            scale = Self.advanceScalar(
+                value: scale,
+                target: target.scale,
+                velocity: &scaleVelocity,
+                step: step
+            )
+            blur = Self.advanceScalar(
+                value: blur,
+                target: target.blur,
+                velocity: &blurVelocity,
+                step: step
+            )
+            remaining -= TimeInterval(step)
+        }
+        if isSettled {
+            snap(to: target)
+        }
+        opacity = min(1, max(0, opacity))
+        scale = min(1.05, max(0.9, scale))
+        blur = max(0, blur)
+        return before != self
+    }
+
+    private static func advanceScalar(
+        value: CGFloat,
+        target: CGFloat,
+        velocity: inout CGFloat,
+        step: CGFloat
+    ) -> CGFloat {
+        let displacement = value - target
+        let force = (-stiffness * displacement) - (damping * velocity)
+        let acceleration = force / mass
+        velocity += acceleration * step
+        return value + velocity * step
+    }
+}
+
 struct LyricsPresentationWavePlan {
     let targetRadius: Int
     let indices: [Int]
