@@ -794,6 +794,7 @@ final class NativeLyricsSurfaceView: NSView {
             manualIndices.insert(configuration.effectiveCurrentIndex)
             manualIndices.insert(configuration.effectiveScrollTargetIndex)
             manualIndices.formUnion(configuration.nativeBufferedActiveIndices)
+            manualIndices.formUnion(geometryVisibleRowIndices(for: configuration))
             return configuration.rows.filter { manualIndices.contains($0.index) }
         }
         let visibleIndices = Set(NativeLyricsVisibleRowSelector.visibleIndices(
@@ -803,8 +804,26 @@ final class NativeLyricsSurfaceView: NSView {
                 .union(configuration.nativeBufferedActiveIndices)
                 .union([configuration.effectiveCurrentIndex]),
             radius: nativeLyricAutoVisibleRowRadius
-        ))
+        )).union(geometryVisibleRowIndices(for: configuration))
         return configuration.rows.filter { visibleIndices.contains($0.index) }
+    }
+
+    private func geometryVisibleRowIndices(
+        for configuration: LyricsLayerRendererConfiguration
+    ) -> Set<Int> {
+        let viewportPadding: CGFloat = 120
+        let viewport = CGRect(
+            x: 0,
+            y: -viewportPadding,
+            width: max(1, bounds.width),
+            height: max(1, bounds.height) + viewportPadding * 2
+        )
+        return Set(configuration.rows.compactMap { row in
+            let minY = modelY(for: row, configuration: configuration)
+            let height = max(1, measuredHeightsByIndex[row.index] ?? 46)
+            let frame = CGRect(x: 0, y: minY, width: configuration.rowWidth, height: height)
+            return frame.intersects(viewport) ? row.index : nil
+        })
     }
 
     private func manualViewportIndex(for configuration: LyricsLayerRendererConfiguration) -> Int? {

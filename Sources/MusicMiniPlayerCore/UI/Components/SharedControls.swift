@@ -390,6 +390,7 @@ private final class NativePlaybackProgressView: NSView {
     private var currentTime: Double = 0
     private var cancellable: AnyCancellable?
     private var trackingArea: NSTrackingArea?
+    private var isDraggingProgress = false
     private var lastLabelCurrentSecond: Int?
     private var lastLabelRemainingSecond: Int?
     private var lastLaidOutBounds: CGRect = .null
@@ -435,6 +436,17 @@ private final class NativePlaybackProgressView: NSView {
     override func layout() {
         super.layout()
         updateDisplay()
+        syncHoverStateToPointer()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            isDraggingProgress = false
+            setProgressHovering(false)
+        } else {
+            syncHoverStateToPointer()
+        }
     }
 
     override func updateTrackingAreas() {
@@ -443,38 +455,52 @@ private final class NativePlaybackProgressView: NSView {
             removeTrackingArea(trackingArea)
         }
         let area = NSTrackingArea(
-            rect: progressRect(),
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            rect: progressInteractiveRect(),
+            options: [.mouseEnteredAndExited, .activeAlways],
             owner: self,
             userInfo: nil
         )
         trackingArea = area
         addTrackingArea(area)
+        syncHoverStateToPointer()
     }
 
     override func mouseEntered(with event: NSEvent) {
-        isProgressHovering = true
-        onHoverChanged?(true)
+        setProgressHovering(true)
     }
 
     override func mouseExited(with event: NSEvent) {
-        isProgressHovering = false
-        onHoverChanged?(false)
+        guard !isDraggingProgress else { return }
+        setProgressHovering(false)
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard progressInteractiveRect().contains(point) else {
+            super.mouseDown(with: event)
+            return
+        }
+        isDraggingProgress = true
+        setProgressHovering(true)
         updateDrag(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard isDraggingProgress else { return }
         updateDrag(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard isDraggingProgress else {
+            super.mouseUp(with: event)
+            return
+        }
+        isDraggingProgress = false
         let progress = progressValue(for: event.locationInWindow)
         onSeek?(Double(progress) * duration)
         onDragChanged?(nil)
         externalDragPosition = nil
+        syncHoverStateToPointer()
     }
 
     private func setupLayers() {
@@ -551,6 +577,25 @@ private final class NativePlaybackProgressView: NSView {
             width: max(0, bounds.width - horizontalInset * 2),
             height: progressSlotHeight
         )
+    }
+
+    private func progressInteractiveRect() -> CGRect {
+        progressRect()
+    }
+
+    private func syncHoverStateToPointer() {
+        guard let window else {
+            setProgressHovering(false)
+            return
+        }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        setProgressHovering(progressInteractiveRect().contains(point))
+    }
+
+    private func setProgressHovering(_ hovering: Bool) {
+        guard isProgressHovering != hovering else { return }
+        isProgressHovering = hovering
+        onHoverChanged?(hovering)
     }
 
     private func updateDisplay() {

@@ -30,6 +30,22 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("if updatedViewportIndex != previousViewportIndex {"))
         XCTAssertTrue(source.contains("manualScrollState.begin(frozenDisplayIndex: configuration.effectiveScrollTargetIndex)"))
         XCTAssertTrue(source.contains("reconcileVisibleRowViews(\n            runtimeConfiguration: runtimeConfiguration,\n            snapPositions: true"))
+        XCTAssertTrue(source.contains("manualIndices.formUnion(geometryVisibleRowIndices(for: configuration))"))
+    }
+
+    func testNativeSurfaceKeepsGeometryVisibleRowsMounted() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
+        let source = try String(contentsOf: surfaceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private func geometryVisibleRowIndices("))
+        XCTAssertTrue(source.contains("let viewportPadding: CGFloat = 120"))
+        XCTAssertTrue(source.contains("let frame = CGRect(x: 0, y: minY, width: configuration.rowWidth, height: height)"))
+        XCTAssertTrue(source.contains("return frame.intersects(viewport) ? row.index : nil"))
+        XCTAssertTrue(source.contains(")).union(geometryVisibleRowIndices(for: configuration))"))
     }
 
     func testSplitDisplayLinesDoNotDuplicateFallbackTranslationAcrossSegments() throws {
