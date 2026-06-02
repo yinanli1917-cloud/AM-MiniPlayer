@@ -784,9 +784,6 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private func visibleRows(for configuration: LyricsLayerRendererConfiguration) -> [LayerBackedLyricRow] {
-        if configuration.effectiveIsManualScrolling {
-            return configuration.rows
-        }
         if let manualViewportIndex = manualViewportIndex(for: configuration) {
             var manualIndices = Set(NativeLyricsVisibleRowSelector.visibleIndices(
                 allIndices: configuration.renderedIndices,
@@ -1632,6 +1629,7 @@ final class NativeLyricsSurfaceView: NSView {
             return true
         }
 
+        let previousViewportIndex = manualViewportIndex(for: runtimeConfiguration)
         beginNativeManualScrollIfNeeded(configuration: runtimeConfiguration)
         let now = CACurrentMediaTime()
         let velocity: CGFloat
@@ -1650,8 +1648,17 @@ final class NativeLyricsSurfaceView: NSView {
             velocity: velocity,
             bounds: manualScrollBounds(for: runtimeConfiguration)
         )
+        let updatedRuntimeConfiguration = self.runtimeConfiguration(from: configuration)
+        let updatedViewportIndex = manualViewportIndex(for: updatedRuntimeConfiguration)
+        if updatedViewportIndex != previousViewportIndex {
+            _ = reconcileVisibleRowViews(
+                runtimeConfiguration: updatedRuntimeConfiguration,
+                snapPositions: true,
+                snapVisuals: false
+            )
+        }
         if isInsideSurface {
-            updateNativeHover(from: point, configuration: runtimeConfiguration)
+            updateNativeHover(from: point, configuration: updatedRuntimeConfiguration)
         } else {
             clearNativeHover()
         }

@@ -367,6 +367,7 @@ private final class NativePlaybackProgressView: NSView {
             if prefersReducedMotion {
                 trackLayer.removeAllAnimations()
                 fillLayer.removeAllAnimations()
+                fillMaskLayer.removeAllAnimations()
             }
         }
     }
@@ -381,6 +382,7 @@ private final class NativePlaybackProgressView: NSView {
     private let labelHeight: CGFloat = 13
     private let trackLayer = CALayer()
     private let fillLayer = CALayer()
+    private let fillMaskLayer = CALayer()
     private let currentLabelLayer = CATextLayer()
     private let remainingLabelLayer = CATextLayer()
     private let qualityBadgeLayer = CALayer()
@@ -478,6 +480,8 @@ private final class NativePlaybackProgressView: NSView {
     private func setupLayers() {
         trackLayer.backgroundColor = NSColor.white.withAlphaComponent(0.22).cgColor
         fillLayer.backgroundColor = NSColor.white.withAlphaComponent(1.0).cgColor
+        fillLayer.mask = fillMaskLayer
+        fillMaskLayer.backgroundColor = NSColor.black.cgColor
         let disabledActions: [String: CAAction] = [
             "bounds": NSNull(),
             "position": NSNull(),
@@ -491,6 +495,7 @@ private final class NativePlaybackProgressView: NSView {
         for progressLayer in [trackLayer, fillLayer, qualityBadgeLayer] {
             progressLayer.actions = disabledActions
         }
+        fillMaskLayer.actions = disabledActions
         for textLayer in [currentLabelLayer, remainingLabelLayer, qualityBadgeTextLayer] {
             textLayer.actions = disabledActions
             textLayer.isWrapped = false
@@ -596,9 +601,9 @@ private final class NativePlaybackProgressView: NSView {
             width: signature.rect.width,
             height: signature.barHeight
         )
-        let fillFrame = CGRect(
-            x: signature.rect.minX,
-            y: signature.barY,
+        let fillMaskFrame = CGRect(
+            x: 0,
+            y: 0,
             width: signature.rect.width * signature.progress,
             height: signature.barHeight
         )
@@ -628,8 +633,13 @@ private final class NativePlaybackProgressView: NSView {
         )
         applyProgressFrame(
             fillLayer,
-            frame: fillFrame,
+            frame: trackFrame,
             cornerRadius: signature.barHeight / 2,
+            animationDuration: hoverTransitionDuration,
+            timingFunctionName: .easeInEaseOut
+        )
+        applyProgressMask(
+            frame: fillMaskFrame,
             animationDuration: hoverTransitionDuration ?? progressTransitionDuration,
             timingFunctionName: hoverTransitionDuration == nil ? .linear : .easeInEaseOut
         )
@@ -679,6 +689,40 @@ private final class NativePlaybackProgressView: NSView {
             animation.duration = animationDuration
             animation.timingFunction = CAMediaTimingFunction(name: timingFunctionName)
             layer.add(animation, forKey: "cornerRadius")
+        }
+    }
+
+    private func applyProgressMask(
+        frame: CGRect,
+        animationDuration: CFTimeInterval?,
+        timingFunctionName: CAMediaTimingFunctionName
+    ) {
+        let fromBounds = fillMaskLayer.presentation()?.bounds ?? fillMaskLayer.bounds
+        let fromPosition = fillMaskLayer.presentation()?.position ?? fillMaskLayer.position
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillMaskLayer.frame = frame
+        CATransaction.commit()
+
+        guard let animationDuration, animationDuration > 0 else { return }
+
+        if fromBounds != fillMaskLayer.bounds {
+            let animation = CABasicAnimation(keyPath: "bounds")
+            animation.fromValue = fromBounds
+            animation.toValue = fillMaskLayer.bounds
+            animation.duration = animationDuration
+            animation.timingFunction = CAMediaTimingFunction(name: timingFunctionName)
+            fillMaskLayer.add(animation, forKey: "bounds")
+        }
+
+        if fromPosition != fillMaskLayer.position {
+            let animation = CABasicAnimation(keyPath: "position")
+            animation.fromValue = fromPosition
+            animation.toValue = fillMaskLayer.position
+            animation.duration = animationDuration
+            animation.timingFunction = CAMediaTimingFunction(name: timingFunctionName)
+            fillMaskLayer.add(animation, forKey: "position")
         }
     }
 

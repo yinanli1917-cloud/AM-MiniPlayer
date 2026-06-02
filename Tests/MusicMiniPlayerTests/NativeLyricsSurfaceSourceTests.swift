@@ -16,7 +16,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("guard !isPointInReservedOverlayZone(point, configuration: runtimeConfiguration) else"))
     }
 
-    func testNativeSurfaceMountsAllRowsDuringManualScroll() throws {
+    func testNativeSurfaceReconcilesViewportRowsDuringManualScroll() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -24,7 +24,10 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
         let source = try String(contentsOf: surfaceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("if configuration.effectiveIsManualScrolling {\n            return configuration.rows\n        }"))
+        XCTAssertFalse(source.contains("if configuration.effectiveIsManualScrolling {\n            return configuration.rows\n        }"))
+        XCTAssertTrue(source.contains("let previousViewportIndex = manualViewportIndex(for: runtimeConfiguration)"))
+        XCTAssertTrue(source.contains("let updatedViewportIndex = manualViewportIndex(for: updatedRuntimeConfiguration)"))
+        XCTAssertTrue(source.contains("if updatedViewportIndex != previousViewportIndex {"))
         XCTAssertTrue(source.contains("manualScrollState.begin(frozenDisplayIndex: configuration.effectiveScrollTargetIndex)"))
         XCTAssertTrue(source.contains("reconcileVisibleRowViews(\n            runtimeConfiguration: runtimeConfiguration,\n            snapPositions: true"))
     }
