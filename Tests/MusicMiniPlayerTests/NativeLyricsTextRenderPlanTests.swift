@@ -216,6 +216,37 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertTrue(masks.allSatisfy { $0.maskRect.width > 0 && $0.maskRect.height > 0 })
     }
 
+    func testNativeSweepLayoutSplitsWrappedSingleTokenAcrossVisualLines() {
+        let line = LyricLine(
+            text: "supercalifragilisticexpialidocious",
+            startTime: 0,
+            endTime: 4,
+            words: [
+                LyricWord(word: "supercalifragilisticexpialidocious", startTime: 0, endTime: 4)
+            ]
+        )
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
+            line: line,
+            currentTime: 1.5,
+            isActive: true
+        ))
+
+        let linePlan = NativeLyricsTextSweepLayout.makePlan(
+            displayText: plan.displayText,
+            wordRuns: plan.wordRuns,
+            width: 76,
+            fontSize: plan.constants.mainFontSize,
+            fadeHalfPoint: plan.constants.fadeHalfPoint
+        )
+
+        XCTAssertGreaterThanOrEqual(linePlan.count, 2)
+        XCTAssertTrue(linePlan.allSatisfy { $0.runs.count == 1 })
+        XCTAssertEqual(
+            linePlan.flatMap(\.runs).reduce(0) { $0 + $1.glyphs.count },
+            plan.displayText.count
+        )
+    }
+
     func testNativeSweepLayoutMapsEmphasisRunsToGlyphRects() {
         let line = LyricLine(
             text: "shine",

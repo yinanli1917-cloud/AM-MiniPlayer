@@ -1991,7 +1991,7 @@ public struct LyricsView: View {
                     words: [],
                     translation: translationSegments.indices.contains(segmentIndex)
                         ? translationSegments[segmentIndex]
-                        : line.translation
+                        : nil
                 )
                 result.append(DisplayLyricLine(
                     id: "\(line.id.uuidString)-\(segmentIndex)",

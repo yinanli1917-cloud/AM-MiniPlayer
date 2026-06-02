@@ -29,6 +29,26 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("reconcileVisibleRowViews(\n            runtimeConfiguration: runtimeConfiguration,\n            snapPositions: true"))
     }
 
+    func testSplitDisplayLinesDoNotDuplicateFallbackTranslationAcrossSegments() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let lyricsViewURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let source = try String(contentsOf: lyricsViewURL, encoding: .utf8)
+        guard let functionStart = source.range(of: "private func makeDisplayLyricLines")?.lowerBound,
+              let functionEnd = source.range(of: "private func shouldKeepDisplayLineUnsplit")?.lowerBound else {
+            XCTFail("Could not locate makeDisplayLyricLines in LyricsView.swift")
+            return
+        }
+        let body = String(source[functionStart..<functionEnd])
+
+        XCTAssertTrue(
+            body.contains("translation: translationSegments.indices.contains(segmentIndex)\n                        ? translationSegments[segmentIndex]\n                        : nil"),
+            "Split display rows must leave unmatched translation segments empty instead of repeating the full translation on later rows."
+        )
+    }
+
     func testNativeSurfaceDoesNotHostSwiftUIRowViews() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

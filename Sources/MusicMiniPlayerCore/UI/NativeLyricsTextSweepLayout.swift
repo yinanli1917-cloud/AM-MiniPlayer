@@ -43,6 +43,11 @@ private struct NativeLyricsTextLineFragment {
     let glyphRange: NSRange
 }
 
+private struct NativeLyricsTokenGlyphPlan {
+    let glyph: NativeLyricsTextSweepVisualRun.Glyph
+    let glyphRange: NSRange
+}
+
 enum NativeLyricsTextSweepLayout {
     static func make(
         displayText: String,
@@ -114,15 +119,44 @@ enum NativeLyricsTextSweepLayout {
             guard tokenGlyphRange.location != NSNotFound, tokenGlyphRange.length > 0 else { continue }
             let tokenRect = layoutManager.boundingRect(forGlyphRange: tokenGlyphRange, in: textContainer)
             guard tokenRect.width > 0, tokenRect.height > 0 else { continue }
-            let glyphs = glyphPlans(
+            let glyphPlans = glyphPlans(
                 for: run.text,
                 characterRange: characterRange,
                 layoutManager: layoutManager,
                 textContainer: textContainer
             )
-            let lineIndex = fragments.firstIndex { fragment in
-                NSIntersectionRange(fragment.glyphRange, tokenGlyphRange).length > 0
-            } ?? nearestFragmentIndex(to: tokenRect, in: fragments)
+            var matchedFragment = false
+            for (lineIndex, fragment) in fragments.enumerated() {
+                let fragmentGlyphRange = NSIntersectionRange(fragment.glyphRange, tokenGlyphRange)
+                guard fragmentGlyphRange.length > 0 else { continue }
+                let fragmentGlyphs = glyphPlans
+                    .filter { NSIntersectionRange($0.glyphRange, fragmentGlyphRange).length > 0 }
+                    .map(\.glyph)
+                let fragmentRect = glyphBoundingRect(
+                    for: fragmentGlyphRange,
+                    fallback: tokenRect,
+                    glyphs: fragmentGlyphs,
+                    layoutManager: layoutManager,
+                    textContainer: textContainer
+                )
+                guard fragmentRect.width > 0, fragmentRect.height > 0 else { continue }
+                matchedFragment = true
+                visualRunsByLine[lineIndex, default: []].append(NativeLyricsTextSweepVisualRun(
+                    order: order,
+                    startTime: run.startTime,
+                    endTime: run.endTime,
+                    text: run.text,
+                    isEmphasis: run.isEmphasis || run.emphasis != .inactive,
+                    rect: fragmentRect,
+                    glyphs: fragmentGlyphs
+                ))
+            }
+
+            if matchedFragment {
+                continue
+            }
+
+            let lineIndex = nearestFragmentIndex(to: tokenRect, in: fragments)
             visualRunsByLine[lineIndex, default: []].append(NativeLyricsTextSweepVisualRun(
                 order: order,
                 startTime: run.startTime,
@@ -130,13 +164,18 @@ enum NativeLyricsTextSweepLayout {
                 text: run.text,
                 isEmphasis: run.isEmphasis || run.emphasis != .inactive,
                 rect: tokenRect,
-                glyphs: glyphs
+                glyphs: glyphPlans.map(\.glyph)
             ))
         }
 
         return visualRunsByLine.keys.sorted().compactMap { lineIndex in
             guard var visualRuns = visualRunsByLine[lineIndex], !visualRuns.isEmpty else { return nil }
-            visualRuns.sort { $0.order < $1.order }
+            visualRuns.sort {
+                if $0.order == $1.order {
+                    return $0.rect.minX < $1.rect.minX
+                }
+                return $0.order < $1.order
+            }
 
             var maskRect = fragments[lineIndex].rect
             for visualRun in visualRuns {
@@ -203,18 +242,41 @@ enum NativeLyricsTextSweepLayout {
         } ?? 0
     }
 
+    private static func glyphBoundingRect(
+        for glyphRange: NSRange,
+        fallback: CGRect,
+        glyphs: [NativeLyricsTextSweepVisualRun.Glyph],
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> CGRect {
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        if rect.width > 0, rect.height > 0 {
+            return rect
+        }
+        if let first = glyphs.first {
+            rect = first.rect
+            for glyph in glyphs.dropFirst() {
+                rect = rect.union(glyph.rect)
+            }
+            return rect
+        }
+        return fallback
+    }
+
     private static func glyphPlans(
         for token: String,
         characterRange: NSRange,
         layoutManager: NSLayoutManager,
         textContainer: NSTextContainer
-    ) -> [NativeLyricsTextSweepVisualRun.Glyph] {
+    ) -> [NativeLyricsTokenGlyphPlan] {
         let nsToken = token as NSString
         guard nsToken.length > 0 else { return [] }
-        var glyphs: [NativeLyricsTextSweepVisualRun.Glyph] = []
+        var glyphs: [NativeLyricsTokenGlyphPlan] = []
         glyphs.reserveCapacity(nsToken.length)
 
         for tokenOffset in 0..<nsToken.length {
+            let tokenCharacter = nsToken.substring(with: NSRange(location: tokenOffset, length: 1))
+            guard !tokenCharacter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             let location = characterRange.location + tokenOffset
             guard location < characterRange.location + characterRange.length else { continue }
             let charRange = NSRange(location: location, length: 1)
@@ -225,10 +287,13 @@ enum NativeLyricsTextSweepLayout {
             guard glyphRange.location != NSNotFound, glyphRange.length > 0 else { continue }
             let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
             guard rect.width > 0, rect.height > 0 else { continue }
-            glyphs.append(NativeLyricsTextSweepVisualRun.Glyph(
-                index: glyphs.count,
-                text: nsToken.substring(with: NSRange(location: tokenOffset, length: 1)),
-                rect: rect
+            glyphs.append(NativeLyricsTokenGlyphPlan(
+                glyph: NativeLyricsTextSweepVisualRun.Glyph(
+                    index: glyphs.count,
+                    text: tokenCharacter,
+                    rect: rect
+                ),
+                glyphRange: glyphRange
             ))
         }
         return glyphs
