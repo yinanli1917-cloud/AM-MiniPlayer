@@ -317,6 +317,7 @@ private struct NativePlaybackProgressSection: NSViewRepresentable {
     func makeNSView(context: Context) -> NativePlaybackProgressView {
         let view = NativePlaybackProgressView()
         view.bind(to: timePublisher)
+        view.prefersReducedMotion = reduceMotion
         view.onHoverChanged = { isHovering in
             if reduceMotion {
                 isProgressBarHovering = isHovering
@@ -334,6 +335,7 @@ private struct NativePlaybackProgressSection: NSViewRepresentable {
     func updateNSView(_ nsView: NativePlaybackProgressView, context: Context) {
         nsView.duration = duration
         nsView.audioQuality = audioQuality
+        nsView.prefersReducedMotion = reduceMotion
         nsView.externalDragPosition = dragPosition
         nsView.isProgressHovering = isProgressBarHovering
         nsView.needsLayout = true
@@ -357,6 +359,16 @@ private final class NativePlaybackProgressView: NSView {
 
     var externalDragPosition: CGFloat? {
         didSet { updateDisplay() }
+    }
+
+    var prefersReducedMotion = false {
+        didSet {
+            guard prefersReducedMotion != oldValue else { return }
+            if prefersReducedMotion {
+                trackLayer.removeAllAnimations()
+                fillLayer.removeAllAnimations()
+            }
+        }
     }
 
     var isProgressHovering = false {
@@ -548,10 +560,7 @@ private final class NativePlaybackProgressView: NSView {
             barY: barY
         )
         if progressSignature != lastProgressSignature {
-            trackLayer.frame = CGRect(x: rect.minX, y: barY, width: rect.width, height: barHeight)
-            trackLayer.cornerRadius = barHeight / 2
-            fillLayer.frame = CGRect(x: rect.minX, y: barY, width: rect.width * progress, height: barHeight)
-            fillLayer.cornerRadius = barHeight / 2
+            updateProgressLayers(progressSignature, previous: lastProgressSignature)
             lastProgressSignature = progressSignature
         }
 
@@ -574,6 +583,102 @@ private final class NativePlaybackProgressView: NSView {
             remainingLabelLayer.frame = CGRect(x: bounds.width - horizontalInset - 70, y: labelY, width: 70, height: labelHeight)
             updateQualityBadgeFrame()
             lastLaidOutBounds = bounds
+        }
+    }
+
+    private func updateProgressLayers(
+        _ signature: ProgressSignature,
+        previous: ProgressSignature?
+    ) {
+        let trackFrame = CGRect(
+            x: signature.rect.minX,
+            y: signature.barY,
+            width: signature.rect.width,
+            height: signature.barHeight
+        )
+        let fillFrame = CGRect(
+            x: signature.rect.minX,
+            y: signature.barY,
+            width: signature.rect.width * signature.progress,
+            height: signature.barHeight
+        )
+        let hoverTransitionDuration: CFTimeInterval? = {
+            guard let previous else { return nil }
+            guard !prefersReducedMotion else { return nil }
+            let hoverChanged = abs(previous.barHeight - signature.barHeight) > 0.001
+                || abs(previous.barY - signature.barY) > 0.001
+            return hoverChanged ? 0.25 : nil
+        }()
+        let progressTransitionDuration: CFTimeInterval? = {
+            guard let previous else { return nil }
+            guard !prefersReducedMotion else { return nil }
+            guard externalDragPosition == nil else { return nil }
+            guard hoverTransitionDuration == nil else { return nil }
+            let delta = abs(previous.progress - signature.progress)
+            guard delta > 0.001, delta < 0.12 else { return nil }
+            return 0.12
+        }()
+
+        applyProgressFrame(
+            trackLayer,
+            frame: trackFrame,
+            cornerRadius: signature.barHeight / 2,
+            animationDuration: hoverTransitionDuration,
+            timingFunctionName: .easeInEaseOut
+        )
+        applyProgressFrame(
+            fillLayer,
+            frame: fillFrame,
+            cornerRadius: signature.barHeight / 2,
+            animationDuration: hoverTransitionDuration ?? progressTransitionDuration,
+            timingFunctionName: hoverTransitionDuration == nil ? .linear : .easeInEaseOut
+        )
+    }
+
+    private func applyProgressFrame(
+        _ layer: CALayer,
+        frame: CGRect,
+        cornerRadius: CGFloat,
+        animationDuration: CFTimeInterval?,
+        timingFunctionName: CAMediaTimingFunctionName
+    ) {
+        let fromBounds = layer.presentation()?.bounds ?? layer.bounds
+        let fromPosition = layer.presentation()?.position ?? layer.position
+        let fromCornerRadius = layer.presentation()?.cornerRadius ?? layer.cornerRadius
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = frame
+        layer.cornerRadius = cornerRadius
+        CATransaction.commit()
+
+        guard let animationDuration, animationDuration > 0 else { return }
+
+        if fromBounds != layer.bounds {
+            let animation = CABasicAnimation(keyPath: "bounds")
+            animation.fromValue = fromBounds
+            animation.toValue = layer.bounds
+            animation.duration = animationDuration
+            animation.timingFunction = CAMediaTimingFunction(name: timingFunctionName)
+            layer.add(animation, forKey: "bounds")
+        }
+
+        if fromPosition != layer.position {
+            let animation = CABasicAnimation(keyPath: "position")
+            animation.fromValue = fromPosition
+            animation.toValue = layer.position
+            animation.duration = animationDuration
+            animation.timingFunction = CAMediaTimingFunction(name: timingFunctionName)
+            layer.add(animation, forKey: "position")
+        }
+
+        if abs(fromCornerRadius - layer.cornerRadius) > 0.001 {
+            let animation = CABasicAnimation(keyPath: "cornerRadius")
+            animation.fromValue = fromCornerRadius
+            animation.toValue = layer.cornerRadius
+            animation.duration = animationDuration
+            animation.timingFunction = CAMediaTimingFunction(name: timingFunctionName)
+            layer.add(animation, forKey: "cornerRadius")
         }
     }
 
