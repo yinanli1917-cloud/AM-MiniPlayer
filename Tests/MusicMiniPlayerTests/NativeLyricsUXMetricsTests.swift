@@ -24,7 +24,7 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             gateByTimeRange: true
         )
         XCTAssertLessThan(fading.overallOpacity, 1)
-        XCTAssertGreaterThan(fading.blur, 0)
+        XCTAssertEqual(fading.blur, 0, accuracy: 0.0001)
     }
 
     func testFrameCadenceSummaryReportsRefreshPreservingMetrics() {
@@ -257,6 +257,76 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(visual.scale, 0.95, accuracy: 0.0001)
         XCTAssertEqual(visual.blur, 1.5, accuracy: 0.0001)
         XCTAssertTrue(visual.isActive)
+    }
+
+    func testAMLLVisualTargetDimsBufferedRowsAndKeepsReferenceInactiveField() {
+        let hot = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 6,
+            currentIndex: 6,
+            scrollTargetIndex: 5,
+            bufferedActiveIndices: [5, 6],
+            isManualScrolling: false
+        )
+        let buffered = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 5,
+            currentIndex: 6,
+            scrollTargetIndex: 5,
+            bufferedActiveIndices: [5, 6],
+            isManualScrolling: false
+        )
+        let passed = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 4,
+            currentIndex: 6,
+            scrollTargetIndex: 5,
+            bufferedActiveIndices: [5, 6],
+            isManualScrolling: false
+        )
+
+        XCTAssertEqual(hot.opacity, 1, accuracy: 0.0001)
+        XCTAssertEqual(hot.scale, 1, accuracy: 0.0001)
+        XCTAssertTrue(hot.isActive)
+        XCTAssertEqual(buffered.opacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(buffered.scale, 1, accuracy: 0.0001)
+        XCTAssertTrue(buffered.isActive)
+        XCTAssertEqual(passed.opacity, 0.35, accuracy: 0.0001)
+        XCTAssertEqual(passed.scale, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(passed.blur, 3.0, accuracy: 0.0001)
+        XCTAssertFalse(passed.isActive)
+
+        let farPassed = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 0,
+            currentIndex: 8,
+            scrollTargetIndex: 8,
+            bufferedActiveIndices: [8],
+            isManualScrolling: false
+        )
+        XCTAssertEqual(farPassed.blur, 13.5, accuracy: 0.0001)
+    }
+
+    func testAMLLVisualTargetUsesNeutralManualBrowseField() {
+        let hot = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 6,
+            currentIndex: 6,
+            scrollTargetIndex: 5,
+            bufferedActiveIndices: [5, 6],
+            isManualScrolling: true
+        )
+        let buffered = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 5,
+            currentIndex: 6,
+            scrollTargetIndex: 5,
+            bufferedActiveIndices: [5, 6],
+            isManualScrolling: true
+        )
+
+        XCTAssertEqual(hot.opacity, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(hot.scale, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(hot.blur, 0, accuracy: 0.0001)
+        XCTAssertTrue(hot.isActive)
+        XCTAssertEqual(buffered.opacity, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(buffered.scale, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(buffered.blur, 0, accuracy: 0.0001)
+        XCTAssertFalse(buffered.isActive)
     }
 
     func testNativeVisualMotionUsesSpringInsteadOfImmediateJump() {
@@ -506,6 +576,90 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.metrics["tapToLineDuringManualScrollCount"], 1)
         XCTAssertEqual(summary.metrics["tapToLineLatencySampleCount"], 1)
         XCTAssertEqual(summary.metrics["dotPhaseSampleCount"], 1)
+    }
+
+    func testTextPhaseMetricsFlagUnexpectedLineLevelSweep() {
+        var accumulator = NativeLyricsRenderTelemetryAccumulator()
+
+        accumulator.recordTextPhase(NativeLyricsTextPhaseSample(
+            hasSyllableSync: false,
+            wordRunCount: 0,
+            mainExpectedProgress: 1,
+            mainAppliedProgress: 1,
+            translationExpectedProgress: nil,
+            translationAppliedProgress: nil,
+            expectsPerRunSweep: false,
+            appliesPerRunSweep: false,
+            expectsNoLineLevelMainSweep: true,
+            appliesLineLevelMainSweep: true,
+            expectsNoLineLevelTranslationSweep: true,
+            appliesLineLevelTranslationSweep: true,
+            expectsPerGlyphEmphasis: false,
+            appliesPerGlyphEmphasis: false,
+            expectedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphMotionCount: 0,
+            maxAppliedEmphasisScale: 1,
+            maxAppliedEmphasisLiftMagnitude: 0,
+            maxAppliedEmphasisGlowOpacity: 0,
+            maxAppliedEmphasisAlpha: 0,
+            textLayoutCoverageGapCount: 0
+        ))
+
+        let summary = accumulator.summary()
+
+        XCTAssertEqual(summary.lineLevelMainSweepSuppressedCount, 1)
+        XCTAssertEqual(summary.unexpectedLineLevelMainSweepCount, 1)
+        XCTAssertEqual(summary.lineLevelTranslationSweepSuppressedCount, 1)
+        XCTAssertEqual(summary.unexpectedLineLevelTranslationSweepCount, 1)
+        XCTAssertEqual(summary.textParityGapCount, 1)
+        XCTAssertEqual(summary.metrics["unexpectedLineLevelMainSweepCount"], 1)
+        XCTAssertEqual(summary.metrics["unexpectedLineLevelTranslationSweepCount"], 1)
+    }
+
+    func testTextPhaseMetricsCountPhaseAndEmphasisDriftAsParityGaps() {
+        var accumulator = NativeLyricsRenderTelemetryAccumulator()
+
+        accumulator.recordTextPhase(NativeLyricsTextPhaseSample(
+            hasSyllableSync: true,
+            wordRunCount: 3,
+            cjkWordRunCount: 1,
+            cjkEmphasisGlyphCount: 1,
+            mainExpectedProgress: 0.50,
+            mainAppliedProgress: 0.47,
+            translationExpectedProgress: 0.25,
+            translationAppliedProgress: 0.28,
+            expectsPerRunSweep: true,
+            appliesPerRunSweep: true,
+            expectsPerGlyphEmphasis: true,
+            appliesPerGlyphEmphasis: true,
+            expectedEmphasisGlyphCount: 2,
+            appliedEmphasisGlyphCount: 2,
+            appliedEmphasisGlyphMotionCount: 2,
+            maxAppliedEmphasisScale: 1.04,
+            maxAppliedEmphasisLiftMagnitude: 1.5,
+            maxAppliedEmphasisGlowOpacity: 0.25,
+            maxAppliedEmphasisAlpha: 0.9,
+            textLayoutCoverageGapCount: 0,
+            emphasisGlyphPositionSampleCount: 2,
+            emphasisGlyphPositionErrorMax: 0.6,
+            emphasisGlyphScaleErrorMax: 0.003,
+            emphasisGlyphAlphaErrorMax: 0.016,
+            emphasisGlyphGlowErrorMax: 0.016
+        ))
+
+        let summary = accumulator.summary()
+
+        XCTAssertEqual(summary.textParityGapCount, 1)
+        XCTAssertEqual(summary.cjkEmphasisGlyphCount, 1)
+        XCTAssertEqual(summary.mainPhaseErrorMax, 0.03, accuracy: 0.0001)
+        XCTAssertEqual(summary.translationPhaseErrorMax, 0.03, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphPositionErrorMax, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphScaleErrorMax, 0.003, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphAlphaErrorMax, 0.016, accuracy: 0.0001)
+        XCTAssertEqual(summary.emphasisGlyphGlowErrorMax, 0.016, accuracy: 0.0001)
+        XCTAssertEqual(summary.metrics["textParityGapCount"], 1)
+        XCTAssertEqual(summary.metrics["cjkEmphasisGlyphCount"], 1)
     }
 
     func testActiveBlurGateUsesSettledSamplesAndStillReportsTransitionBlur() {

@@ -156,6 +156,44 @@ struct LyricsPresentationRowState: Equatable {
     let scale: CGFloat
     let blur: CGFloat
     let isCurrent: Bool
+    let isBufferedActive: Bool
+}
+
+struct LyricsPresentationSpringParameters: Equatable {
+    let mass: CGFloat
+    let stiffness: CGFloat
+    let damping: CGFloat
+
+    static let amllSeekOrInterlude = LyricsPresentationSpringParameters(
+        mass: 0.9,
+        stiffness: 90,
+        damping: 15
+    )
+
+    static func amllPosition(
+        lineInterval: TimeInterval?,
+        isSeeking: Bool,
+        isInterludeActive: Bool
+    ) -> LyricsPresentationSpringParameters {
+        if isSeeking || isInterludeActive {
+            return amllSeekOrInterlude
+        }
+        guard let lineInterval, lineInterval.isFinite, lineInterval > 0 else {
+            return amllSeekOrInterlude
+        }
+
+        let intervalMs = lineInterval * 1000
+        let clampedInterval = min(max(intervalMs, 100), 800)
+        var ratio = 1 - (clampedInterval - 100) / (800 - 100)
+        ratio = pow(ratio, 0.2)
+        let stiffness = 170 + ratio * (220 - 170)
+        let damping = sqrt(stiffness) * 2.2
+        return LyricsPresentationSpringParameters(
+            mass: 0.9,
+            stiffness: CGFloat(stiffness),
+            damping: CGFloat(damping)
+        )
+    }
 }
 
 struct NativeLyricsVisualTarget: Equatable {
@@ -192,6 +230,63 @@ struct NativeLyricsVisualTarget: Equatable {
             opacity: 0.35,
             scale: 0.95,
             blur: CGFloat(abs(displayIndex - currentIndex)) * 1.5,
+            isActive: false
+        )
+    }
+
+    static func amllTarget(
+        displayIndex: Int,
+        currentIndex: Int,
+        scrollTargetIndex: Int,
+        bufferedActiveIndices: Set<Int>,
+        isManualScrolling: Bool,
+        interludeBlend: CGFloat = 0
+    ) -> NativeLyricsVisualTarget {
+        let activeIndices = bufferedActiveIndices.isEmpty ? Set([currentIndex]) : bufferedActiveIndices
+        let isHotActive = displayIndex == currentIndex
+        let isBufferedActive = activeIndices.contains(displayIndex)
+        let focusMin = min(scrollTargetIndex, activeIndices.min() ?? currentIndex)
+        let focusMax = max(scrollTargetIndex, activeIndices.max() ?? currentIndex)
+        let distance: Int
+        if displayIndex < focusMin {
+            distance = focusMin - displayIndex
+        } else if displayIndex > focusMax {
+            distance = displayIndex - focusMax
+        } else {
+            distance = 0
+        }
+
+        if isManualScrolling {
+            return NativeLyricsVisualTarget(
+                opacity: 0.6,
+                scale: 0.95,
+                blur: 0,
+                isActive: isHotActive
+            )
+        }
+        if isHotActive {
+            let blend = min(1, max(0, interludeBlend))
+            return NativeLyricsVisualTarget(
+                opacity: 1.0 - blend * 0.65,
+                scale: 1.0 - blend * 0.03,
+                blur: blend * 1.5,
+                isActive: true
+            )
+        }
+        if isBufferedActive {
+            return NativeLyricsVisualTarget(
+                opacity: 0.85,
+                scale: 1.0,
+                blur: 0,
+                isActive: true
+            )
+        }
+        let passedLineBlurStep = displayIndex < currentIndex ? 1 : 0
+        let renderedBlur = CGFloat(max(distance + passedLineBlurStep, 0)) * 1.5
+        return NativeLyricsVisualTarget(
+            opacity: 0.35,
+            scale: 0.95,
+            blur: renderedBlur,
             isActive: false
         )
     }
@@ -322,20 +417,100 @@ struct LyricsPresentationPendingWave {
 enum NativeLyricsTimelinePolicy {
     static let lineAdvanceEpsilon: TimeInterval = 0.006
 
+    struct AMLLState: Equatable {
+        let playbackTime: TimeInterval
+        let hotGroups: Set<Int>
+        let bufferedGroups: Set<Int>
+        let scrollToIndex: Int
+        let semanticIndex: Int
+    }
+
     static func liveDisplayIndex(
         at playbackTime: TimeInterval,
         rows: [LayerBackedLyricRow],
         fallback: Int
     ) -> Int {
-        let candidates = rows
-            .filter { !$0.isPrelude && $0.displayLine.line.startTime <= playbackTime }
-            .sorted { lhs, rhs in
-                if lhs.displayLine.line.startTime == rhs.displayLine.line.startTime {
-                    return lhs.index < rhs.index
-                }
-                return lhs.displayLine.line.startTime < rhs.displayLine.line.startTime
+        var bestIndex: Int?
+        var bestStartTime = -TimeInterval.greatestFiniteMagnitude
+        for row in rows where !row.isPrelude {
+            let startTime = row.displayLine.line.startTime
+            guard startTime <= playbackTime else { continue }
+            if startTime > bestStartTime || (startTime == bestStartTime && row.index > (bestIndex ?? Int.min)) {
+                bestStartTime = startTime
+                bestIndex = row.index
             }
-        return candidates.last?.index ?? fallback
+        }
+        return bestIndex ?? fallback
+    }
+
+    static func amllState(
+        at playbackTime: TimeInterval,
+        rows: [LayerBackedLyricRow],
+        fallback: Int,
+        previous: AMLLState?,
+        isSeeking: Bool
+    ) -> AMLLState {
+        let sortedRows = rows.sorted { $0.index < $1.index }
+        let hotGroups = Set(sortedRows.compactMap { row -> Int? in
+            guard !row.isPrelude else { return nil }
+            let startTime = row.displayLine.line.startTime
+            let endTime = effectiveEndTime(for: row, in: sortedRows)
+            guard playbackTime + lineAdvanceEpsilon >= startTime,
+                  playbackTime < endTime - lineAdvanceEpsilon else {
+                return nil
+            }
+            return row.index
+        })
+        let latestStartedIndex = liveDisplayIndex(
+            at: playbackTime,
+            rows: sortedRows,
+            fallback: fallback
+        )
+        let firstFutureIndex = sortedRows
+            .filter { !$0.isPrelude && $0.displayLine.line.startTime > playbackTime + lineAdvanceEpsilon }
+            .min { lhs, rhs in lhs.displayLine.line.startTime < rhs.displayLine.line.startTime }?
+            .index
+
+        let validIndices = Set(sortedRows.map(\.index))
+        let expiredPreviousBuffered = Set((previous?.bufferedGroups ?? []).filter { index in
+            guard let row = sortedRows.first(where: { $0.index == index }) else { return true }
+            return !hotGroups.contains(index)
+                && playbackTime >= effectiveEndTime(for: row, in: sortedRows) - lineAdvanceEpsilon
+        })
+        let previousBuffered = (previous?.bufferedGroups ?? []).intersection(validIndices)
+            .subtracting(expiredPreviousBuffered)
+
+        let bufferedGroups: Set<Int>
+        if isSeeking {
+            bufferedGroups = hotGroups
+        } else if let previous, !hotGroups.subtracting(previous.hotGroups).isEmpty {
+            bufferedGroups = previousBuffered.union(hotGroups)
+        } else if hotGroups.isEmpty {
+            bufferedGroups = previousBuffered
+        } else {
+            bufferedGroups = previousBuffered.isEmpty ? hotGroups : previousBuffered.union(hotGroups)
+        }
+
+        let scrollToIndex: Int
+        if let firstBuffered = bufferedGroups.min() {
+            scrollToIndex = firstBuffered
+        } else if isSeeking, let firstFutureIndex {
+            scrollToIndex = firstFutureIndex
+        } else {
+            scrollToIndex = previous?.scrollToIndex ?? latestStartedIndex
+        }
+
+        let semanticIndex = hotGroups.max()
+            ?? bufferedGroups.max()
+            ?? latestStartedIndex
+
+        return AMLLState(
+            playbackTime: playbackTime,
+            hotGroups: hotGroups,
+            bufferedGroups: bufferedGroups,
+            scrollToIndex: scrollToIndex,
+            semanticIndex: semanticIndex
+        )
     }
 
     static func nextLineStartTime(
@@ -347,6 +522,24 @@ enum NativeLyricsTimelinePolicy {
             .filter { !$0.isPrelude && $0.displayLine.line.startTime > playbackTime + lineAdvanceEpsilon }
             .map(\.displayLine.line.startTime)
             .min()
+    }
+
+    private static func effectiveEndTime(
+        for row: LayerBackedLyricRow,
+        in sortedRows: [LayerBackedLyricRow]
+    ) -> TimeInterval {
+        let startTime = row.displayLine.line.startTime
+        let lineEndTime = row.displayLine.line.endTime
+        if lineEndTime > startTime + lineAdvanceEpsilon {
+            return lineEndTime
+        }
+        guard let position = sortedRows.firstIndex(where: { $0.index == row.index }) else {
+            return startTime + 0.4
+        }
+        let nextStartTime = sortedRows[(position + 1)...]
+            .first { !$0.isPrelude && $0.displayLine.line.startTime > startTime + lineAdvanceEpsilon }?
+            .displayLine.line.startTime
+        return nextStartTime ?? startTime + 0.4
     }
 }
 

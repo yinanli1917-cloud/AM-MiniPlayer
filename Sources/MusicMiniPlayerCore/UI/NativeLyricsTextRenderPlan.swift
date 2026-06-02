@@ -38,16 +38,19 @@ struct NativeLyricsStaticWordRunPlan: Equatable {
             endTime: token.word.endTime,
             duration: duration,
             isCJK: isCJK,
-            isEmphasis: !isCJK && shouldEmphasize(token.text, duration: duration)
+            isEmphasis: NativeLyricsEmphasisEligibility.shouldEmphasize(token.word.word, duration: duration)
         )
     }
+}
 
-    private static func shouldEmphasize(_ text: String, duration: TimeInterval) -> Bool {
+fileprivate enum NativeLyricsEmphasisEligibility {
+    static func shouldEmphasize(_ text: String, duration: TimeInterval) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
-        if trimmed.unicodeScalars.contains(where: { $0.value >= 0x4E00 && $0.value <= 0x9FFF }) {
+        guard duration >= 1.5 else { return false }
+        if LanguageUtils.containsCJK(trimmed) {
             return false
         }
-        return duration >= 1.5 && trimmed.count > 1 && trimmed.count <= 7
+        return trimmed.count > 1 && trimmed.count <= 7
     }
 }
 
@@ -93,7 +96,8 @@ struct NativeLyricsTextRenderPlan: Equatable {
         let constants = staticPlan.constants
         let line = configuration.line
         let lineEndTime = line.words.last?.endTime ?? line.endTime
-        let mainSweepProgress = configuration.isActive
+        let appliesTimedWordSweep = line.hasSyllableSync && !line.words.isEmpty
+        let mainSweepProgress = configuration.isActive && appliesTimedWordSweep
             ? wordCountProgress(
                 words: line.words,
                 currentTime: configuration.currentTime,
@@ -109,7 +113,7 @@ struct NativeLyricsTextRenderPlan: Equatable {
                 tokenCount: staticPlan.wordRuns.count,
                 postLineFade: mainPostLineFade,
                 currentTime: configuration.currentTime,
-                isActiveLine: configuration.isActive,
+                isActiveLine: configuration.isActive && appliesTimedWordSweep,
                 staticOpacity: configuration.staticOpacity,
                 constants: constants
             )
@@ -133,6 +137,13 @@ struct NativeLyricsTextRenderPlan: Equatable {
     }
 
     fileprivate static func cleanedDisplayText(for line: LyricLine) -> String {
+        if line.hasSyllableSync && !line.words.isEmpty {
+            let wordDisplayText = LyricDisplaySegmenter.displayText(forWords: line.words)
+            if !wordDisplayText.isEmpty {
+                return wordDisplayText
+            }
+        }
+
         var text: String
         if line.text.contains("[") {
             let pattern = "\\[\\d{2}:\\d{2}[:.]*\\d{0,3}\\]"
@@ -140,13 +151,6 @@ struct NativeLyricsTextRenderPlan: Equatable {
                 .trimmingCharacters(in: .whitespaces)
         } else {
             text = line.text.trimmingCharacters(in: .whitespaces)
-        }
-        if line.hasSyllableSync && !line.words.isEmpty {
-            let totalCharacters = line.words.reduce(0) { $0 + $1.word.count }
-            let averageLength = Double(totalCharacters) / Double(line.words.count)
-            if averageLength <= 2 {
-                text = line.words.map(\.word).joined()
-            }
         }
         return text
     }
@@ -162,13 +166,20 @@ struct NativeLyricsTextRenderPlan: Equatable {
         guard showTranslation,
               let translation = line.translation,
               !translation.isEmpty else { return nil }
-        let progress = line.hasSyllableSync
-            ? wordCountProgress(words: line.words, currentTime: currentTime, lineStartTime: line.startTime, lineEndTime: line.endTime)
-            : linearProgress(currentTime: currentTime, startTime: line.startTime, endTime: line.endTime)
-        let postLineFade = postLineFadeOut(currentTime: currentTime, lineEndTime: line.endTime)
-        let opacity = isActiveLine
-            ? constants.translationBrightAlpha
-            : staticOpacity * constants.currentTranslationOpacityFactor
+        let appliesTimedWordSweep = line.hasSyllableSync && !line.words.isEmpty
+        let lineEndTime = line.words.last?.endTime ?? line.endTime
+        let progress = appliesTimedWordSweep
+            ? wordCountProgress(words: line.words, currentTime: currentTime, lineStartTime: line.startTime, lineEndTime: lineEndTime)
+            : linearProgress(currentTime: currentTime, startTime: line.startTime, endTime: lineEndTime)
+        let postLineFade = postLineFadeOut(currentTime: currentTime, lineEndTime: lineEndTime)
+        let opacity: CGFloat
+        if isActiveLine && appliesTimedWordSweep {
+            opacity = constants.translationBrightAlpha
+        } else if isActiveLine {
+            opacity = constants.currentTranslationOpacityFactor
+        } else {
+            opacity = staticOpacity * constants.currentTranslationOpacityFactor
+        }
         return NativeLyricsTranslationRenderPlan(
             text: translation,
             progress: isActiveLine ? progress : 1,
@@ -371,9 +382,10 @@ struct NativeLyricsEmphasisPlan: Equatable {
         currentTime: TimeInterval,
         wordStartTime: TimeInterval
     ) -> NativeLyricsEmphasisPlan {
-        guard !isCJK,
-              duration >= 1.5,
-              text.trimmingCharacters(in: .whitespaces).count > 1 else {
+        guard !isCJK else {
+            return .inactive
+        }
+        guard NativeLyricsEmphasisEligibility.shouldEmphasize(text, duration: duration) else {
             return .inactive
         }
         let amount = emphasisAmount(duration: duration, isLast: isLastWordOfLine)
@@ -381,18 +393,22 @@ struct NativeLyricsEmphasisPlan: Equatable {
         let du = max(1.0, duration) * (isLastWordOfLine ? 1.2 : 1.0)
         let progress = CGFloat(min(1, max(0, (currentTime - wordStartTime) / du)))
         let easing = NativeLyricsEasing.emphasis(progress)
-        let scale = 1 + easing * 0.1 * amount
-        let liftY = -easing * 0.6 * amount
         let floatDuration = du * 1.4
         let floatProgress = CGFloat(min(1, max(0, (currentTime - wordStartTime + 0.4) / floatDuration)))
         let floatY = (floatProgress > 0 && floatProgress < 1) ? -sin(floatProgress * .pi) * 1.5 : 0
+        let tailWeight = currentTime >= wordStartTime && floatProgress > 0 && floatProgress < 1
+            ? sin(floatProgress * .pi) * 0.8
+            : 0
+        let emphasisWeight = max(easing, tailWeight)
+        let scale = 1 + emphasisWeight * 0.1 * amount
+        let liftY = -emphasisWeight * 0.6 * amount
         return NativeLyricsEmphasisPlan(
             amount: amount,
             blurLevel: blurLevel,
             scale: scale,
             liftY: liftY,
             floatY: floatY,
-            glowOpacity: easing * blurLevel * 1.5,
+            glowOpacity: emphasisWeight * blurLevel * 1.5,
             glowRadius: 12
         )
     }

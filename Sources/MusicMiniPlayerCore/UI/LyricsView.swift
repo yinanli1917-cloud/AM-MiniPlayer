@@ -31,6 +31,7 @@ private struct CacheState {
     var cachedAccumulatedHeights: [Int: CGFloat] = [:]
     var heightCacheInvalidated = true
     var lyricsContainerHeight: CGFloat = 300
+    var nativeEstimatedRowWidth: CGFloat = 0
     /// Cached renderedIndices — invalidated only when lyrics change
     var renderedIndicesCached: [Int] = []
     var renderedIndicesValid = false
@@ -73,8 +74,11 @@ struct LyricWaveTiming {
     }
 
     static let defaultBaseDelay: TimeInterval = 0.08
+    static let minimumBaseDelay: TimeInterval = 0.024
     static let settlePadding: TimeInterval = 0.20
+    static let maxLineIntervalFraction: TimeInterval = 0.72
     static let tailAccelerationFactor: TimeInterval = 1.05
+    static let largeJumpThreshold = 4
 
     static func targetRadius(lineInterval: TimeInterval?, hasSyllableSync: Bool) -> Int {
         14
@@ -97,14 +101,20 @@ struct LyricWaveTiming {
 
     static func staggerSchedule(
         for indices: [Int],
-        newIndex: Int
+        newIndex: Int,
+        lineInterval: TimeInterval? = nil
     ) -> [StaggerTarget] {
         guard !indices.isEmpty else { return [] }
 
         let visibleTopLineIndex = max(0, newIndex - 3)
         let startPosition = indices.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
         var delay: TimeInterval = 0
-        var baseDelay = defaultBaseDelay
+        var baseDelay = baseDelay(
+            for: indices,
+            startPosition: startPosition,
+            newIndex: newIndex,
+            lineInterval: lineInterval
+        )
         var schedule: [StaggerTarget] = []
 
         if startPosition > 0 {
@@ -123,6 +133,51 @@ struct LyricWaveTiming {
         }
 
         return schedule
+    }
+
+    static func baseDelay(
+        for indices: [Int],
+        startPosition: Int,
+        newIndex: Int,
+        lineInterval: TimeInterval?
+    ) -> TimeInterval {
+        guard indices.indices.contains(startPosition) else { return defaultBaseDelay }
+        guard let lineInterval, lineInterval.isFinite, lineInterval > 0 else {
+            return defaultBaseDelay
+        }
+
+        let defaultDuration = waveDuration(
+            for: indices,
+            startPosition: startPosition,
+            newIndex: newIndex,
+            baseDelay: defaultBaseDelay
+        )
+        let targetDuration = max(minimumBaseDelay, lineInterval * maxLineIntervalFraction)
+        guard defaultDuration > targetDuration else { return defaultBaseDelay }
+
+        let scalableDuration = max(defaultDuration - settlePadding, minimumBaseDelay)
+        let targetScalableDuration = max(targetDuration - settlePadding, minimumBaseDelay)
+        let scale = targetScalableDuration / scalableDuration
+        return max(minimumBaseDelay, defaultBaseDelay * scale)
+    }
+
+    static func waveDuration(
+        for indices: [Int],
+        startPosition: Int,
+        newIndex: Int,
+        baseDelay: TimeInterval
+    ) -> TimeInterval {
+        guard indices.indices.contains(startPosition) else { return settlePadding }
+
+        var delay: TimeInterval = 0
+        var nextDelay = baseDelay
+        for i in startPosition..<indices.count {
+            delay += nextDelay
+            if indices[i] >= newIndex {
+                nextDelay /= tailAccelerationFactor
+            }
+        }
+        return delay + settlePadding
     }
 
     static func seededTargetsForNaturalAdvance(
@@ -223,9 +278,11 @@ enum LyricLineTranslationLayoutPolicy {
         index: Int,
         line: LyricLine,
         pendingLineIndices: Set<Int>,
-        isTranslating: Bool
+        isTranslating: Bool,
+        segmentIndex: Int = 0
     ) -> Bool {
-        isTranslating && !line.hasTranslation && pendingLineIndices.contains(index)
+        guard segmentIndex == 0 else { return false }
+        return isTranslating && !line.hasTranslation && pendingLineIndices.contains(index)
     }
 }
 
@@ -346,6 +403,7 @@ public struct LyricsView: View {
     @State private var lastLineMotionCaptureMissEventAt: Date = .distantPast
     @State private var cachedPendingTranslationLineIndices: Set<Int> = []
     @State private var heightCacheUpdateScheduled = false
+    @State private var nativeHeightPrimingScheduled = false
     @State private var displayCurrentLineIndex: Int? = nil
     @State private var cachedDisplayLines: [DisplayLyricLine] = []
     @State private var cachedDisplayLyrics: [LyricLine] = []
@@ -761,6 +819,11 @@ public struct LyricsView: View {
             let layerAccumulatedHeights = Dictionary(uniqueKeysWithValues: layerHeightIndices.map {
                 ($0, cache.cachedAccumulatedHeights[$0] ?? calculateAccumulatedHeight(upTo: $0))
             })
+            let _ = primeNativeRowHeightsIfNeeded(
+                rowWidth: geo.size.width,
+                rows: allLayerRows,
+                pendingTranslationLineIndices: pendingTranslationLineIndices
+            )
 
             Group {
                 if layerActive {
@@ -788,7 +851,7 @@ public struct LyricsView: View {
                         controlsVisible: showControls || isAudioOutputMenuPresented,
                         surfaceController: nativeLyricsSurfaceController,
                         musicController: musicController,
-                        onLineTap: { line in handleLineTap(line: line) },
+                        onLineTap: { line in handleLineTap(line: line, requestNativeDirectSnap: false) },
                         onDirectSnapConsumed: { requestID in
                             if nativeLyricsDirectSnapRequest?.id == requestID {
                                 nativeLyricsDirectSnapRequest = nil
@@ -876,7 +939,8 @@ public struct LyricsView: View {
                                         index: displayLine.sourceIndex,
                                         line: sourceLine,
                                         pendingLineIndices: pendingTranslationLineIndices,
-                                        isTranslating: lyricsService.isTranslating
+                                        isTranslating: lyricsService.isTranslating,
+                                        segmentIndex: displayLine.segmentIndex
                                     )
                                 )
                                 .background(lineHeightTracker(index: index))
@@ -1485,13 +1549,7 @@ public struct LyricsView: View {
     }
 
     private var shouldMountBottomControls: Bool {
-        currentPage == .lyrics && (
-            bottomControlsMounted ||
-            showControls ||
-            isAudioOutputMenuPresented ||
-            isProgressBarHovering ||
-            dragPosition != nil
-        )
+        currentPage == .lyrics
     }
 
     @ViewBuilder
@@ -1545,17 +1603,6 @@ public struct LyricsView: View {
             controlsBlurAmount = 10
             controlsOffsetY = 30
         }
-        let unmountDelay = reduceMotion ? 0.12 : animationDuration + 0.08
-        DispatchQueue.main.asyncAfter(deadline: .now() + unmountDelay) {
-            guard !showControls,
-                  !isHovering,
-                  !isAudioOutputMenuPresented,
-                  !isProgressBarHovering,
-                  dragPosition == nil else {
-                return
-            }
-            bottomControlsMounted = false
-        }
     }
 
     private func handleHover(_ hovering: Bool) {
@@ -1598,7 +1645,7 @@ public struct LyricsView: View {
         )
     }
 
-    private func handleLineTap(line: LyricLine) {
+    private func handleLineTap(line: LyricLine, requestNativeDirectSnap: Bool = true) {
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
         cancelLineAdvanceTimer()
@@ -1615,7 +1662,7 @@ public struct LyricsView: View {
         wave.workItems.removeAll()
         let newIdx = displayCurrentLineIndex ?? displayIndex(forSourceIndex: lyricsService.currentLineIndex ?? 0)
         for idx in renderedIndices { wave.lineTargetIndices[idx] = newIdx }
-        if lyricsLayerRendererActive {
+        if lyricsLayerRendererActive && requestNativeDirectSnap {
             nativeLyricsDirectSnapRequest = NativeLyricsDirectSnapRequest(
                 displayIndex: newIdx,
                 reason: .tapToLine
@@ -1789,24 +1836,8 @@ public struct LyricsView: View {
     }
 
     private func handleNativeScrollChromeDelta(_ deltaY: CGFloat, velocity: CGFloat) {
-        let shouldHideControls = deltaY < 0 || abs(velocity) >= 800
-        let shouldShowControls = deltaY > 0 && abs(velocity) < 800
-        guard (shouldHideControls && showControls) || (shouldShowControls && !showControls) else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            if shouldHideControls {
-                showControls = false
-                controlsBlurAmount = 10
-                controlsOffsetY = 30
-                bottomControlsMounted = false
-            } else {
-                bottomControlsMounted = true
-                showControls = true
-                controlsBlurAmount = 0
-                controlsOffsetY = 0
-            }
-        }
+        handleScrollChromeDelta(deltaY, velocity: velocity)
+        scroll.lastVelocity = abs(velocity)
     }
 
     private func handleNativeManualScrollStarted(frozenDisplayIndex: Int) {
@@ -1814,17 +1845,32 @@ public struct LyricsView: View {
         autoScrollTimer = nil
         cancelLineAdvanceTimer()
         if cache.heightCacheInvalidated { updateHeightCache() }
+        nativeLyricsManualScrollActive = true
+        lyricsService.isManualScrolling = true
+        scroll.lockedLineIndex = frozenDisplayIndex
+        scroll.frozenDisplayIndex = frozenDisplayIndex
+        scroll.scrollLocked = false
+        scroll.hasTriggeredSlowScroll = false
+        scroll.lastVelocity = 0
     }
 
     private func handleNativeManualScrollEnded() {
     }
 
     private func handleNativeManualScrollRecovered() {
+        nativeLyricsManualScrollActive = false
+        lyricsService.isManualScrolling = false
+        scroll.lockedLineIndex = nil
+        scroll.frozenDisplayIndex = nil
+        scroll.scrollLocked = false
+        scroll.hasTriggeredSlowScroll = false
+        scroll.lastVelocity = 0
         updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
         if let idx = displayCurrentLineIndex {
             wave.lastCurrentIndex = idx
         }
         scheduleNextLineAdvanceTimer()
+        if isHovering { animateControlsIn() }
     }
 
     // MARK: - Translation
@@ -2251,12 +2297,52 @@ public struct LyricsView: View {
         }
     }
 
+    private func primeNativeRowHeightsIfNeeded(
+        rowWidth: CGFloat,
+        rows: [LayerBackedLyricRow],
+        pendingTranslationLineIndices: Set<Int>
+    ) {
+        guard LyricsRendererMode.current == .native else { return }
+        guard rowWidth > 1, !rows.isEmpty else { return }
+        let roundedWidth = rowWidth.rounded(.toNearestOrAwayFromZero)
+        let widthChanged = abs(cache.nativeEstimatedRowWidth - roundedWidth) > 0.5
+        let needsPriming = widthChanged
+            || cache.heightCacheInvalidated
+            || rows.contains { cache.lineHeights[$0.index] == nil }
+        guard needsPriming, !nativeHeightPrimingScheduled else { return }
+
+        nativeHeightPrimingScheduled = true
+        let showTranslation = lyricsService.showTranslation
+        let isTranslating = lyricsService.isTranslating
+        DispatchQueue.main.async {
+            nativeHeightPrimingScheduled = false
+            guard currentPage == .lyrics else { return }
+            var changed = false
+            cache.nativeEstimatedRowWidth = roundedWidth
+            for row in rows {
+                let estimated = NativeLyricsRowMeasurement.estimatedHeight(
+                    for: row,
+                    rowWidth: roundedWidth,
+                    showTranslation: showTranslation,
+                    isTranslating: isTranslating,
+                    pendingTranslationLineIndices: pendingTranslationLineIndices
+                )
+                if abs((cache.lineHeights[row.index] ?? 0) - estimated) > 2.0 {
+                    cache.lineHeights[row.index] = estimated
+                    changed = true
+                }
+            }
+            if changed {
+                cache.heightCacheInvalidated = true
+                updateHeightCache()
+            }
+        }
+    }
+
     // MARK: - AMLL Wave Animation (Calculation-Driven)
 
-    /// AMLL wave animation — GCD-driven stagger.
-    /// Each line's target is updated independently via DispatchWorkItem + asyncAfter.
-    /// Each mutation triggers a SwiftUI body re-evaluation, starting that line's spring
-    /// at a genuinely different wall-clock time — creating natural stagger.
+    /// Legacy SwiftUI fallback wave: each row receives the new target at a staggered wall-clock time.
+    /// The native renderer translates the same timing law into its frame-driven presentation engine.
     private func triggerWaveAnimation(from oldIndex: Int, to newIndex: Int) {
         guard !scroll.isManualScrolling else { return }
         let lyrics = cachedDisplayLyrics
@@ -2300,7 +2386,8 @@ public struct LyricsView: View {
 
         let schedule = LyricWaveTiming.staggerSchedule(
             for: indices,
-            newIndex: newIndex
+            newIndex: newIndex,
+            lineInterval: lineInterval
         )
         wave.sequence += 1
         let waveID = wave.sequence

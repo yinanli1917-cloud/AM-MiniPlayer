@@ -61,6 +61,27 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertTrue(plan.wordRuns.allSatisfy { !$0.isEmphasis })
     }
 
+    func testWordLevelPlanUsesSegmentedTokenTextAsSingleSourceOfTruth() {
+        let line = LyricLine(
+            text: "hello   world",
+            startTime: 0,
+            endTime: 2,
+            words: [
+                LyricWord(word: "hello", startTime: 0, endTime: 1),
+                LyricWord(word: "world", startTime: 1, endTime: 2)
+            ]
+        )
+
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
+            line: line,
+            currentTime: 0.5,
+            isActive: true
+        ))
+
+        XCTAssertEqual(plan.displayText, "hello world")
+        XCTAssertEqual(plan.displayText, plan.wordRuns.map(\.text).joined())
+    }
+
     func testWordSweepProgressAndBaseFloatAreTimeDerived() {
         let line = LyricLine(
             text: "hello world",
@@ -87,29 +108,28 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertEqual(plan.wordRuns[1].progress, 0, accuracy: 0.0001)
     }
 
-    func testHeldNonCJKWordsGetEmphasisButCJKDoesNot() {
+    func testHeldWordsUseAMLLEmphasisEligibilityForLatinAndSuppressCJK() {
         let line = LyricLine(
-            text: "shine 光",
+            text: "go shining 光",
             startTime: 0,
-            endTime: 4,
+            endTime: 5,
             words: [
-                LyricWord(word: "shine", startTime: 0, endTime: 2),
-                LyricWord(word: "光", startTime: 2, endTime: 4)
+                LyricWord(word: "go", startTime: 0, endTime: 0.9),
+                LyricWord(word: "shining", startTime: 1, endTime: 2.6),
+                LyricWord(word: "光", startTime: 2.5, endTime: 4)
             ]
         )
 
         let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
             line: line,
-            currentTime: 0.8,
+            currentTime: 3,
             isActive: true
         ))
 
-        XCTAssertTrue(plan.wordRuns[0].isEmphasis)
-        XCTAssertGreaterThan(plan.wordRuns[0].emphasis.scale, 1)
-        XCTAssertLessThan(plan.wordRuns[0].emphasis.liftY, 0)
-        XCTAssertGreaterThan(plan.wordRuns[0].emphasis.glowOpacity, 0)
-        XCTAssertFalse(plan.wordRuns[1].isEmphasis)
-        XCTAssertEqual(plan.wordRuns[1].emphasis, .inactive)
+        XCTAssertFalse(plan.wordRuns[0].isEmphasis)
+        XCTAssertTrue(plan.wordRuns[1].isEmphasis)
+        XCTAssertFalse(plan.wordRuns[2].isEmphasis)
+        XCTAssertEqual(plan.wordRuns[2].emphasis, .inactive)
     }
 
     func testTranslationSweepUsesWordCountProgressAndPostLineFade() {
@@ -139,6 +159,30 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertEqual(active.translation?.dimAlpha, 0.20)
         XCTAssertEqual(active.translation?.brightAlpha, 0.75)
         XCTAssertEqual(fading.translation?.postLineFade ?? 0, 0.75, accuracy: 0.0001)
+    }
+
+    func testActiveLineLevelLyricsKeepMainLineStaticButSweepTranslationByLineProgress() {
+        let line = LyricLine(
+            text: "ordinary line lyric",
+            startTime: 10,
+            endTime: 16,
+            words: [],
+            translation: "普通逐行歌词"
+        )
+
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
+            line: line,
+            currentTime: 13,
+            isActive: true,
+            staticOpacity: 0.35
+        ))
+
+        XCTAssertFalse(line.hasSyllableSync)
+        XCTAssertTrue(plan.wordRuns.isEmpty)
+        XCTAssertEqual(plan.mainSweepProgress, 1)
+        XCTAssertEqual(plan.mainPostLineFade, 1)
+        XCTAssertEqual(Double(plan.translation?.progress ?? -1), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(plan.translation?.opacity, plan.constants.currentTranslationOpacityFactor)
     }
 
     func testNativeSweepLayoutBuildsSeparateMasksForWrappedVisualLines() {
@@ -208,6 +252,61 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
             ),
             emphasisRuns[0].rect.minX
         )
+    }
+
+    func testNativeSweepLayoutSkipsInvisibleWhitespaceGlyphs() {
+        let line = LyricLine(
+            text: "Sweet So",
+            startTime: 0,
+            endTime: 2,
+            words: [
+                LyricWord(word: "Sweet", startTime: 0, endTime: 1),
+                LyricWord(word: "So", startTime: 1, endTime: 2)
+            ]
+        )
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
+            line: line,
+            currentTime: 0.5,
+            isActive: true
+        ))
+
+        let linePlan = NativeLyricsTextSweepLayout.makePlan(
+            displayText: plan.displayText,
+            wordRuns: plan.wordRuns,
+            width: 240,
+            fontSize: plan.constants.mainFontSize,
+            fadeHalfPoint: plan.constants.fadeHalfPoint
+        )
+        let glyphs = linePlan.flatMap(\.runs).flatMap(\.glyphs)
+
+        XCTAssertEqual(plan.displayText, "Sweet So")
+        XCTAssertEqual(glyphs.count, 7)
+        XCTAssertTrue(glyphs.allSatisfy { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
+    func testHeldEmphasisKeepsScaleAndGlowThroughFloatTail() {
+        let emphasis = NativeLyricsEmphasisPlan.make(
+            text: "shine",
+            duration: 1.8,
+            isLastWordOfLine: false,
+            isCJK: false,
+            currentTime: 1.81,
+            wordStartTime: 0
+        )
+
+        XCTAssertGreaterThan(emphasis.floatY.magnitude, 0)
+        XCTAssertGreaterThan(emphasis.scale, 1.001)
+        XCTAssertGreaterThan(emphasis.glowOpacity, 0.001)
+
+        let cjk = NativeLyricsEmphasisPlan.make(
+            text: "遊",
+            duration: 1.8,
+            isLastWordOfLine: false,
+            isCJK: true,
+            currentTime: 1.81,
+            wordStartTime: 0
+        )
+        XCTAssertEqual(cjk, .inactive)
     }
 
     func testInactiveLineKeepsStaticRunsWithoutAnimatedEmphasis() {
