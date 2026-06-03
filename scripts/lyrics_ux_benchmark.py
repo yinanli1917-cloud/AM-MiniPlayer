@@ -287,6 +287,10 @@ def collect_native_text_parity(
             "activeSyllableSampleCount": 0.0,
             "textParityGapCount": 0.0,
             "perRunSweepGapCount": 0.0,
+            "lineLevelMainSweepSuppressedCount": 0.0,
+            "unexpectedLineLevelMainSweepCount": 0.0,
+            "lineLevelTranslationSweepSuppressedCount": 0.0,
+            "unexpectedLineLevelTranslationSweepCount": 0.0,
             "perGlyphEmphasisGapCount": 0.0,
             "rowMountCount": 0.0,
             "rowUnmountCount": 0.0,
@@ -404,15 +408,31 @@ def collect_native_text_parity(
     deadline = time.time() + 5.0
     while True:
         scan()
-        if not fixture_expects_syllable(fixture_name):
-            break
-        if max_metrics.get("activeSyllableSampleCount", 0) > 0:
+        if fixture_expects_syllable(fixture_name):
+            if max_metrics.get("activeSyllableSampleCount", 0) > 0:
+                break
+        elif max_metrics.get("lineLevelMainSweepSuppressedCount", 0) > 0:
             break
         if time.time() >= deadline:
             break
         time.sleep(0.25)
 
     failures: list[str] = []
+    if not fixture_expects_syllable(fixture_name):
+        if not events:
+            failures.append("no native renderer text parity summaries for line-level fixture")
+        if max_metrics["lineLevelMainSweepSuppressedCount"] <= 0:
+            failures.append("no active line-level no-sweep samples")
+    if max_metrics["unexpectedLineLevelMainSweepCount"] > 0:
+        failures.append(
+            "unexpected line-level main sweep count "
+            f"{max_metrics['unexpectedLineLevelMainSweepCount']:.0f}"
+        )
+    if max_metrics["unexpectedLineLevelTranslationSweepCount"] > 0:
+        failures.append(
+            "unexpected line-level translation sweep count "
+            f"{max_metrics['unexpectedLineLevelTranslationSweepCount']:.0f}"
+        )
     if fixture_expects_syllable(fixture_name):
         if not events:
             failures.append("no native renderer text parity summaries for syllable fixture")
@@ -424,6 +444,8 @@ def collect_native_text_parity(
             failures.append(f"per-run sweep gap count {max_metrics['perRunSweepGapCount']:.0f}")
         if max_metrics["perGlyphEmphasisGapCount"] > 0:
             failures.append(f"per-glyph emphasis gap count {max_metrics['perGlyphEmphasisGapCount']:.0f}")
+        if max_metrics["cjkEmphasisGlyphCount"] > 0:
+            failures.append(f"CJK emphasis glyph count {max_metrics['cjkEmphasisGlyphCount']:.0f} > 0")
         if max_metrics["textLayoutCoverageGapCount"] > 0:
             failures.append(f"text layout coverage gap count {max_metrics['textLayoutCoverageGapCount']:.0f}")
         if max_metrics["textSweepLineCoverageGapCount"] > 0:
@@ -442,10 +464,6 @@ def collect_native_text_parity(
             failures.append(
                 "text glyph geometry position error max "
                 f"{max_metrics['textGlyphGeometryPositionErrorMax']:.3f} > 0.500"
-            )
-        if max_metrics["maxCJKWordRunCount"] > 0 and max_metrics["cjkEmphasisGlyphCount"] > 0:
-            failures.append(
-                f"CJK emphasis glyph count {max_metrics['cjkEmphasisGlyphCount']:.0f} must stay 0"
             )
         if max_metrics["lineLayoutSampleCount"] <= 0:
             failures.append("no native line layout parity samples")

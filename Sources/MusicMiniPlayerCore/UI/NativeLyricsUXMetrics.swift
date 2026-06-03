@@ -89,6 +89,10 @@ struct NativeLyricsTextPhaseSample: Equatable {
     let translationAppliedProgress: CGFloat?
     let expectsPerRunSweep: Bool
     let appliesPerRunSweep: Bool
+    let expectsNoLineLevelMainSweep: Bool
+    let appliesLineLevelMainSweep: Bool
+    let expectsNoLineLevelTranslationSweep: Bool
+    let appliesLineLevelTranslationSweep: Bool
     let expectsPerGlyphEmphasis: Bool
     let appliesPerGlyphEmphasis: Bool
     let expectedEmphasisGlyphCount: Int
@@ -131,6 +135,10 @@ struct NativeLyricsTextPhaseSample: Equatable {
         translationAppliedProgress: CGFloat?,
         expectsPerRunSweep: Bool,
         appliesPerRunSweep: Bool,
+        expectsNoLineLevelMainSweep: Bool = false,
+        appliesLineLevelMainSweep: Bool = false,
+        expectsNoLineLevelTranslationSweep: Bool = false,
+        appliesLineLevelTranslationSweep: Bool = false,
         expectsPerGlyphEmphasis: Bool,
         appliesPerGlyphEmphasis: Bool,
         expectedEmphasisGlyphCount: Int,
@@ -172,6 +180,10 @@ struct NativeLyricsTextPhaseSample: Equatable {
         self.translationAppliedProgress = translationAppliedProgress
         self.expectsPerRunSweep = expectsPerRunSweep
         self.appliesPerRunSweep = appliesPerRunSweep
+        self.expectsNoLineLevelMainSweep = expectsNoLineLevelMainSweep
+        self.appliesLineLevelMainSweep = appliesLineLevelMainSweep
+        self.expectsNoLineLevelTranslationSweep = expectsNoLineLevelTranslationSweep
+        self.appliesLineLevelTranslationSweep = appliesLineLevelTranslationSweep
         self.expectsPerGlyphEmphasis = expectsPerGlyphEmphasis
         self.appliesPerGlyphEmphasis = appliesPerGlyphEmphasis
         self.expectedEmphasisGlyphCount = expectedEmphasisGlyphCount
@@ -215,9 +227,19 @@ struct NativeLyricsTextPhaseSample: Equatable {
 
     var hasTextParityGap: Bool {
         (expectsPerRunSweep && !appliesPerRunSweep)
+            || (expectsNoLineLevelMainSweep && appliesLineLevelMainSweep)
+            || (expectsNoLineLevelTranslationSweep && appliesLineLevelTranslationSweep)
             || (expectsPerGlyphEmphasis && !appliesPerGlyphEmphasis)
+            || cjkEmphasisGlyphCount > 0
+            || mainPhaseError > 0.02
+            || (translationPhaseError ?? 0) > 0.02
             || textLayoutCoverageGapCount > 0
             || sweepLineCoverageGapCount > 0
+            || sweepWavefrontErrorMax > 0.5
+            || emphasisGlyphPositionErrorMax > 0.5
+            || emphasisGlyphScaleErrorMax > 0.002
+            || emphasisGlyphAlphaErrorMax > 0.015
+            || emphasisGlyphGlowErrorMax > 0.015
             || textGlyphGeometryCoverageGapCount > 0
             || textGlyphGeometryPositionErrorMax > 0.5
             || translationSweepLineCoverageGapCount > 0
@@ -239,39 +261,75 @@ struct NativeLyricsDotPhasePlan: Equatable {
         currentTime: TimeInterval,
         gateByTimeRange: Bool
     ) -> NativeLyricsDotPhasePlan {
-        let fadeOutDuration: TimeInterval = 0.7
         let totalDuration = max(0.1, endTime - startTime)
-        let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
-        let segmentDuration = dotsActiveDuration / 3.0
-        let progresses: [CGFloat] = (0..<3).map { index in
-            let dotStart = startTime + segmentDuration * Double(index)
-            let dotEnd = startTime + segmentDuration * Double(index + 1)
-            if currentTime <= dotStart { return 0 }
-            if currentTime >= dotEnd { return 1 }
-            return CGFloat(sin((currentTime - dotStart) / (dotEnd - dotStart) * .pi / 2))
-        }
-        let fadeStart = startTime + dotsActiveDuration
-        let fadeOutProgress: CGFloat = {
-            if currentTime < fadeStart { return 0 }
-            if currentTime >= endTime { return 1 }
-            return CGFloat((currentTime - fadeStart) / fadeOutDuration)
-        }()
         let visible = gateByTimeRange ? (currentTime >= startTime && currentTime < endTime) : true
-        let overallOpacity = visible ? (1 - fadeOutProgress) : 0
-        let rawPhase = sin(currentTime * .pi * 0.8)
-        let breathingPhase = rawPhase * abs(rawPhase)
-        let opacities = progresses.map { 0.25 + $0 * 0.75 }
-        let scales = progresses.map { progress in
-            let isLightingUp = progress > 0 && progress < 1
-            let breathingScale: CGFloat = isLightingUp ? (1 + CGFloat(breathingPhase) * 0.12) : 1
-            return (0.85 + progress * 0.15) * breathingScale
+        guard visible else {
+            return NativeLyricsDotPhasePlan(
+                opacities: [0, 0, 0],
+                scales: [0, 0, 0],
+                blur: 0,
+                overallOpacity: 0
+            )
         }
+
+        let currentDuration = min(max(0, currentTime - startTime), totalDuration)
+        let breatheDuration = totalDuration / ceil(totalDuration / 1.5)
+        var scale = sin(1.5 * .pi - (currentDuration / breatheDuration) * 2) / 20 + 1
+        var overallOpacity: CGFloat = 1
+
+        if currentDuration < 2.0 {
+            scale *= Double(easeOutExpo(CGFloat(currentDuration / 2.0)))
+        }
+        if currentDuration < 0.5 {
+            overallOpacity = 0
+        } else if currentDuration < 1.0 {
+            overallOpacity *= CGFloat((currentDuration - 0.5) / 0.5)
+        }
+
+        let remaining = totalDuration - currentDuration
+        if remaining < 0.75 {
+            let exitProgress = CGFloat((0.75 - remaining) / 0.75 / 2)
+            scale *= Double(1 - easeInOutBack(exitProgress))
+        }
+        if remaining < 0.375 {
+            overallOpacity *= clamp01(CGFloat(remaining / 0.375))
+        }
+
+        let dotsDuration = max(0.0001, totalDuration - 0.75)
+        let dotOpacities: [CGFloat] = (0..<3).map { index in
+            let shifted = currentDuration - (dotsDuration / 3.0) * Double(index)
+            return clamp(0.25, CGFloat((shifted * 3.0 / dotsDuration) * 0.75), 1)
+        }
+        let dotScale = max(0, CGFloat(scale)) * 0.7
         return NativeLyricsDotPhasePlan(
-            opacities: opacities,
-            scales: scales,
-            blur: fadeOutProgress * 8,
+            opacities: dotOpacities,
+            scales: [dotScale, dotScale, dotScale],
+            blur: 0,
             overallOpacity: overallOpacity
         )
+    }
+
+    private static func clamp(_ minValue: CGFloat, _ value: CGFloat, _ maxValue: CGFloat) -> CGFloat {
+        min(max(value, minValue), maxValue)
+    }
+
+    private static func clamp01(_ value: CGFloat) -> CGFloat {
+        min(max(value, 0), 1)
+    }
+
+    private static func easeOutExpo(_ x: CGFloat) -> CGFloat {
+        x >= 1 ? 1 : 1 - CGFloat(pow(2.0, Double(-10 * x)))
+    }
+
+    private static func easeInOutBack(_ x: CGFloat) -> CGFloat {
+        let c1: CGFloat = 1.70158
+        let c2 = c1 * 1.525
+        if x < 0.5 {
+            let y = 2 * x
+            return (y * y * ((c2 + 1) * y - c2)) / 2
+        }
+        let y = 2 * x - 2
+        return (y * y * ((c2 + 1) * y + c2) + 2) / 2
     }
 }
 
@@ -376,6 +434,10 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var activeSyllableSampleCount = 0
     private(set) var textParityGapCount = 0
     private(set) var perRunSweepGapCount = 0
+    private(set) var lineLevelMainSweepSuppressedCount = 0
+    private(set) var unexpectedLineLevelMainSweepCount = 0
+    private(set) var lineLevelTranslationSweepSuppressedCount = 0
+    private(set) var unexpectedLineLevelTranslationSweepCount = 0
     private(set) var perGlyphEmphasisGapCount = 0
     private(set) var maxActiveWordRunCount = 0
     private(set) var maxCJKWordRunCount = 0
@@ -487,6 +549,18 @@ struct NativeLyricsRenderTelemetryAccumulator {
         }
         if sample.expectsPerRunSweep && !sample.appliesPerRunSweep {
             perRunSweepGapCount += 1
+        }
+        if sample.expectsNoLineLevelMainSweep {
+            lineLevelMainSweepSuppressedCount += 1
+            if sample.appliesLineLevelMainSweep {
+                unexpectedLineLevelMainSweepCount += 1
+            }
+        }
+        if sample.expectsNoLineLevelTranslationSweep {
+            lineLevelTranslationSweepSuppressedCount += 1
+            if sample.appliesLineLevelTranslationSweep {
+                unexpectedLineLevelTranslationSweepCount += 1
+            }
         }
         if sample.expectsPerGlyphEmphasis && !sample.appliesPerGlyphEmphasis {
             perGlyphEmphasisGapCount += 1
@@ -696,6 +770,10 @@ struct NativeLyricsRenderTelemetryAccumulator {
             activeSyllableSampleCount: activeSyllableSampleCount,
             textParityGapCount: textParityGapCount,
             perRunSweepGapCount: perRunSweepGapCount,
+            lineLevelMainSweepSuppressedCount: lineLevelMainSweepSuppressedCount,
+            unexpectedLineLevelMainSweepCount: unexpectedLineLevelMainSweepCount,
+            lineLevelTranslationSweepSuppressedCount: lineLevelTranslationSweepSuppressedCount,
+            unexpectedLineLevelTranslationSweepCount: unexpectedLineLevelTranslationSweepCount,
             perGlyphEmphasisGapCount: perGlyphEmphasisGapCount,
             maxActiveWordRunCount: maxActiveWordRunCount,
             maxCJKWordRunCount: maxCJKWordRunCount,
@@ -841,6 +919,10 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let activeSyllableSampleCount: Int
     let textParityGapCount: Int
     let perRunSweepGapCount: Int
+    let lineLevelMainSweepSuppressedCount: Int
+    let unexpectedLineLevelMainSweepCount: Int
+    let lineLevelTranslationSweepSuppressedCount: Int
+    let unexpectedLineLevelTranslationSweepCount: Int
     let perGlyphEmphasisGapCount: Int
     let maxActiveWordRunCount: Int
     let maxCJKWordRunCount: Int
@@ -950,6 +1032,10 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "activeSyllableSampleCount": Double(activeSyllableSampleCount),
             "textParityGapCount": Double(textParityGapCount),
             "perRunSweepGapCount": Double(perRunSweepGapCount),
+            "lineLevelMainSweepSuppressedCount": Double(lineLevelMainSweepSuppressedCount),
+            "unexpectedLineLevelMainSweepCount": Double(unexpectedLineLevelMainSweepCount),
+            "lineLevelTranslationSweepSuppressedCount": Double(lineLevelTranslationSweepSuppressedCount),
+            "unexpectedLineLevelTranslationSweepCount": Double(unexpectedLineLevelTranslationSweepCount),
             "perGlyphEmphasisGapCount": Double(perGlyphEmphasisGapCount),
             "maxActiveWordRunCount": Double(maxActiveWordRunCount),
             "maxCJKWordRunCount": Double(maxCJKWordRunCount),
