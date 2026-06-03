@@ -58,26 +58,11 @@ enum NativeLyricsRowMeasurement {
         font: NSFont,
         lineSpacing: CGFloat? = nil
     ) -> CGFloat {
-        guard !text.isEmpty else { return 0 }
-        var attributes: [NSAttributedString.Key: Any] = [.font: font]
-        if let lineSpacing {
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = lineSpacing
-            paragraph.lineBreakMode = .byWordWrapping
-            attributes[.paragraphStyle] = paragraph
-        }
-        let attributed = NSAttributedString(string: text, attributes: attributes)
-        let storage = NSTextStorage(attributedString: attributed)
-        let layoutManager = NSLayoutManager()
-        let textContainer = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
-        textContainer.lineFragmentPadding = 0
-        textContainer.maximumNumberOfLines = 0
-        textContainer.lineBreakMode = .byWordWrapping
-        layoutManager.addTextContainer(textContainer)
-        storage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: textContainer)
-        let glyphRange = layoutManager.glyphRange(for: textContainer)
-        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-        return max(1, ceil(rect.height))
+        NativeLyricsTextMeasurement.measuredTextHeight(
+            text,
+            width: width,
+            font: font,
+            lineSpacing: lineSpacing
+        )
     }
 }

@@ -135,6 +135,18 @@ final class NativeLyricsRenderPlanTests: XCTestCase {
         XCTAssertEqual(visible, [2, 13, 14, 15, 16, 17, 29])
     }
 
+    func testNativeHeightAccumulatorUsesLocalMeasurementsBeforeConfiguredOffsets() {
+        let accumulated = NativeLyricsHeightAccumulator.accumulatedHeights(
+            renderedIndices: [0, 1, 2],
+            configuredAccumulatedHeights: [0: 0, 1: 42, 2: 88],
+            measuredHeights: [1: 80]
+        )
+
+        XCTAssertEqual(accumulated[0], 0)
+        XCTAssertEqual(accumulated[1], 42)
+        XCTAssertEqual(accumulated[2], 128)
+    }
+
     func testNativeManualScrollStateFreezesIndexAndRubberBandsInsideSurface() {
         var state = NativeLyricsManualScrollState()
         state.begin(frozenDisplayIndex: 4)

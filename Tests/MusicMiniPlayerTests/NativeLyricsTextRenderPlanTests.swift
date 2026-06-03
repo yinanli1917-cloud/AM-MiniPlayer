@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import MusicMiniPlayerCore
 
@@ -59,6 +60,17 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertEqual(plan.wordRuns.map(\.text).joined(), "冬天一個遊")
         XCTAssertTrue(plan.wordRuns.allSatisfy(\.isCJK))
         XCTAssertTrue(plan.wordRuns.allSatisfy { !$0.isEmphasis })
+    }
+
+    func testNativeTextMeasurementWrapsCJKLikeLegacyCompactRenderer() {
+        let metrics = NativeLyricsTextMeasurement.metrics(
+            "想走出你控制的领域",
+            width: 186,
+            font: .systemFont(ofSize: NativeLyricsTextConstants().mainFontSize, weight: .semibold)
+        )
+
+        XCTAssertEqual(metrics.lineCount, 2)
+        XCTAssertGreaterThanOrEqual(metrics.height, 48)
     }
 
     func testWordLevelPlanUsesSegmentedTokenTextAsSingleSourceOfTruth() {

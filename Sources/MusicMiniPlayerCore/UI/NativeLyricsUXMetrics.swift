@@ -328,6 +328,31 @@ struct NativeLyricsDotPhasePlan: Equatable {
     }
 }
 
+struct NativeLyricsTranslationLoadingDotPhasePlan: Equatable {
+    static let dotSize: CGFloat = 4
+    static let dotSpacing: CGFloat = 3
+    static let animationDuration: TimeInterval = 0.5
+    static let baseOpacity: CGFloat = 0.3
+    static let highlightOpacity: CGFloat = 0.7
+
+    let opacities: [CGFloat]
+
+    static func make(animationPhase: CGFloat) -> NativeLyricsTranslationLoadingDotPhasePlan {
+        let phase = max(0, min(1, animationPhase))
+        let opacities = (0..<3).map { index in
+            dotOpacity(index: index, animationPhase: phase)
+        }
+        return NativeLyricsTranslationLoadingDotPhasePlan(opacities: opacities)
+    }
+
+    static func dotOpacity(index: Int, animationPhase: CGFloat) -> CGFloat {
+        let phase = max(0, min(1, animationPhase))
+        let offset = CGFloat(index) * 0.3
+        let value = sin((phase + offset) * .pi)
+        return baseOpacity + (highlightOpacity - baseOpacity) * max(0, value)
+    }
+}
+
 struct NativeLyricsDotPhaseSample: Equatable {
     let isPrelude: Bool
     let expectedOpacity: [CGFloat]

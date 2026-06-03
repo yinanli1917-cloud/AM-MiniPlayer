@@ -341,7 +341,7 @@ struct LyricsLayerRendererConfiguration {
     let anchorY: CGFloat
     let rowWidth: CGFloat
     let renderedIndices: [Int]
-    let accumulatedHeights: [Int: CGFloat]
+    var accumulatedHeights: [Int: CGFloat]
     let lineTargetIndices: [Int: Int]
     let lineInterval: TimeInterval?
     let hasSyllableSync: Bool
@@ -684,6 +684,11 @@ final class NativeLyricsSurfaceView: NSView {
             runtimeConfiguration.nativeDirectSnapIndex = request.displayIndex
             runtimeConfiguration.nativeDirectSnapReason = request.reason
         }
+        runtimeConfiguration.accumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
+            renderedIndices: runtimeConfiguration.renderedIndices,
+            configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
+            measuredHeights: measuredHeightsByIndex
+        )
         synchronizeNativeSemanticIndex(configuration: &runtimeConfiguration)
         return runtimeConfiguration
     }
@@ -2414,8 +2419,8 @@ private final class NativeLyricsRowView: NSView {
 
     private static let hoverBackgroundAlpha: CGFloat = 0.08
     private static let hoverBackgroundCornerRadius: CGFloat = 12
-    private static let translationLoadingDotSize: CGFloat = 4
-    private static let translationLoadingDotSpacing: CGFloat = 3
+    private static let translationLoadingDotSize: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSize
+    private static let translationLoadingDotSpacing: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSpacing
     private static let translationLoadingRowHeight: CGFloat = 8
 
     private struct SweepLayoutCacheKey: Equatable {
@@ -3925,20 +3930,25 @@ private final class NativeLyricsRowView: NSView {
     private func startTranslationLoadingDots() {
         translationLoadingDotContainerLayer.isHidden = false
         translationLoadingDotContainerLayer.opacity = 1
+        let forwardSamples = (0...20).map { CGFloat($0) / 20.0 }
+        let reverseSamples = Array(forwardSamples.dropLast().dropFirst().reversed())
+        let phases = forwardSamples + reverseSamples
+        let keyTimes = phases.indices.map { NSNumber(value: Double($0) / Double(max(1, phases.count - 1))) }
         for (index, dot) in translationLoadingDotLayers.enumerated() {
             dot.isHidden = false
             dot.removeAnimation(forKey: "translationLoadingOpacity")
             let animation = CAKeyframeAnimation(keyPath: "opacity")
-            animation.values = [0.3, 0.7, 0.3]
-            animation.keyTimes = [0, 0.5, 1]
-            animation.duration = 0.5
-            animation.beginTime = CACurrentMediaTime() + Double(index) * 0.15
+            animation.values = phases.map {
+                NSNumber(value: Double(NativeLyricsTranslationLoadingDotPhasePlan.dotOpacity(index: index, animationPhase: $0)))
+            }
+            animation.keyTimes = keyTimes
+            animation.duration = NativeLyricsTranslationLoadingDotPhasePlan.animationDuration * 2
             animation.repeatCount = .infinity
-            animation.timingFunctions = [
-                CAMediaTimingFunction(name: .easeInEaseOut),
-                CAMediaTimingFunction(name: .easeInEaseOut)
-            ]
-            dot.opacity = 0.45
+            animation.calculationMode = .linear
+            dot.opacity = Float(NativeLyricsTranslationLoadingDotPhasePlan.dotOpacity(
+                index: index,
+                animationPhase: 0
+            ))
             dot.add(animation, forKey: "translationLoadingOpacity")
         }
     }
@@ -4087,16 +4097,15 @@ private final class NativeLyricsRowView: NSView {
         alpha: CGFloat,
         lineSpacing: CGFloat? = nil
     ) -> NSAttributedString {
-        var attributes: [NSAttributedString.Key: Any] = [
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.alignment = .left
+        paragraph.lineSpacing = lineSpacing ?? 0
+        let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(alpha)
+            .foregroundColor: NSColor.white.withAlphaComponent(alpha),
+            .paragraphStyle: paragraph
         ]
-        if let lineSpacing {
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = lineSpacing
-            paragraph.lineBreakMode = .byWordWrapping
-            attributes[.paragraphStyle] = paragraph
-        }
         return NSAttributedString(
             string: text,
             attributes: attributes
@@ -4133,26 +4142,11 @@ private final class NativeLyricsRowView: NSView {
         font: NSFont,
         lineSpacing: CGFloat? = nil
     ) -> CGFloat {
-        guard !text.isEmpty else { return 0 }
-        var attributes: [NSAttributedString.Key: Any] = [.font: font]
-        if let lineSpacing {
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = lineSpacing
-            paragraph.lineBreakMode = .byWordWrapping
-            attributes[.paragraphStyle] = paragraph
-        }
-        let attributed = NSAttributedString(string: text, attributes: attributes)
-        let storage = NSTextStorage(attributedString: attributed)
-        let layoutManager = NSLayoutManager()
-        let textContainer = NSTextContainer(size: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
-        textContainer.lineFragmentPadding = 0
-        textContainer.maximumNumberOfLines = 0
-        textContainer.lineBreakMode = .byWordWrapping
-        layoutManager.addTextContainer(textContainer)
-        storage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: textContainer)
-        let glyphRange = layoutManager.glyphRange(for: textContainer)
-        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-        return max(1, ceil(rect.height))
+        NativeLyricsTextMeasurement.measuredTextHeight(
+            text,
+            width: width,
+            font: font,
+            lineSpacing: lineSpacing
+        )
     }
 }

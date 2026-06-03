@@ -30,6 +30,20 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(fading.blur, 4, accuracy: 0.0001)
     }
 
+    func testTranslationLoadingDotsMatchLegacySizeSpacingAndSinePhase() {
+        let plan = NativeLyricsTranslationLoadingDotPhasePlan.make(animationPhase: 0)
+
+        XCTAssertEqual(NativeLyricsTranslationLoadingDotPhasePlan.dotSize, 4)
+        XCTAssertEqual(NativeLyricsTranslationLoadingDotPhasePlan.dotSpacing, 3)
+        XCTAssertEqual(NativeLyricsTranslationLoadingDotPhasePlan.animationDuration, 0.5)
+        XCTAssertEqual(plan.opacities[0], 0.3, accuracy: 0.0001)
+        XCTAssertEqual(plan.opacities[1], CGFloat(0.3 + 0.4 * sin(0.3 * Double.pi)), accuracy: 0.0001)
+        XCTAssertEqual(plan.opacities[2], CGFloat(0.3 + 0.4 * sin(0.6 * Double.pi)), accuracy: 0.0001)
+
+        let peak = NativeLyricsTranslationLoadingDotPhasePlan.make(animationPhase: 0.5)
+        XCTAssertEqual(peak.opacities[0], 0.7, accuracy: 0.0001)
+    }
+
     func testFrameCadenceSummaryReportsRefreshPreservingMetrics() {
         var accumulator = NativeLyricsFrameCadenceAccumulator()
         let expected = 1.0 / 60.0
