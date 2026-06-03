@@ -4049,16 +4049,15 @@ private final class NativeLyricsRowView: NSView {
         let attributed = NSMutableAttributedString(
             attributedString: attributedText(text, fontSize: fontSize, alpha: alpha)
         )
-        var location = 0
-        let textLength = (text as NSString).length
-        for (order, run) in wordRuns.enumerated() {
-            let length = (run.text as NSString).length
-            defer { location += length }
-            guard hiddenOrders.contains(order), length > 0, location < textLength else { continue }
+        for range in NativeLyricsHiddenTextMask.ranges(
+            in: text,
+            hiddenOrders: hiddenOrders,
+            wordRuns: wordRuns
+        ) {
             attributed.addAttribute(
                 .foregroundColor,
                 value: NSColor.clear,
-                range: NSRange(location: location, length: min(length, textLength - location))
+                range: range
             )
         }
         return attributed

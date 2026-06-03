@@ -107,7 +107,7 @@ public final class LyricsDiskCache {
     }
 
     public func set(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, lines: [LyricLine], matchedDurationDiff: TimeInterval?) {
-        let cachedLines = lines.map { line in
+        let cachedLines = LyricsWordRepair.repair(lines: lines).map { line in
             CachedLyricLine(
                 text: line.text,
                 startTime: line.startTime,
@@ -140,7 +140,7 @@ public final class LyricsDiskCache {
         matchedDurationDiff: TimeInterval?
     ) {
         guard kind == .instrumental || kind == .unavailable else { return }
-        let cachedLines = lines.map { line in
+        let cachedLines = LyricsWordRepair.repair(lines: lines).map { line in
             CachedLyricLine(
                 text: line.text,
                 startTime: line.startTime,
@@ -163,7 +163,7 @@ public final class LyricsDiskCache {
     }
 
     public static func lyricLines(from cached: [CachedLyricLine]) -> [LyricLine] {
-        cached.map { line in
+        LyricsWordRepair.repair(lines: cached.map { line in
             LyricLine(
                 text: line.text,
                 startTime: line.startTime,
@@ -171,7 +171,7 @@ public final class LyricsDiskCache {
                 words: line.words.map { LyricWord(word: $0.word, startTime: $0.startTime, endTime: $0.endTime) },
                 translation: line.translation
             )
-        }
+        })
     }
 
     private func setEntry(_ entry: LyricsDiskCacheEntry, title: String, artist: String, duration: TimeInterval, album: String) {

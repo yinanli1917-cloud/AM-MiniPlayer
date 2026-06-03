@@ -345,7 +345,12 @@ public final class LyricsParser {
             // Clamp line endTime to last word's endTime — prevents bloated tail
             // (YRC line duration often extends far past the actual last syllable)
             if let lastWord = words.last { endTime = min(endTime, lastWord.endTime) }
-            lines.append(LyricLine(text: lineText, startTime: startTime, endTime: endTime, words: words))
+            lines.append(LyricsWordRepair.repair(line: LyricLine(
+                text: lineText,
+                startTime: startTime,
+                endTime: endTime,
+                words: words
+            )))
         }
 
         lines.sort { $0.startTime < $1.startTime }

@@ -244,6 +244,26 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(lines?[1].text, "世界")
     }
 
+    func testParseYRC_repairsMergedLatinContractionTokens() {
+        let yrc = "[204420,6230](204420,1220,0)STARDUST (205640,3000,0)NIGHTIT'S (209730,480,0)SO (210210,440,0)LIGHT"
+
+        guard let lines = parser.parseYRC(yrc, timeOffset: 0) else {
+            XCTFail("YRC parse returned nil")
+            return
+        }
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines[0].text, "STARDUST NIGHT IT'S SO LIGHT")
+        XCTAssertEqual(
+            lines[0].words.map(\.word),
+            ["STARDUST ", "NIGHT ", "IT'S ", "SO ", "LIGHT"]
+        )
+        XCTAssertEqual(lines[0].words.count, 5)
+        XCTAssertEqual(lines[0].words[1].startTime, 205.64, accuracy: 0.001)
+        XCTAssertLessThan(lines[0].words[1].endTime, lines[0].words[2].startTime + 0.001)
+        XCTAssertEqual(lines[0].words.last?.endTime ?? 0, 210.65, accuracy: 0.001)
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - createUnsyncedLyrics
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -315,6 +315,34 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertTrue(glyphs.allSatisfy { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
     }
 
+    func testHiddenTextMaskPreservesWhitespaceAroundEmphasisRuns() {
+        let line = LyricLine(
+            text: "Sweet Summer",
+            startTime: 0,
+            endTime: 3,
+            words: [
+                LyricWord(word: "Sweet", startTime: 0, endTime: 1.8),
+                LyricWord(word: " Summer", startTime: 1.8, endTime: 3)
+            ]
+        )
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(
+            line: line,
+            currentTime: 1.0,
+            isActive: true
+        ))
+
+        let ranges = NativeLyricsHiddenTextMask.ranges(
+            in: plan.displayText,
+            hiddenOrders: [0],
+            wordRuns: plan.wordRuns
+        )
+        let hiddenOffsets = ranges.map(\.location)
+
+        XCTAssertEqual(plan.displayText, "Sweet Summer")
+        XCTAssertEqual(hiddenOffsets, [0, 1, 2, 3, 4])
+        XCTAssertFalse(hiddenOffsets.contains(5), "The inter-word space must remain visible when the emphasized token is glyph-rendered.")
+    }
+
     func testHeldEmphasisKeepsScaleAndGlowThroughFloatTail() {
         let emphasis = NativeLyricsEmphasisPlan.make(
             text: "shine",

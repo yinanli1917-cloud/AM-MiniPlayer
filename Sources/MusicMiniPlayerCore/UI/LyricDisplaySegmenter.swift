@@ -169,10 +169,7 @@ enum LyricDisplaySegmenter {
         }
         guard !visibleWords.isEmpty else { return [] }
 
-        let hasExplicitWhitespace = visibleWords.contains { item in
-            item.raw.contains(where: { $0.isWhitespace })
-        }
-        let needsSyntheticSpaces = !hasExplicitWhitespace && shouldUseSyntheticSpaces(
+        let needsSyntheticSpaces = shouldUseSyntheticSpaces(
             for: visibleWords.map(\.trimmed)
         )
 
@@ -181,11 +178,9 @@ enum LyricDisplaySegmenter {
             let isLast = offset == visibleWords.count - 1
             if !isLast {
                 let next = visibleWords[offset + 1]
-                if hasExplicitWhitespace {
-                    if item.raw.last?.isWhitespace == true || next.raw.first?.isWhitespace == true {
-                        text += " "
-                    }
-                } else if needsSyntheticSpaces {
+                let hasExplicitBoundaryWhitespace = item.raw.last?.isWhitespace == true
+                    || next.raw.first?.isWhitespace == true
+                if hasExplicitBoundaryWhitespace || needsSyntheticSpaces {
                     text += " "
                 }
             }

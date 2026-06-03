@@ -149,4 +149,31 @@ final class LyricsDiskCacheTests: XCTestCase {
         XCTAssertNil(reloaded.get(title: "Song 0", artist: "Artist", duration: 200, album: "Album"))
         XCTAssertNotNil(reloaded.get(title: "Song 7", artist: "Artist", duration: 207, album: "Album"))
     }
+
+    func testLyricLinesRepairMergedLatinContractionTokensFromCache() {
+        let cached = [
+            CachedLyricLine(
+                text: "STARDUST NIGHTIT'S SO LIGHT",
+                startTime: 204.42,
+                endTime: 210.65,
+                words: [
+                    CachedLyricWord(word: "STARDUST ", startTime: 204.42, endTime: 205.64),
+                    CachedLyricWord(word: "NIGHTIT'S ", startTime: 205.64, endTime: 208.64),
+                    CachedLyricWord(word: "SO ", startTime: 209.73, endTime: 210.21),
+                    CachedLyricWord(word: "LIGHT", startTime: 210.21, endTime: 210.65),
+                ],
+                translation: "这流光四溢的星尘之夜啊"
+            )
+        ]
+
+        let repaired = LyricsDiskCache.lyricLines(from: cached)
+
+        XCTAssertEqual(repaired.count, 1)
+        XCTAssertEqual(repaired[0].text, "STARDUST NIGHT IT'S SO LIGHT")
+        XCTAssertEqual(
+            repaired[0].words.map(\.word),
+            ["STARDUST ", "NIGHT ", "IT'S ", "SO ", "LIGHT"]
+        )
+        XCTAssertEqual(repaired[0].translation, "这流光四溢的星尘之夜啊")
+    }
 }

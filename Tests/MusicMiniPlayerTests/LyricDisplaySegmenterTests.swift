@@ -179,6 +179,21 @@ final class LyricDisplaySegmenterTests: XCTestCase {
         XCTAssertEqual(LyricDisplaySegmenter.displayText(forWords: words), "Sweet So Sweet Kiss")
     }
 
+    func testTimedLatinDisplayRepairsMixedWhitespaceBoundariesPerWord() {
+        let words = [
+            LyricWord(word: "STARDUST", startTime: 0, endTime: 0.8),
+            LyricWord(word: " NIGHT", startTime: 0.8, endTime: 1.6),
+            LyricWord(word: "IT'S", startTime: 1.6, endTime: 2.1),
+            LyricWord(word: " SO", startTime: 2.1, endTime: 2.6),
+            LyricWord(word: " LIGHT", startTime: 2.6, endTime: 3.1),
+        ]
+
+        XCTAssertEqual(
+            LyricDisplaySegmenter.displayText(forWords: words),
+            "STARDUST NIGHT IT'S SO LIGHT"
+        )
+    }
+
     func testWordSplitterDoesNotLeaveSingleWordOrphanWhenItCanRebalance() {
         let words = [
             LyricWord(word: "give", startTime: 1, endTime: 1.2),

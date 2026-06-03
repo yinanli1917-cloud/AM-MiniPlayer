@@ -355,6 +355,34 @@ struct NativeLyricsTranslationRenderPlan: Equatable {
     let postLineFade: CGFloat
 }
 
+enum NativeLyricsHiddenTextMask {
+    static func ranges(
+        in displayText: String,
+        hiddenOrders: Set<Int>,
+        wordRuns: [NativeLyricsWordRunPlan]
+    ) -> [NSRange] {
+        guard !displayText.isEmpty, !hiddenOrders.isEmpty, !wordRuns.isEmpty else { return [] }
+        let textLength = (displayText as NSString).length
+        guard textLength > 0 else { return [] }
+
+        var location = 0
+        var ranges: [NSRange] = []
+        for (order, run) in wordRuns.enumerated() {
+            let runText = run.text as NSString
+            let runLength = runText.length
+            defer { location += runLength }
+            guard hiddenOrders.contains(order), runLength > 0, location < textLength else { continue }
+            let visibleLength = min(runLength, textLength - location)
+            for offset in 0..<visibleLength {
+                let character = runText.substring(with: NSRange(location: offset, length: 1))
+                guard !character.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                ranges.append(NSRange(location: location + offset, length: 1))
+            }
+        }
+        return ranges
+    }
+}
+
 struct NativeLyricsEmphasisPlan: Equatable {
     static let inactive = NativeLyricsEmphasisPlan(
         amount: 0,
