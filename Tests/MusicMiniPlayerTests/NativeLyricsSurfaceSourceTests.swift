@@ -214,6 +214,9 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("applyFrames(runtimeConfiguration: runtimeConfiguration, snap: false, managesTransaction: false)"))
         XCTAssertTrue(source.contains("let needsActivationRefresh = textPhaseIndexChanged"))
         XCTAssertTrue(source.contains("row.index == activeTextPhaseIndex"))
+        XCTAssertTrue(source.contains("private func refreshTextRowsForActiveLineChange("))
+        XCTAssertTrue(source.contains("previousIndex: previousSemanticIndex"))
+        XCTAssertTrue(source.contains("if activeTextLineChanged {\n                refreshTextRowsForActiveLineChange"))
         XCTAssertFalse(source.contains("private func textPhaseRows"))
         XCTAssertFalse(source.contains("rowViews.values.compactMap(\\.currentRow).filter"))
         XCTAssertFalse(source.contains("applyFramesForCurrentConfiguration(snap: false, managesTransaction: false)"))
@@ -259,5 +262,9 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("no active line-level no-sweep samples"))
         XCTAssertTrue(source.contains("\"cjkEmphasisGlyphCount\""))
         XCTAssertTrue(source.contains("CJK emphasis glyph count"))
+        XCTAssertTrue(
+            source.contains("parser.add_argument(\"--min-cpu-reduction\", type=float, default=0.70)"),
+            "The UX gate must preserve the native renderer's 70%+ CPU reduction target instead of accepting weak CPU parity."
+        )
     }
 }

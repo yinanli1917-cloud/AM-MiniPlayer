@@ -943,7 +943,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-perf", action="store_true")
     parser.add_argument("--perf-duration", type=float, default=16.0)
     parser.add_argument("--perf-warmup", type=float, default=8.0)
-    parser.add_argument("--min-cpu-reduction", type=float, default=0.50)
+    parser.add_argument("--min-cpu-reduction", type=float, default=0.70)
     return parser.parse_args()
 
 

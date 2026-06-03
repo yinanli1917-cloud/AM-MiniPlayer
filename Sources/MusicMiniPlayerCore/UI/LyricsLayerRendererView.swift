@@ -1422,6 +1422,13 @@ final class NativeLyricsSurfaceView: NSView {
             || hasActiveVisualMotion
         manualPresentationNeedsApply = false
         withDisabledLayerActions {
+            if activeTextLineChanged {
+                refreshTextRowsForActiveLineChange(
+                    previousIndex: previousSemanticIndex,
+                    currentIndex: runtimeConfiguration.effectiveCurrentIndex,
+                    runtimeConfiguration: runtimeConfiguration
+                )
+            }
             if shouldUpdateTextPhase {
                 updateTextPhasesForCurrentConfiguration(runtimeConfiguration: runtimeConfiguration)
             }
@@ -1447,6 +1454,26 @@ final class NativeLyricsSurfaceView: NSView {
         sampleNativeLineMotionDuringPresentationTickIfNeeded(runtimeConfiguration: runtimeConfiguration)
         checkPendingTapToLineSettleTiming(now: now)
         stopPresentationLoopIfIdle(runtimeConfiguration: runtimeConfiguration)
+    }
+
+    private func refreshTextRowsForActiveLineChange(
+        previousIndex: Int?,
+        currentIndex: Int,
+        runtimeConfiguration: LyricsLayerRendererConfiguration
+    ) {
+        let indices = Set(([previousIndex, currentIndex] as [Int?]).compactMap { $0 })
+        for index in indices {
+            guard let row = runtimeConfiguration.rows.first(where: { $0.index == index }),
+                  let view = rowViews[row.id] else {
+                continue
+            }
+            _ = updateContentIfNeeded(
+                view: view,
+                row: row,
+                configuration: runtimeConfiguration
+            )
+        }
+        lastConfiguredTextPhaseIndex = currentIndex
     }
 
     private func shouldSyncVisualTargetsOnPresentationTick(

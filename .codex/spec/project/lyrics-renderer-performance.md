@@ -1,10 +1,16 @@
 # Lyrics Renderer Performance
 
-Last updated: 2026-05-31
+Last updated: 2026-06-03
 
 ## Protected UX
 
-The old smooth lyrics page is the behavioral reference. Preserve:
+AMLL is the lyric renderer behavior source of truth. The old smooth nanoPod
+`v2.8` lyrics page is the practical regression reference for this app's compact
+window, but native renderer fixes must translate AMLL UX semantics into the
+AppKit/Core Animation implementation instead of copying old SwiftUI code or
+reintroducing old bugs.
+
+Preserve:
 
 - manual Y-offset row layout in `LyricsView`;
 - frozen display index during manual scroll;
@@ -13,6 +19,11 @@ The old smooth lyrics page is the behavioral reference. Preserve:
 - active/non-active blur, scale, and opacity;
 - held-word emphasis, lift, glow, and float;
 - line spacing, wrapping, CJK behavior, interlude/prelude dots, and rapid page/song transitions.
+
+Native active-line lifecycle must follow AMLL hot/buffered row ownership: newly
+hot rows are enabled, rows leaving hot/buffered ownership are disabled, and the
+native layer must refresh both sides of an active-line transition so bright
+sweep, translation sweep, and emphasis state cannot smear across rows.
 
 Native renderer blur parity must use the same distance law as the old
 `LyricLineView`: inactive row blur is `abs(displayIndex - currentIndex) * 1.5`.
@@ -50,7 +61,9 @@ split the translation more aggressively or fall back to the source translation,
 never leave a blank translated row.
 Compact scripts such as CJK, kana, Hangul, and Thai must not be re-spaced by
 Latin orphan balancing.
-Do not replace the old layout with fade-based transitions, opacity culling, cadence reduction, or simplified lyric effects. Those may lower implementation complexity but break the perceived continuity.
+Do not replace AMLL/v2.8 layout with fade-based transitions, opacity culling,
+cadence reduction, or simplified lyric effects. Those may lower implementation
+complexity but break the perceived continuity.
 
 The protected auto-scroll state is a wave, not an "aligned OK" state. Runtime
 diagnostics must not treat every visible row already targeting the active line as
@@ -95,6 +108,11 @@ Fixes that worked:
    lyrics payload or measured row heights change; leaving
    `heightCacheInvalidated` true makes each visible line rescan previous rows
    during SwiftUI layout and can turn page switches into O(N²) CPU spikes.
+
+The UX benchmark CPU gate must preserve a native-renderer reduction target of
+at least 70% versus the main SwiftUI baseline. CPU improvements are not valid if
+they are achieved by weakening motion, sweep, tap recovery, text geometry, or
+visual-state parity.
 
 6. Raise lyric sweep cadence only after reducing renderer layer churn.
    The old 15 Hz active lyric tick is visibly low on word-level lyrics. A verified 30 Hz tick is acceptable when the normal bright sweep is grouped into one masked layer per visual lyric line and emphasized words remain on their separate path. Do not raise cadence by itself.
