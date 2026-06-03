@@ -113,8 +113,7 @@ extension LyricsFetcher {
               LanguageUtils.isPureASCII(title),
               LanguageUtils.isPureASCII(artist),
               LanguageUtils.isLikelyEnglishTitle(title),
-              latinEvidenceKey(title) == latinEvidenceKey(album),
-              latinEvidenceKey(title).count >= 4 else {
+              isAlbumTitleEchoNativeAliasProbeInput(title: title, album: album) else {
             return nil
         }
         let cjkArtists = await resolveArtistCJKAliases(
@@ -2429,22 +2428,38 @@ extension LyricsFetcher {
             },
             extractSong: { song in
                 guard let mid = song["mid"] as? String, let name = song["name"] as? String else { return nil }
+                let songID = song["id"] as? Int
                 var artist = ""
                 if let singers = song["singer"] as? [[String: Any]] {
                     artist = self.joinedProviderArtists(singers)
                 }
                 let dur = Double(song["interval"] as? Int ?? 0)
                 let albumName = (song["album"] as? [String: Any])?["name"] as? String ?? ""
-                return (mid, name, artist, dur, albumName)
+                let providerID = songID.map { "\(mid)|\($0)" } ?? mid
+                return (providerID, name, artist, dur, albumName)
             }
         ) else {
             DebugLogger.log("QQMusic", "❌ 未找到歌曲")
             return nil
         }
-        let songMid = qqMatch.id
+        let idParts = qqMatch.id.split(separator: "|", maxSplits: 1).map(String.init)
+        let songMid = idParts.first ?? qqMatch.id
+        let songID = idParts.dropFirst().first.flatMap(Int.init)
 
         DebugLogger.log("QQMusic", "✅ 找到 songMid=\(songMid) albumMatch=\(qqMatch.albumMatched)")
-        guard let result = await fetchQQMusicLyrics(songMid: songMid, duration: duration) else {
+        let primaryLyrics: (lyrics: [LyricLine], kind: LyricsKind)?
+        if let songID {
+            primaryLyrics = await fetchQQMusicLyricsViaMusicu(songMid: songMid, songID: songID, duration: duration)
+        } else {
+            primaryLyrics = nil
+        }
+        let fallbackLyrics: (lyrics: [LyricLine], kind: LyricsKind)?
+        if primaryLyrics == nil {
+            fallbackLyrics = await fetchQQMusicLyrics(songMid: songMid, duration: duration)
+        } else {
+            fallbackLyrics = nil
+        }
+        guard let result = primaryLyrics ?? fallbackLyrics else {
             DebugLogger.log("QQMusic", "❌ 获取歌词失败")
             return catalogUnavailableResult(
                 source: "QQ",

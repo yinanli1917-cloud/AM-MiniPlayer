@@ -153,6 +153,28 @@ public final class LyricsFetcher {
         return wordCount >= 4 || latinEvidenceKey(title).count >= 14
     }
 
+    func isAlbumTitleEchoNativeAliasProbeInput(title: String, album: String) -> Bool {
+        guard !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              LanguageUtils.isLikelyEnglishTitle(title) else {
+            return false
+        }
+        let titleKey = latinEvidenceKey(title)
+        guard titleKey.count >= 4 else { return false }
+        if titleKey == latinEvidenceKey(album) {
+            return true
+        }
+
+        var albumTokens = album
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        let releaseSuffixes: Set<String> = ["single", "ep", "singles"]
+        while let last = albumTokens.last, releaseSuffixes.contains(last) {
+            albumTokens.removeLast()
+        }
+        return titleKey == latinEvidenceKey(albumTokens.joined(separator: " "))
+    }
+
     private func shouldUsePreflightLibraryNativeTitleCache(
         shouldProbeLibraryNativeTitle: Bool,
         shouldProbeAlbumTitleEchoNativeAlias: Bool
@@ -215,8 +237,7 @@ public final class LyricsFetcher {
             && shouldProbeLibraryNativeTitleAlias(title: title)
         let shouldProbeAlbumTitleEchoNativeAlias = !album.isEmpty
             && LanguageUtils.isLikelyEnglishTitle(title)
-            && latinEvidenceKey(title) == latinEvidenceKey(album)
-            && latinEvidenceKey(title).count >= 4
+            && isAlbumTitleEchoNativeAliasProbeInput(title: title, album: album)
         return foregroundEmptyResultDeadline(
             shouldProtectAsciiNativeAlias: shouldProtectAsciiNativeAlias,
             shouldProbeCatalogExactTitle: shouldProbeCatalogExactTitle,
@@ -240,8 +261,7 @@ public final class LyricsFetcher {
             && shouldProbeLibraryNativeTitleAlias(title: title)
         let shouldProbeAlbumTitleEchoNativeAlias = !album.isEmpty
             && LanguageUtils.isLikelyEnglishTitle(title)
-            && latinEvidenceKey(title) == latinEvidenceKey(album)
-            && latinEvidenceKey(title).count >= 4
+            && isAlbumTitleEchoNativeAliasProbeInput(title: title, album: album)
         return shouldUsePreflightLibraryNativeTitleCache(
             shouldProbeLibraryNativeTitle: shouldProbeLibraryNativeTitle,
             shouldProbeAlbumTitleEchoNativeAlias: shouldProbeAlbumTitleEchoNativeAlias
@@ -285,6 +305,35 @@ public final class LyricsFetcher {
         let d = duration, te = translationEnabled
         let alb = cleanAlbum
 
+        let titleIsASCII = LanguageUtils.isPureASCII(ot)
+        let inputHasCollaborationCredit = titleHasCollaborationCredit(ot)
+        let shouldProtectNativeProviderRace = LanguageUtils.containsCJK(ot)
+            || LanguageUtils.containsCJK(oa)
+            || LanguageUtils.containsCJK(alb)
+        let shouldProtectAsciiNativeAlias = titleIsASCII && !LanguageUtils.isLikelyEnglishTitle(ot)
+        let shouldProbeAlbumTitleEchoNativeAlias = !alb.isEmpty
+            && LanguageUtils.isLikelyEnglishTitle(ot)
+            && isAlbumTitleEchoNativeAliasProbeInput(title: ot, album: alb)
+        let shouldProbeCatalogExactTitle = self.shouldForegroundNetEaseCatalogExactTitleDiscovery(
+            title: ot,
+            artist: oa,
+            originalTitle: ot,
+            originalArtist: oa,
+            duration: d,
+            album: alb
+        )
+        let shouldProbeLibraryNativeTitle = titleIsASCII
+            && LanguageUtils.isLikelyEnglishTitle(ot)
+            && LanguageUtils.isPureASCII(oa)
+            && !inputHasCollaborationCredit
+            && shouldProbeLibraryNativeTitleAlias(title: ot)
+        let shouldDeferAvailabilityCacheForForegroundProbe =
+            shouldProtectNativeProviderRace
+            || shouldProtectAsciiNativeAlias
+            || shouldProbeCatalogExactTitle
+            || shouldProbeLibraryNativeTitle
+            || shouldProbeAlbumTitleEchoNativeAlias
+
         let canUseImmediateDiskLyrics = !LanguageUtils.containsCJK(ot) && !LanguageUtils.containsCJK(oa)
         if canUseImmediateDiskLyrics {
             let cachedCandidates = lyricsDiskCache.candidates(title: ot, artist: oa, duration: d, album: alb)
@@ -292,7 +341,11 @@ public final class LyricsFetcher {
             for cached in cachedCandidates {
                 let lyrics = cached.lines.map { LyricsDiskCache.lyricLines(from: $0) } ?? parser.parseLRC(cached.syncedLyrics)
                 if cached.kind == .instrumental || cached.kind == .unavailable {
-                    guard shouldUseImmediateCachedAvailability(cached, requestedAlbum: alb) else { continue }
+                    guard shouldUseImmediateCachedAvailability(
+                        cached,
+                        requestedAlbum: alb,
+                        defersForegroundProviderProbe: shouldDeferAvailabilityCacheForForegroundProbe
+                    ) else { continue }
                     let kind = cached.kind ?? .unavailable
                     return [LyricsFetchResult(
                         lyrics: lyrics,
@@ -322,9 +375,6 @@ public final class LyricsFetcher {
             }
         }
 
-        // Branch 2 gate — only speculate when the title looks ASCII/romaji.
-        let titleIsASCII = LanguageUtils.isPureASCII(ot)
-
         var results: [LyricsFetchResult] = []
         let fetchStart = Date()
         let branch2Fired = Box(false)
@@ -338,32 +388,11 @@ public final class LyricsFetcher {
         let branch3Fired = Box(false)
         let branch3Landed = Box(false)
         let netEaseProviderLanded = Box(false)
+        let qqProviderLanded = Box(false)
         let shouldDelayLowTierFallbacks = !alb.isEmpty
             && !(titleIsASCII && LanguageUtils.isLikelyEnglishTitle(ot))
-        let shouldProtectNativeProviderRace = LanguageUtils.containsCJK(ot)
-            || LanguageUtils.containsCJK(oa)
-            || LanguageUtils.containsCJK(alb)
         let lowTierFallbackDelay: UInt64 = shouldDelayLowTierFallbacks ? 700_000_000 : 0
         let albumScopedLandingDeadline: TimeInterval = 2.85
-        let shouldProtectAsciiNativeAlias = titleIsASCII && !LanguageUtils.isLikelyEnglishTitle(ot)
-        let shouldProbeAlbumTitleEchoNativeAlias = !alb.isEmpty
-            && LanguageUtils.isLikelyEnglishTitle(ot)
-            && latinEvidenceKey(ot) == latinEvidenceKey(alb)
-            && latinEvidenceKey(ot).count >= 4
-        let shouldProbeCatalogExactTitle = self.shouldForegroundNetEaseCatalogExactTitleDiscovery(
-            title: ot,
-            artist: oa,
-            originalTitle: ot,
-            originalArtist: oa,
-            duration: d,
-            album: alb
-        )
-        let inputHasCollaborationCredit = titleHasCollaborationCredit(ot)
-        let shouldProbeLibraryNativeTitle = titleIsASCII
-            && LanguageUtils.isLikelyEnglishTitle(ot)
-            && LanguageUtils.isPureASCII(oa)
-            && !inputHasCollaborationCredit
-            && shouldProbeLibraryNativeTitleAlias(title: ot)
         let shouldProbeArtistDiscographyAlias = self.shouldForegroundNetEaseArtistDiscographyAliasFallback(
             title: ot,
             artist: oa,
@@ -386,6 +415,8 @@ public final class LyricsFetcher {
             nativeProviderTimeout = 2.55
         } else if shouldProtectNativeProviderRace && !alb.isEmpty {
             nativeProviderTimeout = 4.2
+        } else if shouldProtectNativeProviderRace {
+            nativeProviderTimeout = 3.2
         } else {
             nativeProviderTimeout = 2.2
         }
@@ -499,7 +530,13 @@ public final class LyricsFetcher {
                 netEaseProviderLanded.value = true
                 return result
             }
-            group.addTask { await self.withHardSourceTimeout(seconds: 2.2) { await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb) } }
+            group.addTask {
+                let result = await self.withHardSourceTimeout(seconds: shouldProtectNativeProviderRace ? nativeProviderTimeout : 2.2) {
+                    await self.fetchFromQQMusic(title: ot, artist: oa, originalTitle: ot, originalArtist: oa, duration: d, translationEnabled: te, album: alb)
+                }
+                qqProviderLanded.value = true
+                return result
+            }
 
             // ───────────────────────────────────────────────────────────────
             // Branch 2 — speculative per-region (ASCII input only)
@@ -959,7 +996,9 @@ public final class LyricsFetcher {
                 }
 
                 if results.isEmpty {
-                    if shouldProtectNativeProviderRace && !netEaseProviderLanded.value && elapsed < nativeProviderTimeout {
+                    let nativeProviderPending = shouldProtectNativeProviderRace
+                        && (!netEaseProviderLanded.value || !qqProviderLanded.value)
+                    if nativeProviderPending && elapsed < nativeProviderTimeout {
                         continue
                     }
                     if catalogExactTitleBranchFired.value && !catalogExactTitleBranchLanded.value && elapsed < catalogExactTitleLandingDeadline {
@@ -1005,7 +1044,13 @@ public final class LyricsFetcher {
                         && ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false)
                         && $0.score >= 50
                         && self.hasSaneForegroundTimeline($0.lyrics, duration: d)
+                    let nativeProviderStillPendingForLibraryFastExit =
+                        shouldProtectNativeProviderRace
+                        && (!netEaseProviderLanded.value || !qqProviderLanded.value)
+                        && elapsed < min(nativeProviderTimeout, 2.85)
                     let preferredSyncedSourcePending =
+                        nativeProviderStillPendingForLibraryFastExit
+                        ||
                         (catalogExactTitleBranchFired.value && !catalogExactTitleBranchLanded.value && elapsed < catalogExactTitleLandingDeadline)
                         || (libraryNativeTitleBranchFired.value && !libraryNativeTitleBranchLanded.value && elapsed < libraryNativeTitleLandingDeadline)
                         || (albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed < albumScopedLandingDeadline)
@@ -1081,6 +1126,11 @@ public final class LyricsFetcher {
                     && !hasFastExitSyncedResult
                     && !trustedExactSyncedCanShortCircuit
                     && elapsed < nativeProviderTimeout
+                let qqProviderNeedsLandingWindow = shouldProtectNativeProviderRace
+                    && !qqProviderLanded.value
+                    && !hasFastExitSyncedResult
+                    && !trustedExactSyncedCanShortCircuit
+                    && elapsed < nativeProviderTimeout
                 let branch2NeedsLandingWindow = branch2Fired.value
                     && !branch2Landed.value
                     && !hasFastExitSyncedResult
@@ -1099,7 +1149,7 @@ public final class LyricsFetcher {
                     && !hasFastExitSyncedResult
                     && !trustedExactSyncedCanShortCircuit
                     && elapsed < libraryNativeTitleLandingDeadline
-                if netEaseProviderNeedsLandingWindow || catalogExactTitleNeedsLandingWindow || libraryNativeTitleNeedsLandingWindow || albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
+                if netEaseProviderNeedsLandingWindow || qqProviderNeedsLandingWindow || catalogExactTitleNeedsLandingWindow || libraryNativeTitleNeedsLandingWindow || albumScopedBranchNeedsLandingWindow || branch2NeedsLandingWindow || branch3NeedsLandingWindow {
                     continue
                 }
                 let hasHighConfidenceResult = results.contains {
@@ -1793,9 +1843,7 @@ public final class LyricsFetcher {
             if let primaryTitle {
                 searches.append(("\(primaryTitle) \(normalizedAlbum) \(cjkArtist)", true, false))
             }
-            if LanguageUtils.isLikelyEnglishTitle(title),
-               latinEvidenceKey(title) == latinEvidenceKey(album),
-               latinEvidenceKey(title).count >= 4 {
+            if isAlbumTitleEchoNativeAliasProbeInput(title: title, album: album) {
                 searches.insert((cjkArtist, true, true), at: 0)
             }
         }
@@ -2142,8 +2190,10 @@ public final class LyricsFetcher {
 
     func shouldUseImmediateCachedAvailability(
         _ cached: LyricsDiskCacheEntry,
-        requestedAlbum: String
+        requestedAlbum: String,
+        defersForegroundProviderProbe: Bool = false
     ) -> Bool {
+        guard !defersForegroundProviderProbe else { return false }
         let requestedAlbumID = MetadataDiskCache.normalize(requestedAlbum)
         guard !requestedAlbumID.isEmpty else { return true }
         guard let cachedAlbum = cached.album,

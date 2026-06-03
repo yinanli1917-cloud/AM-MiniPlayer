@@ -2273,6 +2273,34 @@ final class LyricsSelectionTests: XCTestCase {
         ))
     }
 
+    func testForegroundCatalogProbePreventsAvailabilityCacheShortCircuit() {
+        let fetcher = LyricsFetcher.shared
+        let cached = LyricsDiskCacheEntry(
+            source: "QQ",
+            syncedLyrics: "",
+            lines: [CachedLyricLine(text: "Instrumental", startTime: 0, endTime: 275, words: [], translation: nil)],
+            kind: .instrumental,
+            ts: Date().timeIntervalSince1970,
+            duration: 275,
+            album: "Lovers - Single",
+            matchedDurationDiff: 0.1
+        )
+
+        XCTAssertTrue(fetcher.isAlbumTitleEchoNativeAliasProbeInput(
+            title: "Lovers",
+            album: "Lovers - Single"
+        ))
+        XCTAssertFalse(fetcher.shouldUseImmediateCachedAvailability(
+            cached,
+            requestedAlbum: "Lovers - Single",
+            defersForegroundProviderProbe: true
+        ))
+        XCTAssertTrue(fetcher.shouldUseImmediateCachedAvailability(
+            cached,
+            requestedAlbum: "Lovers - Single"
+        ))
+    }
+
     func testAlbumScopedTerminalAvailabilityRequiresAlbumEvidenceToPersist() {
         let fetcher = LyricsFetcher.shared
         let unavailable = LyricsFetcher.LyricsFetchResult(

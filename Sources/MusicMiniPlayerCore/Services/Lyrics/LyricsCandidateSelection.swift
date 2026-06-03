@@ -918,11 +918,18 @@ extension LyricsFetcher {
                         hasAlbumHint: !params.normalizedAlbum.isEmpty,
                         allowNativeTitleAlias: true,
                         allowCompilationAlbumFallback: allowCompilationAlbumFallback
-                    ), match.matchRank == 0,
-                       match.titleMatched,
-                       match.durationDiff < 1.5 {
-                        DebugLogger.log(source, "⚡ Preflight exact match via '\(desc)' (albumMatch=\(match.albumMatched), Δ\(String(format: "%.1f", match.durationDiff))s)")
-                        return match
+                    ) {
+                        let strictExactMatch = match.matchRank == 0
+                            && match.titleMatched
+                            && match.durationDiff < 1.5
+                        let cjkTitleArtistP2Match = LanguageUtils.containsCJK(params.rawTitle)
+                            && match.matchRank <= 2
+                            && match.titleMatched
+                            && match.durationDiff < 3.5
+                        if strictExactMatch || cjkTitleArtistP2Match {
+                            DebugLogger.log(source, "⚡ Preflight exact match via '\(desc)' (albumMatch=\(match.albumMatched), Δ\(String(format: "%.1f", match.durationDiff))s)")
+                            return match
+                        }
                     }
                 } else {
                     DebugLogger.log(source, "⚠️ \(desc): fetchSongs returned nil (parse failure)")
