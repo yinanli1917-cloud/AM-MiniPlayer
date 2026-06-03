@@ -3,14 +3,55 @@ import CoreGraphics
 
 struct LyricsPresentationEngineConfiguration {
     let currentIndex: Int
+    let scrollTargetIndex: Int?
+    let hotActiveIndices: Set<Int>
+    let bufferedActiveIndices: Set<Int>
+    let isManualScrolling: Bool
     let renderedIndices: [Int]
     let anchorY: CGFloat
     let accumulatedHeights: [Int: CGFloat]
     let lineInterval: TimeInterval?
     let hasSyllableSync: Bool
+    let isInterludeActive: Bool
     let trackContext: DiagnosticTrackContext
     let isWaveTimelineDiagnosticsEnabled: Bool
     let playbackMode: LyricsPresentationPlaybackMode
+
+    init(
+        currentIndex: Int,
+        scrollTargetIndex: Int? = nil,
+        hotActiveIndices: Set<Int> = [],
+        bufferedActiveIndices: Set<Int> = [],
+        isManualScrolling: Bool = false,
+        renderedIndices: [Int],
+        anchorY: CGFloat,
+        accumulatedHeights: [Int: CGFloat],
+        lineInterval: TimeInterval?,
+        hasSyllableSync: Bool,
+        isInterludeActive: Bool = false,
+        trackContext: DiagnosticTrackContext,
+        isWaveTimelineDiagnosticsEnabled: Bool,
+        playbackMode: LyricsPresentationPlaybackMode
+    ) {
+        self.currentIndex = currentIndex
+        self.scrollTargetIndex = scrollTargetIndex
+        self.hotActiveIndices = hotActiveIndices
+        self.bufferedActiveIndices = bufferedActiveIndices
+        self.isManualScrolling = isManualScrolling
+        self.renderedIndices = renderedIndices
+        self.anchorY = anchorY
+        self.accumulatedHeights = accumulatedHeights
+        self.lineInterval = lineInterval
+        self.hasSyllableSync = hasSyllableSync
+        self.isInterludeActive = isInterludeActive
+        self.trackContext = trackContext
+        self.isWaveTimelineDiagnosticsEnabled = isWaveTimelineDiagnosticsEnabled
+        self.playbackMode = playbackMode
+    }
+
+    var effectiveScrollTargetIndex: Int {
+        scrollTargetIndex ?? currentIndex
+    }
 }
 
 @MainActor
@@ -40,7 +81,8 @@ final class LyricsPresentationEngine {
         onTargetsChanged: @escaping () -> Void
     ) {
         latestConfiguration = configuration
-        let newIndex = configuration.currentIndex
+        updateSpringParameters(for: configuration)
+        let newIndex = configuration.effectiveScrollTargetIndex
         switch configuration.playbackMode {
         case .directSnap(let reason):
             cancelPendingWave(deferred: true)
@@ -83,7 +125,7 @@ final class LyricsPresentationEngine {
             return
         }
 
-        if abs(newIndex - oldIndex) > 1 {
+        if abs(newIndex - oldIndex) > LyricWaveTiming.largeJumpThreshold {
             cancelPendingWave(deferred: true)
             lastCurrentIndex = newIndex
             recoverySnapAdvancesRemaining = 0
@@ -116,9 +158,49 @@ final class LyricsPresentationEngine {
         })
     }
 
+    func retargetFromCurrentPresentation(
+        to targetIndex: Int,
+        configuration: LyricsPresentationEngineConfiguration,
+        currentYByIndex: [Int: CGFloat],
+        onTargetsChanged: @escaping () -> Void
+    ) {
+        latestConfiguration = configuration
+        updateSpringParameters(for: configuration)
+        cancelPendingWave(deferred: true)
+        lastCurrentIndex = targetIndex
+        recoverySnapAdvancesRemaining = 0
+        lineTargetIndices = [:]
+
+        let rendered = Set(configuration.renderedIndices)
+        rowStates = rowStates.filter { rendered.contains($0.key) }
+        for index in configuration.renderedIndices {
+            let targetY = presentationY(
+                for: index,
+                targetIndex: targetIndex,
+                configuration: configuration
+            )
+            let visual = visualState(for: index, currentIndex: targetIndex)
+            let currentY = currentYByIndex[index] ?? rowStates[index]?.y ?? targetY
+            rowStates[index] = LyricsPresentationRowState(
+                index: index,
+                targetIndex: targetIndex,
+                y: currentY,
+                targetY: targetY,
+                velocity: 0,
+                opacity: visual.opacity,
+                scale: visual.scale,
+                blur: visual.blur,
+                isCurrent: index == targetIndex,
+                isBufferedActive: index == targetIndex
+            )
+        }
+        onTargetsChanged()
+    }
+
     @discardableResult
     func advance(delta: TimeInterval) -> Bool {
         guard let configuration = latestConfiguration else { return false }
+        updateSpringParameters(for: configuration)
         var changed = advancePendingWave(delta: delta, configuration: configuration)
         var nextStates = rowStates
         for (index, state) in rowStates {
@@ -165,7 +247,8 @@ final class LyricsPresentationEngine {
         )
         let schedule = LyricWaveTiming.staggerSchedule(
             for: indices,
-            newIndex: newIndex
+            newIndex: newIndex,
+            lineInterval: lineInterval
         )
         return LyricsPresentationWavePlan(
             targetRadius: targetRadius,
@@ -189,6 +272,7 @@ final class LyricsPresentationEngine {
         configuration: LyricsPresentationEngineConfiguration,
         onTargetsChanged: @escaping () -> Void
     ) {
+        updateSpringParameters(for: configuration)
         cancelPendingWave(deferred: true)
         let plan = Self.makeNaturalWavePlan(
             existingTargets: lineTargetIndices,
@@ -321,16 +405,29 @@ final class LyricsPresentationEngine {
         configuration: LyricsPresentationEngineConfiguration,
         snap: Bool
     ) {
-        let rendered = Set(configuration.renderedIndices)
+        let presentationIndices = presentationRowIndices(for: configuration)
+        let rendered = Set(presentationIndices)
         rowStates = rowStates.filter { rendered.contains($0.key) }
-        for index in configuration.renderedIndices {
-            let targetIndex = targetIndex(for: index, fallback: configuration.currentIndex)
+        for index in presentationIndices {
+            let targetIndex = targetIndex(for: index, fallback: configuration.effectiveScrollTargetIndex)
             let targetY = presentationY(
                 for: index,
                 targetIndex: targetIndex,
                 configuration: configuration
             )
-            let visual = visualState(for: index, currentIndex: configuration.currentIndex)
+            let visual = visualState(
+                for: index,
+                currentIndex: configuration.currentIndex,
+                scrollTargetIndex: configuration.effectiveScrollTargetIndex,
+                bufferedActiveIndices: configuration.bufferedActiveIndices,
+                isManualScrolling: configuration.isManualScrolling
+            )
+            let hotActiveIndices = configuration.hotActiveIndices.isEmpty
+                ? Set([configuration.currentIndex])
+                : configuration.hotActiveIndices
+            let isBufferedActive = configuration.bufferedActiveIndices.isEmpty
+                ? index == configuration.currentIndex
+                : configuration.bufferedActiveIndices.contains(index)
             if snap || rowStates[index] == nil {
                 rowStates[index] = LyricsPresentationRowState(
                     index: index,
@@ -341,7 +438,8 @@ final class LyricsPresentationEngine {
                     opacity: visual.opacity,
                     scale: visual.scale,
                     blur: visual.blur,
-                    isCurrent: index == configuration.currentIndex
+                    isCurrent: hotActiveIndices.contains(index),
+                    isBufferedActive: isBufferedActive
                 )
             } else if let existing = rowStates[index] {
                 rowStates[index] = LyricsPresentationRowState(
@@ -353,10 +451,27 @@ final class LyricsPresentationEngine {
                     opacity: visual.opacity,
                     scale: visual.scale,
                     blur: visual.blur,
-                    isCurrent: index == configuration.currentIndex
+                    isCurrent: hotActiveIndices.contains(index),
+                    isBufferedActive: isBufferedActive
                 )
             }
         }
+    }
+
+    private func presentationRowIndices(for configuration: LyricsPresentationEngineConfiguration) -> [Int] {
+        let radius = LyricWaveTiming.targetRadius(
+            lineInterval: configuration.lineInterval,
+            hasSyllableSync: configuration.hasSyllableSync
+        )
+        let activeTargetIndices = Set(lineTargetIndices.keys)
+            .union(configuration.bufferedActiveIndices)
+            .union([configuration.currentIndex, configuration.effectiveScrollTargetIndex])
+        return NativeLyricsVisibleRowSelector.visibleIndices(
+            allIndices: configuration.renderedIndices,
+            currentIndex: configuration.effectiveScrollTargetIndex,
+            activeTargetIndices: activeTargetIndices,
+            radius: radius
+        )
     }
 
     private func presentationY(
@@ -371,13 +486,32 @@ final class LyricsPresentationEngine {
 
     private func visualState(
         for index: Int,
+        currentIndex: Int,
+        scrollTargetIndex: Int,
+        bufferedActiveIndices: Set<Int>,
+        isManualScrolling: Bool
+    ) -> (opacity: CGFloat, scale: CGFloat, blur: CGFloat) {
+        let target = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: index,
+            currentIndex: currentIndex,
+            scrollTargetIndex: scrollTargetIndex,
+            bufferedActiveIndices: bufferedActiveIndices,
+            isManualScrolling: isManualScrolling
+        )
+        return (target.opacity, target.scale, target.blur)
+    }
+
+    private func visualState(
+        for index: Int,
         currentIndex: Int
     ) -> (opacity: CGFloat, scale: CGFloat, blur: CGFloat) {
-        let distance = abs(index - currentIndex)
-        if distance == 0 {
-            return (1, 1, 0)
-        }
-        return (0.35, 0.95, CGFloat(distance) * 1.5)
+        visualState(
+            for: index,
+            currentIndex: currentIndex,
+            scrollTargetIndex: currentIndex,
+            bufferedActiveIndices: [currentIndex],
+            isManualScrolling: false
+        )
     }
 
     private func cancelPendingWave(deferred: Bool) {
@@ -386,18 +520,27 @@ final class LyricsPresentationEngine {
     }
 
     private func recoverySnapAdvanceCount(for reason: LyricsPresentationDirectSnapReason) -> Int {
-        switch reason {
-        case .tapToLine, .manualScroll, .seek:
-            return 3
-        case .initialLayout, .trackReset, .reducedMotion:
-            return 0
-        }
+        0
+    }
+
+    private func updateSpringParameters(for configuration: LyricsPresentationEngineConfiguration) {
+        spring.updateParameters(
+            LyricsPresentationSpringParameters.amllPosition(
+                lineInterval: configuration.lineInterval,
+                isSeeking: configuration.playbackMode != .natural,
+                isInterludeActive: configuration.isInterludeActive
+            )
+        )
     }
 
     private func hasStaleTargetBacklog(for newIndex: Int) -> Bool {
-        let staleWaveTarget = lineTargetIndices.values.contains { abs($0 - newIndex) > 1 }
+        let staleWaveTarget = lineTargetIndices.values.contains {
+            abs($0 - newIndex) > LyricWaveTiming.largeJumpThreshold
+        }
         if staleWaveTarget { return true }
-        return rowStates.values.contains { abs($0.targetIndex - newIndex) > 1 }
+        return rowStates.values.contains {
+            abs($0.targetIndex - newIndex) > LyricWaveTiming.largeJumpThreshold
+        }
     }
 
     private func flushPendingWaveTimelineSamples(deferred: Bool) {
@@ -415,11 +558,13 @@ final class LyricsPresentationEngine {
 }
 
 private final class LyricsPresentationSpring {
-    private let mass: CGFloat = 1
-    private let stiffness: CGFloat = 100
-    private let damping: CGFloat = 16.5
+    private var parameters = LyricsPresentationSpringParameters.amllSeekOrInterlude
     private let maxStep: TimeInterval = 1.0 / 90.0
     private let maxDelta: TimeInterval = 1.0 / 20.0
+
+    func updateParameters(_ parameters: LyricsPresentationSpringParameters) {
+        self.parameters = parameters
+    }
 
     func advance(
         state: LyricsPresentationRowState,
@@ -434,8 +579,8 @@ private final class LyricsPresentationSpring {
         while remaining > 0 {
             let step = CGFloat(min(remaining, maxStep))
             let displacement = y - state.targetY
-            let force = (-stiffness * displacement) - (damping * velocity)
-            let acceleration = force / mass
+            let force = (-parameters.stiffness * displacement) - (parameters.damping * velocity)
+            let acceleration = force / parameters.mass
             velocity += acceleration * step
             y += velocity * step
             remaining -= TimeInterval(step)
@@ -455,7 +600,8 @@ private final class LyricsPresentationSpring {
             opacity: state.opacity,
             scale: state.scale,
             blur: state.blur,
-            isCurrent: state.isCurrent
+            isCurrent: state.isCurrent,
+            isBufferedActive: state.isBufferedActive
         )
     }
 }

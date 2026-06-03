@@ -833,12 +833,48 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertGreaterThan(tailDelay ?? 0, activeDelay ?? 0)
     }
 
+    func testLyricWaveTimingCompressesDenseLineIntervalsWithoutChangingOrder() {
+        let indices = Array(0...18)
+        let schedule = LyricWaveTiming.staggerSchedule(for: indices, newIndex: 6, lineInterval: 0.45)
+        let activeDelay = schedule.first { $0.lineIndex == 6 }?.delay ?? 0
+        let defaultSchedule = LyricWaveTiming.staggerSchedule(for: indices, newIndex: 6)
+        let defaultActiveDelay = defaultSchedule.first { $0.lineIndex == 6 }?.delay ?? 0
+
+        XCTAssertEqual(schedule.map(\.lineIndex), indices)
+        XCTAssertLessThan(activeDelay, defaultActiveDelay)
+        XCTAssertLessThanOrEqual(schedule.last?.delay ?? 0, 0.45 * LyricWaveTiming.maxLineIntervalFraction)
+    }
+
     func testLyricWaveTimingKeepsOriginalTargetWindow() {
         XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 0.9, hasSyllableSync: false), 14)
         XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 1.45, hasSyllableSync: false), 14)
         XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 1.6, hasSyllableSync: false), 14)
         XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: 0.9, hasSyllableSync: true), 14)
         XCTAssertEqual(LyricWaveTiming.targetRadius(lineInterval: nil, hasSyllableSync: false), 14)
+    }
+
+    func testLyricsPresentationSpringParametersTranslateAMLLDynamicPositionLaw() {
+        let dense = LyricsPresentationSpringParameters.amllPosition(
+            lineInterval: 0.3,
+            isSeeking: false,
+            isInterludeActive: false
+        )
+        let slow = LyricsPresentationSpringParameters.amllPosition(
+            lineInterval: 0.8,
+            isSeeking: false,
+            isInterludeActive: false
+        )
+        let seek = LyricsPresentationSpringParameters.amllPosition(
+            lineInterval: 0.3,
+            isSeeking: true,
+            isInterludeActive: false
+        )
+
+        XCTAssertEqual(seek, .amllSeekOrInterlude)
+        XCTAssertEqual(dense.mass, 0.9, accuracy: 0.0001)
+        XCTAssertGreaterThan(dense.stiffness, slow.stiffness)
+        XCTAssertEqual(dense.damping, sqrt(dense.stiffness) * 2.2, accuracy: 0.0001)
+        XCTAssertEqual(slow.stiffness, 170, accuracy: 0.001)
     }
 
     func testLyricWaveTimingCarriesExistingTargetsIntoNextWaveCleanup() {
@@ -896,9 +932,15 @@ final class RapidSwitchTests: XCTestCase {
         XCTAssertEqual(plan.seededTargets[12], 8)
         XCTAssertEqual(plan.seededTargets[40], 39)
         XCTAssertEqual(plan.schedule.filter { $0.delay == 0 }.map(\.lineIndex), Array(0...9))
+        let expectedActiveDelay = LyricWaveTiming.staggerSchedule(
+            for: Array(0...24),
+            newIndex: 12,
+            lineInterval: 1.2
+        )
+        .first { $0.lineIndex == 12 }?.delay ?? 0
         XCTAssertEqual(
             plan.schedule.first { $0.lineIndex == 12 }?.delay ?? 0,
-            LyricWaveTiming.defaultBaseDelay * 3,
+            expectedActiveDelay,
             accuracy: 0.001
         )
     }
@@ -936,6 +978,115 @@ final class RapidSwitchTests: XCTestCase {
             NativeLyricsTimelinePolicy.nextLineStartTime(after: 4.1, rows: rows),
             6.0
         )
+    }
+
+    func testNativeLyricsTimelinePolicyBuildsAMLLHotBufferedScrollState() {
+        func row(index: Int, startTime: TimeInterval, endTime: TimeInterval, isPrelude: Bool = false) -> LayerBackedLyricRow {
+            let line = LyricLine(
+                text: "Line \(index)",
+                startTime: startTime,
+                endTime: endTime
+            )
+            let displayLine = DisplayLyricLine(
+                id: "line-\(index)",
+                sourceIndex: index,
+                segmentIndex: 0,
+                segmentCount: 1,
+                line: line
+            )
+            return LayerBackedLyricRow(
+                id: displayLine.id,
+                index: index,
+                displayLine: displayLine,
+                sourceLine: line,
+                isPrelude: isPrelude,
+                preludeEndTime: 0,
+                interlude: nil
+            )
+        }
+
+        let rows = [
+            row(index: 0, startTime: 0.0, endTime: 1.5, isPrelude: true),
+            row(index: 1, startTime: 2.0, endTime: 5.0),
+            row(index: 2, startTime: 4.0, endTime: 6.0),
+            row(index: 3, startTime: 8.0, endTime: 10.0)
+        ]
+
+        let first = NativeLyricsTimelinePolicy.amllState(
+            at: 2.5,
+            rows: rows,
+            fallback: 1,
+            previous: nil,
+            isSeeking: false
+        )
+        let overlapping = NativeLyricsTimelinePolicy.amllState(
+            at: 4.5,
+            rows: rows,
+            fallback: 1,
+            previous: first,
+            isSeeking: false
+        )
+
+        XCTAssertEqual(overlapping.hotGroups, [1, 2])
+        XCTAssertEqual(overlapping.bufferedGroups, [1, 2])
+        XCTAssertEqual(overlapping.scrollToIndex, 1)
+        XCTAssertEqual(overlapping.semanticIndex, 2)
+
+        let expiredOverlap = NativeLyricsTimelinePolicy.amllState(
+            at: 5.2,
+            rows: rows,
+            fallback: 2,
+            previous: overlapping,
+            isSeeking: false
+        )
+
+        XCTAssertEqual(expiredOverlap.hotGroups, [2])
+        XCTAssertEqual(expiredOverlap.bufferedGroups, [2])
+        XCTAssertEqual(expiredOverlap.scrollToIndex, 2)
+
+        let seekingGap = NativeLyricsTimelinePolicy.amllState(
+            at: 6.5,
+            rows: rows,
+            fallback: 2,
+            previous: overlapping,
+            isSeeking: true
+        )
+
+        XCTAssertTrue(seekingGap.hotGroups.isEmpty)
+        XCTAssertTrue(seekingGap.bufferedGroups.isEmpty)
+        XCTAssertEqual(seekingGap.scrollToIndex, 3)
+        XCTAssertEqual(seekingGap.semanticIndex, 2)
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineSeparatesAMLLScrollTargetFromSemanticCurrentLine() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...8).map { ($0, CGFloat($0 * 40)) })
+
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 6,
+                scrollTargetIndex: 5,
+                bufferedActiveIndices: [5, 6],
+                renderedIndices: Array(0...8),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.initialLayout)
+            ),
+            onTargetsChanged: {}
+        )
+
+        XCTAssertEqual(engine.presentation(for: 6)?.targetIndex, 5)
+        XCTAssertEqual(engine.presentation(for: 6)?.targetY, 140)
+        XCTAssertTrue(engine.presentation(for: 5)?.isBufferedActive == true)
+        XCTAssertTrue(engine.presentation(for: 6)?.isBufferedActive == true)
+        XCTAssertFalse(engine.presentation(for: 5)?.isCurrent == true)
+        XCTAssertTrue(engine.presentation(for: 6)?.isCurrent == true)
     }
 
     @MainActor
@@ -1126,7 +1277,51 @@ final class RapidSwitchTests: XCTestCase {
     }
 
     @MainActor
-    func testLyricsPresentationEngineSnapsShortNaturalAdvanceSequenceAfterTapRecovery() {
+    func testLyricsPresentationEngineKeepsOldWaveThresholdForSmallNaturalJumps() {
+        let engine = LyricsPresentationEngine()
+        let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
+        let heights = Dictionary(uniqueKeysWithValues: (0...30).map { ($0, CGFloat($0 * 40)) })
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 4,
+                renderedIndices: Array(0...30),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .directSnap(.initialLayout)
+            ),
+            onTargetsChanged: {}
+        )
+
+        var scheduledWave = false
+        engine.update(
+            LyricsPresentationEngineConfiguration(
+                currentIndex: 7,
+                renderedIndices: Array(0...30),
+                anchorY: 100,
+                accumulatedHeights: heights,
+                lineInterval: 1.2,
+                hasSyllableSync: true,
+                trackContext: track,
+                isWaveTimelineDiagnosticsEnabled: false,
+                playbackMode: .natural
+            ),
+            onTargetsChanged: {
+                scheduledWave = true
+            }
+        )
+
+        XCTAssertTrue(scheduledWave)
+        XCTAssertFalse(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.lineTargetIndices[7], 4)
+        XCTAssertEqual(engine.presentation(for: 7)?.targetIndex, 4)
+    }
+
+    @MainActor
+    func testLyricsPresentationEngineResumesNaturalWaveAfterTapRecovery() {
         let engine = LyricsPresentationEngine()
         let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
         let heights = Dictionary(uniqueKeysWithValues: (0...42).map { ($0, CGFloat($0 * 50)) })
@@ -1140,11 +1335,12 @@ final class RapidSwitchTests: XCTestCase {
                 hasSyllableSync: false,
                 trackContext: track,
                 isWaveTimelineDiagnosticsEnabled: false,
-                playbackMode: .directSnap(.tapToLine)
+            playbackMode: .directSnap(.tapToLine)
             ),
             onTargetsChanged: {}
         )
 
+        var firstAdvanceScheduledWave = false
         engine.update(
             LyricsPresentationEngineConfiguration(
                 currentIndex: 32,
@@ -1158,75 +1354,17 @@ final class RapidSwitchTests: XCTestCase {
                 playbackMode: .natural
             ),
             onTargetsChanged: {
-                XCTFail("First advance after tap recovery should snap, not start a stale wave.")
+                firstAdvanceScheduledWave = true
             }
         )
 
-        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
-        XCTAssertEqual(engine.presentation(for: 32)?.targetIndex, 32)
-        XCTAssertEqual(engine.presentation(for: 32)?.y, engine.presentation(for: 32)?.targetY)
-
-        engine.update(
-            LyricsPresentationEngineConfiguration(
-                currentIndex: 33,
-                renderedIndices: Array(0...42),
-                anchorY: 100,
-                accumulatedHeights: heights,
-                lineInterval: 1.2,
-                hasSyllableSync: false,
-                trackContext: track,
-                isWaveTimelineDiagnosticsEnabled: false,
-                playbackMode: .natural
-            ),
-            onTargetsChanged: {
-                XCTFail("Second advance after tap recovery should still snap.")
-            }
-        )
-
-        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
-        XCTAssertEqual(engine.presentation(for: 33)?.targetIndex, 33)
-
-        engine.update(
-            LyricsPresentationEngineConfiguration(
-                currentIndex: 34,
-                renderedIndices: Array(0...42),
-                anchorY: 100,
-                accumulatedHeights: heights,
-                lineInterval: 1.2,
-                hasSyllableSync: false,
-                trackContext: track,
-                isWaveTimelineDiagnosticsEnabled: false,
-                playbackMode: .natural
-            ),
-            onTargetsChanged: {
-                XCTFail("Third advance after tap recovery should still snap.")
-            }
-        )
-
-        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
-        XCTAssertEqual(engine.presentation(for: 34)?.targetIndex, 34)
-
-        engine.update(
-            LyricsPresentationEngineConfiguration(
-                currentIndex: 35,
-                renderedIndices: Array(0...42),
-                anchorY: 100,
-                accumulatedHeights: heights,
-                lineInterval: 1.2,
-                hasSyllableSync: false,
-                trackContext: track,
-                isWaveTimelineDiagnosticsEnabled: false,
-                playbackMode: .natural
-            ),
-            onTargetsChanged: {}
-        )
-
+        XCTAssertTrue(firstAdvanceScheduledWave)
         XCTAssertFalse(engine.lineTargetIndices.isEmpty)
-        XCTAssertEqual(engine.lineTargetIndices[35], 34)
+        XCTAssertEqual(engine.lineTargetIndices[32], 31)
     }
 
     @MainActor
-    func testLyricsPresentationEngineDirectSnapsWhenNaturalBacklogFallsBehind() {
+    func testLyricsPresentationEngineCarriesNearbyNaturalBacklogIntoNextWave() {
         let engine = LyricsPresentationEngine()
         let track = DiagnosticTrackContext(title: "Song", artist: "Artist", album: "Album", duration: 120)
         let heights = Dictionary(uniqueKeysWithValues: (0...42).map { ($0, CGFloat($0 * 50)) })
@@ -1262,6 +1400,7 @@ final class RapidSwitchTests: XCTestCase {
 
         XCTAssertFalse(engine.lineTargetIndices.isEmpty)
 
+        var scheduledWave = false
         engine.update(
             LyricsPresentationEngineConfiguration(
                 currentIndex: 33,
@@ -1275,13 +1414,14 @@ final class RapidSwitchTests: XCTestCase {
                 playbackMode: .natural
             ),
             onTargetsChanged: {
-                XCTFail("Stale target backlog should snap instead of scheduling another wave.")
+                scheduledWave = true
             }
         )
 
-        XCTAssertTrue(engine.lineTargetIndices.isEmpty)
-        XCTAssertEqual(engine.presentation(for: 33)?.targetIndex, 33)
-        XCTAssertEqual(engine.presentation(for: 33)?.y, engine.presentation(for: 33)?.targetY)
+        XCTAssertTrue(scheduledWave)
+        XCTAssertFalse(engine.lineTargetIndices.isEmpty)
+        XCTAssertEqual(engine.presentation(for: 33)?.targetIndex, 32)
+        XCTAssertNotEqual(engine.presentation(for: 33)?.y, engine.presentation(for: 33)?.targetY)
     }
 
     func testLyricWaveAnimationSeedsCurrentLineBeforeNaturalAdvance() throws {
