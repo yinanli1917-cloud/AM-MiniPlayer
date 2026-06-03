@@ -16,6 +16,8 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertTrue(source.contains("getrusage(RUSAGE_SELF"))
         XCTAssertTrue(source.contains("lastProcessCPUUsageSample"))
         XCTAssertTrue(source.contains("|| name == \"process.health.sample\""))
+        XCTAssertTrue(source.contains("trimHighFrequencyEventBuffer()"))
+        XCTAssertTrue(source.contains("if isHighFrequency {\n            trimHighFrequencyEventBuffer()"))
         XCTAssertFalse(source.contains("task_threads(mach_task_self_"))
         XCTAssertFalse(source.contains("thread_info(threadList"))
     }

@@ -802,11 +802,13 @@ public final class DiagnosticsService: ObservableObject {
         metrics: [String: Double] = [:]
     ) {
         guard isEnabled else { return }
+        let isHighFrequency = isHighFrequencyEvent(name)
         events.insert(DiagnosticEvent(name: name, detail: detail, track: track, metrics: metrics), at: 0)
-        trimBuffers()
-        if isHighFrequencyEvent(name) {
+        if isHighFrequency {
+            trimHighFrequencyEventBuffer()
             scheduleHighFrequencyPersistenceSave()
         } else {
+            trimBuffers()
             schedulePersistenceSave()
         }
     }
@@ -2663,6 +2665,12 @@ public final class DiagnosticsService: ObservableObject {
         }
         updateLyricLineMotionSampleCount(force: lyricLineMotionSamples.count != previousMotionSampleCount)
         refreshLastWarningAfterIncidentNormalization()
+    }
+
+    private func trimHighFrequencyEventBuffer() {
+        if events.count > maxEvents {
+            events.removeLast(events.count - maxEvents)
+        }
     }
 
     private func coalesceStandaloneFrameStallIncidents() {
