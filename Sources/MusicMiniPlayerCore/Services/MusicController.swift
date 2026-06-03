@@ -240,6 +240,9 @@ public class MusicController: ObservableObject {
     private var interpolationTimer: Timer?
     private var queueCheckTimer: Timer?
     private var queueRefreshTimer: Timer?     // Debounced queue refresh on track change
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    private var debugPlaybackTimer: Timer?
+    #endif
     private var interpolationTimerActive = false
     private var interpolationTimerInterval: TimeInterval = 0
     var lastPollTime: Date = .distantPast
@@ -366,6 +369,83 @@ public class MusicController: ObservableObject {
         let time = playbackClockBaseTime + elapsed
         return duration > 0 ? min(max(0, time), duration) : max(0, time)
     }
+
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    @MainActor
+    public func applyDebugPlaybackFixture(_ fixture: NativeLyricsDebugFixtureData) {
+        stopTimers()
+        queueObserverTask?.cancel()
+        queueObserverTask = nil
+        artworkAPITask?.cancel()
+        artworkAPITask = nil
+        assetPreloadTask?.cancel()
+        assetPreloadTask = nil
+
+        isPreview = true
+        musicApp = nil
+        stateApp = nil
+        metadataApp = nil
+        queueApp = nil
+        positionApp = nil
+        artworkApp = nil
+        controlApp = nil
+        sbPositionPollInFlight = false
+        queueFetchInFlight = false
+        queueFetchPending = false
+
+        let now = Date()
+        isPlaying = false
+        currentTrackTitle = fixture.title
+        currentArtist = fixture.artist
+        currentAlbum = fixture.album
+        duration = fixture.duration
+        currentPersistentID = "debug-\(fixture.name)"
+        currentTrackClass = "debug"
+        currentPlaylistName = fixture.album
+        currentTrackIsURLTrack = false
+        audioQuality = nil
+        shuffleEnabled = false
+        repeatMode = 0
+        userManuallyOpenedLyrics = true
+        currentPage = .lyrics
+        currentTime = fixture.startTime
+        internalCurrentTime = fixture.startTime
+        lastFrameTime = now
+        setArtwork(NSImage(systemSymbolName: "text.quote", accessibilityDescription: "Lyrics Debug"), isPlaceholder: true)
+
+        isPlaying = true
+        lastPositionPollStateReadAt = now
+        cachedPositionPollStateRaw = Self.sbPlaying
+        syncPlaybackClock(to: fixture.startTime, playing: true, at: now)
+        startDebugPlaybackTimerIfNeeded()
+    }
+
+    private func startDebugPlaybackTimerIfNeeded() {
+        debugPlaybackTimer?.invalidate()
+        debugPlaybackTimer = nil
+        guard isPreview, isPlaying else { return }
+
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = Date()
+            let renderTime = self.lyricRenderTime(at: now)
+            let clampedTime = self.duration > 0 ? min(renderTime, self.duration) : renderTime
+            self.internalCurrentTime = clampedTime
+            self.currentTime = clampedTime
+            if !self.lyricsService.isManualScrolling {
+                self.lyricsService.updateCurrentTime(clampedTime)
+            }
+            if self.duration > 0, clampedTime >= self.duration {
+                self.isPlaying = false
+                self.syncPlaybackClock(to: self.duration, playing: false, at: now)
+                self.debugPlaybackTimer?.invalidate()
+                self.debugPlaybackTimer = nil
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        debugPlaybackTimer = timer
+    }
+    #endif
 
     public func diagnosticsTrackContext() -> DiagnosticTrackContext {
         DiagnosticTrackContext(
@@ -622,6 +702,10 @@ public class MusicController: ObservableObject {
     }
 
     private func stopTimers() {
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        debugPlaybackTimer?.invalidate()
+        debugPlaybackTimer = nil
+        #endif
         pollingTimer?.invalidate()
         pollingTimer = nil
         fullSyncTimer?.invalidate()
@@ -815,6 +899,7 @@ public class MusicController: ObservableObject {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @objc private func playerInfoChanged(_ notification: Notification) {
+        guard !isPreview else { return }
         guard let userInfo = notification.userInfo as? [String: Any] else { return }
 
         DispatchQueue.main.async { [weak self] in

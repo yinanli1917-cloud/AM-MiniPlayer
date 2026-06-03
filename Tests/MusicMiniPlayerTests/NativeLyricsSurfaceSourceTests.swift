@@ -16,6 +16,26 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("guard !isPointInReservedOverlayZone(point, configuration: runtimeConfiguration) else"))
     }
 
+    func testNativeLyricsLayoutInsetsMatchV28SwiftUIRenderer() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
+        let lyricsViewURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let measurementURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/NativeLyricsRowMeasurement.swift")
+        let surfaceSource = try String(contentsOf: surfaceURL, encoding: .utf8)
+        let lyricsViewSource = try String(contentsOf: lyricsViewURL, encoding: .utf8)
+        let measurementSource = try String(contentsOf: measurementURL, encoding: .utf8)
+
+        XCTAssertTrue(surfaceSource.contains("private let nativeLyricContentLeadingInset: CGFloat = 32"))
+        XCTAssertTrue(surfaceSource.contains("private let nativeLyricContentTrailingInset: CGFloat = 32"))
+        XCTAssertTrue(lyricsViewSource.contains("private let lyricContentLeadingInset: CGFloat = 32"))
+        XCTAssertTrue(lyricsViewSource.contains("private let lyricContentTrailingInset: CGFloat = 32"))
+        XCTAssertTrue(measurementSource.contains("static let leadingInset: CGFloat = 32"))
+        XCTAssertTrue(measurementSource.contains("static let trailingInset: CGFloat = 32"))
+    }
+
     func testNativeSurfaceReconcilesViewportRowsDuringManualScroll() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -89,6 +109,8 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("NativeLyricsDisplayLinkScheduler"))
         XCTAssertTrue(source.contains("displayLinkScheduler.enqueue"))
         XCTAssertTrue(source.contains("let delta = lastPresentationTick.map { max(0, now - $0) }"))
+        XCTAssertTrue(source.contains("private static func hasTimelineTargetChange("))
+        XCTAssertFalse(source.contains("previousTimelineState != nativeTimelineState"))
         XCTAssertTrue(source.contains("manualPresentationNeedsApply"))
         XCTAssertTrue(source.contains("rowViewReusePool"))
         XCTAssertTrue(source.contains("prepareForReuse()"))
@@ -229,6 +251,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("summary[\"steps\"][\"rendererMode\"]"))
         XCTAssertTrue(source.contains("unexpectedLineLevelMainSweepCount"))
         XCTAssertTrue(source.contains("no active line-level no-sweep samples"))
-        XCTAssertFalse(source.contains("CJK emphasis glyph count"))
+        XCTAssertTrue(source.contains("\"cjkEmphasisGlyphCount\""))
+        XCTAssertTrue(source.contains("CJK emphasis glyph count"))
     }
 }

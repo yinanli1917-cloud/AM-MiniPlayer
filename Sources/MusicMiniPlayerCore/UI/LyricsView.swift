@@ -65,7 +65,7 @@ private let lyricSteadyRenderVisibleRange = 6
 private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.55
 private let lyricMinimumGeneratedSegmentDuration: TimeInterval = 1.65
 private let lyricContentLeadingInset: CGFloat = 32
-private let lyricContentTrailingInset: CGFloat = 20
+private let lyricContentTrailingInset: CGFloat = 32
 
 struct LyricWaveTiming {
     struct StaggerTarget {

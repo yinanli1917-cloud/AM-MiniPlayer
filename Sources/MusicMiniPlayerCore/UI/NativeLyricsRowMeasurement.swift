@@ -4,7 +4,7 @@ import Foundation
 
 enum NativeLyricsRowMeasurement {
     static let leadingInset: CGFloat = 32
-    static let trailingInset: CGFloat = 20
+    static let trailingInset: CGFloat = 32
     static let preludeHeight: CGFloat = 46
     static let translationLoadingRowHeight: CGFloat = 8
 

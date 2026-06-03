@@ -279,6 +279,44 @@ public class LyricsService: ObservableObject {
     }
 
     // ========================================================================
+    // MARK: - Development Fixtures
+    // ========================================================================
+
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    @MainActor
+    public func applyDebugFixture(_ fixture: NativeLyricsDebugFixtureData) {
+        currentFetchTask?.cancel()
+        currentFetchTask = nil
+        cancelCurrentBackfill()
+        currentSongTranslationID = nil
+        lastSystemTranslationLanguage = nil
+        isTranslating = false
+        translationFailed = false
+        showTranslation = fixture.showTranslation
+
+        let songID = Self.songIdentity(
+            title: fixture.title,
+            artist: fixture.artist,
+            duration: fixture.duration,
+            album: fixture.album
+        )
+        applyLyrics(
+            fixture.lyrics,
+            firstRealLyricIndex: fixture.firstRealLyricIndex,
+            hasSourceTranslation: fixture.lyrics.contains { $0.hasTranslation },
+            isUnsynced: false,
+            songID: songID,
+            title: fixture.title,
+            artist: fixture.artist,
+            stableSongID: Self.stableSongIdentity(title: fixture.title, artist: fixture.artist),
+            duration: fixture.duration,
+            album: fixture.album
+        )
+        updateCurrentTime(fixture.startTime)
+    }
+    #endif
+
+    // ========================================================================
     // MARK: - Public API: Fetch Lyrics
     // ========================================================================
 

@@ -16,6 +16,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertLessThanOrEqual(plan.opacities[2], 0.25)
         XCTAssertEqual(plan.overallOpacity, 1, accuracy: 0.0001)
         XCTAssertEqual(plan.blur, 0, accuracy: 0.0001)
+        XCTAssertGreaterThanOrEqual(plan.scales[0], 0.85)
+        XCTAssertLessThanOrEqual(plan.scales[2], 0.85)
 
         let fading = NativeLyricsDotPhasePlan.make(
             startTime: 10,
@@ -24,7 +26,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             gateByTimeRange: true
         )
         XCTAssertLessThan(fading.overallOpacity, 1)
-        XCTAssertEqual(fading.blur, 0, accuracy: 0.0001)
+        XCTAssertGreaterThan(fading.blur, 0)
+        XCTAssertEqual(fading.blur, 4, accuracy: 0.0001)
     }
 
     func testFrameCadenceSummaryReportsRefreshPreservingMetrics() {

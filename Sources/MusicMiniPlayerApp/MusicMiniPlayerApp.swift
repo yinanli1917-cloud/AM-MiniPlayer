@@ -137,6 +137,8 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } else {
                 showDiagnosticsWindow()
             }
+        case "debug-lyrics":
+            openDebugLyricsFixture(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
         #endif
         default:
             break
@@ -178,6 +180,17 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         musicController.currentPage = page
         musicController.userManuallyOpenedLyrics = page == .lyrics
     }
+
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    func openDebugLyricsFixture(named fixtureName: String) {
+        guard let fixture = NativeLyricsDebugFixture.fixture(named: fixtureName) else { return }
+        Task { @MainActor in
+            LyricsService.shared.applyDebugFixture(fixture)
+            self.musicController.applyDebugPlaybackFixture(fixture)
+            self.showFloatingWindow()
+        }
+    }
+    #endif
 
     // MARK: - Dock Visibility
 

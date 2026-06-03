@@ -5,9 +5,10 @@ import QuartzCore
 import SwiftUI
 
 private let nativeLyricContentLeadingInset: CGFloat = 32
-private let nativeLyricContentTrailingInset: CGFloat = 20
+private let nativeLyricContentTrailingInset: CGFloat = 32
 private let nativeLyricAutoVisibleRowRadius = 12
 private let nativeLyricManualVisibleRowRadius = 12
+private let nativeLyricTextFrameInterval: TimeInterval = 1.0 / 30.0
 private let nativeLyricFrameSummaryInterval: TimeInterval = 10
 private let nativeLyricsTopOverlayReservedHeight: CGFloat = 56
 private let nativeLyricsTopLeadingReservedWidth: CGFloat = 150
@@ -430,6 +431,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var measuredHeightsByIndex: [Int: CGFloat] = [:]
     private var displayLink: CVDisplayLink?
     private var lastPresentationTick: CFTimeInterval?
+    private var lastFrameCadenceTick: CFTimeInterval?
     private var frameSummaryStartedAt: CFTimeInterval?
     private var frameCadence = NativeLyricsFrameCadenceAccumulator()
     private var renderTelemetry = NativeLyricsRenderTelemetryAccumulator()
@@ -443,6 +445,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastNativeLineMotionSampleAt: Date = .distantPast
     private var nativeSemanticCurrentIndex: Int?
     private var nativeTimelineState: NativeLyricsTimelinePolicy.AMLLState?
+    private var lastTextPhaseUpdateAt: CFTimeInterval?
     private var lastScrollWheelTime: CFTimeInterval = 0
     private var hoveredRowIndex: Int?
     private var surfaceTrackingArea: NSTrackingArea?
@@ -539,6 +542,7 @@ final class NativeLyricsSurfaceView: NSView {
             measuredHeightsByIndex.removeAll()
             nativeSemanticCurrentIndex = nil
             nativeTimelineState = nil
+            lastTextPhaseUpdateAt = nil
         }
         self.configuration = configuration
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
@@ -845,8 +849,9 @@ final class NativeLyricsSurfaceView: NSView {
         cancelNativeLineAdvanceTimer()
         manualScrollState.reset()
         manualPresentationNeedsApply = false
-            nativeSemanticCurrentIndex = nil
+        nativeSemanticCurrentIndex = nil
         nativeTimelineState = nil
+        lastTextPhaseUpdateAt = nil
         pendingTapToLineSettleTiming = nil
         visualStates.removeAll()
         interludeBlendStates.removeAll()
@@ -1045,9 +1050,14 @@ final class NativeLyricsSurfaceView: NSView {
         configuration: LyricsLayerRendererConfiguration
     ) -> CGFloat {
         let fallback = modelY(for: row, configuration: configuration)
-        return view.layer?.presentation()?.affineTransform().ty
-            ?? view.layer?.affineTransform().ty
-            ?? fallback
+        guard let layer = view.layer else { return fallback }
+        let modelY = layer.affineTransform().ty
+        let hasCoreAnimation = layer.animationKeys()?.isEmpty == false
+        guard hasCoreAnimation,
+              let presentationY = layer.presentation()?.affineTransform().ty else {
+            return modelY
+        }
+        return presentationY
     }
 
     private func currentRenderedYByIndex(
@@ -1330,6 +1340,7 @@ final class NativeLyricsSurfaceView: NSView {
         }, context)
         displayLink = link
         lastPresentationTick = nil
+        lastFrameCadenceTick = nil
         resetFrameSummary()
         CVDisplayLinkStart(link)
     }
@@ -1355,6 +1366,7 @@ final class NativeLyricsSurfaceView: NSView {
         CVDisplayLinkStop(activeDisplayLink)
         self.displayLink = nil
         lastPresentationTick = nil
+        lastFrameCadenceTick = nil
         displayLinkScheduler.reset()
         flushFrameSummary(reason: "stop")
     }
@@ -1376,7 +1388,6 @@ final class NativeLyricsSurfaceView: NSView {
             ?? displayInterval
             ?? 0
         lastPresentationTick = now
-        recordFrameDelta(delta, expectedRefreshInterval: displayInterval, now: now)
         let semanticChanged = updateNativeTimelineForCurrentPlaybackIfNeeded(
             previousIndex: previousSemanticIndex,
             previousTimelineState: previousTimelineState,
@@ -1391,9 +1402,24 @@ final class NativeLyricsSurfaceView: NSView {
         let visualMotionChanged = advanceVisualStates(delta: delta)
         let motionChanged = presentationEngine.advance(delta: delta)
         let shouldApplyManualPresentation = manualPresentationNeedsApply
+        let activeTextLineChanged = previousSemanticIndex != runtimeConfiguration.effectiveCurrentIndex
+        let shouldUpdateTextPhase = shouldUpdateActiveTextPhase(
+            runtimeConfiguration: runtimeConfiguration,
+            now: now,
+            force: activeTextLineChanged || shouldApplyManualPresentation
+        )
+        let shouldApplyPresentationFrame = shouldApplyManualPresentation
+            || semanticChanged
+            || motionChanged
+            || presentationEngine.hasActiveMotion
+            || visualTargetsChanged
+            || visualMotionChanged
+            || hasActiveVisualMotion
         manualPresentationNeedsApply = false
         withDisabledLayerActions {
-            updateTextPhasesForCurrentConfiguration(runtimeConfiguration: runtimeConfiguration)
+            if shouldUpdateTextPhase {
+                updateTextPhasesForCurrentConfiguration(runtimeConfiguration: runtimeConfiguration)
+            }
             if shouldApplyManualPresentation {
                 if presentationEngine.isNaturalWaveActive {
                     presentationEngine.update(
@@ -1404,14 +1430,14 @@ final class NativeLyricsSurfaceView: NSView {
                     )
                 }
                 applyFrames(runtimeConfiguration: runtimeConfiguration, snap: true, managesTransaction: false)
-            } else if semanticChanged
-                || motionChanged
-                || presentationEngine.hasActiveMotion
-                || visualTargetsChanged
-                || visualMotionChanged
-                || hasActiveVisualMotion {
+            } else if shouldApplyPresentationFrame {
                 applyFrames(runtimeConfiguration: runtimeConfiguration, snap: false, managesTransaction: false)
             }
+        }
+        if shouldApplyPresentationFrame {
+            recordFrameDelta(expectedRefreshInterval: displayInterval, now: now)
+        } else {
+            lastFrameCadenceTick = nil
         }
         sampleNativeLineMotionDuringPresentationTickIfNeeded(runtimeConfiguration: runtimeConfiguration)
         checkPendingTapToLineSettleTiming(now: now)
@@ -1440,14 +1466,18 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func resetFrameSummary(at now: CFTimeInterval = CACurrentMediaTime()) {
         frameSummaryStartedAt = now
+        lastFrameCadenceTick = nil
         frameCadence = NativeLyricsFrameCadenceAccumulator()
     }
 
     private func recordFrameDelta(
-        _ delta: TimeInterval,
         expectedRefreshInterval: TimeInterval?,
         now: CFTimeInterval
     ) {
+        let delta = lastFrameCadenceTick.map { max(0, now - $0) }
+            ?? expectedRefreshInterval
+            ?? 0
+        lastFrameCadenceTick = now
         guard delta > 0 else { return }
         frameCadence.record(delta: delta, expectedRefreshInterval: expectedRefreshInterval)
         guard let startedAt = frameSummaryStartedAt else {
@@ -1956,7 +1986,8 @@ final class NativeLyricsSurfaceView: NSView {
             return false
         }
         let nextIndex = runtimeConfiguration.effectiveCurrentIndex
-        guard previousIndex != nextIndex || previousTimelineState != nativeTimelineState else {
+        guard previousIndex != nextIndex
+            || Self.hasTimelineTargetChange(previousTimelineState, nativeTimelineState) else {
             scheduleNativeLineAdvanceTimerIfNeeded(configuration: runtimeConfiguration)
             return false
         }
@@ -1968,6 +1999,16 @@ final class NativeLyricsSurfaceView: NSView {
         )
         scheduleNativeLineAdvanceTimerIfNeeded(configuration: runtimeConfiguration)
         return true
+    }
+
+    private static func hasTimelineTargetChange(
+        _ lhs: NativeLyricsTimelinePolicy.AMLLState?,
+        _ rhs: NativeLyricsTimelinePolicy.AMLLState?
+    ) -> Bool {
+        lhs?.hotGroups != rhs?.hotGroups
+            || lhs?.bufferedGroups != rhs?.bufferedGroups
+            || lhs?.scrollToIndex != rhs?.scrollToIndex
+            || lhs?.semanticIndex != rhs?.semanticIndex
     }
 
     private func scheduleNativeLineAdvanceTimerIfNeeded(
@@ -2259,6 +2300,29 @@ final class NativeLyricsSurfaceView: NSView {
         }
         rowIDByIndex[activeIndex] = row.id
         return (row, view)
+    }
+
+    private func shouldUpdateActiveTextPhase(
+        runtimeConfiguration: LyricsLayerRendererConfiguration,
+        now: CFTimeInterval,
+        force: Bool
+    ) -> Bool {
+        if force {
+            lastTextPhaseUpdateAt = now
+            return true
+        }
+        guard hasActiveTextAnimation(configuration: runtimeConfiguration) else {
+            return false
+        }
+        guard let lastTextPhaseUpdateAt else {
+            self.lastTextPhaseUpdateAt = now
+            return true
+        }
+        guard now - lastTextPhaseUpdateAt >= nativeLyricTextFrameInterval else {
+            return false
+        }
+        self.lastTextPhaseUpdateAt = now
+        return true
     }
 
     private func hasActiveTextAnimation(configuration: LyricsLayerRendererConfiguration) -> Bool {
@@ -3439,7 +3503,7 @@ private final class NativeLyricsRowView: NSView {
 
         let expectedGlyphCount = plan.wordRuns.enumerated().reduce(0) { partial, item in
             emphasisOrders.contains(item.offset)
-                ? partial + max(1, (item.element.text as NSString).length)
+                ? partial + max(1, visibleGlyphCount(in: item.element.text))
                 : partial
         }
         let appliedGlyphCount = glyphInputs.reduce(0) { $0 + $1.0.glyphs.count }
