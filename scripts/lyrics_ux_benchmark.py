@@ -103,6 +103,7 @@ def run_perf_fixture(
     warmup: float,
     label: str,
     output_dir: Path,
+    allow_pointer_automation: bool = False,
 ) -> dict[str, Any]:
     fixture = visual.FIXTURES[fixture_name]
     cmd = [
@@ -122,7 +123,8 @@ def run_perf_fixture(
         str(output_dir),
         "--require-music-playing",
     ]
-    if fixture_uses_scroll_tap(fixture_name):
+    interaction = perf_interaction_for_fixture(fixture_name, allow_pointer_automation)
+    if interaction == "scroll-tap-jump":
         cmd.extend(["--interaction", "scroll-tap-jump", "--interaction-interval", "2.5"])
     env = {"NANOPOD_APP_PATH": str(app_path)}
     result = subprocess.run(
@@ -142,6 +144,8 @@ def run_perf_fixture(
         "fixture": fixture_name,
         "passed": result.returncode == 0,
         "returncode": result.returncode,
+        "interaction": interaction,
+        "pointerAutomationAllowed": allow_pointer_automation,
         "summary": parsed_summary,
         "stdout": result.stdout[-2000:] if result.stdout else "",
         "stderr": result.stderr[-2000:] if result.stderr else "",
@@ -211,6 +215,12 @@ def fixture_uses_scroll_tap(fixture_name: str) -> bool:
     return fixture_name in SCROLL_TAP_FIXTURES
 
 
+def perf_interaction_for_fixture(fixture_name: str, allow_pointer_automation: bool) -> str:
+    if allow_pointer_automation and fixture_uses_scroll_tap(fixture_name):
+        return "scroll-tap-jump"
+    return "passive"
+
+
 def fixture_expects_translation(fixture_name: str) -> bool:
     fixture = visual.FIXTURES[fixture_name]
     return bool(fixture.get("expect_translation", False))
@@ -273,6 +283,7 @@ def collect_native_text_parity(
     fixture_name: str,
     *,
     started_at: datetime,
+    allow_pointer_automation: bool = False,
 ) -> dict[str, Any]:
     fixture = visual.FIXTURES[fixture_name]
     expected_title = str(fixture["title"])
@@ -592,7 +603,15 @@ def collect_native_text_parity(
         if max_metrics["dotMotionSampleCount"] <= 0:
             failures.append("native dot samples existed but no dot motion was measured")
 
-    if fixture_uses_scroll_tap(fixture_name):
+    skipped_interaction_checks: list[str] = []
+    if fixture_uses_scroll_tap(fixture_name) and not allow_pointer_automation:
+        skipped_interaction_checks = [
+            "manual scroll start/delta",
+            "tap-to-line recovery",
+            "hover background parity",
+            "tap latency/settle",
+        ]
+    if fixture_uses_scroll_tap(fixture_name) and allow_pointer_automation:
         if max_metrics["manualScrollStartCount"] <= 0:
             failures.append("no native manual scroll start recorded")
         if max_metrics["manualScrollDeltaCount"] <= 0:
@@ -634,6 +653,8 @@ def collect_native_text_parity(
         "statePath": str(diagnostics_state_path()),
         "eventCount": len(events),
         "expectedSyllable": fixture_expects_syllable(fixture_name),
+        "pointerAutomationAllowed": allow_pointer_automation,
+        "skippedInteractionChecks": skipped_interaction_checks,
         "maxMetrics": max_metrics,
         "failures": failures,
     }
@@ -895,6 +916,7 @@ def record_main_cpu_baseline(
     duration: float,
     warmup: float,
     label: str,
+    allow_pointer_automation: bool = False,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     quit_candidate_app()
@@ -910,6 +932,7 @@ def record_main_cpu_baseline(
             warmup=warmup,
             label=f"{label}-{fixture}",
             output_dir=output_dir,
+            allow_pointer_automation=allow_pointer_automation,
         )
         payload = cpu_payload_from_perf_result(fixture, result, label)
         payload["passed"] = result["passed"]
@@ -924,6 +947,7 @@ def record_main_cpu_baseline(
     meta = {
         "reference": "main",
         "fixtures": fixtures,
+        "pointerAutomationAllowed": allow_pointer_automation,
         "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "baselines": baselines,
         "failures": failures,
@@ -939,7 +963,7 @@ def compare_against_baseline(candidate: motion.MotionMetrics, fixture: str) -> l
     return motion.compare_metrics(candidate, baseline)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Lyrics UX Benchmark orchestrator")
     parser.add_argument("--fixtures", default=",".join(DEFAULT_FIXTURES))
     parser.add_argument("--label", default="candidate")
@@ -957,10 +981,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-unit-tests", action="store_true")
     parser.add_argument("--skip-perf", action="store_true")
+    parser.add_argument(
+        "--allow-pointer-automation",
+        action="store_true",
+        help="allow LUXB to send system mouse move, scroll, and click events for scroll-tap fixtures",
+    )
     parser.add_argument("--perf-duration", type=float, default=16.0)
     parser.add_argument("--perf-warmup", type=float, default=8.0)
     parser.add_argument("--min-cpu-reduction", type=float, default=0.70)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -981,6 +1010,13 @@ def main() -> int:
         "label": args.label,
         "fixtures": fixtures,
         "reference": "v2.8",
+        "pointerAutomation": {
+            "allowed": bool(args.allow_pointer_automation),
+            "scrollTapFixtures": sorted(SCROLL_TAP_FIXTURES.intersection(fixtures)),
+            "skippedInteractionFixtures": sorted(
+                SCROLL_TAP_FIXTURES.intersection(fixtures)
+            ) if not args.allow_pointer_automation else [],
+        },
         "steps": {},
     }
 
@@ -1001,6 +1037,7 @@ def main() -> int:
             duration=args.perf_duration,
             warmup=args.perf_warmup,
             label=args.label,
+            allow_pointer_automation=args.allow_pointer_automation,
         )
         summary["passed"] = not summary["mainCpuBaseline"]["failures"]
         summary["failures"] = summary["mainCpuBaseline"]["failures"]
@@ -1047,6 +1084,7 @@ def main() -> int:
                 warmup=args.perf_warmup,
                 label=args.label,
                 output_dir=run_dir,
+                allow_pointer_automation=args.allow_pointer_automation,
             )
             perf_steps[fixture] = perf_result
             if not perf_result["passed"]:
@@ -1092,7 +1130,11 @@ def main() -> int:
             }
             failures.extend([f"{fixture}: {failure}" for failure in wave_failures])
 
-            text_parity = collect_native_text_parity(fixture, started_at=started_at)
+            text_parity = collect_native_text_parity(
+                fixture,
+                started_at=started_at,
+                allow_pointer_automation=args.allow_pointer_automation,
+            )
             text_parity_steps[fixture] = text_parity
             failures.extend([f"{fixture}: {failure}" for failure in text_parity["failures"]])
 

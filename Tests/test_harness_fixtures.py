@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import lyrics_visual_harness as visual  # noqa: E402
 import lyrics_motion_evaluator as motion  # noqa: E402
+import lyrics_ux_benchmark as luxb  # noqa: E402
 import luxb_sequential_reference as sequential_reference  # noqa: E402
 import perf_harness as perf  # noqa: E402
 import soak_harness as soak  # noqa: E402
@@ -80,6 +81,22 @@ class HarnessFixtureTests(unittest.TestCase):
             "c3925990fd25b5c0a4891ef23968b2acd3d7db1e4d71fbb9cfdfeefdd2231ae9",
         )
         self.assertFalse(resolved.allow_music_automation_unavailable)
+
+    def test_luxb_defaults_to_no_pointer_automation(self) -> None:
+        args = luxb.parse_args([])
+
+        self.assertFalse(args.allow_pointer_automation)
+
+    def test_luxb_requires_explicit_pointer_automation_for_scroll_tap(self) -> None:
+        self.assertTrue(luxb.fixture_uses_scroll_tap("line-breakup-truth"))
+        self.assertEqual(
+            luxb.perf_interaction_for_fixture("line-breakup-truth", allow_pointer_automation=False),
+            "passive",
+        )
+        self.assertEqual(
+            luxb.perf_interaction_for_fixture("line-breakup-truth", allow_pointer_automation=True),
+            "scroll-tap-jump",
+        )
 
     def test_perf_harness_marks_unverified_music_status_as_non_acceptance(self) -> None:
         status = perf.unverified_music_status("automation denied")
