@@ -2,32 +2,64 @@ import XCTest
 @testable import MusicMiniPlayerCore
 
 final class NativeLyricsUXMetricsTests: XCTestCase {
-    func testDotPhasePlanMatchesLegacyInterludeTimingLaw() {
-        let plan = NativeLyricsDotPhasePlan.make(
+    func testDotPhasePlanMatchesAMLLInterludeTimingLaw() {
+        let introHidden = NativeLyricsDotPhasePlan.make(
             startTime: 10,
-            endTime: 13.7,
-            currentTime: 11.0,
+            endTime: 15,
+            currentTime: 10.25,
             gateByTimeRange: true
         )
 
-        XCTAssertEqual(plan.opacities.count, 3)
-        XCTAssertEqual(plan.scales.count, 3)
-        XCTAssertGreaterThan(plan.opacities[0], 0.25)
-        XCTAssertLessThanOrEqual(plan.opacities[2], 0.25)
-        XCTAssertEqual(plan.overallOpacity, 1, accuracy: 0.0001)
-        XCTAssertEqual(plan.blur, 0, accuracy: 0.0001)
-        XCTAssertGreaterThanOrEqual(plan.scales[0], 0.85)
-        XCTAssertLessThanOrEqual(plan.scales[2], 0.85)
+        XCTAssertEqual(NativeLyricsDotPhasePlan.baseDotSize, 12)
+        XCTAssertEqual(NativeLyricsDotPhasePlan.baseDotSpacing, 10)
+        XCTAssertEqual(introHidden.opacities, [0, 0, 0])
+        XCTAssertEqual(introHidden.scales[0], 0.387003, accuracy: 0.0001)
+        XCTAssertEqual(introHidden.blur, 0, accuracy: 0.0001)
+        XCTAssertEqual(introHidden.overallOpacity, 1, accuracy: 0.0001)
+
+        let introFade = NativeLyricsDotPhasePlan.make(
+            startTime: 10,
+            endTime: 15,
+            currentTime: 10.75,
+            gateByTimeRange: true
+        )
+        XCTAssertEqual(introFade.opacities[0], 0.198529, accuracy: 0.0001)
+        XCTAssertEqual(introFade.opacities[1], 0.125, accuracy: 0.0001)
+        XCTAssertEqual(introFade.opacities[2], 0.125, accuracy: 0.0001)
+        XCTAssertEqual(introFade.scales[0], 0.636232, accuracy: 0.0001)
+
+        let midInterlude = NativeLyricsDotPhasePlan.make(
+            startTime: 10,
+            endTime: 15,
+            currentTime: 12.5,
+            gateByTimeRange: true
+        )
+        XCTAssertEqual(midInterlude.opacities[0], 1, accuracy: 0.0001)
+        XCTAssertEqual(midInterlude.opacities[1], 0.573529, accuracy: 0.0001)
+        XCTAssertEqual(midInterlude.opacities[2], 0.25, accuracy: 0.0001)
+        XCTAssertEqual(midInterlude.scales[0], 0.722878, accuracy: 0.0001)
 
         let fading = NativeLyricsDotPhasePlan.make(
             startTime: 10,
-            endTime: 13.7,
-            currentTime: 13.35,
+            endTime: 15,
+            currentTime: 14.75,
             gateByTimeRange: true
         )
-        XCTAssertLessThan(fading.overallOpacity, 1)
-        XCTAssertGreaterThan(fading.blur, 0)
-        XCTAssertEqual(fading.blur, 4, accuracy: 0.0001)
+        XCTAssertEqual(fading.opacities[0], 2.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(fading.opacities[1], 2.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(fading.opacities[2], 2.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(fading.scales[0], 0.721666, accuracy: 0.0001)
+        XCTAssertEqual(fading.blur, 0, accuracy: 0.0001)
+
+        let outOfRange = NativeLyricsDotPhasePlan.make(
+            startTime: 10,
+            endTime: 15,
+            currentTime: 15,
+            gateByTimeRange: true
+        )
+        XCTAssertEqual(outOfRange.opacities, [0, 0, 0])
+        XCTAssertEqual(outOfRange.scales, [0, 0, 0])
+        XCTAssertEqual(outOfRange.overallOpacity, 0)
     }
 
     func testTranslationLoadingDotsMatchLegacySizeSpacingAndSinePhase() {

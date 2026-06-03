@@ -250,6 +250,9 @@ struct NativeLyricsTextPhaseSample: Equatable {
 }
 
 struct NativeLyricsDotPhasePlan: Equatable {
+    static let baseDotSize: CGFloat = NativeLyricsTextConstants().mainFontSize * 0.5
+    static let baseDotSpacing: CGFloat = NativeLyricsTextConstants().mainFontSize * 0.25 + 4
+
     let opacities: [CGFloat]
     let scales: [CGFloat]
     let blur: CGFloat
@@ -261,7 +264,6 @@ struct NativeLyricsDotPhasePlan: Equatable {
         currentTime: TimeInterval,
         gateByTimeRange: Bool
     ) -> NativeLyricsDotPhasePlan {
-        let fadeOutDuration: TimeInterval = 0.7
         let totalDuration = max(0.1, endTime - startTime)
         let visible = gateByTimeRange ? (currentTime >= startTime && currentTime < endTime) : true
         guard visible else {
@@ -273,34 +275,53 @@ struct NativeLyricsDotPhasePlan: Equatable {
             )
         }
 
-        let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)
-        let segmentDuration = dotsActiveDuration / 3.0
-        let dotProgresses: [CGFloat] = (0..<3).map { index in
-            let dotStart = startTime + segmentDuration * Double(index)
-            let dotEnd = startTime + segmentDuration * Double(index + 1)
-            if currentTime <= dotStart { return 0 }
-            if currentTime >= dotEnd { return 1 }
-            return CGFloat(sin((currentTime - dotStart) / (dotEnd - dotStart) * .pi / 2))
+        let currentDuration = max(0, currentTime - startTime)
+        guard currentDuration <= totalDuration else {
+            return NativeLyricsDotPhasePlan(
+                opacities: [0, 0, 0],
+                scales: [0, 0, 0],
+                blur: 0,
+                overallOpacity: 0
+            )
         }
-        let fadeOutProgress: CGFloat = {
-            let fadeStart = startTime + dotsActiveDuration
-            if currentTime < fadeStart { return 0 }
-            if currentTime >= endTime { return 1 }
-            return CGFloat((currentTime - fadeStart) / fadeOutDuration)
-        }()
-        let rawPhase = sin(currentTime * .pi * 0.8)
-        let breathingPhase = rawPhase * abs(rawPhase)
-        let dotOpacities = dotProgresses.map { 0.25 + $0 * 0.75 }
-        let dotScales = dotProgresses.map { progress -> CGFloat in
-            let isLightingUp = progress > 0 && progress < 1
-            let breathingScale: CGFloat = isLightingUp ? (1 + CGFloat(breathingPhase) * 0.12) : 1
-            return (0.85 + progress * 0.15) * breathingScale
+
+        let targetBreatheDuration: TimeInterval = 1.5
+        let breatheCount = max(1, ceil(totalDuration / targetBreatheDuration))
+        let breatheDuration = totalDuration / breatheCount
+        let breatheScale = CGFloat(sin(1.5 * Double.pi - (currentDuration / breatheDuration) * 2)) / 20 + 1
+
+        var overallScale = breatheScale
+        if currentDuration < 2.0 {
+            overallScale *= easeOutExpo(CGFloat(currentDuration / 2.0))
         }
+
+        var globalOpacity: CGFloat = 1
+        if currentDuration < 0.5 {
+            globalOpacity = 0
+        } else if currentDuration < 1.0 {
+            globalOpacity = CGFloat((currentDuration - 0.5) / 0.5)
+        }
+
+        let remaining = totalDuration - currentDuration
+        if remaining < 0.75 {
+            overallScale *= 1 - easeInOutBack(CGFloat((0.75 - remaining) / 0.75 / 2))
+        }
+        if remaining < 0.375 {
+            globalOpacity *= clamp01(CGFloat(remaining / 0.375))
+        }
+
+        let dotsDuration = max(0.001, totalDuration - 0.75)
+        let dotOpacities: [CGFloat] = (0..<3).map { index in
+            let offset = dotsDuration / 3 * Double(index)
+            let litOpacity = clamp(0.25, CGFloat(((currentDuration - offset) * 3 / dotsDuration) * 0.75), 1)
+            return clamp01(globalOpacity * litOpacity)
+        }
+        let scale = clampPositive(overallScale) * 0.7
         return NativeLyricsDotPhasePlan(
             opacities: dotOpacities,
-            scales: dotScales,
-            blur: fadeOutProgress * 8,
-            overallOpacity: 1 - fadeOutProgress
+            scales: Array(repeating: scale, count: 3),
+            blur: 0,
+            overallOpacity: 1
         )
     }
 
@@ -310,6 +331,10 @@ struct NativeLyricsDotPhasePlan: Equatable {
 
     private static func clamp01(_ value: CGFloat) -> CGFloat {
         min(max(value, 0), 1)
+    }
+
+    private static func clampPositive(_ value: CGFloat) -> CGFloat {
+        max(0, value)
     }
 
     private static func easeOutExpo(_ x: CGFloat) -> CGFloat {

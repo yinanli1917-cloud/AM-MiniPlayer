@@ -3917,19 +3917,18 @@ private final class NativeLyricsRowView: NSView {
     }
 
     private func layoutDotContainer(frame: CGRect) {
-        dotContainerLayer.frame = frame
-        let dotSize: CGFloat = 8
-        let spacing: CGFloat = 6
+        let dotSize = NativeLyricsDotPhasePlan.baseDotSize
+        let spacing = NativeLyricsDotPhasePlan.baseDotSpacing
         let totalWidth = dotSize * CGFloat(dotLayers.count) + spacing * CGFloat(max(0, dotLayers.count - 1))
         var x: CGFloat = 0
-        let y = max(0, (frame.height - dotSize) / 2)
+        dotContainerLayer.bounds = CGRect(x: 0, y: 0, width: totalWidth, height: dotSize)
+        dotContainerLayer.position = CGPoint(x: frame.minX + totalWidth / 2, y: frame.midY)
         for dot in dotLayers {
             dot.bounds = CGRect(x: 0, y: 0, width: dotSize, height: dotSize)
-            dot.position = CGPoint(x: x + dotSize / 2, y: y + dotSize / 2)
+            dot.position = CGPoint(x: x + dotSize / 2, y: dotSize / 2)
             dot.cornerRadius = dotSize / 2
             x += dotSize + spacing
         }
-        dotContainerLayer.bounds = CGRect(x: 0, y: 0, width: max(frame.width, totalWidth), height: frame.height)
     }
 
     private func layoutTranslationLoadingDots(frame: CGRect) {
@@ -4030,20 +4029,22 @@ private final class NativeLyricsRowView: NSView {
         )
         dotContainerLayer.isHidden = plan.overallOpacity <= 0.001
         dotContainerLayer.opacity = Float(plan.overallOpacity)
+        let containerScale = plan.scales.first ?? 1
+        dotContainerLayer.setAffineTransform(CGAffineTransform(scaleX: containerScale, y: containerScale))
         for (index, dot) in dotLayers.enumerated() {
             let opacity = plan.opacities.indices.contains(index) ? plan.opacities[index] : 0
-            let scale = plan.scales.indices.contains(index) ? plan.scales[index] : 1
             dot.opacity = Float(opacity)
-            dot.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
+            dot.setAffineTransform(.identity)
             dot.isHidden = plan.overallOpacity <= 0.001
         }
         let appliedBlur = applyDotBlurRadius(plan.blur)
+        let appliedScale = dotContainerLayer.affineTransform().a
         (superview as? NativeLyricsSurfaceView)?.recordDotPhase(NativeLyricsDotPhaseSample(
             isPrelude: isPrelude,
             expectedOpacity: plan.opacities,
             appliedOpacity: dotLayers.map { CGFloat($0.opacity) },
             expectedScale: plan.scales,
-            appliedScale: dotLayers.map { $0.affineTransform().a },
+            appliedScale: dotLayers.map { _ in appliedScale },
             expectedBlur: plan.blur,
             appliedBlur: appliedBlur,
             expectedOverallOpacity: plan.overallOpacity,
@@ -4076,6 +4077,7 @@ private final class NativeLyricsRowView: NSView {
             dot.opacity = 0
             dot.setAffineTransform(.identity)
         }
+        dotContainerLayer.setAffineTransform(.identity)
     }
 
     private func textRenderPlan(
