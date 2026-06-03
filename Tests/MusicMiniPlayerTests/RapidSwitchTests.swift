@@ -869,8 +869,14 @@ final class RapidSwitchTests: XCTestCase {
             isSeeking: true,
             isInterludeActive: false
         )
+        let interlude = LyricsPresentationSpringParameters.amllPosition(
+            lineInterval: 0.3,
+            isSeeking: false,
+            isInterludeActive: true
+        )
 
         XCTAssertEqual(seek, .amllSeekOrInterlude)
+        XCTAssertEqual(interlude, .amllSeekOrInterlude)
         XCTAssertEqual(dense.mass, 0.9, accuracy: 0.0001)
         XCTAssertGreaterThan(dense.stiffness, slow.stiffness)
         XCTAssertEqual(dense.damping, sqrt(dense.stiffness) * 2.2, accuracy: 0.0001)

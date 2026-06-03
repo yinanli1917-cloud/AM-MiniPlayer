@@ -561,6 +561,7 @@ final class NativeLyricsSurfaceView: NSView {
                 accumulatedHeights: runtimeConfiguration.accumulatedHeights,
                 lineInterval: runtimeConfiguration.lineInterval,
                 hasSyllableSync: runtimeConfiguration.hasSyllableSync,
+                isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil,
                 trackContext: runtimeConfiguration.trackContext,
                 isWaveTimelineDiagnosticsEnabled: runtimeConfiguration.isWaveTimelineDiagnosticsEnabled
                     || DiagnosticsService.shared.isLyricWaveTimelineEnabled,

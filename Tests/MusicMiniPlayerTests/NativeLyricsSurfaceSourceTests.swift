@@ -194,6 +194,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("nativeSemanticCurrentIndex"))
         XCTAssertTrue(source.contains("scheduleNativeLineAdvanceTimerIfNeeded"))
         XCTAssertTrue(source.contains("NativeLyricsTimelinePolicy.amllState"))
+        XCTAssertTrue(source.contains("lineInterval: runtimeConfiguration.lineInterval,\n                hasSyllableSync: runtimeConfiguration.hasSyllableSync,\n                isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil"))
         XCTAssertTrue(source.contains("waveTimelineEnabled"))
         XCTAssertTrue(source.contains("rowTapHandlers[hoveredRowIndex]"))
         XCTAssertTrue(source.contains("override func mouseMoved(with event: NSEvent)"))
