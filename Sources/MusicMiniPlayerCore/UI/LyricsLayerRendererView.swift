@@ -2405,6 +2405,7 @@ private final class NativeLyricsRowView: NSView {
     private let backgroundLayer = CALayer()
     private let mainTextLayer = CATextLayer()
     private let mainBrightTextLayer = CATextLayer()
+    private let mainBaseRevealMaskLayer = CALayer()
     private let mainSweepMaskLayer = CAGradientLayer()
     private let mainPerRunSweepMaskLayer = CALayer()
     private let mainEmphasisLayer = CALayer()
@@ -2422,6 +2423,7 @@ private final class NativeLyricsRowView: NSView {
     private var configuration: LyricsLayerRendererConfiguration?
     private var isHovering = false
     private var mainPerRunSweepLineLayers: [NativeLyricsSweepMaskLineLayer] = []
+    private var mainBaseRevealLineLayers: [NativeLyricsSweepMaskLineLayer] = []
     private var cachedMainSweepLayoutKey: SweepLayoutCacheKey?
     private var cachedMainSweepLinePlan: [NativeLyricsTextSweepVisualLinePlan] = []
     private var cachedTextGlyphGeometryBounds: CGRect?
@@ -2577,10 +2579,12 @@ private final class NativeLyricsRowView: NSView {
             textLayer.shadowRadius = 0
             textLayer.shadowOffset = .zero
         }
+        mainTextLayer.mask = nil
         mainBrightTextLayer.mask = mainSweepMaskLayer
         translationBrightTextLayer.mask = translationSweepMaskLayer
         mainSweepMaskLayer.locations = [0, 0, 0, 1]
         translationSweepMaskLayer.locations = [0, 0, 0, 1]
+        hideBaseRevealMaskLayers()
         hidePerRunSweepMaskLayers()
         hideTranslationSweepMaskLayers()
         hideEmphasisGlyphLayers()
@@ -2645,6 +2649,7 @@ private final class NativeLyricsRowView: NSView {
             mainTextLayer.frame = .zero
             mainBrightTextLayer.frame = mainTextLayer.frame
             mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
+            mainBaseRevealMaskLayer.frame = mainTextLayer.bounds
             mainPerRunSweepMaskLayer.frame = mainBrightTextLayer.bounds
             mainEmphasisLayer.frame = mainBrightTextLayer.frame
             translationTextLayer.frame = .zero
@@ -2665,6 +2670,7 @@ private final class NativeLyricsRowView: NSView {
         mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight)
         mainBrightTextLayer.frame = mainTextLayer.frame
         mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
+        mainBaseRevealMaskLayer.frame = mainTextLayer.bounds
         mainPerRunSweepMaskLayer.frame = mainBrightTextLayer.bounds
         mainEmphasisLayer.frame = mainBrightTextLayer.frame
         y += mainHeight
@@ -2798,6 +2804,8 @@ private final class NativeLyricsRowView: NSView {
         }
         translationLoadingDotContainerLayer.isHidden = true
         mainBrightTextLayer.mask = mainSweepMaskLayer
+        mainBaseRevealMaskLayer.masksToBounds = false
+        mainBaseRevealMaskLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         mainPerRunSweepMaskLayer.masksToBounds = false
         mainPerRunSweepMaskLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         mainEmphasisLayer.masksToBounds = false
@@ -2831,6 +2839,8 @@ private final class NativeLyricsRowView: NSView {
         if row.isPrelude {
             mainTextLayer.string = nil
             mainBrightTextLayer.string = nil
+            mainTextLayer.mask = nil
+            hideBaseRevealMaskLayers()
             hideEmphasisGlyphLayers()
             activeHiddenEmphasisSignature = nil
             translationTextLayer.string = nil
@@ -2847,6 +2857,10 @@ private final class NativeLyricsRowView: NSView {
         let isActive = row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying
         let appliesMainSweep = isActive && row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
         let mainAlpha = appliesMainSweep ? plan.constants.dimAlpha : 1
+        mainTextLayer.mask = appliesMainSweep ? mainBaseRevealMaskLayer : nil
+        if !appliesMainSweep {
+            hideBaseRevealMaskLayers()
+        }
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
@@ -3012,6 +3026,8 @@ private final class NativeLyricsRowView: NSView {
                     appliesLineLevelMainSweep: appliesLineLevelMainSweep,
                     expectsNoLineLevelTranslationSweep: expectsNoLineLevelTranslationSweep,
                     appliesLineLevelTranslationSweep: appliesLineLevelTranslationSweep,
+                    expectsBaseReveal: expectsPerRunSweep,
+                    appliesBaseReveal: appliedMainProgress.appliedBaseReveal,
                     expectsPerGlyphEmphasis: expectsPerGlyphEmphasis,
                     appliesPerGlyphEmphasis: appliedMainProgress.appliedPerGlyphEmphasis,
                     expectedEmphasisGlyphCount: appliedMainProgress.expectedEmphasisGlyphCount,
@@ -3026,6 +3042,8 @@ private final class NativeLyricsRowView: NSView {
                     appliedSweepLineCount: appliedMainProgress.appliedSweepLineCount,
                     sweepLineCoverageGapCount: appliedMainProgress.sweepLineCoverageGapCount,
                     sweepWavefrontErrorMax: appliedMainProgress.sweepWavefrontErrorMax,
+                    baseRevealLineCoverageGapCount: appliedMainProgress.baseRevealLineCoverageGapCount,
+                    baseRevealWavefrontErrorMax: appliedMainProgress.baseRevealWavefrontErrorMax,
                     emphasisGlyphPositionSampleCount: appliedMainProgress.emphasisGlyphPositionSampleCount,
                     emphasisGlyphPositionErrorMax: appliedMainProgress.emphasisGlyphPositionErrorMax,
                     emphasisGlyphScaleErrorMax: appliedMainProgress.emphasisGlyphScaleErrorMax,
@@ -3047,6 +3065,8 @@ private final class NativeLyricsRowView: NSView {
         } else {
             mainBrightTextLayer.isHidden = true
             mainBrightTextLayer.mask = mainSweepMaskLayer
+            mainTextLayer.mask = nil
+            hideBaseRevealMaskLayers()
             hidePerRunSweepMaskLayers()
             hideEmphasisGlyphLayers()
             activeHiddenEmphasisSignature = nil
@@ -3066,6 +3086,7 @@ private final class NativeLyricsRowView: NSView {
     private struct MainTextPhaseAppliedMetrics {
         let progress: CGFloat
         let appliedPerRunSweep: Bool
+        let appliedBaseReveal: Bool
         let appliedPerGlyphEmphasis: Bool
         let expectedEmphasisGlyphCount: Int
         let appliedEmphasisGlyphCount: Int
@@ -3079,6 +3100,8 @@ private final class NativeLyricsRowView: NSView {
         let appliedSweepLineCount: Int
         let sweepLineCoverageGapCount: Int
         let sweepWavefrontErrorMax: CGFloat
+        let baseRevealLineCoverageGapCount: Int
+        let baseRevealWavefrontErrorMax: CGFloat
         let emphasisGlyphPositionSampleCount: Int
         let emphasisGlyphPositionErrorMax: CGFloat
         let emphasisGlyphScaleErrorMax: CGFloat
@@ -3109,6 +3132,12 @@ private final class NativeLyricsRowView: NSView {
             plan: plan,
             currentTime: currentTime,
             bounds: mainBrightTextLayer.bounds,
+            linePlan: linePlan
+        )
+        let baseRevealResult = updateBaseRevealMask(
+            plan: plan,
+            currentTime: currentTime,
+            bounds: mainTextLayer.bounds,
             linePlan: linePlan
         )
         let appliedProgress: CGFloat
@@ -3148,6 +3177,7 @@ private final class NativeLyricsRowView: NSView {
         return MainTextPhaseAppliedMetrics(
             progress: appliedProgress,
             appliedPerRunSweep: sweepResult.applied,
+            appliedBaseReveal: baseRevealResult.applied,
             appliedPerGlyphEmphasis: emphasisResult.applied,
             expectedEmphasisGlyphCount: emphasisResult.expectedGlyphCount,
             appliedEmphasisGlyphCount: emphasisResult.appliedGlyphCount,
@@ -3161,6 +3191,8 @@ private final class NativeLyricsRowView: NSView {
             appliedSweepLineCount: sweepResult.appliedLineCount,
             sweepLineCoverageGapCount: sweepResult.coverageGapCount,
             sweepWavefrontErrorMax: sweepResult.wavefrontErrorMax,
+            baseRevealLineCoverageGapCount: baseRevealResult.coverageGapCount,
+            baseRevealWavefrontErrorMax: baseRevealResult.wavefrontErrorMax,
             emphasisGlyphPositionSampleCount: emphasisResult.positionSampleCount,
             emphasisGlyphPositionErrorMax: emphasisResult.positionErrorMax,
             emphasisGlyphScaleErrorMax: emphasisResult.scaleErrorMax,
@@ -3182,6 +3214,8 @@ private final class NativeLyricsRowView: NSView {
         mainBrightTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.isHidden = true
         mainBrightTextLayer.mask = mainSweepMaskLayer
+        mainTextLayer.mask = nil
+        hideBaseRevealMaskLayers()
         hidePerRunSweepMaskLayers()
         hideEmphasisGlyphLayers()
         activeHiddenEmphasisSignature = nil
@@ -3190,6 +3224,7 @@ private final class NativeLyricsRowView: NSView {
         return MainTextPhaseAppliedMetrics(
             progress: plan.mainSweepProgress,
             appliedPerRunSweep: false,
+            appliedBaseReveal: false,
             appliedPerGlyphEmphasis: false,
             expectedEmphasisGlyphCount: 0,
             appliedEmphasisGlyphCount: 0,
@@ -3203,6 +3238,8 @@ private final class NativeLyricsRowView: NSView {
             appliedSweepLineCount: 0,
             sweepLineCoverageGapCount: 0,
             sweepWavefrontErrorMax: 0,
+            baseRevealLineCoverageGapCount: 0,
+            baseRevealWavefrontErrorMax: 0,
             emphasisGlyphPositionSampleCount: 0,
             emphasisGlyphPositionErrorMax: 0,
             emphasisGlyphScaleErrorMax: 0,
@@ -3317,6 +3354,62 @@ private final class NativeLyricsRowView: NSView {
         }
         for index in lines.count..<mainPerRunSweepLineLayers.count {
             mainPerRunSweepLineLayers[index].isHidden = true
+        }
+        return PerRunSweepAppliedMetrics(
+            applied: true,
+            expectedLineCount: linePlan.count,
+            appliedLineCount: lines.count,
+            coverageGapCount: max(0, linePlan.count - lines.count),
+            wavefrontErrorMax: maxWavefrontError
+        )
+    }
+
+    private func updateBaseRevealMask(
+        plan: NativeLyricsTextRenderPlan,
+        currentTime: TimeInterval,
+        bounds: CGRect,
+        linePlan: [NativeLyricsTextSweepVisualLinePlan]
+    ) -> PerRunSweepAppliedMetrics {
+        guard !plan.wordRuns.isEmpty, bounds.width > 1, bounds.height > 1 else { return .inactive }
+        let lines = NativeLyricsTextSweepLayout.maskLines(
+            from: linePlan,
+            fadeHalfPoint: plan.constants.fadeHalfPoint,
+            currentTime: currentTime
+        )
+        guard !lines.isEmpty else {
+            mainTextLayer.mask = mainBaseRevealMaskLayer
+            hideBaseRevealMaskLayers()
+            return PerRunSweepAppliedMetrics(
+                applied: false,
+                expectedLineCount: linePlan.count,
+                appliedLineCount: 0,
+                coverageGapCount: linePlan.count,
+                wavefrontErrorMax: 0
+            )
+        }
+
+        mainTextLayer.mask = mainBaseRevealMaskLayer
+        mainBaseRevealMaskLayer.frame = bounds
+        ensureBaseRevealMaskLayerCount(lines.count)
+        var maxWavefrontError: CGFloat = 0
+        for (index, line) in lines.enumerated() {
+            let maskLayer = mainBaseRevealLineLayers[index]
+            maskLayer.isHidden = false
+            maskLayer.frame = line.maskRect
+            let expectedLocalWavefront = line.wavefrontX - line.maskRect.minX
+            let appliedLocalWavefront = applySweepMask(
+                maskLayer,
+                wavefrontX: expectedLocalWavefront,
+                fadeHalfPoint: plan.constants.fadeHalfPoint,
+                width: line.maskRect.width
+            )
+            if expectedLocalWavefront >= plan.constants.fadeHalfPoint,
+               expectedLocalWavefront <= line.maskRect.width - plan.constants.fadeHalfPoint {
+                maxWavefrontError = max(maxWavefrontError, abs(appliedLocalWavefront - expectedLocalWavefront))
+            }
+        }
+        for index in lines.count..<mainBaseRevealLineLayers.count {
+            mainBaseRevealLineLayers[index].isHidden = true
         }
         return PerRunSweepAppliedMetrics(
             applied: true,
@@ -3860,8 +3953,25 @@ private final class NativeLyricsRowView: NSView {
         }
     }
 
+    private func ensureBaseRevealMaskLayerCount(_ count: Int) {
+        guard mainBaseRevealLineLayers.count < count else { return }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        while mainBaseRevealLineLayers.count < count {
+            let layer = NativeLyricsSweepMaskLineLayer()
+            layer.contentsScale = scale
+            mainBaseRevealMaskLayer.addSublayer(layer)
+            mainBaseRevealLineLayers.append(layer)
+        }
+    }
+
     private func hidePerRunSweepMaskLayers() {
         for layer in mainPerRunSweepLineLayers {
+            layer.isHidden = true
+        }
+    }
+
+    private func hideBaseRevealMaskLayers() {
+        for layer in mainBaseRevealLineLayers {
             layer.isHidden = true
         }
     }

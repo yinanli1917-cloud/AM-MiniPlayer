@@ -415,6 +415,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             translationAppliedProgress: 0.48,
             expectsPerRunSweep: true,
             appliesPerRunSweep: false,
+            expectsBaseReveal: true,
+            appliesBaseReveal: true,
             expectsPerGlyphEmphasis: true,
             appliesPerGlyphEmphasis: false,
             expectedEmphasisGlyphCount: 5,
@@ -429,6 +431,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             appliedSweepLineCount: 1,
             sweepLineCoverageGapCount: 1,
             sweepWavefrontErrorMax: 0.25,
+            baseRevealLineCoverageGapCount: 0,
+            baseRevealWavefrontErrorMax: 0.1,
             emphasisGlyphPositionSampleCount: 5,
             emphasisGlyphPositionErrorMax: 0.2,
             emphasisGlyphScaleErrorMax: 0.001,
@@ -530,6 +534,10 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.activeSyllableSampleCount, 1)
         XCTAssertEqual(summary.textParityGapCount, 1)
         XCTAssertEqual(summary.perRunSweepGapCount, 1)
+        XCTAssertEqual(summary.baseRevealSampleCount, 1)
+        XCTAssertEqual(summary.baseRevealGapCount, 0)
+        XCTAssertEqual(summary.baseRevealLineCoverageGapCount, 0)
+        XCTAssertEqual(summary.baseRevealWavefrontErrorMax, 0.1, accuracy: 0.0001)
         XCTAssertEqual(summary.perGlyphEmphasisGapCount, 1)
         XCTAssertEqual(summary.maxActiveWordRunCount, 7)
         XCTAssertEqual(summary.maxCJKWordRunCount, 2)
@@ -614,6 +622,9 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.metrics["textParityGapCount"], 1)
         XCTAssertEqual(summary.metrics["textLayoutCoverageGapCount"], 2)
         XCTAssertEqual(summary.metrics["textSweepLineCoverageGapCount"], 1)
+        XCTAssertEqual(summary.metrics["baseRevealSampleCount"], 1)
+        XCTAssertEqual(summary.metrics["baseRevealGapCount"], 0)
+        XCTAssertEqual(summary.metrics["baseRevealWavefrontErrorMax"], 0.1)
         XCTAssertEqual(summary.metrics["emphasisGlyphPositionSampleCount"], 5)
         XCTAssertEqual(summary.metrics["textGlyphGeometrySampleCount"], 7)
         XCTAssertEqual(summary.metrics["translationSweepLineSampleCount"], 2)
@@ -664,6 +675,39 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(summary.textParityGapCount, 1)
         XCTAssertEqual(summary.metrics["unexpectedLineLevelMainSweepCount"], 1)
         XCTAssertEqual(summary.metrics["unexpectedLineLevelTranslationSweepCount"], 1)
+    }
+
+    func testTextPhaseMetricsFlagMissingBaseRevealForSyllableLines() {
+        var accumulator = NativeLyricsRenderTelemetryAccumulator()
+
+        accumulator.recordTextPhase(NativeLyricsTextPhaseSample(
+            hasSyllableSync: true,
+            wordRunCount: 2,
+            mainExpectedProgress: 0.5,
+            mainAppliedProgress: 0.5,
+            translationExpectedProgress: nil,
+            translationAppliedProgress: nil,
+            expectsPerRunSweep: true,
+            appliesPerRunSweep: true,
+            expectsBaseReveal: true,
+            appliesBaseReveal: false,
+            expectsPerGlyphEmphasis: false,
+            appliesPerGlyphEmphasis: false,
+            expectedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphCount: 0,
+            appliedEmphasisGlyphMotionCount: 0,
+            maxAppliedEmphasisScale: 1,
+            maxAppliedEmphasisLiftMagnitude: 0,
+            maxAppliedEmphasisGlowOpacity: 0,
+            maxAppliedEmphasisAlpha: 0,
+            textLayoutCoverageGapCount: 0
+        ))
+
+        let summary = accumulator.summary()
+
+        XCTAssertEqual(summary.baseRevealSampleCount, 1)
+        XCTAssertEqual(summary.baseRevealGapCount, 1)
+        XCTAssertEqual(summary.textParityGapCount, 1)
     }
 
     func testTextPhaseMetricsCountPhaseAndEmphasisDriftAsParityGaps() {

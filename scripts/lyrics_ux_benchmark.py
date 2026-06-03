@@ -291,6 +291,10 @@ def collect_native_text_parity(
             "unexpectedLineLevelMainSweepCount": 0.0,
             "lineLevelTranslationSweepSuppressedCount": 0.0,
             "unexpectedLineLevelTranslationSweepCount": 0.0,
+            "baseRevealSampleCount": 0.0,
+            "baseRevealGapCount": 0.0,
+            "baseRevealLineCoverageGapCount": 0.0,
+            "baseRevealWavefrontErrorMax": 0.0,
             "perGlyphEmphasisGapCount": 0.0,
             "rowMountCount": 0.0,
             "rowUnmountCount": 0.0,
@@ -442,6 +446,18 @@ def collect_native_text_parity(
             failures.append(f"text parity gap count {max_metrics['textParityGapCount']:.0f}")
         if max_metrics["perRunSweepGapCount"] > 0:
             failures.append(f"per-run sweep gap count {max_metrics['perRunSweepGapCount']:.0f}")
+        if max_metrics["baseRevealSampleCount"] <= 0:
+            failures.append("no active syllable base reveal samples")
+        if max_metrics["baseRevealGapCount"] > 0:
+            failures.append(f"base reveal gap count {max_metrics['baseRevealGapCount']:.0f}")
+        if max_metrics["baseRevealLineCoverageGapCount"] > 0:
+            failures.append(
+                f"base reveal line coverage gap count {max_metrics['baseRevealLineCoverageGapCount']:.0f}"
+            )
+        if max_metrics["baseRevealWavefrontErrorMax"] > 0.5:
+            failures.append(
+                f"base reveal wavefront error max {max_metrics['baseRevealWavefrontErrorMax']:.3f} > 0.500"
+            )
         if max_metrics["perGlyphEmphasisGapCount"] > 0:
             failures.append(f"per-glyph emphasis gap count {max_metrics['perGlyphEmphasisGapCount']:.0f}")
         if max_metrics["cjkEmphasisGlyphCount"] > 0:

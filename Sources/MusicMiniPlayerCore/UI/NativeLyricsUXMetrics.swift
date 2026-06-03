@@ -93,6 +93,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
     let appliesLineLevelMainSweep: Bool
     let expectsNoLineLevelTranslationSweep: Bool
     let appliesLineLevelTranslationSweep: Bool
+    let expectsBaseReveal: Bool
+    let appliesBaseReveal: Bool
     let expectsPerGlyphEmphasis: Bool
     let appliesPerGlyphEmphasis: Bool
     let expectedEmphasisGlyphCount: Int
@@ -107,6 +109,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
     let appliedSweepLineCount: Int
     let sweepLineCoverageGapCount: Int
     let sweepWavefrontErrorMax: CGFloat
+    let baseRevealLineCoverageGapCount: Int
+    let baseRevealWavefrontErrorMax: CGFloat
     let emphasisGlyphPositionSampleCount: Int
     let emphasisGlyphPositionErrorMax: CGFloat
     let emphasisGlyphScaleErrorMax: CGFloat
@@ -139,6 +143,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
         appliesLineLevelMainSweep: Bool = false,
         expectsNoLineLevelTranslationSweep: Bool = false,
         appliesLineLevelTranslationSweep: Bool = false,
+        expectsBaseReveal: Bool = false,
+        appliesBaseReveal: Bool = false,
         expectsPerGlyphEmphasis: Bool,
         appliesPerGlyphEmphasis: Bool,
         expectedEmphasisGlyphCount: Int,
@@ -153,6 +159,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
         appliedSweepLineCount: Int = 0,
         sweepLineCoverageGapCount: Int = 0,
         sweepWavefrontErrorMax: CGFloat = 0,
+        baseRevealLineCoverageGapCount: Int = 0,
+        baseRevealWavefrontErrorMax: CGFloat = 0,
         emphasisGlyphPositionSampleCount: Int = 0,
         emphasisGlyphPositionErrorMax: CGFloat = 0,
         emphasisGlyphScaleErrorMax: CGFloat = 0,
@@ -184,6 +192,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
         self.appliesLineLevelMainSweep = appliesLineLevelMainSweep
         self.expectsNoLineLevelTranslationSweep = expectsNoLineLevelTranslationSweep
         self.appliesLineLevelTranslationSweep = appliesLineLevelTranslationSweep
+        self.expectsBaseReveal = expectsBaseReveal
+        self.appliesBaseReveal = appliesBaseReveal
         self.expectsPerGlyphEmphasis = expectsPerGlyphEmphasis
         self.appliesPerGlyphEmphasis = appliesPerGlyphEmphasis
         self.expectedEmphasisGlyphCount = expectedEmphasisGlyphCount
@@ -198,6 +208,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
         self.appliedSweepLineCount = appliedSweepLineCount
         self.sweepLineCoverageGapCount = sweepLineCoverageGapCount
         self.sweepWavefrontErrorMax = sweepWavefrontErrorMax
+        self.baseRevealLineCoverageGapCount = baseRevealLineCoverageGapCount
+        self.baseRevealWavefrontErrorMax = baseRevealWavefrontErrorMax
         self.emphasisGlyphPositionSampleCount = emphasisGlyphPositionSampleCount
         self.emphasisGlyphPositionErrorMax = emphasisGlyphPositionErrorMax
         self.emphasisGlyphScaleErrorMax = emphasisGlyphScaleErrorMax
@@ -229,6 +241,7 @@ struct NativeLyricsTextPhaseSample: Equatable {
         (expectsPerRunSweep && !appliesPerRunSweep)
             || (expectsNoLineLevelMainSweep && appliesLineLevelMainSweep)
             || (expectsNoLineLevelTranslationSweep && appliesLineLevelTranslationSweep)
+            || (expectsBaseReveal && !appliesBaseReveal)
             || (expectsPerGlyphEmphasis && !appliesPerGlyphEmphasis)
             || cjkEmphasisGlyphCount > 0
             || mainPhaseError > 0.02
@@ -236,6 +249,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
             || textLayoutCoverageGapCount > 0
             || sweepLineCoverageGapCount > 0
             || sweepWavefrontErrorMax > 0.5
+            || baseRevealLineCoverageGapCount > 0
+            || baseRevealWavefrontErrorMax > 0.5
             || emphasisGlyphPositionErrorMax > 0.5
             || emphasisGlyphScaleErrorMax > 0.002
             || emphasisGlyphAlphaErrorMax > 0.015
@@ -483,6 +498,9 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private(set) var unexpectedLineLevelMainSweepCount = 0
     private(set) var lineLevelTranslationSweepSuppressedCount = 0
     private(set) var unexpectedLineLevelTranslationSweepCount = 0
+    private(set) var baseRevealSampleCount = 0
+    private(set) var baseRevealGapCount = 0
+    private(set) var baseRevealLineCoverageGapCount = 0
     private(set) var perGlyphEmphasisGapCount = 0
     private(set) var maxActiveWordRunCount = 0
     private(set) var maxCJKWordRunCount = 0
@@ -529,6 +547,7 @@ struct NativeLyricsRenderTelemetryAccumulator {
     private var mainPhaseErrors: [CGFloat] = []
     private var translationPhaseErrors: [CGFloat] = []
     private var sweepWavefrontErrors: [CGFloat] = []
+    private var baseRevealWavefrontErrors: [CGFloat] = []
     private var emphasisGlyphPositionErrors: [CGFloat] = []
     private var emphasisGlyphScaleErrors: [CGFloat] = []
     private var emphasisGlyphAlphaErrors: [CGFloat] = []
@@ -607,6 +626,12 @@ struct NativeLyricsRenderTelemetryAccumulator {
                 unexpectedLineLevelTranslationSweepCount += 1
             }
         }
+        if sample.expectsBaseReveal {
+            baseRevealSampleCount += 1
+            if !sample.appliesBaseReveal {
+                baseRevealGapCount += 1
+            }
+        }
         if sample.expectsPerGlyphEmphasis && !sample.appliesPerGlyphEmphasis {
             perGlyphEmphasisGapCount += 1
         }
@@ -635,6 +660,10 @@ struct NativeLyricsRenderTelemetryAccumulator {
         textSweepLineCoverageGapCount += sample.sweepLineCoverageGapCount
         if sample.sweepWavefrontErrorMax > 0 {
             sweepWavefrontErrors.append(sample.sweepWavefrontErrorMax)
+        }
+        baseRevealLineCoverageGapCount += sample.baseRevealLineCoverageGapCount
+        if sample.baseRevealWavefrontErrorMax > 0 {
+            baseRevealWavefrontErrors.append(sample.baseRevealWavefrontErrorMax)
         }
         emphasisGlyphPositionSampleCount += sample.emphasisGlyphPositionSampleCount
         if sample.emphasisGlyphPositionErrorMax > 0 {
@@ -819,6 +848,10 @@ struct NativeLyricsRenderTelemetryAccumulator {
             unexpectedLineLevelMainSweepCount: unexpectedLineLevelMainSweepCount,
             lineLevelTranslationSweepSuppressedCount: lineLevelTranslationSweepSuppressedCount,
             unexpectedLineLevelTranslationSweepCount: unexpectedLineLevelTranslationSweepCount,
+            baseRevealSampleCount: baseRevealSampleCount,
+            baseRevealGapCount: baseRevealGapCount,
+            baseRevealLineCoverageGapCount: baseRevealLineCoverageGapCount,
+            baseRevealWavefrontErrorMax: baseRevealWavefrontErrors.max() ?? 0,
             perGlyphEmphasisGapCount: perGlyphEmphasisGapCount,
             maxActiveWordRunCount: maxActiveWordRunCount,
             maxCJKWordRunCount: maxCJKWordRunCount,
@@ -968,6 +1001,10 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
     let unexpectedLineLevelMainSweepCount: Int
     let lineLevelTranslationSweepSuppressedCount: Int
     let unexpectedLineLevelTranslationSweepCount: Int
+    let baseRevealSampleCount: Int
+    let baseRevealGapCount: Int
+    let baseRevealLineCoverageGapCount: Int
+    let baseRevealWavefrontErrorMax: CGFloat
     let perGlyphEmphasisGapCount: Int
     let maxActiveWordRunCount: Int
     let maxCJKWordRunCount: Int
@@ -1081,6 +1118,10 @@ struct NativeLyricsRenderTelemetrySummary: Equatable {
             "unexpectedLineLevelMainSweepCount": Double(unexpectedLineLevelMainSweepCount),
             "lineLevelTranslationSweepSuppressedCount": Double(lineLevelTranslationSweepSuppressedCount),
             "unexpectedLineLevelTranslationSweepCount": Double(unexpectedLineLevelTranslationSweepCount),
+            "baseRevealSampleCount": Double(baseRevealSampleCount),
+            "baseRevealGapCount": Double(baseRevealGapCount),
+            "baseRevealLineCoverageGapCount": Double(baseRevealLineCoverageGapCount),
+            "baseRevealWavefrontErrorMax": Double(baseRevealWavefrontErrorMax),
             "perGlyphEmphasisGapCount": Double(perGlyphEmphasisGapCount),
             "maxActiveWordRunCount": Double(maxActiveWordRunCount),
             "maxCJKWordRunCount": Double(maxCJKWordRunCount),
