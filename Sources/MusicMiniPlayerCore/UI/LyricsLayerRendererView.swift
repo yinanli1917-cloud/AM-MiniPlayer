@@ -1773,7 +1773,17 @@ final class NativeLyricsSurfaceView: NSView {
                 refreshRowInteractionState(configuration: runtimeConfiguration(from: configuration))
             }
         }
-        forceDirectSnap(to: rowIndex, reason: .tapToLine)
+        // Spring to the tapped line from current on-screen positions instead of a hard
+        // position snap. v2.8 parity: LyricLineView lets `.animation(value: fullOffset)`
+        // own the transition (LyricsView.swift:1671-1672); the spring continues from where
+        // the rows visually are (manual offset included) so the jump is smooth, not abrupt.
+        if let configuration {
+            semanticSpringRetarget(
+                to: rowIndex,
+                reason: .tapToLine,
+                currentYByIndex: currentRenderedYByIndex(configuration: runtimeConfiguration(from: configuration))
+            )
+        }
         recordTapToLineSettleTiming(targetIndex: rowIndex, startedAt: startedAt)
         let onManualScrollRecovered = configuration?.onManualScrollRecovered
         let onLineTap = configuration?.onLineTap
@@ -1838,11 +1848,16 @@ final class NativeLyricsSurfaceView: NSView {
     private func recoverNativeManualScroll() {
         guard let configuration, manualScrollState.isActive else { return }
         cancelManualScrollTimers()
-        let liveIndex = liveDisplayIndex(configuration: runtimeConfiguration(from: configuration))
+        let scrolledConfiguration = runtimeConfiguration(from: configuration)
+        let liveIndex = liveDisplayIndex(configuration: scrolledConfiguration)
+        // Capture where the rows currently sit (the manual-scrolled offset) BEFORE resetting,
+        // so the spring releases smoothly from that position back to the live line.
+        let scrolledYByIndex = currentRenderedYByIndex(configuration: scrolledConfiguration)
         manualScrollState.reset()
         renderTelemetry.recordManualScrollRecovery()
         refreshRowInteractionState(configuration: runtimeConfiguration(from: configuration))
-        forceDirectSnap(to: liveIndex, reason: .manualScroll)
+        // Spring-release to the live line (v2.8 parity) instead of an abrupt hard snap.
+        semanticSpringRetarget(to: liveIndex, reason: .manualScroll, currentYByIndex: scrolledYByIndex)
         let onManualScrollRecovered = configuration.onManualScrollRecovered
         deferParentCallback {
             onManualScrollRecovered()
