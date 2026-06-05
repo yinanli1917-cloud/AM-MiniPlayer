@@ -136,6 +136,15 @@ struct NativeLyricsTextRenderPlan: Equatable {
         )
     }
 
+    /// v2.8 "floating": the active line's text gently lifts as it is sung — the alive feel that
+    /// is computed per word (`baseFloatY`) but was never applied to the main text layers. Each
+    /// word eases toward -2pt and HOLDS there, so the line-level lift is the DEEPEST float among
+    /// words that have started: it rises smoothly to the target and holds, with no per-word
+    /// reset jitter (using only the most-recently-started word resets to 0 each word boundary).
+    func activeLineFloatY(at currentTime: TimeInterval) -> CGFloat {
+        wordRuns.filter { $0.startTime <= currentTime }.map(\.baseFloatY).min() ?? 0
+    }
+
     fileprivate static func cleanedDisplayText(for line: LyricLine) -> String {
         if line.hasSyllableSync && !line.words.isEmpty {
             let wordDisplayText = LyricDisplaySegmenter.displayText(forWords: line.words)

@@ -37,6 +37,38 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertEqual(cached.translation?.progress, uncached.translation?.progress)
     }
 
+    /// v2.8 floating: the active line lifts toward -2pt as it is sung and HOLDS — it must never
+    /// bob back up at a word boundary. The naive "most-recently-started word" float resets to 0
+    /// each new word (jitter); the line-level lift must be monotonic.
+    func testActiveLineFloatRisesMonotonicallyWithoutPerWordJitter() {
+        let line = LyricLine(
+            text: "shine through the night",
+            startTime: 10, endTime: 15,
+            words: [
+                LyricWord(word: "shine", startTime: 10, endTime: 12),
+                LyricWord(word: " through", startTime: 12, endTime: 13),
+                LyricWord(word: " the", startTime: 13, endTime: 14),
+                LyricWord(word: " night", startTime: 14, endTime: 15)
+            ]
+        )
+        func floatY(at t: TimeInterval) -> CGFloat {
+            NativeLyricsTextRenderPlan.make(configuration: .init(line: line, currentTime: t, isActive: true))
+                .activeLineFloatY(at: t)
+        }
+        XCTAssertEqual(floatY(at: 9), 0, accuracy: 0.001, "no float before the line starts")
+        XCTAssertLessThan(floatY(at: 10.4), 0, "float begins once the line is active")
+        // Monotonic settle across every word boundary — never jitters back up.
+        var prev: CGFloat = 0
+        for step in 0...20 {
+            let t = 10.0 + Double(step) * 0.25
+            let y = floatY(at: t)
+            XCTAssertLessThanOrEqual(y, prev + 0.0001, "float jittered up at t=\(t): y=\(y) prev=\(prev)")
+            XCTAssertGreaterThanOrEqual(y, -2.0001, "float never overshoots the -2pt target")
+            prev = y
+        }
+        XCTAssertEqual(floatY(at: 14.9), -2, accuracy: 0.001, "settled at the float target")
+    }
+
     func testCJKWordLevelPlanRemovesProviderSpacingWithoutSyntheticSpaces() {
         let line = LyricLine(
             text: "冬 天 一 個 遊",

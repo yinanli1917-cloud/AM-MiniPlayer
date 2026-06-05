@@ -3139,8 +3139,13 @@ private final class NativeLyricsRowView: NSView {
     ) -> MainTextPhaseAppliedMetrics {
         let activeRun = plan.wordRuns.last { $0.startTime <= currentTime }
             ?? plan.wordRuns.first
-        mainTextLayer.setAffineTransform(.identity)
-        mainBrightTextLayer.setAffineTransform(.identity)
+        // v2.8 floating: lift the active line's text toward -2pt as it is sung (smooth, holds —
+        // no per-word jitter). The bright layer's sweep mask is its child, so it lifts in
+        // lockstep and the sweep stays aligned to the glyphs. Emphasis glyph layers are separate
+        // and keep their own per-word float.
+        let floatTransform = CGAffineTransform(translationX: 0, y: plan.activeLineFloatY(at: currentTime))
+        mainTextLayer.setAffineTransform(floatTransform)
+        mainBrightTextLayer.setAffineTransform(floatTransform)
         mainBrightTextLayer.opacity = Float(plan.mainPostLineFade)
         mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || plan.mainPostLineFade <= 0.001
         let linePlan = mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
