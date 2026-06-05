@@ -798,7 +798,16 @@ public struct LyricsView: View {
                 : liveIndex
             let isLineWaveActive = !wave.workItems.isEmpty
             let _ = updateLyricsContainerHeight(containerHeight)
-            let anchorY = (containerHeight - controlBarHeight) * 0.24
+            // Clamp the active-line anchor so a tall wrapped line keeps its whole height
+            // above the controls (its lower CJK sublines were rendering behind the overlay
+            // and disappearing). Short lines keep the v2.8 24%-from-top position.
+            let activeLineHeight = calculateAccumulatedHeight(upTo: displayIndex + 1)
+                - calculateAccumulatedHeight(upTo: displayIndex)
+            let anchorY = LyricsAnchorPolicy.anchorY(
+                containerHeight: containerHeight,
+                controlBarHeight: controlBarHeight,
+                activeLineHeight: activeLineHeight
+            )
             let pendingTranslationLineIndices = cachedPendingTranslationLineIndices
             // Visibility culling: only during steady auto-play with all heights measured
             let visibleRange = 12

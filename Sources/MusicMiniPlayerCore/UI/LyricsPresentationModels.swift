@@ -557,6 +557,34 @@ enum NativeLyricsVisibleRowSelector {
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Active-line anchor (align-anchor)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+enum LyricsAnchorPolicy {
+    /// Vertical anchor (top of the active line) within the lyrics area.
+    ///
+    /// The base anchor is the v2.8 "upper-quarter" position (24% of the area above the
+    /// controls). A FIXED top anchor lets a TALL wrapped line (e.g. multi-subline CJK)
+    /// push its lower sublines into the bottom controls zone, where the controls overlay
+    /// covers them — the "disappearing letters" bug. So when the active line would not
+    /// fit, clamp the anchor UP just enough to keep its whole height above the controls,
+    /// without pushing its top above ~12% of the area (so preceding context stays visible).
+    static func anchorY(
+        containerHeight: CGFloat,
+        controlBarHeight: CGFloat,
+        activeLineHeight: CGFloat,
+        bottomMargin: CGFloat = 8
+    ) -> CGFloat {
+        let visibleBottom = max(1, containerHeight - controlBarHeight)
+        let base = visibleBottom * 0.24
+        guard activeLineHeight > 0 else { return base }
+        let fitAnchor = visibleBottom - activeLineHeight - bottomMargin
+        let minAnchor = visibleBottom * 0.12
+        return min(base, max(minAnchor, fitAnchor))
+    }
+}
+
 struct NativeLyricsManualScrollBounds: Equatable {
     let maxUp: CGFloat
     let maxDown: CGFloat

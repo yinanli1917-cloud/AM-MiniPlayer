@@ -304,4 +304,37 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             "DEFECT pinned: hovered-row tap fallback expands the hit frame by 24pt"
         )
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Active-line anchor (disappearing-letters / clipping fix)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// A tall wrapped active line must be clamped UP so its whole height stays above the
+    /// controls (otherwise lower CJK sublines render behind the controls and disappear).
+    /// Short lines keep the v2.8 24%-from-top anchor unchanged.
+    func test_anchorPolicy_keepsTallActiveLineAboveControls() {
+        let containerHeight: CGFloat = 400
+        let controlBarHeight: CGFloat = 120
+        let visibleBottom = containerHeight - controlBarHeight   // 280
+        let base = visibleBottom * 0.24                          // 67.2
+
+        // Short line + unmeasured height: unchanged v2.8 base anchor.
+        XCTAssertEqual(
+            LyricsAnchorPolicy.anchorY(containerHeight: containerHeight, controlBarHeight: controlBarHeight, activeLineHeight: 40),
+            base, accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            LyricsAnchorPolicy.anchorY(containerHeight: containerHeight, controlBarHeight: controlBarHeight, activeLineHeight: 0),
+            base, accuracy: 0.0001
+        )
+
+        // Tall line that would clip at the base anchor: shifted up so its bottom fits.
+        let tall: CGFloat = 230
+        let tallAnchor = LyricsAnchorPolicy.anchorY(
+            containerHeight: containerHeight, controlBarHeight: controlBarHeight, activeLineHeight: tall
+        )
+        XCTAssertLessThan(tallAnchor, base)                        // clamped upward
+        XCTAssertLessThanOrEqual(tallAnchor + tall, visibleBottom) // bottom no longer behind controls
+        XCTAssertEqual(tallAnchor, visibleBottom - tall - 8, accuracy: 0.0001)
+    }
 }
