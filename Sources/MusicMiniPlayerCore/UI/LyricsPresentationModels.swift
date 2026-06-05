@@ -245,16 +245,6 @@ struct NativeLyricsVisualTarget: Equatable {
         let activeIndices = bufferedActiveIndices.isEmpty ? Set([currentIndex]) : bufferedActiveIndices
         let isHotActive = displayIndex == currentIndex
         let isBufferedActive = activeIndices.contains(displayIndex)
-        let focusMin = min(scrollTargetIndex, activeIndices.min() ?? currentIndex)
-        let focusMax = max(scrollTargetIndex, activeIndices.max() ?? currentIndex)
-        let distance: Int
-        if displayIndex < focusMin {
-            distance = focusMin - displayIndex
-        } else if displayIndex > focusMax {
-            distance = displayIndex - focusMax
-        } else {
-            distance = 0
-        }
 
         if isManualScrolling {
             return NativeLyricsVisualTarget(
@@ -281,8 +271,12 @@ struct NativeLyricsVisualTarget: Equatable {
                 isActive: true
             )
         }
-        let passedLineBlurStep = displayIndex < currentIndex ? 1 : 0
-        let renderedBlur = CGFloat(max(distance + passedLineBlurStep, 0)) * 1.5
+        // v2.8/AMLL: blur grows symmetrically with the TRUE distance from the active line, so
+        // the active line is sharp and every other line blurs progressively outward by an equal
+        // step on both sides. The old focus-band logic zeroed blur for the active line AND its
+        // accumulated neighbors (a flat sharp plateau) and over-blurred passed lines with a +1
+        // step, breaking the depth relationship the user expects.
+        let renderedBlur = CGFloat(abs(displayIndex - currentIndex)) * 1.5
         return NativeLyricsVisualTarget(
             opacity: 0.35,
             scale: 0.95,

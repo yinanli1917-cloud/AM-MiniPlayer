@@ -2872,10 +2872,11 @@ private final class NativeLyricsRowView: NSView {
         let isActive = row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying
         let appliesMainSweep = isActive && row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
         let mainAlpha = appliesMainSweep ? plan.constants.dimAlpha : 1
-        mainTextLayer.mask = appliesMainSweep ? mainBaseRevealMaskLayer : nil
-        if !appliesMainSweep {
-            hideBaseRevealMaskLayers()
-        }
+        // v2.8 karaoke: the dim base text stays fully visible at dimAlpha at ALL times; only
+        // the bright overlay sweeps over it. Masking the base made unsung words invisible until
+        // the wavefront reached them — the "从无到有 / words materialize from nothing" bug.
+        mainTextLayer.mask = nil
+        hideBaseRevealMaskLayers()
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
@@ -3149,11 +3150,11 @@ private final class NativeLyricsRowView: NSView {
             bounds: mainBrightTextLayer.bounds,
             linePlan: linePlan
         )
-        let baseRevealResult = updateBaseRevealMask(
-            plan: plan,
-            currentTime: currentTime,
-            bounds: mainTextLayer.bounds,
-            linePlan: linePlan
+        // Base-reveal is intentionally NOT applied: the dim base stays fully visible (v2.8
+        // karaoke). Skipping the mask update also avoids per-frame base-mask layout work.
+        let baseRevealResult = PerRunSweepAppliedMetrics(
+            applied: false, expectedLineCount: 0, appliedLineCount: 0,
+            coverageGapCount: 0, wavefrontErrorMax: 0
         )
         let appliedProgress: CGFloat
         if sweepResult.applied {
@@ -3369,62 +3370,6 @@ private final class NativeLyricsRowView: NSView {
         }
         for index in lines.count..<mainPerRunSweepLineLayers.count {
             mainPerRunSweepLineLayers[index].isHidden = true
-        }
-        return PerRunSweepAppliedMetrics(
-            applied: true,
-            expectedLineCount: linePlan.count,
-            appliedLineCount: lines.count,
-            coverageGapCount: max(0, linePlan.count - lines.count),
-            wavefrontErrorMax: maxWavefrontError
-        )
-    }
-
-    private func updateBaseRevealMask(
-        plan: NativeLyricsTextRenderPlan,
-        currentTime: TimeInterval,
-        bounds: CGRect,
-        linePlan: [NativeLyricsTextSweepVisualLinePlan]
-    ) -> PerRunSweepAppliedMetrics {
-        guard !plan.wordRuns.isEmpty, bounds.width > 1, bounds.height > 1 else { return .inactive }
-        let lines = NativeLyricsTextSweepLayout.maskLines(
-            from: linePlan,
-            fadeHalfPoint: plan.constants.fadeHalfPoint,
-            currentTime: currentTime
-        )
-        guard !lines.isEmpty else {
-            mainTextLayer.mask = mainBaseRevealMaskLayer
-            hideBaseRevealMaskLayers()
-            return PerRunSweepAppliedMetrics(
-                applied: false,
-                expectedLineCount: linePlan.count,
-                appliedLineCount: 0,
-                coverageGapCount: linePlan.count,
-                wavefrontErrorMax: 0
-            )
-        }
-
-        mainTextLayer.mask = mainBaseRevealMaskLayer
-        mainBaseRevealMaskLayer.frame = bounds
-        ensureBaseRevealMaskLayerCount(lines.count)
-        var maxWavefrontError: CGFloat = 0
-        for (index, line) in lines.enumerated() {
-            let maskLayer = mainBaseRevealLineLayers[index]
-            maskLayer.isHidden = false
-            maskLayer.frame = line.maskRect
-            let expectedLocalWavefront = line.wavefrontX - line.maskRect.minX
-            let appliedLocalWavefront = applySweepMask(
-                maskLayer,
-                wavefrontX: expectedLocalWavefront,
-                fadeHalfPoint: plan.constants.fadeHalfPoint,
-                width: line.maskRect.width
-            )
-            if expectedLocalWavefront >= plan.constants.fadeHalfPoint,
-               expectedLocalWavefront <= line.maskRect.width - plan.constants.fadeHalfPoint {
-                maxWavefrontError = max(maxWavefrontError, abs(appliedLocalWavefront - expectedLocalWavefront))
-            }
-        }
-        for index in lines.count..<mainBaseRevealLineLayers.count {
-            mainBaseRevealLineLayers[index].isHidden = true
         }
         return PerRunSweepAppliedMetrics(
             applied: true,
@@ -3965,17 +3910,6 @@ private final class NativeLyricsRowView: NSView {
             layer.contentsScale = scale
             mainPerRunSweepMaskLayer.addSublayer(layer)
             mainPerRunSweepLineLayers.append(layer)
-        }
-    }
-
-    private func ensureBaseRevealMaskLayerCount(_ count: Int) {
-        guard mainBaseRevealLineLayers.count < count else { return }
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        while mainBaseRevealLineLayers.count < count {
-            let layer = NativeLyricsSweepMaskLineLayer()
-            layer.contentsScale = scale
-            mainBaseRevealMaskLayer.addSublayer(layer)
-            mainBaseRevealLineLayers.append(layer)
         }
     }
 

@@ -118,10 +118,11 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("mainBrightTextLayer.mask = mainSweepMaskLayer"))
         XCTAssertTrue(source.contains("private let mainBaseRevealMaskLayer = CALayer()"))
         XCTAssertTrue(source.contains("private var mainBaseRevealLineLayers: [NativeLyricsSweepMaskLineLayer] = []"))
-        XCTAssertTrue(source.contains("mainTextLayer.mask = appliesMainSweep ? mainBaseRevealMaskLayer : nil"))
-        XCTAssertTrue(source.contains("private func updateBaseRevealMask("))
-        XCTAssertTrue(source.contains("mainTextLayer.mask = mainBaseRevealMaskLayer"))
-        XCTAssertTrue(source.contains("ensureBaseRevealMaskLayerCount"))
+        // v2.8 karaoke: the dim base text is NEVER masked — the full line is always visible at
+        // dimAlpha and only the bright overlay sweeps. (Masking the base caused the "从无到有"
+        // words-materialize-from-nothing bug.)
+        XCTAssertFalse(source.contains("mainTextLayer.mask = appliesMainSweep ? mainBaseRevealMaskLayer"))
+        XCTAssertTrue(source.contains("the dim base text stays fully visible at dimAlpha at ALL times"))
         XCTAssertTrue(source.contains("hideBaseRevealMaskLayers()"))
         XCTAssertTrue(source.contains("translationBrightTextLayer.mask = translationSweepMaskLayer"))
         XCTAssertTrue(source.contains("hideDotLayers()"))

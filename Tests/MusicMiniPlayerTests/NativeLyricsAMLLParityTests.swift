@@ -120,18 +120,19 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         assertTarget(interludeActive, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: true, "v2.8 interlude scale = 1 - b*0.05 = 0.95")
     }
 
-    /// DIVERGENCE: AMLL adds a passed-line +1 blur step (asymmetric), so a passed line at
-    /// distance 1 is 3.0pt in native vs 1.5pt in v2.8. The user chose AMLL semantics, so
-    /// this asymmetry is intended. AMLL ref: base/layout.ts:326-327 @ 243112b.
-    func test_DIVERGENCE_amllPassedLine_hasExtraBlurStep_vs_v28() {
+    /// FIXED (formerly a divergence): native passed-line blur now MATCHES v2.8 — symmetric,
+    /// no extra +1 step. The old asymmetric step over-blurred the line just above the active
+    /// line (3.0 vs 1.5); the user reported the blur relationship as wrong, so native follows
+    /// the v2.8 symmetric curve. The AMLL harmony-brightness semantic (buffered rows at 0.85)
+    /// is kept separately and is unaffected.
+    func test_passedLineBlur_matchesV28_symmetric() {
         let amllPassed = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 4, currentIndex: 5, scrollTargetIndex: 5,
             bufferedActiveIndices: [5], isManualScrolling: false
         )
         let v28Passed = NativeLyricsVisualTarget.legacyTarget(displayIndex: 4, currentIndex: 5, isManualScrolling: false)
-        XCTAssertEqual(amllPassed.blur, 3.0, accuracy: 1e-6, "AMLL passed dist-1 = (1+1)*1.5")
-        XCTAssertEqual(v28Passed.blur, 1.5, accuracy: 1e-6, "v2.8 passed dist-1 = 1*1.5")
-        XCTAssertGreaterThan(amllPassed.blur, v28Passed.blur, "AMLL over-blurs passed lines vs v2.8 by one step")
+        XCTAssertEqual(amllPassed.blur, v28Passed.blur, accuracy: 1e-6, "native passed-line blur now matches v2.8")
+        XCTAssertEqual(amllPassed.blur, 1.5, accuracy: 1e-6, "passed dist-1 = 1.5 (symmetric, no extra step)")
     }
 
     /// DIVERGENCE: future (upcoming) lines are symmetric in BOTH laws — no passed-step —
@@ -401,6 +402,31 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
 
         XCTAssertGreaterThan(longEnglish, single * 1.8, "long English line must wrap to >= ~2 lines")
         XCTAssertGreaterThan(longCJK, single * 1.8, "long CJK line must wrap to >= ~2 lines")
+    }
+
+    /// AMLL/v2.8 blur must grow SYMMETRICALLY with the true distance from the active line:
+    /// active sharp, each line out +1.5pt, same on the passed and future sides. The old
+    /// `amllTarget` used an accumulating focus band (zeroing blur for the active line AND its
+    /// neighbors → a flat sharp plateau) plus an asymmetric +1 step on passed lines. This pins
+    /// the corrected curve against the multi-element buffered set that occurs live (single-
+    /// element sets hid the bug in the older tests).
+    func test_blur_isSymmetricByTrueDistanceFromActiveLine() {
+        func blur(_ idx: Int, current: Int, buffered: Set<Int>, scroll: Int) -> CGFloat {
+            NativeLyricsVisualTarget.amllTarget(
+                displayIndex: idx, currentIndex: current, scrollTargetIndex: scroll,
+                bufferedActiveIndices: buffered, isManualScrolling: false
+            ).blur
+        }
+        // Active line sharp.
+        XCTAssertEqual(blur(5, current: 5, buffered: [5], scroll: 5), 0, accuracy: 0.001)
+        // Immediate neighbors blur equally on both sides (old passed side = 3.0 via +1 step).
+        XCTAssertEqual(blur(6, current: 5, buffered: [5], scroll: 5), 1.5, accuracy: 0.001)
+        XCTAssertEqual(blur(4, current: 5, buffered: [5], scroll: 5), 1.5, accuracy: 0.001)
+        // Distance 2 passed line = 3.0 (old: 4.5 via +1 step).
+        XCTAssertEqual(blur(3, current: 5, buffered: [5], scroll: 5), 3.0, accuracy: 0.001)
+        // With an ACCUMULATED buffered set (live case), a non-buffered line 2 away still blurs
+        // by its TRUE distance (3.0), not collapsed to band-distance 1 (old: 1.5).
+        XCTAssertEqual(blur(7, current: 5, buffered: [4, 5, 6], scroll: 5), 3.0, accuracy: 0.001)
     }
 
 }

@@ -345,7 +345,9 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             bufferedActiveIndices: [8],
             isManualScrolling: false
         )
-        XCTAssertEqual(farPassed.blur, 13.5, accuracy: 0.0001)
+        // Symmetric true-distance blur: abs(0 - 8) * 1.5 = 12.0 (was 13.5 with the removed
+        // asymmetric +1 passed-line step).
+        XCTAssertEqual(farPassed.blur, 12.0, accuracy: 0.0001)
     }
 
     func testAMLLVisualTargetUsesNeutralManualBrowseField() {
