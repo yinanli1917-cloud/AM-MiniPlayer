@@ -4155,22 +4155,23 @@ private final class NativeLyricsRowView: NSView {
         )
         dotContainerLayer.isHidden = plan.overallOpacity <= 0.001
         dotContainerLayer.opacity = Float(plan.overallOpacity)
-        let containerScale = plan.scales.first ?? 1
-        dotContainerLayer.setAffineTransform(CGAffineTransform(scaleX: containerScale, y: containerScale))
+        // v2.8 parity: each dot scales individually as it fills (container stays
+        // identity); only the dot currently lighting up breathes.
+        dotContainerLayer.setAffineTransform(.identity)
         for (index, dot) in dotLayers.enumerated() {
             let opacity = plan.opacities.indices.contains(index) ? plan.opacities[index] : 0
+            let scale = plan.scales.indices.contains(index) ? plan.scales[index] : 1
             dot.opacity = Float(opacity)
-            dot.setAffineTransform(.identity)
+            dot.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
             dot.isHidden = plan.overallOpacity <= 0.001
         }
         let appliedBlur = applyDotBlurRadius(plan.blur)
-        let appliedScale = dotContainerLayer.affineTransform().a
         (superview as? NativeLyricsSurfaceView)?.recordDotPhase(NativeLyricsDotPhaseSample(
             isPrelude: isPrelude,
             expectedOpacity: plan.opacities,
             appliedOpacity: dotLayers.map { CGFloat($0.opacity) },
             expectedScale: plan.scales,
-            appliedScale: dotLayers.map { _ in appliedScale },
+            appliedScale: dotLayers.map { CGFloat($0.affineTransform().a) },
             expectedBlur: plan.blur,
             appliedBlur: appliedBlur,
             expectedOverallOpacity: plan.overallOpacity,
