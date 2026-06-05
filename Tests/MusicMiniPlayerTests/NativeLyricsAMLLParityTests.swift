@@ -20,6 +20,7 @@
 
 import XCTest
 import CoreGraphics
+import AppKit
 @testable import MusicMiniPlayerCore
 
 final class NativeLyricsAMLLParityTests: XCTestCase {
@@ -337,4 +338,69 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         XCTAssertLessThanOrEqual(tallAnchor + tall, visibleBottom) // bottom no longer behind controls
         XCTAssertEqual(tallAnchor, visibleBottom - tall - 8, accuracy: 0.0001)
     }
+
+    /// REAL mini-player geometry (measured from the live lyrics_line_motion_samples.csv):
+    /// the lyrics area is only ~284pt tall, with a 120pt bottom controls zone and a ~42pt
+    /// top inset (visibleTopY) — leaving ~122pt visible. A synced active line with a wrapped
+    /// main + translation can be ~148pt, TALLER than the visible area. The old policy clamped
+    /// the anchor UP to fit the bottom (-> visibleBottom*0.12 = 19.7), which shoved the line's
+    /// TOP above the 42pt inset, clipping the sung main text behind the header — exactly the
+    /// "letters disappear" report (CSV: idx=44 minY=39.4 < visibleTop=42, bottom over by 23pt).
+    /// An oversized line cannot fully fit, so the top MUST be pinned to the visible top: the
+    /// sung text + sweep stay on screen, only the translation fades under the controls.
+    func test_anchorPolicy_pinsOversizedActiveLineTopToVisibleTop() {
+        let containerHeight: CGFloat = 284
+        let controlBarHeight: CGFloat = 120
+        let topInset: CGFloat = 42
+        let visibleBottom = containerHeight - controlBarHeight   // 164
+        let oversized: CGFloat = 148                             // taller than visible area (122)
+
+        let anchor = LyricsAnchorPolicy.anchorY(
+            containerHeight: containerHeight,
+            controlBarHeight: controlBarHeight,
+            activeLineHeight: oversized,
+            topInset: topInset
+        )
+        // The sung line's TOP must never sit above the visible top inset.
+        XCTAssertGreaterThanOrEqual(anchor, topInset)
+        // For an oversized line, pin exactly to the top so the most-important (sung) text shows.
+        XCTAssertEqual(anchor, topInset, accuracy: 0.0001)
+        // Documents why the old result (min(base, max(0.12*vb, vb-h-8)) = 19.7) clipped the top.
+        XCTAssertLessThan(visibleBottom * 0.12, topInset)
+
+        // A line that DOES fit keeps the upper-quarter base but never lifts above the top inset,
+        // and its bottom stays above the controls.
+        let fits: CGFloat = 70
+        let fitAnchor = LyricsAnchorPolicy.anchorY(
+            containerHeight: containerHeight, controlBarHeight: controlBarHeight,
+            activeLineHeight: fits, topInset: topInset
+        )
+        XCTAssertGreaterThanOrEqual(fitAnchor, topInset)
+        XCTAssertLessThanOrEqual(fitAnchor + fits, visibleBottom)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Line wrapping / clipping (the "lyrics disappear" report)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// A long line at the mini-player content width MUST measure as multiple wrapped lines.
+    /// If this returns a single line height, the row frame is too short and the wrapped
+    /// continuation is clipped -> "disappearing letters". This pins the measurement that
+    /// drives the row frame height, deterministically (no app / window / screenshot).
+    func test_measuredTextHeight_longLineWrapsToMultipleLines() {
+        let font = NSFont.systemFont(ofSize: 24, weight: .semibold)
+        let contentWidth: CGFloat = 186  // ~ 250pt window - 64pt insets
+
+        let single = NativeLyricsTextMeasurement.measuredTextHeight("Got", width: contentWidth, font: font)
+        let longEnglish = NativeLyricsTextMeasurement.measuredTextHeight(
+            "Got another mouth to feed leave your dishes in the sink", width: contentWidth, font: font
+        )
+        let longCJK = NativeLyricsTextMeasurement.measuredTextHeight(
+            "浪漫節日燈飾太亮掩蓋了隱憂也沒有後路可以退", width: contentWidth, font: font
+        )
+
+        XCTAssertGreaterThan(longEnglish, single * 1.8, "long English line must wrap to >= ~2 lines")
+        XCTAssertGreaterThan(longCJK, single * 1.8, "long CJK line must wrap to >= ~2 lines")
+    }
+
 }

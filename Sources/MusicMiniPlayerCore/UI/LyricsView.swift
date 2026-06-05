@@ -798,15 +798,36 @@ public struct LyricsView: View {
                 : liveIndex
             let isLineWaveActive = !wave.workItems.isEmpty
             let _ = updateLyricsContainerHeight(containerHeight)
-            // Clamp the active-line anchor so a tall wrapped line keeps its whole height
-            // above the controls (its lower CJK sublines were rendering behind the overlay
-            // and disappearing). Short lines keep the v2.8 24%-from-top position.
-            let activeLineHeight = calculateAccumulatedHeight(upTo: displayIndex + 1)
-                - calculateAccumulatedHeight(upTo: displayIndex)
+            // Clamp the active-line anchor so a tall wrapped line keeps its sung text visible:
+            // never lifted above the top header inset, and pulled above the bottom controls
+            // when it still fits. The native height cache primes ASYNCHRONOUSLY, so a freshly
+            // activated tall line can momentarily be missing from the cache and fall back to the
+            // small default height — anchoring it at the base position where its lower sublines
+            // render behind the controls and disappear. Measure it synchronously in that case.
+            let activeLineHeight: CGFloat = {
+                if cache.lineHeights[displayIndex] != nil {
+                    return calculateAccumulatedHeight(upTo: displayIndex + 1)
+                        - calculateAccumulatedHeight(upTo: displayIndex)
+                }
+                guard let activeRow = cachedLayerRows.first(where: { $0.index == displayIndex }) else {
+                    return calculateAccumulatedHeight(upTo: displayIndex + 1)
+                        - calculateAccumulatedHeight(upTo: displayIndex)
+                }
+                return NativeLyricsRowMeasurement.estimatedHeight(
+                    for: activeRow,
+                    rowWidth: geo.size.width,
+                    showTranslation: lyricsService.showTranslation,
+                    isTranslating: lyricsService.isTranslating,
+                    pendingTranslationLineIndices: cachedPendingTranslationLineIndices
+                )
+            }()
+            // 42 == the renderer's visibleTopY: the top header/fade band the active line's top
+            // must stay below so the sung main text never clips behind it.
             let anchorY = LyricsAnchorPolicy.anchorY(
                 containerHeight: containerHeight,
                 controlBarHeight: controlBarHeight,
-                activeLineHeight: activeLineHeight
+                activeLineHeight: activeLineHeight,
+                topInset: 42
             )
             let pendingTranslationLineIndices = cachedPendingTranslationLineIndices
             // Visibility culling: only during steady auto-play with all heights measured

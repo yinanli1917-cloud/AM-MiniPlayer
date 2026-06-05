@@ -565,23 +565,32 @@ enum LyricsAnchorPolicy {
     /// Vertical anchor (top of the active line) within the lyrics area.
     ///
     /// The base anchor is the v2.8 "upper-quarter" position (24% of the area above the
-    /// controls). A FIXED top anchor lets a TALL wrapped line (e.g. multi-subline CJK)
-    /// push its lower sublines into the bottom controls zone, where the controls overlay
-    /// covers them — the "disappearing letters" bug. So when the active line would not
-    /// fit, clamp the anchor UP just enough to keep its whole height above the controls,
-    /// without pushing its top above ~12% of the area (so preceding context stays visible).
+    /// controls). The visible lyrics area is bounded by `topInset` (the header/fade at the
+    /// top) and the controls zone at the bottom. A synced active line with a wrapped main +
+    /// translation can be TALLER than that visible band, so the anchor must respect BOTH
+    /// edges:
+    ///   • never lift the line's top above `topInset` (else the sung text clips behind the
+    ///     header — the "disappearing letters" report), and
+    ///   • pull up to keep the bottom above the controls when the line still fits.
+    /// When the line is taller than the whole visible band it cannot fit either way, so the
+    /// top is pinned to `topInset`: the sung text + word-sweep stay on screen and only the
+    /// lower translation fades under the controls (AMLL/Apple Music behaviour).
     static func anchorY(
         containerHeight: CGFloat,
         controlBarHeight: CGFloat,
         activeLineHeight: CGFloat,
+        topInset: CGFloat = 0,
         bottomMargin: CGFloat = 8
     ) -> CGFloat {
-        let visibleBottom = max(1, containerHeight - controlBarHeight)
+        let visibleTop = max(0, topInset)
+        let visibleBottom = max(visibleTop + 1, containerHeight - controlBarHeight)
         let base = visibleBottom * 0.24
-        guard activeLineHeight > 0 else { return base }
-        let fitAnchor = visibleBottom - activeLineHeight - bottomMargin
-        let minAnchor = visibleBottom * 0.12
-        return min(base, max(minAnchor, fitAnchor))
+        guard activeLineHeight > 0 else { return max(visibleTop, base) }
+        let fitUpper = visibleBottom - activeLineHeight - bottomMargin
+        if fitUpper <= visibleTop {
+            return visibleTop
+        }
+        return max(visibleTop, min(base, fitUpper))
     }
 }
 
