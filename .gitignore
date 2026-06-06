@@ -36,8 +36,9 @@ tmp/visual/
 .claude/workflow.md
 .claude/tasks/
 
-# Codex runtime state
-.codex/runtime/
+# Codex harness — runtime, tasks, agents, hooks, config, workspace.
+# Process/scratch files, not product. Already-tracked specs stay tracked.
+.codex/
 
 # Build / release artifacts (regenerable)
 dist/
