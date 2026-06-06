@@ -489,6 +489,79 @@ public extension LanguageUtils {
             .joined()
     }
 
+    // ====================================================================
+    // MARK: - Romanized→CJK title corroboration
+    //
+    // A romanized (ASCII) library title — e.g. "Er Shi Sui De Lang Man" —
+    // must only resolve to a CJK catalog title whose own transliteration is
+    // consistent with the input. Without this, a *different* song by the same
+    // or a featured artist (or a sibling track on the same album) with a
+    // near-identical duration is accepted purely on artist/album+duration
+    // (postmortem 006: romanized→CJK must verify the TITLE). Reuses
+    // `toLatinLower` so it covers Pinyin (Hanzi) and Romaji (Kana).
+    // ====================================================================
+
+    /// Score at/above which a CJK candidate is considered a corroborated match
+    /// for a romanized input. Below this, callers fall back to other evidence.
+    public static let romanizedTitleCorroborationThreshold: Double = 0.6
+
+    /// Boolean convenience over `romanizedTitleCorroboration`.
+    public static func isRomanizedTitleCorroborated(input: String, candidateTitle: String) -> Bool {
+        romanizedTitleCorroboration(input: input, candidateTitle: candidateTitle)
+            >= romanizedTitleCorroborationThreshold
+    }
+
+    /// 0...1 corroboration between a romanized input title and a CJK candidate.
+    /// 1.0 = identical transliterations ("二十歲的浪漫" ⇄ "Er Shi Sui De Lang Man").
+    /// Low = unrelated title that merely shares an artist/duration. 0 = no usable
+    /// Latin signal on either side → caller should NOT treat this as a match,
+    /// but is free to fall back to duration-based evidence (graceful fallback).
+    public static func romanizedTitleCorroboration(input: String, candidateTitle: String) -> Double {
+        let inputLatin = toLatinLower(stripTitleDecorations(input))
+        let candidateLatin = toLatinLower(stripTitleDecorations(candidateTitle))
+        guard inputLatin.count >= 2, candidateLatin.count >= 2 else { return 0 }
+        if inputLatin == candidateLatin { return 1.0 }
+        let shorter = min(inputLatin.count, candidateLatin.count)
+        let longer = max(inputLatin.count, candidateLatin.count)
+        if candidateLatin.contains(inputLatin) || inputLatin.contains(candidateLatin) {
+            return Double(shorter) / Double(longer)
+        }
+        return characterBigramJaccard(inputLatin, candidateLatin)
+    }
+
+    /// Drop parenthetical / bracketed decorations ("(feat. X)", "[Remaster]",
+    /// full-width "（…）" / "【…】") so the featured-artist name does not pollute
+    /// the title transliteration.
+    private static func stripTitleDecorations(_ title: String) -> String {
+        title
+            .replacingOccurrences(
+                of: #"[\(（\[【][^\)）\]】]*[\)）\]】]"#,
+                with: "",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Jaccard similarity over character bigrams — tolerates minor
+    /// transliteration drift without rewarding unrelated strings.
+    private static func characterBigramJaccard(_ a: String, _ b: String) -> Double {
+        func bigrams(_ s: String) -> Set<String> {
+            let chars = Array(s)
+            guard chars.count >= 2 else { return Set(chars.map(String.init)) }
+            var set = Set<String>()
+            for index in 0..<(chars.count - 1) {
+                set.insert(String(chars[index...index + 1]))
+            }
+            return set
+        }
+        let setA = bigrams(a)
+        let setB = bigrams(b)
+        guard !setA.isEmpty, !setB.isEmpty else { return 0 }
+        let intersection = setA.intersection(setB).count
+        let union = setA.union(setB).count
+        return union == 0 ? 0 : Double(intersection) / Double(union)
+    }
+
     /// Detect if text contains Traditional-exclusive characters.
     /// True = user is using Traditional (HK/TW context), display should match.
     /// False alone doesn't mean Simplified — ASCII or ambiguous also returns false.

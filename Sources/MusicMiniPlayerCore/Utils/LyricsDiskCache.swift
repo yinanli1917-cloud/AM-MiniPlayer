@@ -38,7 +38,7 @@ private struct LyricsDiskCacheFile: Codable {
 }
 
 public final class LyricsDiskCache {
-    public static let schemaVersion = 26
+    public static let schemaVersion = 27  // 27: romanized→CJK title corroboration (album-scoped + multi-region) — invalidate sibling-track/collision rows
     public static let ttlSeconds: TimeInterval = 30 * 86400
     public static let unavailableTTLSeconds: TimeInterval = 24 * 3600
     public static let defaultMaxEntryCount = 450

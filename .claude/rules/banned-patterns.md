@@ -35,6 +35,8 @@ Full architecture reference: `docs/playlist-architecture.md`
 - ✅ Three-rule principle: ALL candidate matches require title + artist + duration — no exceptions
 - ❌ Artist-only match without title signal (`artistMatch && durationDiff < X`) → Same-artist different-song collision (NewJeans "How Sweet" 191s → "Supernatural" 191s)
 - ✅ P3 (artist-only + duration) must require token overlap or CJK title — prevents coincidental duration matches from returning wrong lyrics
+- ❌ romanized→CJK resolution (multi-region OR album-scoped) accepting a CJK title on artist/album+duration WITHOUT verifying the title romanizes to the input → wrong song: featured-artist collision OR sibling track on the correct album with a closer duration (postmortem 006 class)
+- ✅ Corroborate via `LanguageUtils.toLatinLower`: prefer the candidate whose transliteration matches the romanized input (selectBestRegionCandidate + multi-region merge + resolveAlbumScopedMetadata); graceful fallback when none corroborate; bump LyricsDiskCache.schemaVersion so poisoned rows flush; Branch-2 cache read guards on corroboration
 - ❌ Trusting test suite pass rate as proxy for lyrics correctness → Benchmark covers ~100 songs, false positives in uncovered songs go undetected
 - ✅ Always verify matched song name in debug log matches requested song; check lyrics TEXT content, not just scores
 

@@ -114,6 +114,8 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ Use `.underWindowBackground` instead
 - ❌ `romanized→CJK` using `resultHasCJK` (includes artist) → ASCII→ASCII title replacement slips through
   ✅ Use `resultTitleHasCJK` (title-only check) → Prevents "Moon Style Love"→"milk tea" mismatch
+- ❌ romanized→CJK resolver (multi-region AND album-scoped) accepting a CJK result on artist/album+duration ONLY → wrong song: same/featured-artist ("Er Shi Sui De Lang Man"→大嘴巴 "Funky那個女孩", Δ0.17 vs 0.50) OR sibling album track ("Er Shi Sui De Lang Man"→蓝心湄 "快节奏" on album 二十岁的浪漫, Δ0.27 vs 0.50). Poison persists in lyrics_cache.json + served via canUseImmediateDiskLyrics
+  ✅ Title-corroboration: candidate `LanguageUtils.toLatinLower` (pinyin/romaji) must match the romanized input; applied in selectBestRegionCandidate, multi-region merge, AND resolveAlbumScopedMetadata; graceful fallback when none corroborate; bump LyricsDiskCache.schemaVersion to flush poisoned rows
 - ❌ `isLikelyEnglishArtist` with "word=English" heuristic → False positives on EPO/JADOES
   ✅ Use only high-confidence signals (known list + English affixes), safety backed by `resultTitleHasCJK`
 - ❌ `TranslationSession.Configuration(source: detectLanguage())` → NLLanguageRecognizer misclassifies English as Danish/Slovak → unsupported pair → instant failure → dots flash then vanish

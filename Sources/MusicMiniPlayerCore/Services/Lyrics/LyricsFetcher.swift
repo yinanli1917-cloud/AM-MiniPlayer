@@ -738,7 +738,11 @@ public final class LyricsFetcher {
                 if !shouldProbeLibraryNativeTitle,
                    let cached = self.metadataResolver.diskCache.get(title: ot, artist: oa, duration: d),
                    LanguageUtils.containsCJK(cached.resolvedTitle),
-                   cached.resolvedTitle != ot {
+                   cached.resolvedTitle != ot,
+                   // 🔑 Don't replay a cached CJK resolution that fails title
+                   // corroboration for a romanized input (poisoned collision).
+                   (!LanguageUtils.isPureASCII(ot)
+                    || LanguageUtils.isRomanizedTitleCorroborated(input: ot, candidateTitle: cached.resolvedTitle)) {
                     group.addTask {
                         branch2Fired.value = true
                         let cachedArtist = LanguageUtils.containsChinese(cached.resolvedArtist)

@@ -74,6 +74,16 @@ extension LyricsFetcher {
         //   (3) durationDiff asc — closest duration as final tiebreaker
         let compositeRank: (SearchCandidate<ID>, SearchCandidate<ID>) -> Bool = { a, b in
             if a.albumMatch != b.albumMatch { return a.albumMatch && !b.albumMatch }
+            // 🔑 For a romanized input, a track whose CJK title romanizes to the
+            // input outranks one that doesn't — otherwise a sibling album track
+            // ('快节奏') beats the real title track ('二十岁的浪漫') on the shorter-
+            // name / closer-duration tiebreakers. Graceful: when neither (or both)
+            // corroborate, this is a no-op and the existing order applies.
+            if LanguageUtils.isPureASCII(inputTitle) {
+                let aCorroborates = LanguageUtils.isRomanizedTitleCorroborated(input: inputTitle, candidateTitle: a.name)
+                let bCorroborates = LanguageUtils.isRomanizedTitleCorroborated(input: inputTitle, candidateTitle: b.name)
+                if aCorroborates != bCorroborates { return aCorroborates && !bCorroborates }
+            }
             if a.normalizedNameLength != b.normalizedNameLength {
                 return a.normalizedNameLength < b.normalizedNameLength
             }

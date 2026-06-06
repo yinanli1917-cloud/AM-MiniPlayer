@@ -291,6 +291,12 @@ public final class MetadataResolver {
                         && $0.termRank <= 1
                         && $0.durationDiff < 0.25
                         && ($0.titleHasCJK || $0.albumHasCJK)
+                        // 🔑 For a romanized input, only fast-exit on a track whose
+                        // title actually romanizes to the input — otherwise a sibling
+                        // album track with a closer duration ('快节奏' Δ0.27) short-
+                        // circuits before the real title track is even collected.
+                        && (!LanguageUtils.isPureASCII(title)
+                            || LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: $0.title))
                 }) {
                     group.cancelAll()
                     return collected
@@ -302,6 +308,13 @@ public final class MetadataResolver {
         guard !candidates.isEmpty else { return nil }
         let best = candidates.min { lhs, rhs in
             if lhs.artistMatches != rhs.artistMatches { return lhs.artistMatches && !rhs.artistMatches }
+            // 🔑 Within the album, prefer the track whose CJK title romanizes to
+            // the romanized input. Duration proximity alone picks a sibling track
+            // ('快节奏' Δ0.27 beat the real '二十岁的浪漫' Δ0.50). Graceful: when no
+            // candidate corroborates (Japanese kanji), this term is equal for all.
+            let lhsCorrob = LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: lhs.title)
+            let rhsCorrob = LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: rhs.title)
+            if lhsCorrob != rhsCorrob { return lhsCorrob && !rhsCorrob }
             if lhs.termRank != rhs.termRank { return lhs.termRank < rhs.termRank }
             if lhs.titleHasCJK != rhs.titleHasCJK { return lhs.titleHasCJK && !rhs.titleHasCJK }
             if lhs.albumHasCJK != rhs.albumHasCJK { return lhs.albumHasCJK && !rhs.albumHasCJK }
@@ -742,6 +755,18 @@ public final class MetadataResolver {
 
         let inputTitleNorm = LanguageUtils.normalizeTrackName(title).lowercased()
         let inputIsASCII = LanguageUtils.isPureASCII(title)
+        // 🔑 Demote a non-corroborating CJK candidate ONLY when corroboration is
+        // achievable (some region returned a transliteration-matching CJK title).
+        // Else leave the CJK signal intact (graceful fallback for Japanese kanji).
+        let corroborationAchievable = inputIsASCII && trustedOutputs.contains { output in
+            guard let r = output.resolved, LanguageUtils.containsCJK(r.0) else { return false }
+            return LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: r.0)
+        }
+        func titleCJKSignal(_ candidateTitle: String) -> Bool {
+            guard LanguageUtils.containsCJK(candidateTitle) else { return false }
+            guard corroborationAchievable else { return true }
+            return LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: candidateTitle)
+        }
         var bestMatch: (String, String, String, Double)? = nil
         for output in trustedOutputs {
             if let r = output.resolved {
@@ -753,12 +778,12 @@ public final class MetadataResolver {
                     //   (exact title match means same song in same script)
                     // JP/KR regions are authoritative for their languages' character forms.
                     let rTitleMatch = LanguageUtils.normalizeTrackName(r.0).lowercased() == inputTitleNorm
-                    let rTitleCJK = LanguageUtils.containsCJK(r.0)
+                    let rTitleCJK = titleCJKSignal(r.0)
                     let rArtistCJK = LanguageUtils.containsCJK(r.1)
                     let rHasCJK = rTitleCJK || rArtistCJK
                     let rIsOriginRegion = r.2 == "JP" || r.2 == "KR"
                     let bestTitleMatch = bestMatch.map { LanguageUtils.normalizeTrackName($0.0).lowercased() == inputTitleNorm } ?? false
-                    let bestTitleCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) } ?? false
+                    let bestTitleCJK = bestMatch.map { titleCJKSignal($0.0) } ?? false
                     let bestArtistCJK = bestMatch.map { LanguageUtils.containsCJK($0.1) } ?? false
                     let bestIsOriginRegion = bestMatch.map { $0.2 == "JP" || $0.2 == "KR" } ?? false
                     let bestHasCJK = bestMatch.map { LanguageUtils.containsCJK($0.0) || LanguageUtils.containsCJK($0.1) } ?? false
@@ -933,7 +958,7 @@ public final class MetadataResolver {
             let tiers = classifyRegionResults(
                 results, title: title, artist: artist, duration: duration, region: region
             )
-            if let best = selectBestRegionCandidate(tiers, region: region) {
+            if let best = selectBestRegionCandidate(tiers, inputTitle: title, region: region) {
                 resolved = best
                 break
             }
@@ -1048,6 +1073,7 @@ public final class MetadataResolver {
     /// 区域候选选择 — titleMatch > artist+CJK(唯一) > romanized→CJK(安全)
     private func selectBestRegionCandidate(
         _ tiers: (title: [RegionCandidate], artistCJK: [RegionCandidate], romanized: [RegionCandidate]),
+        inputTitle: String,
         region: String
     ) -> (String, String, String, Double)? {
         // titleMatch 最可靠 → 取最佳（同时长时优先无后缀标题）
@@ -1068,6 +1094,22 @@ public final class MetadataResolver {
         }
         // romanized→CJK：唯一候选 或 所有候选标题相同（同一首歌不同版本）
         guard !tiers.romanized.isEmpty else { return nil }
+        // 🔑 Title corroboration: prefer the CJK candidate whose transliteration
+        // matches the romanized input; drop the rest. Graceful fallback when none
+        // corroborate (postmortem 006).
+        let corroborating = tiers.romanized.filter {
+            LanguageUtils.isRomanizedTitleCorroborated(input: inputTitle, candidateTitle: $0.trackName)
+        }
+        if !corroborating.isEmpty {
+            let best = corroborating.sorted {
+                let lhs = LanguageUtils.romanizedTitleCorroboration(input: inputTitle, candidateTitle: $0.trackName)
+                let rhs = LanguageUtils.romanizedTitleCorroboration(input: inputTitle, candidateTitle: $1.trackName)
+                if lhs != rhs { return lhs > rhs }
+                return $0.durationDiff < $1.durationDiff
+            }[0]
+            DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 标题印证: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s [\(corroborating.count)/\(tiers.romanized.count)]")
+            return (best.trackName, best.artistName, region, best.durationDiff)
+        }
         let sorted = tiers.romanized.sorted { $0.durationDiff < $1.durationDiff }
         let best = sorted[0]
         // 清理标题后比较（忽略 "2024 Remaster" 等后缀）
