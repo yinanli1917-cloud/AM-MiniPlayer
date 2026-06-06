@@ -445,6 +445,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastNativeLineMotionSampleAt: Date = .distantPast
     private var nativeSemanticCurrentIndex: Int?
     private var nativeTimelineState: NativeLyricsTimelinePolicy.AMLLState?
+    private var lastObservedSeekGeneration: Int = 0
     private var lastTextPhaseUpdateAt: CFTimeInterval?
     private var lastScrollWheelTime: CFTimeInterval = 0
     private var hoveredRowIndex: Int?
@@ -727,24 +728,48 @@ final class NativeLyricsSurfaceView: NSView {
             configuration.nativeScrollTargetIndex = snapIndex
             configuration.nativeHotActiveIndices = [snapIndex]
             configuration.nativeBufferedActiveIndices = [snapIndex]
+            // Keep the seek token in sync: this branch already snapped, so a seek that happened in
+            // snap mode must not re-fire when natural playback resumes.
+            lastObservedSeekGeneration = configuration.musicController.seekGeneration
             cancelNativeLineAdvanceTimer()
             return
         }
         let playbackTime = configuration.musicController.lyricRenderTime()
-        let timelineState = NativeLyricsTimelinePolicy.amllState(
+        // Provisional read (no buffered reset) used only to classify the transition.
+        let provisional = NativeLyricsTimelinePolicy.amllState(
             at: playbackTime,
             rows: configuration.rows,
             fallback: configuration.currentIndex,
             previous: nativeTimelineState,
             isSeeking: false
         )
-        let liveIndex = timelineState.semanticIndex
-        if let current = nativeSemanticCurrentIndex,
-           current != liveIndex,
-           abs(liveIndex - current) > 1 {
+        let liveIndex = provisional.semanticIndex
+        // First-class seek: an explicit in-app scrub (token bump) OR a non-monotonic index transition
+        // (backward, or forward by >1 line) is a seek, not natural advance.
+        let seekToken = configuration.musicController.seekGeneration
+        let explicitSeek = seekToken != lastObservedSeekGeneration
+        lastObservedSeekGeneration = seekToken
+        let isSeek = NativeLyricsSeekClassifier.isSeek(
+            previousIndex: nativeSemanticCurrentIndex,
+            liveIndex: liveIndex,
+            explicitSeek: explicitSeek
+        )
+        // On a seek, recompute with the buffered trail reset so the scroll snaps to the new line
+        // instead of dragging the previous bright lines (and waving) toward it.
+        let timelineState = isSeek
+            ? NativeLyricsTimelinePolicy.amllState(
+                at: playbackTime,
+                rows: configuration.rows,
+                fallback: configuration.currentIndex,
+                previous: nativeTimelineState,
+                isSeeking: true
+            )
+            : provisional
+        let resolvedIndex = timelineState.semanticIndex
+        if isSeek, nativeSemanticCurrentIndex != nil, nativeSemanticCurrentIndex != resolvedIndex {
             presentationEngine.update(
                 LyricsPresentationEngineConfiguration(
-                    currentIndex: liveIndex,
+                    currentIndex: resolvedIndex,
                     scrollTargetIndex: timelineState.scrollToIndex,
                     hotActiveIndices: timelineState.hotGroups,
                     bufferedActiveIndices: timelineState.bufferedGroups,
@@ -752,8 +777,8 @@ final class NativeLyricsSurfaceView: NSView {
                     renderedIndices: configuration.renderedIndices,
                     anchorY: configuration.anchorY,
                     accumulatedHeights: configuration.accumulatedHeights,
-                    lineInterval: lineInterval(around: liveIndex, rows: configuration.rows),
-                    hasSyllableSync: configuration.rows.first(where: { $0.index == liveIndex })?.displayLine.line.hasSyllableSync ?? configuration.hasSyllableSync,
+                    lineInterval: lineInterval(around: resolvedIndex, rows: configuration.rows),
+                    hasSyllableSync: configuration.rows.first(where: { $0.index == resolvedIndex })?.displayLine.line.hasSyllableSync ?? configuration.hasSyllableSync,
                     isInterludeActive: configuration.interludeAfterIndex != nil,
                     trackContext: configuration.trackContext,
                     isWaveTimelineDiagnosticsEnabled: configuration.isWaveTimelineDiagnosticsEnabled || DiagnosticsService.shared.isLyricWaveTimelineEnabled,
@@ -765,8 +790,8 @@ final class NativeLyricsSurfaceView: NSView {
             )
         }
         nativeTimelineState = timelineState
-        nativeSemanticCurrentIndex = liveIndex
-        configuration.nativeSemanticCurrentIndex = liveIndex
+        nativeSemanticCurrentIndex = resolvedIndex
+        configuration.nativeSemanticCurrentIndex = resolvedIndex
         configuration.nativeScrollTargetIndex = timelineState.scrollToIndex
         configuration.nativeHotActiveIndices = timelineState.hotGroups
         configuration.nativeBufferedActiveIndices = timelineState.bufferedGroups

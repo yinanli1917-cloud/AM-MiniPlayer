@@ -121,6 +121,9 @@ extension MusicController {
     }
 
     public func seek(to position: Double) {
+        // Bump the seek token so the native lyrics renderer treats this as a first-class seek (snap,
+        // not wave) even when the new position lands on the current or next line.
+        registerSeek()
         if isPreview {
             logger.info("Preview: seek to \(position)")
             currentTime = position

@@ -137,6 +137,14 @@ public class MusicController: ObservableObject {
     var internalCurrentTime: Double = 0
     var isPreview: Bool = false
     var seekPending = false
+    /// Monotonic counter bumped on every in-app seek (progress-bar scrub). The native lyrics renderer
+    /// compares it against its last-observed value to classify a seek as first-class — so even a scrub
+    /// that lands one line ahead snaps instead of waving. Reliable across frames where `seekPending`
+    /// (cleared on the next poll) is not.
+    private(set) var seekGeneration: Int = 0
+
+    /// Records an in-app seek so the native renderer snaps to the new line instead of waving to it.
+    func registerSeek() { seekGeneration &+= 1 }
     var lastUserActionTime: Date = .distantPast
 
     public var lyricsService: LyricsService { LyricsService.shared }

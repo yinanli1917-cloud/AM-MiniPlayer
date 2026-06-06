@@ -292,10 +292,17 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     /// amllState(isSeeking: false) and fakes seek by detecting a >1-line index jump. AMLL
     /// threads an explicit isSeek flag from the transport (base/index.ts:480-518).
     /// Phase 3: thread a real seek signal; remove the jump heuristic.
-    func test_DEFECT_seek_isHeuristicNotFirstClass() throws {
+    /// FIXED (was DEFECT): seek is now first-class. The renderer classifies via
+    /// `NativeLyricsSeekClassifier` (index monotonicity + explicit in-app seek token) and recomputes
+    /// the timeline with `isSeeking: true` to reset the buffered trail — no longer the `>1-line jump`
+    /// heuristic that misread backward / small seeks as natural playback. Decision logic is unit-tested
+    /// in `NativeLyricsSeekClassifierTests`.
+    func test_seek_isFirstClass_notHeuristic() throws {
         let source = try rendererSource()
-        XCTAssertTrue(source.contains("isSeeking: false"), "DEFECT pinned: natural recompute hardcodes isSeeking:false")
-        XCTAssertTrue(source.contains("abs(liveIndex - current) > 1"), "DEFECT pinned: seek inferred from >1-line jump heuristic")
+        XCTAssertTrue(source.contains("NativeLyricsSeekClassifier.isSeek"), "seek must be classified by the first-class classifier")
+        XCTAssertTrue(source.contains("seekGeneration"), "renderer must observe the explicit in-app seek token")
+        XCTAssertTrue(source.contains("isSeeking: true"), "a detected seek must reset the buffered trail")
+        XCTAssertFalse(source.contains("abs(liveIndex - current) > 1"), "the >1-line jump heuristic must be gone")
     }
 
     /// DEFECT D4 — tap forwarding is looser than AMLL: when manual-scrolling, a miss still

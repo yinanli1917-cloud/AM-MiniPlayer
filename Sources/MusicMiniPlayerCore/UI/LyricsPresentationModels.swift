@@ -408,6 +408,20 @@ struct LyricsPresentationPendingWave {
     let schedule: [LyricWaveTiming.StaggerTarget]
 }
 
+/// First-class seek classification. Natural playback advances the semantic line index monotonically by
+/// 0 or +1 only (time crosses one line boundary at a time). Therefore ANY other transition — backward,
+/// or forward by more than one line — is a discontinuity, i.e. a seek, and the renderer must SNAP +
+/// reset the buffered trail instead of springing/waving to it. An explicit in-app seek signal (the
+/// progress-bar scrub) also forces a seek even for a +1 step that would otherwise look natural.
+enum NativeLyricsSeekClassifier {
+    static func isSeek(previousIndex: Int?, liveIndex: Int, explicitSeek: Bool) -> Bool {
+        if explicitSeek { return true }
+        guard let previous = previousIndex else { return false }
+        if liveIndex == previous || liveIndex == previous + 1 { return false }
+        return true
+    }
+}
+
 enum NativeLyricsTimelinePolicy {
     static let lineAdvanceEpsilon: TimeInterval = 0.006
 
