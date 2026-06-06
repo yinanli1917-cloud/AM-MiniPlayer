@@ -2482,6 +2482,12 @@ final class NativeLyricsRowView: NSView {
 
     private static let hoverBackgroundAlpha: CGFloat = 0.08
     private static let hoverBackgroundCornerRadius: CGFloat = 12
+    // CATextLayer clips text tight to its bounds: at frame height == usedRect.height the LAST wrapped
+    // line's bottom pixels (CJK strokes / descenders) get shaved. Pad the rendered text-layer height so
+    // the glyph bottoms have room. The row's stacking offset still uses the true (un-padded) height, so
+    // line positions and the gap before the translation are unchanged — the pad lives in the existing
+    // 8pt bottom slack of measuredHeight.
+    private static let textBottomClipPad: CGFloat = 6
     private static let translationLoadingDotSize: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSize
     private static let translationLoadingDotSpacing: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSpacing
     private static let translationLoadingRowHeight: CGFloat = 8
@@ -2741,7 +2747,7 @@ final class NativeLyricsRowView: NSView {
             width: textWidth,
             font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
         )
-        mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight)
+        mainTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: mainHeight + Self.textBottomClipPad)
         mainBrightTextLayer.frame = mainTextLayer.frame
         mainSweepMaskLayer.frame = mainBrightTextLayer.bounds
         mainBaseRevealMaskLayer.frame = mainTextLayer.bounds
@@ -2759,7 +2765,7 @@ final class NativeLyricsRowView: NSView {
                 font: .systemFont(ofSize: plan.constants.translationFontSize, weight: .semibold),
                 lineSpacing: plan.constants.translationLineSpacing
             )
-            translationTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: translationExpectedHeight)
+            translationTextLayer.frame = CGRect(x: textX, y: y, width: textWidth, height: translationExpectedHeight + Self.textBottomClipPad)
             translationBrightTextLayer.frame = translationTextLayer.frame
             translationSweepMaskLayer.frame = translationBrightTextLayer.bounds
             translationPerLineSweepMaskLayer.frame = translationBrightTextLayer.bounds
