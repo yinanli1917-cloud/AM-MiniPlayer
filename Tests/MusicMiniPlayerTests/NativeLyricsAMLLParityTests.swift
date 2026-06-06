@@ -561,6 +561,47 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         assertRenderedTextWraps(view, rawText: text, contentWidth: contentWidth)
     }
 
+    /// v2.8 per-word cascade: the laid-out active line must float each word by its OWN baseFloatY, so
+    /// the applied floats span a non-zero range (spread). A regression to one collapsed line-level
+    /// value collapses the spread to 0. CJK words are all non-emphasis, so they take the per-word
+    /// float-glyph path (emphasis long words use their own scale/glow layers).
+    @MainActor
+    func test_renderTruth_activeLine_appliesPerWordFloatCascade_notCollapsed() {
+        let width: CGFloat = 400
+        let line = LyricLine(
+            text: "冬天一個遊", startTime: 10, endTime: 15,
+            words: [
+                LyricWord(word: "冬", startTime: 10, endTime: 11),
+                LyricWord(word: "天", startTime: 11, endTime: 12),
+                LyricWord(word: "一", startTime: 12, endTime: 13),
+                LyricWord(word: "個", startTime: 13, endTime: 14),
+                LyricWord(word: "遊", startTime: 14, endTime: 15)
+            ]
+        )
+        let displayLine = DisplayLyricLine(
+            id: "r0", sourceIndex: 0, segmentIndex: 0, segmentCount: 1, line: line
+        )
+        let r = LayerBackedLyricRow(
+            id: displayLine.id, index: 0, displayLine: displayLine,
+            sourceLine: line, isPrelude: false, preludeEndTime: 0, interlude: nil
+        )
+        let config = makeRenderConfiguration(rows: [r], rowWidth: width)
+        let view = NativeLyricsRowView(frame: .zero)
+        view.configure(row: r, configuration: config)
+        view.frame = CGRect(x: 0, y: 0, width: width, height: view.measuredHeight(width: width))
+        view.debugForceLayout()
+
+        // At t=12.5 the first two glyphs have settled at -2, the third is mid-rise, the last two
+        // have not started (0) — a clear left-to-right cascade.
+        let probe = view.debugActiveMainPhaseWordFloat(currentTime: 12.5)
+        XCTAssertNotNil(probe, "active syllable-synced line must report per-word float telemetry")
+        XCTAssertGreaterThan(probe?.sampleCount ?? 0, 0, "per-word float glyph layers must cover the non-emphasis words")
+        XCTAssertGreaterThan(
+            probe?.floatSpread ?? 0, 0.5,
+            "words must float by DISTINCT amounts (cascade), not one collapsed line-level value"
+        )
+    }
+
     /// A pooled row view reused with a STALE narrow frame must not bake its text against that
     /// stale width. Pre-fix: configure read bounds.width (90) and over-wrapped the string,
     /// which never reflowed when the real 250 frame arrived -> clip + blank bands.

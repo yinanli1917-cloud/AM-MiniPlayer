@@ -145,6 +145,14 @@ struct NativeLyricsTextRenderPlan: Equatable {
         wordRuns.filter { $0.startTime <= currentTime }.map(\.baseFloatY).min() ?? 0
     }
 
+    /// v2.8 per-word cascade: each word's OWN float (AMLL "base float"), indexed by word order.
+    /// A word that has not started yet contributes 0 — so the line rises left-to-right as a rolling
+    /// wave instead of all-at-once. The per-word renderer applies these directly to per-word layers;
+    /// the collapsed `activeLineFloatY` above is the legacy single-layer approximation.
+    func perWordFloatY(at currentTime: TimeInterval) -> [CGFloat] {
+        wordRuns.map { $0.startTime <= currentTime ? $0.baseFloatY : 0 }
+    }
+
     fileprivate static func cleanedDisplayText(for line: LyricLine) -> String {
         if line.hasSyllableSync && !line.words.isEmpty {
             let wordDisplayText = LyricDisplaySegmenter.displayText(forWords: line.words)

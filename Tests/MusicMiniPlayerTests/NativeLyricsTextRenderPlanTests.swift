@@ -69,6 +69,33 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertEqual(floatY(at: 14.9), -2, accuracy: 0.001, "settled at the float target")
     }
 
+    /// v2.8 per-word cascade: each word rises at its OWN start time (AMLL base float). The renderer
+    /// must apply each word's own `baseFloatY`, NOT a single line-level value collapsed via `.min()`.
+    /// Earlier-started words sit deeper; not-yet-started words have zero float.
+    func testActiveLineAppliesDistinctPerWordFloatNotCollapsedMin() {
+        let line = LyricLine(
+            text: "shine through the night",
+            startTime: 10, endTime: 15,
+            words: [
+                LyricWord(word: "shine", startTime: 10, endTime: 12),
+                LyricWord(word: " through", startTime: 12, endTime: 13),
+                LyricWord(word: " the", startTime: 13, endTime: 14),
+                LyricWord(word: " night", startTime: 14, endTime: 15)
+            ]
+        )
+        let plan = NativeLyricsTextRenderPlan.make(configuration: .init(line: line, currentTime: 12.3, isActive: true))
+        let ys = plan.perWordFloatY(at: 12.3)
+
+        XCTAssertEqual(ys.count, plan.wordRuns.count)
+        // word0 started at 10 (settled), word1 started at 12 (rising), word2/word3 not started.
+        XCTAssertLessThan(ys[0], ys[1], "earlier word floats deeper than a later one — this is the cascade")
+        XCTAssertLessThan(ys[1], 0, "the currently-singing word has begun rising")
+        XCTAssertEqual(ys[2], 0, accuracy: 0.0001, "a word that has not started has no float")
+        XCTAssertEqual(ys[3], 0, accuracy: 0.0001, "a word that has not started has no float")
+        XCTAssertEqual(ys[0], plan.wordRuns[0].baseFloatY, accuracy: 0.0001, "each word gets its OWN baseFloatY")
+        XCTAssertGreaterThan(Set(ys.map { ($0 * 1000).rounded() }).count, 1, "values must NOT be collapsed to one")
+    }
+
     func testCJKWordLevelPlanRemovesProviderSpacingWithoutSyntheticSpaces() {
         let line = LyricLine(
             text: "冬 天 一 個 遊",

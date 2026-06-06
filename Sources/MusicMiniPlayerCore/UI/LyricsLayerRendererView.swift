@@ -2467,6 +2467,13 @@ final class NativeLyricsRowView: NSView {
     private var emphasisGlyphLayers: [CATextLayer] = []
     private var emphasisGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
     private var activeHiddenEmphasisSignature: String?
+    // v2.8 per-word cascade: non-emphasis words render as per-glyph layers so each WORD can float by
+    // its own baseFloatY (rolling rise), while brightness still comes from the shared sweep mask. The
+    // dim glyphs parent to mainTextLayer (always visible), the bright glyphs to mainBrightTextLayer
+    // (masked by the sweep — so a 2pt float never disturbs the horizontal wavefront).
+    private var mainDimWordGlyphLayers: [CATextLayer] = []
+    private var mainBrightWordGlyphLayers: [CATextLayer] = []
+    private var mainWordGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
     private var lastLineLayoutMetrics = LineLayoutAppliedMetrics.inactive
     private let blurFilter = CIFilter(name: "CIGaussianBlur")
     private let dotBlurFilter = CIFilter(name: "CIGaussianBlur")
@@ -2627,6 +2634,7 @@ final class NativeLyricsRowView: NSView {
         hidePerRunSweepMaskLayers()
         hideTranslationSweepMaskLayers()
         hideEmphasisGlyphLayers()
+        hideMainWordGlyphLayers()
         hideTranslationLoadingDots()
         hideDotLayers()
     }
@@ -2711,6 +2719,22 @@ final class NativeLyricsRowView: NSView {
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
 
     func debugForceLayout() { layoutSubtreeIfNeeded() }
+
+    /// Drives the active main phase at a controlled time (bypassing the live player clock) and
+    /// returns the per-word float telemetry, so tests can prove each word floats by its OWN amount
+    /// (spread > 0 = the cascade) instead of one collapsed line-level value.
+    @MainActor
+    func debugActiveMainPhaseWordFloat(currentTime: TimeInterval) -> (sampleCount: Int, floatSpread: CGFloat)? {
+        guard let row else { return nil }
+        // Force an active plan: the preview MusicController reports isPlaying == false, which would
+        // zero every baseFloatY. We want the genuine per-word float at this time.
+        let plan = NativeLyricsTextRenderPlan.make(
+            configuration: .init(line: row.displayLine.line, currentTime: currentTime, isActive: true)
+        )
+        guard row.displayLine.line.hasSyllableSync, !plan.wordRuns.isEmpty else { return nil }
+        let metrics = applyActiveMainPhase(plan: plan, currentTime: currentTime)
+        return (metrics.mainWordFloatSampleCount, metrics.mainWordFloatSpread)
+    }
     #endif
 
 
@@ -2957,6 +2981,7 @@ final class NativeLyricsRowView: NSView {
             mainTextLayer.mask = nil
             hideBaseRevealMaskLayers()
             hideEmphasisGlyphLayers()
+            hideMainWordGlyphLayers()
             activeHiddenEmphasisSignature = nil
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
@@ -3196,7 +3221,9 @@ final class NativeLyricsRowView: NSView {
                     lineLayoutHeightErrorMax: appliedMainProgress.lineLayoutHeightErrorMax,
                     lineLayoutWidthErrorMax: appliedMainProgress.lineLayoutWidthErrorMax,
                     mainTextFrameHeightErrorMax: appliedMainProgress.mainTextFrameHeightErrorMax,
-                    translationTextFrameHeightErrorMax: appliedMainProgress.translationTextFrameHeightErrorMax
+                    translationTextFrameHeightErrorMax: appliedMainProgress.translationTextFrameHeightErrorMax,
+                    mainWordFloatSampleCount: appliedMainProgress.mainWordFloatSampleCount,
+                    mainWordFloatSpread: appliedMainProgress.mainWordFloatSpread
                 )
             }
         } else {
@@ -3206,6 +3233,7 @@ final class NativeLyricsRowView: NSView {
             hideBaseRevealMaskLayers()
             hidePerRunSweepMaskLayers()
             hideEmphasisGlyphLayers()
+            hideMainWordGlyphLayers()
             activeHiddenEmphasisSignature = nil
             translationBrightTextLayer.isHidden = true
             hideTranslationSweepMaskLayers()
@@ -3252,6 +3280,8 @@ final class NativeLyricsRowView: NSView {
         let lineLayoutWidthErrorMax: CGFloat
         let mainTextFrameHeightErrorMax: CGFloat
         let translationTextFrameHeightErrorMax: CGFloat
+        let mainWordFloatSampleCount: Int
+        let mainWordFloatSpread: CGFloat
     }
 
     private func applyActiveMainPhase(
@@ -3260,16 +3290,41 @@ final class NativeLyricsRowView: NSView {
     ) -> MainTextPhaseAppliedMetrics {
         let activeRun = plan.wordRuns.last { $0.startTime <= currentTime }
             ?? plan.wordRuns.first
-        // v2.8 floating: lift the active line's text toward -2pt as it is sung (smooth, holds —
-        // no per-word jitter). The bright layer's sweep mask is its child, so it lifts in
-        // lockstep and the sweep stays aligned to the glyphs. Emphasis glyph layers are separate
-        // and keep their own per-word float.
-        let floatTransform = CGAffineTransform(translationX: 0, y: plan.activeLineFloatY(at: currentTime))
-        mainTextLayer.setAffineTransform(floatTransform)
-        mainBrightTextLayer.setAffineTransform(floatTransform)
+        let linePlan = mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
+        let emphasisOrders = Self.activeEmphasisOrders(plan: plan)
+        // v2.8 per-word cascade: once the line is laid out, every word is drawn by per-glyph layers so
+        // each WORD floats by its OWN baseFloatY (rolling rise, AMLL base float). Non-emphasis glyphs
+        // parent to the dim and bright text layers — the bright ones inherit the sweep mask, so a 2pt
+        // float never disturbs the horizontal wavefront and brightness stays a smooth gradient.
+        // Emphasis words keep their dedicated scale/glow glyph layers. The whole-line text layers then
+        // draw nothing. Before layout (bounds are .zero on a fresh/pooled row) we fall back to the
+        // single whole-line text + a collapsed line-level float, so the dim base is never blank
+        // (the 从无到有 guard).
+        let geometryReady = mainBrightTextLayer.bounds.width > 1
+            && mainBrightTextLayer.bounds.height > 1
+            && !linePlan.isEmpty
+        let wordFloatResult: MainWordFloatAppliedMetrics
+        if geometryReady {
+            if mainTextLayer.string != nil { mainTextLayer.string = nil }
+            if mainBrightTextLayer.string != nil { mainBrightTextLayer.string = nil }
+            activeHiddenEmphasisSignature = nil
+            mainTextLayer.setAffineTransform(.identity)
+            mainBrightTextLayer.setAffineTransform(.identity)
+            wordFloatResult = applyMainWordFloatGlyphLayers(
+                plan: plan,
+                currentTime: currentTime,
+                linePlan: linePlan,
+                emphasisOrders: emphasisOrders
+            )
+        } else {
+            hideMainWordGlyphLayers()
+            let floatTransform = CGAffineTransform(translationX: 0, y: plan.activeLineFloatY(at: currentTime))
+            mainTextLayer.setAffineTransform(floatTransform)
+            mainBrightTextLayer.setAffineTransform(floatTransform)
+            wordFloatResult = .inactive
+        }
         mainBrightTextLayer.opacity = Float(plan.mainPostLineFade)
         mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || plan.mainPostLineFade <= 0.001
-        let linePlan = mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
         let sweepResult = updatePerRunSweepMask(
             plan: plan,
             currentTime: currentTime,
@@ -3298,7 +3353,9 @@ final class NativeLyricsRowView: NSView {
         let emphasisResult = applyEmphasisGlyphLayers(
             plan: plan,
             currentTime: currentTime,
-            linePlan: linePlan
+            linePlan: linePlan,
+            emphasisOrders: emphasisOrders,
+            managesContainerText: !geometryReady
         )
         if emphasisResult.applied {
             clearEmphasis(from: mainBrightTextLayer)
@@ -3347,11 +3404,14 @@ final class NativeLyricsRowView: NSView {
             lineLayoutHeightErrorMax: layoutResult.heightErrorMax,
             lineLayoutWidthErrorMax: layoutResult.widthErrorMax,
             mainTextFrameHeightErrorMax: layoutResult.mainFrameHeightError,
-            translationTextFrameHeightErrorMax: layoutResult.translationFrameHeightError
+            translationTextFrameHeightErrorMax: layoutResult.translationFrameHeightError,
+            mainWordFloatSampleCount: wordFloatResult.sampleCount,
+            mainWordFloatSpread: wordFloatResult.floatSpread
         )
     }
 
     private func applyStaticActiveTextPhase(plan: NativeLyricsTextRenderPlan) -> MainTextPhaseAppliedMetrics {
+        hideMainWordGlyphLayers()
         mainTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.setAffineTransform(.identity)
         mainBrightTextLayer.isHidden = true
@@ -3394,7 +3454,9 @@ final class NativeLyricsRowView: NSView {
             lineLayoutHeightErrorMax: layoutResult.heightErrorMax,
             lineLayoutWidthErrorMax: layoutResult.widthErrorMax,
             mainTextFrameHeightErrorMax: layoutResult.mainFrameHeightError,
-            translationTextFrameHeightErrorMax: layoutResult.translationFrameHeightError
+            translationTextFrameHeightErrorMax: layoutResult.translationFrameHeightError,
+            mainWordFloatSampleCount: 0,
+            mainWordFloatSpread: 0
         )
     }
 
@@ -3668,10 +3730,21 @@ final class NativeLyricsRowView: NSView {
         return count
     }
 
+    /// The word orders that render as dedicated emphasis (scale/glow) glyph layers — AMLL holds long
+    /// words. Shared by the emphasis renderer and the per-word float renderer (which draws the
+    /// complement), so the two partitions never overlap or leave a gap.
+    static func activeEmphasisOrders(plan: NativeLyricsTextRenderPlan) -> Set<Int> {
+        Set(plan.wordRuns.enumerated().compactMap { order, run in
+            (run.isEmphasis || run.emphasis != .inactive) ? order : nil
+        })
+    }
+
     private func applyEmphasisGlyphLayers(
         plan: NativeLyricsTextRenderPlan,
         currentTime: TimeInterval,
-        linePlan: [NativeLyricsTextSweepVisualLinePlan]
+        linePlan: [NativeLyricsTextSweepVisualLinePlan],
+        emphasisOrders: Set<Int>,
+        managesContainerText: Bool
     ) -> (
         applied: Bool,
         expectedGlyphCount: Int,
@@ -3688,16 +3761,15 @@ final class NativeLyricsRowView: NSView {
         alphaErrorMax: CGFloat,
         glowErrorMax: CGFloat
     ) {
-        let emphasisOrders = Set(plan.wordRuns.enumerated().compactMap { order, run in
-            (run.isEmphasis || run.emphasis != .inactive) ? order : nil
-        })
         guard !emphasisOrders.isEmpty else {
-            restoreMainTextIfNeeded(plan: plan)
+            // managesContainerText is the pre-layout fallback: the whole-line text is the live render,
+            // so restore it. When per-word glyph layers own the line, the caller already blanked it.
+            if managesContainerText { restoreMainTextIfNeeded(plan: plan) }
             hideEmphasisGlyphLayers()
             return (false, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         }
 
-        applyHiddenEmphasisText(plan: plan, hiddenOrders: emphasisOrders)
+        if managesContainerText { applyHiddenEmphasisText(plan: plan, hiddenOrders: emphasisOrders) }
 
         var glyphInputs: [(NativeLyricsTextSweepVisualRun, NativeLyricsWordRunPlan, CGFloat)] = []
         glyphInputs.reserveCapacity(emphasisOrders.count)
@@ -3854,6 +3926,123 @@ final class NativeLyricsRowView: NSView {
             layer.shadowOpacity = 0
             layer.setAffineTransform(.identity)
         }
+    }
+
+    private struct MainWordFloatAppliedMetrics {
+        let sampleCount: Int
+        /// max − min applied float across the line. > 0 proves the words floated by DISTINCT amounts
+        /// (the cascade), so a regression back to one collapsed line-level value is caught.
+        let floatSpread: CGFloat
+        static let inactive = MainWordFloatAppliedMetrics(sampleCount: 0, floatSpread: 0)
+    }
+
+    /// v2.8 per-word cascade: draw every NON-emphasis word as per-glyph layers floated by that word's
+    /// own `baseFloatY`. The dim glyphs (always visible) parent to `mainTextLayer`; the bright glyphs
+    /// parent to `mainBrightTextLayer` and so inherit the sweep mask — brightness stays a smooth
+    /// gradient and the 2pt float never shifts the horizontal wavefront. Position carries the float
+    /// (scale stays 1 → no top-clip). Emphasis (long) words are skipped; they keep their own
+    /// scale/glow glyph layers, so the two partitions cover the line without overlap or gap.
+    private func applyMainWordFloatGlyphLayers(
+        plan: NativeLyricsTextRenderPlan,
+        currentTime: TimeInterval,
+        linePlan: [NativeLyricsTextSweepVisualLinePlan],
+        emphasisOrders: Set<Int>
+    ) -> MainWordFloatAppliedMetrics {
+        let floats = plan.perWordFloatY(at: currentTime)
+        var inputs: [(glyph: NativeLyricsTextSweepVisualRun.Glyph, floatY: CGFloat)] = []
+        for line in linePlan {
+            for run in line.runs where !emphasisOrders.contains(run.order) {
+                let floatY = run.order < floats.count ? floats[run.order] : 0
+                for glyph in run.glyphs {
+                    inputs.append((glyph, floatY))
+                }
+            }
+        }
+        guard !inputs.isEmpty else {
+            hideMainWordGlyphLayers()
+            return .inactive
+        }
+        ensureMainWordGlyphLayerCount(inputs.count)
+        let fontSize = plan.constants.mainFontSize
+        let dimColor = NSColor.white.withAlphaComponent(plan.constants.dimAlpha).cgColor
+        let brightColor = NSColor.white.withAlphaComponent(plan.constants.brightAlpha).cgColor
+        var minFloat = CGFloat.greatestFiniteMagnitude
+        var maxFloat = -CGFloat.greatestFiniteMagnitude
+        for (index, input) in inputs.enumerated() {
+            let glyph = input.glyph
+            let dimLayer = mainDimWordGlyphLayers[index]
+            let brightLayer = mainBrightWordGlyphLayers[index]
+            dimLayer.isHidden = false
+            brightLayer.isHidden = false
+            let signature = EmphasisGlyphLayerSignature(glyph: glyph, fontSize: fontSize)
+            if mainWordGlyphLayerSignatures.indices.contains(index),
+               mainWordGlyphLayerSignatures[index] != signature {
+                mainWordGlyphLayerSignatures[index] = signature
+                // CATextLayer clips text tight to its bounds — at exactly glyph.rect.size the bottom
+                // ink of CJK strokes / descenders is shaved (same trap the whole-line layer pads
+                // around). The view is flipped (y-down), so glyph.rect.minY is the top: extend the box
+                // DOWNWARD by textBottomClipPad (keeping the top edge fixed) for room below the glyph.
+                for layer in [dimLayer, brightLayer] {
+                    layer.string = glyph.text
+                    layer.bounds = CGRect(
+                        origin: .zero,
+                        size: CGSize(width: glyph.rect.width, height: glyph.rect.height + Self.textBottomClipPad)
+                    )
+                }
+            }
+            dimLayer.foregroundColor = dimColor
+            brightLayer.foregroundColor = brightColor
+            // Center sits pad/2 below the glyph midY so the taller box keeps its TOP at glyph.rect.minY
+            // (text stays exactly where the whole-line layer drew it; only the bottom gains room).
+            let centerY = glyph.rect.midY + Self.textBottomClipPad / 2 + input.floatY
+            let position = CGPoint(x: glyph.rect.midX, y: centerY)
+            dimLayer.position = position
+            brightLayer.position = position
+            let appliedFloat = position.y - glyph.rect.midY - Self.textBottomClipPad / 2
+            minFloat = min(minFloat, appliedFloat)
+            maxFloat = max(maxFloat, appliedFloat)
+        }
+        for index in inputs.count..<mainDimWordGlyphLayers.count {
+            mainDimWordGlyphLayers[index].isHidden = true
+            mainBrightWordGlyphLayers[index].isHidden = true
+        }
+        return MainWordFloatAppliedMetrics(
+            sampleCount: inputs.count,
+            floatSpread: maxFloat - minFloat
+        )
+    }
+
+    private func ensureMainWordGlyphLayerCount(_ count: Int) {
+        guard mainDimWordGlyphLayers.count < count else { return }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let fontSize = NativeLyricsTextConstants().mainFontSize
+        while mainDimWordGlyphLayers.count < count {
+            let dimLayer = makeWordGlyphLayer(scale: scale, fontSize: fontSize)
+            let brightLayer = makeWordGlyphLayer(scale: scale, fontSize: fontSize)
+            mainTextLayer.addSublayer(dimLayer)
+            mainBrightTextLayer.addSublayer(brightLayer)
+            mainDimWordGlyphLayers.append(dimLayer)
+            mainBrightWordGlyphLayers.append(brightLayer)
+            mainWordGlyphLayerSignatures.append(nil)
+        }
+    }
+
+    private func makeWordGlyphLayer(scale: CGFloat, fontSize: CGFloat) -> CATextLayer {
+        let layer = CATextLayer()
+        layer.contentsScale = scale
+        layer.font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        layer.fontSize = fontSize
+        layer.isWrapped = false
+        layer.alignmentMode = .center
+        layer.truncationMode = .none
+        layer.masksToBounds = false
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        return layer
+    }
+
+    private func hideMainWordGlyphLayers() {
+        for layer in mainDimWordGlyphLayers { layer.isHidden = true }
+        for layer in mainBrightWordGlyphLayers { layer.isHidden = true }
     }
 
     private struct EmphasisGlyphAppliedMetrics {

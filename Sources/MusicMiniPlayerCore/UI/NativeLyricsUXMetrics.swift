@@ -127,6 +127,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
     let lineLayoutWidthErrorMax: CGFloat
     let mainTextFrameHeightErrorMax: CGFloat
     let translationTextFrameHeightErrorMax: CGFloat
+    let mainWordFloatSampleCount: Int
+    let mainWordFloatSpread: CGFloat
 
     init(
         hasSyllableSync: Bool,
@@ -176,7 +178,9 @@ struct NativeLyricsTextPhaseSample: Equatable {
         lineLayoutHeightErrorMax: CGFloat = 0,
         lineLayoutWidthErrorMax: CGFloat = 0,
         mainTextFrameHeightErrorMax: CGFloat = 0,
-        translationTextFrameHeightErrorMax: CGFloat = 0
+        translationTextFrameHeightErrorMax: CGFloat = 0,
+        mainWordFloatSampleCount: Int = 0,
+        mainWordFloatSpread: CGFloat = 0
     ) {
         self.hasSyllableSync = hasSyllableSync
         self.wordRunCount = wordRunCount
@@ -226,6 +230,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
         self.lineLayoutWidthErrorMax = lineLayoutWidthErrorMax
         self.mainTextFrameHeightErrorMax = mainTextFrameHeightErrorMax
         self.translationTextFrameHeightErrorMax = translationTextFrameHeightErrorMax
+        self.mainWordFloatSampleCount = mainWordFloatSampleCount
+        self.mainWordFloatSpread = mainWordFloatSpread
     }
 
     var mainPhaseError: CGFloat {
