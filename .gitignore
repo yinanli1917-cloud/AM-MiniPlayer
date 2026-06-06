@@ -38,3 +38,11 @@ tmp/visual/
 
 # Codex runtime state
 .codex/runtime/
+
+# Build / release artifacts (regenerable)
+dist/
+*.zip
+*.dmg
+*.sha256
+tmp/
+__pycache__/
