@@ -545,6 +545,7 @@ final class NativeLyricsSurfaceView: NSView {
             lastTextPhaseUpdateAt = nil
         }
         self.configuration = configuration
+
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         updateNativeLineMotionSamplingTimer(configuration: runtimeConfiguration)
         consumeDirectSnapRequestIfNeeded(runtimeConfiguration)
@@ -675,6 +676,7 @@ final class NativeLyricsSurfaceView: NSView {
         return visualTargetsChanged
     }
 
+
     private func runtimeConfiguration(
         from configuration: LyricsLayerRendererConfiguration
     ) -> LyricsLayerRendererConfiguration {
@@ -684,6 +686,20 @@ final class NativeLyricsSurfaceView: NSView {
            !consumedDirectSnapRequestIDs.contains(request.id) {
             runtimeConfiguration.nativeDirectSnapIndex = request.displayIndex
             runtimeConfiguration.nativeDirectSnapReason = request.reason
+        }
+        // Stable positions: seed every not-yet-mounted row with its exact height ESTIMATE
+        // (≈ the eventual measured height, same TextKit), so the accumulated offsets never fall
+        // back to the flat 36pt default. That default made each incoming row snap ~30px the instant
+        // it mounted and measured (the "排版来回改" jitter + cold-start blank). The estimate matches
+        // the later measurement, so the row does not reflow when it actually mounts.
+        for row in runtimeConfiguration.rows where measuredHeightsByIndex[row.index] == nil {
+            measuredHeightsByIndex[row.index] = NativeLyricsRowMeasurement.estimatedHeight(
+                for: row,
+                rowWidth: runtimeConfiguration.rowWidth,
+                showTranslation: runtimeConfiguration.showTranslation,
+                isTranslating: runtimeConfiguration.isTranslating,
+                pendingTranslationLineIndices: runtimeConfiguration.pendingTranslationLineIndices
+            )
         }
         runtimeConfiguration.accumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
             renderedIndices: runtimeConfiguration.renderedIndices,
@@ -895,6 +911,7 @@ final class NativeLyricsSurfaceView: NSView {
         let heightChanged = abs((measuredHeightsByIndex[row.index] ?? 0) - height) > 2
         renderTelemetry.recordHeightMeasurement(changed: heightChanged)
         if heightChanged {
+
             measuredHeightsByIndex[row.index] = height
             DispatchQueue.main.async {
                 configuration.onHeightMeasured(row.index, height)
@@ -1318,6 +1335,7 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private func startPresentationLoop() {
+
         guard displayLink == nil else { return }
         var link: CVDisplayLink?
         guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess,
@@ -1700,7 +1718,7 @@ final class NativeLyricsSurfaceView: NSView {
             return true
         }
         if event.phase == .ended || event.momentumPhase == .ended {
-            scheduleNativeScrollEnd(delay: 5.0)
+            scheduleNativeScrollEnd(delay: 2.0)
             return true
         }
 
@@ -1754,7 +1772,7 @@ final class NativeLyricsSurfaceView: NSView {
         deferParentCallback {
             onManualScrollDelta(deltaY, velocity)
         }
-        scheduleNativeScrollEnd(delay: 5.0)
+        scheduleNativeScrollEnd(delay: 2.0)
         return true
     }
 
@@ -2406,7 +2424,7 @@ final class NativeLyricsSurfaceView: NSView {
     }
 }
 
-private final class NativeLyricsRowView: NSView {
+final class NativeLyricsRowView: NSView {
     override var isFlipped: Bool { true }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -2548,7 +2566,7 @@ private final class NativeLyricsRowView: NSView {
         self.row = row
         self.configuration = configuration
         wantsLayer = true
-        updateTextLayers()
+        updateTextLayers(textWidth: contentTextWidth(configuration))
         updateHoverBackground()
         needsLayout = true
     }
@@ -2622,6 +2640,21 @@ private final class NativeLyricsRowView: NSView {
         return quantizedRadius
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Single source of truth for the content width
+    //
+    // The text-layout width MUST come from `configuration.rowWidth` — which is KNOWN at
+    // configure time — and never from `bounds.width`, which is .zero on a fresh view and
+    // stale on a pooled one before `applyFrame`/`layout()` runs. `applyFrame` sets the
+    // view frame to exactly `configuration.rowWidth`, so this value equals the post-layout
+    // `bounds.width - insets`. Routing wrapping, frame, and height through this one helper
+    // is what stops the baked line-breaks from disagreeing with the laid-out frame (the
+    // horizontal-clip + blank-row bug).
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    private func contentTextWidth(_ configuration: LyricsLayerRendererConfiguration) -> CGFloat {
+        max(1, configuration.rowWidth - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
+    }
+
     func measuredHeight(width: CGFloat) -> CGFloat {
         guard let row, let configuration else { return 1 }
         let textWidth = max(1, width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
@@ -2652,11 +2685,37 @@ private final class NativeLyricsRowView: NSView {
         return ceil(height)
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Rendering-truth read-back (tests only)
+    //
+    // The metrics/parity pipeline only validates plan->layer fidelity (we set an opacity,
+    // then read it back). It never reads the ACTUAL rendered TEXT, so horizontal clipping
+    // and blank rows slipped through every "green" diagnostic. These read-backs expose the
+    // real committed string + frame so a deterministic test can assert that the baked line
+    // breaks match the laid-out width (no clip, no empty row). Not used by production code.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #if DEBUG
+    var debugMainTextLayerString: String? {
+        if let attributed = mainTextLayer.string as? NSAttributedString { return attributed.string }
+        return mainTextLayer.string as? String
+    }
+
+    var debugMainTextLayerFrame: CGRect { mainTextLayer.frame }
+
+    var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
+
+    func debugForceLayout() { layoutSubtreeIfNeeded() }
+    #endif
+
+
     override func layout() {
         super.layout()
         guard let row, let configuration else { return }
         let textX = nativeLyricContentLeadingInset
-        let textWidth = max(1, bounds.width - nativeLyricContentLeadingInset - nativeLyricContentTrailingInset)
+        // Single source of truth (same value updateTextLayers baked against). Deriving the frame
+        // width from configuration.rowWidth instead of bounds.width removes the last bounds-timing
+        // hazard, so the frame can never disagree with the baked line-breaks even on the first pass.
+        let textWidth = contentTextWidth(configuration)
         let plan = textRenderPlan(row: row, configuration: configuration)
         backgroundLayer.frame = Self.hoverBackgroundFrame(in: bounds)
         var y: CGFloat = 8
@@ -2743,6 +2802,41 @@ private final class NativeLyricsRowView: NSView {
             mainFrameHeightError: mainFrameHeightError,
             translationFrameHeightError: translationFrameHeightError
         )
+    }
+
+    static func displayWrapped(_ text: String, width: CGFloat, font: NSFont, lineSpacing: CGFloat = 0) -> String {
+        guard width > 1, text.count > 1, !text.contains("\n") else { return text }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.lineSpacing = lineSpacing
+        let storage = NSTextStorage(attributedString: NSAttributedString(
+            string: text,
+            attributes: [.font: font, .paragraphStyle: paragraph]
+        ))
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = 0
+        container.lineBreakMode = .byWordWrapping
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+
+        let ns = text as NSString
+        var lines: [String] = []
+        var glyphIndex = 0
+        let glyphCount = manager.numberOfGlyphs
+        while glyphIndex < glyphCount {
+            var lineGlyphRange = NSRange()
+            _ = manager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            let charRange = manager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            var line = ns.substring(with: charRange)
+            if line.hasSuffix(" ") { line.removeLast() }
+            lines.append(line)
+            glyphIndex = NSMaxRange(lineGlyphRange)
+        }
+        guard lines.count > 1 else { return text }
+        return lines.joined(separator: "\n")
     }
 
     override func updateTrackingAreas() {
@@ -2849,7 +2943,7 @@ private final class NativeLyricsRowView: NSView {
         }
     }
 
-    private func updateTextLayers() {
+    private func updateTextLayers(textWidth: CGFloat) {
         guard let row, let configuration else { return }
         if row.isPrelude {
             mainTextLayer.string = nil
@@ -2877,13 +2971,27 @@ private final class NativeLyricsRowView: NSView {
         // the wavefront reached them — the "从无到有 / words materialize from nothing" bug.
         mainTextLayer.mask = nil
         hideBaseRevealMaskLayers()
-        mainTextLayer.string = attributedText(
+        // Single source of truth: wrap at the KNOWN configuration width, never the not-yet-laid-out
+        // bounds.width (which is .zero on a fresh view / stale on a pooled one). This is the exact
+        // width layout() will use, so the baked line-breaks always match the rendered frame.
+        let displayTextWidth = textWidth
+        let wrappedMainText = Self.displayWrapped(
             plan.displayText,
+            width: displayTextWidth,
+            font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
+        )
+        mainTextLayer.string = attributedText(
+            wrappedMainText,
             fontSize: plan.constants.mainFontSize,
             alpha: mainAlpha
         )
+        // The reuse pool hides every text layer in prepareForReuse() to kill stale content during
+        // the transition. The dim BASE must be restored here for every non-prelude row, or a row that
+        // ever passed through the pool stays invisible forever — the panel empties out as playback
+        // recycles rows, and the active line shows only its sung (bright) portion. Restore it now.
+        mainTextLayer.isHidden = false
         mainBrightTextLayer.string = appliesMainSweep
-            ? attributedText(plan.displayText, fontSize: plan.constants.mainFontSize, alpha: plan.constants.brightAlpha)
+            ? attributedText(wrappedMainText, fontSize: plan.constants.mainFontSize, alpha: plan.constants.brightAlpha)
             : nil
         activeHiddenEmphasisSignature = nil
         hideEmphasisGlyphLayers()
@@ -2892,15 +3000,22 @@ private final class NativeLyricsRowView: NSView {
             let translationBaseAlpha = appliesTranslationSweep
                 ? translation.dimAlpha
                 : plan.constants.currentTranslationOpacityFactor
-            translationTextLayer.string = attributedText(
+            let wrappedTranslationText = Self.displayWrapped(
                 translation.text,
+                width: displayTextWidth,
+                font: .systemFont(ofSize: plan.constants.translationFontSize, weight: .semibold),
+                lineSpacing: plan.constants.translationLineSpacing
+            )
+            translationTextLayer.string = attributedText(
+                wrappedTranslationText,
                 fontSize: plan.constants.translationFontSize,
                 alpha: translationBaseAlpha,
                 lineSpacing: plan.constants.translationLineSpacing
             )
+            translationTextLayer.isHidden = false
             translationBrightTextLayer.string = appliesTranslationSweep
                 ? attributedText(
-                    translation.text,
+                    wrappedTranslationText,
                     fontSize: plan.constants.translationFontSize,
                     alpha: translation.brightAlpha,
                     lineSpacing: plan.constants.translationLineSpacing

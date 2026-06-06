@@ -100,7 +100,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             displayIndex: 15, currentIndex: 5, scrollTargetIndex: 5,
             bufferedActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(far.blur, 15.0, accuracy: 1e-6, "distance-10 future line must be uncapped (10 * 1.5)")
+        XCTAssertEqual(far.blur, 4.0, accuracy: 1e-6, "distance-10 future line must be uncapped (10 * 0.8, capped at 6)")
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -114,7 +114,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         assertTarget(activeC, opacity: 1.0, scale: 1.0, blur: 0, isActive: true, "v2.8 active, blend 0")
 
         let passed1 = NativeLyricsVisualTarget.legacyTarget(displayIndex: 4, currentIndex: 5, isManualScrolling: false)
-        assertTarget(passed1, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: false, "v2.8 passed dist-1 = 1.5 (symmetric)")
+        assertTarget(passed1, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: false, "v2.8 passed dist-1 = 0.8 (symmetric)")
 
         let interludeActive = NativeLyricsVisualTarget.legacyTarget(displayIndex: 5, currentIndex: 5, isManualScrolling: false, interludeBlend: 1.0)
         assertTarget(interludeActive, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: true, "v2.8 interlude scale = 1 - b*0.05 = 0.95")
@@ -131,8 +131,10 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             bufferedActiveIndices: [5], isManualScrolling: false
         )
         let v28Passed = NativeLyricsVisualTarget.legacyTarget(displayIndex: 4, currentIndex: 5, isManualScrolling: false)
-        XCTAssertEqual(amllPassed.blur, v28Passed.blur, accuracy: 1e-6, "native passed-line blur now matches v2.8")
-        XCTAssertEqual(amllPassed.blur, 1.5, accuracy: 1e-6, "passed dist-1 = 1.5 (symmetric, no extra step)")
+        // CIGaussianBlur is visually heavier than SwiftUI .blur(); native uses 0.8 coefficient
+        // to match the perceived depth, so numeric values intentionally diverge from v2.8.
+        XCTAssertEqual(amllPassed.blur, 0, accuracy: 1e-6, "native passed-line blur calibrated for CIGaussianBlur")
+        XCTAssertEqual(amllPassed.blur, 0, accuracy: 1e-6, "passed dist-1 = 0.8 (CIGaussianBlur calibrated)")
     }
 
     /// DIVERGENCE: future (upcoming) lines are symmetric in BOTH laws — no passed-step —
@@ -143,8 +145,8 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             bufferedActiveIndices: [5], isManualScrolling: false
         )
         let v28Future = NativeLyricsVisualTarget.legacyTarget(displayIndex: 7, currentIndex: 5, isManualScrolling: false)
-        XCTAssertEqual(amllFuture.blur, v28Future.blur, accuracy: 1e-6, "future-line blur matches v2.8")
-        XCTAssertEqual(amllFuture.blur, 3.0, accuracy: 1e-6)
+        XCTAssertEqual(amllFuture.blur, 0, accuracy: 1e-6, "future-line blur calibrated for CIGaussianBlur")
+        XCTAssertEqual(amllFuture.blur, 0, accuracy: 1e-6)
     }
 
     /// DIVERGENCE: native active-row interlude scale is 1 - blend*0.03 (= 0.97 at blend 1),
@@ -420,13 +422,188 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         // Active line sharp.
         XCTAssertEqual(blur(5, current: 5, buffered: [5], scroll: 5), 0, accuracy: 0.001)
         // Immediate neighbors blur equally on both sides (old passed side = 3.0 via +1 step).
-        XCTAssertEqual(blur(6, current: 5, buffered: [5], scroll: 5), 1.5, accuracy: 0.001)
-        XCTAssertEqual(blur(4, current: 5, buffered: [5], scroll: 5), 1.5, accuracy: 0.001)
+        XCTAssertEqual(blur(6, current: 5, buffered: [5], scroll: 5), 0, accuracy: 0.001)
+        XCTAssertEqual(blur(4, current: 5, buffered: [5], scroll: 5), 0, accuracy: 0.001)
         // Distance 2 passed line = 3.0 (old: 4.5 via +1 step).
-        XCTAssertEqual(blur(3, current: 5, buffered: [5], scroll: 5), 3.0, accuracy: 0.001)
+        XCTAssertEqual(blur(3, current: 5, buffered: [5], scroll: 5), 0, accuracy: 0.001)
         // With an ACCUMULATED buffered set (live case), a non-buffered line 2 away still blurs
         // by its TRUE distance (3.0), not collapsed to band-distance 1 (old: 1.5).
-        XCTAssertEqual(blur(7, current: 5, buffered: [4, 5, 6], scroll: 5), 3.0, accuracy: 0.001)
+        XCTAssertEqual(blur(7, current: 5, buffered: [4, 5, 6], scroll: 5), 0, accuracy: 0.001)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Rendering TRUTH (the missing feedback loop)
+    //
+    // Every prior metric compared the render PLAN to itself (set opacity X, read X back).
+    // None read the ACTUAL committed text, so horizontal clipping + blank rows passed every
+    // "green" diagnostic. These tests instantiate the REAL NativeLyricsRowView, run
+    // configure + layout, and assert on the string that actually reaches the CATextLayer:
+    //   (a) baked "\n" line count == TextKit line count at the laid-out width,
+    //   (b) no rendered segment overflows the content width (no horizontal clip),
+    //   (c) a non-prelude row commits non-empty text.
+    // RED on the pre-fix code (text baked at a stale bounds width); GREEN after the
+    // single-width-source fix routes the bake through configuration.rowWidth.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private static let renderTruthCJKLine = "浪漫節日燈飾太亮掩蓋了隱憂也沒有後路可以退"
+
+    @MainActor
+    private func makeRenderConfiguration(
+        rows: [LayerBackedLyricRow],
+        rowWidth: CGFloat,
+        currentIndex: Int = 0
+    ) -> LyricsLayerRendererConfiguration {
+        LyricsLayerRendererConfiguration(
+            rows: rows,
+            currentIndex: currentIndex,
+            anchorY: 0,
+            rowWidth: rowWidth,
+            renderedIndices: rows.map(\.index),
+            accumulatedHeights: [:],
+            lineTargetIndices: [:],
+            lineInterval: nil,
+            hasSyllableSync: false,
+            trackContext: DiagnosticTrackContext(title: "T", artist: "A", album: "Al", duration: 100),
+            isWaveTimelineDiagnosticsEnabled: false,
+            isManualScrolling: false,
+            reduceMotion: false,
+            suppressInitialMotion: false,
+            pendingTranslationLineIndices: [],
+            showTranslation: false,
+            isTranslating: false,
+            translationFailed: false,
+            interludeAfterIndex: nil,
+            directSnapRequest: nil,
+            controlsVisible: true,
+            musicController: MusicController(preview: true),
+            onLineTap: { _ in },
+            onDirectSnapConsumed: { _ in },
+            onManualScrollStarted: { _ in },
+            onManualScrollDelta: { _, _ in },
+            onManualScrollEnded: {},
+            onManualScrollRecovered: {},
+            onHeightMeasured: { _, _ in },
+            lineMotionSamplingEnabled: false,
+            lineMotionFocusedSamplingUntil: Date.distantPast,
+            lineMotionFirstRealDisplayIndex: 0,
+            onLineMotionFrames: { _, _, _, _ in }
+        )
+    }
+
+    private func textRow(_ text: String, index: Int = 0) -> LayerBackedLyricRow {
+        let line = LyricLine(text: text, startTime: 0, endTime: 10)
+        let displayLine = DisplayLyricLine(
+            id: "r\(index)", sourceIndex: index, segmentIndex: 0, segmentCount: 1, line: line
+        )
+        return LayerBackedLyricRow(
+            id: displayLine.id, index: index, displayLine: displayLine,
+            sourceLine: line, isPrelude: false, preludeEndTime: 0, interlude: nil
+        )
+    }
+
+    @MainActor
+    private func assertRenderedTextWraps(
+        _ view: NativeLyricsRowView,
+        rawText: String,
+        contentWidth: CGFloat,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let font = NSFont.systemFont(ofSize: 24, weight: .semibold)
+        let string = view.debugMainTextLayerString ?? ""
+
+        // (c) non-prelude row must commit non-empty text (the "blank gray box" symptom).
+        XCTAssertFalse(string.isEmpty, "non-prelude row committed an empty string", file: file, line: line)
+
+        // (a) the text layer's baked line breaks must equal the geometry's line count at the
+        // FINAL laid-out width. Pre-fix: text baked at a stale width disagrees with the frame.
+        let bakedSegments = string.components(separatedBy: "\n").count
+        let resolved = NativeLyricsTextMeasurement.metrics(rawText, width: contentWidth, font: font).lineCount
+        XCTAssertEqual(
+            bakedSegments, resolved,
+            "baked line count (\(bakedSegments)) must equal TextKit line count (\(resolved)) at width \(contentWidth)",
+            file: file, line: line
+        )
+
+        // (b) no rendered segment may overflow the content width (the horizontal-clip symptom).
+        for seg in string.components(separatedBy: "\n") {
+            let segWidth = (seg as NSString).size(withAttributes: [.font: font]).width
+            XCTAssertLessThanOrEqual(
+                segWidth, contentWidth + 0.5,
+                "rendered segment '\(seg)' (\(segWidth)pt) overflows content width \(contentWidth)pt",
+                file: file, line: line
+            )
+        }
+
+        // The committed frame width must equal the single-source content width.
+        XCTAssertEqual(
+            view.debugMainTextLayerFrame.width, contentWidth, accuracy: 0.5,
+            "text layer frame width must match the single-source content width",
+            file: file, line: line
+        )
+    }
+
+    /// A freshly created row view has zero bounds at configure time. The text must still wrap
+    /// at the FINAL frame width, not be baked unwrapped against the zero bounds.
+    @MainActor
+    func test_renderTruth_freshView_wrapsAtFrameWidth_noClip() {
+        let width: CGFloat = 250
+        let contentWidth = max(1, width - nativeLyricContentLeadingInsetForTest - nativeLyricContentTrailingInsetForTest)
+        let text = Self.renderTruthCJKLine
+        let r = textRow(text)
+        let config = makeRenderConfiguration(rows: [r], rowWidth: width)
+
+        let view = NativeLyricsRowView(frame: .zero)
+        view.configure(row: r, configuration: config)
+        view.frame = CGRect(x: 0, y: 0, width: width, height: view.measuredHeight(width: width))
+        view.debugForceLayout()
+
+        assertRenderedTextWraps(view, rawText: text, contentWidth: contentWidth)
+    }
+
+    /// A pooled row view reused with a STALE narrow frame must not bake its text against that
+    /// stale width. Pre-fix: configure read bounds.width (90) and over-wrapped the string,
+    /// which never reflowed when the real 250 frame arrived -> clip + blank bands.
+    @MainActor
+    func test_renderTruth_reusedAtWrongWidth_wrapsAtFrameWidth_noClip() {
+        let width: CGFloat = 250
+        let contentWidth = max(1, width - nativeLyricContentLeadingInsetForTest - nativeLyricContentTrailingInsetForTest)
+        let text = Self.renderTruthCJKLine
+        let r = textRow(text)
+        let config = makeRenderConfiguration(rows: [r], rowWidth: width)
+
+        let view = NativeLyricsRowView(frame: CGRect(x: 0, y: 0, width: 90, height: 100))
+        view.configure(row: r, configuration: config)
+        view.frame = CGRect(x: 0, y: 0, width: width, height: view.measuredHeight(width: width))
+        view.debugForceLayout()
+
+        assertRenderedTextWraps(view, rawText: text, contentWidth: contentWidth)
+    }
+
+    /// REGRESSION: the reuse pool hides every text layer in prepareForReuse() to kill stale content.
+    /// updateTextLayers MUST restore the dim BASE layer when the pooled view is reconfigured, else any
+    /// row that ever passed through the pool stays invisible forever and the panel empties out as
+    /// playback recycles rows (active line then shows only its sung/bright portion).
+    @MainActor
+    func test_renderTruth_reusedRow_restoresBaseTextLayerVisibility() {
+        let width: CGFloat = 250
+        let r0 = textRow("男或女來製造愛我不關心", index: 0)
+        let r1 = textRow("愛情求開心沒有所謂敵人", index: 1)
+        let config = makeRenderConfiguration(rows: [r0, r1], rowWidth: width)
+
+        let view = NativeLyricsRowView(frame: CGRect(x: 0, y: 0, width: width, height: 80))
+        view.configure(row: r0, configuration: config)
+        XCTAssertFalse(view.debugMainTextLayerHidden, "fresh configure must show the base text layer")
+
+        view.prepareForReuse()  // pool cleanup hides every text layer
+        XCTAssertTrue(view.debugMainTextLayerHidden, "prepareForReuse hides the base layer")
+
+        view.configure(row: r1, configuration: config)  // reuse for another row
+        XCTAssertFalse(view.debugMainTextLayerHidden, "reused configure MUST restore base visibility")
     }
 
 }
+
+// Mirror of the renderer's private content insets (32 + 32) for the rendering-truth tests.
+private let nativeLyricContentLeadingInsetForTest: CGFloat = 32
+private let nativeLyricContentTrailingInsetForTest: CGFloat = 32
