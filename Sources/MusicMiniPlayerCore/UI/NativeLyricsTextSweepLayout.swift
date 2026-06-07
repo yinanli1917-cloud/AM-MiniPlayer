@@ -370,4 +370,45 @@ enum NativeLyricsTranslationSweepLayout {
         }
         return lines
     }
+
+    static func maskLinesSequential(
+        from plan: [NativeLyricsTranslationSweepVisualLinePlan],
+        currentTime: TimeInterval,
+        lineStartTime: TimeInterval,
+        lineEndTime: TimeInterval,
+        fadeHalfPoint: CGFloat
+    ) -> [NativeLyricsTranslationSweepMaskLine] {
+        guard !plan.isEmpty else { return [] }
+        let n = plan.count
+        let totalDuration = lineEndTime - lineStartTime
+        guard totalDuration > 0 else {
+            return maskLines(from: plan, progress: 1, fadeHalfPoint: fadeHalfPoint)
+        }
+        var lines: [NativeLyricsTranslationSweepMaskLine] = []
+        for (index, line) in plan.enumerated() {
+            let segmentStart = lineStartTime + totalDuration * Double(index) / Double(n)
+            let segmentEnd = lineStartTime + totalDuration * Double(index + 1) / Double(n)
+            let segmentDuration = segmentEnd - segmentStart
+            let localProgress: CGFloat
+            if currentTime >= segmentEnd {
+                localProgress = 1
+            } else if currentTime <= segmentStart || segmentDuration <= 0 {
+                localProgress = 0
+            } else {
+                localProgress = CGFloat((currentTime - segmentStart) / segmentDuration)
+            }
+            let maskRect = line.rect.insetBy(dx: -20, dy: -20)
+            let wavefront: CGFloat
+            if localProgress <= 0 {
+                wavefront = maskRect.minX - fadeHalfPoint
+            } else {
+                wavefront = line.rect.minX + line.rect.width * min(1, localProgress)
+            }
+            lines.append(NativeLyricsTranslationSweepMaskLine(
+                maskRect: maskRect,
+                wavefrontX: wavefront
+            ))
+        }
+        return lines
+    }
 }

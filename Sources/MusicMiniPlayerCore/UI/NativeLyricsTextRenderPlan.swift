@@ -200,6 +200,9 @@ struct NativeLyricsTextRenderPlan: Equatable {
         return NativeLyricsTranslationRenderPlan(
             text: translation,
             progress: isActiveLine ? progress : 1,
+            currentTime: currentTime,
+            lineStartTime: line.startTime,
+            lineEndTime: lineEndTime,
             opacity: opacity,
             dimAlpha: constants.translationDimAlpha,
             brightAlpha: constants.translationBrightAlpha,
@@ -365,6 +368,9 @@ struct NativeLyricsSweepPlan: Equatable {
 struct NativeLyricsTranslationRenderPlan: Equatable {
     let text: String
     let progress: CGFloat
+    let currentTime: TimeInterval
+    let lineStartTime: TimeInterval
+    let lineEndTime: TimeInterval
     let opacity: CGFloat
     let dimAlpha: CGFloat
     let brightAlpha: CGFloat
