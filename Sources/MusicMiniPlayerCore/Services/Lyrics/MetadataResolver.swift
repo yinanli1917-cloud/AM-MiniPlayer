@@ -444,6 +444,23 @@ public final class MetadataResolver {
                 DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先多区域(\(localized!.region)原名): '\(localized!.title)' by '\(localized!.artist)' over CN '\(cnResult!.artist)'")
                 return (localized!.title, localized!.artist)
             }
+            // 🔑 Title corroboration tiebreak: when CN's CJK title does NOT
+            // corroborate the romanized input but localized's does, prefer
+            // localized (e.g. CN resolves to sibling track '快节奏' while
+            // multi-region correctly found '二十歲的浪漫'). Only applies
+            // to romanized (non-English) input.
+            let inputIsRomanized = LanguageUtils.isPureASCII(title)
+                && !LanguageUtils.isLikelyEnglishTitle(title)
+            if inputIsRomanized && locHasCJKTitle {
+                let cnCorroborates = LanguageUtils.isRomanizedTitleCorroborated(
+                    input: title, candidateTitle: cnResult!.title)
+                let locCorroborates = LanguageUtils.isRomanizedTitleCorroborated(
+                    input: title, candidateTitle: localized!.title)
+                if !cnCorroborates && locCorroborates {
+                    DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先印证多区域: '\(localized!.title)' by '\(localized!.artist)' over CN '\(cnResult!.title)'")
+                    return (localized!.title, localized!.artist)
+                }
+            }
             DebugLogger.log("MetadataResolver", "✅ 罗马字→CJK 优先 CN: '\(cnResult!.title)' by '\(cnResult!.artist)'")
             return (cnResult!.title, cnResult!.artist)
         }
@@ -656,10 +673,17 @@ public final class MetadataResolver {
         let resultTitleHasCJK = LanguageUtils.containsChinese(trackName) || LanguageUtils.containsJapanese(trackName) || LanguageUtils.containsKorean(trackName)
         if durationDiff < 3.0 && resultTitleHasCJK && inputIsPureEnglish {
             // 🔑 艺术家校验：同脚本（都是 ASCII）必须匹配，防止不同歌手错配
-            // "NCT DREAM" vs "NewJeans" → 都是 ASCII 且不匹配 → 拒绝
-            // "彭佳慧" vs "Julia Peng" → 不同脚本 → 无法校验 → 放行（靠时长兜底）
             let resultArtistIsASCII = LanguageUtils.isPureASCII(artistName)
             if resultArtistIsASCII && !artistMatch {
+                return .none
+            }
+            // 🔑 Title corroboration: when the romanized input is NOT likely
+            // English (i.e. it looks like pinyin/romaji), a translated candidate
+            // whose CJK title does NOT romanize to the input is a sibling-track
+            // collision (e.g. '快节奏' Δ0.3 on the same album as '二十岁的浪漫' Δ0.5).
+            // Skip it so the real title track can be collected instead.
+            if !LanguageUtils.isLikelyEnglishTitle(title),
+               !LanguageUtils.isRomanizedTitleCorroborated(input: title, candidateTitle: trackName) {
                 return .none
             }
             DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 翻译候选('\(searchTerm)'): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.1f", durationDiff))s")
