@@ -456,6 +456,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
+    private let surfaceInterludeOverlay = NSView()
     private let surfaceInterludeDotContainer = CALayer()
     private let surfaceInterludeDots: [CALayer] = (0..<3).map { _ in CALayer() }
 
@@ -485,7 +486,10 @@ final class NativeLyricsSurfaceView: NSView {
     private func setupSurfaceInterludeDots() {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let dotSize = NativeLyricsDotPhasePlan.baseDotSize
-        surfaceInterludeDotContainer.isHidden = true
+        surfaceInterludeOverlay.wantsLayer = true
+        surfaceInterludeOverlay.layer?.masksToBounds = false
+        surfaceInterludeOverlay.alphaValue = 0
+        addSubview(surfaceInterludeOverlay)
         surfaceInterludeDotContainer.masksToBounds = false
         surfaceInterludeDotContainer.contentsScale = scale
         for dot in surfaceInterludeDots {
@@ -495,7 +499,7 @@ final class NativeLyricsSurfaceView: NSView {
             dot.masksToBounds = false
             surfaceInterludeDotContainer.addSublayer(dot)
         }
-        layer?.addSublayer(surfaceInterludeDotContainer)
+        surfaceInterludeOverlay.layer?.addSublayer(surfaceInterludeDotContainer)
     }
 
     private func updateSurfaceInterludeDots(
@@ -505,7 +509,7 @@ final class NativeLyricsSurfaceView: NSView {
         guard let interludeIndex = configuration.interludeAfterIndex,
               let row = configuration.rows.first(where: { $0.index == interludeIndex }),
               let interlude = row.interlude else {
-            surfaceInterludeDotContainer.isHidden = true
+            surfaceInterludeOverlay.alphaValue = 0
             return
         }
         let baseY: CGFloat
@@ -517,6 +521,7 @@ final class NativeLyricsSurfaceView: NSView {
         }
         let rowHeight = measuredHeightsByIndex[row.index] ?? 36
         let y = baseY + configuration.effectiveManualOffset + rowHeight + 8
+        surfaceInterludeOverlay.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
         let dotSize = NativeLyricsDotPhasePlan.baseDotSize
         let spacing = NativeLyricsDotPhasePlan.baseDotSpacing
         let totalWidth = dotSize * CGFloat(surfaceInterludeDots.count)
@@ -532,8 +537,7 @@ final class NativeLyricsSurfaceView: NSView {
             currentTime: currentTime,
             gateByTimeRange: true
         )
-        surfaceInterludeDotContainer.isHidden = plan.overallOpacity < 0.001
-        surfaceInterludeDotContainer.opacity = Float(plan.overallOpacity)
+        surfaceInterludeOverlay.alphaValue = CGFloat(plan.overallOpacity)
         if plan.blur > 0.01 {
             let filter = CIFilter(name: "CIGaussianBlur")
             filter?.setValue(Double(plan.blur), forKey: kCIInputRadiusKey)

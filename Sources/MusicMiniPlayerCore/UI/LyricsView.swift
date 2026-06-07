@@ -1853,11 +1853,10 @@ public struct LyricsView: View {
         let absVelocity = abs(velocity)
         let threshold: CGFloat = 800
 
-        if deltaY < 0 {
+        if absVelocity >= threshold {
+            if !scroll.scrollLocked { scroll.scrollLocked = true }
             if showControls { animateControlsOut() }
-            if !scroll.scrollLocked { scroll.scrollLocked = true }
-        } else if absVelocity >= threshold {
-            if !scroll.scrollLocked { scroll.scrollLocked = true }
+        } else if deltaY < 0 {
             if showControls { animateControlsOut() }
         } else if deltaY > 0 && !scroll.scrollLocked && !scroll.hasTriggeredSlowScroll {
             scroll.hasTriggeredSlowScroll = true
