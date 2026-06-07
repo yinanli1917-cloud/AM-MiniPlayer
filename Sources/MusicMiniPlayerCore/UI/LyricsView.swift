@@ -1565,14 +1565,13 @@ public struct LyricsView: View {
                         translationButton: lyricsService.canTranslate
                             ? AnyView(TranslationButtonView(lyricsService: lyricsService)) : nil
                     )
-                    .allowsHitTesting(showControls)
                 }
                 .blur(radius: controlsBlurAmount)
                 .offset(y: controlsOffsetY)
                 .transition(.opacity)
             }
         }
-        .allowsHitTesting(false)
+        .allowsHitTesting(showControls)
         .opacity(showControls ? 1 : 0)
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showControls)
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: controlsBlurAmount)
