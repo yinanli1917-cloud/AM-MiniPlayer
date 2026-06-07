@@ -170,6 +170,12 @@ struct LyricsPresentationSpringParameters: Equatable {
         damping: 15
     )
 
+    static let amllNatural = LyricsPresentationSpringParameters(
+        mass: 1.0,
+        stiffness: 100,
+        damping: 16.5
+    )
+
     static func amllPosition(
         lineInterval: TimeInterval?,
         isSeeking: Bool,
@@ -178,21 +184,7 @@ struct LyricsPresentationSpringParameters: Equatable {
         if isSeeking || isInterludeActive {
             return amllSeekOrInterlude
         }
-        guard let lineInterval, lineInterval.isFinite, lineInterval > 0 else {
-            return amllSeekOrInterlude
-        }
-
-        let intervalMs = lineInterval * 1000
-        let clampedInterval = min(max(intervalMs, 100), 800)
-        var ratio = 1 - (clampedInterval - 100) / (800 - 100)
-        ratio = pow(ratio, 0.2)
-        let stiffness = 170 + ratio * (220 - 170)
-        let damping = sqrt(stiffness) * 2.2
-        return LyricsPresentationSpringParameters(
-            mass: 0.9,
-            stiffness: CGFloat(stiffness),
-            damping: CGFloat(damping)
-        )
+        return amllNatural
     }
 }
 
@@ -259,11 +251,12 @@ struct NativeLyricsVisualTarget: Equatable {
         }
         if isHotActive {
             let blend = min(1, max(0, interludeBlend))
+            let distanceBlur = CGFloat(abs(displayIndex - scrollTargetIndex)) * 1.5
             return NativeLyricsVisualTarget(
                 opacity: 1.0 - blend * 0.65,
-                scale: 1.0 - blend * 0.03,
-                blur: blend * 1.5,
-                isActive: true
+                scale: 1.0 - blend * 0.05,
+                blur: blend * max(1.5, distanceBlur),
+                isActive: blend < 0.5
             )
         }
         if isHarmonyActive {
@@ -340,8 +333,7 @@ struct NativeLyricsVisualMotionState: Equatable {
         let before = self
         let boundedDelta = min(max(delta, 0), Self.maxDelta)
         guard boundedDelta > 0 else { return false }
-        // v2.8: ALL visual properties (blur, opacity, scale) animate with the same spring.
-        // This produces smooth depth-field transitions that track the scroll position.
+        if isSettled { return false }
         let spring = spring ?? Self.fallbackSpring
         var remaining = boundedDelta
         while remaining > 0 {

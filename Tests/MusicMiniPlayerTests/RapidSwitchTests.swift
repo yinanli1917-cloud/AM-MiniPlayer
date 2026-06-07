@@ -877,10 +877,11 @@ final class RapidSwitchTests: XCTestCase {
 
         XCTAssertEqual(seek, .amllSeekOrInterlude)
         XCTAssertEqual(interlude, .amllSeekOrInterlude)
-        XCTAssertEqual(dense.mass, 0.9, accuracy: 0.0001)
-        XCTAssertGreaterThan(dense.stiffness, slow.stiffness)
-        XCTAssertEqual(dense.damping, sqrt(dense.stiffness) * 2.2, accuracy: 0.0001)
-        XCTAssertEqual(slow.stiffness, 170, accuracy: 0.001)
+        XCTAssertEqual(dense, .amllNatural)
+        XCTAssertEqual(slow, .amllNatural)
+        XCTAssertEqual(dense.mass, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(dense.stiffness, 100, accuracy: 0.001)
+        XCTAssertEqual(dense.damping, 16.5, accuracy: 0.001)
     }
 
     func testLyricWaveTimingCarriesExistingTargetsIntoNextWaveCleanup() {

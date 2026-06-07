@@ -587,6 +587,9 @@ private final class LyricsPresentationSpring {
     ) -> LyricsPresentationRowState {
         let boundedDelta = min(max(delta, 0), maxDelta)
         guard boundedDelta > 0 else { return state }
+        if abs(state.y - state.targetY) < 0.1 && abs(state.velocity) < 0.1 {
+            return state
+        }
 
         var y = state.y
         var velocity = state.velocity
