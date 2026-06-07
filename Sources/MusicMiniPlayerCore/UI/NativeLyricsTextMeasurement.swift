@@ -70,10 +70,13 @@ enum NativeLyricsHeightAccumulator {
     static let rowSpacing: CGFloat = 6
     static let defaultRowHeight: CGFloat = 36
 
+    static let interludeGapHeight: CGFloat = 34
+
     static func accumulatedHeights(
         renderedIndices: [Int],
         configuredAccumulatedHeights: [Int: CGFloat],
         measuredHeights: [Int: CGFloat],
+        interludeAfterIndex: Int? = nil,
         rowSpacing: CGFloat = rowSpacing,
         defaultRowHeight: CGFloat = defaultRowHeight
     ) -> [Int: CGFloat] {
@@ -91,6 +94,9 @@ enum NativeLyricsHeightAccumulator {
                 rowSpacing: rowSpacing,
                 defaultRowHeight: defaultRowHeight
             )
+            if index == interludeAfterIndex {
+                accumulated += interludeGapHeight
+            }
             if position < renderedIndices.count - 1 {
                 accumulated += rowSpacing
             }

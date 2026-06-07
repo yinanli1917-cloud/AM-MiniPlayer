@@ -117,8 +117,8 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         let logical: CGFloat = 10
         let applied = view.applyBlurRadius(logical)
         XCTAssertLessThan(applied, logical, "rendered CIGaussianBlur radius must be lighter than the logical depth")
-        let expectedApplied = (sqrt(logical) * NativeLyricsRowView.blurRenderCalibration * 4)
-            .rounded(.toNearestOrAwayFromZero) / 4
+        let expectedApplied = (sqrt(logical) * NativeLyricsRowView.blurRenderCalibration * 2)
+            .rounded(.toNearestOrAwayFromZero) / 2
         XCTAssertEqual(applied, expectedApplied, accuracy: 0.01,
                        "rendered radius = sqrt(logical) * calibration, quantized")
         XCTAssertLessThanOrEqual(NativeLyricsRowView.blurRenderCalibration, 1.0, "calibration must not amplify")
@@ -194,12 +194,12 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
 
     /// DIVERGENCE: native active-row interlude scale is 1 - blend*0.03 (= 0.97 at blend 1),
     /// while v2.8 used 1 - blend*0.05 (= 0.95). A 0.02 difference at full interlude.
-    func test_DIVERGENCE_activeInterludeScale_003_vs_v28_005() {
+    func test_interludeBlend_matchesNonActiveAppearance() {
         let amllActive = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false, interludeBlend: 1.0
         )
-        assertTarget(amllActive, opacity: 0.35, scale: 0.97, blur: 1.5, isActive: true, "AMLL interlude active scale 0.97")
+        assertTarget(amllActive, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: false, "interlude blend matches non-active")
     }
 
     /// CHARACTERIZATION of the "smeared active row / wrong brightness" report: native keeps

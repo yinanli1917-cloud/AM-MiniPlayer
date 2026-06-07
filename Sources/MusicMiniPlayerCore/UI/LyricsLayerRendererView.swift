@@ -445,6 +445,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastNativeLineMotionSampleAt: Date = .distantPast
     private var nativeSemanticCurrentIndex: Int?
     private var nativeTimelineState: NativeLyricsTimelinePolicy.AMLLState?
+    private var pausedSemanticLocked = false
     private var lastObservedSeekGeneration: Int = 0
     private var lastTextPhaseUpdateAt: CFTimeInterval?
     private var lastScrollWheelTime: CFTimeInterval = 0
@@ -455,6 +456,8 @@ final class NativeLyricsSurfaceView: NSView {
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
+    private let surfaceInterludeDotContainer = CALayer()
+    private let surfaceInterludeDots: [CALayer] = (0..<3).map { _ in CALayer() }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -475,7 +478,78 @@ final class NativeLyricsSurfaceView: NSView {
     private func commonInit() {
         wantsLayer = true
         layer?.masksToBounds = false
+        setupSurfaceInterludeDots()
         installLocalEventMonitor()
+    }
+
+    private func setupSurfaceInterludeDots() {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let dotSize = NativeLyricsDotPhasePlan.baseDotSize
+        surfaceInterludeDotContainer.isHidden = true
+        surfaceInterludeDotContainer.masksToBounds = false
+        surfaceInterludeDotContainer.contentsScale = scale
+        for dot in surfaceInterludeDots {
+            dot.contentsScale = scale
+            dot.cornerRadius = dotSize / 2
+            dot.backgroundColor = NSColor.white.cgColor
+            dot.masksToBounds = false
+            surfaceInterludeDotContainer.addSublayer(dot)
+        }
+        layer?.addSublayer(surfaceInterludeDotContainer)
+    }
+
+    private func updateSurfaceInterludeDots(
+        configuration: LyricsLayerRendererConfiguration,
+        snap: Bool
+    ) {
+        guard let interludeIndex = configuration.interludeAfterIndex,
+              let row = configuration.rows.first(where: { $0.index == interludeIndex }),
+              let interlude = row.interlude else {
+            surfaceInterludeDotContainer.isHidden = true
+            return
+        }
+        let baseY: CGFloat
+        if snap {
+            baseY = snapY(for: row, configuration: configuration)
+        } else {
+            baseY = presentationEngine.presentation(for: row.index)?.y
+                ?? snapY(for: row, configuration: configuration)
+        }
+        let rowHeight = measuredHeightsByIndex[row.index] ?? 36
+        let y = baseY + configuration.effectiveManualOffset + rowHeight + 8
+        let dotSize = NativeLyricsDotPhasePlan.baseDotSize
+        let spacing = NativeLyricsDotPhasePlan.baseDotSpacing
+        let totalWidth = dotSize * CGFloat(surfaceInterludeDots.count)
+            + spacing * CGFloat(max(0, surfaceInterludeDots.count - 1))
+        let containerX = nativeLyricContentLeadingInset
+        surfaceInterludeDotContainer.bounds = CGRect(x: 0, y: 0, width: totalWidth, height: dotSize)
+        surfaceInterludeDotContainer.position = CGPoint(x: containerX + totalWidth / 2, y: y + dotSize / 2)
+        var x: CGFloat = 0
+        let currentTime = configuration.musicController.lyricRenderTime()
+        let plan = NativeLyricsDotPhasePlan.make(
+            startTime: interlude.startTime,
+            endTime: interlude.endTime,
+            currentTime: currentTime,
+            gateByTimeRange: true
+        )
+        surfaceInterludeDotContainer.isHidden = plan.overallOpacity < 0.001
+        surfaceInterludeDotContainer.opacity = Float(plan.overallOpacity)
+        if plan.blur > 0.01 {
+            let filter = CIFilter(name: "CIGaussianBlur")
+            filter?.setValue(Double(plan.blur), forKey: kCIInputRadiusKey)
+            surfaceInterludeDotContainer.filters = filter.map { [$0] }
+        } else {
+            surfaceInterludeDotContainer.filters = nil
+        }
+        for (index, dot) in surfaceInterludeDots.enumerated() {
+            dot.bounds = CGRect(x: 0, y: 0, width: dotSize, height: dotSize)
+            dot.position = CGPoint(x: x + dotSize / 2, y: dotSize / 2)
+            dot.cornerRadius = dotSize / 2
+            dot.opacity = Float(plan.opacities[index])
+            dot.setAffineTransform(CGAffineTransform(scaleX: plan.scales[index], y: plan.scales[index]))
+            dot.isHidden = false
+            x += dotSize + spacing
+        }
     }
 
     private func installLocalEventMonitor() {
@@ -543,6 +617,7 @@ final class NativeLyricsSurfaceView: NSView {
             measuredHeightsByIndex.removeAll()
             nativeSemanticCurrentIndex = nil
             nativeTimelineState = nil
+            pausedSemanticLocked = false
             lastTextPhaseUpdateAt = nil
         }
         self.configuration = configuration
@@ -705,7 +780,8 @@ final class NativeLyricsSurfaceView: NSView {
         runtimeConfiguration.accumulatedHeights = NativeLyricsHeightAccumulator.accumulatedHeights(
             renderedIndices: runtimeConfiguration.renderedIndices,
             configuredAccumulatedHeights: runtimeConfiguration.accumulatedHeights,
-            measuredHeights: measuredHeightsByIndex
+            measuredHeights: measuredHeightsByIndex,
+            interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
         )
         synchronizeNativeSemanticIndex(configuration: &runtimeConfiguration)
         return runtimeConfiguration
@@ -734,8 +810,26 @@ final class NativeLyricsSurfaceView: NSView {
             cancelNativeLineAdvanceTimer()
             return
         }
+        let isPlaying = configuration.musicController.isPlaying
+        let seekToken = configuration.musicController.seekGeneration
+        let explicitSeek = seekToken != lastObservedSeekGeneration
+        if !isPlaying && !explicitSeek && pausedSemanticLocked && nativeSemanticCurrentIndex != nil {
+            lastObservedSeekGeneration = seekToken
+            configuration.nativeSemanticCurrentIndex = nativeSemanticCurrentIndex!
+            if let ts = nativeTimelineState {
+                configuration.nativeScrollTargetIndex = ts.scrollToIndex
+                configuration.nativeHotActiveIndices = ts.hotGroups
+                configuration.nativeBufferedActiveIndices = ts.bufferedGroups
+            }
+            scheduleNativeLineAdvanceTimerIfNeeded(configuration: configuration)
+            return
+        }
+        if !isPlaying && !pausedSemanticLocked {
+            pausedSemanticLocked = true
+        } else if isPlaying && pausedSemanticLocked {
+            pausedSemanticLocked = false
+        }
         let playbackTime = configuration.musicController.lyricRenderTime()
-        // Provisional read (no buffered reset) used only to classify the transition.
         let provisional = NativeLyricsTimelinePolicy.amllState(
             at: playbackTime,
             rows: configuration.rows,
@@ -744,10 +838,6 @@ final class NativeLyricsSurfaceView: NSView {
             isSeeking: false
         )
         let liveIndex = provisional.semanticIndex
-        // First-class seek: an explicit in-app scrub (token bump) OR a non-monotonic index transition
-        // (backward, or forward by >1 line) is a seek, not natural advance.
-        let seekToken = configuration.musicController.seekGeneration
-        let explicitSeek = seekToken != lastObservedSeekGeneration
         lastObservedSeekGeneration = seekToken
         let isSeek = NativeLyricsSeekClassifier.isSeek(
             previousIndex: nativeSemanticCurrentIndex,
@@ -898,6 +988,7 @@ final class NativeLyricsSurfaceView: NSView {
         manualPresentationNeedsApply = false
         nativeSemanticCurrentIndex = nil
         nativeTimelineState = nil
+        pausedSemanticLocked = false
         lastTextPhaseUpdateAt = nil
         pendingTapToLineSettleTiming = nil
         visualStates.removeAll()
@@ -1345,6 +1436,7 @@ final class NativeLyricsSurfaceView: NSView {
                 guard let row = view.currentRow else { continue }
                 self.applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snap)
             }
+            self.updateSurfaceInterludeDots(configuration: runtimeConfiguration, snap: snap)
         }
         if managesTransaction {
             withDisabledLayerActions(applyFrames)
@@ -1724,11 +1816,6 @@ final class NativeLyricsSurfaceView: NSView {
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         let point = convert(event.locationInWindow, from: nil)
         let isInsideSurface = bounds.insetBy(dx: -4, dy: -4).contains(point)
-        if isPointInReservedOverlayZone(point, configuration: runtimeConfiguration),
-           !manualScrollState.isActive {
-            renderTelemetry.recordIgnoredManualScroll(reason: .outOfBounds)
-            return false
-        }
         guard isInsideSurface || manualScrollState.isActive else {
             renderTelemetry.recordIgnoredManualScroll(reason: .outOfBounds)
             return false
@@ -2673,22 +2760,16 @@ final class NativeLyricsRowView: NSView {
 
     @discardableResult
     func applyBlurRadius(_ radius: CGFloat) -> CGFloat {
-        // v2.8's SwiftUI .blur(radius:) is perceptually lighter than CIGaussianBlur at the same
-        // numeric radius. Use sqrt to compress the curve: near lines (distance 1-2) get visible
-        // blur, far lines (distance 7+) saturate instead of fogging out.
         let logicalBlur = radius > 0.1 ? radius : 0
         let calibrated = logicalBlur > 0 ? sqrt(logicalBlur) * Self.blurRenderCalibration : 0
         let effectiveRadius = calibrated > 0.1 ? calibrated : 0
-        let quantizedRadius = (effectiveRadius * 4).rounded(.toNearestOrAwayFromZero) / 4
+        let quantizedRadius = (effectiveRadius * 2).rounded(.toNearestOrAwayFromZero) / 2
         guard abs(appliedBlurRadius - quantizedRadius) > 0.001 else { return quantizedRadius }
         appliedBlurRadius = quantizedRadius
         guard quantizedRadius > 0 else {
             layer?.filters = nil
             return quantizedRadius
         }
-        // Fresh CIFilter each application — the reused instance may retain internal render state
-        // that compounds over successive radius changes, producing the "blur gets heavier as the
-        // song progresses" accumulation the user reported.
         let filter = CIFilter(name: "CIGaussianBlur")
         filter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
         layer?.filters = filter.map { [$0] }
@@ -2733,9 +2814,6 @@ final class NativeLyricsRowView: NSView {
             )
         } else if configuration.showTranslation && isAwaitingTranslation(row: row, configuration: configuration) {
             height += plan.constants.mainFontSize * 0.33 + Self.translationLoadingRowHeight
-        }
-        if row.interlude != nil {
-            height += 34
         }
         return ceil(height)
     }
@@ -2858,13 +2936,8 @@ final class NativeLyricsRowView: NSView {
             translationPerLineSweepMaskLayer.frame = .zero
             hideTranslationLoadingDots()
         }
-        if row.interlude != nil {
-            interludeTextLayer.frame = CGRect(x: textX, y: y + 8, width: 80, height: 24)
-            layoutDotContainer(frame: interludeTextLayer.frame)
-        } else {
-            interludeTextLayer.frame = .zero
-            hideDotLayers()
-        }
+        interludeTextLayer.frame = .zero
+        if !row.isPrelude { hideDotLayers() }
         let mainFrameHeightError = abs(mainTextLayer.frame.height - mainHeight)
         let mainFrameWidthError = abs(mainTextLayer.frame.width - textWidth)
         lastLineLayoutMetrics = LineLayoutAppliedMetrics(
@@ -3630,11 +3703,22 @@ final class NativeLyricsRowView: NSView {
             constants: constants,
             bounds: bounds
         )
-        let lines = NativeLyricsTranslationSweepLayout.maskLines(
-            from: linePlan,
-            progress: translation.progress,
-            fadeHalfPoint: translation.fadeHalfPoint
-        )
+        let lines: [NativeLyricsTranslationSweepMaskLine]
+        if linePlan.count > 1 {
+            lines = NativeLyricsTranslationSweepLayout.maskLinesSequential(
+                from: linePlan,
+                currentTime: translation.currentTime,
+                lineStartTime: translation.lineStartTime,
+                lineEndTime: translation.lineEndTime,
+                fadeHalfPoint: translation.fadeHalfPoint
+            )
+        } else {
+            lines = NativeLyricsTranslationSweepLayout.maskLines(
+                from: linePlan,
+                progress: translation.progress,
+                fadeHalfPoint: translation.fadeHalfPoint
+            )
+        }
         guard !lines.isEmpty else {
             translationBrightTextLayer.mask = translationSweepMaskLayer
             hideTranslationSweepMaskLayers()
@@ -4418,17 +4502,7 @@ final class NativeLyricsRowView: NSView {
             )
             return
         }
-        guard let interlude = row.interlude else {
-            hideDotLayers()
-            return
-        }
-        applyDotPhase(
-            startTime: interlude.startTime,
-            endTime: interlude.endTime,
-            currentTime: currentTime,
-            gateByTimeRange: true,
-            isPrelude: false
-        )
+        hideDotLayers()
     }
 
     private func applyDotPhase(

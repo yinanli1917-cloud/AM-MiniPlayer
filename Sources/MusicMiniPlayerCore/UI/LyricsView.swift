@@ -2250,6 +2250,8 @@ public struct LyricsView: View {
         }
 
         let spacing: CGFloat = 6, defaultHeight: CGFloat = 36
+        let interludeGap: CGFloat = NativeLyricsHeightAccumulator.interludeGapHeight
+        let interludeIdx = lyricsService.interludeAfterIndex
         var totalHeight: CGFloat = 0
         let indices = renderedIndices
         guard let targetPosition = indices.firstIndex(of: targetIndex) else { return 0 }
@@ -2258,6 +2260,9 @@ public struct LyricsView: View {
         }
         for i in 0..<targetPosition {
             totalHeight += (cache.lineHeights[indices[i]] ?? defaultHeight) + spacing
+            if indices[i] == interludeIdx {
+                totalHeight += interludeGap
+            }
         }
         return totalHeight
     }
