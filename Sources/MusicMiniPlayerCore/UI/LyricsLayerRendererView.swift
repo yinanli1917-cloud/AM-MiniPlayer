@@ -408,6 +408,10 @@ struct LyricsLayerRendererConfiguration {
     }
 }
 
+private class _FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 @MainActor
 final class NativeLyricsSurfaceView: NSView {
     override var isFlipped: Bool { true }
@@ -456,7 +460,10 @@ final class NativeLyricsSurfaceView: NSView {
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
-    private let surfaceInterludeOverlay = NSView()
+    private let surfaceInterludeOverlay: NSView = {
+        let v = _FlippedView()
+        return v
+    }()
     private let surfaceInterludeDotContainer = CALayer()
     private let surfaceInterludeDots: [CALayer] = (0..<3).map { _ in CALayer() }
 
