@@ -194,12 +194,12 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
 
     /// DIVERGENCE: native active-row interlude scale is 1 - blend*0.03 (= 0.97 at blend 1),
     /// while v2.8 used 1 - blend*0.05 (= 0.95). A 0.02 difference at full interlude.
-    func test_interludeBlend_matchesNonActiveAppearance() {
+    func test_interludeBlend_lineStaysBright() {
         let amllActive = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false, interludeBlend: 1.0
         )
-        assertTarget(amllActive, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: false, "interlude blend matches non-active")
+        assertTarget(amllActive, opacity: 1.0, scale: 1.0, blur: 0, isActive: true, "v2.8: line stays bright during interlude")
     }
 
     /// CHARACTERIZATION of the "smeared active row / wrong brightness" report: native keeps

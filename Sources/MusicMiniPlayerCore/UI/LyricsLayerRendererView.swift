@@ -1505,7 +1505,8 @@ final class NativeLyricsSurfaceView: NSView {
         guard pendingTapToLineSettleTiming == nil,
               !presentationEngine.hasActiveMotion,
               !hasActiveVisualMotion,
-              !hasActiveTextAnimation(configuration: runtimeConfiguration) else { return }
+              !hasActiveTextAnimation(configuration: runtimeConfiguration),
+              runtimeConfiguration.interludeAfterIndex == nil else { return }
         stopPresentationLoop()
     }
 
@@ -1593,6 +1594,11 @@ final class NativeLyricsSurfaceView: NSView {
             recordFrameDelta(expectedRefreshInterval: displayInterval, now: now)
         } else {
             lastFrameCadenceTick = nil
+        }
+        if runtimeConfiguration.interludeAfterIndex != nil {
+            withDisabledLayerActions {
+                updateSurfaceInterludeDots(configuration: runtimeConfiguration, snap: false)
+            }
         }
         sampleNativeLineMotionDuringPresentationTickIfNeeded(runtimeConfiguration: runtimeConfiguration)
         checkPendingTapToLineSettleTiming(now: now)

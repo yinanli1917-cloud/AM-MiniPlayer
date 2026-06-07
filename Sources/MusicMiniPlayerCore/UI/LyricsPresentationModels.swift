@@ -250,13 +250,11 @@ struct NativeLyricsVisualTarget: Equatable {
             )
         }
         if isHotActive {
-            let blend = min(1, max(0, interludeBlend))
-            let distanceBlur = CGFloat(abs(displayIndex - scrollTargetIndex)) * 1.5
             return NativeLyricsVisualTarget(
-                opacity: 1.0 - blend * 0.65,
-                scale: 1.0 - blend * 0.05,
-                blur: blend * max(1.5, distanceBlur),
-                isActive: blend < 0.5
+                opacity: 1.0,
+                scale: 1.0,
+                blur: 0,
+                isActive: true
             )
         }
         if isHarmonyActive {
