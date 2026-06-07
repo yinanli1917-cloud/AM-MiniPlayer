@@ -271,8 +271,8 @@ struct NativeLyricsTextPhaseSample: Equatable {
 }
 
 struct NativeLyricsDotPhasePlan: Equatable {
-    static let baseDotSize: CGFloat = NativeLyricsTextConstants().mainFontSize * 0.5
-    static let baseDotSpacing: CGFloat = NativeLyricsTextConstants().mainFontSize * 0.25 + 4
+    static let baseDotSize: CGFloat = 8
+    static let baseDotSpacing: CGFloat = 6
 
     let opacities: [CGFloat]
     let scales: [CGFloat]

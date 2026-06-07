@@ -2526,7 +2526,7 @@ final class NativeLyricsRowView: NSView {
     /// Calibration for the sqrt-compressed CIGaussianBlur curve. The rendered radius is
     /// `sqrt(logicalBlur) * calibration`, so near lines get visible blur while far lines
     /// saturate instead of fogging. Tunable.
-    static let blurRenderCalibration: CGFloat = 0.65
+    static let blurRenderCalibration: CGFloat = 1.0
     private static let translationLoadingDotSize: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSize
     private static let translationLoadingDotSpacing: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSpacing
     private static let translationLoadingRowHeight: CGFloat = 8
@@ -2732,7 +2732,7 @@ final class NativeLyricsRowView: NSView {
                 lineSpacing: plan.constants.translationLineSpacing
             )
         } else if configuration.showTranslation && isAwaitingTranslation(row: row, configuration: configuration) {
-            height += Self.translationLoadingRowHeight
+            height += plan.constants.mainFontSize * 0.33 + Self.translationLoadingRowHeight
         }
         if row.interlude != nil {
             height += 34
@@ -2843,9 +2843,10 @@ final class NativeLyricsRowView: NSView {
             translationBrightTextLayer.frame = .zero
             translationSweepMaskLayer.frame = .zero
             translationPerLineSweepMaskLayer.frame = .zero
+            y += plan.constants.mainFontSize * 0.33
             layoutTranslationLoadingDots(frame: CGRect(
                 x: textX,
-                y: y + 2,
+                y: y,
                 width: textWidth,
                 height: Self.translationLoadingRowHeight
             ))
@@ -2971,7 +2972,7 @@ final class NativeLyricsRowView: NSView {
         }
         dotLayers.forEach { dot in
             dot.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-            dot.cornerRadius = 4
+            dot.cornerRadius = NativeLyricsDotPhasePlan.baseDotSize / 2
             dot.backgroundColor = NSColor.white.cgColor
             dotContainerLayer.addSublayer(dot)
         }

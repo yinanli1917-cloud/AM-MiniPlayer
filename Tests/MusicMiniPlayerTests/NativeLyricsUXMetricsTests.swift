@@ -54,8 +54,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(outOfRange.opacities, [0, 0, 0])
         XCTAssertEqual(outOfRange.overallOpacity, 0)
 
-        XCTAssertEqual(NativeLyricsDotPhasePlan.baseDotSize, 12)
-        XCTAssertEqual(NativeLyricsDotPhasePlan.baseDotSpacing, 10)
+        XCTAssertEqual(NativeLyricsDotPhasePlan.baseDotSize, 8)
+        XCTAssertEqual(NativeLyricsDotPhasePlan.baseDotSpacing, 6)
     }
 
     func testTranslationLoadingDotsMatchLegacySizeSpacingAndSinePhase() {

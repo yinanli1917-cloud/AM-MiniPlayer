@@ -117,9 +117,11 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         let logical: CGFloat = 10
         let applied = view.applyBlurRadius(logical)
         XCTAssertLessThan(applied, logical, "rendered CIGaussianBlur radius must be lighter than the logical depth")
-        XCTAssertEqual(applied, logical * NativeLyricsRowView.blurRenderCalibration, accuracy: 0.25,
-                       "rendered radius = logical depth * calibration")
-        XCTAssertLessThan(NativeLyricsRowView.blurRenderCalibration, 1.0, "calibration must lighten, not amplify")
+        let expectedApplied = (sqrt(logical) * NativeLyricsRowView.blurRenderCalibration * 4)
+            .rounded(.toNearestOrAwayFromZero) / 4
+        XCTAssertEqual(applied, expectedApplied, accuracy: 0.01,
+                       "rendered radius = sqrt(logical) * calibration, quantized")
+        XCTAssertLessThanOrEqual(NativeLyricsRowView.blurRenderCalibration, 1.0, "calibration must not amplify")
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -182,8 +182,8 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(metricsSource.contains("baseRevealGapCount"))
         XCTAssertTrue(metricsSource.contains("baseRevealLineCoverageGapCount"))
         XCTAssertTrue(metricsSource.contains("baseRevealWavefrontErrorMax"))
-        XCTAssertTrue(metricsSource.contains("static let baseDotSize: CGFloat = NativeLyricsTextConstants().mainFontSize * 0.5"))
-        XCTAssertTrue(metricsSource.contains("static let baseDotSpacing: CGFloat = NativeLyricsTextConstants().mainFontSize * 0.25 + 4"))
+        XCTAssertTrue(metricsSource.contains("static let baseDotSize: CGFloat = 8"))
+        XCTAssertTrue(metricsSource.contains("static let baseDotSpacing: CGFloat = 6"))
         // v2.8 InterludeDotsView dot parity (replaced the AMLL all-dots "loading" breathing).
         XCTAssertTrue(metricsSource.contains("let dotsActiveDuration = max(0.1, totalDuration - fadeOutDuration)"))
         XCTAssertTrue(metricsSource.contains("(0.85 + progress * 0.15)"))
