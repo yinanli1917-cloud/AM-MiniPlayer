@@ -989,9 +989,12 @@ final class NativeLyricsSurfaceView: NSView {
 
     @discardableResult
     private func advanceVisualStates(delta: TimeInterval) -> Bool {
+        // Drive blur/scale/opacity on the SAME spring as line position so the depth-of-field stays
+        // locked to the scroll (no past-sharper-than-upcoming lag during transitions).
+        let spring = presentationEngine.currentVisualSpringParameters
         var changed = false
         for index in visualStates.keys {
-            changed = visualStates[index]?.advance(delta: delta) == true || changed
+            changed = visualStates[index]?.advance(delta: delta, spring: spring) == true || changed
         }
         return changed
     }
@@ -1011,7 +1014,7 @@ final class NativeLyricsSurfaceView: NSView {
             displayIndex: row.index,
             currentIndex: configuration.effectiveCurrentIndex,
             scrollTargetIndex: configuration.effectiveScrollTargetIndex,
-            bufferedActiveIndices: configuration.nativeBufferedActiveIndices,
+            hotActiveIndices: configuration.nativeHotActiveIndices,
             isManualScrolling: configuration.effectiveIsManualScrolling,
             interludeBlend: blend
         )
@@ -1069,7 +1072,7 @@ final class NativeLyricsSurfaceView: NSView {
             appliedOpacity: CGFloat(view.layer?.opacity ?? 0),
             expectedScale: visual.scale,
             appliedScale: appliedScale,
-            expectedBlurRadius: visual.blur > 0.1 ? visual.blur : 0,
+            expectedBlurRadius: visual.blur > 0.1 ? sqrt(visual.blur) * NativeLyricsRowView.blurRenderCalibration : 0,
             appliedBlurRadius: appliedBlur,
             isActive: visual.target.isActive,
             isSettled: visual.isSettled
@@ -2520,6 +2523,10 @@ final class NativeLyricsRowView: NSView {
     // line positions and the gap before the translation are unchanged — the pad lives in the existing
     // 8pt bottom slack of measuredHeight.
     private static let textBottomClipPad: CGFloat = 6
+    /// Calibration for the sqrt-compressed CIGaussianBlur curve. The rendered radius is
+    /// `sqrt(logicalBlur) * calibration`, so near lines get visible blur while far lines
+    /// saturate instead of fogging. Tunable.
+    static let blurRenderCalibration: CGFloat = 0.65
     private static let translationLoadingDotSize: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSize
     private static let translationLoadingDotSpacing: CGFloat = NativeLyricsTranslationLoadingDotPhasePlan.dotSpacing
     private static let translationLoadingRowHeight: CGFloat = 8
@@ -2666,7 +2673,12 @@ final class NativeLyricsRowView: NSView {
 
     @discardableResult
     func applyBlurRadius(_ radius: CGFloat) -> CGFloat {
-        let effectiveRadius = radius > 0.1 ? radius : 0
+        // v2.8's SwiftUI .blur(radius:) is perceptually lighter than CIGaussianBlur at the same
+        // numeric radius. Use sqrt to compress the curve: near lines (distance 1-2) get visible
+        // blur, far lines (distance 7+) saturate instead of fogging out.
+        let logicalBlur = radius > 0.1 ? radius : 0
+        let calibrated = logicalBlur > 0 ? sqrt(logicalBlur) * Self.blurRenderCalibration : 0
+        let effectiveRadius = calibrated > 0.1 ? calibrated : 0
         let quantizedRadius = (effectiveRadius * 4).rounded(.toNearestOrAwayFromZero) / 4
         guard abs(appliedBlurRadius - quantizedRadius) > 0.001 else { return quantizedRadius }
         appliedBlurRadius = quantizedRadius
@@ -2674,8 +2686,12 @@ final class NativeLyricsRowView: NSView {
             layer?.filters = nil
             return quantizedRadius
         }
-        blurFilter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
-        layer?.filters = blurFilter.map { [$0] }
+        // Fresh CIFilter each application — the reused instance may retain internal render state
+        // that compounds over successive radius changes, producing the "blur gets heavier as the
+        // song progresses" accumulation the user reported.
+        let filter = CIFilter(name: "CIGaussianBlur")
+        filter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
+        layer?.filters = filter.map { [$0] }
         return quantizedRadius
     }
 

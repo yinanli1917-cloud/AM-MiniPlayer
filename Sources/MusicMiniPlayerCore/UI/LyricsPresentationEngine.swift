@@ -419,7 +419,7 @@ final class LyricsPresentationEngine {
                 for: index,
                 currentIndex: configuration.currentIndex,
                 scrollTargetIndex: configuration.effectiveScrollTargetIndex,
-                bufferedActiveIndices: configuration.bufferedActiveIndices,
+                hotActiveIndices: configuration.hotActiveIndices,
                 isManualScrolling: configuration.isManualScrolling
             )
             let hotActiveIndices = configuration.hotActiveIndices.isEmpty
@@ -488,14 +488,14 @@ final class LyricsPresentationEngine {
         for index: Int,
         currentIndex: Int,
         scrollTargetIndex: Int,
-        bufferedActiveIndices: Set<Int>,
+        hotActiveIndices: Set<Int>,
         isManualScrolling: Bool
     ) -> (opacity: CGFloat, scale: CGFloat, blur: CGFloat) {
         let target = NativeLyricsVisualTarget.amllTarget(
             displayIndex: index,
             currentIndex: currentIndex,
             scrollTargetIndex: scrollTargetIndex,
-            bufferedActiveIndices: bufferedActiveIndices,
+            hotActiveIndices: hotActiveIndices,
             isManualScrolling: isManualScrolling
         )
         return (target.opacity, target.scale, target.blur)
@@ -509,7 +509,7 @@ final class LyricsPresentationEngine {
             for: index,
             currentIndex: currentIndex,
             scrollTargetIndex: currentIndex,
-            bufferedActiveIndices: [currentIndex],
+            hotActiveIndices: [currentIndex],
             isManualScrolling: false
         )
     }
@@ -524,12 +524,27 @@ final class LyricsPresentationEngine {
     }
 
     private func updateSpringParameters(for configuration: LyricsPresentationEngineConfiguration) {
-        spring.updateParameters(
-            LyricsPresentationSpringParameters.amllPosition(
-                lineInterval: configuration.lineInterval,
-                isSeeking: configuration.playbackMode != .natural,
-                isInterludeActive: configuration.isInterludeActive
-            )
+        spring.updateParameters(visualSpringParameters(for: configuration))
+    }
+
+    /// The spring driving line POSITION. The per-row visual motion (blur/scale/opacity) must advance on
+    /// the SAME spring so the depth-of-field tracks the scroll exactly (v2.8 drives all four from one
+    /// `interpolatingSpring`). Using a separate, slower fixed spring for blur let it lag the position,
+    /// so a just-passed line reached its new slot while still sharp — a lopsided, non-progressive field.
+    var currentVisualSpringParameters: LyricsPresentationSpringParameters {
+        guard let configuration = latestConfiguration else {
+            return .amllSeekOrInterlude
+        }
+        return visualSpringParameters(for: configuration)
+    }
+
+    private func visualSpringParameters(
+        for configuration: LyricsPresentationEngineConfiguration
+    ) -> LyricsPresentationSpringParameters {
+        LyricsPresentationSpringParameters.amllPosition(
+            lineInterval: configuration.lineInterval,
+            isSeeking: configuration.playbackMode != .natural,
+            isInterludeActive: configuration.isInterludeActive
         )
     }
 

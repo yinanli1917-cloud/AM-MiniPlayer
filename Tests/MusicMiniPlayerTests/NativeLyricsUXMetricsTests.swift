@@ -259,7 +259,7 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.activeBottomClipY, 0)
     }
 
-    func testNativeVisualStateKeepsLegacyDistanceBlurWithoutCap() {
+    func testNativeVisualStateUncappedDistanceBlur() {
         let visual = NativeLyricsVisualState.make(displayIndex: 12, activeDisplayIndex: 0)
 
         XCTAssertEqual(visual.opacity, 0.35)
@@ -309,21 +309,21 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             displayIndex: 6,
             currentIndex: 6,
             scrollTargetIndex: 5,
-            bufferedActiveIndices: [5, 6],
+            hotActiveIndices: [5, 6],
             isManualScrolling: false
         )
         let buffered = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5,
             currentIndex: 6,
             scrollTargetIndex: 5,
-            bufferedActiveIndices: [5, 6],
+            hotActiveIndices: [5, 6],
             isManualScrolling: false
         )
         let passed = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 4,
             currentIndex: 6,
             scrollTargetIndex: 5,
-            bufferedActiveIndices: [5, 6],
+            hotActiveIndices: [5, 6],
             isManualScrolling: false
         )
 
@@ -342,11 +342,10 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             displayIndex: 0,
             currentIndex: 8,
             scrollTargetIndex: 8,
-            bufferedActiveIndices: [8],
+            hotActiveIndices: [8],
             isManualScrolling: false
         )
-        // Symmetric true-distance blur: abs(0 - 8) * 1.5 = 12.0 (was 13.5 with the removed
-        // asymmetric +1 passed-line step).
+        // Symmetric true-distance blur, uncapped (v2.8 parity): abs(0 - 8) * 1.5 = 12.0
         XCTAssertEqual(farPassed.blur, 12.0, accuracy: 0.0001)
     }
 
@@ -355,14 +354,14 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             displayIndex: 6,
             currentIndex: 6,
             scrollTargetIndex: 5,
-            bufferedActiveIndices: [5, 6],
+            hotActiveIndices: [5, 6],
             isManualScrolling: true
         )
         let buffered = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5,
             currentIndex: 6,
             scrollTargetIndex: 5,
-            bufferedActiveIndices: [5, 6],
+            hotActiveIndices: [5, 6],
             isManualScrolling: true
         )
 
@@ -376,7 +375,7 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertFalse(buffered.isActive)
     }
 
-    func testNativeVisualMotionUsesSpringInsteadOfImmediateJump() {
+    func testNativeVisualMotionSpringsAllProperties() {
         var state = NativeLyricsVisualMotionState(target: NativeLyricsVisualTarget.legacyTarget(
             displayIndex: 1,
             currentIndex: 1,
@@ -390,9 +389,14 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
 
         XCTAssertTrue(state.setTarget(next))
         XCTAssertTrue(state.advance(delta: 1.0 / 60.0))
+        // v2.8 parity: ALL visual properties (blur, opacity, scale) spring-animate together.
+        // After one frame, blur and opacity are mid-transition (not yet at target).
+        XCTAssertGreaterThan(state.blur, 0)
+        XCTAssertLessThan(state.blur, next.blur)
+        XCTAssertLessThan(state.opacity, 1)
         XCTAssertGreaterThan(state.opacity, next.opacity)
         XCTAssertLessThan(state.scale, 1)
-        XCTAssertLessThan(state.blur, next.blur)
+        XCTAssertGreaterThan(state.scale, next.scale)
         XCTAssertFalse(state.isSettled)
     }
 

@@ -1,0 +1,132 @@
+# Music.app Public Queue Surface Probe
+
+timestamp_utc: 20260524T023828Z
+context_label: radio-station-url-track
+macos: 26.2
+music_app: /System/Applications/Music.app
+visible_notes_file: .codex/workspace/music-queue-probes/parity-matrix-20260524T023825Z/visible-notes/visible-state-radio-station-url-track.md
+
+## Compliance preflight
+
+public_surface_rule: Apple Events through Music.app sdef, MusicKit public SDK symbols, and Apple Music API metadata/history only.
+excluded_queue_sources: private frameworks; private AppleEvents; Music.app private databases/files; accessibility/UI scraping; memory inspection.
+entitlements_file: Sources/MusicMiniPlayerApp/MusicMiniPlayer.entitlements
+entitlements.apple_events: true
+entitlements.private_music_storage_exception: PRESENT
+compliance.note: do not use Music.app PlaybackSessions/private files as a real queue source for App Store parity.
+
+## MusicKit macOS compiler probes
+
+ApplicationMusicPlayer:
+Queue
+ApplicationMusicPlayer compile: PASS
+
+SystemMusicPlayer:
+-e:1:55: error: 'SystemMusicPlayer' is unavailable in macOS
+1 | #sourceLocation(file: "-e", line: 1)
+2 | import MusicKit; if #available(macOS 14.0, *) { print(SystemMusicPlayer.shared) }
+  |                                                       `- error: 'SystemMusicPlayer' is unavailable in macOS
+3 | 
+
+MusicKit.SystemMusicPlayer:4:14: note: 'SystemMusicPlayer' has been explicitly marked unavailable here
+2 | @available(watchOS, unavailable)
+3 | @available(macOS, unavailable)
+4 | public class SystemMusicPlayer : MusicPlayer {
+  |              `- note: 'SystemMusicPlayer' has been explicitly marked unavailable here
+5 |     public static let shared: SystemMusicPlayer
+6 |     public var queue: MusicPlayer.Queue { get set }
+SystemMusicPlayer compile: FAIL
+
+## Music.app scripting dictionary queue-like terms
+
+captured_sdef: .codex/workspace/music-queue-probes/parity-matrix-20260524T023825Z/music-sdef-radio-station-url-track-20260524T023828Z.xml
+
+85:		<command name="back track" code="hookBack" description="reposition to beginning of current track or go to previous track if already at start of current track">
+109:		<command name="next track" code="hookNext" description="advance to the next track in the current playlist">
+115:		<command name="play" code="hookPlay" description="play the current track or the specified track or file.">
+118:			<parameter name="once" code="POne" type="boolean" optional="yes" description="If true, play this track once and then stop."/>
+120:		<command name="playpause" code="hookPlPs" description="toggle the playing/paused state of the current track">
+123:		<command name="previous track" code="hookPrev" description="return to the previous track in the current playlist">
+224:			<property name="current playlist" code="pPla" type="playlist" access="r" description="the playlist containing the currently targeted track">
+227:			<property name="current stream title" code="pStT" type="text" access="r" description="the name of the current track in the playing stream (provided by streaming server)">
+233:			<property name="current track" code="pTrk" type="track" access="r" description="the current targeted track">
+
+Exact public queue/history object declarations:
+sdef_exact_queue_terms: ABSENT
+
+## Runtime AppleScript snapshot
+
+player_state=playing
+shuffle_enabled=false
+song_repeat=off
+player_position=15.444999694824
+current_stream_title=missing value
+current_stream_url=missing value
+current_track.name=It Ain't Wrong Loving You
+current_track.artist=HONNE
+current_track.album=Warm On a Cold Night (Deluxe)
+current_track.persistent_id=65C30E3EB6270418
+current_track.class=URL track
+current_track.index=421
+current_playlist.error=Music got an error: Can’t get current playlist.
+browser_window.views=error:Music got an error: Can’t get name of view of browser window id 87655.
+playlist_window.views=
+playlists_named_up_next=
+hidden_playlists=Library
+current_playlist.neighbors.error=Music got an error: Can’t get current playlist.
+classification.public_queue_candidate=none
+classification.current_playlist_available=false
+classification.track_class=URL track
+classification.outcome=unavailable_no_current_playlist
+
+## Interpretation checklist
+
+- Context label is only a test label; it is not proof of playback origin.
+- Compare the visible Music.app Up Next panel manually against neighbor[...] rows.
+- If Play Next / Play Later edits appear in Music.app but not in this snapshot, currentPlaylist scanning is not a real queue mirror.
+- If radio/station playback has no current playlist tracks or unrelated neighbors, mark that context unavailable.
+- Treat ApplicationMusicPlayer.queue as app-local unless a separate proof shows it targets the same Music.app playback session on macOS.
+- Treat SystemMusicPlayer as unavailable on macOS unless the local SDK compiler probe changes.
+- Do not treat Apple Music recently played API data as live queue proof.
+
+## Visible Music.app notes
+
+# Visible Music.app Queue Notes
+
+context_label: radio-station-url-track
+created_utc: 20260524T023825Z
+manual_outcome: pending
+
+## Manual Setup
+
+- Required setup: Play an Apple Music station/radio item.
+- Expected proof: Probe must expose visible upcoming/history rows or mark unavailable.
+- Music.app visible Up Next/history UI open: TODO yes/no
+- Playback source visible in Music.app: TODO
+- Current visible track: TODO
+- Manual Play Next/Play Later edits present: TODO yes/no
+
+## Visible Rows
+
+Record exact visible row order from Music.app. Include title, artist, album when
+visible, and whether each row is history/current/upcoming.
+
+```text
+TODO paste visible queue rows here
+```
+
+## Probe Comparison
+
+- Probe output file: TODO filled by runner or by hand
+- Probe classification.outcome: TODO filled by runner or by hand
+- Do visible rows match probe rows by order and identity: TODO yes/no
+- Mismatch notes: TODO
+
+## Exact-Claim Gate
+
+Only mark this context exact when:
+
+- visible Music.app rows are recorded above;
+- public probe rows are recorded in the probe output;
+- visible rows and probe rows match by order and identity;
+- no private storage, UI scraping, or private AppleEvent source was used.

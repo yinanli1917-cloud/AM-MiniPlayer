@@ -238,13 +238,16 @@ struct NativeLyricsVisualTarget: Equatable {
         displayIndex: Int,
         currentIndex: Int,
         scrollTargetIndex: Int,
-        bufferedActiveIndices: Set<Int>,
+        hotActiveIndices: Set<Int>,
         isManualScrolling: Bool,
         interludeBlend: CGFloat = 0
     ) -> NativeLyricsVisualTarget {
-        let activeIndices = bufferedActiveIndices.isEmpty ? Set([currentIndex]) : bufferedActiveIndices
         let isHotActive = displayIndex == currentIndex
-        let isBufferedActive = activeIndices.contains(displayIndex)
+        // The bright + sharp tier applies ONLY to genuinely HOT lines (the primary active + any
+        // simultaneously-playing harmony lines), NOT the accumulated buffered trail. Pinning the trail
+        // sharp/bright (the old `isBufferedActive` tier) broke the depth gradient worse and worse as the
+        // trail grew over the song — passed lines stayed razor-sharp among the distance-blurred ones.
+        let isHarmonyActive = hotActiveIndices.contains(displayIndex)
 
         if isManualScrolling {
             return NativeLyricsVisualTarget(
@@ -263,7 +266,7 @@ struct NativeLyricsVisualTarget: Equatable {
                 isActive: true
             )
         }
-        if isBufferedActive {
+        if isHarmonyActive {
             return NativeLyricsVisualTarget(
                 opacity: 0.85,
                 scale: 1.0,
@@ -271,11 +274,10 @@ struct NativeLyricsVisualTarget: Equatable {
                 isActive: true
             )
         }
-        // v2.8/AMLL: blur grows symmetrically with the TRUE distance from the active line, so
-        // the active line is sharp and every other line blurs progressively outward by an equal
-        // step on both sides. The old focus-band logic zeroed blur for the active line AND its
-        // accumulated neighbors (a flat sharp plateau) and over-blurred passed lines with a +1
-        // step, breaking the depth relationship the user expects.
+        // v2.8: blur = abs(distance) * 1.5, uncapped, symmetric. The depth gradient grows
+        // continuously — far lines are much blurrier than near ones. The calibration factor in
+        // NativeLyricsRowView.blurRenderCalibration scales CIGaussianBlur down to match v2.8's
+        // lighter SwiftUI .blur, so the uncapped ramp no longer fogs out.
         let renderedBlur = CGFloat(abs(displayIndex - currentIndex)) * 1.5
         return NativeLyricsVisualTarget(
             opacity: 0.35,
@@ -295,9 +297,9 @@ struct NativeLyricsVisualMotionState: Equatable {
     private var scaleVelocity: CGFloat = 0
     private var blurVelocity: CGFloat = 0
 
-    private static let mass: CGFloat = 1
-    private static let stiffness: CGFloat = 100
-    private static let damping: CGFloat = 20
+    // Fallback spring (used when no position spring is supplied, e.g. unit tests). Live playback passes
+    // the SAME parameters the position engine uses, so blur/scale/opacity stay locked to the scroll.
+    private static let fallbackSpring = LyricsPresentationSpringParameters(mass: 1, stiffness: 100, damping: 20)
     private static let maxStep: TimeInterval = 1.0 / 90.0
     private static let maxDelta: TimeInterval = 1.0 / 20.0
 
@@ -334,10 +336,13 @@ struct NativeLyricsVisualMotionState: Equatable {
     }
 
     @discardableResult
-    mutating func advance(delta: TimeInterval) -> Bool {
+    mutating func advance(delta: TimeInterval, spring: LyricsPresentationSpringParameters? = nil) -> Bool {
         let before = self
         let boundedDelta = min(max(delta, 0), Self.maxDelta)
         guard boundedDelta > 0 else { return false }
+        // v2.8: ALL visual properties (blur, opacity, scale) animate with the same spring.
+        // This produces smooth depth-field transitions that track the scroll position.
+        let spring = spring ?? Self.fallbackSpring
         var remaining = boundedDelta
         while remaining > 0 {
             let step = CGFloat(min(remaining, Self.maxStep))
@@ -345,19 +350,22 @@ struct NativeLyricsVisualMotionState: Equatable {
                 value: opacity,
                 target: target.opacity,
                 velocity: &opacityVelocity,
-                step: step
+                step: step,
+                spring: spring
             )
             scale = Self.advanceScalar(
                 value: scale,
                 target: target.scale,
                 velocity: &scaleVelocity,
-                step: step
+                step: step,
+                spring: spring
             )
             blur = Self.advanceScalar(
                 value: blur,
                 target: target.blur,
                 velocity: &blurVelocity,
-                step: step
+                step: step,
+                spring: spring
             )
             remaining -= TimeInterval(step)
         }
@@ -374,11 +382,12 @@ struct NativeLyricsVisualMotionState: Equatable {
         value: CGFloat,
         target: CGFloat,
         velocity: inout CGFloat,
-        step: CGFloat
+        step: CGFloat,
+        spring: LyricsPresentationSpringParameters
     ) -> CGFloat {
         let displacement = value - target
-        let force = (-stiffness * displacement) - (damping * velocity)
-        let acceleration = force / mass
+        let force = (-spring.stiffness * displacement) - (spring.damping * velocity)
+        let acceleration = force / spring.mass
         velocity += acceleration * step
         return value + velocity * step
     }

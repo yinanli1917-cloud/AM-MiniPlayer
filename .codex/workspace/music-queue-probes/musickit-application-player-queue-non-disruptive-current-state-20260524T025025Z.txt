@@ -1,0 +1,52 @@
+# MusicKit ApplicationMusicPlayer Queue Runtime Probe
+
+timestamp_utc: 20260524T025025Z
+context_label: non-disruptive-current-state
+macos: 26.2
+
+## Compliance preflight
+
+public_surface_rule: public Music.app AppleScript read state plus public MusicKit ApplicationMusicPlayer read state only.
+excluded_queue_sources: private frameworks; private AppleEvents; Music.app private databases/files; accessibility/UI scraping; memory inspection.
+mutating_calls: none
+authorization_request: none
+
+## Music.app public AppleScript snapshot
+
+music_app.running=true
+music_app.player_state=playing
+music_app.player_position=95.870002746582
+music_app.current_track.name=Nothing Burns Like The Cold (feat. Vince Staples)
+music_app.current_track.artist=Snoh Aalegra
+music_app.current_track.album=FEELS
+music_app.current_track.class=URL track
+music_app.current_track.persistent_id=65C30E3EB6270892
+music_app.current_playlist.available=false
+music_app.current_playlist.error=Music got an error: Can’t get current playlist.
+
+## MusicKit ApplicationMusicPlayer snapshot
+
+musickit.authorization=.notDetermined
+musickit.application_player.available=true
+musickit.application_player.playback_status=stopped
+musickit.application_player.playback_rate=0.0
+musickit.application_player.repeat_mode=nil
+musickit.application_player.shuffle_mode=nil
+musickit.application_player.queue.current_entry=nil
+musickit.application_player.queue.entries_count=0
+
+## Relationship classification
+
+classification.outcome=not_music_app_session_music_playing_application_player_empty
+classification.music_app_running=true
+classification.music_app_player_state=playing
+classification.music_app_track=Nothing Burns Like The Cold (feat. Vince Staples)|Snoh Aalegra|URL track
+classification.application_player_status=stopped
+classification.application_player_current_entry=nil
+classification.application_player_entries_count=0
+
+## Interpretation
+
+- If Music.app is playing while ApplicationMusicPlayer is stopped with an empty queue, ApplicationMusicPlayer is not evidence of the user's visible Music.app session.
+- If ApplicationMusicPlayer has entries, compare them against Music.app's visible Up Next/history UI before any exact claim.
+- This probe does not test queue editing. Editing remains locked until a public edit API is proven to modify the same visible Music.app session and the read path proves the result.

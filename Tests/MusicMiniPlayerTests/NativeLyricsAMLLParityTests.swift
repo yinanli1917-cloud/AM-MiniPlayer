@@ -80,27 +80,46 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     func test_MYTH_manualScroll_flattensEveryRow_includingActive() {
         let active = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5], isManualScrolling: true
+            hotActiveIndices: [5], isManualScrolling: true
         )
         let far = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 15, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5], isManualScrolling: true
+            hotActiveIndices: [5], isManualScrolling: true
         )
         assertTarget(active, opacity: 0.6, scale: 0.95, blur: 0, isActive: true, "active row during manual scroll")
         assertTarget(far, opacity: 0.6, scale: 0.95, blur: 0, isActive: false, "far row during manual scroll")
     }
 
-    /// MYTH "native blur is capped at 5". The current inactive-blur law is uncapped
-    /// (LyricsPresentationModels.swift:284-289), which honors the user's "uncapped blur"
-    /// iron law. A far line at distance 10 yields 15.0pt, not min(5, ...).
-    /// NOTE: AMLL upstream DOES cap at 5px (dom/lyric-line.ts:289 @ 243112b). This is the
-    /// one place the user's explicit "uncapped" iron law overrides AMLL literalism.
-    func test_MYTH_inactiveBlur_isUncapped() {
+    /// Inactive blur is UNCAPPED (v2.8 parity): abs(distance) * 1.5 grows continuously.
+    /// The render calibration in NativeLyricsRowView scales CIGaussianBlur down to match
+    /// v2.8's lighter SwiftUI .blur, so the uncapped ramp no longer fogs out.
+    func test_inactiveBlur_uncapped_v28Parity() {
         let far = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 15, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5], isManualScrolling: false
+            hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(far.blur, 15.0, accuracy: 1e-6, "distance-10 line is uncapped: 10 * 1.5 = 15.0 (no min(5,...) cap)")
+        XCTAssertEqual(far.blur, 15.0, accuracy: 1e-6, "distance-10: 10 * 1.5 = 15.0 (uncapped)")
+
+        let next = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 6, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [5], isManualScrolling: false
+        )
+        XCTAssertEqual(next.blur, 1.5, accuracy: 1e-6, "distance-1: 1 * 1.5 = 1.5")
+    }
+
+    /// The LOGICAL depth value (abs*1.5, uncapped) is rendered through CIGaussianBlur, which reads
+    /// perceptually heavier than v2.8's SwiftUI .blur and fades upcoming lines into nothing. The
+    /// render boundary scales the radius by `blurRenderCalibration` (< 1) so upcoming lines stay
+    /// readable while still deepening with distance. Value-agnostic: tracks the constant.
+    @MainActor
+    func test_blurRenderCalibration_rendersLighterThanLogicalDepth() {
+        let view = NativeLyricsRowView(frame: CGRect(x: 0, y: 0, width: 200, height: 60))
+        let logical: CGFloat = 10
+        let applied = view.applyBlurRadius(logical)
+        XCTAssertLessThan(applied, logical, "rendered CIGaussianBlur radius must be lighter than the logical depth")
+        XCTAssertEqual(applied, logical * NativeLyricsRowView.blurRenderCalibration, accuracy: 0.25,
+                       "rendered radius = logical depth * calibration")
+        XCTAssertLessThan(NativeLyricsRowView.blurRenderCalibration, 1.0, "calibration must lighten, not amplify")
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -120,6 +139,30 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         assertTarget(interludeActive, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: true, "v2.8 interlude scale = 1 - b*0.05 = 0.95")
     }
 
+    /// Depth field must be monotonic: the accumulated BUFFERED trail (recently-passed lines that are
+    /// no longer hot) must blur + dim by its TRUE distance, NOT be pinned sharp at blur 0 / 0.85 like
+    /// the old buffered tier did (which broke the gradient worse and worse as the trail grew over the
+    /// song). Only genuinely HOT lines (the primary active + simultaneous harmony) stay bright/sharp.
+    func test_bufferedTrail_blursByDistance_onlyHotStaysSharp() {
+        // Line 3 sits in the accumulated buffered trail [3,4,5] but is NOT hot -> distance 2 -> 3.0.
+        let trail = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 3, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [5], isManualScrolling: false
+        )
+        XCTAssertEqual(trail.blur, 3.0, accuracy: 1e-6, "buffered trail line blurs by true distance, not pinned to 0")
+        XCTAssertEqual(trail.opacity, 0.35, accuracy: 1e-6, "buffered trail line dims like any inactive line")
+        XCTAssertFalse(trail.isActive, "a non-hot trail line is not active")
+
+        // A simultaneously-hot harmony line (not the primary) keeps the bright, sharp treatment.
+        let harmony = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 4, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [4, 5], isManualScrolling: false
+        )
+        XCTAssertEqual(harmony.blur, 0, accuracy: 1e-6, "hot harmony line stays sharp")
+        XCTAssertEqual(harmony.opacity, 0.85, accuracy: 1e-6, "hot harmony line stays bright")
+        XCTAssertTrue(harmony.isActive, "a hot harmony line is active")
+    }
+
     /// FIXED (formerly a divergence): native passed-line blur now MATCHES v2.8 — symmetric,
     /// no extra +1 step. The old asymmetric step over-blurred the line just above the active
     /// line (3.0 vs 1.5); the user reported the blur relationship as wrong, so native follows
@@ -128,7 +171,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     func test_passedLineBlur_matchesV28_symmetric() {
         let amllPassed = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 4, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5], isManualScrolling: false
+            hotActiveIndices: [5], isManualScrolling: false
         )
         let v28Passed = NativeLyricsVisualTarget.legacyTarget(displayIndex: 4, currentIndex: 5, isManualScrolling: false)
         XCTAssertEqual(amllPassed.blur, 1.5, accuracy: 1e-6, "passed dist-1 = abs(1) * 1.5 = 1.5")
@@ -140,7 +183,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     func test_DIVERGENCE_futureLine_matchesV28() {
         let amllFuture = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 7, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5], isManualScrolling: false
+            hotActiveIndices: [5], isManualScrolling: false
         )
         let v28Future = NativeLyricsVisualTarget.legacyTarget(displayIndex: 7, currentIndex: 5, isManualScrolling: false)
         XCTAssertEqual(amllFuture.blur, 3.0, accuracy: 1e-6, "future dist-2 = abs(2) * 1.5 = 3.0")
@@ -152,7 +195,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     func test_DIVERGENCE_activeInterludeScale_003_vs_v28_005() {
         let amllActive = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5], isManualScrolling: false, interludeBlend: 1.0
+            hotActiveIndices: [5], isManualScrolling: false, interludeBlend: 1.0
         )
         assertTarget(amllActive, opacity: 0.35, scale: 0.97, blur: 1.5, isActive: true, "AMLL interlude active scale 0.97")
     }
@@ -165,11 +208,11 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         // Two simultaneously-active rows (5 hot, 6 buffered harmony).
         let hot = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5, 6], isManualScrolling: false
+            hotActiveIndices: [5, 6], isManualScrolling: false
         )
         let buffered = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 6, currentIndex: 5, scrollTargetIndex: 5,
-            bufferedActiveIndices: [5, 6], isManualScrolling: false
+            hotActiveIndices: [5, 6], isManualScrolling: false
         )
         assertTarget(hot, opacity: 1.0, scale: 1.0, blur: 0, isActive: true, "primary active row")
         assertTarget(buffered, opacity: 0.85, scale: 1.0, blur: 0, isActive: true, "harmony row stays bright (no v2.8 equivalent)")
@@ -416,22 +459,22 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     /// project iron law). This pins the corrected curve against the multi-element buffered set that
     /// occurs live (single-element sets hid the bug in the older tests).
     func test_blur_isSymmetricByTrueDistanceFromActiveLine() {
-        func blur(_ idx: Int, current: Int, buffered: Set<Int>, scroll: Int) -> CGFloat {
+        func blur(_ idx: Int, current: Int, hot: Set<Int>, scroll: Int) -> CGFloat {
             NativeLyricsVisualTarget.amllTarget(
                 displayIndex: idx, currentIndex: current, scrollTargetIndex: scroll,
-                bufferedActiveIndices: buffered, isManualScrolling: false
+                hotActiveIndices: hot, isManualScrolling: false
             ).blur
         }
         // Active line sharp (distance 0).
-        XCTAssertEqual(blur(5, current: 5, buffered: [5], scroll: 5), 0, accuracy: 0.001)
+        XCTAssertEqual(blur(5, current: 5, hot: [5], scroll: 5), 0, accuracy: 0.001)
         // Immediate neighbors blur equally on both sides: true distance 1 -> 1.5pt.
-        XCTAssertEqual(blur(6, current: 5, buffered: [5], scroll: 5), 1.5, accuracy: 0.001)
-        XCTAssertEqual(blur(4, current: 5, buffered: [5], scroll: 5), 1.5, accuracy: 0.001)
+        XCTAssertEqual(blur(6, current: 5, hot: [5], scroll: 5), 1.5, accuracy: 0.001)
+        XCTAssertEqual(blur(4, current: 5, hot: [5], scroll: 5), 1.5, accuracy: 0.001)
         // Distance 2 passed line = 3.0 (symmetric, no +1 step).
-        XCTAssertEqual(blur(3, current: 5, buffered: [5], scroll: 5), 3.0, accuracy: 0.001)
-        // With an ACCUMULATED buffered set (live case), a non-buffered line 2 away still blurs
-        // by its TRUE distance (3.0), not collapsed to band-distance 1.
-        XCTAssertEqual(blur(7, current: 5, buffered: [4, 5, 6], scroll: 5), 3.0, accuracy: 0.001)
+        XCTAssertEqual(blur(3, current: 5, hot: [5], scroll: 5), 3.0, accuracy: 0.001)
+        // A line 2 away that is NOT hot blurs by its TRUE distance (3.0) — the old accumulated-buffered
+        // set no longer pins it sharp.
+        XCTAssertEqual(blur(7, current: 5, hot: [5], scroll: 5), 3.0, accuracy: 0.001)
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
