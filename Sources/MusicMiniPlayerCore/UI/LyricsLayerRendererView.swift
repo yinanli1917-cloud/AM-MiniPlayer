@@ -600,9 +600,10 @@ final class NativeLyricsSurfaceView: NSView {
     private func shouldHandleLocalEvent(_ event: NSEvent) -> Bool {
         let point = convert(event.locationInWindow, from: nil)
         if bounds.insetBy(dx: -4, dy: -4).contains(point) {
+            if event.type == .scrollWheel { return true }
             if let configuration,
                isPointInReservedOverlayZone(point, configuration: configuration) {
-                return event.type == .scrollWheel && manualScrollState.isActive
+                return manualScrollState.isActive
             }
             return true
         }
@@ -3607,10 +3608,13 @@ final class NativeLyricsRowView: NSView {
         }
         translationBrightTextLayer.opacity = Float(translation.postLineFade)
         translationBrightTextLayer.isHidden = translation.progress <= 0.001 || translation.postLineFade <= 0.001
+        let bounds = translationBrightTextLayer.bounds.width > 1
+            ? translationBrightTextLayer.bounds
+            : translationTextLayer.bounds
         return updateTranslationSweepMask(
             translation: translation,
             constants: plan.constants,
-            bounds: translationBrightTextLayer.bounds
+            bounds: bounds
         )
     }
 
@@ -3720,22 +3724,11 @@ final class NativeLyricsRowView: NSView {
             constants: constants,
             bounds: bounds
         )
-        let lines: [NativeLyricsTranslationSweepMaskLine]
-        if linePlan.count > 1 {
-            lines = NativeLyricsTranslationSweepLayout.maskLinesSequential(
-                from: linePlan,
-                currentTime: translation.currentTime,
-                lineStartTime: translation.lineStartTime,
-                lineEndTime: translation.lineEndTime,
-                fadeHalfPoint: translation.fadeHalfPoint
-            )
-        } else {
-            lines = NativeLyricsTranslationSweepLayout.maskLines(
-                from: linePlan,
-                progress: translation.progress,
-                fadeHalfPoint: translation.fadeHalfPoint
-            )
-        }
+        let lines = NativeLyricsTranslationSweepLayout.maskLines(
+            from: linePlan,
+            progress: translation.progress,
+            fadeHalfPoint: translation.fadeHalfPoint
+        )
         guard !lines.isEmpty else {
             translationBrightTextLayer.mask = translationSweepMaskLayer
             hideTranslationSweepMaskLayers()
