@@ -355,7 +355,7 @@ enum NativeLyricsTranslationSweepLayout {
         for line in plan {
             let localFilled = filledWidth - accumulated
             defer { accumulated += line.width }
-            let maskRect = line.rect.insetBy(dx: -20, dy: -20)
+            let maskRect = line.rect.insetBy(dx: -20, dy: 0)
             let wavefront: CGFloat
             if localFilled <= 0 {
                 wavefront = maskRect.minX - fadeHalfPoint
@@ -397,7 +397,7 @@ enum NativeLyricsTranslationSweepLayout {
             } else {
                 localProgress = CGFloat((currentTime - segmentStart) / segmentDuration)
             }
-            let maskRect = line.rect.insetBy(dx: -20, dy: -20)
+            let maskRect = line.rect.insetBy(dx: -20, dy: 0)
             let wavefront: CGFloat
             if localProgress <= 0 {
                 wavefront = maskRect.minX - fadeHalfPoint

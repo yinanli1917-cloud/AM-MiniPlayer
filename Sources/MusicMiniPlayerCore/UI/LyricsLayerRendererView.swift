@@ -2538,9 +2538,17 @@ final class NativeLyricsSurfaceView: NSView {
             ?? configuration.rows.first(where: { $0.index == configuration.effectiveCurrentIndex }) else {
             return false
         }
-        return activeRow.displayLine.line.hasSyllableSync
+        if activeRow.displayLine.line.hasSyllableSync
             || activeRow.interlude != nil
-            || activeRow.isPrelude
+            || activeRow.isPrelude {
+            return true
+        }
+        if configuration.showTranslation,
+           let translation = activeRow.displayLine.line.translation,
+           !translation.isEmpty {
+            return true
+        }
+        return false
     }
 
     private static func isSameTrackIdentity(
@@ -3168,7 +3176,7 @@ final class NativeLyricsRowView: NSView {
         activeHiddenEmphasisSignature = nil
         hideEmphasisGlyphLayers()
         if let translation = plan.translation {
-            let appliesTranslationSweep = appliesMainSweep
+            let appliesTranslationSweep = isActive
             let translationBaseAlpha = appliesTranslationSweep
                 ? translation.dimAlpha
                 : plan.constants.currentTranslationOpacityFactor
@@ -3284,6 +3292,16 @@ final class NativeLyricsRowView: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
         }
+        #if LOCAL_DEVELOPER_BUILD
+        do {
+            let hasTranslation = row.displayLine.line.translation != nil
+            if let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sweep.log") {
+                fh.seekToEndOfFile()
+                fh.write("[Phase] isActive=\(isActive) isPlaying=\(configuration.musicController.isPlaying) idx=\(row.index) curIdx=\(configuration.effectiveCurrentIndex) hasTrans=\(hasTranslation)\n".data(using: .utf8)!)
+                fh.closeFile()
+            }
+        }
+        #endif
         if isActive {
             let plan = textRenderPlan(
                 row: row,
@@ -3718,6 +3736,8 @@ final class NativeLyricsRowView: NSView {
         )
     }
 
+    private var translationSweepDiagRowID: String?
+
     private func updateTranslationSweepMask(
         translation: NativeLyricsTranslationRenderPlan,
         constants: NativeLyricsTextConstants,
@@ -3743,6 +3763,28 @@ final class NativeLyricsRowView: NSView {
             progress: translation.progress,
             fadeHalfPoint: translation.fadeHalfPoint
         )
+
+        #if LOCAL_DEVELOPER_BUILD
+        do {
+            let rowID = row?.id ?? "?"
+            if translationSweepDiagRowID != rowID {
+                translationSweepDiagRowID = rowID
+                if let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sweep.log") {
+                    fh.seekToEndOfFile()
+                    let text = translation.text.prefix(60)
+                    fh.write("[SweepDiag] row=\(rowID) text=\"\(text)\" bounds=\(bounds) planCount=\(linePlan.count) linesCount=\(lines.count) progress=\(String(format: "%.3f", translation.progress)) maskUsed=\(lines.isEmpty ? "gradient" : "perLine")\n".data(using: .utf8)!)
+                    for (i, p) in linePlan.enumerated() {
+                        fh.write("  plan[\(i)] rect=\(p.rect) width=\(String(format: "%.1f", p.width))\n".data(using: .utf8)!)
+                    }
+                    for (i, l) in lines.enumerated() {
+                        fh.write("  line[\(i)] maskRect=\(l.maskRect) wavefrontX=\(String(format: "%.1f", l.wavefrontX))\n".data(using: .utf8)!)
+                    }
+                    fh.closeFile()
+                }
+            }
+        }
+        #endif
+
         guard !lines.isEmpty else {
             translationBrightTextLayer.mask = translationSweepMaskLayer
             hideTranslationSweepMaskLayers()

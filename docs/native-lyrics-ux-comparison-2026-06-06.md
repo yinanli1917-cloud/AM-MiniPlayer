@@ -81,7 +81,9 @@ while their comments say `1.5`/`3.0`. **Fix = correct the test expectations to `
 
 | # | Gap | Subsystem | Sev | Effort | Notes |
 |---|---|---|---|---|---|
-| A | **Seek is a heuristic, not first-class state** | scroll | P0 | M | seeks ≤1 line look like natural playback |
+| A | ~~Seek is a heuristic~~ **✅ DONE (5c2d0a93)** — NativeLyricsSeekClassifier + in-app seek token | scroll | P0 | M | backward/small seeks now snap |
+| J | ~~Stale RED parity tests~~ **✅ DONE (2a3d3c06)** — corrected to abs*1.5; suite fully green | tests | P1 | S | |
+| L | **Line-level (non-syllable-synced) lyrics still broken/deprecated** — user-reported 2026-06-06 | text | P0 | ? | needs investigation; word-level now good, line-level not |
 | B | **Edge progressive blur entirely missing** (component built, 0 call sites) | blur | P1 | S-M | user explicitly named this; viewport hard-clips |
 | C | **Scale-coupled bright/dim mask alpha** absent (static 0.85/0.25) | sweep | P1 | M | largest sweep-fidelity gap; line doesn't "breathe" contrast |
 | D | **No reverse-float settle** on line deactivate (hard snap) | lifecycle | P1 | M | finishing line's risen glyphs snap instead of easing down |

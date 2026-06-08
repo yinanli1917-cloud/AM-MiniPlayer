@@ -47,3 +47,6 @@ dist/
 *.sha256
 tmp/
 __pycache__/
+
+# Codex runtime state
+.codex/runtime/

@@ -10,15 +10,6 @@ Use this folder for rules that should survive conversation compaction:
 - file ownership and module boundaries
 - release or operational procedures
 
-## Specs
-
-- `lyrics-pipeline.md`: lyrics result taxonomy, fallback selection, and verifier semantics.
-- `lyrics-renderer-performance.md`: protected lyrics UX, verified performance fixes, and profiling gates.
-- `playback-artwork.md`: current-track artwork fetching, cache boundaries, and stale-cover prevention.
-- `playback-state-sync.md`: Music playback state enum mapping and system/UI synchronization rules.
-- `owner-diagnostics.md`: local owner debug diagnostics boundary, report model, privacy rules, and retention/media policy.
-- `distribution-and-compliance.md`: GitHub/App Store product variant boundaries and shared App Store-safe system feature rules.
-
 ## Pre-Development Checklist
 
 - Check this index for relevant project rules.
@@ -27,3 +18,8 @@ Use this folder for rules that should survive conversation compaction:
 ## Quality Check
 
 - If the task taught a durable lesson, add or update a focused spec file here.
+
+## Specs
+
+- [Cross-Session Continuity](cross-session-continuity.md) - Bounded task continuity matching, compact task memory, and multi-session safety rules.
+- [Spec Update Protocol](spec-update-protocol.md) - Trellis-style durable spec update rules for project, module, and workflow knowledge.
