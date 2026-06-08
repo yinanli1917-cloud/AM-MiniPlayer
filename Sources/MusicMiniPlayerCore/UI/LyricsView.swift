@@ -1856,9 +1856,7 @@ public struct LyricsView: View {
         if absVelocity >= threshold {
             if !scroll.scrollLocked { scroll.scrollLocked = true }
             if showControls { animateControlsOut() }
-        } else if deltaY < 0 {
-            if showControls { animateControlsOut() }
-        } else if deltaY > 0 && !scroll.scrollLocked && !scroll.hasTriggeredSlowScroll {
+        } else if !scroll.scrollLocked && !scroll.hasTriggeredSlowScroll {
             scroll.hasTriggeredSlowScroll = true
             if !showControls { animateControlsIn() }
         }

@@ -3608,9 +3608,15 @@ final class NativeLyricsRowView: NSView {
         }
         translationBrightTextLayer.opacity = Float(translation.postLineFade)
         translationBrightTextLayer.isHidden = translation.progress <= 0.001 || translation.postLineFade <= 0.001
-        let bounds = translationBrightTextLayer.bounds.width > 1
-            ? translationBrightTextLayer.bounds
-            : translationTextLayer.bounds
+        guard let configuration else { return nil }
+        let textWidth = contentTextWidth(configuration)
+        let translationHeight = measuredTextHeight(
+            translation.text,
+            width: textWidth,
+            font: .systemFont(ofSize: plan.constants.translationFontSize, weight: .semibold),
+            lineSpacing: plan.constants.translationLineSpacing
+        )
+        let bounds = CGRect(x: 0, y: 0, width: textWidth, height: translationHeight + Self.textBottomClipPad)
         return updateTranslationSweepMask(
             translation: translation,
             constants: plan.constants,
