@@ -263,6 +263,7 @@ struct NativeLyricsSurface: NSViewRepresentable {
     let onManualScrollDelta: (CGFloat, CGFloat) -> Void
     let onManualScrollEnded: () -> Void
     let onManualScrollRecovered: () -> Void
+    let onManualScrollChromeReset: (() -> Void)?
     let onHeightMeasured: (Int, CGFloat) -> Void
     let lineMotionSamplingEnabled: Bool
     let lineMotionFocusedSamplingUntil: Date
@@ -307,6 +308,7 @@ struct NativeLyricsSurface: NSViewRepresentable {
                 onManualScrollDelta: onManualScrollDelta,
                 onManualScrollEnded: onManualScrollEnded,
                 onManualScrollRecovered: onManualScrollRecovered,
+                onManualScrollChromeReset: onManualScrollChromeReset,
                 onHeightMeasured: onHeightMeasured,
                 lineMotionSamplingEnabled: lineMotionSamplingEnabled,
                 lineMotionFocusedSamplingUntil: lineMotionFocusedSamplingUntil,
@@ -364,6 +366,7 @@ struct LyricsLayerRendererConfiguration {
     let onManualScrollDelta: (CGFloat, CGFloat) -> Void
     let onManualScrollEnded: () -> Void
     let onManualScrollRecovered: () -> Void
+    let onManualScrollChromeReset: (() -> Void)?
     let onHeightMeasured: (Int, CGFloat) -> Void
     let lineMotionSamplingEnabled: Bool
     let lineMotionFocusedSamplingUntil: Date
@@ -1863,7 +1866,12 @@ final class NativeLyricsSurfaceView: NSView {
         }
 
         let previousViewportIndex = manualViewportIndex(for: runtimeConfiguration)
+        let isNewGesture = event.phase == .began
         beginNativeManualScrollIfNeeded(configuration: runtimeConfiguration)
+        if isNewGesture && manualScrollState.isActive {
+            let onChromeReset = configuration.onManualScrollChromeReset
+            deferParentCallback { onChromeReset?() }
+        }
         let now = CACurrentMediaTime()
         let velocity: CGFloat
         if lastScrollWheelTime > 0 {

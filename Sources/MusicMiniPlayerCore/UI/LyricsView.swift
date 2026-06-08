@@ -899,6 +899,10 @@ public struct LyricsView: View {
                         onManualScrollRecovered: {
                             handleNativeManualScrollRecovered()
                         },
+                        onManualScrollChromeReset: {
+                            scroll.scrollLocked = false
+                            scroll.hasTriggeredSlowScroll = false
+                        },
                         onHeightMeasured: { index, height in
                             if abs((cache.lineHeights[index] ?? 0) - height) > 2.0 {
                                 cache.lineHeights[index] = height
@@ -1853,10 +1857,13 @@ public struct LyricsView: View {
         let absVelocity = abs(velocity)
         let threshold: CGFloat = 800
 
-        if absVelocity >= threshold {
+        if deltaY < 0 {
+            if showControls { animateControlsOut() }
+            scroll.scrollLocked = true
+        } else if absVelocity >= threshold {
             if !scroll.scrollLocked { scroll.scrollLocked = true }
             if showControls { animateControlsOut() }
-        } else if !scroll.scrollLocked && !scroll.hasTriggeredSlowScroll {
+        } else if deltaY > 0 && !scroll.scrollLocked && !scroll.hasTriggeredSlowScroll {
             scroll.hasTriggeredSlowScroll = true
             if !showControls { animateControlsIn() }
         }
