@@ -162,7 +162,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("mainTextLayer.setAffineTransform(.identity)"))
         XCTAssertFalse(source.contains("mainTextLayer.setAffineTransform(CGAffineTransform(translationX: 0, y: y))"))
         XCTAssertTrue(source.contains("let appliesMainSweep = isActive && row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty"))
-        XCTAssertTrue(source.contains("let appliesTranslationSweep = appliesMainSweep"))
+        XCTAssertTrue(source.contains("let appliesTranslationSweep = isActive"))
         XCTAssertTrue(source.contains("isAwaitingTranslation(row: row, configuration: configuration)"))
         XCTAssertTrue(source.contains("isTranslationFailureVisible(row: row, configuration: configuration)"))
         XCTAssertFalse(source.contains("configuration.showTranslation && (configuration.isTranslating || configuration.translationFailed)"))

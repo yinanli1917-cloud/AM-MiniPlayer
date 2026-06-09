@@ -1615,7 +1615,7 @@ final class RapidSwitchTests: XCTestCase {
             source.contains("let appliedOffsetY = framesIncludeLineOffset\n                ? 0\n                : Double(fullOffset + effectiveManualOffset)"),
             "Native renderer frame telemetry already reports final visible row coordinates and must not double-count manual scroll offset."
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             source.contains(".offset(y: layerActive ? 0 : scroll.manualScrollOffset)"),
             "Native renderer mode must not keep the old SwiftUI manual-scroll offset wrapped around the native surface."
         )

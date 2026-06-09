@@ -530,6 +530,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             onManualScrollDelta: { _, _ in },
             onManualScrollEnded: {},
             onManualScrollRecovered: {},
+            onManualScrollChromeReset: nil,
             onHeightMeasured: { _, _ in },
             lineMotionSamplingEnabled: false,
             lineMotionFocusedSamplingUntil: Date.distantPast,

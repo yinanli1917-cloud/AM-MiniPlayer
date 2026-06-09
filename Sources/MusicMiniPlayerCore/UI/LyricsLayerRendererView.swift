@@ -8,7 +8,7 @@ private let nativeLyricContentLeadingInset: CGFloat = 32
 private let nativeLyricContentTrailingInset: CGFloat = 32
 private let nativeLyricAutoVisibleRowRadius = 12
 private let nativeLyricManualVisibleRowRadius = 12
-private let nativeLyricTextFrameInterval: TimeInterval = 1.0 / 30.0
+private let nativeLyricTextFrameInterval: TimeInterval = 1.0 / 60.0
 private let nativeLyricFrameSummaryInterval: TimeInterval = 10
 private let nativeLyricsTopOverlayReservedHeight: CGFloat = 56
 private let nativeLyricsTopLeadingReservedWidth: CGFloat = 150
@@ -424,6 +424,8 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private var configuration: LyricsLayerRendererConfiguration?
+    private var pendingConfiguration: LyricsLayerRendererConfiguration?
+    private var configureGeneration: Int = 0
     private let presentationEngine = LyricsPresentationEngine()
     private var rowViews: [String: NativeLyricsRowView] = [:]
     private var rowViewReusePool: [NativeLyricsRowView] = []
@@ -620,6 +622,18 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     func configure(_ configuration: LyricsLayerRendererConfiguration) {
+        configureGeneration += 1
+        let generation = configureGeneration
+        pendingConfiguration = configuration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.configureGeneration == generation,
+                  let config = self.pendingConfiguration else { return }
+            self.pendingConfiguration = nil
+            self.applyConfigure(config)
+        }
+    }
+
+    private func applyConfigure(_ configuration: LyricsLayerRendererConfiguration) {
         installLocalEventMonitor()
         if let previous = self.configuration?.trackContext,
            !Self.isSameTrackIdentity(previous, configuration.trackContext) {
@@ -1621,17 +1635,15 @@ final class NativeLyricsSurfaceView: NSView {
         currentIndex: Int,
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
-        let indices = Set(([previousIndex, currentIndex] as [Int?]).compactMap { $0 })
-        for index in indices {
-            guard let row = runtimeConfiguration.rows.first(where: { $0.index == index }),
-                  let view = rowViews[row.id] else {
-                continue
-            }
-            _ = updateContentIfNeeded(
-                view: view,
-                row: row,
-                configuration: runtimeConfiguration
-            )
+        if let previousIndex, previousIndex != currentIndex,
+           let prevRow = runtimeConfiguration.rows.first(where: { $0.index == previousIndex }),
+           let prevView = rowViews[prevRow.id] {
+            prevView.clearSweepState()
+            _ = updateContentIfNeeded(view: prevView, row: prevRow, configuration: runtimeConfiguration)
+        }
+        if let row = runtimeConfiguration.rows.first(where: { $0.index == currentIndex }),
+           let view = rowViews[row.id] {
+            _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
         }
         lastConfiguredTextPhaseIndex = currentIndex
     }
@@ -2623,6 +2635,8 @@ final class NativeLyricsRowView: NSView {
     private var mainDimWordGlyphLayers: [CATextLayer] = []
     private var mainBrightWordGlyphLayers: [CATextLayer] = []
     private var mainWordGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
+    private var lastMainSweepWavefrontX: [Int: CGFloat] = [:]
+    private var lastTranslationSweepWavefrontX: [Int: CGFloat] = [:]
     private var lastLineLayoutMetrics = LineLayoutAppliedMetrics.inactive
     private let blurFilter = CIFilter(name: "CIGaussianBlur")
     private let dotBlurFilter = CIFilter(name: "CIGaussianBlur")
@@ -2737,6 +2751,16 @@ final class NativeLyricsRowView: NSView {
         needsLayout = true
     }
 
+    func clearSweepState() {
+        mainBrightTextLayer.mask = nil
+        mainPerRunSweepMaskLayer.frame = .zero
+        hidePerRunSweepMaskLayers()
+        translationBrightTextLayer.mask = nil
+        translationPerLineSweepMaskLayer.frame = .zero
+        lastMainSweepWavefrontX.removeAll()
+        lastTranslationSweepWavefrontX.removeAll()
+    }
+
     func refreshInteractionState(configuration: LyricsLayerRendererConfiguration) {
         self.configuration = configuration
         updateHoverBackground()
@@ -2756,6 +2780,8 @@ final class NativeLyricsRowView: NSView {
         appliedBlurRadius = -.greatestFiniteMagnitude
         cachedMainSweepLayoutKey = nil
         cachedMainSweepLinePlan = []
+        lastMainSweepWavefrontX.removeAll()
+        lastTranslationSweepWavefrontX.removeAll()
         cachedTextGlyphGeometryBounds = nil
         cachedTextGlyphGeometryMetrics = nil
         cachedTranslationSweepLayoutKey = nil
@@ -3712,7 +3738,9 @@ final class NativeLyricsRowView: NSView {
             let maskLayer = mainPerRunSweepLineLayers[index]
             maskLayer.isHidden = false
             maskLayer.frame = line.maskRect
-            let expectedLocalWavefront = line.wavefrontX - line.maskRect.minX
+            let rawWavefrontX = max(line.wavefrontX, lastMainSweepWavefrontX[index] ?? -.greatestFiniteMagnitude)
+            lastMainSweepWavefrontX[index] = rawWavefrontX
+            let expectedLocalWavefront = rawWavefrontX - line.maskRect.minX
             let appliedLocalWavefront = applySweepMask(
                 maskLayer,
                 wavefrontX: expectedLocalWavefront,
@@ -3811,7 +3839,9 @@ final class NativeLyricsRowView: NSView {
             let maskLayer = translationSweepLineLayers[index]
             maskLayer.isHidden = false
             maskLayer.frame = line.maskRect
-            let expectedLocalWavefront = line.wavefrontX - line.maskRect.minX
+            let rawWavefrontX = max(line.wavefrontX, lastTranslationSweepWavefrontX[index] ?? -.greatestFiniteMagnitude)
+            lastTranslationSweepWavefrontX[index] = rawWavefrontX
+            let expectedLocalWavefront = rawWavefrontX - line.maskRect.minX
             let appliedLocalWavefront = applySweepMask(
                 maskLayer,
                 wavefrontX: expectedLocalWavefront,
@@ -4424,6 +4454,8 @@ final class NativeLyricsRowView: NSView {
         for layer in mainPerRunSweepLineLayers {
             layer.isHidden = true
         }
+        lastMainSweepWavefrontX.removeAll()
+        lastTranslationSweepWavefrontX.removeAll()
     }
 
     private func hideBaseRevealMaskLayers() {

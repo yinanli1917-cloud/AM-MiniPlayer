@@ -64,7 +64,11 @@ extension MusicController {
         let now = Date()
         let renderTime = lyricRenderTime(at: now)
         self.isPlaying.toggle()
-        syncPlaybackClock(to: renderTime, playing: self.isPlaying, at: now)
+        if self.isPlaying {
+            syncPlaybackClock(to: renderTime, playing: true, at: now)
+        } else {
+            stopInterpolationTimerImmediately()
+        }
         updateTimerState()
 
         // 🔑 User controls use dedicated controlApp/controlQueue — never blocked by

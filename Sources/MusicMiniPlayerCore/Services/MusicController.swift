@@ -757,6 +757,15 @@ public class MusicController: ObservableObject {
         }
     }
 
+    func stopInterpolationTimerImmediately() {
+        let now = Date()
+        syncPlaybackClock(to: lyricRenderTime(at: now), playing: false, at: now)
+        interpolationTimer?.invalidate()
+        interpolationTimer = nil
+        interpolationTimerActive = false
+        interpolationTimerInterval = 0
+    }
+
     /// Window movement start/end notifications emitted by SnappablePanel.
     func setupWindowMovementObserver() {
         NotificationCenter.default.addObserver(
@@ -1365,7 +1374,7 @@ public class MusicController: ObservableObject {
                         ]
                     )
                 }
-                if self.seekPending || !self.isPlaying || timeDiff > 2.0 || shouldCorrectVisibleLyrics {
+                if self.seekPending || timeDiff > 2.0 || shouldCorrectVisibleLyrics {
                     let wasSeeking = self.seekPending
                     self.currentTime = position
                     self.seekPending = false
