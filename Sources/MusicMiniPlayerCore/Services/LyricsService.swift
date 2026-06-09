@@ -446,13 +446,12 @@ public class LyricsService: ObservableObject {
             let cachedHasSyllableSync = cached.lyrics.contains { $0.hasSyllableSync }
             DebugLogger.log("LyricsService", "📦 Cache hit: '\(songID)' (source=\(cached.source ?? "unknown"), score=\(cached.score.map { String(format: "%.1f", $0) } ?? "n/a"), isNoLyrics=\(cached.isNoLyrics), unsynced=\(cached.isUnsynced), syllable=\(cachedHasSyllableSync), lines=\(cached.lyrics.count))")
 
-            // Clear old lyrics first so old and new lines cannot overlap during track changes.
-            lyrics = []
             currentLineIndex = nil
-            refreshTranslationAvailability()
 
             // Handle cached no-lyrics result.
             if cached.isNoLyrics {
+                lyrics = []
+                refreshTranslationAvailability()
                 currentSongID = songID
                 currentSongTitle = title
                 currentSongArtist = artist
@@ -521,9 +520,11 @@ public class LyricsService: ObservableObject {
         currentSongAlbum = album
 
         // Set loading state synchronously to avoid races.
+        // isLoading = true already causes the view to show loadingView instead of
+        // scrollableLyricsContent, so clearing lyrics here is unnecessary and would
+        // trigger an extra onChange(of: lyrics) → refreshDisplayLineCache() cycle.
         isLoading = true
         if !appliedProvisionalCache {
-            lyrics = []
             currentLineIndex = nil
         }
         error = nil

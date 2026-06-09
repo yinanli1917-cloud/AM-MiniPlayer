@@ -2453,20 +2453,39 @@ struct SystemTranslationModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
-            if let config = translationSessionConfigAny as? TranslationSession.Configuration {
-                content
-                    .translationTask(config, action: { session in
-                        guard lyricsService.showTranslation,
-                              !lyricsService.lyrics.isEmpty else { return }
-                        await lyricsService.performSystemTranslation(session: session)
-                    })
-                    .id(translationTrigger)
-            } else {
-                content
-            }
+            content
+                .modifier(TranslationTaskApplicator(
+                    configAny: translationSessionConfigAny,
+                    lyricsService: lyricsService,
+                    trigger: translationTrigger
+                ))
         } else {
             content
         }
+    }
+}
+
+@available(macOS 15.0, *)
+private struct TranslationTaskApplicator: ViewModifier {
+    let configAny: Any?
+    let lyricsService: LyricsService
+    let trigger: Int
+
+    func body(content: Content) -> some View {
+        content
+            .translationTask(activeConfig, action: { session in
+                guard lyricsService.showTranslation,
+                      !lyricsService.lyrics.isEmpty else { return }
+                await lyricsService.performSystemTranslation(session: session)
+            })
+            .id(trigger)
+    }
+
+    private var activeConfig: TranslationSession.Configuration {
+        if let config = configAny as? TranslationSession.Configuration {
+            return config
+        }
+        return TranslationSession.Configuration(target: Locale.Language(identifier: "zh-Hans"))
     }
 }
 

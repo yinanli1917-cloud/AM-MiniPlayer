@@ -1161,7 +1161,7 @@ public class MusicController: ObservableObject {
         sbPositionPollInFlight = true
 
         let pollEnqueueTime = Date()
-        let shouldReadPlayerState = Date().timeIntervalSince(lastPositionPollStateReadAt) >= 10.0
+        let shouldReadPlayerState = true
         let fallbackStateRaw = cachedPositionPollStateRaw
         positionPollQueue.async { [weak self] in
             guard let self = self else { return }
@@ -1306,7 +1306,21 @@ public class MusicController: ObservableObject {
 
                 // Update playing state (respect user action lock)
                 if Date().timeIntervalSince(self.lastUserActionTime) > self.userActionLockDuration {
-                    if self.isPlaying != playing { self.isPlaying = playing }
+                    if self.isPlaying != playing {
+                        self.isPlaying = playing
+                    }
+                    // Velocity-based pause detection: if SB cached state says playing
+                    // but polled position is far behind where interpolation expected it,
+                    // the player paused mid-interval and the notification was delayed.
+                    if playing && self.isPlaying && !self.seekPending {
+                        let expectedPosition = self.internalCurrentTime
+                        let deficit = expectedPosition - position
+                        if deficit > 0.8 {
+                            DebugLogger.log("Timing", "⏸ VELOCITY PAUSE: polled=\(String(format: "%.2f", position)) expected=\(String(format: "%.2f", expectedPosition)) deficit=\(String(format: "%.2f", deficit))s — inferring pause")
+                            self.isPlaying = false
+                            self.cachedPositionPollStateRaw = Self.sbStopped
+                        }
+                    }
                 }
 
                 // 🔑 Drift correction — snap frame-relative interpolation back to actual position.
