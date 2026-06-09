@@ -326,6 +326,14 @@ struct NativeLyricsVisualMotionState: Equatable {
         blurVelocity = 0
     }
 
+    mutating func quickRetarget(to nextTarget: NativeLyricsVisualTarget) {
+        target = nextTarget
+        let kick: CGFloat = 12
+        opacityVelocity = (nextTarget.opacity - opacity) * kick
+        scaleVelocity = (nextTarget.scale - scale) * kick
+        blurVelocity = (nextTarget.blur - blur) * kick
+    }
+
     @discardableResult
     mutating func advance(delta: TimeInterval, spring: LyricsPresentationSpringParameters? = nil) -> Bool {
         let before = self
