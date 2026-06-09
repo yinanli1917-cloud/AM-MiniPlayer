@@ -265,11 +265,8 @@ struct NativeLyricsVisualTarget: Equatable {
                 isActive: true
             )
         }
-        // v2.8: blur = abs(distance) * 1.5, uncapped, symmetric. The depth gradient grows
-        // continuously — far lines are much blurrier than near ones. The calibration factor in
-        // NativeLyricsRowView.blurRenderCalibration scales CIGaussianBlur down to match v2.8's
-        // lighter SwiftUI .blur, so the uncapped ramp no longer fogs out.
-        let renderedBlur = CGFloat(abs(displayIndex - currentIndex)) * 1.5
+        let dist = CGFloat(abs(displayIndex - currentIndex))
+        let renderedBlur = max(0, dist - 0.75) * 2.0
         return NativeLyricsVisualTarget(
             opacity: 0.35,
             scale: 0.95,

@@ -335,7 +335,7 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertTrue(buffered.isActive)
         XCTAssertEqual(passed.opacity, 0.35, accuracy: 0.0001)
         XCTAssertEqual(passed.scale, 0.95, accuracy: 0.0001)
-        XCTAssertEqual(passed.blur, 3.0, accuracy: 0.0001)
+        XCTAssertEqual(passed.blur, 2.5, accuracy: 0.0001)
         XCTAssertFalse(passed.isActive)
 
         let farPassed = NativeLyricsVisualTarget.amllTarget(
@@ -345,8 +345,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
             hotActiveIndices: [8],
             isManualScrolling: false
         )
-        // Symmetric true-distance blur, uncapped (v2.8 parity): abs(0 - 8) * 1.5 = 12.0
-        XCTAssertEqual(farPassed.blur, 12.0, accuracy: 0.0001)
+        // Symmetric true-distance blur, uncapped: max(0, 8-0.75)*2 = 14.5
+        XCTAssertEqual(farPassed.blur, 14.5, accuracy: 0.0001)
     }
 
     func testAMLLVisualTargetUsesNeutralManualBrowseField() {

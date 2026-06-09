@@ -90,21 +90,21 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         assertTarget(far, opacity: 0.6, scale: 0.95, blur: 0, isActive: false, "far row during manual scroll")
     }
 
-    /// Inactive blur is UNCAPPED (v2.8 parity): abs(distance) * 1.5 grows continuously.
-    /// The render calibration in NativeLyricsRowView scales CIGaussianBlur down to match
-    /// v2.8's lighter SwiftUI .blur, so the uncapped ramp no longer fogs out.
+    /// Inactive blur is UNCAPPED: max(0, dist - 0.75) * 2.0 grows continuously.
+    /// Softer entry at dist=1 (0.5 vs old 1.5) to eliminate the visible blur-band
+    /// at the active/inactive boundary; far lines remain deeply blurred.
     func test_inactiveBlur_uncapped_v28Parity() {
         let far = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 15, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(far.blur, 15.0, accuracy: 1e-6, "distance-10: 10 * 1.5 = 15.0 (uncapped)")
+        XCTAssertEqual(far.blur, 18.5, accuracy: 1e-6, "distance-10: max(0, 10-0.75)*2 = 18.5 (uncapped)")
 
         let next = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 6, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(next.blur, 1.5, accuracy: 1e-6, "distance-1: 1 * 1.5 = 1.5")
+        XCTAssertEqual(next.blur, 0.5, accuracy: 1e-6, "distance-1: max(0, 1-0.75)*2 = 0.5")
     }
 
     /// The LOGICAL depth value (abs*1.5, uncapped) is rendered through CIGaussianBlur, which reads
@@ -151,7 +151,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             displayIndex: 3, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(trail.blur, 3.0, accuracy: 1e-6, "buffered trail line blurs by true distance, not pinned to 0")
+        XCTAssertEqual(trail.blur, 2.5, accuracy: 1e-6, "buffered trail line blurs by true distance, not pinned to 0")
         XCTAssertEqual(trail.opacity, 0.35, accuracy: 1e-6, "buffered trail line dims like any inactive line")
         XCTAssertFalse(trail.isActive, "a non-hot trail line is not active")
 
@@ -176,8 +176,8 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             hotActiveIndices: [5], isManualScrolling: false
         )
         let v28Passed = NativeLyricsVisualTarget.legacyTarget(displayIndex: 4, currentIndex: 5, isManualScrolling: false)
-        XCTAssertEqual(amllPassed.blur, 1.5, accuracy: 1e-6, "passed dist-1 = abs(1) * 1.5 = 1.5")
-        XCTAssertEqual(amllPassed.blur, v28Passed.blur, accuracy: 1e-6, "native passed-line blur matches v2.8 symmetric law")
+        XCTAssertEqual(amllPassed.blur, 0.5, accuracy: 1e-6, "passed dist-1 = max(0, 1-0.75)*2 = 0.5")
+        XCTAssertNotEqual(amllPassed.blur, v28Passed.blur, "native blur diverges from v2.8 at dist-1 (softer entry)")
     }
 
     /// DIVERGENCE: future (upcoming) lines are symmetric in BOTH laws — no passed-step —
@@ -188,8 +188,8 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             hotActiveIndices: [5], isManualScrolling: false
         )
         let v28Future = NativeLyricsVisualTarget.legacyTarget(displayIndex: 7, currentIndex: 5, isManualScrolling: false)
-        XCTAssertEqual(amllFuture.blur, 3.0, accuracy: 1e-6, "future dist-2 = abs(2) * 1.5 = 3.0")
-        XCTAssertEqual(amllFuture.blur, v28Future.blur, accuracy: 1e-6, "native future-line blur matches v2.8")
+        XCTAssertEqual(amllFuture.blur, 2.5, accuracy: 1e-6, "future dist-2 = max(0, 2-0.75)*2 = 2.5")
+        XCTAssertNotEqual(amllFuture.blur, v28Future.blur, "native blur diverges from v2.8 at dist-2 (softer ramp)")
     }
 
     /// DIVERGENCE: native active-row interlude scale is 1 - blend*0.03 (= 0.97 at blend 1),
@@ -469,14 +469,13 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         }
         // Active line sharp (distance 0).
         XCTAssertEqual(blur(5, current: 5, hot: [5], scroll: 5), 0, accuracy: 0.001)
-        // Immediate neighbors blur equally on both sides: true distance 1 -> 1.5pt.
-        XCTAssertEqual(blur(6, current: 5, hot: [5], scroll: 5), 1.5, accuracy: 0.001)
-        XCTAssertEqual(blur(4, current: 5, hot: [5], scroll: 5), 1.5, accuracy: 0.001)
-        // Distance 2 passed line = 3.0 (symmetric, no +1 step).
-        XCTAssertEqual(blur(3, current: 5, hot: [5], scroll: 5), 3.0, accuracy: 0.001)
-        // A line 2 away that is NOT hot blurs by its TRUE distance (3.0) — the old accumulated-buffered
-        // set no longer pins it sharp.
-        XCTAssertEqual(blur(7, current: 5, hot: [5], scroll: 5), 3.0, accuracy: 0.001)
+        // Immediate neighbors blur equally on both sides: true distance 1 -> 0.5pt.
+        XCTAssertEqual(blur(6, current: 5, hot: [5], scroll: 5), 0.5, accuracy: 0.001)
+        XCTAssertEqual(blur(4, current: 5, hot: [5], scroll: 5), 0.5, accuracy: 0.001)
+        // Distance 2 passed line = 2.5 (symmetric).
+        XCTAssertEqual(blur(3, current: 5, hot: [5], scroll: 5), 2.5, accuracy: 0.001)
+        // A line 2 away that is NOT hot blurs by its TRUE distance (2.5).
+        XCTAssertEqual(blur(7, current: 5, hot: [5], scroll: 5), 2.5, accuracy: 0.001)
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

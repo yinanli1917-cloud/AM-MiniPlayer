@@ -462,6 +462,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastConfigureEventSignature: String?
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
+    private var deferredDeactivationIndex: Int?
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
     private let surfaceInterludeOverlay: NSView = {
         let v = _FlippedView()
@@ -635,6 +636,7 @@ final class NativeLyricsSurfaceView: NSView {
             nativeTimelineState = nil
             pausedSemanticLocked = false
             lastTextPhaseUpdateAt = nil
+            deferredDeactivationIndex = nil
         }
         self.configuration = configuration
 
@@ -747,15 +749,21 @@ final class NativeLyricsSurfaceView: NSView {
                 }
                 view.onTap = tapHandler
                 rowTapHandlers[row.index] = tapHandler
+                let isDeferredDeactivation = row.index == deferredDeactivationIndex
+                if isDeferredDeactivation {
+                    applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
+                    continue
+                }
                 let contentUpdated = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
                 let needsActivationRefresh = textPhaseIndexChanged
                     && (row.index == activeTextPhaseIndex || row.index == previousTextPhaseIndex)
                 if needsActivationRefresh && !contentUpdated {
                     view.configure(row: row, configuration: runtimeConfiguration)
-                } else if row.index == activeTextPhaseIndex,
-                          !contentUpdated,
-                          let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
-                    renderTelemetry.recordTextPhase(textSample)
+                }
+                if row.index == activeTextPhaseIndex {
+                    if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
+                        renderTelemetry.recordTextPhase(textSample)
+                    }
                 }
                 applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
             }
@@ -1528,7 +1536,8 @@ final class NativeLyricsSurfaceView: NSView {
               !presentationEngine.hasActiveMotion,
               !hasActiveVisualMotion,
               !hasActiveTextAnimation(configuration: runtimeConfiguration),
-              runtimeConfiguration.interludeAfterIndex == nil else { return }
+              runtimeConfiguration.interludeAfterIndex == nil,
+              deferredDeactivationIndex == nil else { return }
         stopPresentationLoop()
     }
 
@@ -1595,6 +1604,7 @@ final class NativeLyricsSurfaceView: NSView {
                     runtimeConfiguration: runtimeConfiguration
                 )
             }
+            finalizeDeferredDeactivation(runtimeConfiguration: runtimeConfiguration)
             if shouldUpdateTextPhase {
                 updateTextPhasesForCurrentConfiguration(runtimeConfiguration: runtimeConfiguration)
             }
@@ -1632,17 +1642,47 @@ final class NativeLyricsSurfaceView: NSView {
         currentIndex: Int,
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
-        if let previousIndex, previousIndex != currentIndex,
-           let prevRow = runtimeConfiguration.rows.first(where: { $0.index == previousIndex }),
-           let prevView = rowViews[prevRow.id] {
-            prevView.clearSweepState()
-            _ = updateContentIfNeeded(view: prevView, row: prevRow, configuration: runtimeConfiguration)
+        if let oldDeferred = deferredDeactivationIndex, oldDeferred != currentIndex {
+            forceFinalizeDeactivation(index: oldDeferred, runtimeConfiguration: runtimeConfiguration)
+        }
+        if let previousIndex, previousIndex != currentIndex {
+            if previousIndex == deferredDeactivationIndex {
+                // already deferred
+            } else {
+                deferredDeactivationIndex = previousIndex
+            }
         }
         if let row = runtimeConfiguration.rows.first(where: { $0.index == currentIndex }),
            let view = rowViews[row.id] {
             _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
         }
         lastConfiguredTextPhaseIndex = currentIndex
+    }
+
+    private func forceFinalizeDeactivation(index: Int, runtimeConfiguration: LyricsLayerRendererConfiguration) {
+        deferredDeactivationIndex = nil
+        guard let row = runtimeConfiguration.rows.first(where: { $0.index == index }),
+              let view = rowViews[row.id] else { return }
+        view.clearSweepState()
+        view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false)
+        _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
+    }
+
+    private func finalizeDeferredDeactivation(runtimeConfiguration: LyricsLayerRendererConfiguration) {
+        guard let idx = deferredDeactivationIndex else { return }
+        let settled: Bool
+        if let state = visualStates[idx] {
+            settled = state.isSettled || state.opacity < 0.38
+        } else {
+            settled = true
+        }
+        guard settled else { return }
+        deferredDeactivationIndex = nil
+        guard let row = runtimeConfiguration.rows.first(where: { $0.index == idx }),
+              let view = rowViews[row.id] else { return }
+        view.clearSweepState()
+        view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false)
+        _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
     }
 
     private func shouldSyncVisualTargetsOnPresentationTick(
@@ -4134,6 +4174,7 @@ final class NativeLyricsRowView: NSView {
             layer.alignmentMode = .center
             layer.truncationMode = .none
             layer.masksToBounds = false
+            layer.isHidden = true
             mainEmphasisLayer.addSublayer(layer)
             emphasisGlyphLayers.append(layer)
             emphasisGlyphLayerSignatures.append(nil)
@@ -4239,6 +4280,8 @@ final class NativeLyricsRowView: NSView {
         while mainDimWordGlyphLayers.count < count {
             let dimLayer = makeWordGlyphLayer(scale: scale, fontSize: fontSize)
             let brightLayer = makeWordGlyphLayer(scale: scale, fontSize: fontSize)
+            dimLayer.isHidden = true
+            brightLayer.isHidden = true
             mainTextLayer.addSublayer(dimLayer)
             mainBrightTextLayer.addSublayer(brightLayer)
             mainDimWordGlyphLayers.append(dimLayer)
@@ -4443,6 +4486,7 @@ final class NativeLyricsRowView: NSView {
         while mainPerRunSweepLineLayers.count < count {
             let layer = NativeLyricsSweepMaskLineLayer()
             layer.contentsScale = scale
+            layer.isHidden = true
             mainPerRunSweepMaskLayer.addSublayer(layer)
             mainPerRunSweepLineLayers.append(layer)
         }
@@ -4468,6 +4512,7 @@ final class NativeLyricsRowView: NSView {
         while translationSweepLineLayers.count < count {
             let layer = NativeLyricsSweepMaskLineLayer()
             layer.contentsScale = scale
+            layer.isHidden = true
             translationPerLineSweepMaskLayer.addSublayer(layer)
             translationSweepLineLayers.append(layer)
         }
