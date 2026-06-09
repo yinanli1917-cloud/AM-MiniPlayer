@@ -949,59 +949,6 @@ extension LyricsFetcher {
             }
         }
 
-        if enableAliasResolve,
-           LanguageUtils.isPureASCII(params.rawTitle),
-           !LanguageUtils.isLikelyEnglishTitle(params.rawTitle),
-           (artistIsASCII || originalArtistIsASCII) {
-            let asciiProbe = artistIsASCII ? params.rawArtist : params.rawOriginalArtist
-            let aliases = await self.resolveArtistCJKAliases(
-                asciiArtist: asciiProbe,
-                allowUnconfirmedCatalogMatches: false
-            )
-            for cjkArtist in aliases.prefix(3) {
-                let aliasParams = SearchParams(
-                    title: params.rawTitle,
-                    artist: cjkArtist,
-                    originalTitle: params.rawOriginalTitle,
-                    originalArtist: params.rawOriginalArtist,
-                    duration: params.duration,
-                    album: params.normalizedAlbum,
-                    disableCjkEscapeInP3: params.disableCjkEscapeInP3
-                )
-                let probes = [
-                    ("\(params.simplifiedTitle) \(cjkArtist)", "alias+title:\(cjkArtist)"),
-                    (cjkArtist, "alias artist only:\(cjkArtist)")
-                ]
-                for (keyword, desc) in probes {
-                    DebugLogger.log(source, "🔎 \(desc): '\(keyword)'")
-                    do {
-                        guard let songs = try await fetchSongs(keyword) else { continue }
-                        DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
-                        let candidates = self.buildCandidates(
-                            songs: songs, params: aliasParams, searchDescriptor: desc, extractSong: extractSong
-                        )
-                        if let match = self.selectBestCandidate(
-                            candidates,
-                            source: source,
-                            inputTitle: params.rawTitle,
-                            inputArtist: params.rawArtist,
-                            disableCjkEscape: params.disableCjkEscapeInP3,
-                            aliasConfirmedCJK: true,
-                            hasAlbumHint: !params.normalizedAlbum.isEmpty,
-                            allowNativeTitleAlias: true,
-                            allowCompilationAlbumFallback: allowCompilationAlbumFallback
-                        ), match.titleMatched,
-                           match.durationDiff < 1.5 {
-                            DebugLogger.log(source, "⚡ Preflight alias exact match via '\(desc)' (albumMatch=\(match.albumMatched), Δ\(String(format: "%.1f", match.durationDiff))s)")
-                            return match
-                        }
-                    } catch {
-                        DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
-                    }
-                }
-            }
-        }
-
         // 🔑 Parallel keyword search — fire ALL rounds simultaneously.
         return await withTaskGroup(of: (SelectedSearchCandidate<ID>, String, Int)?.self) { group in
             // 🔑 Alias-resolved keyword

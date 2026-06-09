@@ -1592,40 +1592,42 @@ extension LyricsFetcher {
         } else {
             DebugLogger.log("NetEase", "❌ 未找到歌曲 — trying artist-discography fallback")
         }
-        DebugLogger.log("NetEase", "❌ 获取歌词失败/低质 — trying artist-discography fallback")
-        if let titleFallback = await fetchNetEaseTitleOnlyAliasFallback(
-            params: params,
-            headers: headers,
-            duration: duration,
-            translationEnabled: translationEnabled
-        ) {
-            return titleFallback
+        DebugLogger.log("NetEase", "❌ 获取歌词失败/低质 — trying parallel fallback probes")
+        let fallbackResult: LyricsFetchResult? = await withTaskGroup(of: (Int, LyricsFetchResult?).self) { group in
+            group.addTask {
+                (0, await self.fetchNetEaseTitleOnlyAliasFallback(
+                    params: params, headers: headers,
+                    duration: duration, translationEnabled: translationEnabled))
+            }
+            group.addTask {
+                (1, await self.fetchNetEaseCompilationAlbumFallback(
+                    params: params, headers: headers,
+                    duration: duration, translationEnabled: translationEnabled))
+            }
+            group.addTask {
+                (2, await self.fetchNetEaseOrphanExactTitleFallback(
+                    params: params, headers: headers,
+                    duration: duration, translationEnabled: translationEnabled))
+            }
+            group.addTask {
+                (3, await self.fetchNetEaseArtistDiscographyFallback(
+                    params: params, headers: headers,
+                    duration: duration, translationEnabled: translationEnabled,
+                    primaryResult: primaryResult, match: match))
+            }
+            var results: [(Int, LyricsFetchResult)] = []
+            for await (priority, result) in group {
+                guard let result else { continue }
+                results.append((priority, result))
+                if result.kind == .synced, result.score >= 45 {
+                    group.cancelAll()
+                    break
+                }
+            }
+            return results.min(by: { $0.0 < $1.0 })?.1
         }
-        if let compilationAlbumFallback = await fetchNetEaseCompilationAlbumFallback(
-            params: params,
-            headers: headers,
-            duration: duration,
-            translationEnabled: translationEnabled
-        ) {
-            return compilationAlbumFallback
-        }
-        if let exactTitleFallback = await fetchNetEaseOrphanExactTitleFallback(
-            params: params,
-            headers: headers,
-            duration: duration,
-            translationEnabled: translationEnabled
-        ) {
-            return exactTitleFallback
-        }
-        if let artistFallback = await fetchNetEaseArtistDiscographyFallback(
-                params: params,
-                headers: headers,
-                duration: duration,
-                translationEnabled: translationEnabled,
-                primaryResult: primaryResult,
-                match: match
-        ) {
-            return artistFallback
+        if let fallbackResult {
+            return fallbackResult
         }
         if primaryResult == nil, let match {
             return catalogUnavailableResult(

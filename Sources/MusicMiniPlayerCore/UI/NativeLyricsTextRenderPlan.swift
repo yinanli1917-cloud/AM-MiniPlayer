@@ -186,8 +186,8 @@ struct NativeLyricsTextRenderPlan: Equatable {
         let appliesTimedWordSweep = line.hasSyllableSync && !line.words.isEmpty
         let lineEndTime = line.words.last?.endTime ?? line.endTime
         let progress: CGFloat = appliesTimedWordSweep
-            ? 1
-            : linearProgress(currentTime: currentTime, startTime: line.startTime, endTime: lineEndTime)
+            ? wordCountProgress(words: line.words, currentTime: currentTime, lineStartTime: line.startTime, lineEndTime: lineEndTime)
+            : 1
         let postLineFade = postLineFadeOut(currentTime: currentTime, lineEndTime: lineEndTime)
         let opacity: CGFloat
         if isActiveLine && appliesTimedWordSweep {

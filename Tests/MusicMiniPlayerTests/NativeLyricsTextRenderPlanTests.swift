@@ -252,7 +252,7 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertTrue(plan.wordRuns.isEmpty)
         XCTAssertEqual(plan.mainSweepProgress, 1)
         XCTAssertEqual(plan.mainPostLineFade, 1)
-        XCTAssertEqual(Double(plan.translation?.progress ?? -1), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(Double(plan.translation?.progress ?? -1), 1.0, accuracy: 0.0001)
         XCTAssertEqual(plan.translation?.opacity, plan.constants.currentTranslationOpacityFactor)
     }
 

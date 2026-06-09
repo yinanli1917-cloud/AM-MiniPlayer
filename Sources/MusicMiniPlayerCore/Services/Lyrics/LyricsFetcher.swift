@@ -414,9 +414,9 @@ public final class LyricsFetcher {
         if shouldProtectAsciiNativeAlias {
             nativeProviderTimeout = 2.55
         } else if shouldProtectNativeProviderRace && !alb.isEmpty {
-            nativeProviderTimeout = 4.2
+            nativeProviderTimeout = 3.0
         } else if shouldProtectNativeProviderRace {
-            nativeProviderTimeout = 3.2
+            nativeProviderTimeout = 2.8
         } else {
             nativeProviderTimeout = 2.2
         }
@@ -898,11 +898,11 @@ public final class LyricsFetcher {
                 return nil
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: 4_500_000_000)
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
                 return nil
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
                 return nil
             }
 
@@ -1167,7 +1167,7 @@ public final class LyricsFetcher {
                         && self.earlyReturnSources.contains($0.source)
                         && ($0.titleMatched || self.selectedHasStrongNativeAliasIdentity($0))
                 }
-                if hasOnlyLooseNativeAliasSyncedResults && (branch2Fired.value || albumScopedBranchFired.value) && elapsed < 4.6 {
+                if hasOnlyLooseNativeAliasSyncedResults && (branch2Fired.value || albumScopedBranchFired.value) && elapsed < 3.5 {
                     continue
                 }
                 if (hasHighConfidenceResult && elapsed >= 1.5)
@@ -1180,8 +1180,8 @@ public final class LyricsFetcher {
                     || (!protectNativeProviderRace && branch2Fired.value && !branch2Landed.value && !libraryNativeTitleBranchFired.value && elapsed >= 2.2)
                     || (!protectNativeProviderRace && branch3Fired.value && !branch3Landed.value && elapsed >= 2.2)
                     || (hasAnySyncedResult && !protectNativeProviderRace && elapsed >= 2.2)
-                    || (protectNativeProviderRace && elapsed >= 4.6)
-                    || elapsed >= 8.0 {
+                    || (protectNativeProviderRace && elapsed >= 3.5)
+                    || elapsed >= 5.0 {
                     DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
                     group.cancelAll()
                     break

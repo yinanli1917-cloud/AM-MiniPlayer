@@ -619,6 +619,7 @@ final class NativeLyricsSurfaceView: NSView {
         }
     }
 
+
     func configure(_ configuration: LyricsLayerRendererConfiguration) {
         installLocalEventMonitor()
         if let previous = self.configuration?.trackContext,

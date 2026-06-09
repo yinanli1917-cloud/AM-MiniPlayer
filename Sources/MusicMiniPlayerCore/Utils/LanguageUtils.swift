@@ -39,6 +39,12 @@ public enum LanguageUtils {
         "Greek":      [0x0370...0x03FF],
     ]
 
+    // Pre-computed range arrays — avoids dictionary lookup + array concatenation per call.
+    private static let chineseRanges: [ClosedRange<UInt32>] = scriptRanges["Chinese"]!
+    private static let japaneseRanges: [ClosedRange<UInt32>] = scriptRanges["Japanese"]!
+    private static let koreanRanges: [ClosedRange<UInt32>] = scriptRanges["Korean"]!
+    private static let allCJKRanges: [ClosedRange<UInt32>] = chineseRanges + japaneseRanges + koreanRanges
+
     /// 通用 Unicode 范围检测
     private static func containsScript(_ text: String, ranges: [ClosedRange<UInt32>]) -> Bool {
         text.unicodeScalars.contains { scalar in
@@ -48,39 +54,42 @@ public enum LanguageUtils {
 
     // MARK: - CJK Detection
 
-    public static func containsChinese(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Chinese"]!) }
-    public static func containsJapanese(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Japanese"]!) }
-    public static func containsKorean(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Korean"]!) }
+    public static func containsChinese(_ text: String) -> Bool { containsScript(text, ranges: chineseRanges) }
+    public static func containsJapanese(_ text: String) -> Bool { containsScript(text, ranges: japaneseRanges) }
+    public static func containsKorean(_ text: String) -> Bool { containsScript(text, ranges: koreanRanges) }
 
     /// 检测是否包含任何 CJK 字符（中日韩），单次遍历
     public static func containsCJK(_ text: String) -> Bool {
-        let allCJKRanges = scriptRanges["Chinese"]! + scriptRanges["Japanese"]! + scriptRanges["Korean"]!
-        return containsScript(text, ranges: allCJKRanges)
+        containsScript(text, ranges: allCJKRanges)
     }
 
-    /// 单字符 CJK 判定（复用 scriptRanges，供跨文件调用）
+    /// 单字符 CJK 判定
     public static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
         let v = scalar.value
-        let allCJKRanges = scriptRanges["Chinese"]! + scriptRanges["Japanese"]! + scriptRanges["Korean"]!
         return allCJKRanges.contains { $0.contains(v) }
     }
 
     /// Scalar-level Chinese detection (CJK Unified Ideographs — shared with Japanese kanji)
     public static func isChineseScalar(_ scalar: Unicode.Scalar) -> Bool {
-        scriptRanges["Chinese"]!.contains { $0.contains(scalar.value) }
+        chineseRanges.contains { $0.contains(scalar.value) }
     }
 
     /// Scalar-level Japanese kana detection (hiragana + katakana only, excludes kanji)
     public static func isJapaneseKana(_ scalar: Unicode.Scalar) -> Bool {
-        scriptRanges["Japanese"]!.contains { $0.contains(scalar.value) }
+        japaneseRanges.contains { $0.contains(scalar.value) }
     }
 
     // MARK: - Southeast Asian Scripts (东南亚)
 
-    public static func containsThai(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Thai"]!) }
-    public static func containsBurmese(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Burmese"]!) }
-    public static func containsKhmer(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Khmer"]!) }
-    public static func containsLao(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Lao"]!) }
+    private static let thaiRanges: [ClosedRange<UInt32>] = scriptRanges["Thai"]!
+    private static let burmeseRanges: [ClosedRange<UInt32>] = scriptRanges["Burmese"]!
+    private static let khmerRanges: [ClosedRange<UInt32>] = scriptRanges["Khmer"]!
+    private static let laoRanges: [ClosedRange<UInt32>] = scriptRanges["Lao"]!
+
+    public static func containsThai(_ text: String) -> Bool { containsScript(text, ranges: thaiRanges) }
+    public static func containsBurmese(_ text: String) -> Bool { containsScript(text, ranges: burmeseRanges) }
+    public static func containsKhmer(_ text: String) -> Bool { containsScript(text, ranges: khmerRanges) }
+    public static func containsLao(_ text: String) -> Bool { containsScript(text, ranges: laoRanges) }
 
     /// 越南文用 CharacterSet（带声调拉丁字母，无法用 Unicode 连续范围表达）
     public static func containsVietnamese(_ text: String) -> Bool {
@@ -92,19 +101,30 @@ public enum LanguageUtils {
 
     // MARK: - South Asian Scripts (印度次大陆)
 
-    public static func containsDevanagari(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Devanagari"]!) }
-    public static func containsTamil(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Tamil"]!) }
-    public static func containsTelugu(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Telugu"]!) }
+    private static let devanagariRanges: [ClosedRange<UInt32>] = scriptRanges["Devanagari"]!
+    private static let tamilRanges: [ClosedRange<UInt32>] = scriptRanges["Tamil"]!
+    private static let teluguRanges: [ClosedRange<UInt32>] = scriptRanges["Telugu"]!
+
+    public static func containsDevanagari(_ text: String) -> Bool { containsScript(text, ranges: devanagariRanges) }
+    public static func containsTamil(_ text: String) -> Bool { containsScript(text, ranges: tamilRanges) }
+    public static func containsTelugu(_ text: String) -> Bool { containsScript(text, ranges: teluguRanges) }
 
     // MARK: - Middle Eastern Scripts (中东)
 
-    public static func containsArabic(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Arabic"]!) }
-    public static func containsHebrew(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Hebrew"]!) }
+    private static let arabicRanges: [ClosedRange<UInt32>] = scriptRanges["Arabic"]!
+
+    public static func containsArabic(_ text: String) -> Bool { containsScript(text, ranges: arabicRanges) }
+    private static let hebrewRanges: [ClosedRange<UInt32>] = scriptRanges["Hebrew"]!
+
+    public static func containsHebrew(_ text: String) -> Bool { containsScript(text, ranges: hebrewRanges) }
 
     // MARK: - European Scripts (欧洲)
 
-    public static func containsCyrillic(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Cyrillic"]!) }
-    public static func containsGreek(_ text: String) -> Bool { containsScript(text, ranges: scriptRanges["Greek"]!) }
+    private static let cyrillicRanges: [ClosedRange<UInt32>] = scriptRanges["Cyrillic"]!
+    private static let greekRanges: [ClosedRange<UInt32>] = scriptRanges["Greek"]!
+
+    public static func containsCyrillic(_ text: String) -> Bool { containsScript(text, ranges: cyrillicRanges) }
+    public static func containsGreek(_ text: String) -> Bool { containsScript(text, ranges: greekRanges) }
 
     // MARK: - ASCII Detection
 
@@ -477,16 +497,25 @@ public extension LanguageUtils {
     /// "黃韻玲" → "huangyunling", "ミドリ" → "midori".
     /// Used for cross-script album/title matching when Apple Music shows a
     /// pinyin/romanized variant while NE/QQ indexes the original CJK.
+    private static let latinCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 128
+        return cache
+    }()
+
     static func toLatinLower(_ text: String) -> String {
+        let key = text as NSString
+        if let cached = latinCache.object(forKey: key) { return cached as String }
         let mutableString = NSMutableString(string: text)
         CFStringTransform(mutableString, nil, "Any-Latin" as CFString, false)
-        CFStringTransform(mutableString, nil, "Latin-ASCII" as CFString, false)  // strips tone marks
+        CFStringTransform(mutableString, nil, "Latin-ASCII" as CFString, false)
         let asString = (mutableString as String).lowercased()
-        // Drop non-alphanumeric so "ping fan" and "pingfan" compare equal.
-        return asString.unicodeScalars
+        let result = asString.unicodeScalars
             .filter { CharacterSet.alphanumerics.contains($0) }
             .map(String.init)
             .joined()
+        latinCache.setObject(result as NSString, forKey: key)
+        return result
     }
 
     // ====================================================================
