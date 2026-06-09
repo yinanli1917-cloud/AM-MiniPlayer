@@ -697,6 +697,8 @@ final class NativeLyricsSurfaceView: NSView {
         let visibleRows = visibleRows(for: runtimeConfiguration)
         let nextIDs = Set(visibleRows.map(\.id))
         var unmountedCount = 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         for (id, view) in rowViews where !nextIDs.contains(id) {
             view.layer?.removeAllAnimations()
             view.removeFromSuperview()
@@ -726,7 +728,7 @@ final class NativeLyricsSurfaceView: NSView {
         let activeTextPhaseIndex = runtimeConfiguration.effectiveCurrentIndex
         let textPhaseIndexChanged = previousTextPhaseIndex != activeTextPhaseIndex
         var mountedCount = 0
-        withDisabledLayerActions {
+        do {
             for row in visibleRows {
                 let view = rowViews[row.id] ?? rowViewReusePool.popLast() ?? NativeLyricsRowView()
                 if rowViews[row.id] == nil {
@@ -758,6 +760,7 @@ final class NativeLyricsSurfaceView: NSView {
                 applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
             }
         }
+        CATransaction.commit()
         lastConfiguredTextPhaseIndex = activeTextPhaseIndex
         renderTelemetry.recordLifecycle(
             mounted: mountedCount,
