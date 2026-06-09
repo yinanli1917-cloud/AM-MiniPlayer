@@ -46,9 +46,6 @@ enum NativeLyricsRowMeasurement {
             height += translationLoadingRowHeight
         }
 
-        if row.interlude != nil {
-            height += 34
-        }
         return ceil(height)
     }
 

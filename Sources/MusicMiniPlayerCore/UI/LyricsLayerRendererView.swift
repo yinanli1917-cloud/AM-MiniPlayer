@@ -1088,7 +1088,13 @@ final class NativeLyricsSurfaceView: NSView {
                 visualStates[row.index]?.snap(to: target)
                 changed = changed || before != visualStates[row.index]
             } else {
-                changed = visualStates[row.index]?.setTarget(target) == true || changed
+                let wasActive = visualStates[row.index]?.target.isActive ?? false
+                if wasActive && !target.isActive {
+                    visualStates[row.index]?.snap(to: target)
+                    changed = true
+                } else {
+                    changed = visualStates[row.index]?.setTarget(target) == true || changed
+                }
             }
         }
         return changed
