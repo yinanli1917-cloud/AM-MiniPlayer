@@ -1,5 +1,5 @@
 /**
- * [INPUT]: Depends on MusicController, LyricsService, LyricLineView, SharedBottomControls
+ * [INPUT]: Depends on MusicController, LyricsService, SharedBottomControls
  * [OUTPUT]: Exports LyricsView
  * [POS]: Full-screen lyrics UI
  */
@@ -948,52 +948,9 @@ public struct LyricsView: View {
                             }
                         }
                     )
-                } else {
-                    ZStack(alignment: .topLeading) {
-                        ForEach(Array(displayLines.enumerated()), id: \.element.id) { index, displayLine in
-                            let line = displayLine.line
-                            let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
-                                ? lyricsService.lyrics[displayLine.sourceIndex]
-                                : line
-                            if visibleIndices.contains(index) {
-                                let lineOffset = calculateLineOffset(
-                                    index: index,
-                                    currentIndex: displayIndex,
-                                    anchorY: anchorY
-                                )
-                                let fullOffset = lineOffset + calculateAccumulatedHeight(upTo: index)
-
-                                lyricLineContent(
-                                    line: line,
-                                    index: index,
-                                    currentIndex: displayIndex,
-                                    sourceIndex: displayLine.sourceIndex,
-                                    isLastSegment: displayLine.isLastSegment,
-                                    isAwaitingTranslation: LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
-                                        index: displayLine.sourceIndex,
-                                        line: sourceLine,
-                                        pendingLineIndices: pendingTranslationLineIndices,
-                                        isTranslating: lyricsService.isTranslating,
-                                        segmentIndex: displayLine.segmentIndex
-                                    )
-                                )
-                                .background(lineHeightTracker(index: index))
-                                .allowsHitTesting(true)
-                                .offset(y: fullOffset)
-                                .animation(
-                                    scroll.isManualScrolling || reduceMotion || (suppressInitialLineMotion && !isLineWaveActive) ? nil : .interpolatingSpring(
-                                        mass: 1, stiffness: 100, damping: 16.5, initialVelocity: 0
-                                    ),
-                                    value: scroll.isManualScrolling ? 0 : fullOffset
-                                )
-                                .background(lineMotionTracker(index: index))
-                            }
-                        }
-                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .offset(y: layerActive ? 0 : scroll.manualScrollOffset)
             .coordinateSpace(name: lyricLineMotionCoordinateSpace)
             .onPreferenceChange(LyricLineMotionFramePreferenceKey.self) { frames in
                 guard lineMotionFrameCaptureActive, !layerActive else {
@@ -1075,66 +1032,6 @@ public struct LyricsView: View {
         }
     }
 
-    @ViewBuilder
-    private func lyricLineContent(
-        line: LyricLine,
-        index: Int,
-        currentIndex: Int,
-        sourceIndex: Int,
-        isLastSegment: Bool,
-        isAwaitingTranslation: Bool
-    ) -> some View {
-            if isPreludeEllipsis(line.text) {
-                let nextLineStartTime: TimeInterval = {
-                    if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
-                        return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
-                    }
-                    for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
-                        let nextLine = lyricsService.lyrics[nextIndex]
-                        if !isPreludeEllipsis(nextLine.text) { return nextLine.startTime }
-                    }
-                    return line.endTime
-                }()
-
-                PreludeDotsView(
-                    startTime: line.startTime,
-                    endTime: nextLineStartTime,
-                    timePublisher: musicController.timePublisher
-                )
-                .frame(height: 30)
-                .padding(.leading, lyricContentLeadingInset)
-                .padding(.trailing, lyricContentTrailingInset)
-                .padding(.vertical, 8)
-            } else {
-                VStack(spacing: 0) {
-                    LyricLineView(
-                        line: line,
-                        index: index,
-                        currentIndex: currentIndex,
-                        isScrolling: scroll.isManualScrolling,
-                        musicController: musicController,
-                        onTap: { handleLineTap(line: line) },
-                        showTranslation: lyricsService.showTranslation,
-                        isTranslating: isAwaitingTranslation,
-                        translationFailed: lyricsService.translationFailed && isAwaitingTranslation,
-                        isPrecedingInterlude: lyricsService.interludeAfterIndex == index
-                    )
-                    .padding(.leading, lyricContentLeadingInset)
-                    .padding(.trailing, lyricContentTrailingInset)
-
-                    if isLastSegment, let interludeInfo = checkForInterlude(at: sourceIndex) {
-                        PreludeDotsView(
-                            startTime: interludeInfo.startTime,
-                            endTime: interludeInfo.endTime,
-                            timePublisher: musicController.timePublisher,
-                            gateByTimeRange: true
-                        )
-                        .padding(.leading, lyricContentLeadingInset)
-                        .padding(.trailing, lyricContentTrailingInset)
-                    }
-                }
-            }
-    }
 
     private func refreshPendingTranslationLineIndices() {
         cachedPendingTranslationLineIndices = lyricsService.showTranslation
@@ -1142,38 +1039,6 @@ public struct LyricsView: View {
             : []
     }
 
-    private func lineHeightTracker(index: Int) -> some View {
-        GeometryReader { lineGeo in
-            Color.clear.onAppear {
-                let h = lineGeo.size.height
-                if abs((cache.lineHeights[index] ?? 0) - h) > 2.0 {
-                    cache.lineHeights[index] = h
-                    cache.heightCacheInvalidated = true
-                    scheduleHeightCacheUpdate()
-                }
-            }
-            .onChange(of: lineGeo.size.height) { _, newHeight in
-                // Ignore tiny <=2pt changes caused by scale-animation jitter.
-                if abs((cache.lineHeights[index] ?? 0) - newHeight) > 2.0 {
-                    cache.lineHeights[index] = newHeight
-                    cache.heightCacheInvalidated = true
-                    scheduleHeightCacheUpdate()
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func lineMotionTracker(index: Int) -> some View {
-        if lineMotionFrameCaptureActive {
-            GeometryReader { lineGeo in
-                Color.clear.preference(
-                    key: LyricLineMotionFramePreferenceKey.self,
-                    value: [index: lineGeo.frame(in: .named(lyricLineMotionCoordinateSpace))]
-                )
-            }
-        }
-    }
 
     private func requestLatestLyricLineMotionCapture() {
         let now = Date()
@@ -2578,6 +2443,32 @@ public struct LyricsView: View {
 }
 
 // MARK: - Preview
+
+// MARK: - SystemTranslationModifier (macOS 15.0+)
+
+struct SystemTranslationModifier: ViewModifier {
+    var translationSessionConfigAny: Any?
+    let lyricsService: LyricsService
+    let translationTrigger: Int
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            if let config = translationSessionConfigAny as? TranslationSession.Configuration {
+                content
+                    .translationTask(config, action: { session in
+                        guard lyricsService.showTranslation,
+                              !lyricsService.lyrics.isEmpty else { return }
+                        await lyricsService.performSystemTranslation(session: session)
+                    })
+                    .id(translationTrigger)
+            } else {
+                content
+            }
+        } else {
+            content
+        }
+    }
+}
 
 #if DEBUG
 struct LyricsView_Previews: PreviewProvider {
