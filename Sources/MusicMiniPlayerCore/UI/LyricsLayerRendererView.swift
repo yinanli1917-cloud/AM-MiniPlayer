@@ -2768,6 +2768,7 @@ final class NativeLyricsRowView: NSView {
         onHoverChanged = nil
         onHoverBackgroundVisible = nil
         onTap = nil
+        layer?.opacity = 0
         backgroundLayer.isHidden = true
         lastHoverBackgroundVisible = false
         layer?.filters = nil
