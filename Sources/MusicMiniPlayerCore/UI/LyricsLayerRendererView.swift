@@ -424,8 +424,6 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private var configuration: LyricsLayerRendererConfiguration?
-    private var pendingConfiguration: LyricsLayerRendererConfiguration?
-    private var configureGeneration: Int = 0
     private let presentationEngine = LyricsPresentationEngine()
     private var rowViews: [String: NativeLyricsRowView] = [:]
     private var rowViewReusePool: [NativeLyricsRowView] = []
@@ -622,31 +620,9 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     func configure(_ configuration: LyricsLayerRendererConfiguration) {
-        let isTrackChange = self.configuration.map {
-            !Self.isSameTrackIdentity($0.trackContext, configuration.trackContext)
-        } ?? true
-        if isTrackChange {
-            configureGeneration += 1
-            let generation = configureGeneration
-            pendingConfiguration = configuration
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.configureGeneration == generation,
-                      let config = self.pendingConfiguration else { return }
-                self.pendingConfiguration = nil
-                self.applyConfigure(config)
-            }
-        } else {
-            pendingConfiguration = nil
-            applyConfigure(configuration)
-        }
-    }
-
-    private func applyConfigure(_ configuration: LyricsLayerRendererConfiguration) {
         installLocalEventMonitor()
-        let isTrackChange: Bool
         if let previous = self.configuration?.trackContext,
            !Self.isSameTrackIdentity(previous, configuration.trackContext) {
-            isTrackChange = true
             cancelManualScrollTimers()
             cancelNativeLineAdvanceTimer()
             manualScrollState.reset()
@@ -658,16 +634,8 @@ final class NativeLyricsSurfaceView: NSView {
             nativeTimelineState = nil
             pausedSemanticLocked = false
             lastTextPhaseUpdateAt = nil
-        } else {
-            isTrackChange = self.configuration == nil
         }
-        let structuralChange = isTrackChange
-            || !isStructurallyEqual(self.configuration, configuration)
         self.configuration = configuration
-        guard structuralChange else {
-            startPresentationLoop()
-            return
-        }
 
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         updateNativeLineMotionSamplingTimer(configuration: runtimeConfiguration)
@@ -1215,27 +1183,6 @@ final class NativeLyricsSurfaceView: NSView {
             isActive: visual.target.isActive,
             isSettled: visual.isSettled
         ))
-    }
-
-    private func isStructurallyEqual(
-        _ lhs: LyricsLayerRendererConfiguration?,
-        _ rhs: LyricsLayerRendererConfiguration
-    ) -> Bool {
-        guard let lhs else { return false }
-        return lhs.rows.count == rhs.rows.count
-            && lhs.rows.map(\.id) == rhs.rows.map(\.id)
-            && lhs.renderedIndices == rhs.renderedIndices
-            && lhs.accumulatedHeights == rhs.accumulatedHeights
-            && lhs.showTranslation == rhs.showTranslation
-            && lhs.isTranslating == rhs.isTranslating
-            && lhs.translationFailed == rhs.translationFailed
-            && lhs.pendingTranslationLineIndices == rhs.pendingTranslationLineIndices
-            && lhs.interludeAfterIndex == rhs.interludeAfterIndex
-            && lhs.controlsVisible == rhs.controlsVisible
-            && lhs.reduceMotion == rhs.reduceMotion
-            && lhs.suppressInitialMotion == rhs.suppressInitialMotion
-            && abs(lhs.rowWidth - rhs.rowWidth) < 1
-            && lhs.directSnapRequest?.id == rhs.directSnapRequest?.id
     }
 
     private func withDisabledLayerActions(_ body: () -> Void) {
