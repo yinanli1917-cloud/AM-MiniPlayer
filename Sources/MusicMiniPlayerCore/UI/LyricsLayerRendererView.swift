@@ -479,6 +479,9 @@ final class NativeLyricsSurfaceView: NSView {
     #if LOCAL_DEVELOPER_BUILD
     private var lastImplicitAnimationAuditLog: [String: CFTimeInterval] = [:]
     private var implicitAnimationAuditTickCounter = 0
+    private var visualTrajectories: [String: [VisualTrajectorySample]] = [:]
+    private var lastTrajectoryDump: [String: CFTimeInterval] = [:]
+    private var lastTrajectoryPrune: CFTimeInterval = 0
     #endif
     private var lastFrameCadenceTick: CFTimeInterval?
     private var frameSummaryStartedAt: CFTimeInterval?
@@ -1244,6 +1247,17 @@ final class NativeLyricsSurfaceView: NSView {
             isActive: visual.target.isActive,
             isSettled: visual.isSettled
         ))
+        #if LOCAL_DEVELOPER_BUILD
+        recordVisualTrajectory(
+            rowID: row.id,
+            rowIndex: row.index,
+            y: y,
+            opacity: visual.opacity,
+            blur: appliedBlur,
+            scale: visual.scale,
+            snap: snap
+        )
+        #endif
     }
 
     private func withDisabledLayerActions(_ body: () -> Void) {
@@ -1712,6 +1726,104 @@ final class NativeLyricsSurfaceView: NSView {
             if let mask = current.mask { stack.append((mask, path + ".mask")) }
             for (i, sub) in (current.sublayers ?? []).enumerated() { stack.append((sub, path + ".\(i)")) }
         }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Visual trajectory recorder (self-flagging diagnosis)
+    //
+    // The implicit-animation auditor catches stray ANIMATIONS; this recorder catches
+    // wrong VALUES: a row rendered for 1-2 ticks at the wrong y / blur / opacity and
+    // then corrected (the "heavily blurred line flashes" class — invisible to the
+    // auditor because every property set is legitimate, just transiently wrong).
+    // Per visible row we keep a short ring of applied values per tick and flag
+    // jump-and-revert trajectories:
+    //   - mount flash: first tick differs wildly from the immediately-settled value
+    //   - spike: a big step out followed by a big step back within a few ticks
+    // Snap modes (track change, direct snap, manual scroll release) legitimately
+    // teleport rows, so samples recorded with snap=true never trigger flags.
+    // Each flag dumps the trajectory + context once per row per 2s.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    private struct VisualTrajectorySample {
+        let time: CFTimeInterval
+        let y: CGFloat
+        let opacity: CGFloat
+        let blur: CGFloat
+        let scale: CGFloat
+        let snap: Bool
+    }
+
+    private func recordVisualTrajectory(
+        rowID: String,
+        rowIndex: Int,
+        y: CGFloat,
+        opacity: CGFloat,
+        blur: CGFloat,
+        scale: CGFloat,
+        snap: Bool
+    ) {
+        let now = CACurrentMediaTime()
+        var ring = visualTrajectories[rowID] ?? []
+        ring.append(VisualTrajectorySample(time: now, y: y, opacity: opacity, blur: blur, scale: scale, snap: snap))
+        if ring.count > 24 { ring.removeFirst(ring.count - 24) }
+        visualTrajectories[rowID] = ring
+        detectTrajectoryAnomaly(rowID: rowID, rowIndex: rowIndex, ring: ring, now: now)
+
+        // Bound the dictionary: drop rows that haven't been applied for 5s.
+        if now - lastTrajectoryPrune > 5 {
+            lastTrajectoryPrune = now
+            visualTrajectories = visualTrajectories.filter { now - ($0.value.last?.time ?? 0) < 5 }
+        }
+    }
+
+    private func detectTrajectoryAnomaly(rowID: String, rowIndex: Int, ring: [VisualTrajectorySample], now: CFTimeInterval) {
+        guard ring.count >= 3 else { return }
+        let s = ring.suffix(4)
+        let a = Array(s)
+        // Only consider windows where the row was visible and not in a snap mode.
+        guard a.allSatisfy({ !$0.snap }), a.contains(where: { $0.opacity > 0.05 }) else { return }
+        let last = a.count - 1
+
+        var reasons: [String] = []
+        // Jump-and-revert on y: one step >40pt that comes >60% back within the window.
+        for i in 1..<last {
+            let out = a[i].y - a[i - 1].y
+            let back = a[last].y - a[i].y
+            if abs(out) > 40, abs(back) > abs(out) * 0.6, out.sign != back.sign {
+                reasons.append("y \(Int(a[i - 1].y))→\(Int(a[i].y))→\(Int(a[last].y))")
+                break
+            }
+        }
+        // Blur flash: rendered radius spikes by >3.5 and reverts.
+        for i in 1..<last {
+            let out = a[i].blur - a[i - 1].blur
+            let back = a[last].blur - a[i].blur
+            if abs(out) > 3.5, abs(back) > abs(out) * 0.6, out.sign != back.sign {
+                reasons.append("blur \(String(format: "%.1f→%.1f→%.1f", a[i - 1].blur, a[i].blur, a[last].blur))")
+                break
+            }
+        }
+        // Opacity flash: visible→invisible→visible (or inverse) inside the window.
+        for i in 1..<last {
+            let out = a[i].opacity - a[i - 1].opacity
+            let back = a[last].opacity - a[i].opacity
+            if abs(out) > 0.5, abs(back) > 0.4, out.sign != back.sign {
+                reasons.append("opacity \(String(format: "%.2f→%.2f→%.2f", a[i - 1].opacity, a[i].opacity, a[last].opacity))")
+                break
+            }
+        }
+        guard !reasons.isEmpty else { return }
+        let lastDump = lastTrajectoryDump[rowID] ?? 0
+        guard now - lastDump > 2 else { return }
+        lastTrajectoryDump[rowID] = now
+
+        let trajectory = ring.suffix(8).map {
+            String(format: "(t%+.0fms y%.0f o%.2f b%.1f s%.2f%@)",
+                   ($0.time - now) * 1000, $0.y, $0.opacity, $0.blur, $0.scale, $0.snap ? " S" : "")
+        }.joined(separator: " ")
+        let ctx = configuration.map {
+            "idx=\($0.effectiveCurrentIndex) rows=\($0.rows.count) track='\($0.trackContext.title.prefix(24))'"
+        } ?? "no-config"
+        DebugLogger.log("VisualSpike", "row[\(rowIndex)] \(rowID) \(reasons.joined(separator: " + ")) | \(ctx) | \(trajectory)")
     }
     #endif
 
