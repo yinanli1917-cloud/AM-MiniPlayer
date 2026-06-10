@@ -1272,10 +1272,21 @@ public class MusicController: ObservableObject {
                 return true
             }()
 
-            if positionJumpedBack || radioBackstopDue {
+            // Identity heartbeat for ALL tracks (5s while playing): notifications can be
+            // missed or race with skip commands, leaving the displayed title/duration stale
+            // for seconds (recorded as the "0:00/-3:27 while a 2:20 track plays" glitch).
+            // The same AppleScript snapshot that already serves the radio backstop heals
+            // identity (processPlayerState) and duration (below) within one heartbeat.
+            let identityHeartbeatDue: Bool = {
+                guard playing, !self.seekPending, !self.radioTrackCheckInFlight,
+                      Date().timeIntervalSince(self.lastRadioTrackCheckTime) >= 5.0 else { return false }
+                return true
+            }()
+
+            if positionJumpedBack || radioBackstopDue || identityHeartbeatDue {
                 let reason = positionJumpedBack
                     ? "position jump \(String(format: "%.1f", prevPosition))s→\(String(format: "%.1f", position))s"
-                    : "radio backstop (1s)"
+                    : (radioBackstopDue ? "radio backstop (1s)" : "identity heartbeat (5s)")
                 DebugLogger.log("Poll", "🔄 Track check via AppleScript — reason: \(reason)")
                 DispatchQueue.main.async { self.radioTrackCheckInFlight = true }
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -1291,6 +1302,13 @@ public class MusicController: ObservableObject {
                         if trackChanged {
                             DebugLogger.log("Poll", "🎵 Track change confirmed: '\(self.currentTrackTitle)' → '\(snapshot.trackName)' (reason: \(reason))")
                             self.processPlayerState(snapshot)
+                        } else if snapshot.trackDuration > 0,
+                                  abs(snapshot.trackDuration - self.duration) > 1.0 {
+                            // Same track, wrong total: a stale "Total Time" survived a race
+                            // (e.g. notification metadata applied across a skip). The progress
+                            // bar otherwise shows the wrong remaining time until the 30s sync.
+                            DebugLogger.log("Poll", "⏱ Duration self-heal: \(String(format: "%.0f", self.duration))s → \(String(format: "%.0f", snapshot.trackDuration))s")
+                            self.duration = snapshot.trackDuration
                         }
                     }
                 }
