@@ -12,6 +12,7 @@ import AppKit
 public struct FluidGradientBackground: View {
     let artwork: NSImage?
     @State private var displayedArtwork: NSImage?
+    @State private var artworkVisible = false
     @State private var tone = ArtworkBackgroundToneMap.neutral
 
     private static let crossfade = Animation.easeInOut(duration: 0.6)
@@ -58,21 +59,41 @@ public struct FluidGradientBackground: View {
                         Color.black
                             .opacity(tone.shadeOpacity)
                     }
-                    // Distinct identity per artwork: a change crossfades old → new instead of
-                    // mutating one subtree in place (which applies as an instant cut).
+                    // Distinct identity per artwork: a REPLACEMENT crossfades old → new
+                    // (insertion transition). REMOVAL (artwork → nil) deliberately does NOT
+                    // use a removal transition: removal transitions silently skip the fade on
+                    // blend-mode/blur subtrees (observed as the gold→black 1-frame cut on
+                    // song change). Instead the subtree stays mounted and fades via the
+                    // modifier opacity below, which animates reliably; the image is released
+                    // only after the fade lands.
                     .id(ObjectIdentifier(artwork))
                     .transition(.opacity)
+                    .opacity(artworkVisible ? 1 : 0)
                 }
             }
         }
         .onAppear {
             displayedArtwork = artwork
+            artworkVisible = artwork != nil
             updateTone()
         }
         .onChange(of: artwork) {
-            withAnimation(Self.crossfade) {
-                displayedArtwork = artwork
-                updateTone()
+            if let newArtwork = artwork {
+                withAnimation(Self.crossfade) {
+                    displayedArtwork = newArtwork
+                    artworkVisible = true
+                    updateTone()
+                }
+            } else {
+                withAnimation(Self.crossfade) {
+                    artworkVisible = false
+                    updateTone()
+                }
+                // Release the kept image once the fade has landed — unless a new
+                // artwork arrived meanwhile (artworkVisible flips back to true).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                    if !artworkVisible { displayedArtwork = nil }
+                }
             }
         }
     }
