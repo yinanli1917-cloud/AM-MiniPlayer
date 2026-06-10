@@ -49,6 +49,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 | POSTM-006 | romanized→CJK 路径 ASCII→ASCII 错配 | 2026-03-18 | Bug | P1 | ✅ 已完成 |
 | POSTM-007 | Chinese Translation Leak — Three Root Causes | 2026-03-22 | Bug | P1 | ✅ 已完成 |
 | POSTM-008 | Localized-title lyrics fallback missed synced sources | 2026-05-01 | Bug / Process | P1 | ✅ 已完成 |
+| POSTM-009 | 隐式 CALayer 动画闪烁家族（翻译左上角漂入/鬼影行/换轨陈旧行） | 2026-06-09 | Architecture | P1 | ✅ 已完成 |
 
 ---
 
@@ -59,6 +60,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - [POSTM-002](./002-page-switch-hover-desync.md) - 页面切换 hover 状态同步
 - [POSTM-003](./003-artwork-concurrent-blocking.md) - 封面加载并发阻塞
 - [POSTM-004](./004-lyrics-scroll-spacing.md) - 歌词视图滚动和间距
+- [POSTM-009](./009-implicit-calayer-animation-flicker-family.md) - 隐式 CALayer 动画闪烁家族（层级阻断 + 审计器 + 窗口托管测试）
 
 #### 🐛 Bug (代码缺陷)
 - [POSTM-006](./006-romanized-cjk-false-positive.md) - romanized→CJK ASCII→ASCII 错配
