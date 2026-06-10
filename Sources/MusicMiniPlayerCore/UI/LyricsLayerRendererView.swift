@@ -115,9 +115,47 @@ private final class NativeLyricsDisplayLinkScheduler {
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Implicit-animation hygiene
+//
+// Every layer this renderer creates is INERT: property changes apply instantly, never via
+// Core Animation's implicit 0.25s default actions. All intended motion comes from (a)
+// per-tick property sets driven by the presentation engine, or (b) explicit CAAnimations
+// added by name (the translation loading dots) — explicit adds bypass the action search,
+// so they keep working.
+//
+// WHY layer-level and not call-site CATransaction wraps: these are manual sublayers of
+// layer-backed NSViews. AppKit only suppresses implicit actions for a view's OWN backing
+// layer. Text/mask/dot sublayer frames are assigned inside NSView.layout(), which AppKit
+// runs in its own, un-wrapped transaction — no amount of call-site wrapping covers it.
+// Un-blocked, a translation layer whose committed frame is .zero implicitly animates
+// position+bounds from the origin when its real frame arrives ("drifts in from top-left"),
+// reflows ghost mid-flight, and per-tick wavefront/dot sets each spawn an interrupted
+// animation (smear/lag). The delegate is the FIRST stop in CA's action search, so
+// returning NSNull() kills every implicit action without enumerating keys.
+// Guarded by NativeLyricsImplicitAnimationTests.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+final class NativeLyricsInertLayerDelegate: NSObject, CALayerDelegate {
+    static let shared = NativeLyricsInertLayerDelegate()
+    func action(for layer: CALayer, forKey event: String) -> CAAction? { NSNull() }
+}
+
+extension CALayer {
+    /// Marks this renderer-managed layer as inert (no implicit actions) and returns it,
+    /// so creation sites read `CATextLayer().lyricsInert()`.
+    func lyricsInert() -> Self {
+        delegate = NativeLyricsInertLayerDelegate.shared
+        return self
+    }
+}
+
 private final class NativeLyricsSweepMaskLineLayer: CALayer {
-    private let solidLayer = CALayer()
-    private let fadeLayer = CALayer()
+    private let solidLayer = CALayer().lyricsInert()
+    private let fadeLayer = CALayer().lyricsInert()
+
+    // Mask line layers are created in per-tick batches; short-circuit the whole action
+    // search at the class level instead of relying on the delegate slot.
+    override func action(forKey event: String) -> CAAction? { NSNull() }
 
     override init() {
         super.init()
@@ -438,6 +476,10 @@ final class NativeLyricsSurfaceView: NSView {
     private var measuredHeightsByIndex: [Int: CGFloat] = [:]
     private var displayLink: CVDisplayLink?
     private var lastPresentationTick: CFTimeInterval?
+    #if LOCAL_DEVELOPER_BUILD
+    private var lastImplicitAnimationAuditLog: [String: CFTimeInterval] = [:]
+    private var implicitAnimationAuditTickCounter = 0
+    #endif
     private var lastFrameCadenceTick: CFTimeInterval?
     private var frameSummaryStartedAt: CFTimeInterval?
     private var frameCadence = NativeLyricsFrameCadenceAccumulator()
@@ -468,8 +510,8 @@ final class NativeLyricsSurfaceView: NSView {
         let v = _FlippedView()
         return v
     }()
-    private let surfaceInterludeDotContainer = CALayer()
-    private let surfaceInterludeDots: [CALayer] = (0..<3).map { _ in CALayer() }
+    private let surfaceInterludeDotContainer = CALayer().lyricsInert()
+    private let surfaceInterludeDots: [CALayer] = (0..<3).map { _ in CALayer().lyricsInert() }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1634,8 +1676,44 @@ final class NativeLyricsSurfaceView: NSView {
         }
         sampleNativeLineMotionDuringPresentationTickIfNeeded(runtimeConfiguration: runtimeConfiguration)
         checkPendingTapToLineSettleTiming(now: now)
+        #if LOCAL_DEVELOPER_BUILD
+        auditImplicitAnimationsIfNeeded(now: now)
+        #endif
         stopPresentationLoopIfIdle(runtimeConfiguration: runtimeConfiguration)
     }
+
+    #if LOCAL_DEVELOPER_BUILD
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Implicit-animation auditor (diagnosis tooling)
+    //
+    // One-frame glitches are nearly impossible to capture by eye or screenshots. Any
+    // animation attached to a renderer layer that we did not add by name is an
+    // implicit-action leak; the auditor turns each into a deterministic log line with
+    // the layer path + offending keys. Sampled every 15 ticks (≈4 Hz at 60 Hz): an
+    // implicit action lives 0.25 s, so every leak is observed at least once. Each
+    // unique signature logs at most once per 2 s to keep the log readable.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    private static let explicitAnimationKeys: Set<String> = ["translationLoadingOpacity"]
+
+    private func auditImplicitAnimationsIfNeeded(now: CFTimeInterval) {
+        implicitAnimationAuditTickCounter += 1
+        guard implicitAnimationAuditTickCounter % 15 == 0, let root = layer else { return }
+        var stack: [(CALayer, String)] = [(root, "surface")]
+        while let (current, path) = stack.popLast() {
+            let stray = (current.animationKeys() ?? []).filter { !Self.explicitAnimationKeys.contains($0) }
+            if !stray.isEmpty {
+                let signature = "\(path)<\(type(of: current))>:\(stray.sorted().joined(separator: ","))"
+                let last = lastImplicitAnimationAuditLog[signature] ?? 0
+                if now - last > 2 {
+                    lastImplicitAnimationAuditLog[signature] = now
+                    DebugLogger.log("ImplicitAnimLeak", signature)
+                }
+            }
+            if let mask = current.mask { stack.append((mask, path + ".mask")) }
+            for (i, sub) in (current.sublayers ?? []).enumerated() { stack.append((sub, path + ".\(i)")) }
+        }
+    }
+    #endif
 
     private func refreshTextRowsForActiveLineChange(
         previousIndex: Int?,
@@ -2633,22 +2711,22 @@ final class NativeLyricsRowView: NSView {
         nil
     }
 
-    private let backgroundLayer = CALayer()
-    private let mainTextLayer = CATextLayer()
-    private let mainBrightTextLayer = CATextLayer()
-    private let mainBaseRevealMaskLayer = CALayer()
-    private let mainSweepMaskLayer = CAGradientLayer()
-    private let mainPerRunSweepMaskLayer = CALayer()
-    private let mainEmphasisLayer = CALayer()
-    private let translationTextLayer = CATextLayer()
-    private let translationBrightTextLayer = CATextLayer()
-    private let translationSweepMaskLayer = CAGradientLayer()
-    private let translationPerLineSweepMaskLayer = CALayer()
-    private let translationLoadingDotContainerLayer = CALayer()
-    private let translationLoadingDotLayers: [CALayer] = (0..<3).map { _ in CALayer() }
-    private let interludeTextLayer = CATextLayer()
-    private let dotContainerLayer = CALayer()
-    private let dotLayers: [CALayer] = (0..<3).map { _ in CALayer() }
+    private let backgroundLayer = CALayer().lyricsInert()
+    private let mainTextLayer = CATextLayer().lyricsInert()
+    private let mainBrightTextLayer = CATextLayer().lyricsInert()
+    private let mainBaseRevealMaskLayer = CALayer().lyricsInert()
+    private let mainSweepMaskLayer = CAGradientLayer().lyricsInert()
+    private let mainPerRunSweepMaskLayer = CALayer().lyricsInert()
+    private let mainEmphasisLayer = CALayer().lyricsInert()
+    private let translationTextLayer = CATextLayer().lyricsInert()
+    private let translationBrightTextLayer = CATextLayer().lyricsInert()
+    private let translationSweepMaskLayer = CAGradientLayer().lyricsInert()
+    private let translationPerLineSweepMaskLayer = CALayer().lyricsInert()
+    private let translationLoadingDotContainerLayer = CALayer().lyricsInert()
+    private let translationLoadingDotLayers: [CALayer] = (0..<3).map { _ in CALayer().lyricsInert() }
+    private let interludeTextLayer = CATextLayer().lyricsInert()
+    private let dotContainerLayer = CALayer().lyricsInert()
+    private let dotLayers: [CALayer] = (0..<3).map { _ in CALayer().lyricsInert() }
     private var trackingAreaRef: NSTrackingArea?
     private var row: LayerBackedLyricRow?
     private var configuration: LyricsLayerRendererConfiguration?
@@ -2952,6 +3030,14 @@ final class NativeLyricsRowView: NSView {
         let metrics = applyActiveMainPhase(plan: plan, currentTime: currentTime)
         return (metrics.mainWordFloatSampleCount, metrics.mainWordFloatSpread)
     }
+
+    var debugTranslationTextLayerFrame: CGRect { translationTextLayer.frame }
+
+    var debugTranslationTextLayerHidden: Bool { translationTextLayer.isHidden }
+
+    /// Animation keys attached to the translation base layer. Implicit-action leaks show up
+    /// here as property-name keys ("position", "bounds", ...) that no renderer code ever adds.
+    var debugTranslationTextLayerAnimationKeys: [String] { translationTextLayer.animationKeys() ?? [] }
     #endif
 
 
@@ -4166,7 +4252,7 @@ final class NativeLyricsRowView: NSView {
         guard emphasisGlyphLayers.count < count else { return }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         while emphasisGlyphLayers.count < count {
-            let layer = CATextLayer()
+            let layer = CATextLayer().lyricsInert()
             layer.contentsScale = scale
             layer.font = NSFont.systemFont(ofSize: NativeLyricsTextConstants().mainFontSize, weight: .semibold)
             layer.fontSize = NativeLyricsTextConstants().mainFontSize
@@ -4291,7 +4377,7 @@ final class NativeLyricsRowView: NSView {
     }
 
     private func makeWordGlyphLayer(scale: CGFloat, fontSize: CGFloat) -> CATextLayer {
-        let layer = CATextLayer()
+        let layer = CATextLayer().lyricsInert()
         layer.contentsScale = scale
         layer.font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
         layer.fontSize = fontSize
