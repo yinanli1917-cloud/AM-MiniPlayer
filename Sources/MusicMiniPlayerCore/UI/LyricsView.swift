@@ -409,6 +409,7 @@ public struct LyricsView: View {
     @State private var cachedDisplayLyrics: [LyricLine] = []
     @State private var cachedFirstRealDisplayIndex: Int = 0
     @State private var cachedLayerRows: [LayerBackedLyricRow] = []
+    @State private var cachedLayerRowsTrackKey: String = ""
     @State private var cachedNativeRenderedIndices: [Int] = []
     @State private var nativeLyricsManualScrollActive = false
     @State private var nativeLyricsDirectSnapRequest: NativeLyricsDirectSnapRequest?
@@ -522,6 +523,7 @@ public struct LyricsView: View {
             cachedDisplayLines.removeAll()
             cachedDisplayLyrics.removeAll()
             cachedLayerRows.removeAll()
+            cachedLayerRowsTrackKey = ""
             cachedNativeRenderedIndices.removeAll()
             cachedFirstRealDisplayIndex = 0
             displayCurrentLineIndex = nil
@@ -843,8 +845,15 @@ public struct LyricsView: View {
                 }
                 return index
             }
-            let allLayerRows = cachedLayerRows
-            let nativeRenderedIndices = cachedNativeRenderedIndices
+            // Rows built for ANOTHER track must never render under the new track's identity.
+            // SwiftUI runs onChange(currentTrackTitle) AFTER the body, so the first render
+            // after a track change evaluates with the NEW title but the OLD cached rows —
+            // the surface then mounts one frame of the previous song's lyrics (stale-rows
+            // flash at track-change teardown). Gate on the identity the cache was built for
+            // and feed an empty list until refreshDisplayLineCache rebuilds it.
+            let cacheIsCurrentTrack = cachedLayerRowsTrackKey == Self.layerRowsTrackKey(for: musicController)
+            let allLayerRows = cacheIsCurrentTrack ? cachedLayerRows : []
+            let nativeRenderedIndices = cacheIsCurrentTrack ? cachedNativeRenderedIndices : []
             let layerHeightIndices = Set(nativeRenderedIndices + [displayIndex] + Array(activeWaveIndices))
             let layerAccumulatedHeights = Dictionary(uniqueKeysWithValues: layerHeightIndices.map {
                 ($0, cache.cachedAccumulatedHeights[$0] ?? calculateAccumulatedHeight(upTo: $0))
@@ -1938,6 +1947,12 @@ public struct LyricsView: View {
             ?? min(lyricsService.firstRealLyricIndex, max(0, displayLines.count - 1))
     }
 
+    /// Identity the layer-row cache is valid for; compared at body time (see the
+    /// stale-rows gate in scrollableLyricsContent).
+    static func layerRowsTrackKey(for controller: MusicController) -> String {
+        controller.currentTrackTitle + "|" + controller.currentArtist
+    }
+
     private func refreshDisplayLineCache() {
         let displayLines = makeDisplayLyricLines(from: lyricsService.lyrics)
         let firstRealDisplayIndex = displayFirstRealLyricIndex(in: displayLines)
@@ -1948,6 +1963,7 @@ public struct LyricsView: View {
             row.index == 0 || row.index >= firstRealDisplayIndex
         }
         cachedLayerRows = layerRows
+        cachedLayerRowsTrackKey = Self.layerRowsTrackKey(for: musicController)
         cachedNativeRenderedIndices = layerRows.map(\.index)
         displayCurrentLineIndex = displayIndex(
             forSourceIndex: lyricsService.currentLineIndex ?? lyricsService.firstRealLyricIndex,
