@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 无外部依赖
- * [OUTPUT]: DebugLogger 统一调试日志工具
- * [POS]: Utils 的日志子模块，替代分散的 debugLog 实现
+ * [INPUT]: No external dependencies
+ * [OUTPUT]: DebugLogger unified debug logging (log / setLogURL / setDiagnosticsFileLoggingEnabled / resetLogURL / clearLog / flush)
+ * [POS]: Logging submodule of Utils; all file writes funnel through one serial queue holding a single O_APPEND handle per log target
  * [PROTOCOL]: 变更时更新此头部，然后检查 Utils/CLAUDE.md
  */
 
@@ -20,6 +20,9 @@ public enum DebugLogger {
     private static let logURLLock = NSLock()
     private static var configuredLogURL = defaultLogURL
     private static var diagnosticsFileLoggingEnabled = false
+    // Bumped whenever the log target changes so queued writes reopen by path
+    // instead of following a renamed or removed inode. Guarded by logURLLock.
+    private static var logTargetGeneration = 0
 
     // Opt-in diagnostic logging. Playback and animation paths can call this
     // frequently, so normal app runs must avoid file I/O and date formatting.
@@ -62,6 +65,10 @@ public enum DebugLogger {
     public static func setLogURL(_ url: URL) {
         logURLLock.lock()
         configuredLogURL = url
+        // Bump even when the path is unchanged: callers rotate the file
+        // underneath us at session start, and the next write must open a
+        // fresh inode at this path instead of reusing the stale handle.
+        logTargetGeneration += 1
         logURLLock.unlock()
     }
 
@@ -75,39 +82,74 @@ public enum DebugLogger {
         logURLLock.lock()
         configuredLogURL = defaultLogURL
         diagnosticsFileLoggingEnabled = false
+        logTargetGeneration += 1
         logURLLock.unlock()
     }
 
-    // ── 内部实现 ──
-
-    private static func writeToFile(_ line: String) {
-        guard let data = line.data(using: .utf8) else { return }
-        let url = currentLogURL()
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-
-        if FileManager.default.fileExists(atPath: url.path) {
-            if let handle = FileHandle(forWritingAtPath: url.path) {
-                handle.seekToEndOfFile()
-                handle.write(data)
-                handle.closeFile()
-            }
-        } else {
-            FileManager.default.createFile(atPath: url.path, contents: data)
-        }
+    /// Block until every queued log line has reached the file.
+    public static func flush() {
+        writeQueue.sync {}
     }
 
     /// 清空日志文件
     public static func clearLog() {
-        try? FileManager.default.removeItem(at: currentLogURL())
+        let target = currentLogTarget()
+        writeQueue.sync {
+            closeWriteHandle()
+            try? FileManager.default.removeItem(at: target.url)
+        }
     }
 
-    private static func currentLogURL() -> URL {
+    // ── 内部实现 ──
+
+    // Serial queue owning the write handle: concurrent log calls can no
+    // longer interleave bytes (torn writes), and render-path callers only
+    // pay an async enqueue instead of a per-line open/seek/close.
+    private static let writeQueue = DispatchQueue(
+        label: "com.nanopod.debug-logger.writes",
+        qos: .utility
+    )
+
+    // Queue-confined state — touch only from writeQueue.
+    private static var writeHandle: FileHandle?
+    private static var writeHandleGeneration = -1
+
+    private static func writeToFile(_ line: String) {
+        guard let data = line.data(using: .utf8) else { return }
+        let target = currentLogTarget()
+        writeQueue.async {
+            guard let handle = appendHandle(for: target) else { return }
+            try? handle.write(contentsOf: data)
+        }
+    }
+
+    // Reuses one O_APPEND handle for the whole session; O_APPEND keeps each
+    // line append atomic even when another process writes to the same file.
+    private static func appendHandle(for target: (url: URL, generation: Int)) -> FileHandle? {
+        if let handle = writeHandle, writeHandleGeneration == target.generation {
+            return handle
+        }
+        closeWriteHandle()
+        try? FileManager.default.createDirectory(
+            at: target.url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let descriptor = open(target.url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        guard descriptor >= 0 else { return nil }
+        writeHandle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        writeHandleGeneration = target.generation
+        return writeHandle
+    }
+
+    private static func closeWriteHandle() {
+        try? writeHandle?.close()
+        writeHandle = nil
+    }
+
+    private static func currentLogTarget() -> (url: URL, generation: Int) {
         logURLLock.lock()
-        let url = configuredLogURL
+        let target = (url: configuredLogURL, generation: logTargetGeneration)
         logURLLock.unlock()
-        return url
+        return target
     }
 }

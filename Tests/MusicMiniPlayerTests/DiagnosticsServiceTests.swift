@@ -1254,9 +1254,69 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual(event?.metrics["clearedUnresolvedIncidentCount"] ?? -1, 1, accuracy: 0.001)
     }
 
-    func testDebugLogAttachmentIsSessionScoped() {
-        XCTAssertFalse(DiagnosticsService.shared.shouldAttachDebugLog(modifiedAt: Date().addingTimeInterval(-10)))
-        XCTAssertTrue(DiagnosticsService.shared.shouldAttachDebugLog(modifiedAt: Date()))
+    func testLaunchMaintenanceRotatesPreviousSessionDebugLogToTimestampedArchive() throws {
+        let root = try XCTUnwrap(diagnosticsStorageRoot)
+        let liveLogURL = root.appendingPathComponent("nanopod_debug.log")
+        try "previous session line\n".write(to: liveLogURL, atomically: true, encoding: .utf8)
+
+        DiagnosticsService.shared.runLaunchStorageMaintenanceForTesting()
+        DiagnosticsService.shared.flushStorageMaintenanceForTesting()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: liveLogURL.path))
+        let archives = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("nanopod_debug-") && $0.pathExtension == "log" }
+        XCTAssertEqual(archives.count, 1)
+        let archive = try XCTUnwrap(archives.first)
+        XCTAssertEqual(try String(contentsOf: archive, encoding: .utf8), "previous session line\n")
+    }
+
+    func testLaunchMaintenanceKeepsOnlyRecentDebugLogArchives() throws {
+        let root = try XCTUnwrap(diagnosticsStorageRoot)
+        for day in 1...6 {
+            let name = "nanopod_debug-2026010\(day)-000000.log"
+            try "archived session \(day)\n".write(
+                to: root.appendingPathComponent(name),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        DiagnosticsService.shared.runLaunchStorageMaintenanceForTesting()
+        DiagnosticsService.shared.flushStorageMaintenanceForTesting()
+
+        let archiveNames = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .map(\.lastPathComponent)
+            .filter { $0.hasPrefix("nanopod_debug-") }
+            .sorted()
+        XCTAssertEqual(archiveNames, [
+            "nanopod_debug-20260103-000000.log",
+            "nanopod_debug-20260104-000000.log",
+            "nanopod_debug-20260105-000000.log",
+            "nanopod_debug-20260106-000000.log"
+        ])
+    }
+
+    func testLaunchMaintenancePrunesOldReportBundles() throws {
+        let root = try XCTUnwrap(diagnosticsStorageRoot)
+        let reportsDir = root
+            .appendingPathComponent("nanoPod", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+            .appendingPathComponent("Reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: reportsDir, withIntermediateDirectories: true)
+        for day in 10...21 {
+            let bundle = reportsDir.appendingPathComponent("nanopod-diagnostics-202601\(day)-000000", isDirectory: true)
+            try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        }
+
+        DiagnosticsService.shared.runLaunchStorageMaintenanceForTesting()
+        DiagnosticsService.shared.flushStorageMaintenanceForTesting()
+
+        let remaining = try FileManager.default.contentsOfDirectory(at: reportsDir, includingPropertiesForKeys: nil)
+            .map(\.lastPathComponent)
+            .sorted()
+        XCTAssertEqual(remaining.count, 10)
+        XCTAssertEqual(remaining.first, "nanopod-diagnostics-20260112-000000")
+        XCTAssertEqual(remaining.last, "nanopod-diagnostics-20260121-000000")
     }
 
     func testCurrentSessionDebugLogIsAttachedToReportBundle() throws {
@@ -1274,13 +1334,13 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathComponent("debug_log_status.txt").path))
     }
 
-    func testStaleDebugLogIsNotAttachedToReportBundle() throws {
+    func testPreviousSessionDebugLogIsNotAttachedToReportBundle() throws {
         let debugLogURL = try XCTUnwrap(diagnosticsStorageRoot?.appendingPathComponent("nanopod_debug.log"))
         try "stale diagnostics log\n".write(to: debugLogURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date().addingTimeInterval(-60)],
-            ofItemAtPath: debugLogURL.path
-        )
+
+        // Launch maintenance rotates the leftover log away before this
+        // session writes anything, so the report has no live log to attach.
+        DiagnosticsService.shared.runLaunchStorageMaintenanceForTesting()
 
         let url = try DiagnosticsService.shared.exportReportBundle(
             userSymptom: .visibleStutter,

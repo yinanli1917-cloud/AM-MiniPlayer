@@ -1,6 +1,6 @@
 /**
  * [INPUT]: Runtime timing signals from MusicController/LyricsService and user report actions
- * [OUTPUT]: DiagnosticsService owner debug-mode incident buffer and report bundle export
+ * [OUTPUT]: DiagnosticsService owner debug-mode incident buffer, report bundle export, and launch-time log rotation/report pruning
  * [POS]: MusicMiniPlayerCore local-only diagnostics recorder for Codex/debug bug reports
  */
 
@@ -599,6 +599,9 @@ public final class DiagnosticsService: ObservableObject {
     private let maxInteractions = 120
     private let maxLyricLineMotionSamples = 2400
     private let maxLyricWaveTimelineSamples = 4000
+    // Live log rotation: current session + 4 archives ≈ the last 5 sessions.
+    private let maxArchivedDebugLogSessions = 4
+    private let maxRetainedReportBundles = 10
     private let standaloneFrameStallThreshold: TimeInterval = 0.125
     private let criticalStandaloneFrameStallThreshold: TimeInterval = 0.250
     private let severeStandaloneFrameStallThreshold: TimeInterval = 0.500
@@ -645,6 +648,13 @@ public final class DiagnosticsService: ObservableObject {
         label: "com.nanopod.diagnostics.live-wave-timeline-writes",
         qos: .utility
     )
+    // Old archives and report bundles can hold hundreds of MB; deletions run
+    // off the main thread on this queue.
+    private let storageMaintenanceQueue = DispatchQueue(
+        label: "com.nanopod.diagnostics.storage-maintenance",
+        qos: .utility
+    )
+    private var hasRunLaunchStorageMaintenance = false
 
     private init() {
         self.isEnabled = Self.isOwnerDiagnosticsBuild && UserDefaults.standard.bool(forKey: Self.enabledKey)
@@ -764,6 +774,16 @@ public final class DiagnosticsService: ObservableObject {
         debugLogURLForTesting = url
     }
 
+    func runLaunchStorageMaintenanceForTesting() {
+        hasRunLaunchStorageMaintenance = false
+        runLaunchStorageMaintenanceIfNeeded()
+        configureDebugLoggerForCurrentSession()
+    }
+
+    func flushStorageMaintenanceForTesting() {
+        storageMaintenanceQueue.sync {}
+    }
+
     func flushPersistenceForTesting() {
         persistSnapshotSynchronously()
     }
@@ -793,6 +813,9 @@ public final class DiagnosticsService: ObservableObject {
         persistenceSaveTask?.cancel()
         persistenceSaveTask = nil
         persistSnapshotSynchronously()
+        // Log writes are queued asynchronously; drain them before quit so
+        // the session log keeps its final lines.
+        DebugLogger.flush()
     }
 
     public func recordEvent(
@@ -2168,6 +2191,7 @@ public final class DiagnosticsService: ObservableObject {
     }
 
     private func startSessionIfNeeded() {
+        runLaunchStorageMaintenanceIfNeeded()
         configureDebugLoggerForCurrentSession()
         if healthSampler == nil {
             healthSampler = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
@@ -4086,11 +4110,9 @@ public final class DiagnosticsService: ObservableObject {
         return renderedBuckets.count <= max(3, samples.count / 3)
     }
 
-    func shouldAttachDebugLog(modifiedAt: Date) -> Bool {
-        modifiedAt >= sessionStartedAt.addingTimeInterval(-1)
-    }
-
     private func writeDebugLogAttachment(to reportDir: URL) throws {
+        // Drain queued log writes so the attachment includes the latest lines.
+        DebugLogger.flush()
         if let debugLogURL = currentSessionDebugLogURL(),
            let logData = try? Data(contentsOf: debugLogURL) {
             let destination = reportDir.appendingPathComponent("nanopod_debug.log")
@@ -4109,22 +4131,106 @@ public final class DiagnosticsService: ObservableObject {
         )
     }
 
+    // The live log is rotated to a timestamped archive at launch, so the file
+    // at the live URL only ever contains the current session.
     private func currentSessionDebugLogURL() -> URL? {
-        guard let url = debugLogURLForTesting ?? (try? liveDebugLogURL()) else {
-            return nil
-        }
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let modifiedAt = attributes[.modificationDate] as? Date,
-              shouldAttachDebugLog(modifiedAt: modifiedAt) else {
+        guard let url = resolvedLiveDebugLogURL(),
+              FileManager.default.fileExists(atPath: url.path) else {
             return nil
         }
         return url
     }
 
     private func configureDebugLoggerForCurrentSession() {
-        guard let url = debugLogURLForTesting ?? (try? liveDebugLogURL()) else { return }
+        guard let url = resolvedLiveDebugLogURL() else { return }
         DebugLogger.setLogURL(url)
         DebugLogger.setDiagnosticsFileLoggingEnabled(true)
+    }
+
+    private func resolvedLiveDebugLogURL() -> URL? {
+        debugLogURLForTesting ?? (try? liveDebugLogURL())
+    }
+
+    // ── Launch storage maintenance ──
+
+    // Runs once per process launch, before the debug logger is pointed at the
+    // live log: rotates the previous session's log to a timestamped archive,
+    // prunes old archives, and prunes old report bundles.
+    private func runLaunchStorageMaintenanceIfNeeded() {
+        guard !hasRunLaunchStorageMaintenance else { return }
+        hasRunLaunchStorageMaintenance = true
+        DebugLogger.flush()
+        if let liveLogURL = resolvedLiveDebugLogURL() {
+            rotatePreviousSessionDebugLog(at: liveLogURL)
+            pruneArchivedDebugLogs(around: liveLogURL)
+        }
+        pruneOldReportBundles()
+    }
+
+    // Renames the previous session's live log so the live URL only ever holds
+    // the current session. Must run before configureDebugLoggerForCurrentSession,
+    // which re-points DebugLogger at a fresh file on the same path.
+    private func rotatePreviousSessionDebugLog(at liveLogURL: URL) {
+        let fileManager = FileManager.default
+        let attributes = try? fileManager.attributesOfItem(atPath: liveLogURL.path)
+        guard let size = attributes?[.size] as? NSNumber, size.int64Value > 0 else { return }
+        let stamp = Self.reportDateFormatter.string(from: Date())
+        let archiveURL = liveLogURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("nanopod_debug-\(stamp).log")
+        do {
+            try fileManager.moveItem(at: liveLogURL, to: archiveURL)
+        } catch {
+            // A same-second name collision is the only realistic failure; drop
+            // the old log rather than let it leak into the new session.
+            try? fileManager.removeItem(at: liveLogURL)
+        }
+    }
+
+    private func pruneArchivedDebugLogs(around liveLogURL: URL) {
+        let directory = liveLogURL.deletingLastPathComponent()
+        let stale = staleStorageEntries(
+            in: directory,
+            matching: { $0.hasPrefix("nanopod_debug-") && $0.hasSuffix(".log") },
+            keepingNewest: maxArchivedDebugLogSessions
+        )
+        removeStorageEntries(stale)
+    }
+
+    private func pruneOldReportBundles() {
+        guard let reportsDirectory = try? diagnosticsReportsDirectory() else { return }
+        let stale = staleStorageEntries(
+            in: reportsDirectory,
+            matching: { $0.hasPrefix("nanopod-diagnostics-") },
+            keepingNewest: maxRetainedReportBundles
+        )
+        removeStorageEntries(stale)
+    }
+
+    // Archive and bundle names embed reportDateFormatter stamps, so lexical
+    // name order is recency order.
+    private func staleStorageEntries(
+        in directory: URL,
+        matching isCandidate: (String) -> Bool,
+        keepingNewest keepCount: Int
+    ) -> [URL] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return [] }
+        let candidates = entries
+            .filter { isCandidate($0.lastPathComponent) }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        return Array(candidates.dropFirst(keepCount))
+    }
+
+    private func removeStorageEntries(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        storageMaintenanceQueue.async {
+            for url in urls {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
     }
 
     private func liveDebugLogURL() throws -> URL {
