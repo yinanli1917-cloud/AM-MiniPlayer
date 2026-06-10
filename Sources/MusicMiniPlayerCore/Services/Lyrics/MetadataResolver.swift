@@ -328,7 +328,10 @@ public final class MetadataResolver {
             duration: duration,
             resolvedTitle: best.title,
             resolvedArtist: best.artist,
-            region: best.region
+            region: best.region,
+            // Persist the measured gap that admitted this row — cached claims
+            // must carry the evidence that admitted them (postmortem 006).
+            durationDiff: best.durationDiff
         )
         DebugLogger.log("MetadataResolver", "💿 album scoped resolve: '\(title)'/'\(cleanAlbum)' → '\(best.title)'/'\(best.album)' by '\(best.artist)' (\(best.region), Δ\(String(format: "%.2f", best.durationDiff))s)")
         return (best.title, best.artist, best.album, best.region, best.durationDiff)
@@ -732,14 +735,21 @@ public final class MetadataResolver {
         duration: TimeInterval
     ) async -> (title: String, artist: String, region: String, durationDiff: Double)? {
         // Disk cache hit — skip iTunes entirely on warm cold starts.
+        // Cached claims must carry the evidence that admitted them: replay
+        // returns the REAL stored durationDiff so the postmortem-006 guard
+        // (durationPrecise check in resolveRomanizedInput) scrutinizes cached
+        // rows exactly like fresh results. A fabricated 0 here let every
+        // cached row — including poisoned ones — bypass that guard for up to
+        // 30 days. Rows without stored evidence are never replayed.
         if let cached = diskCache.get(title: title, artist: artist, duration: duration) {
-            if shouldUseCachedLocalizedMetadata(
-                inputTitle: title,
-                cachedTitle: cached.resolvedTitle,
-                cachedArtist: cached.resolvedArtist
-            ) {
-                DebugLogger.log("MetadataResolver", "💾 fetchLocalizedMetadata disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (region: \(cached.region))")
-                return (cached.resolvedTitle, cached.resolvedArtist, cached.region, 0)
+            if let storedDurationDiff = cached.durationDiff,
+               shouldUseCachedLocalizedMetadata(
+                   inputTitle: title,
+                   cachedTitle: cached.resolvedTitle,
+                   cachedArtist: cached.resolvedArtist
+               ) {
+                DebugLogger.log("MetadataResolver", "💾 fetchLocalizedMetadata disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (region: \(cached.region), Δ\(String(format: "%.2f", storedDurationDiff))s)")
+                return (cached.resolvedTitle, cached.resolvedArtist, cached.region, storedDurationDiff)
             }
             DebugLogger.log("MetadataResolver", "🧹 Ignoring stale localized cache: '\(cached.resolvedTitle)' for input '\(title)'")
         }
@@ -844,9 +854,12 @@ public final class MetadataResolver {
             DebugLogger.log("MetadataResolver", "⚠️ 所有区域均无匹配结果")
         } else if let m = bestMatch {
             // Persist successful resolutions only — no negative caching.
+            // m.3 is the measured durationDiff that admitted this row; storing
+            // it means replay faces the same scrutiny as this fresh result.
             diskCache.set(
                 title: title, artist: artist, duration: duration,
-                resolvedTitle: m.0, resolvedArtist: m.1, region: m.2
+                resolvedTitle: m.0, resolvedArtist: m.1, region: m.2,
+                durationDiff: m.3
             )
         }
         return bestMatch

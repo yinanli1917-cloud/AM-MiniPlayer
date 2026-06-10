@@ -4,21 +4,28 @@
  * [POS]: Utils — disk-backed cache used by MetadataResolver / LyricsPrewarmer
  *
  * ---------------------------------------------------------------------------
- * On-disk schema (human-readable JSON, version: 4):
+ * On-disk schema (human-readable JSON, version: 5):
  *
  *     {
- *       "version": 4,
+ *       "version": 5,
  *       "entries": {
  *         "<sha256-hex-key>": {
  *           "resolved_title": "プラスティック・ラヴ",
  *           "resolved_artist": "竹内まりや",
  *           "region": "jp",
  *           "ts": 1733000000.0,
- *           "source": "metadata-cache-v1"
+ *           "source": "metadata-cache-v1",
+ *           "duration_diff": 0.42
  *         },
  *         ...
  *       }
  *     }
+ *
+ * `duration_diff` is the REAL measured duration gap (seconds) that admitted
+ * the row. Cached claims must carry the evidence that admitted them — replay
+ * returns this value so duration-keyed guards (postmortem 006) scrutinize
+ * cached rows exactly like fresh results, instead of being bypassed by a
+ * fabricated perfect match.
  *
  * Key derivation: SHA256 of "normalized_title|normalized_artist|int_duration".
  * Normalization: lowercase + collapse internal whitespace + strip ASCII punct.
@@ -42,6 +49,10 @@ public struct MetadataCacheEntry: Codable, Equatable {
     public let region: String
     public let ts: TimeInterval
     public let source: String
+    /// Measured duration gap (seconds) that admitted this row at write time.
+    /// Optional only for decode tolerance — every v5 writer stores a value.
+    /// Replay must return this REAL evidence, never a fabricated 0.
+    public let durationDiff: Double?
 
     enum CodingKeys: String, CodingKey {
         case resolvedTitle  = "resolved_title"
@@ -49,6 +60,7 @@ public struct MetadataCacheEntry: Codable, Equatable {
         case region
         case ts
         case source
+        case durationDiff   = "duration_diff"
     }
 }
 
@@ -77,7 +89,11 @@ public struct PreflightEntry: Codable, Equatable {
 
 public final class MetadataDiskCache {
 
-    public static let schemaVersion = 4
+    /// v5: entries gained `duration_diff` (real measured admission evidence).
+    /// The bump flushes all v4 rows once — they carried no evidence and
+    /// replayed as fabricated perfect matches (durationDiff = 0), letting
+    /// poisoned rows bypass the postmortem-006 guard for up to 30 days.
+    public static let schemaVersion = 5
     public static let ttlSeconds: TimeInterval = 30 * 86400  // 30 days
 
     private let fileURL: URL
@@ -119,15 +135,20 @@ public final class MetadataDiskCache {
         }
     }
 
+    /// `durationDiff` is mandatory: cached claims must carry the evidence
+    /// that admitted them, so the writer is forced to pass the real measured
+    /// gap instead of letting replay fabricate one.
     public func set(title: String, artist: String, duration: TimeInterval,
-                    resolvedTitle: String, resolvedArtist: String, region: String) {
+                    resolvedTitle: String, resolvedArtist: String, region: String,
+                    durationDiff: Double) {
         let key = Self.cacheKey(title: title, artist: artist, duration: duration)
         let entry = MetadataCacheEntry(
             resolvedTitle: resolvedTitle,
             resolvedArtist: resolvedArtist,
             region: region,
             ts: Date().timeIntervalSince1970,
-            source: "metadata-cache-v1"
+            source: "metadata-cache-v1",
+            durationDiff: durationDiff
         )
         queue.sync {
             ensureLoaded()
