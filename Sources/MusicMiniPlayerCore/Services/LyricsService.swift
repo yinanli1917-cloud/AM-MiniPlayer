@@ -2,7 +2,7 @@
  * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver)
  * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
- * [PROTOCOL]: Update this header on behavior changes; keep foreground and authoritative backfill work cancellable on track changes
+ * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
 import Foundation
@@ -149,6 +149,10 @@ public class LyricsService: ObservableObject {
 
     private var currentFetchTask: Task<Void, Never>?
     private var currentBackfillTask: Task<Void, Never>?
+    /// Owner handle for the queue preloader (cancel-and-replace, mirroring
+    /// MusicController.assetPreloadTask). Main-actor confined like the two
+    /// handles above: written only by preloadNextSongs and fetchLyrics.
+    private var currentPreloadTask: Task<Void, Never>?
     private var currentBackfillGeneration: UInt64 = 0
     private let logger = Logger(subsystem: "com.yinanli.MusicMiniPlayer", category: "LyricsService")
     private var currentStableSongID: String?
@@ -433,6 +437,12 @@ public class LyricsService: ObservableObject {
         currentFetchTask?.cancel()
         currentFetchTask = nil
         cancelCurrentBackfill()
+        // The foreground fetch wins the shared HTTP pool: a preload batch still
+        // running here was scheduled for the previous queue position, so its
+        // remaining tracks may already have been skipped past. MusicController
+        // re-issues a fresh preload for the new queue shortly after.
+        currentPreloadTask?.cancel()
+        currentPreloadTask = nil
 
         var appliedProvisionalCache = false
 
@@ -1574,6 +1584,10 @@ public class LyricsService: ObservableObject {
     // MARK: - Public API: Preload
     // ========================================================================
 
+    /// Main-actor: the single caller (MusicController.preloadNearbyAssets) already
+    /// runs there, and both the task handle and the showTranslation read must stay
+    /// on the same actor as fetchLyrics, which owns the cancel side.
+    @MainActor
     public func preloadNextSongs(tracks: [(title: String, artist: String, duration: TimeInterval, album: String)]) {
         let candidates = tracks
             .prefix(4)
@@ -1585,9 +1599,20 @@ public class LyricsService: ObservableObject {
 
         guard !candidates.isEmpty else { return }
 
-        Task.detached(priority: .low) { [weak self] in
+        // Capture the live translation preference on the main actor so a preloaded
+        // cache item is identical to what a direct play would build (same idiom as
+        // wantsTranslation in launchAuthoritativeBackfill). Hardcoding false here
+        // used to make preloaded tracks show different lyrics than direct plays.
+        let translationEnabled = showTranslation
+
+        // Cancel-and-replace, mirroring assetPreloadTask in MusicController:
+        // a new batch means the queue moved, so the old batch is stale.
+        currentPreloadTask?.cancel()
+        currentPreloadTask = Task.detached(priority: .low) { [weak self] in
             guard let self else { return }
             for track in candidates {
+                // Checkpoint between tracks: a foreground fetch or a newer batch
+                // cancels us — remaining tracks must not keep running searches.
                 guard !Task.isCancelled else { return }
                 let songID = Self.songIdentity(
                     title: track.title,
@@ -1601,20 +1626,28 @@ public class LyricsService: ObservableObject {
                     title: track.title,
                     artist: track.artist,
                     duration: track.duration,
-                    translationEnabled: false,
+                    translationEnabled: translationEnabled,
                     album: track.album
                 )
 
                 var bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration)
                 if bestResult == nil {
+                    // Mid-track checkpoint: an empty result after cancellation means
+                    // the HTTP requests were killed, not that lyrics are missing —
+                    // don't start the long serial backfill chain on that evidence.
+                    guard !Task.isCancelled else { return }
                     bestResult = await self.fetcher.backfillAuthoritativeSyncedLyrics(
                         title: track.title,
                         artist: track.artist,
                         duration: track.duration,
-                        translationEnabled: false,
+                        translationEnabled: translationEnabled,
                         album: track.album
                     )
                 }
+                // Cancellation kills HTTP requests mid-flight, so this pass may hold
+                // partial results; caching them could pin a weaker source for the
+                // session (mirrors the no-cache-on-cancel guard in performFetch).
+                guard !Task.isCancelled else { return }
                 guard let bestResult, !bestResult.lyrics.isEmpty else { continue }
 
                 let aligned = self.fetcher.rescaleTimestamps(bestResult.lyrics, duration: track.duration)
