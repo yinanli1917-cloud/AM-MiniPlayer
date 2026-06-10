@@ -410,6 +410,7 @@ public struct LyricsView: View {
     @State private var cachedFirstRealDisplayIndex: Int = 0
     @State private var cachedLayerRows: [LayerBackedLyricRow] = []
     @State private var cachedLayerRowsTrackKey: String = ""
+    @State private var contentTransitionOpacity: Double = 1
     @State private var cachedNativeRenderedIndices: [Int] = []
     @State private var nativeLyricsManualScrollActive = false
     @State private var nativeLyricsDirectSnapRequest: NativeLyricsDirectSnapRequest?
@@ -455,6 +456,17 @@ public struct LyricsView: View {
                     scrollableLyricsContent
                 }
             }
+            // Song-switch choreography. Two layers of protection against the switch
+            // flash (old lyrics → 1-2 frames of bare/stale panel → new content):
+            // 1. The identity term: the very first render after a track change still
+            //    carries the OLD rows cache (SwiftUI runs onChange after body), and the
+            //    stale-rows gate blanks the surface that frame — rendering it at
+            //    opacity 0 makes that frame invisible. The mismatch lasts until the
+            //    cache rebuilds for the new track (1-3 frames).
+            // 2. contentTransitionOpacity: dipped to 0 on the title change, faded back
+            //    in by refreshDisplayLineCache once the new track's state is ready —
+            //    so spinner/lyrics enter with a soft fade instead of popping.
+            .opacity(trackCacheMatchesCurrentTrack ? contentTransitionOpacity : 0)
         }
         .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
         .overlay(bottomControlsOverlay)
@@ -524,6 +536,8 @@ public struct LyricsView: View {
             cachedDisplayLyrics.removeAll()
             cachedLayerRows.removeAll()
             cachedLayerRowsTrackKey = ""
+            // Start the new track's content dark; refreshDisplayLineCache fades it in.
+            contentTransitionOpacity = 0
             cachedNativeRenderedIndices.removeAll()
             cachedFirstRealDisplayIndex = 0
             displayCurrentLineIndex = nil
@@ -556,6 +570,16 @@ public struct LyricsView: View {
         }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
+        .onChange(of: lyricsService.isLoading) { _, _ in
+            // A no-lyrics → no-lyrics track switch republishes nothing on `lyrics`
+            // ([] == []), which would leave the identity gate mismatched — and the
+            // content dark — forever. Every fetch flips isLoading, so re-tag the
+            // cache for the current track here whenever the gate is stale.
+            if !trackCacheMatchesCurrentTrack {
+                refreshDisplayLineCache()
+                refreshPendingTranslationLineIndices()
+            }
+        }
         // Translation changes.
         .onChange(of: lyricsService.lyrics) { _, newLyrics in
             let newCount = newLyrics.count
@@ -1953,6 +1977,10 @@ public struct LyricsView: View {
         controller.currentTrackTitle + "|" + controller.currentArtist
     }
 
+    private var trackCacheMatchesCurrentTrack: Bool {
+        cachedLayerRowsTrackKey == Self.layerRowsTrackKey(for: musicController)
+    }
+
     private func refreshDisplayLineCache() {
         let displayLines = makeDisplayLyricLines(from: lyricsService.lyrics)
         let firstRealDisplayIndex = displayFirstRealLyricIndex(in: displayLines)
@@ -1964,6 +1992,11 @@ public struct LyricsView: View {
         }
         cachedLayerRows = layerRows
         cachedLayerRowsTrackKey = Self.layerRowsTrackKey(for: musicController)
+        // The new track's state is ready (even if it's just the loading/empty layout):
+        // fade the content container back in if a track change dipped it out.
+        if contentTransitionOpacity < 1 {
+            withAnimation(.easeInOut(duration: 0.25)) { contentTransitionOpacity = 1 }
+        }
         cachedNativeRenderedIndices = layerRows.map(\.index)
         displayCurrentLineIndex = displayIndex(
             forSourceIndex: lyricsService.currentLineIndex ?? lyricsService.firstRealLyricIndex,
