@@ -7,9 +7,14 @@ import AppKit
 
 /// 流体渐变背景视图 - 使用封面图片 + 模糊效果
 /// 🔑 优化：静态多层 + 更大偏移/旋转差异 = 流体扭曲感（无动画，CPU 友好）
+/// 🔑 换曲交叉淡入：封面到达/更换/消失都经过 0.6s crossfade —— 背景永不硬切
+///    （旧实现直接 swap `if let artwork` 分支，黑↔金一帧跳变，录屏可见闪烁）
 public struct FluidGradientBackground: View {
     let artwork: NSImage?
+    @State private var displayedArtwork: NSImage?
     @State private var tone = ArtworkBackgroundToneMap.neutral
+
+    private static let crossfade = Animation.easeInOut(duration: 0.6)
 
     public init(artwork: NSImage?) {
         self.artwork = artwork
@@ -23,39 +28,53 @@ public struct FluidGradientBackground: View {
             ZStack {
                 Color.black
 
-                if let artwork = artwork {
+                if let artwork = displayedArtwork {
                     ZStack {
-                        fluidLayer(artwork: artwork, containerSize: size,
-                                   size: diagonal * 1.5,
-                                   offsetX: size.width * 0.05, offsetY: -size.height * 0.03,
-                                   rotation: 0.12)
+                        ZStack {
+                            fluidLayer(artwork: artwork, containerSize: size,
+                                       size: diagonal * 1.5,
+                                       offsetX: size.width * 0.05, offsetY: -size.height * 0.03,
+                                       rotation: 0.12)
 
-                        fluidLayer(artwork: artwork, containerSize: size,
-                                   size: diagonal * 0.95,
-                                   offsetX: -size.width * 0.22, offsetY: -size.height * 0.15,
-                                   rotation: 0.45)
+                            fluidLayer(artwork: artwork, containerSize: size,
+                                       size: diagonal * 0.95,
+                                       offsetX: -size.width * 0.22, offsetY: -size.height * 0.15,
+                                       rotation: 0.45)
 
-                        fluidLayer(artwork: artwork, containerSize: size,
-                                   size: diagonal * 0.8,
-                                   offsetX: size.width * 0.25, offsetY: size.height * 0.2,
-                                   rotation: -0.35)
+                            fluidLayer(artwork: artwork, containerSize: size,
+                                       size: diagonal * 0.8,
+                                       offsetX: size.width * 0.25, offsetY: size.height * 0.2,
+                                       rotation: -0.35)
+                        }
+                        .blur(radius: 58)
+                        .saturation(tone.textureSaturation)
+                        .contrast(tone.textureContrast)
+                        .brightness(tone.textureBrightness)
+
+                        Color.white
+                            .opacity(tone.liftOpacity)
+                            .blendMode(.screen)
+
+                        Color.black
+                            .opacity(tone.shadeOpacity)
                     }
-                    .blur(radius: 58)
-                    .saturation(tone.textureSaturation)
-                    .contrast(tone.textureContrast)
-                    .brightness(tone.textureBrightness)
-
-                    Color.white
-                        .opacity(tone.liftOpacity)
-                        .blendMode(.screen)
-
-                    Color.black
-                        .opacity(tone.shadeOpacity)
+                    // Distinct identity per artwork: a change crossfades old → new instead of
+                    // mutating one subtree in place (which applies as an instant cut).
+                    .id(ObjectIdentifier(artwork))
+                    .transition(.opacity)
                 }
             }
         }
-        .onAppear { updateTone() }
-        .onChange(of: artwork) { updateTone() }
+        .onAppear {
+            displayedArtwork = artwork
+            updateTone()
+        }
+        .onChange(of: artwork) {
+            withAnimation(Self.crossfade) {
+                displayedArtwork = artwork
+                updateTone()
+            }
+        }
     }
 
     @ViewBuilder
