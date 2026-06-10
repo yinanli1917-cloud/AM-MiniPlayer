@@ -1475,6 +1475,16 @@ public final class LyricsFetcher {
             }
         }
 
+        // A cancelled backfill (the user skipped away mid-fetch) yields DEGRADED results —
+        // children die mid-flight and a track that has lyrics can look instrumental or
+        // unavailable. Persisting that verdict poisons the availability cache for up to a
+        // day. Bail before selection + every persistence site below (same idiom as
+        // fetchAllSources' post-collection guard).
+        guard !Task.isCancelled else {
+            DebugLogger.log("⏭️ Authoritative lyrics backfill cancelled before persistence")
+            return nil
+        }
+
         var selected = selectBestResult(from: results, songDuration: duration)
 
         if selected.map({ !selectedHasPersistentIdentity($0) }) == true {
