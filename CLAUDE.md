@@ -67,10 +67,11 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 148 个单元测试
+Tests/MusicMiniPlayerTests/         - 557 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
-    └── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
+    ├── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
+    └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 
@@ -130,6 +131,10 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ Use `LSUIElement=true` in Info.plist, only change activation policy in `updateDockVisibility()`
 - ❌ Bundle ID change (MusicMiniPlayer→nanoPod) leaves stale `menuItemLocations` in ControlCenter's `trackedApplications` → status item placed at x=-1 (off-screen)
   ✅ Run `scripts/fix_menubar.py` to clean stale entries; build_app.sh runs it automatically
+- ❌ Bare CALayer sublayers in layer-backed NSViews → EVERY property change implicitly animates 0.25s; NSView.layout() frame assignments escape call-site CATransaction wraps → translation drifts in from top-left, reflow ghosts, sweep/dot smear
+  ✅ Layer-level kill: `.lyricsInert()` on every renderer-created layer (NativeLyricsInertLayerDelegate) + ImplicitAnimLeak runtime auditor (LOCAL_DEVELOPER_BUILD, ~4Hz) + NativeLyricsImplicitAnimationTests (must host in NSWindow + CATransaction.flush between phases or the bug is unreproducible)
+- ❌ SwiftUI `onChange(currentTrackTitle)` runs AFTER body → first post-track-change render feeds the native surface NEW identity + OLD cachedLayerRows = one-frame stale-rows flash
+  ✅ `cachedLayerRowsTrackKey` identity gate: rows cached for another track render as `[]`
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)

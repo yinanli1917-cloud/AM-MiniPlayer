@@ -1,5 +1,13 @@
 # Banned Patterns
 
+## CALayer / Implicit Animation Traps (Native Lyrics Renderer)
+
+- ❌ Creating bare `CALayer()/CATextLayer()/CAGradientLayer()` sublayers inside layer-backed NSViews → EVERY property change (frame/position/opacity/string/filters/isHidden) implicitly animates 0.25s. AppKit only suppresses actions for the view's OWN backing layer, never manual sublayers. Result: translation text drifts in from top-left (frame .zero→real animates from origin), reflow ghosts, per-tick wavefront/dot smears.
+- ❌ Fixing implicit-animation leaks by wrapping call sites in `CATransaction.setDisableActions` → NSView.layout() (where text-layer frames are assigned) runs in AppKit's own UNWRAPPED transaction; 30 commits of call-site whack-a-mole never covered it.
+- ✅ Block at the LAYER: every renderer-created layer gets `.lyricsInert()` (NativeLyricsInertLayerDelegate returns NSNull for all actions); CALayer subclasses override `action(forKey:)`. Explicit named CAAnimations still work (they bypass the action search). Guarded by NativeLyricsImplicitAnimationTests + the LOCAL_DEVELOPER_BUILD ImplicitAnimLeak auditor (~4 Hz layer-tree sweep in presentationTick).
+- ❌ Unit-testing implicit animations on a detached view, or configuring twice in one run-loop turn → CA never animates layers added in the current uncommitted transaction; the test silently passes. MUST host in a realized NSWindow AND `CATransaction.flush()` + run-loop spin between the committed state and the mutation.
+- ❌ Feeding the native surface rows cached for the PREVIOUS track during a track change → SwiftUI runs `onChange` AFTER body, so the first render after `currentTrackTitle` changes carries new identity + old `cachedLayerRows` = one-frame stale-rows flash. ✅ Tag the cache with the track key it was built for (`cachedLayerRowsTrackKey`) and feed `[]` on mismatch.
+
 ## PlaylistView — Verified Failures (Never Repeat)
 
 PlaylistView uses single ScrollView + VStack + global overlay sticky headers + Gemini per-view blur.
