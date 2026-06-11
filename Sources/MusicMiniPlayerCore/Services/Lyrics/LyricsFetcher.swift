@@ -2,7 +2,7 @@
  * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils
  * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate
  * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
- * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches
+ * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
  * [PROTOCOL]: Update this header when changing the module, then check Services/Lyrics/CLAUDE.md
  */
@@ -1262,28 +1262,40 @@ public final class LyricsFetcher {
             )
         } else if let instrumental = selectInstrumentalResult(from: finalResults),
                   shouldPersistAvailabilityResult(instrumental, requestedAlbum: alb) {
-            lyricsDiskCache.setAvailability(
-                title: ot,
-                artist: oa,
-                duration: d,
-                album: alb,
-                source: instrumental.source,
-                kind: .instrumental,
-                lines: instrumental.lyrics,
-                matchedDurationDiff: instrumental.matchedDurationDiff
-            )
+            // Negative-verdict quorum: the terminal evidence itself is real
+            // (a protocol response delivered it), but with requests dead in
+            // transport the fetch was incomplete — a silenced source might
+            // still have lyrics. Serve the verdict, don't persist it.
+            if negativeVerdictQuorumMet {
+                lyricsDiskCache.setAvailability(
+                    title: ot,
+                    artist: oa,
+                    duration: d,
+                    album: alb,
+                    source: instrumental.source,
+                    kind: .instrumental,
+                    lines: instrumental.lyrics,
+                    matchedDurationDiff: instrumental.matchedDurationDiff
+                )
+            } else {
+                DebugLogger.log("🛜 INSTRUMENTAL verdict NOT persisted — transport failures during fetch (quorum unmet)")
+            }
         } else if let unavailable = selectUnavailableResult(from: finalResults),
                   shouldPersistAvailabilityResult(unavailable, requestedAlbum: alb) {
-            lyricsDiskCache.setAvailability(
-                title: ot,
-                artist: oa,
-                duration: d,
-                album: alb,
-                source: unavailable.source,
-                kind: .unavailable,
-                lines: unavailable.lyrics,
-                matchedDurationDiff: unavailable.matchedDurationDiff
-            )
+            if negativeVerdictQuorumMet {
+                lyricsDiskCache.setAvailability(
+                    title: ot,
+                    artist: oa,
+                    duration: d,
+                    album: alb,
+                    source: unavailable.source,
+                    kind: .unavailable,
+                    lines: unavailable.lyrics,
+                    matchedDurationDiff: unavailable.matchedDurationDiff
+                )
+            } else {
+                DebugLogger.log("🛜 UNAVAILABLE verdict NOT persisted — transport failures during fetch (quorum unmet)")
+            }
         }
 
         return finalResults.sorted { $0.score > $1.score }
@@ -1504,6 +1516,13 @@ public final class LyricsFetcher {
                     DebugLogger.log("🧭 Authoritative lyrics backfill INSTRUMENTAL not cached without album evidence")
                     return .instrumental(instrumental)
                 }
+                // Negative-verdict quorum (see negativeVerdictQuorumMet):
+                // transport deaths mean the sweep was incomplete — return
+                // the verdict for display but keep it out of the 24h cache.
+                if !negativeVerdictQuorumMet {
+                    DebugLogger.log("🛜 Authoritative lyrics backfill INSTRUMENTAL not cached — transport failures (quorum unmet)")
+                    return .instrumental(instrumental)
+                }
                 lyricsDiskCache.setAvailability(
                     title: cleanTitle,
                     artist: cleanArtist,
@@ -1520,6 +1539,10 @@ public final class LyricsFetcher {
             if let unavailable = selectUnavailableResult(from: results) {
                 if !shouldPersistAvailabilityResult(unavailable, requestedAlbum: cleanAlbum) {
                     DebugLogger.log("🧭 Authoritative lyrics backfill UNAVAILABLE not cached without album evidence")
+                    return .unavailable(unavailable)
+                }
+                if !negativeVerdictQuorumMet {
+                    DebugLogger.log("🛜 Authoritative lyrics backfill UNAVAILABLE not cached — transport failures (quorum unmet)")
                     return .unavailable(unavailable)
                 }
                 lyricsDiskCache.setAvailability(
@@ -2225,6 +2248,17 @@ public final class LyricsFetcher {
         let requestedAlbumID = MetadataDiskCache.normalize(requestedAlbum)
         guard !requestedAlbumID.isEmpty else { return true }
         return result.albumMatched
+    }
+
+    /// Negative-verdict quorum: a 24h "no lyrics exist" availability row is
+    /// only trustworthy when every counted request in this fetch got a real
+    /// HTTP answer. One provider's "no match" plus six requests dead in
+    /// transport is NOT a verdict about the song — it's a verdict about the
+    /// network, and persisting it would suppress lyrics for a full day.
+    /// Default-allow: with no ledger bound (LyricsVerifier CLI, preload),
+    /// `current` is nil and the quorum passes — behavior is unchanged.
+    var negativeVerdictQuorumMet: Bool {
+        !(NetworkOutcomeLedger.current?.hadTransportFailures ?? false)
     }
 
     private func selectedHasPersistentIdentity(_ result: LyricsFetchResult) -> Bool {

@@ -1,13 +1,15 @@
 /**
- * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver)
+ * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver), Network (NWPathMonitor)
  * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
+ * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch
  * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
 import Foundation
 import Combine
 import CryptoKit
+import Network
 import os
 import Translation
 import NaturalLanguage
@@ -162,6 +164,17 @@ public class LyricsService: ObservableObject {
     /// Cooldown: refuse re-fetches within this window unless forceRefresh
     private let stabilityGuardCooldown: TimeInterval = 3.0
 
+    // Silent self-recovery for the "No internet connection" terminal: when
+    // connectivity returns, re-issue the fetch for the current track. No
+    // popups, no prompts — NWPathMonitor is a passive observer.
+    private let networkPathMonitor = NWPathMonitor()
+    private let networkPathMonitorQueue = DispatchQueue(label: "com.nanoPod.lyrics.network-path", qos: .utility)
+    /// Last observed path state. Only touched on networkPathMonitorQueue
+    /// (serial), so no extra locking is needed. Optional: `nil` until the
+    /// first callback, so the initial "already online" report can never be
+    /// mistaken for a recovery transition.
+    private var lastNetworkPathSatisfied: Bool?
+
     /// Clears translation text from all lyric lines.
     private func clearAllTranslations() {
         for i in lyrics.indices { lyrics[i].translation = nil }
@@ -280,6 +293,46 @@ public class LyricsService: ObservableObject {
         lyricsCache.totalCostLimit = 10 * 1024 * 1024
 
         HTTPClient.warmup()
+        startNetworkRecoveryMonitor()
+    }
+
+    // ========================================================================
+    // MARK: - Network Recovery (silent re-fetch when connectivity returns)
+    // ========================================================================
+
+    private func startNetworkRecoveryMonitor() {
+        networkPathMonitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            let isSatisfied = path.status == .satisfied
+            let wasSatisfied = self.lastNetworkPathSatisfied
+            self.lastNetworkPathSatisfied = isSatisfied
+            // Only an offline→online TRANSITION triggers recovery. The very
+            // first callback (wasSatisfied == nil) is the current state, not
+            // a transition, and repeated .satisfied reports are no-ops.
+            guard isSatisfied, wasSatisfied == false else { return }
+            Task { @MainActor in
+                self.retryAfterNetworkRecoveryIfNeeded()
+            }
+        }
+        networkPathMonitor.start(queue: networkPathMonitorQueue)
+    }
+
+    @MainActor
+    private func retryAfterNetworkRecoveryIfNeeded() {
+        // Re-fetch ONLY when the current track is parked on the
+        // network-unreachable terminal — any other state (lyrics shown,
+        // genuine "Lyrics unavailable", still loading) needs no recovery.
+        guard error == Self.networkUnreachableErrorMessage, !currentSongTitle.isEmpty else { return }
+        DebugLogger.log("LyricsService", "🛜 Connectivity returned — re-fetching lyrics for current track '\(currentSongTitle)'")
+        // Plain re-issue (no forceRefresh): the empty-with-error state passes
+        // shouldRetryAfterEmptyCurrentResult, and nothing negative was cached
+        // for this song (the network verdict never writes caches).
+        fetchLyrics(
+            for: currentSongTitle,
+            artist: currentSongArtist,
+            duration: currentSongDuration,
+            album: currentSongAlbum
+        )
     }
 
     // ========================================================================
@@ -553,15 +606,22 @@ public class LyricsService: ObservableObject {
         // 🔑 Early exit only if cancelled BEFORE network starts (no work wasted)
         guard !Task.isCancelled else { return }
 
-        // Fetch all lyrics sources in parallel.
+        // Fetch all lyrics sources in parallel, with a fresh network-outcome
+        // ledger bound for this pipeline only. The task-local propagates into
+        // fetchAllSources' child tasks but NOT into other concurrent pipelines
+        // (preload stays unbound, the backfill binds its own), so evidence
+        // from different fetches can never mix.
+        let networkLedger = NetworkOutcomeLedger()
         let foregroundStartedAt = Date()
-        let results = await fetcher.fetchAllSources(
-            title: title,
-            artist: artist,
-            duration: duration,
-            translationEnabled: showTranslation,
-            album: album
-        )
+        let results = await NetworkOutcomeLedger.$current.withValue(networkLedger) {
+            await fetcher.fetchAllSources(
+                title: title,
+                artist: artist,
+                duration: duration,
+                translationEnabled: showTranslation,
+                album: album
+            )
+        }
         let foregroundFetchSeconds = Date().timeIntervalSince(foregroundStartedAt)
 
         // Select the best result; keep the full result so auto-scroll can use parse-time kind.
@@ -602,7 +662,29 @@ public class LyricsService: ObservableObject {
                     classification: "instrumental"
                 )
                 await MainActor.run {
-                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .instrumental)
+                }
+                return
+            }
+
+            // 🛜 Network verdict: zero protocol responses + ≥1 transport death
+            // means no server ever answered — "Lyrics unavailable" would be a
+            // false statement about the song. Surface the honest offline state
+            // now and skip the backfill (it would only burn 5-10s of timeouts);
+            // the NWPathMonitor below re-issues the fetch when connectivity
+            // returns. Checked AFTER instrumental: disk-cached terminal
+            // evidence is a real verdict about the song and outranks this.
+            if networkLedger.indicatesNetworkUnreachable {
+                DebugLogger.log("LyricsService", "🛜 Network unreachable: '\(songID)' (protocol=0, transport=\(networkLedger.transportFailures)) — NOT a no-lyrics verdict")
+                recordDiagnosticsLyricsUnavailable(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    duration: duration,
+                    classification: "network-unreachable"
+                )
+                await MainActor.run {
+                    self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .networkUnreachable)
                 }
                 return
             }
@@ -672,8 +754,31 @@ public class LyricsService: ObservableObject {
         return albumCompatible && durationCompatible
     }
 
+    /// Terminal verdicts for a fetch that produced no displayable lyrics.
+    /// The distinction matters: `.noLyrics`/`.instrumental` are statements
+    /// about the SONG, `.networkUnreachable` is a statement about the
+    /// NETWORK — showing "Lyrics unavailable" while offline would be false,
+    /// and only the network verdict arms the silent auto-retry on reconnect.
+    enum TerminalMissVerdict {
+        case noLyrics
+        case instrumental
+        case networkUnreachable
+
+        var errorMessage: String {
+            switch self {
+            case .noLyrics: return "Lyrics unavailable"
+            case .instrumental: return "Instrumental track"
+            case .networkUnreachable: return LyricsService.networkUnreachableErrorMessage
+            }
+        }
+    }
+
+    /// Distinct error string for the offline terminal state. NWPathMonitor
+    /// recovery keys off this exact value to know a re-fetch is worthwhile.
+    static let networkUnreachableErrorMessage = "No internet connection"
+
     @MainActor
-    private func applyNoLyricsMissIfStillCurrentAndEmpty(songID: String, isInstrumental: Bool = false) {
+    private func applyNoLyricsMissIfStillCurrentAndEmpty(songID: String, verdict: TerminalMissVerdict = .noLyrics) {
         guard Self.shouldApplyNoLyricsMiss(
             currentSongID: currentSongID,
             missSongID: songID,
@@ -683,7 +788,7 @@ public class LyricsService: ObservableObject {
             return
         }
         isLoading = false
-        error = isInstrumental ? "Instrumental track" : "Lyrics unavailable"
+        error = verdict.errorMessage
     }
 
     private func launchAuthoritativeBackfill(
@@ -715,27 +820,39 @@ public class LyricsService: ObservableObject {
                 guard let self else { return }
                 guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
 
-                guard let backfill = await self.fetcher.backfillAuthoritativeLyrics(
-                    title: title,
-                    artist: artist,
-                    duration: duration,
-                    translationEnabled: wantsTranslation,
-                    album: album
-                ) else {
+                // Detached tasks do NOT inherit task-locals — bind a fresh
+                // ledger here so the backfill's persistence quorum and its
+                // miss verdict see only this pipeline's traffic.
+                let backfillLedger = NetworkOutcomeLedger()
+                guard let backfill = await NetworkOutcomeLedger.$current.withValue(backfillLedger, operation: {
+                    await self.fetcher.backfillAuthoritativeLyrics(
+                        title: title,
+                        artist: artist,
+                        duration: duration,
+                        translationEnabled: wantsTranslation,
+                        album: album
+                    )
+                }) else {
                     guard await self.isCurrentBackfill(generation: generation, songID: songID) else { return }
-                    DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'")
+                    // Same honesty rule as the foreground: a miss with zero
+                    // protocol responses and transport deaths is "the network
+                    // died", not "the song has no lyrics".
+                    let verdict: TerminalMissVerdict = backfillLedger.indicatesNetworkUnreachable
+                        ? .networkUnreachable
+                        : .noLyrics
+                    DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'\(verdict == .networkUnreachable ? " — network unreachable (protocol=0, transport=\(backfillLedger.transportFailures))" : "")")
                     self.recordDiagnosticsLyricsBackfillFinished(
                         title: title,
                         artist: artist,
                         album: album,
                         duration: duration,
-                        result: "miss",
+                        result: verdict == .networkUnreachable ? "network-unreachable" : "miss",
                         source: nil,
                         score: nil,
                         lineCount: 0
                     )
                     await MainActor.run {
-                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: verdict)
                     }
                     await self.clearBackfillIfCurrent(generation: generation)
                     return
@@ -781,7 +898,7 @@ public class LyricsService: ObservableObject {
                         classification: "instrumental"
                     )
                     await MainActor.run {
-                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, isInstrumental: true)
+                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .instrumental)
                     }
                 case .unavailable:
                     self.recordDiagnosticsLyricsBackfillFinished(
@@ -1622,13 +1739,21 @@ public class LyricsService: ObservableObject {
                 )
                 if self.lyricsCache.object(forKey: songID as NSString) != nil { continue }
 
-                let results = await self.fetcher.fetchAllSources(
-                    title: track.title,
-                    artist: track.artist,
-                    duration: track.duration,
-                    translationEnabled: translationEnabled,
-                    album: track.album
-                )
+                // Per-track ledger: preload writes the same 24h availability
+                // verdicts as the foreground, so it needs the same transport-
+                // failure quorum. Per TRACK (not per batch) because each
+                // track's verdict must stand on its own request evidence.
+                let preloadLedger = NetworkOutcomeLedger()
+
+                let results = await NetworkOutcomeLedger.$current.withValue(preloadLedger) {
+                    await self.fetcher.fetchAllSources(
+                        title: track.title,
+                        artist: track.artist,
+                        duration: track.duration,
+                        translationEnabled: translationEnabled,
+                        album: track.album
+                    )
+                }
 
                 var bestResult = self.fetcher.selectBestResult(from: results, songDuration: track.duration)
                 if bestResult == nil {
@@ -1636,13 +1761,15 @@ public class LyricsService: ObservableObject {
                     // the HTTP requests were killed, not that lyrics are missing —
                     // don't start the long serial backfill chain on that evidence.
                     guard !Task.isCancelled else { return }
-                    bestResult = await self.fetcher.backfillAuthoritativeSyncedLyrics(
-                        title: track.title,
-                        artist: track.artist,
-                        duration: track.duration,
-                        translationEnabled: translationEnabled,
-                        album: track.album
-                    )
+                    bestResult = await NetworkOutcomeLedger.$current.withValue(preloadLedger) {
+                        await self.fetcher.backfillAuthoritativeSyncedLyrics(
+                            title: track.title,
+                            artist: track.artist,
+                            duration: track.duration,
+                            translationEnabled: translationEnabled,
+                            album: track.album
+                        )
+                    }
                 }
                 // Cancellation kills HTTP requests mid-flight, so this pass may hold
                 // partial results; caching them could pin a weaker source for the

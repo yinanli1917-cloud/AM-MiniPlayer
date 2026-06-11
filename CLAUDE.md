@@ -19,7 +19,7 @@ Sources/
 │   │   ├── MusicController.swift          - Thin facade: @Published state + notifications/polling/Timer
 │   │   ├── MusicController+Artwork.swift  - Artwork extraction/fetching/caching
 │   │   ├── MusicController+Playback.swift - Playback controls + volume + favorites + AppleEventCode
-│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService)
+│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService) + NWPathMonitor offline self-recovery
 │   │   ├── MenuBarHealer.swift            - Self-heal macOS 26 ControlCenter plist at launch
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
@@ -49,7 +49,7 @@ Sources/
 │   │       ├── FluidGradientBackground.swift
 │   │       └── LiquidBackgroundView.swift
 │   ├── Utils/
-│   │   ├── HTTPClient.swift           - HTTP requests + retry + connection warmup
+│   │   ├── HTTPClient.swift           - HTTP requests + retry + connection warmup + NetworkOutcomeLedger (protocol vs transport)
 │   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion
 │   │   ├── MatchingUtils.swift        - Matching score utilities
 │   │   ├── DebugLogger.swift          - Debug logging
@@ -67,10 +67,11 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 557 个单元测试
+Tests/MusicMiniPlayerTests/         - 572 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     ├── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
+    ├── NetworkOutcomeLedgerTests.swift - 网络结果分类表 + 负面裁决配额 + task-local default-allow
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix

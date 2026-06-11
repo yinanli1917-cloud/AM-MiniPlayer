@@ -1,11 +1,134 @@
 /**
  * [INPUT]: Foundation URLSession
- * [OUTPUT]: HTTPClient 统一 HTTP 请求工具
+ * [OUTPUT]: HTTPClient 统一 HTTP 请求工具 + NetworkOutcomeLedger (protocol vs transport evidence)
  * [POS]: Utils 的网络子模块，替代分散的 URLRequest 模式
  * [PROTOCOL]: 变更时更新此头部，然后检查 Utils/CLAUDE.md
  */
 
 import Foundation
+
+// ============================================================
+// MARK: - Network Outcome Ledger
+// ============================================================
+
+/// Counts, per fetch pipeline, how many HTTP requests produced a PROTOCOL
+/// RESPONSE (the server answered with any status — even 404/500 proves the
+/// internet works) versus how many died as TRANSPORT FAILURES (timeout, DNS,
+/// cannot-connect, offline — no server ever answered).
+///
+/// Why: "no source had lyrics" and "no request ever reached a server" look
+/// identical at the call sites (both end as empty results), but they demand
+/// opposite verdicts — the first may be cached for 24h as "no lyrics exist",
+/// the second must surface as "network unreachable" and never be cached.
+///
+/// Binding model: a `@TaskLocal`. Each fetch pipeline binds its own fresh
+/// ledger so concurrent pipelines (foreground fetch vs backfill vs preload)
+/// cannot mix evidence. DEFAULT-ALLOW: when no ledger is bound (`current ==
+/// nil`) nothing records and nothing gates — the LyricsVerifier CLI and any
+/// other unbound caller behave exactly as before this ledger existed.
+public final class NetworkOutcomeLedger: @unchecked Sendable {
+
+    /// Task-local binding. `nil` (the default) means "no ledger": recording
+    /// becomes a no-op and persistence gates stay open (default-allow).
+    @TaskLocal public static var current: NetworkOutcomeLedger?
+
+    /// Classification of a single request outcome.
+    public enum RequestOutcome: Equatable {
+        /// The server answered at the HTTP layer (any status code).
+        case protocolResponse
+        /// The request died in transport — no server ever answered.
+        case transportFailure
+        /// The task was cancelled — says nothing about the network, so it
+        /// must be excluded from BOTH counters (the time-budget loop cancels
+        /// stragglers on every normal fetch; counting those as failures
+        /// would block every legitimate negative-verdict write).
+        case cancelled
+        /// Anything else (bad URL, undecodable body, …) — no evidence
+        /// either way, excluded from both counters.
+        case indeterminate
+    }
+
+    // NSLock over the two counters: recordings arrive from URLSession
+    // completion contexts on arbitrary threads inside one task group.
+    private let lock = NSLock()
+    private var protocolResponseCount = 0
+    private var transportFailureCount = 0
+
+    public init() {}
+
+    public var protocolResponses: Int {
+        lock.withLock { protocolResponseCount }
+    }
+
+    public var transportFailures: Int {
+        lock.withLock { transportFailureCount }
+    }
+
+    /// Quorum check for negative verdicts: a "no lyrics exist" cache write
+    /// is only trustworthy when every counted request got a real answer.
+    public var hadTransportFailures: Bool {
+        transportFailures > 0
+    }
+
+    /// The honest offline verdict: nobody answered AND someone died trying.
+    /// Zero traffic on both counters is NOT unreachable — it means the
+    /// pipeline was answered from caches and never needed the network.
+    public var indicatesNetworkUnreachable: Bool {
+        lock.withLock { protocolResponseCount == 0 && transportFailureCount > 0 }
+    }
+
+    func recordProtocolResponse() {
+        lock.withLock { protocolResponseCount += 1 }
+    }
+
+    /// Record a thrown request error according to the classification table.
+    func record(failure error: Error) {
+        guard Self.classify(failure: error) == .transportFailure else { return }
+        lock.withLock { transportFailureCount += 1 }
+    }
+
+    /// The classification table for thrown request errors. Pure function so
+    /// unit tests can pin every row. Conservative by design: only errors
+    /// that PROVE the transport layer failed count as transport failures —
+    /// an unknown error must never be able to flip the verdict to
+    /// "network unreachable".
+    public static func classify(failure error: Error) -> RequestOutcome {
+        // Swift-concurrency cancellation (Task.checkCancellation paths).
+        if error is CancellationError { return .cancelled }
+        guard let urlError = error as? URLError else { return .indeterminate }
+
+        switch urlError.code {
+        // URLSession surfaces task cancellation as URLError(.cancelled).
+        case .cancelled:
+            return .cancelled
+
+        // The request never produced an HTTP answer: dead in transport.
+        case .timedOut,
+             .cannotFindHost,
+             .dnsLookupFailed,
+             .cannotConnectToHost,
+             .networkConnectionLost,
+             .notConnectedToInternet,
+             .internationalRoamingOff,
+             .dataNotAllowed,
+             // TLS/certificate family: TCP may have connected but no HTTP
+             // exchange happened — this is also the captive-portal signature,
+             // which for lyrics purposes IS "network unreachable".
+             .secureConnectionFailed,
+             .serverCertificateUntrusted,
+             .serverCertificateHasBadDate,
+             .serverCertificateHasUnknownRoot,
+             .serverCertificateNotYetValid:
+            return .transportFailure
+
+        // Everything else (.badURL, .badServerResponse, .cannotParseResponse,
+        // .httpTooManyRedirects, …) either implies the server DID answer or
+        // is a local programming error — no transport evidence.
+        default:
+            return .indeterminate
+        }
+    }
+}
 
 // ============================================================
 // MARK: - HTTP 客户端
@@ -113,7 +236,19 @@ public enum HTTPClient {
             request.setValue(defaultUserAgent, forHTTPHeaderField: "User-Agent")
         }
 
-        let (data, response) = try await sharedSession.data(for: request)
+        // Ledger choke point: classify the raw session call only. Status
+        // errors thrown BELOW (404/5xx) already proved the server answered,
+        // so the protocol response is recorded before they are raised.
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await sharedSession.data(for: request)
+        } catch {
+            NetworkOutcomeLedger.current?.record(failure: error)
+            throw error
+        }
+        // Any URLResponse object means the transport delivered an answer.
+        NetworkOutcomeLedger.current?.recordProtocolResponse()
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw HTTPError.invalidResponse
@@ -182,7 +317,17 @@ public enum HTTPClient {
 
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await sharedSession.data(for: request)
+        // Same ledger choke point as _performGet — QQ Music search rides on
+        // POST, so transport evidence must be collected here too.
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await sharedSession.data(for: request)
+        } catch {
+            NetworkOutcomeLedger.current?.record(failure: error)
+            throw error
+        }
+        NetworkOutcomeLedger.current?.recordProtocolResponse()
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
