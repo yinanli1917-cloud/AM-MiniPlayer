@@ -24,7 +24,7 @@ Sources/
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
 │   │   └── Lyrics/
-│   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources
+│   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限)
 │   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh)
 │   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale
@@ -70,12 +70,13 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 597 个单元测试
+Tests/MusicMiniPlayerTests/         - 606 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     ├── LyricsSourceProfileTests.swift - 类型化源注册表 oracle 等值测试（旧硬编码阶梯字面量）
     ├── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
     ├── NetworkOutcomeLedgerTests.swift - 网络结果分类表 + 负面裁决配额 + task-local default-allow
+    ├── AuthoritativeBackfillBudgetTests.swift - 回填预算算术（9s 哨兵 ≥ 最长链 7.7s）+ 并行别名发现合并顺序 oracle + marker-only 证据窗口
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix

@@ -740,9 +740,12 @@ public struct LyricsView: View {
     }
 
     /// Deep-search phase: the quick foreground burst found nothing and the
-    /// long authoritative backfill is still running. Same spinner as
-    /// loadingView plus a label, so the long wait reads as labeled progress
-    /// instead of an anonymous stall (review #5).
+    /// authoritative backfill is still running. Same spinner as loadingView
+    /// plus a label, so the wait reads as labeled progress instead of an
+    /// anonymous stall (review #5). The wait itself is bounded: the backfill
+    /// is hard-capped at AuthoritativeBackfillBudget.overall (9s, review
+    /// #6+#7), so this view's lifetime matches a ceiling the pipeline
+    /// actually enforces.
     private var deepSearchingView: some View {
         VStack(spacing: 12) {
             ProgressView()

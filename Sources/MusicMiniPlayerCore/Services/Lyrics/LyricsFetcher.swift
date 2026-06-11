@@ -2,7 +2,7 @@
  * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils, LyricsSourceProfile (typed source registry)
  * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource
  * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
- * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound
+ * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound; the authoritative backfill is hard-bounded by AuthoritativeBackfillBudget (every child via addBoundedSourceTask, 9s overall sentinel, witness = 3s parallel discovery + 6s probe) and marker-only foreground sets take the empty fast exit with unclamped evidence windows (review #6+#7)
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
  * [PROTOCOL]: Update this header when changing the module, then check Services/Lyrics/CLAUDE.md
  */
@@ -142,6 +142,77 @@ public final class LyricsFetcher {
     private let foregroundAlbumTextFallbackTimeout: TimeInterval = 1.0
     private let foregroundLibraryNativeTitleEmptyTimeout: TimeInterval = 2.20
 
+    // MARK: - Authoritative Backfill Budget (review #6+#7, corrected arithmetic)
+    //
+    // A track with no lyrics anywhere used to hold the spinner ~18s: the
+    // backfill group drained ALL children with no overall ceiling, and the
+    // alias-witness child was the one child never wrapped in a timeout —
+    // internally it chained dozens of serial 2.8s catalog searches. The
+    // corrected budget bounds every child end-to-end and arms an overall
+    // sentinel, WITHOUT shrinking any source's existing per-source timeout:
+    //
+    //   phase                        ceiling   composition
+    //   ───────────────────────────  ────────  ──────────────────────────────
+    //   simple source children       ≤ 4.8s    existing per-source caps kept
+    //   album-scoped composite       7.7s      3.2 resolve + 4.5 probe
+    //   resolved-title composite     6.0s      2.8 resolve + 3.2 probe
+    //   alias-witness composite      9.0s      3.0 discovery + 6.0 probe
+    //                                          (review correction: "discovery
+    //                                          cap plus probe time, ~3s + 6s")
+    //   overall sentinel             9.0s      = max child cap; sized ABOVE
+    //                                          the longest legitimate chain
+    //                                          (album-scoped 7.7s — review
+    //                                          correction: "~8-10s, or wrap
+    //                                          each composite end-to-end";
+    //                                          this change does both)
+    //
+    // The UI consequence (review #5 wiring): `deepSearching` can only end via
+    // the backfill returning, so the state's real-world window is bounded by
+    // `overall` — the "Searching more sources" label is a promise the
+    // pipeline can now keep.
+    enum AuthoritativeBackfillBudget {
+        /// Hard ceiling for the whole backfill task group, enforced by the
+        /// sentinel child in `backfillAuthoritativeLyrics`.
+        static let overall: TimeInterval = 9.0
+
+        // Simple (non-composite) source children — unchanged per-source caps.
+        static let lrclibChild: TimeInterval = 3.2
+        static let lrclibSearchChild: TimeInterval = 3.2
+        static let netEaseChild: TimeInterval = 4.8
+        static let qqChild: TimeInterval = 3.2
+        static let albumTitleEchoChild: TimeInterval = 2.9
+
+        // Album-scoped composite: metadata resolve, then a 3-source probe.
+        static let albumScopedMetadataResolve: TimeInterval = 3.2
+        static let albumScopedProbe: TimeInterval = 4.5
+        static var albumScopedComposite: TimeInterval { albumScopedMetadataResolve + albumScopedProbe }
+
+        // Resolved-title composite: metadata resolve, then a 3-source probe.
+        static let resolvedMetadataResolve: TimeInterval = 2.8
+        static let resolvedProbe: TimeInterval = 3.2
+        static var resolvedComposite: TimeInterval { resolvedMetadataResolve + resolvedProbe }
+
+        // Alias-witness composite: alias discovery (parallel across its
+        // independent passes — review #7), then the existing probe group.
+        static let witnessDiscovery: TimeInterval = 3.0
+        static let witnessProbe: TimeInterval = 6.0
+        static var witnessComposite: TimeInterval { witnessDiscovery + witnessProbe }
+
+        /// Longest single child the group can legally wait for. The sentinel
+        /// must never undercut this, or it would clip legitimate work.
+        static var longestChildCeiling: TimeInterval {
+            max(lrclibChild, lrclibSearchChild, netEaseChild, qqChild,
+                albumTitleEchoChild, albumScopedComposite, resolvedComposite,
+                witnessComposite)
+        }
+
+        /// Concurrency width for the parallel alias-discovery searches:
+        /// wide enough that ~tens of small catalog queries finish well inside
+        /// `witnessDiscovery`, narrow enough not to monopolize the shared
+        /// HTTP connection pool or trip provider rate limits.
+        static let aliasDiscoveryMaxConcurrentSearches = 6
+    }
+
     private func isLibraryFallbackSource(_ source: LyricsSource) -> Bool {
         source.profile.isLibraryFallback
     }
@@ -209,6 +280,26 @@ public final class LyricsFetcher {
             return 2.60
         }
         return 2.2
+    }
+
+    /// Landing window granted to a fired-but-unlanded evidence branch inside
+    /// the empty/marker-only fast-exit path (review #6+#7 merged change).
+    ///
+    /// A truly-empty result set keeps the historical clamp: when NOTHING has
+    /// answered by the empty-result deadline, the fetch is over — pending
+    /// branch or not. A marker-only set is different evidence: a provider DID
+    /// answer and said "track found, no lyric text", so a fired album-scoped
+    /// or native-title branch keeps its FULL landing window (required
+    /// correction from the #6 adversarial review: "use the unclamped evidence
+    /// windows when treating marker-only results as empty") — real lyrics may
+    /// still land under a native-title alias, and an early marker must not
+    /// shorten that legitimate chance.
+    static func emptyPathEvidenceWindow(
+        landingDeadline: TimeInterval,
+        emptyResultDeadline: TimeInterval,
+        resultSetIsTrulyEmpty: Bool
+    ) -> TimeInterval {
+        resultSetIsTrulyEmpty ? min(landingDeadline, emptyResultDeadline) : landingDeadline
     }
 
     func foregroundEmptyResultDeadlineForTesting(
@@ -1004,7 +1095,19 @@ public final class LyricsFetcher {
                     }
                 }
 
-                if results.isEmpty {
+                // Review #6+#7: a result set holding ONLY provider availability
+                // markers (instrumental / unavailable) is evidence about the
+                // SONG, not lyrics worth waiting on. Before this change one
+                // early marker made `results` non-empty, every fast-exit row
+                // below required a synced result or a still-pending branch,
+                // and the miss path rode the full 5s ceiling — "evidence-only
+                // markers bypass the fast exit". Marker-only sets now take the
+                // same 2.2-2.95s empty fast exit as a truly-empty timeline.
+                let hasOnlyAvailabilityMarkers = results.allSatisfy {
+                    $0.kind == .instrumental || $0.kind == .unavailable
+                }
+                if hasOnlyAvailabilityMarkers { // also true for the truly-empty set
+                    let resultSetIsTrulyEmpty = results.isEmpty
                     let nativeProviderPending = shouldProtectNativeProviderRace
                         && (!netEaseProviderLanded.value || !qqProviderLanded.value)
                     if nativeProviderPending && elapsed < nativeProviderTimeout {
@@ -1015,10 +1118,19 @@ public final class LyricsFetcher {
                     }
                     if libraryNativeTitleBranchFired.value
                         && !libraryNativeTitleBranchLanded.value
-                        && elapsed < min(libraryNativeTitleLandingDeadline, emptyResultDeadline) {
+                        && elapsed < Self.emptyPathEvidenceWindow(
+                            landingDeadline: libraryNativeTitleLandingDeadline,
+                            emptyResultDeadline: emptyResultDeadline,
+                            resultSetIsTrulyEmpty: resultSetIsTrulyEmpty
+                        ) {
                         continue
                     }
-                    if albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed < min(albumScopedLandingDeadline, emptyResultDeadline) {
+                    if albumScopedBranchFired.value && !albumScopedBranchLanded.value
+                        && elapsed < Self.emptyPathEvidenceWindow(
+                            landingDeadline: albumScopedLandingDeadline,
+                            emptyResultDeadline: emptyResultDeadline,
+                            resultSetIsTrulyEmpty: resultSetIsTrulyEmpty
+                        ) {
                         continue
                     }
                     if branch2Fired.value && !branch2Landed.value && elapsed < 2.2 {
@@ -1028,7 +1140,9 @@ public final class LyricsFetcher {
                         continue
                     }
                     if elapsed >= emptyResultDeadline {
-                        DebugLogger.log("⏱️ No synced candidate within \(String(format: "%.1f", elapsed))s")
+                        DebugLogger.log(resultSetIsTrulyEmpty
+                            ? "⏱️ No synced candidate within \(String(format: "%.1f", elapsed))s"
+                            : "⏱️ Availability markers only within \(String(format: "%.1f", elapsed))s — taking the empty fast exit")
                         group.cancelAll()
                         break
                     }
@@ -1371,6 +1485,21 @@ public final class LyricsFetcher {
         return nil
     }
 
+    /// Adds a backfill child that CANNOT outlive its budget (review #6's
+    /// structural helper). `withHardSourceTimeout` resumes with nil at the
+    /// deadline even if the operation ignores cancellation, so a child built
+    /// through this helper has a hard ceiling by construction — the group's
+    /// drain time is then bounded by the largest budget passed here.
+    private func addBoundedSourceTask(
+        to group: inout TaskGroup<LyricsFetchResult?>,
+        seconds: TimeInterval,
+        operation: @escaping @Sendable () async -> LyricsFetchResult?
+    ) {
+        group.addTask {
+            await self.withHardSourceTimeout(seconds: seconds, operation: operation)
+        }
+    }
+
     public func backfillAuthoritativeLyrics(
         title: String,
         artist: String,
@@ -1385,47 +1514,56 @@ public final class LyricsFetcher {
         DebugLogger.log("🧭 Authoritative lyrics backfill START: '\(cleanTitle)' by '\(cleanArtist)'")
 
         var results: [LyricsFetchResult] = []
+        var backfillDeadlineClipped = false
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
-            group.addTask {
-                await self.withHardSourceTimeout(seconds: 3.2) {
-                    await self.fetchFromLRCLIB(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
-                }
+            // Structural rule (review #6): EVERY child enters through
+            // addBoundedChild → addBoundedSourceTask, so no child can run
+            // unbounded — the ~18s drain existed because exactly one child
+            // (the alias witness) skipped its wrapper. The local wrapper also
+            // keeps the pending-children count honest for the sentinel logic
+            // (the album-scoped child is conditional).
+            var pendingRealChildren = 0
+            func addBoundedChild(
+                seconds: TimeInterval,
+                operation: @escaping @Sendable () async -> LyricsFetchResult?
+            ) {
+                pendingRealChildren += 1
+                self.addBoundedSourceTask(to: &group, seconds: seconds, operation: operation)
             }
-            group.addTask {
-                await self.withHardSourceTimeout(seconds: 3.2) {
-                    await self.fetchFromLRCLIBSearch(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
-                }
+
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.lrclibChild) {
+                await self.fetchFromLRCLIB(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
             }
-            group.addTask {
-                await self.withHardSourceTimeout(seconds: 4.8) {
-                    await self.fetchFromNetEase(title: cleanTitle, artist: cleanArtist,
-                                                originalTitle: cleanTitle, originalArtist: cleanArtist,
-                                                duration: duration, translationEnabled: translationEnabled,
-                                                album: cleanAlbum)
-                }
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.lrclibSearchChild) {
+                await self.fetchFromLRCLIBSearch(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
             }
-            group.addTask {
-                await self.withHardSourceTimeout(seconds: 3.2) {
-                    await self.fetchFromQQMusic(title: cleanTitle, artist: cleanArtist,
-                                                originalTitle: cleanTitle, originalArtist: cleanArtist,
-                                                duration: duration, translationEnabled: translationEnabled,
-                                                album: cleanAlbum)
-                }
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.netEaseChild) {
+                await self.fetchFromNetEase(title: cleanTitle, artist: cleanArtist,
+                                            originalTitle: cleanTitle, originalArtist: cleanArtist,
+                                            duration: duration, translationEnabled: translationEnabled,
+                                            album: cleanAlbum)
             }
-            group.addTask {
-                await self.withHardSourceTimeout(seconds: 2.9, operation: {
-                    await self.fetchAlbumTitleEchoNativeNetEase(
-                        title: cleanTitle,
-                        artist: cleanArtist,
-                        duration: duration,
-                        translationEnabled: translationEnabled,
-                        album: cleanAlbum
-                    )
-                })
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.qqChild) {
+                await self.fetchFromQQMusic(title: cleanTitle, artist: cleanArtist,
+                                            originalTitle: cleanTitle, originalArtist: cleanArtist,
+                                            duration: duration, translationEnabled: translationEnabled,
+                                            album: cleanAlbum)
+            }
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.albumTitleEchoChild) {
+                await self.fetchAlbumTitleEchoNativeNetEase(
+                    title: cleanTitle,
+                    artist: cleanArtist,
+                    duration: duration,
+                    translationEnabled: translationEnabled,
+                    album: cleanAlbum
+                )
             }
             if !cleanAlbum.isEmpty {
-                group.addTask {
-                    guard let localized = await self.withHardMetadataTimeout(seconds: 3.2, operation: {
+                // Composite child wrapped END-TO-END (7.7s = 3.2 resolve +
+                // 4.5 probe) — the longest legitimate chain in the group,
+                // which is what the overall sentinel is sized above.
+                addBoundedChild(seconds: AuthoritativeBackfillBudget.albumScopedComposite) {
+                    guard let localized = await self.withHardMetadataTimeout(seconds: AuthoritativeBackfillBudget.albumScopedMetadataResolve, operation: {
                         await self.metadataResolver.resolveAlbumScopedMetadata(
                             title: cleanTitle,
                             artist: cleanArtist,
@@ -1447,8 +1585,9 @@ public final class LyricsFetcher {
                     )
                 }
             }
-            group.addTask {
-                guard let resolved = await self.withHardMetadataTimeout(seconds: 2.8, operation: {
+            // Composite child wrapped end-to-end (6.0s = 2.8 resolve + 3.2 probe).
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.resolvedComposite) {
+                guard let resolved = await self.withHardMetadataTimeout(seconds: AuthoritativeBackfillBudget.resolvedMetadataResolve, operation: {
                     await self.metadataResolver.resolveSearchMetadata(
                         title: cleanTitle,
                         artist: cleanArtist,
@@ -1468,7 +1607,11 @@ public final class LyricsFetcher {
                     album: cleanAlbum
                 )
             }
-            group.addTask {
+            // The hole this change exists for: the alias witness used to be
+            // the ONLY unwrapped child — internally it could chain dozens of
+            // serial 2.8s catalog searches (~18s observed). Documented cap:
+            // 9.0s = 3.0 discovery + 6.0 probe (corrected #6 arithmetic).
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.witnessComposite) {
                 await self.fetchNativeTitleAliasWitnessBackfill(
                     title: cleanTitle,
                     artist: cleanArtist,
@@ -1478,14 +1621,61 @@ public final class LyricsFetcher {
                 )
             }
 
+            // Overall sentinel (review #6): an alarm-clock child that wakes
+            // the drain loop at the overall budget so it can cancel the whole
+            // group. With every child individually bounded the sentinel never
+            // clips legitimate work — it is the structural guarantee that a
+            // future unbounded child cannot reintroduce the open-ended drain.
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(AuthoritativeBackfillBudget.overall * 1_000_000_000))
+                return nil
+            }
+
             for await result in group {
-                guard let result else { continue }
-                results.append(result)
-                if result.kind == .synced,
-                   (
-                    (result.titleMatched && result.score >= 45 && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
-                        || (result.score >= 70 && selectedHasPersistentIdentity(result))
-                   ) {
+                if let result {
+                    // Real children are the only non-nil producers, so the
+                    // bookkeeping is exact here. Collect BEFORE any deadline
+                    // decision: even a straggler racing the sentinel at the
+                    // wire carries work its own per-child cap vouched for.
+                    pendingRealChildren -= 1
+                    results.append(result)
+                    if result.kind == .synced,
+                       (
+                        (result.titleMatched && result.score >= 45 && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
+                            || (result.score >= 70 && selectedHasPersistentIdentity(result))
+                       ) {
+                        group.cancelAll()
+                        break
+                    }
+                    if pendingRealChildren == 0 {
+                        // All real children drained before the budget —
+                        // cancel the sentinel instead of idling until it fires.
+                        group.cancelAll()
+                        break
+                    }
+                    continue
+                }
+                // nil event: a child that timed out (before the budget that is
+                // the only possibility — the sentinel sleeps exactly the
+                // budget), or the sentinel itself at the wire. (Under task
+                // cancellation the sentinel can wake early, but then the
+                // post-collection cancellation guard discards everything.)
+                if Date().timeIntervalSince(start) >= AuthoritativeBackfillBudget.overall {
+                    if pendingRealChildren > 0 {
+                        // Children still in flight at the budget — the sweep
+                        // is truncated. A child nil'ing out AT the wire (the
+                        // witness maxing its 9.0 cap) is indistinguishable
+                        // from the sentinel and lands here too; treating it
+                        // as clipped is the conservative side — its evidence
+                        // never arrived, so the sweep was incomplete anyway.
+                        backfillDeadlineClipped = true
+                        DebugLogger.log("⏱️ Authoritative lyrics backfill clipped at \(String(format: "%.1f", AuthoritativeBackfillBudget.overall))s overall budget (\(pendingRealChildren) children pending)")
+                    }
+                    group.cancelAll()
+                    break
+                }
+                pendingRealChildren -= 1
+                if pendingRealChildren == 0 {
                     group.cancelAll()
                     break
                 }
@@ -1521,6 +1711,15 @@ public final class LyricsFetcher {
                     DebugLogger.log("🧭 Authoritative lyrics backfill INSTRUMENTAL not cached without album evidence")
                     return .instrumental(instrumental)
                 }
+                // Same rule as the cancellation guard above: a truncated
+                // search can never write a 24-hour verdict (review #6
+                // correction). Cancelled requests are excluded from the
+                // transport-failure quorum by design, so the deadline clip
+                // needs its own guard — display the verdict, skip the cache.
+                if backfillDeadlineClipped {
+                    DebugLogger.log("⏱️ Authoritative lyrics backfill INSTRUMENTAL not cached — overall budget clipped the sweep")
+                    return .instrumental(instrumental)
+                }
                 // Negative-verdict quorum (see negativeVerdictQuorumMet):
                 // transport deaths mean the sweep was incomplete — return
                 // the verdict for display but keep it out of the 24h cache.
@@ -1544,6 +1743,10 @@ public final class LyricsFetcher {
             if let unavailable = selectUnavailableResult(from: results) {
                 if !shouldPersistAvailabilityResult(unavailable, requestedAlbum: cleanAlbum) {
                     DebugLogger.log("🧭 Authoritative lyrics backfill UNAVAILABLE not cached without album evidence")
+                    return .unavailable(unavailable)
+                }
+                if backfillDeadlineClipped {
+                    DebugLogger.log("⏱️ Authoritative lyrics backfill UNAVAILABLE not cached — overall budget clipped the sweep")
                     return .unavailable(unavailable)
                 }
                 if !negativeVerdictQuorumMet {
@@ -1594,7 +1797,7 @@ public final class LyricsFetcher {
         var probeResults: [LyricsFetchResult] = []
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 4.5) {
+                await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.albumScopedProbe) {
                     await self.fetchResolvedTitleKeyedSources(
                         title: localizedTitle,
                         artist: localizedArtist,
@@ -1607,7 +1810,7 @@ public final class LyricsFetcher {
                 }
             }
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 4.5) {
+                await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.albumScopedProbe) {
                     await self.fetchFromLRCLIB(
                         title: localizedTitle,
                         artist: localizedArtist,
@@ -1617,7 +1820,7 @@ public final class LyricsFetcher {
                 }
             }
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 4.5) {
+                await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.albumScopedProbe) {
                     await self.fetchFromLRCLIBSearch(
                         title: localizedTitle,
                         artist: localizedArtist,
@@ -1653,7 +1856,7 @@ public final class LyricsFetcher {
         var probeResults: [LyricsFetchResult] = []
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 3.2) {
+                await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.resolvedProbe) {
                     await self.fetchResolvedTitleKeyedSources(
                         title: resolvedTitle,
                         artist: resolvedArtist,
@@ -1666,7 +1869,7 @@ public final class LyricsFetcher {
                 }
             }
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 3.2) {
+                await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.resolvedProbe) {
                     await self.fetchFromNetEase(
                         title: resolvedTitle,
                         artist: resolvedArtist,
@@ -1679,7 +1882,7 @@ public final class LyricsFetcher {
                 }
             }
             group.addTask {
-                await self.withHardSourceTimeout(seconds: 3.2) {
+                await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.resolvedProbe) {
                     await self.fetchFromQQMusic(
                         title: resolvedTitle,
                         artist: resolvedArtist,
@@ -1715,42 +1918,43 @@ public final class LyricsFetcher {
     ) async -> LyricsFetchResult? {
         guard LanguageUtils.isPureASCII(title),
               LanguageUtils.isPureASCII(artist) else { return nil }
-        let cjkArtists = await resolveArtistCJKAliases(
-            asciiArtist: artist,
-            allowUnconfirmedCatalogMatches: true
-        )
+        // DISCOVERY PHASE — capped at witnessDiscovery (the 3.0s half of the
+        // 9.0s witness budget; corrected #6 arithmetic: "discovery cap plus
+        // probe time, ~3s + 6s"). The deadline covers artist-alias resolution
+        // AND the catalog alias searches; whatever has landed when it expires
+        // is probed as-is. The old serial loop here chained up to dozens of
+        // 2.8s searches — the observed ~18s spinner on a total miss.
+        let discoveryDeadline = Date().addingTimeInterval(AuthoritativeBackfillBudget.witnessDiscovery)
+        let cjkArtists = await withHardMetadataTimeout(seconds: AuthoritativeBackfillBudget.witnessDiscovery) {
+            await self.resolveArtistCJKAliases(
+                asciiArtist: artist,
+                allowUnconfirmedCatalogMatches: true
+            )
+        } ?? []
         guard !cjkArtists.isEmpty else { return nil }
 
-        var probes: [(title: String, artist: String)] = []
-        func appendProbes(_ newProbes: [(title: String, artist: String)]) {
-            for probe in newProbes where !probes.contains(where: { $0.title == probe.title && $0.artist == probe.artist }) {
-                probes.append(probe)
-            }
-        }
-
+        // Pass list in the exact order the old serial loop visited it:
+        // collaboration passes first (aliasLimit 2), then per-artist passes
+        // (aliasLimit 3). Passes are independent, so they execute
+        // concurrently (review #7); the ordered merge inside
+        // discoverNativeTitleAliasProbes reproduces the serial result order.
+        var passes: [NativeTitleAliasDiscoveryPass] = []
         if asciiArtistLooksCollaborative(artist) {
             for collaborationArtist in collaborationCJKArtistQueries(from: cjkArtists).prefix(4) {
-                appendProbes(await nativeTitleAliasProbes(
-                    title: title,
-                    asciiArtist: artist,
-                    cjkArtist: collaborationArtist,
-                    duration: duration,
-                    album: album,
-                    aliasLimit: 2
-                ))
+                passes.append(NativeTitleAliasDiscoveryPass(cjkArtist: collaborationArtist, aliasLimit: 2))
             }
         }
-
         for cjkArtist in cjkArtists.prefix(3) {
-            appendProbes(await nativeTitleAliasProbes(
-                title: title,
-                asciiArtist: artist,
-                cjkArtist: cjkArtist,
-                duration: duration,
-                album: album,
-                aliasLimit: 3
-            ))
+            passes.append(NativeTitleAliasDiscoveryPass(cjkArtist: cjkArtist, aliasLimit: 3))
         }
+        let probes = await discoverNativeTitleAliasProbes(
+            title: title,
+            asciiArtist: artist,
+            passes: passes,
+            duration: duration,
+            album: album,
+            deadline: discoveryDeadline
+        )
         guard !probes.isEmpty else { return nil }
         DebugLogger.log("🧭 Native-title witness probes: \(probes.map { "'\($0.title)' by '\($0.artist)'" }.joined(separator: ", "))")
 
@@ -1758,7 +1962,7 @@ public final class LyricsFetcher {
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
             for probe in probes.prefix(4) {
                 group.addTask {
-                    await self.withHardSourceTimeout(seconds: 6.0) {
+                    await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.witnessProbe) {
                         await self.fetchFromLRCLIB(
                             title: probe.title,
                             artist: probe.artist,
@@ -1768,7 +1972,7 @@ public final class LyricsFetcher {
                     }
                 }
                 group.addTask {
-                    await self.withHardSourceTimeout(seconds: 6.0) {
+                    await self.withHardSourceTimeout(seconds: AuthoritativeBackfillBudget.witnessProbe) {
                         await self.fetchFromLRCLIBSearch(
                             title: probe.title,
                             artist: probe.artist,
@@ -1826,117 +2030,278 @@ public final class LyricsFetcher {
         return selected
     }
 
-    private func nativeTitleAliasProbes(
+    /// One independent alias-discovery pass: a catalog artist spelling plus
+    /// the number of discovered aliases it may convert into probes.
+    struct NativeTitleAliasDiscoveryPass {
+        let cjkArtist: String
+        let aliasLimit: Int
+    }
+
+    /// A witness probe — one (title-variant, artist) catalog query. A struct
+    /// rather than a tuple so the order-preserving merge can be generic over
+    /// Equatable and the #7 merge-order test can build fixtures.
+    struct NativeTitleAliasProbe: Equatable {
+        let title: String
+        let artist: String
+    }
+
+    /// One NetEase catalog search a discovery pass issues.
+    struct AliasDiscoverySearch {
+        let query: String
+        let albumScoped: Bool
+        let requiresTitleAlbumEcho: Bool
+    }
+
+    /// Order-preserving merge of independently produced discovery slices
+    /// (review #7): slices execute concurrently, but the merged list must be
+    /// identical to the old serial loop's output — flatten in slice order,
+    /// keep first occurrences. Used at BOTH levels: per-search alias lists
+    /// inside one pass, and per-pass probe lists across passes.
+    static func mergeOrderedDiscoveryPasses<Element: Equatable>(_ passes: [[Element]]) -> [Element] {
+        var merged: [Element] = []
+        for pass in passes {
+            for element in pass where !merged.contains(element) {
+                merged.append(element)
+            }
+        }
+        return merged
+    }
+
+    /// Runs every (pass × search) catalog query concurrently — bounded width,
+    /// hard deadline — then reassembles aliases and probes in the exact order
+    /// the old serial code produced them. The serial worst case chained the
+    /// searches (dozens × 2.8s); the parallel worst case is the deadline,
+    /// with every slice that landed in time still contributing.
+    private func discoverNativeTitleAliasProbes(
         title: String,
         asciiArtist: String,
-        cjkArtist: String,
+        passes: [NativeTitleAliasDiscoveryPass],
         duration: TimeInterval,
         album: String,
-        aliasLimit: Int
-    ) async -> [(title: String, artist: String)] {
-        let aliases = await discoverNativeTitleAliases(
-            title: title,
-            asciiArtist: asciiArtist,
-            cjkArtist: cjkArtist,
-            duration: duration,
-            album: album
-        )
+        deadline: Date
+    ) async -> [NativeTitleAliasProbe] {
+        guard !passes.isEmpty, Date() < deadline else { return [] }
+        let titleCollaborators = asciiTitleCollaborators(from: title)
+        let canUseCollaborationArtistOnlyEvidence = LanguageUtils.isPureASCII(title)
+            && asciiArtistLooksCollaborative(asciiArtist)
 
-        var probes: [(title: String, artist: String)] = []
+        struct SearchUnit {
+            let passIndex: Int
+            let searchIndex: Int
+            let cjkArtist: String
+            let search: AliasDiscoverySearch
+        }
+        var units: [SearchUnit] = []
+        var perPassSearchCounts: [Int] = []
+        for (passIndex, pass) in passes.enumerated() {
+            let searches = buildAliasDiscoverySearches(
+                title: title,
+                asciiArtist: asciiArtist,
+                cjkArtist: pass.cjkArtist,
+                album: album
+            )
+            perPassSearchCounts.append(searches.count)
+            for (searchIndex, search) in searches.enumerated() {
+                units.append(SearchUnit(
+                    passIndex: passIndex,
+                    searchIndex: searchIndex,
+                    cjkArtist: pass.cjkArtist,
+                    search: search
+                ))
+            }
+        }
+        guard !units.isEmpty else { return [] }
+
+        // aliasSlices[pass][search] — filled as units land, merged in order.
+        var aliasSlices: [[[String]]] = perPassSearchCounts.map {
+            Array(repeating: [String](), count: $0)
+        }
+        await withTaskGroup(of: (passIndex: Int, searchIndex: Int, aliases: [String])?.self) { group in
+            var nextUnit = 0
+            var completedUnits = 0
+            func addNextUnit() {
+                let unit = units[nextUnit]
+                nextUnit += 1
+                group.addTask {
+                    let aliases = await self.fetchAliasDiscoverySearchAliases(
+                        search: unit.search,
+                        title: title,
+                        asciiArtist: asciiArtist,
+                        cjkArtist: unit.cjkArtist,
+                        duration: duration,
+                        album: album,
+                        titleCollaborators: titleCollaborators,
+                        canUseCollaborationArtistOnlyEvidence: canUseCollaborationArtistOnlyEvidence
+                    )
+                    return (unit.passIndex, unit.searchIndex, aliases)
+                }
+            }
+            while nextUnit < min(AuthoritativeBackfillBudget.aliasDiscoveryMaxConcurrentSearches, units.count) {
+                addNextUnit()
+            }
+            // Deadline sentinel: real units always return non-nil, so before
+            // the deadline a nil event is impossible — when one arrives the
+            // date check above it exits with whatever slices already landed.
+            group.addTask {
+                let remaining = deadline.timeIntervalSinceNow
+                if remaining > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
+                return nil
+            }
+            for await event in group {
+                if Date() >= deadline {
+                    group.cancelAll()
+                    break
+                }
+                guard let event else { continue }
+                aliasSlices[event.passIndex][event.searchIndex] = event.aliases
+                completedUnits += 1
+                if nextUnit < units.count {
+                    addNextUnit()
+                } else if completedUnits == units.count {
+                    // Everything landed before the deadline — cancel the
+                    // sentinel instead of idling until it fires.
+                    group.cancelAll()
+                    break
+                }
+            }
+        }
+
+        var passProbes: [[NativeTitleAliasProbe]] = []
+        for (passIndex, pass) in passes.enumerated() {
+            let aliases = Self.mergeOrderedDiscoveryPasses(aliasSlices[passIndex])
+            passProbes.append(nativeTitleAliasProbes(
+                fromAliases: aliases,
+                cjkArtist: pass.cjkArtist,
+                aliasLimit: pass.aliasLimit
+            ))
+        }
+        return Self.mergeOrderedDiscoveryPasses(passProbes)
+    }
+
+    /// Aliases → probe variants for one pass. Pure (discovery hoisted out);
+    /// identical to the old per-pass loop body, including the in-pass dedup.
+    private func nativeTitleAliasProbes(
+        fromAliases aliases: [String],
+        cjkArtist: String,
+        aliasLimit: Int
+    ) -> [NativeTitleAliasProbe] {
+        var probes: [NativeTitleAliasProbe] = []
         for alias in aliases.prefix(aliasLimit) {
-            for variant in nativeTitleAliasVariants(alias, artist: cjkArtist) where !probes.contains(where: { $0.title == variant && $0.artist == cjkArtist }) {
-                probes.append((variant, cjkArtist))
+            for variant in nativeTitleAliasVariants(alias, artist: cjkArtist) {
+                let probe = NativeTitleAliasProbe(title: variant, artist: cjkArtist)
+                if !probes.contains(probe) {
+                    probes.append(probe)
+                }
             }
         }
         return probes
     }
 
-    private func discoverNativeTitleAliases(
+    /// The search list one discovery pass issues — extracted unchanged from
+    /// the old serial loop so the parallel scheduler and the serial-order
+    /// oracle agree on exactly what a "pass" contains.
+    func buildAliasDiscoverySearches(
         title: String,
         asciiArtist: String,
         cjkArtist: String,
-        duration: TimeInterval,
         album: String
-    ) async -> [String] {
-        let headers = [
-            "User-Agent": "nanoPod/1.0 (native-title-alias)",
-            "Referer": "https://music.163.com/"
-        ]
+    ) -> [AliasDiscoverySearch] {
         let normalizedAlbum = LanguageUtils.toSimplifiedChinese(
             LanguageUtils.normalizeTrackName(album)
         ).lowercased()
         let titleCollaborators = asciiTitleCollaborators(from: title)
         let primaryTitle = titleWithoutCollaborationCredit(title)
-        var searches: [(query: String, albumScoped: Bool, requiresTitleAlbumEcho: Bool)] = [
-            ("\(title) \(cjkArtist)", false, false)
+        var searches: [AliasDiscoverySearch] = [
+            AliasDiscoverySearch(query: "\(title) \(cjkArtist)", albumScoped: false, requiresTitleAlbumEcho: false)
         ]
         if let primaryTitle, !titleCollaborators.isEmpty {
-            searches.insert(("\(primaryTitle) \(titleCollaborators.joined(separator: " ")) \(asciiArtist)", false, false), at: 0)
+            searches.insert(AliasDiscoverySearch(query: "\(primaryTitle) \(titleCollaborators.joined(separator: " ")) \(asciiArtist)", albumScoped: false, requiresTitleAlbumEcho: false), at: 0)
         }
         if let primaryTitle {
             if !titleCollaborators.isEmpty {
-                searches.insert(("\(primaryTitle) \(titleCollaborators.joined(separator: " ")) \(cjkArtist)", false, false), at: 0)
+                searches.insert(AliasDiscoverySearch(query: "\(primaryTitle) \(titleCollaborators.joined(separator: " ")) \(cjkArtist)", albumScoped: false, requiresTitleAlbumEcho: false), at: 0)
             }
-            searches.append(("\(primaryTitle) \(cjkArtist)", false, false))
+            searches.append(AliasDiscoverySearch(query: "\(primaryTitle) \(cjkArtist)", albumScoped: false, requiresTitleAlbumEcho: false))
         }
         if !normalizedAlbum.isEmpty {
-            searches.append(("\(normalizedAlbum) \(cjkArtist)", true, false))
-            searches.append(("\(title) \(normalizedAlbum) \(cjkArtist)", true, false))
+            searches.append(AliasDiscoverySearch(query: "\(normalizedAlbum) \(cjkArtist)", albumScoped: true, requiresTitleAlbumEcho: false))
+            searches.append(AliasDiscoverySearch(query: "\(title) \(normalizedAlbum) \(cjkArtist)", albumScoped: true, requiresTitleAlbumEcho: false))
             if let primaryTitle {
-                searches.append(("\(primaryTitle) \(normalizedAlbum) \(cjkArtist)", true, false))
+                searches.append(AliasDiscoverySearch(query: "\(primaryTitle) \(normalizedAlbum) \(cjkArtist)", albumScoped: true, requiresTitleAlbumEcho: false))
             }
             if isAlbumTitleEchoNativeAliasProbeInput(title: title, album: album) {
-                searches.insert((cjkArtist, true, true), at: 0)
+                searches.insert(AliasDiscoverySearch(query: cjkArtist, albumScoped: true, requiresTitleAlbumEcho: true), at: 0)
             }
         }
         let canUseCollaborationArtistOnlyEvidence = LanguageUtils.isPureASCII(title)
             && asciiArtistLooksCollaborative(asciiArtist)
         if canUseCollaborationArtistOnlyEvidence {
-            searches.append((cjkArtist, false, false))
+            searches.append(AliasDiscoverySearch(query: cjkArtist, albumScoped: false, requiresTitleAlbumEcho: false))
         }
+        return searches
+    }
+
+    /// One catalog search → the aliases it contributes, in encounter order.
+    /// HTTP timeout (2.8s) and every extraction rule are unchanged from the
+    /// old serial loop — only the scheduling around them changed. The dedup
+    /// here is per-search; the cross-search dedup happens in the ordered
+    /// merge, which together reproduce the serial running-dedup exactly.
+    private func fetchAliasDiscoverySearchAliases(
+        search: AliasDiscoverySearch,
+        title: String,
+        asciiArtist: String,
+        cjkArtist: String,
+        duration: TimeInterval,
+        album: String,
+        titleCollaborators: [String],
+        canUseCollaborationArtistOnlyEvidence: Bool
+    ) async -> [String] {
+        let headers = [
+            "User-Agent": "nanoPod/1.0 (native-title-alias)",
+            "Referer": "https://music.163.com/"
+        ]
+        guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
+            "s": search.query, "type": "1", "limit": "30"
+        ]) else { return [] }
+        guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 2.8, retry: false),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [String: Any],
+              let songs = result["songs"] as? [[String: Any]] else { return [] }
 
         var aliases: [String] = []
-        for search in searches {
-            guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
-                "s": search.query, "type": "1", "limit": "30"
-            ]) else { continue }
-            guard let (data, _) = try? await HTTPClient.getData(url: url, headers: headers, timeout: 2.8, retry: false),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let result = json["result"] as? [String: Any],
-                  let songs = result["songs"] as? [[String: Any]] else { continue }
+        for (index, song) in songs.prefix(12).enumerated() {
+            guard let name = song["name"] as? String else { continue }
+            if let alias = nativeTitleAlias(fromEvidenceName: name, inputTitle: title, asciiArtist: asciiArtist, cjkArtist: cjkArtist),
+               !aliases.contains(alias) {
+                aliases.append(alias)
+            }
+            if let alias = nativePinyinTitleAlias(fromCatalogName: name, inputTitle: title, resultIndex: index),
+               !aliases.contains(alias) {
+                aliases.append(alias)
+            }
 
-            for (index, song) in songs.prefix(12).enumerated() {
-                guard let name = song["name"] as? String else { continue }
-                if let alias = nativeTitleAlias(fromEvidenceName: name, inputTitle: title, asciiArtist: asciiArtist, cjkArtist: cjkArtist),
-                   !aliases.contains(alias) {
-                    aliases.append(alias)
-                }
-                if let alias = nativePinyinTitleAlias(fromCatalogName: name, inputTitle: title, resultIndex: index),
-                   !aliases.contains(alias) {
-                    aliases.append(alias)
-                }
+            if !album.isEmpty,
+               !search.albumScoped,
+               LanguageUtils.isLikelyEnglishTitle(title),
+               !canUseCollaborationArtistOnlyEvidence {
+                continue
+            }
 
-                if !album.isEmpty,
-                   !search.albumScoped,
-                   LanguageUtils.isLikelyEnglishTitle(title),
-                   !canUseCollaborationArtistOnlyEvidence {
-                    continue
-                }
-
-                guard let catalogAlias = nativeTitleAlias(
-                    fromCatalogSong: song,
-                    inputTitle: title,
-                    cjkArtist: cjkArtist,
-                    duration: duration,
-                    albumScoped: search.albumScoped,
-                    requiresTitleAlbumEcho: search.requiresTitleAlbumEcho,
-                    requiresCollaboratorEvidence: !search.albumScoped && canUseCollaborationArtistOnlyEvidence,
-                    requiredAsciiCollaborators: search.albumScoped ? [] : titleCollaborators,
-                    resultIndex: index
-                ) else { continue }
-                if !aliases.contains(catalogAlias) {
-                    aliases.append(catalogAlias)
-                }
+            guard let catalogAlias = nativeTitleAlias(
+                fromCatalogSong: song,
+                inputTitle: title,
+                cjkArtist: cjkArtist,
+                duration: duration,
+                albumScoped: search.albumScoped,
+                requiresTitleAlbumEcho: search.requiresTitleAlbumEcho,
+                requiresCollaboratorEvidence: !search.albumScoped && canUseCollaborationArtistOnlyEvidence,
+                requiredAsciiCollaborators: search.albumScoped ? [] : titleCollaborators,
+                resultIndex: index
+            ) else { continue }
+            if !aliases.contains(catalogAlias) {
+                aliases.append(catalogAlias)
             }
         }
         return aliases

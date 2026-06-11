@@ -20,3 +20,9 @@ Commits: 984d218c, cd545727, 9e5adf57, 8236f6b8
 - NOT yet run (needs real app + Wi-Fi toggle, left for the integration gate): Wi-Fi-off
   honest-message-within-3s check, lyrics_cache.json diff proving no negative row written
   offline, auto-recovery on reconnect, /etc/hosts partial-blackhole quorum check.
+
+## #6+#7 bounded miss-path deadline gate (2026-06-11)
+- 606 tests green (9 new AuthoritativeBackfillBudgetTests pin the arithmetic).
+- Verifier 77/5 (baseline 72/10), benchmark 94/5 (baseline 91/9) — both improved;
+  zero failures outside the known baseline∪flake union. Bounding the witness chain
+  + marker-only fast exit reduced timeout-induced misses.

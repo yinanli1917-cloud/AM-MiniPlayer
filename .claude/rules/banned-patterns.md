@@ -32,6 +32,9 @@ Full architecture reference: `docs/playlist-architecture.md`
 
 ### Scoring / Lyrics Traps (from postmortem/)
 
+- ❌ Backfill group child without a timeout wrapper (the alias witness chained dozens of serial 2.8s searches) → ~18s spinner on no-lyrics tracks; the drain loop waits for ALL children
+- ❌ Availability markers (instrumental/unavailable) making `results` non-empty → miss path bypasses the 2.2-2.95s empty fast exit and rides the full 5s foreground ceiling
+- ✅ Review #6+#7: every backfill child goes through `addBoundedSourceTask` (witness 9s = 3s parallel discovery + 6s probe; composites wrapped end-to-end) + 9s overall sentinel sized ABOVE the longest legitimate chain (album-scoped 7.7s); marker-only sets take the empty fast exit with UNCLAMPED evidence windows; deadline-clipped sweeps never persist 24h verdicts (`AuthoritativeBackfillBudgetTests` pins the arithmetic)
 - ❌ Genius/lyrics.ovh skip timing penalties → Inflated scores beat synced sources; `selectBest` must prefer synced≥30
 - ❌ `TranslationSession.Configuration(source: detectLanguage())` → NLLanguageRecognizer misclassifies en→da/sk; always use `source: nil`
 - ❌ `romanized→CJK` using `resultHasCJK` (includes artist) → Use `resultTitleHasCJK` (title-only)

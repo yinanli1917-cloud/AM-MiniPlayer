@@ -2,7 +2,7 @@
  * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver), Network (NWPathMonitor)
  * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state + LyricsDisplayState machine (isLoading is a derived compat shim)
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
- * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; deep-search may only relabel the searching spinner, never displayed content (review #5)
+ * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7)
  * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
@@ -31,6 +31,14 @@ enum LyricsDisplayState: Equatable {
     /// Still nothing to show, but the quick foreground burst is over and the
     /// long authoritative backfill is running. The UI labels this phase
     /// ("Searching more sources") so the wait reads as progress.
+    ///
+    /// Bounded window (review #6+#7): this state can only end through the
+    /// backfill returning, and the backfill is hard-capped at
+    /// `LyricsFetcher.AuthoritativeBackfillBudget.overall` (9s — every child
+    /// bounded end-to-end plus an overall sentinel). The searching phase
+    /// before it is capped by the foreground 5s ceiling, and a marker-only
+    /// miss exits the foreground in 2.2-2.95s — so the spinner phases now
+    /// have real, enforced ceilings instead of the old open-ended ~18s drain.
     case deepSearching
     /// The published `lyrics` array is the content to render.
     case content
@@ -878,6 +886,11 @@ public class LyricsService: ObservableObject {
             // relabeled — content already on screen (unsynced foreground
             // result, provisional cache) survives the backfill untouched
             // (required correction from the #5 adversarial review).
+            // The phase the state advertises is now a real promise: the
+            // backfill below is hard-capped at
+            // AuthoritativeBackfillBudget.overall (9s, review #6+#7), and
+            // every completion path of the detached task publishes a
+            // terminal state — deepSearching cannot outlive the budget.
             self.displayState = self.displayState.enteringDeepSearch()
             self.cancelCurrentBackfill()
             self.currentBackfillGeneration &+= 1
