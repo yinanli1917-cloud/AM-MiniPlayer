@@ -19,7 +19,7 @@ Sources/
 │   │   ├── MusicController.swift          - Thin facade: @Published state + notifications/polling/Timer
 │   │   ├── MusicController+Artwork.swift  - Artwork extraction/fetching/caching
 │   │   ├── MusicController+Playback.swift - Playback controls + volume + favorites + AppleEventCode
-│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService) + NWPathMonitor offline self-recovery
+│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService) + NWPathMonitor offline self-recovery + LyricsDisplayState machine (deep-search never demotes content)
 │   │   ├── MenuBarHealer.swift            - Self-heal macOS 26 ControlCenter plist at launch
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
@@ -70,7 +70,7 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 591 个单元测试
+Tests/MusicMiniPlayerTests/         - 597 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     ├── LyricsSourceProfileTests.swift - 类型化源注册表 oracle 等值测试（旧硬编码阶梯字面量）

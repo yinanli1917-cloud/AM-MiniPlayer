@@ -1,8 +1,8 @@
 /**
  * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver), Network (NWPathMonitor)
- * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state
+ * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state + LyricsDisplayState machine (isLoading is a derived compat shim)
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
- * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch
+ * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; deep-search may only relabel the searching spinner, never displayed content (review #5)
  * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
@@ -13,6 +13,58 @@ import Network
 import os
 import Translation
 import NaturalLanguage
+
+// ============================================================================
+// MARK: - LyricsDisplayState
+// ============================================================================
+
+/// What the lyrics page should draw — one published value, one view (review #5).
+///
+/// Replaces the isLoading / error / lyrics.isEmpty flag triple. That triple
+/// let "loading" win over everything, so freshly applied cached lyrics were
+/// blanked back to a bare spinner the moment a better-source refetch
+/// started, and a no-result deep search spent its whole run as an anonymous
+/// spinner that ended in an unexplained terminal.
+enum LyricsDisplayState: Equatable {
+    /// A fetch is running and there is nothing to show yet.
+    case searching
+    /// Still nothing to show, but the quick foreground burst is over and the
+    /// long authoritative backfill is running. The UI labels this phase
+    /// ("Searching more sources") so the wait reads as progress.
+    case deepSearching
+    /// The published `lyrics` array is the content to render.
+    case content
+    /// Terminal: every source was searched and none had lyrics for this song
+    /// (includes the instrumental verdict).
+    case noLyrics
+    /// Terminal: no server ever answered — a statement about the NETWORK,
+    /// not the song. Kept distinct so the silent NWPathMonitor re-fetch can
+    /// key off it and the UI keeps its dedicated offline message + retry.
+    case networkUnreachable
+
+    /// True for both spinner phases. The `isLoading` compatibility property
+    /// and the view-side "loading just ended" edge detection derive from this.
+    var isSearchPhase: Bool {
+        self == .searching || self == .deepSearching
+    }
+
+    /// Transition for the moment the backfill becomes the only remaining
+    /// hope. REQUIRED CORRECTION (adversarial review of #5): deep-searching
+    /// may only replace the plain spinner — content already on screen
+    /// (provisional cache hit, unsynced Genius-only result) is NEVER demoted
+    /// back to a spinner while the backfill runs behind it.
+    func enteringDeepSearch() -> LyricsDisplayState {
+        self == .searching ? .deepSearching : self
+    }
+
+    /// Transition for the moment a fetch dispatches its network task. A fetch
+    /// that has just applied provisional cached lyrics keeps them on screen
+    /// (its own granularity refetch must not flip the page back to a
+    /// spinner); any other fetch owes the user the searching state.
+    static func dispatchingFetch(showingProvisionalContent: Bool) -> LyricsDisplayState {
+        showingProvisionalContent ? .content : .searching
+    }
+}
 
 // ============================================================================
 // MARK: - LyricsService (Facade)
@@ -34,8 +86,16 @@ public class LyricsService: ObservableObject {
     @Published public var interludeAfterIndex: Int? = nil
     /// True when lyrics have fabricated timestamps (unsynced source) — UI should disable auto-scroll
     @Published public var isUnsyncedLyrics: Bool = false
-    @Published var isLoading: Bool = false
+    /// Single source of truth for what the lyrics page draws. Starts at
+    /// .noLyrics so the pre-first-fetch render matches the old empty-state
+    /// branch (not loading, no error, no lyrics).
+    @Published private(set) var displayState: LyricsDisplayState = .noLyrics
     @Published var error: String? = nil
+
+    /// Compatibility shim for the flag era: true while either search phase
+    /// runs. Derived from `displayState` — there is no second stored flag
+    /// that could drift out of sync.
+    var isLoading: Bool { displayState.isSearchPhase }
 
     // Translation state.
     @Published public var showTranslation: Bool = false {
@@ -321,8 +381,8 @@ public class LyricsService: ObservableObject {
     private func retryAfterNetworkRecoveryIfNeeded() {
         // Re-fetch ONLY when the current track is parked on the
         // network-unreachable terminal — any other state (lyrics shown,
-        // genuine "Lyrics unavailable", still loading) needs no recovery.
-        guard error == Self.networkUnreachableErrorMessage, !currentSongTitle.isEmpty else { return }
+        // genuine "Lyrics unavailable", still searching) needs no recovery.
+        guard displayState == .networkUnreachable, !currentSongTitle.isEmpty else { return }
         DebugLogger.log("LyricsService", "🛜 Connectivity returned — re-fetching lyrics for current track '\(currentSongTitle)'")
         // Plain re-issue (no forceRefresh): the empty-with-error state passes
         // shouldRetryAfterEmptyCurrentResult, and nothing negative was cached
@@ -470,9 +530,9 @@ public class LyricsService: ObservableObject {
 
         // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
         lastGoodLyricsTime = nil
-        // Clear error/loading immediately so retry UI does not leak across track changes.
+        // Clear error/state immediately so retry UI does not leak across track changes.
         error = nil
-        isLoading = true
+        displayState = .searching
 
         // Reset translation state, including isTranslating, so a cancelled task cannot leave it stuck.
         currentSongTranslationID = nil
@@ -521,7 +581,7 @@ public class LyricsService: ObservableObject {
                 currentStableSongID = stableSongID
                 currentSongDuration = duration
                 currentSongAlbum = album
-                isLoading = false
+                displayState = .noLyrics
                 error = "No lyrics available"
                 DebugLogger.log("LyricsService", "❌ Using cached no-lyrics result")
                 recordDiagnosticsLyricsMiss(
@@ -582,11 +642,14 @@ public class LyricsService: ObservableObject {
         currentSongDuration = duration
         currentSongAlbum = album
 
-        // Set loading state synchronously to avoid races.
-        // isLoading = true already causes the view to show loadingView instead of
-        // scrollableLyricsContent, so clearing lyrics here is unnecessary and would
-        // trigger an extra onChange(of: lyrics) → refreshDisplayLineCache() cycle.
-        isLoading = true
+        // Set the display state synchronously to avoid races. `.searching`
+        // already makes the view draw loadingView instead of
+        // scrollableLyricsContent, so clearing lyrics here is unnecessary and
+        // would trigger an extra onChange(of: lyrics) → refreshDisplayLineCache()
+        // cycle. A fetch that just applied provisional cached lyrics stays on
+        // `.content`: its own granularity refetch must not demote visible
+        // lyrics back to a spinner (review #5).
+        displayState = LyricsDisplayState.dispatchingFetch(showingProvisionalContent: appliedProvisionalCache)
         if !appliedProvisionalCache {
             currentLineIndex = nil
         }
@@ -771,6 +834,14 @@ public class LyricsService: ObservableObject {
             case .networkUnreachable: return LyricsService.networkUnreachableErrorMessage
             }
         }
+
+        /// Display terminal for this verdict. Instrumental folds into the
+        /// no-lyrics terminal — both are statements that the SONG has nothing
+        /// to display; only the network verdict keeps its own state (it arms
+        /// the reconnect re-fetch and the offline message + retry button).
+        var displayState: LyricsDisplayState {
+            self == .networkUnreachable ? .networkUnreachable : .noLyrics
+        }
     }
 
     /// Distinct error string for the offline terminal state. NWPathMonitor
@@ -787,7 +858,7 @@ public class LyricsService: ObservableObject {
             DebugLogger.log("LyricsService", "⏭️ Ignoring stale no-lyrics miss after lyrics/backfill applied: '\(songID)'")
             return
         }
-        isLoading = false
+        displayState = verdict.displayState
         error = verdict.errorMessage
     }
 
@@ -803,6 +874,11 @@ public class LyricsService: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard self.currentSongID == songID else { return }
+            // Deep-search phase: only the plain searching spinner may be
+            // relabeled — content already on screen (unsynced foreground
+            // result, provisional cache) survives the backfill untouched
+            // (required correction from the #5 adversarial review).
+            self.displayState = self.displayState.enteringDeepSearch()
             self.cancelCurrentBackfill()
             self.currentBackfillGeneration &+= 1
             let generation = self.currentBackfillGeneration
@@ -1036,7 +1112,10 @@ public class LyricsService: ObservableObject {
         self.lyrics = newLyrics
         self.firstRealLyricIndex = firstRealLyricIndex
         self.translationsAreFromLyricsSource = hasSourceTranslation
-        self.isLoading = false
+        // Content renders the moment it publishes — immediate cache/disk
+        // lyrics included; any concurrent better-source refetch leaves
+        // `.content` in place (review #5).
+        self.displayState = .content
         self.error = nil
         self.currentLineIndex = nil
         // Parse-time classification from LyricsKind — no IQR/CV guessing.

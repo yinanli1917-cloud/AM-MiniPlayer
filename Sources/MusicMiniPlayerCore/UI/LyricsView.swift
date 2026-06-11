@@ -446,14 +446,34 @@ public struct LyricsView: View {
         ZStack {
             backgroundLayer
             VStack(spacing: 0) {
-                if lyricsService.isLoading {
+                // One state, one view (review #5). The old isLoading/error/
+                // lyrics.isEmpty chain let "loading" win over freshly applied
+                // cached lyrics; the service's state machine now guarantees
+                // content is never demoted back to a spinner.
+                switch lyricsService.displayState {
+                case .searching:
                     loadingView
-                } else if let error = lyricsService.error {
-                    errorView(error)
-                } else if lyricsService.lyrics.isEmpty {
-                    emptyStateView
-                } else {
-                    scrollableLyricsContent
+                case .deepSearching:
+                    deepSearchingView
+                case .networkUnreachable:
+                    errorView(lyricsService.error ?? LyricsService.networkUnreachableErrorMessage)
+                case .noLyrics:
+                    // The terminal verdict's specific wording must survive —
+                    // "Instrumental track" is information, not an error; only
+                    // a wordless miss falls back to the generic empty state.
+                    if let verdictText = lyricsService.error, !verdictText.isEmpty {
+                        errorView(verdictText)
+                    } else {
+                        emptyStateView
+                    }
+                case .content:
+                    // Safety net mirroring the old chain's empty-lyrics branch
+                    // (reachable only via debug fixtures).
+                    if lyricsService.lyrics.isEmpty {
+                        emptyStateView
+                    } else {
+                        scrollableLyricsContent
+                    }
                 }
             }
             // Song-switch choreography. Two layers of protection against the switch
@@ -570,11 +590,12 @@ public struct LyricsView: View {
         }
         // currentTime → lyrics line index update moved to MusicController.interpolateTime()
         // to avoid triggering SwiftUI body re-evaluations 10x/sec via onChange
-        .onChange(of: lyricsService.isLoading) { _, _ in
+        .onChange(of: lyricsService.displayState) { _, _ in
             // A no-lyrics → no-lyrics track switch republishes nothing on `lyrics`
             // ([] == []), which would leave the identity gate mismatched — and the
-            // content dark — forever. Every fetch flips isLoading, so re-tag the
-            // cache for the current track here whenever the gate is stale.
+            // content dark — forever. Every fetch transitions the display state,
+            // so re-tag the cache for the current track here whenever the gate
+            // is stale.
             if !trackCacheMatchesCurrentTrack {
                 refreshDisplayLineCache()
                 refreshPendingTranslationLineIndices()
@@ -609,9 +630,11 @@ public struct LyricsView: View {
                 lineAdvanceTimerTargetPlaybackTime = nil
             }
         }
-        .onChange(of: lyricsService.isLoading) { oldValue, newValue in
+        .onChange(of: lyricsService.displayState) { oldValue, newValue in
             if #available(macOS 15.0, *) {
-                if oldValue && !newValue && !lyricsService.lyrics.isEmpty {
+                // Same edge as the old isLoading true→false: a search phase
+                // just ended with lyrics on hand.
+                if oldValue.isSearchPhase && !newValue.isSearchPhase && !lyricsService.lyrics.isEmpty {
                     scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
                 }
             }
@@ -714,6 +737,23 @@ public struct LyricsView: View {
             .accessibilityLabel("加载歌词中")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .foregroundColor(.white)
+    }
+
+    /// Deep-search phase: the quick foreground burst found nothing and the
+    /// long authoritative backfill is still running. Same spinner as
+    /// loadingView plus a label, so the long wait reads as labeled progress
+    /// instead of an anonymous stall (review #5).
+    private var deepSearchingView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Searching more sources…")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.5))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("正在搜索更多歌词来源")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .foregroundColor(.white)
     }
 
     private func errorView(_ error: String) -> some View {

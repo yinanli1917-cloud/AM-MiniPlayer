@@ -299,4 +299,66 @@ final class LyricsServiceStateTests: XCTestCase {
 
         XCTAssertEqual(source?.languageCode?.identifier, "ja")
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Display-state machine (review #5)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func testSearchingMayEnterDeepSearch() {
+        XCTAssertEqual(LyricsDisplayState.searching.enteringDeepSearch(), .deepSearching)
+    }
+
+    func testDeepSearchNeverDemotesContentOrTerminals() {
+        // REQUIRED CORRECTION from the adversarial review: deep-searching may
+        // only replace the plain spinner. Content (e.g. a Genius-only
+        // unsynced result already on screen) and the terminals must survive
+        // a backfill launch untouched.
+        XCTAssertEqual(LyricsDisplayState.content.enteringDeepSearch(), .content)
+        XCTAssertEqual(LyricsDisplayState.noLyrics.enteringDeepSearch(), .noLyrics)
+        XCTAssertEqual(LyricsDisplayState.networkUnreachable.enteringDeepSearch(), .networkUnreachable)
+        XCTAssertEqual(LyricsDisplayState.deepSearching.enteringDeepSearch(), .deepSearching)
+    }
+
+    func testFetchDispatchOwesSpinnerUnlessProvisionalContentIsShowing() {
+        XCTAssertEqual(
+            LyricsDisplayState.dispatchingFetch(showingProvisionalContent: true),
+            .content
+        )
+        XCTAssertEqual(
+            LyricsDisplayState.dispatchingFetch(showingProvisionalContent: false),
+            .searching
+        )
+    }
+
+    func testCachedContentThenBetterSourceRefetchStaysContentEndToEnd() {
+        // applyLyrics published cached lyrics → content. Its own granularity
+        // refetch dispatches and may later launch the deep backfill; neither
+        // step may put a spinner back over the visible lyrics.
+        var state = LyricsDisplayState.content
+        state = LyricsDisplayState.dispatchingFetch(showingProvisionalContent: true)
+        XCTAssertEqual(state, .content)
+        state = state.enteringDeepSearch()
+        XCTAssertEqual(state, .content)
+    }
+
+    func testMissPathReachesLabeledTerminals() {
+        // searching → deepSearching → terminal: a no-result search ends in an
+        // explained terminal instead of an anonymous spinner.
+        var state = LyricsDisplayState.dispatchingFetch(showingProvisionalContent: false)
+        XCTAssertEqual(state, .searching)
+        state = state.enteringDeepSearch()
+        XCTAssertEqual(state, .deepSearching)
+
+        XCTAssertEqual(LyricsService.TerminalMissVerdict.noLyrics.displayState, .noLyrics)
+        XCTAssertEqual(LyricsService.TerminalMissVerdict.instrumental.displayState, .noLyrics)
+        XCTAssertEqual(LyricsService.TerminalMissVerdict.networkUnreachable.displayState, .networkUnreachable)
+    }
+
+    func testIsLoadingCompatibilityDerivesFromSearchPhases() {
+        XCTAssertTrue(LyricsDisplayState.searching.isSearchPhase)
+        XCTAssertTrue(LyricsDisplayState.deepSearching.isSearchPhase)
+        XCTAssertFalse(LyricsDisplayState.content.isSearchPhase)
+        XCTAssertFalse(LyricsDisplayState.noLyrics.isSearchPhase)
+        XCTAssertFalse(LyricsDisplayState.networkUnreachable.isSearchPhase)
+    }
 }
