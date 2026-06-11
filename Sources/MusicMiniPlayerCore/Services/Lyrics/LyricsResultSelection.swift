@@ -1,5 +1,5 @@
 /**
- * [INPUT]: LyricsFetchResult from LyricsFetcher's parallel pipeline
+ * [INPUT]: LyricsFetchResult from LyricsFetcher's parallel pipeline, LyricsSourceProfile declared traits (admission ladders, mirror group, risk checks)
  * [OUTPUT]: selectBestResult — single best lyrics result after quality/identity/timing gates
  * [POS]: Result selection sub-module of LyricsFetcher — quality filtering + scoring + fallback
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
@@ -53,38 +53,23 @@ extension LyricsFetcher {
         // or severe timing coverage problems. Word-level candidates stay in
         // the pool because their structure is a strong signal and later
         // identity/timing gates can still reject them.
-        var syncedResults = results.filter {
-            guard $0.kind == .synced else { return false }
-            if $0.scriptMismatchSuspected { return false }
-            if isLikelyRomanizedCJKLyricsCandidate($0) { return false }
-            if hasWordLevelSync($0) && $0.score > 0 { return true }
-            if hasIndependentLyricAgreement(for: $0, allResults: results) { return true }
-            switch $0.source {
-            case "LRCLIB-Search":
-                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 28
+        var syncedResults = results.filter { result in
+            guard result.kind == .synced else { return false }
+            if result.scriptMismatchSuspected { return false }
+            if isLikelyRomanizedCJKLyricsCandidate(result) { return false }
+            if hasWordLevelSync(result) && result.score > 0 { return true }
+            if hasIndependentLyricAgreement(for: result, allResults: results) { return true }
+            // Per-source admission ladder, declared in the trait profile.
+            // (The legacy `default:` arm re-checked independent agreement, but
+            // the universal check above already admitted every such result —
+            // the duplicate call was pure and is dropped, not re-declared.)
+            let admission = result.source.profile.syncedAdmission
+            for rung in admission.exactRungs {
+                if result.titleMatched, (result.matchedDurationDiff.map { $0 < rung.maxDurationDiff } ?? false) {
+                    return result.score >= rung.minScore && result.lyrics.count >= rung.minLineCount
                 }
-                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 3.0 } ?? false) {
-                    return $0.score >= 45
-                }
-                return $0.score >= 50
-            case "LRCLIB":
-                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 28
-                }
-                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 5.0 } ?? false) {
-                    return $0.score >= 20 && $0.lyrics.count >= 10
-                }
-                return $0.score >= 45
-            default:
-                if hasIndependentLyricAgreement(for: $0, allResults: results) {
-                    return true
-                }
-                if $0.titleMatched, ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) {
-                    return $0.score >= 10
-                }
-                return $0.score >= 35
             }
+            return result.score >= admission.baseFloor
         }
         let versionSafeSynced = syncedResults.filter {
             !hasLooseCatalogVersionMismatch($0, songDuration: songDuration)
@@ -124,8 +109,8 @@ extension LyricsFetcher {
             return nil
         }
         if syncedResults.count >= 2 && songDuration >= 480 {
-            var seenSources = Set<String>()
-            let sourceTimes: [(src: String, t: Double)] = syncedResults.compactMap { r in
+            var seenSources = Set<LyricsSource>()
+            let sourceTimes: [(src: LyricsSource, t: Double)] = syncedResults.compactMap { r in
                 guard !seenSources.contains(r.source) else { return nil }
                 guard let t = r.lyrics.first(where: { $0.startTime > 0 })?.startTime else { return nil }
                 seenSources.insert(r.source)
@@ -135,7 +120,7 @@ extension LyricsFetcher {
 
             if sourceTimes.count >= 2 {
                 let tolerance: Double = 5.0
-                var bestCluster: [(src: String, t: Double)] = []
+                var bestCluster: [(src: LyricsSource, t: Double)] = []
                 for anchor in sourceTimes {
                     let cluster = sourceTimes.filter { abs($0.t - anchor.t) <= tolerance }
                     if cluster.count > bestCluster.count { bestCluster = cluster }
@@ -225,10 +210,12 @@ extension LyricsFetcher {
             }
         }
 
-        let candidates = plainCandidates.filter {
-            $0.score >= 28 ||
-            ($0.source == "lyrics.ovh" && $0.score >= 24 && $0.lyrics.count >= 16) ||
-            ($0.source == "Genius" && $0.score >= 24)
+        let candidates = plainCandidates.filter { result in
+            if result.score >= 28 { return true }
+            // Per-source relaxed floor, declared in the trait profile
+            // (lyrics.ovh: 24 with >= 16 lines; Genius: 24).
+            guard let relaxed = result.source.profile.unsyncedFallbackRelaxation else { return false }
+            return result.score >= relaxed.minScore && result.lyrics.count >= relaxed.minLineCount
         }
         return candidates.max(by: { $0.score < $1.score })
     }
@@ -240,7 +227,8 @@ extension LyricsFetcher {
     }
 
     private func isLikelyRomanizedCJKLyricsCandidate(_ result: LyricsFetchResult) -> Bool {
-        guard result.source == "LRCLIB" || result.source == "LRCLIB-Search" else { return false }
+        // Risk check declared per profile — the LRCLIB pair only, never AMLL.
+        guard result.source.profile.appliesRomanizedCJKLyricsCheck else { return false }
         let lines = result.lyrics.map(\.text)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && $0 != "..." && $0 != "…" && $0 != "⋯" }
@@ -282,13 +270,8 @@ extension LyricsFetcher {
         }
     }
 
-    private func areIndependentLyricSources(_ lhs: String, _ rhs: String) -> Bool {
-        guard lhs != rhs else { return false }
-        let mirroredLibrarySources: Set<String> = ["LRCLIB", "LRCLIB-Search"]
-        if mirroredLibrarySources.contains(lhs), mirroredLibrarySources.contains(rhs) {
-            return false
-        }
-        return true
+    private func areIndependentLyricSources(_ lhs: LyricsSource, _ rhs: LyricsSource) -> Bool {
+        LyricsSource.areIndependentWitnesses(lhs, rhs)
     }
 
     /// Use independent source agreement as an output-side identity oracle.
@@ -483,7 +466,7 @@ extension LyricsFetcher {
     // MARK: - Deduplication
 
     func uniqueSourceResults(_ results: [LyricsFetchResult]) -> [LyricsFetchResult] {
-        var bestBySource: [String: LyricsFetchResult] = [:]
+        var bestBySource: [LyricsSource: LyricsFetchResult] = [:]
         for result in results {
             if let existing = bestBySource[result.source], existing.score >= result.score { continue }
             bestBySource[result.source] = result
@@ -575,12 +558,12 @@ extension LyricsFetcher {
         return min(span / songDuration, 1.0)
     }
 
-    private func isLibraryFallbackSourceName(_ source: String) -> Bool {
-        source == "LRCLIB" || source == "LRCLIB-Search"
+    private func isLibraryFallbackSourceName(_ source: LyricsSource) -> Bool {
+        source.profile.isLibraryFallback
     }
 
-    private func isPreferredHumanCuratedSource(_ source: String) -> Bool {
-        source == "NetEase" || source == "QQ" || source == "AppleMusic" || source == "AMLL"
+    private func isPreferredHumanCuratedSource(_ source: LyricsSource) -> Bool {
+        source.profile.isPreferredHumanCurated
     }
 
     private func hasComparableCatalogEvidence(_ result: LyricsFetchResult) -> Bool {
@@ -607,7 +590,7 @@ extension LyricsFetcher {
 
             if top.score < 30,
                let exactLRCLIB = workingPool.first(where: {
-                   ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") &&
+                   $0.source.profile.isLibraryFallback &&
                    $0.titleMatched &&
                    ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false) &&
                    $0.score >= 20

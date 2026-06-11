@@ -56,7 +56,7 @@ final class LyricsKindTests: XCTestCase {
 
         // Wrap it the way LyricsFetcher does for QQ and classify.
         let result = LyricsFetcher.LyricsFetchResult(
-            lyrics: lines, source: "QQ", score: 80, kind: .synced
+            lyrics: lines, source: .qq, score: 80, kind: .synced
         )
         XCTAssertEqual(LyricsFetcher.LyricsClassifier.classify(result: result), .synced,
             "Real LRC data must classify as synced, not fabricated — this is the QQ auto-scroll regression guard")
@@ -78,7 +78,7 @@ final class LyricsKindTests: XCTestCase {
         XCTAssertGreaterThan(lines.count, 0)
 
         let result = LyricsFetcher.LyricsFetchResult(
-            lyrics: lines, source: "lyrics.ovh", score: 0, kind: .unsynced
+            lyrics: lines, source: .lyricsOvh, score: 0, kind: .unsynced
         )
         XCTAssertEqual(LyricsFetcher.LyricsClassifier.classify(result: result), .unsynced)
     }
@@ -101,8 +101,8 @@ final class LyricsKindTests: XCTestCase {
                 endTime: base + 10 + Double(i % 3)
             )
         }
-        let synced = scorer.calculateScore(lines, source: "NetEase", duration: 240, translationEnabled: false, kind: .synced)
-        let unsynced = scorer.calculateScore(lines, source: "NetEase", duration: 240, translationEnabled: false, kind: .unsynced)
+        let synced = scorer.calculateScore(lines, source: .netEase, duration: 240, translationEnabled: false, kind: .synced)
+        let unsynced = scorer.calculateScore(lines, source: .netEase, duration: 240, translationEnabled: false, kind: .unsynced)
         XCTAssertGreaterThan(synced, unsynced,
             "Explicit .synced must outscore .unsynced for identical line arrays")
         XCTAssertGreaterThan(synced - unsynced, 20,
@@ -111,11 +111,11 @@ final class LyricsKindTests: XCTestCase {
 
     func testScorerKeepsTerminalAvailabilityScoresWithoutLines() {
         XCTAssertEqual(
-            scorer.calculateScore([], source: "QQ", duration: 220, translationEnabled: false, kind: .instrumental),
+            scorer.calculateScore([], source: .qq, duration: 220, translationEnabled: false, kind: .instrumental),
             -100
         )
         XCTAssertEqual(
-            scorer.calculateScore([], source: "NetEase", duration: 220, translationEnabled: false, kind: .unavailable),
+            scorer.calculateScore([], source: .netEase, duration: 220, translationEnabled: false, kind: .unavailable),
             -80
         )
     }
@@ -143,19 +143,19 @@ final class LyricsKindTests: XCTestCase {
 
         XCTAssertFalse(fetcher.canUseImmediateCachedLyrics(
             cjkLines,
-            source: "QQ",
+            source: .qq,
             title: "Yi Jian Zhong Qing",
             artist: "Pauline Lan"
         ))
         XCTAssertTrue(fetcher.canUseImmediateCachedLyrics(
             wordLevelCJKLines,
-            source: "QQ",
+            source: .qq,
             title: "Yi Jian Zhong Qing",
             artist: "Pauline Lan"
         ))
         XCTAssertFalse(fetcher.canUseImmediateCachedLyrics(
             cjkLines,
-            source: "NetEase",
+            source: .netEase,
             title: "Dance Around the Fire",
             artist: "Why These Coyotes"
         ))

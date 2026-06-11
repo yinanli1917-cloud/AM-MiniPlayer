@@ -127,16 +127,18 @@ func testSongWithLyrics(
     }
 
     let elapsed = foregroundElapsedMs
-    let knownSources = ["AppleMusic", "AMLL", "NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"]
-    var firstResultBySource: [String: LyricsFetcher.LyricsFetchResult] = [:]
+    // Explicit display order (ovh before Genius) — keeps the JSON `allSources`
+    // array byte-identical to the String era for benchmark diffs.
+    let knownSources: [LyricsSource] = [.appleMusic, .amll, .netEase, .qq, .lrclib, .lrclibSearch, .lyricsOvh, .genius]
+    var firstResultBySource: [LyricsSource: LyricsFetcher.LyricsFetchResult] = [:]
     for result in fetchResults where firstResultBySource[result.source] == nil {
         firstResultBySource[result.source] = result
     }
     let allSources: [SourceResult] = knownSources.map { name in
         if let r = firstResultBySource[name] {
-            return SourceResult(name: name, found: true, score: round(r.score * 10) / 10, lines: r.lyrics.count)
+            return SourceResult(name: name.rawValue, found: true, score: round(r.score * 10) / 10, lines: r.lyrics.count)
         }
-        return SourceResult(name: name, found: false, score: 0, lines: 0)
+        return SourceResult(name: name.rawValue, found: false, score: 0, lines: 0)
     }
 
     let rawLyrics = bestLyrics ?? []
@@ -195,7 +197,7 @@ func testSongWithLyrics(
     let result = VerifyResult(
         id: id, title: title, artist: artist,
         duration: Int(duration), passed: failures.isEmpty,
-        selectedSource: reportResult?.source,
+        selectedSource: reportResult?.source.rawValue,
         selectedScore: reportResult?.score,
         lyricsLineCount: lyrics.count,
         hasTranslation: lyricStats.hasTranslation,
@@ -288,7 +290,7 @@ func testSong(
 
 private func checkExpectation(
     _ exp: TestExpectation,
-    source: String?,
+    source: LyricsSource?,
     lyrics: [LyricLine],
     firstReal: LyricLine?,
     classification: String,
@@ -306,8 +308,9 @@ private func checkExpectation(
             return failures
         }
         if let acceptable = exp.acceptableSources, let src = source,
-           src != "AppleMusic",
-           !acceptable.contains(src) {
+           src != .appleMusic,
+           // Expectation lists come from test-case JSON — string side of the boundary.
+           !acceptable.contains(src.rawValue) {
             failures.append("源 \(src) 不在可接受列表 \(acceptable) 中")
         }
         if let keyword = exp.firstLineContains {
@@ -376,7 +379,7 @@ private func checkExpectation(
         }
     } else {
         if !lyrics.isEmpty {
-            failures.append("期望无歌词，但找到了 \(source ?? "unknown")")
+            failures.append("期望无歌词，但找到了 \(source?.rawValue ?? "unknown")")
         }
     }
 
@@ -480,7 +483,7 @@ private struct ContentValidation {
 
 private func validateContent(
     title: String, artist: String,
-    source: String?, score: Double?,
+    source: LyricsSource?, score: Double?,
     lyrics: [LyricLine],
     duration: TimeInterval = 0,
     allResults: [LyricsFetcher.LyricsFetchResult] = []
@@ -510,7 +513,7 @@ private func validateContent(
                 (0x4E00...0x9FFF).contains($0.value) || (0x3040...0x30FF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value)
             }
             let isCrossLanguage = inputIsASCII && lyricsTitleHasCJK
-            let isReliableSource = ["NetEase", "QQ", "AMLL"].contains(source) && (score ?? 0) >= 50
+            let isReliableSource = [LyricsSource.netEase, .qq, .amll].contains(source) && (score ?? 0) >= 50
 
             // 🔑 规范化斜杠空格后再比较：" / " → "/"
             let normalizedLyricsTitle = lyricsTitle.replacingOccurrences(of: " / ", with: "/")
@@ -530,7 +533,7 @@ private func validateContent(
     let asciiOnlyLines = validLines.filter { $0.text.allSatisfy { $0.isASCII } }
     let hasCJKTitle = title.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
             || title.unicodeScalars.contains { $0.value >= 0x3040 && $0.value <= 0x30FF }
-    if hasCJKTitle && asciiOnlyLines.count == validLines.count && source == "lyrics.ovh" {
+    if hasCJKTitle && asciiOnlyLines.count == validLines.count && source == .lyricsOvh {
         validation.warnings.append("⚠️ CJK标题但歌词全是ASCII（可能是拼音垃圾）")
     }
 
@@ -547,7 +550,7 @@ private func validateContent(
         let witnessTokens = lyricIdentityTokens(result.lyrics)
         return witnessTokens.count >= 6 && lyricSimilarity(sourceTokens, witnessTokens) >= 0.34
     }
-    if source == "lyrics.ovh" && (score ?? 0) < 55 && !hasIndependentLyricAgreement {
+    if source == .lyricsOvh && (score ?? 0) < 55 && !hasIndependentLyricAgreement {
         validation.warnings.append("⚠️ 仅 lyrics.ovh 低分命中（高错配风险）")
     }
 
@@ -695,7 +698,7 @@ private func validateCrossSourceIdentity(
         .max() ?? 0
     guard selectedSimilarity < 0.18 else { return [] }
 
-    let supporters = bestCluster.map { $0.result.source }.sorted().joined(separator: ",")
+    let supporters = bestCluster.map { $0.result.source.rawValue }.sorted().joined(separator: ",")
     return ["跨源歌词内容冲突: selected=\(selected.source), consensus=\(supporters)"]
 }
 
@@ -718,13 +721,9 @@ private func hasIndependentLyricAgreement(
     }
 }
 
-private func areIndependentLyricSources(_ lhs: String, _ rhs: String) -> Bool {
-    guard lhs != rhs else { return false }
-    let mirroredLibrarySources: Set<String> = ["LRCLIB", "LRCLIB-Search"]
-    if mirroredLibrarySources.contains(lhs), mirroredLibrarySources.contains(rhs) {
-        return false
-    }
-    return true
+private func areIndependentLyricSources(_ lhs: LyricsSource, _ rhs: LyricsSource) -> Bool {
+    // Shared registry rule — the verifier copy can no longer drift from the app.
+    LyricsSource.areIndependentWitnesses(lhs, rhs)
 }
 
 private func hasStrongCatalogIdentity(
@@ -746,8 +745,8 @@ private func hasTrustedStaticFallback(
     realLineCount: Int
 ) -> Bool {
     selected.kind == .unsynced &&
-    ((selected.source == "lyrics.ovh" && selected.score >= 24 && realLineCount >= 16) ||
-     (selected.source == "Genius" && selected.score >= 24 && realLineCount >= 12))
+    ((selected.source == .lyricsOvh && selected.score >= 24 && realLineCount >= 16) ||
+     (selected.source == .genius && selected.score >= 24 && realLineCount >= 12))
 }
 
 private func hasWordLevelSync(_ result: LyricsFetcher.LyricsFetchResult) -> Bool {
@@ -757,7 +756,7 @@ private func hasWordLevelSync(_ result: LyricsFetcher.LyricsFetchResult) -> Bool
 }
 
 private func uniqueSourceResults(_ results: [LyricsFetcher.LyricsFetchResult]) -> [LyricsFetcher.LyricsFetchResult] {
-    var bestBySource: [String: LyricsFetcher.LyricsFetchResult] = [:]
+    var bestBySource: [LyricsSource: LyricsFetcher.LyricsFetchResult] = [:]
     for result in results {
         if let existing = bestBySource[result.source], existing.score >= result.score { continue }
         bestBySource[result.source] = result

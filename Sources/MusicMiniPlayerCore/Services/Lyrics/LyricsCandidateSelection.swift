@@ -2,7 +2,7 @@
  * [INPUT]: Raw search results from NetEase/QQ APIs
  * [OUTPUT]: selectBestCandidate — unified priority-chain candidate matching with explicit title-evidence state
  * [POS]: Candidate selection sub-module of LyricsFetcher — SearchCandidate + matching + alias resolution
- * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, provider-ranked native title evidence, bounded English-title/native pinyin aliases, compilation-artist safety, and buildCandidates generic builder
+ * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, provider-ranked native title evidence, bounded English-title/native pinyin aliases, compilation-artist safety, and buildCandidates generic builder; source param is typed LyricsSource — the QQ-only candidate guard binds to .qq (no more log-label substring sniffing)
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -63,11 +63,12 @@ extension LyricsFetcher {
         let matchRank: Int
     }
 
-    func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: String, inputTitle: String = "", inputArtist: String = "", disableCjkEscape: Bool = false, aliasConfirmedCJK: Bool = false, hasAlbumHint: Bool = false, allowNativeTitleAlias: Bool = false, allowCompilationAlbumFallback: Bool = false) -> SelectedSearchCandidate<ID>? {
+    func selectBestCandidate<ID>(_ candidates: [SearchCandidate<ID>], source: LyricsSource, inputTitle: String = "", inputArtist: String = "", disableCjkEscape: Bool = false, aliasConfirmedCJK: Bool = false, hasAlbumHint: Bool = false, allowNativeTitleAlias: Bool = false, allowCompilationAlbumFallback: Bool = false) -> SelectedSearchCandidate<ID>? {
+        let logTag = source.candidateSearchLogTag
         // Debug view: sorted purely by durationDiff so the log reads naturally.
         let sortedByDelta = candidates.sorted { $0.durationDiff < $1.durationDiff }
         let desc = sortedByDelta.prefix(5).map { "'\($0.name)' by '\($0.artist)' alb='\($0.album)' q='\($0.searchDescriptor)' T=\($0.titleMatch) A=\($0.artistMatch) AL=\($0.albumMatch) L=\($0.normalizedNameLength) Δ\(String(format: "%.1f", $0.durationDiff))s" }
-        DebugLogger.log(source, "🎯 候选: \(desc.joined(separator: ", "))")
+        DebugLogger.log(logTag, "🎯 候选: \(desc.joined(separator: ", "))")
         // Composite rank applied WITHIN each priority tier below:
         //   (1) albumMatch desc  — strongest version disambiguator
         //   (2) nameLength asc   — prefer titles without "(国)"/"(粤)"/"(Live)"
@@ -137,7 +138,9 @@ extension LyricsFetcher {
         let inputWordCount = inputTokens.count
         let likelyJapaneseRomaji = LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
         let inputLooksEnglish = LanguageUtils.isLikelyEnglishTitle(inputTitle)
-        let sourceIsQQ = source.range(of: "qq", options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        // Was armed by sniffing the substring "qq" in the log label — a rename
+        // would have silently disarmed it. Now bound to the QQ case directly.
+        let sourceIsQQ = source == .qq
         let isRiskyUnscopedNativeTitleOnly: (SearchCandidate<ID>) -> Bool = { candidate in
             guard sourceIsQQ else { return false }
             guard candidate.searchDescriptor == "title only" else { return false }
@@ -422,7 +425,7 @@ extension LyricsFetcher {
         }
 
         if let winner = chosen {
-            DebugLogger.log(source, "✅ \(winner.label): '\(winner.candidate.name)' by '\(winner.candidate.artist)' alb='\(winner.candidate.album)' q='\(winner.candidate.searchDescriptor)' AL=\(winner.candidate.albumMatch) L=\(winner.candidate.normalizedNameLength) Δ\(String(format: "%.1f", winner.candidate.durationDiff))s")
+            DebugLogger.log(logTag, "✅ \(winner.label): '\(winner.candidate.name)' by '\(winner.candidate.artist)' alb='\(winner.candidate.album)' q='\(winner.candidate.searchDescriptor)' AL=\(winner.candidate.albumMatch) L=\(winner.candidate.normalizedNameLength) Δ\(String(format: "%.1f", winner.candidate.durationDiff))s")
             let nativeAliasLabels: Set<String> = ["P1d", "P1f", "P2d", "P2e"]
             return SelectedSearchCandidate(
                 id: winner.candidate.id,
@@ -441,7 +444,7 @@ extension LyricsFetcher {
             )
         }
 
-        if !sorted.isEmpty { DebugLogger.log(source, "❌ 无匹配") }
+        if !sorted.isEmpty { DebugLogger.log(logTag, "❌ 无匹配") }
         return nil
     }
 
@@ -787,13 +790,14 @@ extension LyricsFetcher {
     /// 统一搜索模板：构建关键词 → 逐轮调 API → 构建候选 → 选择最佳
     func searchAndSelectCandidate<ID>(
         params: SearchParams,
-        source: String,
+        source: LyricsSource,
         extraKeywords: [(String, String)] = [],
         enableAliasResolve: Bool = true,
         allowCompilationAlbumFallback: Bool = false,
         fetchSongs: @escaping (String) async throws -> [[String: Any]]?,
         extractSong: @escaping ([String: Any]) -> (id: ID, name: String, artist: String, duration: Double, album: String)?
     ) async -> SelectedSearchCandidate<ID>? {
+        let logTag = source.candidateSearchLogTag
         // 多关键词策略（按优先级排列）
         var keywords: [(String, String)] = [
             ("\(params.simplifiedTitle) \(params.simplifiedArtist)", "title+artist")
@@ -907,15 +911,15 @@ extension LyricsFetcher {
             keywords.append((params.simplifiedArtist, "artist only"))
         }
         keywords.append(contentsOf: extraKeywords)
-        DebugLogger.log(source, "🔑 关键词: \(keywords.map(\.0))")
+        DebugLogger.log(logTag, "🔑 关键词: \(keywords.map(\.0))")
 
         // Fast path before parallel fan-out. A strict title+artist+duration hit
         // should not wait for slower album/title/artist-only probes to cancel.
         if let (keyword, desc) = keywords.first {
-            DebugLogger.log(source, "🔎 \(desc): '\(keyword)'")
+            DebugLogger.log(logTag, "🔎 \(desc): '\(keyword)'")
             do {
                 if let songs = try await fetchSongs(keyword) {
-                    DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
+                    DebugLogger.log(logTag, "📦 \(desc): \(songs.count) 个候选")
                     let candidates = self.buildCandidates(
                         songs: songs, params: params, searchDescriptor: desc, extractSong: extractSong
                     )
@@ -937,15 +941,15 @@ extension LyricsFetcher {
                             && match.titleMatched
                             && match.durationDiff < 3.5
                         if strictExactMatch || cjkTitleArtistP2Match {
-                            DebugLogger.log(source, "⚡ Preflight exact match via '\(desc)' (albumMatch=\(match.albumMatched), Δ\(String(format: "%.1f", match.durationDiff))s)")
+                            DebugLogger.log(logTag, "⚡ Preflight exact match via '\(desc)' (albumMatch=\(match.albumMatched), Δ\(String(format: "%.1f", match.durationDiff))s)")
                             return match
                         }
                     }
                 } else {
-                    DebugLogger.log(source, "⚠️ \(desc): fetchSongs returned nil (parse failure)")
+                    DebugLogger.log(logTag, "⚠️ \(desc): fetchSongs returned nil (parse failure)")
                 }
             } catch {
-                DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
+                DebugLogger.log(logTag, "⚠️ \(desc) HTTP error: \(error)")
             }
         }
 
@@ -972,10 +976,10 @@ extension LyricsFetcher {
                             aliasProbes.append(("\(params.normalizedAlbum) \(cjkArtist)", "alias album+artist:\(cjkArtist)"))
                         }
                         for (kw, desc) in aliasProbes {
-                            DebugLogger.log(source, "🔎 \(desc): '\(kw)'")
+                            DebugLogger.log(logTag, "🔎 \(desc): '\(kw)'")
                             do {
                                 guard let songs = try await fetchSongs(kw) else { continue }
-                                DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
+                                DebugLogger.log(logTag, "📦 \(desc): \(songs.count) 个候选")
                                 let aliasParams = SearchParams(
                                     title: params.rawTitle, artist: cjkArtist,
                                     originalTitle: params.rawOriginalTitle,
@@ -991,7 +995,7 @@ extension LyricsFetcher {
                                     return (m, desc, Self.keywordPriority(desc))
                                 }
                             } catch {
-                                DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
+                                DebugLogger.log(logTag, "⚠️ \(desc) HTTP error: \(error)")
                             }
                         }
                     }
@@ -1000,13 +1004,13 @@ extension LyricsFetcher {
             }
             for (keyword, desc) in keywords {
                 group.addTask {
-                    DebugLogger.log(source, "🔎 \(desc): '\(keyword)'")
+                    DebugLogger.log(logTag, "🔎 \(desc): '\(keyword)'")
                     do {
                         guard let songs = try await fetchSongs(keyword) else {
-                            DebugLogger.log(source, "⚠️ \(desc): fetchSongs returned nil (parse failure)")
+                            DebugLogger.log(logTag, "⚠️ \(desc): fetchSongs returned nil (parse failure)")
                             return nil
                         }
-                        DebugLogger.log(source, "📦 \(desc): \(songs.count) 个候选")
+                        DebugLogger.log(logTag, "📦 \(desc): \(songs.count) 个候选")
                         let candidates = self.buildCandidates(
                             songs: songs, params: params, searchDescriptor: desc, extractSong: extractSong
                         )
@@ -1021,7 +1025,7 @@ extension LyricsFetcher {
                             return (match, desc, Self.keywordPriority(desc))
                         }
                     } catch {
-                        DebugLogger.log(source, "⚠️ \(desc) HTTP error: \(error)")
+                        DebugLogger.log(logTag, "⚠️ \(desc) HTTP error: \(error)")
                     }
                     return nil
                 }
@@ -1046,7 +1050,7 @@ extension LyricsFetcher {
                    r.0.titleMatched,
                    r.0.durationDiff < 1.5,
                    (r.2 <= 1 || r.0.albumMatched || exactNativeAliasMatch) {
-                    DebugLogger.log(source, "⚡ Fast exact match via '\(r.1)' (albumMatch=\(r.0.albumMatched), Δ\(String(format: "%.1f", r.0.durationDiff))s)")
+                    DebugLogger.log(logTag, "⚡ Fast exact match via '\(r.1)' (albumMatch=\(r.0.albumMatched), Δ\(String(format: "%.1f", r.0.durationDiff))s)")
                     group.cancelAll()
                     return r.0
                 }
@@ -1062,7 +1066,7 @@ extension LyricsFetcher {
             }!
             let matchType = best.0.albumMatched ? "albumMatch=true" : "no album match"
             let titleType = best.0.titleMatched ? "titleMatch=true" : "titleMatch=false"
-            DebugLogger.log(source, "⚡ Best match via '\(best.1)' (\(matchType), \(titleType), rank=\(best.0.matchRank), Δ\(String(format: "%.1f", best.0.durationDiff))s) from \(allResults.count) rounds")
+            DebugLogger.log(logTag, "⚡ Best match via '\(best.1)' (\(matchType), \(titleType), rank=\(best.0.matchRank), Δ\(String(format: "%.1f", best.0.durationDiff))s) from \(allResults.count) rounds")
             return best.0
         }
     }

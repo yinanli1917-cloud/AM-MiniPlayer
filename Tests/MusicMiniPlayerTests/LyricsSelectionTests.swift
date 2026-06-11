@@ -83,7 +83,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "summer in the city feels borrowed",
                 "the chorus keeps turning away"
             ], wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 96,
             kind: .synced
         )
@@ -96,7 +96,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "I keep waiting for the morning",
                 "I keep looking for the truth"
             ]),
-            source: "LRCLIB",
+            source: .lrclib,
             score: 52,
             kind: .synced
         )
@@ -109,7 +109,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "I keep waiting for the morning",
                 "I keep looking for the truth"
             ]),
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 13,
             kind: .unsynced
         )
@@ -119,7 +119,7 @@ final class LyricsSelectionTests: XCTestCase {
             songDuration: 120
         )
 
-        XCTAssertEqual(selected?.source, "LRCLIB")
+        XCTAssertEqual(selected?.source, .lrclib)
     }
 
     func testSingleDisagreeingSourceDoesNotOverrideWordLevelPriority() {
@@ -133,7 +133,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "summer in the city feels borrowed",
                 "the chorus keeps turning away"
             ], wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 96,
             kind: .synced
         )
@@ -146,7 +146,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "I keep waiting for the morning",
                 "I keep looking for the truth"
             ]),
-            source: "LRCLIB",
+            source: .lrclib,
             score: 42,
             kind: .synced
         )
@@ -156,7 +156,7 @@ final class LyricsSelectionTests: XCTestCase {
             songDuration: 120
         )
 
-        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertEqual(selected?.source, .netEase)
     }
 
     func testSameIdentityWordLevelBeatsAlbumMatchedLineSync() {
@@ -173,7 +173,7 @@ final class LyricsSelectionTests: XCTestCase {
         ]
         let albumLineSync = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines(sharedText),
-            source: "LRCLIB-Search",
+            source: .lrclibSearch,
             score: 82,
             kind: .synced,
             albumMatched: true,
@@ -182,7 +182,7 @@ final class LyricsSelectionTests: XCTestCase {
         )
         let wordLevel = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines(sharedText, wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 76,
             kind: .synced,
             titleMatched: true,
@@ -194,7 +194,7 @@ final class LyricsSelectionTests: XCTestCase {
             songDuration: 40
         )
 
-        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertEqual(selected?.source, .netEase)
         XCTAssertTrue(selected?.lyrics.contains(where: { $0.hasSyllableSync }) == true)
     }
 
@@ -211,7 +211,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "誰還留在街角等候",
                 "若然明日天色仍舊"
             ], startingAt: 15.2, gap: 4.3),
-            source: "NetEase",
+            source: .netEase,
             score: 75,
             kind: .synced,
             albumMatched: true,
@@ -229,7 +229,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "若然 明日 天色 仍舊",
                 "我 都 想 再 向前 走"
             ], wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 66,
             kind: .synced,
             titleMatched: true,
@@ -256,7 +256,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "霓虹燈 照著 我",
                 "一個人 走"
             ], wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 100,
             kind: .synced,
             albumMatched: true,
@@ -272,7 +272,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "寒風 中 記低 未完成 的 夢",
                 "誰 還 留在 街角 等候"
             ], wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 100,
             kind: .synced,
             titleMatched: true,
@@ -297,7 +297,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "有一天你会看见",
                 "温柔一直在身边"
             ], startingAt: 25.7, gap: 18.0),
-            source: "NetEase",
+            source: .netEase,
             score: 47,
             kind: .synced,
             titleMatched: true,
@@ -325,7 +325,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "the city keeps the lights on",
                 "but none of them lead back to you"
             ]),
-            source: "LRCLIB-Search",
+            source: .lrclibSearch,
             score: 82,
             kind: .synced,
             albumMatched: true,
@@ -343,7 +343,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "there is a train beyond the river",
                 "calling a name I never knew"
             ], wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 96,
             kind: .synced,
             titleMatched: false,
@@ -355,7 +355,7 @@ final class LyricsSelectionTests: XCTestCase {
             songDuration: 40
         )
 
-        XCTAssertEqual(selected?.source, "LRCLIB-Search")
+        XCTAssertEqual(selected?.source, .lrclibSearch)
         XCTAssertFalse(selected?.lyrics.contains(where: { $0.hasSyllableSync }) == true)
     }
 
@@ -372,13 +372,13 @@ final class LyricsSelectionTests: XCTestCase {
 
         XCTAssertFalse(fetcher.canUseImmediateCachedLyrics(
             lineSyncLyrics,
-            source: "LRCLIB-Search",
+            source: .lrclibSearch,
             title: "Winter Solo Walk",
             artist: "Gordon Flanders"
         ))
         XCTAssertTrue(fetcher.canUseImmediateCachedLyrics(
             wordLevelLyrics,
-            source: "NetEase",
+            source: .netEase,
             title: "Winter Solo Walk",
             artist: "Gordon Flanders"
         ))
@@ -395,7 +395,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "We're going on",
                 "New stars are born"
             ]),
-            source: "LRCLIB-Search",
+            source: .lrclibSearch,
             score: 77,
             kind: .synced,
             titleMatched: true,
@@ -410,7 +410,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "We're going on",
                 "New stars are born"
             ]),
-            source: "NetEase",
+            source: .netEase,
             score: 68,
             kind: .synced,
             titleMatched: true,
@@ -422,7 +422,7 @@ final class LyricsSelectionTests: XCTestCase {
             songDuration: 178
         )
 
-        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertEqual(selected?.source, .netEase)
     }
 
     func testUnsyncedConsensusCanReturnStaticFallbackWhenNoSyncedSurvives() {
@@ -436,7 +436,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "I can hear the chorus rising",
                 "I can feel it in my name"
             ]),
-            source: "Genius",
+            source: .genius,
             score: 31,
             kind: .unsynced
         )
@@ -449,7 +449,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "I can hear the chorus rising",
                 "I can feel it in my name"
             ]),
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 28,
             kind: .unsynced
         )
@@ -457,7 +457,7 @@ final class LyricsSelectionTests: XCTestCase {
         let selected = fetcher.selectBestResult(from: [plainA, plainB], songDuration: 120)
 
         XCTAssertEqual(selected?.kind, .unsynced)
-        XCTAssertEqual(selected?.source, "Genius")
+        XCTAssertEqual(selected?.source, .genius)
     }
 
     func testShortCJKGeniusSnippetIsNotUsedAsFallback() {
@@ -474,7 +474,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "不必掛心的 即管試一試",
                 "啦啦啦"
             ]),
-            source: "Genius",
+            source: .genius,
             score: 20.5,
             kind: .unsynced
         )
@@ -499,7 +499,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "如若你喜歡怪人",
                 "其實我很美"
             ]),
-            source: "Genius",
+            source: .genius,
             score: 21,
             kind: .unsynced
         )
@@ -530,7 +530,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "ima mo hanarenai",
                 "mune wo hanarenai"
             ]),
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 25,
             kind: .unsynced
         )
@@ -538,7 +538,7 @@ final class LyricsSelectionTests: XCTestCase {
         let selected = fetcher.selectBestResult(from: [plain], songDuration: 225)
 
         XCTAssertEqual(selected?.kind, .unsynced)
-        XCTAssertEqual(selected?.source, "lyrics.ovh")
+        XCTAssertEqual(selected?.source, .lyricsOvh)
     }
 
     func testUnsyncedConsensusReplacesMissingSyncedResultWithStaticFallback() {
@@ -552,7 +552,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "different timed line five",
                 "different timed line six"
             ]),
-            source: "LRCLIB",
+            source: .lrclib,
             score: 35,
             kind: .synced
         )
@@ -565,13 +565,13 @@ final class LyricsSelectionTests: XCTestCase {
                 "I can hear the chorus rising",
                 "I can feel it in my name"
             ]),
-            source: "Genius",
+            source: .genius,
             score: 31,
             kind: .unsynced
         )
         let plainB = LyricsFetcher.LyricsFetchResult(
             lyrics: plainA.lyrics,
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 28,
             kind: .unsynced
         )
@@ -579,7 +579,7 @@ final class LyricsSelectionTests: XCTestCase {
         let selected = fetcher.selectBestResult(from: [synced, plainA, plainB], songDuration: 120)
 
         XCTAssertEqual(selected?.kind, .unsynced)
-        XCTAssertEqual(selected?.source, "Genius")
+        XCTAssertEqual(selected?.source, .genius)
     }
 
     func testSyncedConsensusBeatsUnsyncedConsensus() {
@@ -593,13 +593,13 @@ final class LyricsSelectionTests: XCTestCase {
                 "different timed line five",
                 "different timed line six"
             ]),
-            source: "LRCLIB",
+            source: .lrclib,
             score: 52,
             kind: .synced
         )
         let syncedB = LyricsFetcher.LyricsFetchResult(
             lyrics: syncedA.lyrics,
-            source: "QQ",
+            source: .qq,
             score: 33,
             kind: .synced
         )
@@ -612,20 +612,20 @@ final class LyricsSelectionTests: XCTestCase {
                 "I can hear the chorus rising",
                 "I can feel it in my name"
             ]),
-            source: "Genius",
+            source: .genius,
             score: 31,
             kind: .unsynced
         )
         let plainB = LyricsFetcher.LyricsFetchResult(
             lyrics: plainA.lyrics,
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 28,
             kind: .unsynced
         )
 
         let selected = fetcher.selectBestResult(from: [syncedA, syncedB, plainA, plainB], songDuration: 120)
 
-        XCTAssertEqual(selected?.source, "LRCLIB")
+        XCTAssertEqual(selected?.source, .lrclib)
         XCTAssertEqual(selected?.kind, .synced)
     }
 
@@ -640,7 +640,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "another language line five",
                 "another language line six"
             ]),
-            source: "NetEase",
+            source: .netEase,
             score: 60,
             kind: .synced
         )
@@ -653,13 +653,13 @@ final class LyricsSelectionTests: XCTestCase {
                 "the real song is not the outlier",
                 "the real song closes the night"
             ]),
-            source: "Genius",
+            source: .genius,
             score: 31,
             kind: .unsynced
         )
         let plainB = LyricsFetcher.LyricsFetchResult(
             lyrics: plainA.lyrics,
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 28,
             kind: .unsynced
         )
@@ -667,7 +667,7 @@ final class LyricsSelectionTests: XCTestCase {
         let selected = fetcher.selectBestResult(from: [wrongSynced, plainA, plainB], songDuration: 120)
 
         XCTAssertEqual(selected?.kind, .unsynced)
-        XCTAssertEqual(selected?.source, "Genius")
+        XCTAssertEqual(selected?.source, .genius)
     }
 
     func testUnsyncedConsensusDoesNotVetoStrongWordLevelSynced() {
@@ -681,7 +681,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "ハンバーガーほおばって",
                 "私たちStreet dancer"
             ], wordLevel: true),
-            source: "NetEase",
+            source: .netEase,
             score: 99,
             kind: .synced
         )
@@ -694,20 +694,20 @@ final class LyricsSelectionTests: XCTestCase {
                 "七色の虹よ",
                 "心がある私たちstreet dancer"
             ]),
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 27,
             kind: .unsynced
         )
         let plainB = LyricsFetcher.LyricsFetchResult(
             lyrics: plainA.lyrics,
-            source: "Genius",
+            source: .genius,
             score: 6,
             kind: .unsynced
         )
 
         let selected = fetcher.selectBestResult(from: [strongSynced, plainA, plainB], songDuration: 120)
 
-        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertEqual(selected?.source, .netEase)
         XCTAssertEqual(selected?.kind, .synced)
     }
 
@@ -722,7 +722,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "生活总是不太容易",
                 "总有些压力"
             ]),
-            source: "NetEase",
+            source: .netEase,
             score: 74,
             kind: .synced,
             titleMatched: true
@@ -736,7 +736,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "车灯照向远方 什么都看不到",
                 "仿佛宇宙只剩孤独的我们俩"
             ]),
-            source: "NetEase",
+            source: .netEase,
             score: 80,
             kind: .synced,
             titleMatched: false
@@ -762,7 +762,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "就讓我再等一等你",
                 "等到天晴"
             ], startingAt: 13, gap: 5),
-            source: "NetEase",
+            source: .netEase,
             score: 74,
             kind: .synced,
             titleMatched: false,
@@ -771,7 +771,7 @@ final class LyricsSelectionTests: XCTestCase {
         )
         let libraryTitle = LyricsFetcher.LyricsFetchResult(
             lyrics: nativeAlias.lyrics,
-            source: "LRCLIB-Search",
+            source: .lrclibSearch,
             score: 69,
             kind: .synced,
             titleMatched: true,
@@ -780,7 +780,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [nativeAlias, libraryTitle], songDuration: 70)
 
-        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertEqual(selected?.source, .netEase)
     }
 
     func testMirroredLibrarySourcesDoNotValidateWeakSyncedHit() {
@@ -802,7 +802,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let lrclib = LyricsFetcher.LyricsFetchResult(
             lyrics: weakLibraryLyrics,
-            source: "LRCLIB",
+            source: .lrclib,
             score: 14,
             kind: .synced,
             titleMatched: true,
@@ -810,7 +810,7 @@ final class LyricsSelectionTests: XCTestCase {
         )
         let lrclibSearchMirror = LyricsFetcher.LyricsFetchResult(
             lyrics: weakLibraryLyrics,
-            source: "LRCLIB-Search",
+            source: .lrclibSearch,
             score: 13,
             kind: .synced,
             titleMatched: true,
@@ -838,7 +838,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "단한번만 나의 모습을 되돌아봐 줘",
                 "멈춰버린 내 가슴은 또 어떻게 해"
             ]),
-            source: "NetEase",
+            source: .netEase,
             score: 87,
             kind: .synced,
             titleMatched: true,
@@ -856,7 +856,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "Every spark is getting brighter",
                 "Take me where the embers glow"
             ], startingAt: 10, gap: 22),
-            source: "LRCLIB",
+            source: .lrclib,
             score: 29,
             kind: .synced,
             titleMatched: true,
@@ -868,7 +868,7 @@ final class LyricsSelectionTests: XCTestCase {
             songDuration: 200
         )
 
-        XCTAssertEqual(selected?.source, "LRCLIB")
+        XCTAssertEqual(selected?.source, .lrclib)
     }
 
     func testSevereTailGapFallsBackToStaticConsensusWhenSyncedIsMistimed() {
@@ -879,7 +879,7 @@ final class LyricsSelectionTests: XCTestCase {
                 LyricLine(text: "I do want to say", startTime: 20, endTime: 24),
                 LyricLine(text: "Only you can conquer time", startTime: 150, endTime: 154)
             ],
-            source: "LRCLIB",
+            source: .lrclib,
             score: 55,
             kind: .synced
         )
@@ -907,13 +907,13 @@ final class LyricsSelectionTests: XCTestCase {
                 "Only you can conquer time",
                 "Only you can conquer time"
             ]),
-            source: "Genius",
+            source: .genius,
             score: 15,
             kind: .unsynced
         )
         let plainB = LyricsFetcher.LyricsFetchResult(
             lyrics: plainA.lyrics,
-            source: "lyrics.ovh",
+            source: .lyricsOvh,
             score: 13,
             kind: .unsynced
         )
@@ -921,7 +921,7 @@ final class LyricsSelectionTests: XCTestCase {
         let selected = fetcher.selectBestResult(from: [mistimed, plainA, plainB], songDuration: 300)
 
         XCTAssertEqual(selected?.kind, .unsynced)
-        XCTAssertEqual(selected?.source, "Genius")
+        XCTAssertEqual(selected?.source, .genius)
     }
 
     func testLateFirstVocalTimelineIsRejected() {
@@ -935,7 +935,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "nothing ever changes",
                 "call me in the morning"
             ], startingAt: 183),
-            source: "NetEase",
+            source: .netEase,
             score: 42,
             kind: .synced,
             titleMatched: true,
@@ -976,7 +976,7 @@ final class LyricsSelectionTests: XCTestCase {
         }
         let exactLongIntro = LyricsFetcher.LyricsFetchResult(
             lyrics: lines,
-            source: "NetEase",
+            source: .netEase,
             score: 48.6,
             kind: .synced,
             titleMatched: true,
@@ -985,7 +985,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [exactLongIntro], songDuration: 340.133)
 
-        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertEqual(selected?.source, .netEase)
     }
 
     func testEnglishContractionVariantsCoverApostropheMissingTitles() {
@@ -1095,7 +1095,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "冬天一個遊",
             inputArtist: "Gordon Flanders",
             hasAlbumHint: true
@@ -1195,7 +1195,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "The Key",
             inputArtist: "JJ Lin",
             aliasConfirmedCJK: true,
@@ -1226,7 +1226,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "This Is My Love",
             inputArtist: "Michelle Chen",
             aliasConfirmedCJK: true,
@@ -1257,7 +1257,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "The Key",
             inputArtist: "JJ Lin",
             aliasConfirmedCJK: true,
@@ -1288,7 +1288,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Tell Me",
             inputArtist: "Cheer Chen",
             hasAlbumHint: true,
@@ -1320,7 +1320,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "QQMusic",
+            source: .qq,
             inputTitle: "For my Doggie",
             inputArtist: "Wen Zhaojie",
             hasAlbumHint: true,
@@ -1352,7 +1352,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "The Key",
             inputArtist: "JJ Lin",
             aliasConfirmedCJK: true,
@@ -1384,7 +1384,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "The Key",
             inputArtist: "JJ Lin",
             aliasConfirmedCJK: true,
@@ -1435,7 +1435,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "This Is My Love",
             inputArtist: "Michelle Chen",
             hasAlbumHint: true
@@ -1445,7 +1445,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let fallbackSelected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "This Is My Love",
             inputArtist: "Michelle Chen",
             hasAlbumHint: true,
@@ -1609,7 +1609,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             [candidate],
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "This Is My Love",
             inputArtist: "Michelle Chen",
             hasAlbumHint: true,
@@ -1620,7 +1620,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         XCTAssertNil(fetcher.selectBestCandidate(
             [candidate],
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Love",
             inputArtist: "Michelle Chen",
             hasAlbumHint: true,
@@ -1744,7 +1744,7 @@ final class LyricsSelectionTests: XCTestCase {
         )
         let selected = fetcher.selectBestCandidate(
             [matching],
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Such a Perfect Day",
             inputArtist: "deca joins",
             allowNativeTitleAlias: true
@@ -1769,7 +1769,7 @@ final class LyricsSelectionTests: XCTestCase {
         )
         XCTAssertNil(fetcher.selectBestCandidate(
             [looseDuration],
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Such a Perfect Day",
             inputArtist: "deca joins",
             allowNativeTitleAlias: true
@@ -1790,7 +1790,7 @@ final class LyricsSelectionTests: XCTestCase {
         )
         XCTAssertNil(fetcher.selectBestCandidate(
             [lowerRanked],
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Such a Perfect Day",
             inputArtist: "deca joins",
             allowNativeTitleAlias: true
@@ -1848,7 +1848,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Distance (feat. deca joins)",
             inputArtist: "Enno Cheng",
             hasAlbumHint: true,
@@ -1893,7 +1893,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Deep",
             inputArtist: "Tanya Chua",
             aliasConfirmedCJK: true,
@@ -1923,7 +1923,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Strange Weather",
             inputArtist: "YELLOW & 9m88",
             allowNativeTitleAlias: true
@@ -1953,7 +1953,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "QQMusic",
+            source: .qq,
             inputTitle: "Thinking of Someone",
             inputArtist: "Pets Tseng",
             hasAlbumHint: true,
@@ -2004,7 +2004,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Hatsukoi",
             inputArtist: "Kozo Murashita",
             aliasConfirmedCJK: true,
@@ -2055,7 +2055,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Yi Jian Zhong Qing",
             inputArtist: "Pauline Lan",
             aliasConfirmedCJK: true,
@@ -2093,7 +2093,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Fureai",
             inputArtist: "Yoshie Kashiwabara",
             aliasConfirmedCJK: true,
@@ -2115,7 +2115,7 @@ final class LyricsSelectionTests: XCTestCase {
                 startingAt: 0.2,
                 gap: 4.5
             ),
-            source: "QQ",
+            source: .qq,
             score: 35,
             kind: .synced,
             titleMatched: true,
@@ -2124,7 +2124,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [sparseSynced], songDuration: 401)
 
-        XCTAssertEqual(selected?.source, "QQ")
+        XCTAssertEqual(selected?.source, .qq)
     }
 
     func testCompressedFastLineTimedVersionIsRejected() {
@@ -2142,7 +2142,7 @@ final class LyricsSelectionTests: XCTestCase {
                 "寫下痴心記號",
                 "甜蜜是這戀愛預告"
             ], startingAt: 0.8, gap: 18.0),
-            source: "NetEase",
+            source: .netEase,
             score: 51.6,
             kind: .synced,
             titleMatched: true,
@@ -2175,7 +2175,7 @@ final class LyricsSelectionTests: XCTestCase {
         let fetcher = LyricsFetcher.shared
         let unavailable = LyricsFetcher.LyricsFetchResult(
             lyrics: [],
-            source: "NetEase",
+            source: .netEase,
             score: -80,
             kind: .unavailable,
             titleMatched: true,
@@ -2184,14 +2184,14 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectUnavailableResult(from: [unavailable])
 
-        XCTAssertEqual(selected?.source, "NetEase")
+        XCTAssertEqual(selected?.source, .netEase)
     }
 
     func testWeakTerminalAvailabilityDoesNotBlockAlbumNativeAliasRescue() {
         let fetcher = LyricsFetcher.shared
         let instrumental = LyricsFetcher.LyricsFetchResult(
             lyrics: [LyricLine(text: "纯音乐，请欣赏", startTime: 0, endTime: 1)],
-            source: "QQ",
+            source: .qq,
             score: -100,
             kind: .instrumental,
             albumMatched: false,
@@ -2211,7 +2211,7 @@ final class LyricsSelectionTests: XCTestCase {
         let fetcher = LyricsFetcher.shared
         let unavailable = LyricsFetcher.LyricsFetchResult(
             lyrics: [],
-            source: "QQ",
+            source: .qq,
             score: -80,
             kind: .unavailable,
             albumMatched: true,
@@ -2305,7 +2305,7 @@ final class LyricsSelectionTests: XCTestCase {
         let fetcher = LyricsFetcher.shared
         let unavailable = LyricsFetcher.LyricsFetchResult(
             lyrics: [],
-            source: "NetEase",
+            source: .netEase,
             score: -80,
             kind: .unavailable,
             albumMatched: false,
@@ -2327,7 +2327,7 @@ final class LyricsSelectionTests: XCTestCase {
         let fetcher = LyricsFetcher.shared
         let instrumental = LyricsFetcher.LyricsFetchResult(
             lyrics: [LyricLine(text: "Instrumental", startTime: 0, endTime: 180)],
-            source: "QQ",
+            source: .qq,
             score: -100,
             kind: .instrumental,
             albumMatched: true,
@@ -2374,7 +2374,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Second Love",
             aliasConfirmedCJK: true,
             allowNativeTitleAlias: true
@@ -2417,7 +2417,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Yuki No Hana",
             inputArtist: "Akina Nakamori",
             aliasConfirmedCJK: true,
@@ -2462,7 +2462,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "Yuki No Hana",
             inputArtist: "Akina Nakamori",
             aliasConfirmedCJK: true,
@@ -2494,7 +2494,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "QQMusic",
+            source: .qq,
             inputTitle: "Dream Boat ga Deru Yoru ni",
             inputArtist: "Momoko Kikuchi",
             aliasConfirmedCJK: true,
@@ -2524,7 +2524,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "QQMusic",
+            source: .qq,
             inputTitle: "Dream Boat ga Deru Yoru ni",
             inputArtist: "Momoko Kikuchi",
             aliasConfirmedCJK: true,
@@ -2554,7 +2554,7 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: "江山"
         )
 

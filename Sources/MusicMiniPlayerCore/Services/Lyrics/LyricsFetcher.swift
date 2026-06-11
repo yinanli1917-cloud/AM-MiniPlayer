@@ -1,8 +1,8 @@
 /**
- * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils
- * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate
+ * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils, LyricsSourceProfile (typed source registry)
+ * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource
  * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
- * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound
+ * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
  * [PROTOCOL]: Update this header when changing the module, then check Services/Lyrics/CLAUDE.md
  */
@@ -53,7 +53,7 @@ public final class LyricsFetcher {
     /// Lyrics search result.
     public struct LyricsFetchResult {
         public let lyrics: [LyricLine]
-        public let source: String
+        public let source: LyricsSource
         public let score: Double
         /// True when the source candidate had direct title evidence
         /// (normalized title match, dual-title match, or exact source lookup).
@@ -79,7 +79,7 @@ public final class LyricsFetcher {
 
         public init(
             lyrics: [LyricLine],
-            source: String,
+            source: LyricsSource,
             score: Double,
             kind: LyricsKind,
             albumMatched: Bool = false,
@@ -132,20 +132,18 @@ public final class LyricsFetcher {
     //
     // Only high-tier sources can trigger early return — prevents fast low-tier sources
     // (LRCLIB) from cancelling slower high-quality sources (AMLL/NetEase/QQ) that provide
-    // syllable sync, translations, and better matching.
+    // syllable sync, translations, and better matching. Source membership is
+    // declared per-profile (`canTriggerEarlyReturn` / `isLyricIdentityWitness`)
+    // in LyricsSourceProfile.swift — no string sets to drift.
     private let earlyReturnThreshold: Double = 70.0
-    private let earlyReturnSources: Set<String> = ["AppleMusic", "AMLL", "NetEase", "QQ"]
-    private let lyricIdentityValidationSources: Set<String> = [
-        "AMLL", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"
-    ]
     private let foregroundLibraryFallbackTimeout: TimeInterval = 2.35
     private let foregroundAlbumLibraryFallbackTimeout: TimeInterval = 1.7
     private let foregroundTextFallbackTimeout: TimeInterval = 1.8
     private let foregroundAlbumTextFallbackTimeout: TimeInterval = 1.0
     private let foregroundLibraryNativeTitleEmptyTimeout: TimeInterval = 2.20
 
-    private func isLibraryFallbackSource(_ source: String) -> Bool {
-        source == "LRCLIB" || source == "LRCLIB-Search"
+    private func isLibraryFallbackSource(_ source: LyricsSource) -> Bool {
+        source.profile.isLibraryFallback
     }
 
     private func shouldProbeLibraryNativeTitleAlias(title: String) -> Bool {
@@ -339,6 +337,13 @@ public final class LyricsFetcher {
             let cachedCandidates = lyricsDiskCache.candidates(title: ot, artist: oa, duration: d, album: alb)
                 + (!alb.isEmpty ? lyricsDiskCache.candidates(title: ot, artist: oa, duration: d) : [])
             for cached in cachedCandidates {
+                // Boundary mapping: cache rows store the source as a string.
+                // Map once; an unmapped string (hand-edited or legacy row) is
+                // an explicit cache miss — never a silent default profile.
+                guard let cachedSource = LyricsSource(rawValue: cached.source) else {
+                    DebugLogger.log("⚠️ Disk cache row has unknown source '\(cached.source)' — ignoring row")
+                    continue
+                }
                 let lyrics = cached.lines.map { LyricsDiskCache.lyricLines(from: $0) } ?? parser.parseLRC(cached.syncedLyrics)
                 if cached.kind == .instrumental || cached.kind == .unavailable {
                     guard shouldUseImmediateCachedAvailability(
@@ -349,19 +354,19 @@ public final class LyricsFetcher {
                     let kind = cached.kind ?? .unavailable
                     return [LyricsFetchResult(
                         lyrics: lyrics,
-                        source: cached.source,
-                        score: scorer.calculateScore(lyrics, source: cached.source, duration: d, translationEnabled: te, kind: kind),
+                        source: cachedSource,
+                        score: scorer.calculateScore(lyrics, source: cachedSource, duration: d, translationEnabled: te, kind: kind),
                         kind: kind,
                         albumMatched: cached.album != nil && MetadataDiskCache.normalize(cached.album ?? "") == MetadataDiskCache.normalize(alb),
                         titleMatched: true,
                         matchedDurationDiff: cached.matchedDurationDiff
                     )]
                 }
-                if canUseImmediateCachedLyrics(lyrics, source: cached.source, title: ot, artist: oa) {
-                    let score = scorer.calculateScore(lyrics, source: cached.source, duration: d, translationEnabled: te)
+                if canUseImmediateCachedLyrics(lyrics, source: cachedSource, title: ot, artist: oa) {
+                    let score = scorer.calculateScore(lyrics, source: cachedSource, duration: d, translationEnabled: te)
                     let cachedResult = LyricsFetchResult(
                         lyrics: lyrics,
-                        source: cached.source,
+                        source: cachedSource,
                         score: score,
                         kind: .synced,
                         albumMatched: cached.album != nil && MetadataDiskCache.normalize(cached.album ?? "") == MetadataDiskCache.normalize(alb),
@@ -920,7 +925,7 @@ public final class LyricsFetcher {
                     results.append(r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
                     let isLineTimedCJKNativeProviderResult = shouldProtectNativeProviderRace
-                        && ["NetEase", "QQ"].contains(r.source)
+                        && r.source.profile.isCJKNativeProvider
                         && r.kind == .synced
                         && !r.lyrics.contains(where: { $0.hasSyllableSync })
 
@@ -937,10 +942,10 @@ public final class LyricsFetcher {
                         && r.score >= 30
                     let albumGate = !hasAlbumHint || r.albumMatched || hasStrongCatalogEvidence
                     let needsIdentityWitness = hasAlbumHint
-                        && ["NetEase", "QQ"].contains(r.source)
+                        && r.source.profile.isCJKNativeProvider
                         && !hasStrongCatalogEvidence
                     let identityWitnesses = results.filter {
-                        $0.source != r.source && self.lyricIdentityValidationSources.contains($0.source)
+                        $0.source != r.source && $0.source.profile.isLyricIdentityWitness
                     }
                     let hasConflictingIdentityWitness = identityWitnesses.contains { witness in
                         self.lyricIdentityTokens(r.lyrics).count >= 6
@@ -962,7 +967,7 @@ public final class LyricsFetcher {
                         && !libraryNativeTitleBranchLanded.value
                         && elapsed < libraryNativeTitleLandingDeadline
                     if r.score >= self.earlyReturnThreshold
-                        && self.earlyReturnSources.contains(r.source)
+                        && r.source.profile.canTriggerEarlyReturn
                         && albumGate
                         && !albumScopedEvidencePending
                         && !catalogExactTitleEvidencePending
@@ -975,14 +980,14 @@ public final class LyricsFetcher {
                     }
                     if hasAlbumHint
                         && hasAlbumExactSyncedResult
-                        && self.earlyReturnSources.contains(r.source)
+                        && r.source.profile.canTriggerEarlyReturn
                         && !isLineTimedCJKNativeProviderResult {
                         DebugLogger.log("⚡ Early return: \(r.source) album-exact synced score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
                     }
                     if self.selectedHasTightCatalogAliasIdentity(r),
-                       self.earlyReturnSources.contains(r.source),
+                       r.source.profile.canTriggerEarlyReturn,
                        !isLineTimedCJKNativeProviderResult {
                         DebugLogger.log("⚡ Early return: \(r.source) tight catalog-alias score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
@@ -1031,7 +1036,7 @@ public final class LyricsFetcher {
                 }
                 let hasFastExitSyncedResult = results.contains {
                     let lineTimedCJKNativeProvider = shouldProtectNativeProviderRace
-                        && ["NetEase", "QQ"].contains($0.source)
+                        && $0.source.profile.isCJKNativeProvider
                         && $0.kind == .synced
                         && !$0.lyrics.contains(where: { $0.hasSyllableSync })
                     let looseNativeAlias = $0.nativeAliasMatched
@@ -1063,7 +1068,7 @@ public final class LyricsFetcher {
                     let libraryFallbackCanFastExit = !preferredSyncedSourcePending
                         && (
                             exactLibraryCanFastExit
-                            || (lrclibCanFastExit && ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") && $0.score >= 50)
+                            || (lrclibCanFastExit && $0.source.profile.isLibraryFallback && $0.score >= 50)
                         )
                     let tightCatalogAliasCanFastExit = self.selectedHasTightCatalogAliasIdentity($0)
                     return $0.kind == .synced
@@ -1072,7 +1077,7 @@ public final class LyricsFetcher {
                         && (
                             tightCatalogAliasCanFastExit
                             || ($0.score >= 40 && (
-                                self.earlyReturnSources.contains($0.source)
+                                $0.source.profile.canTriggerEarlyReturn
                                 || (!self.isLibraryFallbackSource($0.source) && $0.score >= self.earlyReturnThreshold)
                                 || libraryFallbackCanFastExit
                             ))
@@ -1095,7 +1100,7 @@ public final class LyricsFetcher {
                 let hasAnySyncedResult = results.contains { $0.kind == .synced && $0.score > 0 }
                 let hasOnlyWeakLibraryFallbackSyncedResults = hasAnySyncedResult && results.allSatisfy {
                     $0.kind != .synced || (
-                        ($0.source == "LRCLIB" || $0.source == "LRCLIB-Search") &&
+                        $0.source.profile.isLibraryFallback &&
                         $0.score < 50
                     )
                 }
@@ -1115,8 +1120,8 @@ public final class LyricsFetcher {
                 let hasAnyPotentiallyUsableSyncedResult = results.contains {
                     $0.kind == .synced && (
                         $0.score >= 18 ||
-                        ($0.source == "LRCLIB" && $0.score >= 45 && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)) ||
-                        ($0.source == "LRCLIB-Search" && $0.score >= 50 && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)) ||
+                        ($0.source == .lrclib && $0.score >= 45 && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)) ||
+                        ($0.source == .lrclibSearch && $0.score >= 50 && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)) ||
                         $0.lyrics.contains { $0.hasSyllableSync }
                     )
                 }
@@ -1158,13 +1163,13 @@ public final class LyricsFetcher {
                 }
                 let hasHighConfidenceResult = results.contains {
                     let lineTimedCJKNativeProvider = shouldProtectNativeProviderRace
-                        && ["NetEase", "QQ"].contains($0.source)
+                        && $0.source.profile.isCJKNativeProvider
                         && $0.kind == .synced
                         && !$0.lyrics.contains(where: { $0.hasSyllableSync })
                     return $0.kind == .synced
                         && !lineTimedCJKNativeProvider
                         && $0.score >= 60
-                        && self.earlyReturnSources.contains($0.source)
+                        && $0.source.profile.canTriggerEarlyReturn
                         && ($0.titleMatched || self.selectedHasStrongNativeAliasIdentity($0))
                 }
                 if hasOnlyLooseNativeAliasSyncedResults && (branch2Fired.value || albumScopedBranchFired.value) && elapsed < 3.5 {
@@ -1256,7 +1261,7 @@ public final class LyricsFetcher {
                 artist: oa,
                 duration: d,
                 album: alb,
-                source: selected.source,
+                source: selected.source.rawValue,
                 lines: selected.lyrics,
                 matchedDurationDiff: selected.matchedDurationDiff
             )
@@ -1272,7 +1277,7 @@ public final class LyricsFetcher {
                     artist: oa,
                     duration: d,
                     album: alb,
-                    source: instrumental.source,
+                    source: instrumental.source.rawValue,
                     kind: .instrumental,
                     lines: instrumental.lyrics,
                     matchedDurationDiff: instrumental.matchedDurationDiff
@@ -1288,7 +1293,7 @@ public final class LyricsFetcher {
                     artist: oa,
                     duration: d,
                     album: alb,
-                    source: unavailable.source,
+                    source: unavailable.source.rawValue,
                     kind: .unavailable,
                     lines: unavailable.lyrics,
                     matchedDurationDiff: unavailable.matchedDurationDiff
@@ -1331,7 +1336,7 @@ public final class LyricsFetcher {
                 results.append(result)
                 if result.kind == .synced,
                    result.score >= earlyReturnThreshold,
-                   earlyReturnSources.contains(result.source),
+                   result.source.profile.canTriggerEarlyReturn,
                    result.titleMatched,
                    (result.matchedDurationDiff.map { $0 < 1.5 } ?? true) {
                     group.cancelAll()
@@ -1528,7 +1533,7 @@ public final class LyricsFetcher {
                     artist: cleanArtist,
                     duration: duration,
                     album: cleanAlbum,
-                    source: instrumental.source,
+                    source: instrumental.source.rawValue,
                     kind: .instrumental,
                     lines: instrumental.lyrics,
                     matchedDurationDiff: instrumental.matchedDurationDiff
@@ -1550,7 +1555,7 @@ public final class LyricsFetcher {
                     artist: cleanArtist,
                     duration: duration,
                     album: cleanAlbum,
-                    source: unavailable.source,
+                    source: unavailable.source.rawValue,
                     kind: .unavailable,
                     lines: unavailable.lyrics,
                     matchedDurationDiff: unavailable.matchedDurationDiff
@@ -1568,7 +1573,7 @@ public final class LyricsFetcher {
                 artist: cleanArtist,
                 duration: duration,
                 album: cleanAlbum,
-                source: selected.source,
+                source: selected.source.rawValue,
                 lines: selected.lyrics,
                 matchedDurationDiff: selected.matchedDurationDiff
             )
@@ -1806,7 +1811,7 @@ public final class LyricsFetcher {
                 if result.kind == .synced,
                    selectedHasReturnableIdentity(result),
                    result.score >= 45,
-                   earlyReturnSources.contains(result.source) {
+                   result.source.profile.canTriggerEarlyReturn {
                     group.cancelAll()
                     break
                 }
@@ -2264,10 +2269,7 @@ public final class LyricsFetcher {
     private func selectedHasPersistentIdentity(_ result: LyricsFetchResult) -> Bool {
         result.albumMatched
             || (result.titleMatched && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
-            || result.source == "LRCLIB"
-            || result.source == "LRCLIB-Search"
-            || result.source == "AMLL"
-            || result.source == "AppleMusic"
+            || result.source.profile.hasSelfEvidentCatalogIdentity
     }
 
     private func selectedHasReturnableIdentity(_ result: LyricsFetchResult) -> Bool {
@@ -2310,7 +2312,7 @@ public final class LyricsFetcher {
         if result.albumMatched { return true }
         if let durationDiff = result.matchedDurationDiff, durationDiff < 3.0 { return true }
         if let durationDiff = result.matchedDurationDiff, durationDiff < 10.0 {
-            return result.source == "NetEase" || result.source == "QQ" || result.source == "LRCLIB"
+            return result.source.profile.trustsWideDurationUnavailableVerdict
         }
         return false
     }
@@ -2380,10 +2382,10 @@ public final class LyricsFetcher {
                     && result.score >= 30
                 let albumGate = !hasAlbumHint || result.albumMatched || hasStrongCatalogEvidence
                 let needsIdentityWitness = hasAlbumHint
-                    && ["NetEase", "QQ"].contains(result.source)
+                    && result.source.profile.isCJKNativeProvider
                     && !hasStrongCatalogEvidence
                 let identityWitnesses = resolvedResults.filter {
-                    $0.source != result.source && self.lyricIdentityValidationSources.contains($0.source)
+                    $0.source != result.source && $0.source.profile.isLyricIdentityWitness
                 }
                 let hasConflictingIdentityWitness = identityWitnesses.contains { witness in
                     self.lyricIdentityTokens(result.lyrics).count >= 6
@@ -2392,18 +2394,18 @@ public final class LyricsFetcher {
                 }
                 let hasIdentityWitness = !identityWitnesses.isEmpty && !hasConflictingIdentityWitness
                 if result.score >= self.earlyReturnThreshold
-                    && self.earlyReturnSources.contains(result.source)
+                    && result.source.profile.canTriggerEarlyReturn
                     && albumGate
                     && (!needsIdentityWitness || hasIdentityWitness) {
                     group.cancelAll()
                     return result
                 }
-                if hasAlbumExactSyncedResult && self.earlyReturnSources.contains(result.source) {
+                if hasAlbumExactSyncedResult && result.source.profile.canTriggerEarlyReturn {
                     group.cancelAll()
                     return result
                 }
                 if self.selectedHasTightCatalogAliasIdentity(result),
-                   self.earlyReturnSources.contains(result.source) {
+                   result.source.profile.canTriggerEarlyReturn {
                     group.cancelAll()
                     return result
                 }
@@ -2440,7 +2442,7 @@ public final class LyricsFetcher {
 
     func canUseImmediateCachedLyrics(
         _ lyrics: [LyricLine],
-        source: String,
+        source: LyricsSource,
         title: String,
         artist: String
     ) -> Bool {
@@ -2480,8 +2482,9 @@ public final class LyricsFetcher {
         await withHardTimeout(seconds: seconds, operation: operation)
     }
 
-    private func isLikelyRomanizedCJKLyrics(_ lyrics: [LyricLine], source: String) -> Bool {
-        guard source == "LRCLIB" || source == "LRCLIB-Search" else { return false }
+    private func isLikelyRomanizedCJKLyrics(_ lyrics: [LyricLine], source: LyricsSource) -> Bool {
+        // Risk check declared per profile — the LRCLIB pair only, never AMLL.
+        guard source.profile.appliesRomanizedCJKLyricsCheck else { return false }
         let realLines = lyrics.map(\.text)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && $0 != "..." && $0 != "…" && $0 != "⋯" }

@@ -1,7 +1,7 @@
 /**
- * [INPUT]: Song metadata (title, artist, duration) + SearchParams from candidate selection
- * [OUTPUT]: LyricsFetchResult from each source (AMLL, NetEase, QQ, LRCLIB, lyrics.ovh, Genius, Apple Music)
- * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 7 lyric sources; provider catalog aliases stay behind strict title/artist/duration/context evidence
+ * [INPUT]: Song metadata (title, artist, duration) + SearchParams from candidate selection + LyricsSource typed registry
+ * [OUTPUT]: LyricsFetchResult from each of the 8 sources (AppleMusic, AMLL, NetEase, QQ, LRCLIB, LRCLIB-Search, Genius, lyrics.ovh), stamped with typed LyricsSource cases
+ * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 8 lyric sources; provider catalog aliases stay behind strict title/artist/duration/context evidence
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -200,7 +200,7 @@ extension LyricsFetcher {
               lyrics.count >= 8 else { return nil }
         let rawScore = scorer.calculateScore(
             lyrics,
-            source: "NetEase",
+            source: .netEase,
             duration: duration,
             translationEnabled: translationEnabled,
             kind: fetched.kind
@@ -217,7 +217,7 @@ extension LyricsFetcher {
         DebugLogger.log("NetEase", "✅ album-title echo native hit: '\(candidate.name)' by '\(candidate.artist)' Δ\(String(format: "%.1f", candidate.durationDiff))s")
         return LyricsFetchResult(
             lyrics: lyrics,
-            source: "NetEase",
+            source: .netEase,
             score: score,
             kind: fetched.kind,
             albumMatched: true,
@@ -283,7 +283,7 @@ extension LyricsFetcher {
         )
         guard let match = selectBestCandidate(
             candidates,
-            source: "NetEase",
+            source: .netEase,
             inputTitle: aliasParams.simplifiedTitle,
             inputArtist: artist,
             aliasConfirmedCJK: true,
@@ -309,7 +309,7 @@ extension LyricsFetcher {
               lyrics.count >= 8 else { return nil }
         let rawScore = scorer.calculateScore(
             lyrics,
-            source: "NetEase",
+            source: .netEase,
             duration: duration,
             translationEnabled: translationEnabled,
             kind: fetched.kind
@@ -326,7 +326,7 @@ extension LyricsFetcher {
         DebugLogger.log("NetEase", "✅ native artist alias direct hit: '\(match.title)' by '\(match.artist)' Δ\(String(format: "%.1f", match.durationDiff))s")
         return LyricsFetchResult(
             lyrics: lyrics,
-            source: "NetEase",
+            source: .netEase,
             score: score,
             kind: fetched.kind,
             albumMatched: match.albumMatched,
@@ -798,7 +798,7 @@ extension LyricsFetcher {
                     )
                     let rawScore = self.scorer.calculateScore(
                         candidateLyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         duration: duration,
                         translationEnabled: translationEnabled,
                         kind: fetched.kind
@@ -813,7 +813,7 @@ extension LyricsFetcher {
                     )
                     let result = LyricsFetchResult(
                         lyrics: candidateLyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         score: score,
                         kind: fetched.kind,
                         albumMatched: false,
@@ -1017,7 +1017,7 @@ extension LyricsFetcher {
                     guard candidateLyrics.count >= 8 else { return nil }
                     let rawScore = self.scorer.calculateScore(
                         candidateLyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         duration: duration,
                         translationEnabled: translationEnabled,
                         kind: fetched.kind
@@ -1035,7 +1035,7 @@ extension LyricsFetcher {
                     }
                     let result = LyricsFetchResult(
                         lyrics: candidateLyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         score: score,
                         kind: fetched.kind,
                         albumMatched: true,
@@ -1202,7 +1202,7 @@ extension LyricsFetcher {
     }
 
     private func catalogUnavailableResult(
-        source: String,
+        source: LyricsSource,
         albumMatched: Bool,
         titleMatched: Bool,
         durationDiff: Double?
@@ -1224,8 +1224,8 @@ extension LyricsFetcher {
         // 尝试通过 Apple Music Track ID 直接获取
         if let trackId = await getAppleMusicTrackId(title: title, artist: artist, duration: duration),
            let lyrics = await fetchAMLLTTML(platform: "am-lyrics", filename: "\(trackId).ttml") {
-            let score = scorer.calculateScore(lyrics, source: "AMLL", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score, kind: .synced)
+            let score = scorer.calculateScore(lyrics, source: .amll, duration: duration, translationEnabled: translationEnabled)
+            return LyricsFetchResult(lyrics: lyrics, source: .amll, score: score, kind: .synced)
         }
 
         // 🔑 检查是否在冷却期内
@@ -1276,8 +1276,8 @@ extension LyricsFetcher {
         guard let match = bestMatch else { return nil }
 
         if let lyrics = await fetchAMLLTTML(platform: match.entry.platform, filename: "\(match.entry.id).ttml") {
-            let score = scorer.calculateScore(lyrics, source: "AMLL", duration: duration, translationEnabled: translationEnabled)
-            return LyricsFetchResult(lyrics: lyrics, source: "AMLL", score: score, kind: .synced)
+            let score = scorer.calculateScore(lyrics, source: .amll, duration: duration, translationEnabled: translationEnabled)
+            return LyricsFetchResult(lyrics: lyrics, source: .amll, score: score, kind: .synced)
         }
 
         return nil
@@ -1462,7 +1462,7 @@ extension LyricsFetcher {
                        "Referer": "https://music.163.com"]
 
         let match: SelectedSearchCandidate<Int>? = await searchAndSelectCandidate(
-            params: params, source: "NetEase",
+            params: params, source: .netEase,
             allowCompilationAlbumFallback: true,
             fetchSongs: { keyword in
                 guard let url = HTTPClient.buildURL(base: "https://music.163.com/api/search/get", queryItems: [
@@ -1498,7 +1498,7 @@ extension LyricsFetcher {
             if let result = await fetchNetEaseLyrics(songId: match.id, duration: duration, expectedTitle: match.title, expectedArtist: match.artist) {
                 let lyrics = result.lyrics
                 let kind = result.kind
-                let rawScore = scorer.calculateScore(lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: kind)
+                let rawScore = scorer.calculateScore(lyrics, source: .netEase, duration: duration, translationEnabled: translationEnabled, kind: kind)
                 let score = scoreWithCatalogEvidence(baseScore: rawScore, lyrics: lyrics, kind: kind, albumMatched: match.albumMatched, titleMatched: match.titleMatched, durationDiff: match.durationDiff, nativeAliasMatched: match.nativeAliasMatched)
                 let scriptMismatchSuspected = shouldFlagEnglishMetadataCJKDominantLyrics(
                     lyrics,
@@ -1513,7 +1513,7 @@ extension LyricsFetcher {
                 }
                 let fetched = LyricsFetchResult(
                     lyrics: lyrics,
-                    source: "NetEase",
+                    source: .netEase,
                     score: score,
                     kind: kind,
                     albumMatched: match.albumMatched,
@@ -1631,7 +1631,7 @@ extension LyricsFetcher {
         }
         if primaryResult == nil, let match {
             return catalogUnavailableResult(
-                source: "NetEase",
+                source: .netEase,
                 albumMatched: match.albumMatched,
                 titleMatched: match.titleMatched,
                 durationDiff: match.durationDiff
@@ -1825,7 +1825,7 @@ extension LyricsFetcher {
                     DebugLogger.log("NetEase", "⏭️ native alias rejected by unproved immediate-vocal timing: '\(c.name)' Δ\(String(format: "%.1f", c.delta))s")
                     continue
                 }
-                let rawScore = scorer.calculateScore(candidateLyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: r.kind)
+                let rawScore = scorer.calculateScore(candidateLyrics, source: .netEase, duration: duration, translationEnabled: translationEnabled, kind: r.kind)
                 var score = scoreWithCatalogEvidence(
                     baseScore: rawScore,
                     lyrics: candidateLyrics,
@@ -1838,7 +1838,7 @@ extension LyricsFetcher {
                 if c.riskyNativeAlias {
                     score = max(score, 45)
                 }
-                let fetched = LyricsFetchResult(lyrics: candidateLyrics, source: "NetEase", score: score, kind: r.kind, albumMatched: false, titleMatched: c.titleMatched, matchedDurationDiff: c.delta, nativeAliasMatched: c.sourceTitleAlias || c.riskyNativeAlias)
+                let fetched = LyricsFetchResult(lyrics: candidateLyrics, source: .netEase, score: score, kind: r.kind, albumMatched: false, titleMatched: c.titleMatched, matchedDurationDiff: c.delta, nativeAliasMatched: c.sourceTitleAlias || c.riskyNativeAlias)
                 DebugLogger.log("NetEase", "✅ fallback hit: id=\(c.id) '\(c.name)' Δ\(String(format: "%.1f", c.delta))s \(candidateLyrics.count)L")
                 if bestFallback == nil || score > bestFallback!.score {
                     bestFallback = fetched
@@ -1876,7 +1876,7 @@ extension LyricsFetcher {
         }
         if primaryResult == nil, let match {
             return catalogUnavailableResult(
-                source: "NetEase",
+                source: .netEase,
                 albumMatched: match.albumMatched,
                 titleMatched: match.titleMatched,
                 durationDiff: match.durationDiff
@@ -1920,12 +1920,12 @@ extension LyricsFetcher {
             guard let fetched = await fetchNetEaseLyrics(songId: id, duration: duration, expectedTitle: name, expectedArtist: artistName),
                   !fetched.lyrics.isEmpty,
                   hasCJKLyricOverlap(fetched.lyrics, witness.lyrics) else { continue }
-            let rawScore = scorer.calculateScore(fetched.lyrics, source: "NetEase", duration: duration, translationEnabled: translationEnabled, kind: fetched.kind)
+            let rawScore = scorer.calculateScore(fetched.lyrics, source: .netEase, duration: duration, translationEnabled: translationEnabled, kind: fetched.kind)
             let score = max(rawScore, 45)
             DebugLogger.log("NetEase", "✅ witness-probe rescue: '\(name)' by '\(artistName)'")
             return LyricsFetchResult(
                 lyrics: fetched.lyrics,
-                source: "NetEase",
+                source: .netEase,
                 score: score,
                 kind: fetched.kind,
                 albumMatched: false,
@@ -2114,7 +2114,7 @@ extension LyricsFetcher {
                     }
                     let rawScore = self.scorer.calculateScore(
                         lyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         duration: duration,
                         translationEnabled: translationEnabled,
                         kind: fetched.kind
@@ -2130,7 +2130,7 @@ extension LyricsFetcher {
                     score = max(score, 45)
                     let result = LyricsFetchResult(
                         lyrics: lyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         score: score,
                         kind: fetched.kind,
                         albumMatched: false,
@@ -2236,7 +2236,7 @@ extension LyricsFetcher {
                     }
                     let rawScore = self.scorer.calculateScore(
                         fetched.lyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         duration: duration,
                         translationEnabled: translationEnabled,
                         kind: fetched.kind
@@ -2251,7 +2251,7 @@ extension LyricsFetcher {
                     )
                     return LyricsFetchResult(
                         lyrics: fetched.lyrics,
-                        source: "NetEase",
+                        source: .netEase,
                         score: score,
                         kind: fetched.kind,
                         albumMatched: candidate.albumMatched,
@@ -2411,7 +2411,7 @@ extension LyricsFetcher {
         guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
 
         guard let qqMatch: SelectedSearchCandidate<String> = await searchAndSelectCandidate(
-            params: params, source: "QQMusic",
+            params: params, source: .qq,
             extraKeywords: [(params.simplifiedTitle, "title only")],
             fetchSongs: { keyword in
                 let body: [String: Any] = [
@@ -2464,7 +2464,7 @@ extension LyricsFetcher {
         guard let result = primaryLyrics ?? fallbackLyrics else {
             DebugLogger.log("QQMusic", "❌ 获取歌词失败")
             return catalogUnavailableResult(
-                source: "QQ",
+                source: .qq,
                 albumMatched: qqMatch.albumMatched,
                 titleMatched: qqMatch.titleMatched,
                 durationDiff: qqMatch.durationDiff
@@ -2472,9 +2472,9 @@ extension LyricsFetcher {
         }
         let lyrics = result.lyrics
         let kind = result.kind
-        let rawScore = scorer.calculateScore(lyrics, source: "QQ", duration: duration, translationEnabled: translationEnabled, kind: kind)
+        let rawScore = scorer.calculateScore(lyrics, source: .qq, duration: duration, translationEnabled: translationEnabled, kind: kind)
         let score = scoreWithCatalogEvidence(baseScore: rawScore, lyrics: lyrics, kind: kind, albumMatched: qqMatch.albumMatched, titleMatched: qqMatch.titleMatched, durationDiff: qqMatch.durationDiff, nativeAliasMatched: qqMatch.nativeAliasMatched)
-        return LyricsFetchResult(lyrics: lyrics, source: "QQ", score: score, kind: kind, albumMatched: qqMatch.albumMatched, titleMatched: qqMatch.titleMatched, matchedDurationDiff: qqMatch.durationDiff, nativeAliasMatched: qqMatch.nativeAliasMatched)
+        return LyricsFetchResult(lyrics: lyrics, source: .qq, score: score, kind: kind, albumMatched: qqMatch.albumMatched, titleMatched: qqMatch.titleMatched, matchedDurationDiff: qqMatch.durationDiff, nativeAliasMatched: qqMatch.nativeAliasMatched)
     }
 
     private func fetchQQMusicLyrics(songMid: String, duration: TimeInterval) async -> (lyrics: [LyricLine], kind: LyricsKind)? {
@@ -2537,15 +2537,17 @@ extension LyricsFetcher {
         let normalizedTitle = LanguageUtils.normalizeTrackName(title)
         let normalizedArtist = LanguageUtils.normalizeArtistName(artist)
 
+        // Boundary mapping: cache rows store the source as a string — map once,
+        // then require the LRCLIB case. Unknown strings simply miss the cache.
         if let cached = lyricsDiskCache.get(title: title, artist: artist, duration: duration),
-           cached.source == "LRCLIB",
+           LyricsSource(rawValue: cached.source) == .lrclib,
            let cachedLines = cached.lines {
             let lyrics = LyricsDiskCache.lyricLines(from: cachedLines)
             if !lyrics.isEmpty {
-                let score = scorer.calculateScore(lyrics, source: cached.source, duration: duration, translationEnabled: translationEnabled)
+                let score = scorer.calculateScore(lyrics, source: .lrclib, duration: duration, translationEnabled: translationEnabled)
                 return LyricsFetchResult(
                     lyrics: lyrics,
-                    source: cached.source,
+                    source: .lrclib,
                     score: score,
                     kind: .synced,
                     matchedDurationDiff: cached.matchedDurationDiff
@@ -2581,10 +2583,10 @@ extension LyricsFetcher {
             }
 
             let lyrics = parser.parseLRC(syncedLyrics)
-            let score = scorer.calculateScore(lyrics, source: "LRCLIB", duration: duration, translationEnabled: translationEnabled)
+            let score = scorer.calculateScore(lyrics, source: .lrclib, duration: duration, translationEnabled: translationEnabled)
             return LyricsFetchResult(
                 lyrics: lyrics,
-                source: "LRCLIB",
+                source: .lrclib,
                 score: score,
                 kind: .synced,
                 titleMatched: matchResult.titleMatch,
@@ -2598,15 +2600,16 @@ extension LyricsFetcher {
 
     func fetchFromLRCLIBSearch(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
         DebugLogger.log("LRCLIB", "🔍 /search '\(title)' by '\(artist)' (\(Int(duration))s)")
+        // Boundary mapping: same one-shot string→case mapping as /get above.
         if let cached = lyricsDiskCache.get(title: title, artist: artist, duration: duration),
-           cached.source == "LRCLIB-Search",
+           LyricsSource(rawValue: cached.source) == .lrclibSearch,
            let cachedLines = cached.lines {
             let lyrics = LyricsDiskCache.lyricLines(from: cachedLines)
             if !lyrics.isEmpty {
-                let score = scorer.calculateScore(lyrics, source: cached.source, duration: duration, translationEnabled: translationEnabled)
+                let score = scorer.calculateScore(lyrics, source: .lrclibSearch, duration: duration, translationEnabled: translationEnabled)
                 return LyricsFetchResult(
                     lyrics: lyrics,
-                    source: cached.source,
+                    source: .lrclibSearch,
                     score: score,
                     kind: .synced,
                     matchedDurationDiff: cached.matchedDurationDiff
@@ -2667,10 +2670,10 @@ extension LyricsFetcher {
             }
 
             let lyrics = parser.parseLRC(match.lyrics)
-            let score = scorer.calculateScore(lyrics, source: "LRCLIB-Search", duration: duration, translationEnabled: translationEnabled)
+            let score = scorer.calculateScore(lyrics, source: .lrclibSearch, duration: duration, translationEnabled: translationEnabled)
             return LyricsFetchResult(
                 lyrics: lyrics,
-                source: "LRCLIB-Search",
+                source: .lrclibSearch,
                 score: score,
                 kind: .synced,
                 titleMatched: match.titleMatched,
@@ -2872,7 +2875,7 @@ extension LyricsFetcher {
             guard let result = musicuLyrics ?? legacyLyrics else {
                 DebugLogger.log("QQMusic", "❌ library native-title bridge lyrics unavailable for songMid=\(candidate.songMid)")
                 return catalogUnavailableResult(
-                    source: "QQ",
+                    source: .qq,
                     albumMatched: false,
                     titleMatched: true,
                     durationDiff: candidate.durationDiff
@@ -2880,7 +2883,7 @@ extension LyricsFetcher {
             }
             let rawScore = scorer.calculateScore(
                 result.lyrics,
-                source: "QQ",
+                source: .qq,
                 duration: duration,
                 translationEnabled: translationEnabled,
                 kind: result.kind
@@ -2897,7 +2900,7 @@ extension LyricsFetcher {
             DebugLogger.log("QQMusic", "✅ library native-title bridge hit: '\(candidate.title)' by '\(candidate.artist)' Δ\(String(format: "%.1f", candidate.durationDiff))s")
             return LyricsFetchResult(
                 lyrics: result.lyrics,
-                source: "QQ",
+                source: .qq,
                 score: score,
                 kind: result.kind,
                 albumMatched: false,
@@ -3072,8 +3075,8 @@ extension LyricsFetcher {
             guard let lyricsText = json["lyrics"] as? String, !lyricsText.isEmpty else { return nil }
 
             let lyrics = parser.createUnsyncedLyrics(lyricsText, duration: duration)
-            let score = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
-            return LyricsFetchResult(lyrics: lyrics, source: "lyrics.ovh", score: score, kind: .unsynced)
+            let score = scorer.calculateScore(lyrics, source: .lyricsOvh, duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
+            return LyricsFetchResult(lyrics: lyrics, source: .lyricsOvh, score: score, kind: .unsynced)
         } catch {
             return nil
         }
@@ -3115,8 +3118,8 @@ extension LyricsFetcher {
             guard !lyricsText.isEmpty else { return nil }
 
             let lyrics = parser.createUnsyncedLyrics(lyricsText, duration: duration)
-            let score = scorer.calculateScore(lyrics, source: "Genius", duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
-            return LyricsFetchResult(lyrics: lyrics, source: "Genius", score: score, kind: .unsynced)
+            let score = scorer.calculateScore(lyrics, source: .genius, duration: duration, translationEnabled: translationEnabled, kind: .unsynced)
+            return LyricsFetchResult(lyrics: lyrics, source: .genius, score: score, kind: .unsynced)
         } catch { return nil }
     }
 
@@ -3230,9 +3233,9 @@ extension LyricsFetcher {
                 return nil
             }
             let kind: LyricsKind = .synced
-            let score = scorer.calculateScore(parsed, source: "AppleMusic", duration: duration, translationEnabled: translationEnabled, kind: kind)
+            let score = scorer.calculateScore(parsed, source: .appleMusic, duration: duration, translationEnabled: translationEnabled, kind: kind)
             DebugLogger.log("AppleMusic", "✅ '\(title)' by '\(artist)' — \(parsed.count) lines (TTML)")
-            return LyricsFetchResult(lyrics: parsed, source: "AppleMusic", score: score, kind: kind)
+            return LyricsFetchResult(lyrics: parsed, source: .appleMusic, score: score, kind: kind)
         } catch {
             DebugLogger.log("AppleMusic", "❌ MusicDataRequest error: \(error.localizedDescription)")
             return nil

@@ -1,6 +1,6 @@
 /**
- * [INPUT]: LyricModels 的 LyricLine 结构, LanguageUtils 语言检测
- * [OUTPUT]: calculateLyricsScore/analyzeLyricsQuality 评分函数
+ * [INPUT]: LyricModels 的 LyricLine 结构, LyricsSourceProfile 的 LyricsSource + 声明式 bonus, LanguageUtils 语言检测
+ * [OUTPUT]: calculateScore/analyzeQuality 评分函数 (source 参数为 typed LyricsSource)
  * [POS]: Lyrics 的评分子模块，负责歌词质量评估和来源选择
  * [PROTOCOL]: 变更时更新此头部，然后检查 Services/Lyrics/CLAUDE.md
  */
@@ -44,13 +44,13 @@ public final class LyricsScorer {
     /// 计算歌词综合评分（0-100分）
     /// - Parameters:
     ///   - lyrics: 歌词数组
-    ///   - source: 歌词源名称
+    ///   - source: 歌词源（typed — unknown sources are unrepresentable）
     ///   - duration: 歌曲时长
     ///   - translationEnabled: 是否启用翻译（启用时有翻译的歌词加分）
     /// - Returns: 综合评分
     public func calculateScore(
         _ lyrics: [LyricLine],
-        source: String,
+        source: LyricsSource,
         duration: TimeInterval,
         translationEnabled: Bool,
         kind: LyricsKind = .synced
@@ -241,19 +241,11 @@ public final class LyricsScorer {
 
     // MARK: - 来源加成
 
-    /// 获取歌词源加成分数
-    public func sourceBonus(for source: String) -> Double {
-        switch source {
-        case "AppleMusic": return 12
-        case "AMLL": return 10
-        case "NetEase": return 8
-        case "QQ": return 6
-        case "LRCLIB": return 3
-        case "LRCLIB-Search": return 2
-        case "Genius": return 1
-        case "lyrics.ovh": return -2
-        default: return 0
-        }
+    /// 获取歌词源加成分数 — declared in the source's trait profile.
+    /// The legacy String switch had a silent `default: return 0`; with the
+    /// typed registry an unknown source cannot reach this function at all.
+    public func sourceBonus(for source: LyricsSource) -> Double {
+        source.profile.bonus
     }
 
     // MARK: - 辅助函数

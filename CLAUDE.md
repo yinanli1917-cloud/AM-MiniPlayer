@@ -25,7 +25,7 @@ Sources/
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources
-│   │       ├── LyricsSourceFetchers.swift       - 7 source fetch methods (AMLL/NE/QQ/LRCLIB/Genius/AM/ovh)
+│   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh)
 │   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale
 │   │       ├── LyricsParser.swift               - TTML/LRC/YRC parsing
@@ -58,7 +58,10 @@ Sources/
 │   │   ├── SBTimeoutRunner.swift      - ScriptingBridge timeout wrapper
 │   │   ├── DebugConfig.swift          - Debug configuration
 │   │   └── AppleScriptRunner.swift    - Music.app osascript execution + parsing
-│   ├── Models/LyricModels.swift   - Lyrics data structures + shared constants
+│   ├── Models/
+│   │   ├── LyricModels.swift          - Lyrics data structures + shared constants
+│   │   ├── LyricsSourceProfile.swift  - Typed source registry: 8 providers + declared trait profiles
+│   │   └── MusicQueueProvenance.swift - Queue provenance model
 │   └── Shaders/blur.metal
 └── LyricsVerifier/                - 歌词管线 CLI 测试工具
     ├── main.swift                 - CLI 入口 (run/check/library/benchmark)
@@ -67,9 +70,10 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 572 个单元测试
+Tests/MusicMiniPlayerTests/         - 591 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
+    ├── LyricsSourceProfileTests.swift - 类型化源注册表 oracle 等值测试（旧硬编码阶梯字面量）
     ├── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
     ├── NetworkOutcomeLedgerTests.swift - 网络结果分类表 + 负面裁决配额 + task-local default-allow
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
@@ -92,17 +96,20 @@ postmortem/001~006                 - 已知 bug 根因 + 解决方案
 - `artworkFetchQueue` (low priority): Playlist artwork prefetching
 - ⚠️ ScriptingBridge must only be called on `scriptingBridgeQueue` — calling from main thread will crash
 
-### Lyrics Source Architecture (7 Parallel Sources + Quality Scoring)
+### Lyrics Source Architecture (8 Parallel Sources + Quality Scoring)
+
+Typed registry: `LyricsSource` + per-source trait profile in `Models/LyricsSourceProfile.swift` — bonuses, admission floors, mirror group, and risk checks are declared per case (compiler-enforced, no string comparisons). Oracle-equality tests in `LyricsSourceProfileTests` pin these values to the legacy ladders.
 
 | Source | Bonus | Notes |
 |--------|-------|-------|
-| AMLL-TTML-DB | +10 | Word-level timestamps |
+| AppleMusic | +12 | First-party TTML via MusicKit |
+| AMLL-TTML-DB | +10 | Word-level timestamps, community DB |
 | NetEase | +8 | Chinese primary, YRC + translation |
 | QQ Music | +6 | Chinese secondary, supports translation |
-| SimpMusic | +5 | Global, YouTube Music community |
-| LRCLIB | +3 | Exact match |
-| LRCLIB-Search | +2 | Fuzzy search |
-| lyrics.ovh | +0 | Plain text fallback |
+| LRCLIB | +3 | Exact match (/get) |
+| LRCLIB-Search | +2 | Fuzzy search (/search), same library as LRCLIB |
+| Genius | +1 | Plain text scrape, unsynced |
+| lyrics.ovh | -2 | Plain text fallback, unsynced |
 
 Matching weights: Duration (40%) + Title (35%) + Artist (25%), threshold >= 50
 Multi-region metadata: Auto-detects Japanese/Korean/Thai/Vietnamese characters, queries corresponding iTunes regional API

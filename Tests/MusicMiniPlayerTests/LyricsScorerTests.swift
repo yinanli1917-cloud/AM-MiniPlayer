@@ -46,15 +46,17 @@ final class LyricsScorerTests: XCTestCase {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     func testSourceBonus_allSources() {
-        XCTAssertEqual(scorer.sourceBonus(for: "AppleMusic"), 12)
-        XCTAssertEqual(scorer.sourceBonus(for: "AMLL"), 10)
-        XCTAssertEqual(scorer.sourceBonus(for: "NetEase"), 8)
-        XCTAssertEqual(scorer.sourceBonus(for: "QQ"), 6)
-        XCTAssertEqual(scorer.sourceBonus(for: "LRCLIB"), 3)
-        XCTAssertEqual(scorer.sourceBonus(for: "LRCLIB-Search"), 2)
-        XCTAssertEqual(scorer.sourceBonus(for: "Genius"), 1)
-        XCTAssertEqual(scorer.sourceBonus(for: "lyrics.ovh"), -2)
-        XCTAssertEqual(scorer.sourceBonus(for: "UnknownSource"), 0)
+        XCTAssertEqual(scorer.sourceBonus(for: .appleMusic), 12)
+        XCTAssertEqual(scorer.sourceBonus(for: .amll), 10)
+        XCTAssertEqual(scorer.sourceBonus(for: .netEase), 8)
+        XCTAssertEqual(scorer.sourceBonus(for: .qq), 6)
+        XCTAssertEqual(scorer.sourceBonus(for: .lrclib), 3)
+        XCTAssertEqual(scorer.sourceBonus(for: .lrclibSearch), 2)
+        XCTAssertEqual(scorer.sourceBonus(for: .genius), 1)
+        XCTAssertEqual(scorer.sourceBonus(for: .lyricsOvh), -2)
+        // The legacy String switch silently scored unknown sources 0; with the
+        // typed registry an unknown string fails the boundary mapping instead.
+        XCTAssertNil(LyricsSource(rawValue: "UnknownSource"))
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -62,14 +64,14 @@ final class LyricsScorerTests: XCTestCase {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     func testCalculateScore_emptyLyrics() {
-        let score = scorer.calculateScore([], source: "AMLL", duration: 240, translationEnabled: false)
+        let score = scorer.calculateScore([], source: .amll, duration: 240, translationEnabled: false)
         XCTAssertEqual(score, 0)
     }
 
     func testCalculateScore_syncedHighQuality() {
         // 有逐字、高质量、时长匹配、来源 AMLL — authentic timestamps
         let lyrics = makeAuthenticLyrics(count: 40, duration: 240, withWords: true)
-        let score = scorer.calculateScore(lyrics, source: "AMLL", duration: 240, translationEnabled: false)
+        let score = scorer.calculateScore(lyrics, source: .amll, duration: 240, translationEnabled: false)
 
         // 逐字30 + 质量~30 + 行数15 + 时长~12 + 覆盖~8 + 真实+15 + AMLL10 ≈ 100
         XCTAssertGreaterThan(score, 80)
@@ -78,7 +80,7 @@ final class LyricsScorerTests: XCTestCase {
     func testCalculateScore_unsyncedLowQuality() {
         // 无逐字、无翻译、来源 lyrics.ovh — fabricated kind tagged at parse time
         let lyrics = makeLyrics(count: 10, duration: 240)
-        let score = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: 240, translationEnabled: false, kind: .unsynced)
+        let score = scorer.calculateScore(lyrics, source: .lyricsOvh, duration: 240, translationEnabled: false, kind: .unsynced)
 
         // Fabricated: duration/coverage gated → 质量30 + 行数5 - 伪造15 + ovh(-2) ≈ 18
         XCTAssertGreaterThan(score, 10)
@@ -91,8 +93,8 @@ final class LyricsScorerTests: XCTestCase {
         let withTrans = makeLyrics(count: 10, duration: 240, withTranslation: true)
         let withoutTrans = makeLyrics(count: 10, duration: 240, withTranslation: false)
 
-        let scoreWith = scorer.calculateScore(withTrans, source: "LRCLIB-Search", duration: 240, translationEnabled: true)
-        let scoreWithout = scorer.calculateScore(withoutTrans, source: "LRCLIB-Search", duration: 240, translationEnabled: true)
+        let scoreWith = scorer.calculateScore(withTrans, source: .lrclibSearch, duration: 240, translationEnabled: true)
+        let scoreWithout = scorer.calculateScore(withoutTrans, source: .lrclibSearch, duration: 240, translationEnabled: true)
 
         // 有翻译应多 15 分
         XCTAssertEqual(scoreWith - scoreWithout, 15, accuracy: 0.1)
@@ -101,8 +103,8 @@ final class LyricsScorerTests: XCTestCase {
     func testCalculateScore_translationDisabled() {
         let lyrics = makeLyrics(count: 20, duration: 240, withTranslation: true)
 
-        let scoreEnabled = scorer.calculateScore(lyrics, source: "NetEase", duration: 240, translationEnabled: true)
-        let scoreDisabled = scorer.calculateScore(lyrics, source: "NetEase", duration: 240, translationEnabled: false)
+        let scoreEnabled = scorer.calculateScore(lyrics, source: .netEase, duration: 240, translationEnabled: true)
+        let scoreDisabled = scorer.calculateScore(lyrics, source: .netEase, duration: 240, translationEnabled: false)
 
         // 关闭翻译时不加分
         XCTAssertGreaterThan(scoreEnabled, scoreDisabled)
@@ -112,8 +114,8 @@ final class LyricsScorerTests: XCTestCase {
         // Authentic timestamps so duration scoring isn't gated
         let lyrics = makeAuthenticLyrics(count: 20, duration: 240)
         // 时长差 20% 以上应被罚分
-        let scoreGoodDuration = scorer.calculateScore(lyrics, source: "LRCLIB", duration: 240, translationEnabled: false)
-        let scoreBadDuration = scorer.calculateScore(lyrics, source: "LRCLIB", duration: 600, translationEnabled: false)
+        let scoreGoodDuration = scorer.calculateScore(lyrics, source: .lrclib, duration: 240, translationEnabled: false)
+        let scoreBadDuration = scorer.calculateScore(lyrics, source: .lrclib, duration: 600, translationEnabled: false)
 
         XCTAssertGreaterThan(scoreGoodDuration, scoreBadDuration)
     }
@@ -121,7 +123,7 @@ final class LyricsScorerTests: XCTestCase {
     func testCalculateScore_cappedAt100() {
         // 所有加分项拉满
         let lyrics = makeLyrics(count: 60, duration: 240, withWords: true, withTranslation: true)
-        let score = scorer.calculateScore(lyrics, source: "AMLL", duration: 240, translationEnabled: true)
+        let score = scorer.calculateScore(lyrics, source: .amll, duration: 240, translationEnabled: true)
 
         XCTAssertLessThanOrEqual(score, 100)
     }
@@ -129,9 +131,9 @@ final class LyricsScorerTests: XCTestCase {
     func testCalculateScore_sourceAffectsScore() {
         let lyrics = makeLyrics(count: 20, duration: 240)
 
-        let scoreAMLL = scorer.calculateScore(lyrics, source: "AMLL", duration: 240, translationEnabled: false)
-        let scoreOVH = scorer.calculateScore(lyrics, source: "lyrics.ovh", duration: 240, translationEnabled: false)
-        let scoreNetEase = scorer.calculateScore(lyrics, source: "NetEase", duration: 240, translationEnabled: false)
+        let scoreAMLL = scorer.calculateScore(lyrics, source: .amll, duration: 240, translationEnabled: false)
+        let scoreOVH = scorer.calculateScore(lyrics, source: .lyricsOvh, duration: 240, translationEnabled: false)
+        let scoreNetEase = scorer.calculateScore(lyrics, source: .netEase, duration: 240, translationEnabled: false)
 
         // 🔑 Duration/coverage now apply uniformly; diff is source bonus only: AMLL(10) - lyrics.ovh(-2) = 12
         XCTAssertEqual(scoreAMLL - scoreOVH, 12, accuracy: 1)
@@ -259,7 +261,7 @@ final class LyricsScorerTests: XCTestCase {
                 endTime: Double(i + 1) * timePerLine
             )
         }
-        let score = scorer.calculateScore(lines, source: "Genius", duration: 378, translationEnabled: false, kind: .unsynced)
+        let score = scorer.calculateScore(lines, source: .genius, duration: 378, translationEnabled: false, kind: .unsynced)
         XCTAssertLessThan(score, 30,
             "Fabricated 4-line English text for 378s song scored \(score), should be < 30")
     }
@@ -276,7 +278,7 @@ final class LyricsScorerTests: XCTestCase {
                 endTime: Double(i + 1) * (duration / Double(lineCount))
             )
         }
-        let score = scorer.calculateScore(lines, source: "lyrics.ovh", duration: duration, translationEnabled: false, kind: .unsynced)
+        let score = scorer.calculateScore(lines, source: .lyricsOvh, duration: duration, translationEnabled: false, kind: .unsynced)
         // Without gating: ~32 (duration +15, coverage +8 are free points from fabrication)
         // With gating: those bonuses should be zeroed → score drops significantly
         XCTAssertLessThan(score, 15,
@@ -320,7 +322,7 @@ final class LyricsScorerTests: XCTestCase {
         let songDuration: TimeInterval = 184
         let wrongDuration: TimeInterval = 4200
         let lines = makeAuthenticLyrics(count: 50, duration: wrongDuration, withWords: true, withTranslation: true)
-        let score = scorer.calculateScore(lines, source: "AMLL", duration: songDuration, translationEnabled: true)
+        let score = scorer.calculateScore(lines, source: .amll, duration: songDuration, translationEnabled: true)
         XCTAssertLessThan(score, 0,
             "50 syllable-synced lines at 23x overshoot scored \(score), must be negative to prevent selection")
     }
@@ -330,7 +332,7 @@ final class LyricsScorerTests: XCTestCase {
         let songDuration: TimeInterval = 240
         let liveVersionDuration: TimeInterval = 276  // 15% longer
         let lines = makeAuthenticLyrics(count: 30, duration: liveVersionDuration, withWords: true)
-        let score = scorer.calculateScore(lines, source: "NetEase", duration: songDuration, translationEnabled: false)
+        let score = scorer.calculateScore(lines, source: .netEase, duration: songDuration, translationEnabled: false)
         XCTAssertGreaterThan(score, 20,
             "30 syllable-synced lines at 15% overshoot scored \(score), should still be viable")
     }
@@ -345,10 +347,10 @@ final class LyricsScorerTests: XCTestCase {
         let songDuration: TimeInterval = 113
         let wrongVersionDuration: TimeInterval = 132  // 17% overshoot
         let wrongLines = makeAuthenticLyrics(count: 43, duration: wrongVersionDuration)
-        let wrongScore = scorer.calculateScore(wrongLines, source: "QQ", duration: songDuration, translationEnabled: false)
+        let wrongScore = scorer.calculateScore(wrongLines, source: .qq, duration: songDuration, translationEnabled: false)
 
         let correctLines = makeAuthenticLyrics(count: 31, duration: songDuration)
-        let correctScore = scorer.calculateScore(correctLines, source: "LRCLIB", duration: songDuration, translationEnabled: false)
+        let correctScore = scorer.calculateScore(correctLines, source: .lrclib, duration: songDuration, translationEnabled: false)
 
         XCTAssertLessThan(wrongScore, correctScore,
             "Wrong version (17% overshoot, QQ score=\(wrongScore)) must lose to correct version (LRCLIB score=\(correctScore))")

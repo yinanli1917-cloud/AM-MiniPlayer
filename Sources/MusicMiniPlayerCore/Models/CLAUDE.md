@@ -6,13 +6,16 @@
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| LyricModels.swift | 106 | 歌词数据结构：LyricWord, LyricLine, CachedLyricsItem, kInstrumentalPatterns |
+| LyricModels.swift | 234 | 歌词数据结构：LyricWord, LyricLine, CachedLyricsItem, kInstrumentalPatterns, vocable/role-marker 检测 |
+| LyricsSourceProfile.swift | 370 | 歌词源类型注册表：LyricsSource (8 个源) + LyricsSourceProfile（trust tier / bonus / admission 阶梯 / mirror group / 风险检查），编译器强制新源声明完整 profile |
+| MusicQueueProvenance.swift | 112 | 播放队列来源模型 |
 
 ## 设计原则
 
-- 纯数据结构，无业务逻辑
+- 纯数据结构 + 声明式规则，无业务流程逻辑
 - 所有类型 `public` 以便跨模块使用
 - 实现 `Identifiable`, `Equatable` 支持 SwiftUI
+- LyricsSource rawValue = 旧版字符串拼写（磁盘缓存行 / verifier JSON / 日志 grep 兼容）；字符串只存在于数据边界，用 `LyricsSource(rawValue:)` 一次性映射，nil 必须显式处理
 
 ---
 

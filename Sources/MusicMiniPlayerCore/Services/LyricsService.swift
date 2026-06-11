@@ -867,7 +867,7 @@ public class LyricsService: ObservableObject {
                         album: album,
                         duration: duration,
                         result: "lyrics",
-                        source: backfilled.source,
+                        source: backfilled.source.rawValue,
                         score: backfilled.score,
                         lineCount: backfilled.lyrics.count
                     )
@@ -980,7 +980,7 @@ public class LyricsService: ObservableObject {
             firstRealLyricIndex: processed.firstRealLyricIndex,
             hasSourceTranslation: hasSourceTranslation,
             isUnsynced: isUnsynced,
-            source: bestResult.source,
+            source: bestResult.source.rawValue,
             score: bestResult.score
         )
         lyricsCache.setObject(cacheItem, forKey: songID as NSString)
@@ -990,7 +990,7 @@ public class LyricsService: ObservableObject {
             artist: artist,
             album: album,
             duration: duration,
-            source: bestResult.source,
+            source: bestResult.source.rawValue,
             score: bestResult.score,
             lineCount: processed.lyrics.count,
             hasSyllableSync: workloadIdentity.hasSyllableSync,
@@ -1786,7 +1786,7 @@ public class LyricsService: ObservableObject {
                     firstRealLyricIndex: processed.firstRealLyricIndex,
                     hasSourceTranslation: hasSourceTranslation,
                     isUnsynced: bestResult.kind == .unsynced,
-                    source: bestResult.source,
+                    source: bestResult.source.rawValue,
                     score: bestResult.score
                 )
                 self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
