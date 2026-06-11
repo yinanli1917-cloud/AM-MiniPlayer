@@ -677,6 +677,7 @@ final class NativeLyricsSurfaceView: NSView {
             visualStates.removeAll()
             interludeBlendStates.removeAll()
             measuredHeightsByIndex.removeAll()
+            lastAppliedYByRowID.removeAll()
             nativeSemanticCurrentIndex = nil
             nativeTimelineState = nil
             pausedSemanticLocked = false
@@ -752,6 +753,7 @@ final class NativeLyricsSurfaceView: NSView {
             rowViews[id] = nil
             rowRenderKeys[id] = nil
             visualParitySignatures[id] = nil
+            lastAppliedYByRowID[id] = nil
             view.prepareForReuse()
             if rowViewReusePool.count < 80 {
                 rowViewReusePool.append(view)
@@ -1203,16 +1205,41 @@ final class NativeLyricsSurfaceView: NSView {
         return interludeBlendStates[rowIndex]?.value(at: now) ?? nextTarget
     }
 
+    /// Largest per-tick position change a row may take in NATURAL mode. Springs peak
+    /// around 25pt/tick on the biggest tap-to-jump scrolls; 60pt/tick (≈3600pt/s) is
+    /// far above any legitimate motion but well below the one-tick teleports produced
+    /// by engine-window/model handoff glitches (observed: 105-230pt for one tick,
+    /// rendering as a misplaced blurred line for a frame). Snap modes are exempt —
+    /// they teleport by design.
+    private static let naturalModeMaxYStepPerTick: CGFloat = 60
+
     private func applyFrame(
         for row: LayerBackedLyricRow,
         view: NativeLyricsRowView,
         configuration: LyricsLayerRendererConfiguration,
         snap: Bool
     ) {
+        let engineState = snap ? nil : presentationEngine.presentation(for: row.index)
         let baseY = snap
             ? snapY(for: row, configuration: configuration)
-            : (presentationEngine.presentation(for: row.index)?.y ?? snapY(for: row, configuration: configuration))
-        let y = baseY + configuration.effectiveManualOffset
+            : (engineState?.y ?? snapY(for: row, configuration: configuration))
+        let requestedY = baseY + configuration.effectiveManualOffset
+        var y = requestedY
+        // Teleport guard: a settled row must never jump a large distance for a single
+        // tick in natural mode, whatever upstream produced the value (engine entry
+        // momentarily missing → snapY fallback, or a configure carrying mid-update
+        // heights). Step toward the new value instead; real springs converge well
+        // under the cap, glitch spikes get absorbed and self-correct next tick.
+        if !snap, let previous = lastAppliedYByRowID[row.id] {
+            let delta = requestedY - previous
+            if abs(delta) > Self.naturalModeMaxYStepPerTick {
+                y = previous + Self.naturalModeMaxYStepPerTick * (delta > 0 ? 1 : -1)
+                #if LOCAL_DEVELOPER_BUILD
+                noteTeleportClamp(rowID: row.id, rowIndex: row.index, requestedY: requestedY, previousY: previous, engineBacked: engineState != nil)
+                #endif
+            }
+        }
+        lastAppliedYByRowID[row.id] = y
         let fallbackTarget = visualTarget(for: row, configuration: configuration, now: CACurrentMediaTime())
         let visual = visualStates[row.index] ?? NativeLyricsVisualMotionState(target: fallbackTarget)
         let height = measuredHeightsByIndex[row.index] ?? max(1, view.frame.height)
@@ -1248,17 +1275,24 @@ final class NativeLyricsSurfaceView: NSView {
             isSettled: visual.isSettled
         ))
         #if LOCAL_DEVELOPER_BUILD
+        // Record the RAW requested y (pre-clamp) so upstream anomalies stay fully
+        // visible in VisualSpike dumps even though the screen shows the clamped value.
         recordVisualTrajectory(
             rowID: row.id,
             rowIndex: row.index,
-            y: y,
+            y: requestedY,
             opacity: visual.opacity,
             blur: appliedBlur,
             scale: visual.scale,
-            snap: snap
+            snap: snap,
+            engineBacked: snap || engineState != nil
         )
         #endif
     }
+
+    /// Last y actually applied per row (release builds too — feeds the teleport guard).
+    /// Pruned on row unmount and cleared on track-identity reset.
+    private var lastAppliedYByRowID: [String: CGFloat] = [:]
 
     private func withDisabledLayerActions(_ body: () -> Void) {
         CATransaction.begin()
@@ -1750,6 +1784,9 @@ final class NativeLyricsSurfaceView: NSView {
         let blur: CGFloat
         let scale: CGFloat
         let snap: Bool
+        /// Whether the y came from the presentation engine (vs the snapY model
+        /// fallback) — distinguishes engine-entry-drop glitches from model skew.
+        let engineBacked: Bool
     }
 
     private func recordVisualTrajectory(
@@ -1759,11 +1796,12 @@ final class NativeLyricsSurfaceView: NSView {
         opacity: CGFloat,
         blur: CGFloat,
         scale: CGFloat,
-        snap: Bool
+        snap: Bool,
+        engineBacked: Bool
     ) {
         let now = CACurrentMediaTime()
         var ring = visualTrajectories[rowID] ?? []
-        ring.append(VisualTrajectorySample(time: now, y: y, opacity: opacity, blur: blur, scale: scale, snap: snap))
+        ring.append(VisualTrajectorySample(time: now, y: y, opacity: opacity, blur: blur, scale: scale, snap: snap, engineBacked: engineBacked))
         if ring.count > 24 { ring.removeFirst(ring.count - 24) }
         visualTrajectories[rowID] = ring
         detectTrajectoryAnomaly(rowID: rowID, rowIndex: rowIndex, ring: ring, now: now)
@@ -1773,6 +1811,14 @@ final class NativeLyricsSurfaceView: NSView {
             lastTrajectoryPrune = now
             visualTrajectories = visualTrajectories.filter { now - ($0.value.last?.time ?? 0) < 5 }
         }
+    }
+
+    private func noteTeleportClamp(rowID: String, rowIndex: Int, requestedY: CGFloat, previousY: CGFloat, engineBacked: Bool) {
+        let now = CACurrentMediaTime()
+        let last = lastTrajectoryDump["clamp:" + rowID] ?? 0
+        guard now - last > 2 else { return }
+        lastTrajectoryDump["clamp:" + rowID] = now
+        DebugLogger.log("TeleportClamp", "row[\(rowIndex)] \(rowID) requested \(Int(previousY))→\(Int(requestedY)) (Δ\(Int(requestedY - previousY))) source=\(engineBacked ? "engine" : "snapY-fallback")")
     }
 
     private func detectTrajectoryAnomaly(rowID: String, rowIndex: Int, ring: [VisualTrajectorySample], now: CFTimeInterval) {
@@ -1817,8 +1863,9 @@ final class NativeLyricsSurfaceView: NSView {
         lastTrajectoryDump[rowID] = now
 
         let trajectory = ring.suffix(8).map {
-            String(format: "(t%+.0fms y%.0f o%.2f b%.1f s%.2f%@)",
-                   ($0.time - now) * 1000, $0.y, $0.opacity, $0.blur, $0.scale, $0.snap ? " S" : "")
+            String(format: "(t%+.0fms y%.0f o%.2f b%.1f s%.2f %@%@)",
+                   ($0.time - now) * 1000, $0.y, $0.opacity, $0.blur, $0.scale,
+                   $0.engineBacked ? "E" : "M", $0.snap ? " S" : "")
         }.joined(separator: " ")
         let ctx = configuration.map {
             "idx=\($0.effectiveCurrentIndex) rows=\($0.rows.count) track='\($0.trackContext.title.prefix(24))'"
