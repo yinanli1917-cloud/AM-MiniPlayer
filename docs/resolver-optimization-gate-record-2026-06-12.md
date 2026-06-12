@@ -194,3 +194,36 @@ Commit: (this commit)
 
 #11 verdict: LANDED — Japanese title matching generalizes from 8 words to the
 language; a whitelist is deleted from production.
+
+## Latency-regression fix A+B — warm-up sweep + single-flight (post-round-2)
+
+Commits: (B then A, this pair)
+
+User-reported regression: waits >3s, "searching more sources" repeatedly.
+Diagnosis from the user's own session log (06:26-06:53): schema double-flush
+left 34 cold resolver waves vs 5 disk hits; resolver fired its full wave TWICE
+per fetch (concurrent Branch-2/Branch-3/backfill consults); hard-miss songs
+re-ran the full sweep on every replay. Immediate mitigation: manual
+`library --recent 60` warm sweep restored 55 localized + 43 CN rows.
+
+- B single-flight: per-entry-point actor coalescing (unstructured shared Task —
+  awaiter cancellation never forwards; dedupe-only, entry dropped on completion
+  so sequential consults re-enter disk replay + live guards). TDD: 6 tests RED
+  (8≠1, 6≠1, 4≠1, cancellation 2≠1) → green.
+- A warm-up sweep: once per schema version (stamped only on completion),
+  utility QoS, sequential 1s spacing, 50-track cap, yields to foreground
+  fetches, metadata-only via the normal entry points. TDD: 6 tests.
+- Suite: 658 tests 0 failures (fresh orchestrator run). Verifier 73/82 and
+  benchmark 87/100 in a visibly degraded provider window: ALL pass flips
+  adjudicated — ES-09/KO-05/PT-06 recover individually (Genius fallback
+  carrying while synced sources flake); FR-03/PT-04/C02/X01/X04 improved;
+  R07 and H21 reproduce BUT fail byte-identically on stashed pre-change code
+  (R07 UNRESOLVED, H21 wrong NetEase row 22L) — today's provider state.
+  Zero A+B-attributable regressions.
+- Real-app (binary 08d8de03): warm-up start line at +1s of launch, 2 queue
+  tracks resolved throttled, "schema v7 stamped" completion; cold-track fetch
+  (SHYNESS BOY/Anri) fired exactly ONE CN wave (was 2) and applied correct
+  lyrics (夏の Partyで声を, 28L synced) in 1s. Playback restored.
+
+A+B verdict: LANDED — duplicate waves gone, schema flushes can never silently
+cold the library again.

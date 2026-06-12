@@ -23,6 +23,7 @@ Sources/
 │   │   ├── MenuBarHealer.swift            - Self-heal macOS 26 ControlCenter plist at launch
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
+│   │   ├── MetadataWarmupSweep.swift      - 启动元数据预热：每 schema 版本一次，后台串行解析队列/最近曲目缺失行（utility QoS + 让位前台抓取 + 可整体取消，仅元数据不抓歌词）
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限) + DrainExitFacts（排水循环退出闭包拆分：纯项每结果只算一次，事件项留在闭包内）
 │   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh)
@@ -30,7 +31,7 @@ Sources/
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale + 写一次记忆化（token/solo/romaji/quality 每结果只算一次；单结果池统一走 solo 裁决备忘录）
 │   │       ├── LyricsParser.swift               - TTML/LRC/YRC parsing
 │   │       ├── LyricsScorer.swift               - Quality scoring
-│   │       └── MetadataResolver.swift           - iTunes multi-region metadata
+│   │       └── MetadataResolver.swift           - iTunes multi-region metadata + 四入口 single-flight 合流（同 key 并发咨询共享一次解析，仅去重不缓存）
 │   ├── UI/
 │   │   ├── MiniPlayerView.swift   - Main player view + page switching
 │   │   ├── LyricsView.swift       - Lyrics display + scrolling + translation
@@ -70,7 +71,7 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 637 个单元测试
+Tests/MusicMiniPlayerTests/         - 649 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── JapaneseReadingTests.swift - 日语读音判定（8 对旧白名单 fixture + 前缀扩展负例 + 长音折叠 + fail-closed + 包含下限）
     ├── MetadataDiskCacheTierTests.swift - 元数据缓存层隔离（CN/多区域互不覆盖）+ CN 证据元组往返 + v6 schema 冲洗 + 防抖合并写
@@ -80,6 +81,8 @@ Tests/MusicMiniPlayerTests/         - 637 个单元测试
     ├── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
     ├── NetworkOutcomeLedgerTests.swift - 网络结果分类表 + 负面裁决配额 + task-local default-allow
     ├── AuthoritativeBackfillBudgetTests.swift - 回填预算算术（9s 哨兵 ≥ 最长链 7.7s）+ 并行别名发现合并顺序 oracle + marker-only 证据窗口
+    ├── ResolverSingleFlightTests.swift - 解析器 single-flight：同 key 并发咨询只执行一次解析体 + 异 key 不合流 + awaiter 取消不杀共享任务
+    ├── MetadataWarmupTests.swift  - 预热扫描：每 schema 版本一次 + 有行即跳过 + 让位前台 + 取消不盖戳（全 seam 注入，零网络）
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix

@@ -86,6 +86,14 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             UpdateService.shared.checkInBackground()
         }
 
+        // ──────────────────────────────────────────────
+        // Metadata warm-up: once per disk-cache schema version, background-
+        // resolve queue/recent tracks whose rows a schema bump flushed.
+        // Utility priority, sequential, yields to foreground fetches; the
+        // sweep itself polls until the queue snapshot populates.
+        // ──────────────────────────────────────────────
+        MetadataWarmupSweep.shared.startIfNeeded()
+
         debugPrint("[AppMain] Setup complete\n")
     }
 
@@ -95,8 +103,11 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         DiagnosticsService.shared.prepareForTermination()
+        // Stop the warm-up sweep BEFORE flushing so no new resolutions
+        // race the final cache write (bundle swap must stay last).
+        MetadataWarmupSweep.shared.cancel()
         // Metadata cache persists on a debounce — force the pending write
-        // out before the process dies (bundle swap must stay last).
+        // out before the process dies.
         MetadataResolver.shared.diskCache.flush()
         UpdateApplier.applyIfStaged()
     }
