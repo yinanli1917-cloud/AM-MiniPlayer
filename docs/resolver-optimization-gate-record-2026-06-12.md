@@ -69,3 +69,38 @@ All five PASS — no flip reproduces; verdict: provider weather, not 8a.
 
 8a verdict: LANDED — identity proven offline (611 tests), zero reproducible
 per-case regression, real-app applied at +2s with selection-line drop visible.
+
+## 8b — exit-closure split (cached vs event-dependent terms)
+
+Commit: (this commit)
+
+- Mechanism: per-result PURE exit terms (syllable-sync presence, lyrics-CJK,
+  romanized-CJK sniff, sane-timeline [duration-keyed], strong/tight alias
+  identity) move into write-once DrainExitFacts on the 8a memo box; scorer
+  romaji/quality verdicts memoized; 1-element selectBestResult pools route
+  through the solo-verdict memo (single chokepoint). Pool composition, elapsed
+  time, and branch-flag boxes stay verbatim event-side. Orchestrator verified
+  the chokepoint invariant independently: zero LyricsFetchResult constructions
+  in LyricsResultSelection.swift — selection only ever returns pool elements.
+- TDD: probe assertions failing pre-split (48 facts computations for 4 results
+  × 12 events → 4; romaji 24 → ≤4; quality 12 → ≤4; warm 1-element selections
+  24 full passes → 0), then green; pinned-value equivalence + duration keying.
+- swift test: 616 (611 + 5 new), agent green; orchestrator chain run showed ONE
+  transient unidentified failure whose detail a summary-only pipe discarded —
+  5 consecutive full-suite re-runs green; all later gate chains capture full
+  output to files so any recurrence is identifiable.
+- Verifier: 77/82 == baseline count, ZERO pass flips vs baseline. Source flips
+  without pass changes (H12 NetEase→QQ, H13 QQ→NetEase): H12 individually
+  rechecked → NetEase 100pts, SHA byte-identical to baseline suite run —
+  provider weather. (Observation, out of scope: `check` mode fails H12's
+  first-line phrase oracle while `run` mode treats it as advisory — same
+  content, different harness verdicts.)
+- Benchmark: 92/100 via clean --json-out (first live use), ZERO pass flips vs
+  baseline run1; vs 8a only X07/BM-PT-06 recovered (the known weather pair).
+- Real-app (binary d5763fa5, relaunch 02:38): cached JP track applied instantly
+  with correct content (泣かないで… 28L); fresh drain fetch (track switch)
+  selection lines = 3 (2 empty-pool + 1 solo) — review target ≤4 per fetch MET
+  (12+ pre-#8 → 7 post-8a → 3 post-8b). Launch refetch of the CN track: 3 lines
+  before backfill. Playback state restored (自寻烦恼 paused @ 141.25).
+
+8b verdict: LANDED — #8 family complete, perf gate satisfied.

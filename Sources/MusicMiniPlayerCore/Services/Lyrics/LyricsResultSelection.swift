@@ -1,6 +1,6 @@
 /**
  * [INPUT]: LyricsFetchResult from LyricsFetcher's parallel pipeline (carries the write-once LyricsSelectionMemo), LyricsSourceProfile declared traits (admission ladders, mirror group, risk checks)
- * [OUTPUT]: selectBestResult — single best lyrics result after quality/identity/timing gates; memoized per-result facts (lyricIdentityTokens(for:), result-pair lyricSimilarity, soloSelectionVerdict) — compute once per result, output-identical to the raw paths
+ * [OUTPUT]: selectBestResult — single best lyrics result after quality/identity/timing gates; 1-element pools route through the solo-verdict memo (single chokepoint); memoized per-result facts (lyricIdentityTokens(for:), result-pair lyricSimilarity, soloSelectionVerdict, scorer romaji/quality verdicts) — compute once per result, output-identical to the raw paths
  * [POS]: Result selection sub-module of LyricsFetcher — quality filtering + scoring + fallback
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
@@ -19,6 +19,14 @@ enum LyricsSelectionMemoProbe {
     static var tokenizationPasses = 0
     /// Full single-result selection verdicts (memo misses).
     static var soloVerdictComputations = 0
+    /// Full selection-body executions (mirrors the 🔬 log line count).
+    static var fullSelectionPasses = 0
+    /// Drain-loop exit-facts computations (memo misses).
+    static var drainFactsComputations = 0
+    /// `scorer.isLikelyRomaji` analyses (memo misses).
+    static var romajiAnalyses = 0
+    /// `scorer.analyzeQuality` analyses (memo misses).
+    static var qualityAnalyses = 0
 }
 #endif
 
@@ -51,11 +59,28 @@ extension LyricsFetcher {
     // MARK: - selectBestResult (core)
 
     /// Select best result with song duration for coverage analysis.
-    /// Coverage = (lastLineEnd - firstLineStart) / songDuration.
+    /// Single-result pools ride the solo-verdict memo (single chokepoint,
+    /// review 8b): a full selection over [r] can only return r or nil —
+    /// every selection path returns an element of its input pool — which is
+    /// exactly the memoized verdict. A composite child's 1-element final
+    /// selection and the drain loop's later re-ask of the same result
+    /// therefore share one computation instead of running two.
+    public func selectBestResult(from results: [LyricsFetchResult], songDuration: TimeInterval) -> LyricsFetchResult? {
+        if results.count == 1, let only = results.first {
+            return soloSelectionVerdict(for: only, songDuration: songDuration) ? only : nil
+        }
+        return selectBestResultUnmemoized(from: results, songDuration: songDuration)
+    }
+
+    /// The full selection body — quality/identity/timing gates over the
+    /// whole pool. Coverage = (lastLineEnd - firstLineStart) / songDuration.
     /// When an album-matched source has drastically lower coverage than a
     /// non-matched one, its content is likely mistimed (same recording
     /// tagged under different albums → metadata match, not timing match).
-    public func selectBestResult(from results: [LyricsFetchResult], songDuration: TimeInterval) -> LyricsFetchResult? {
+    private func selectBestResultUnmemoized(from results: [LyricsFetchResult], songDuration: TimeInterval) -> LyricsFetchResult? {
+        #if DEBUG
+        LyricsSelectionMemoProbe.fullSelectionPasses += 1
+        #endif
         // 🔑 Reject unsynced-only low-score results.
         // Unsynced lyrics (lyrics.ovh plain text, Genius HTML) don't support
         // auto-scroll or tap-to-jump in the UI — LyricsService.updateCurrentTime
@@ -212,7 +237,7 @@ extension LyricsFetcher {
         #if DEBUG
         LyricsSelectionMemoProbe.soloVerdictComputations += 1
         #endif
-        let isSelectable = selectBestResult(from: [result], songDuration: songDuration) != nil
+        let isSelectable = selectBestResultUnmemoized(from: [result], songDuration: songDuration) != nil
         result.selectionMemo.soloVerdict = (songDuration, isSelectable)
         return isSelectable
     }
@@ -631,18 +656,44 @@ extension LyricsFetcher {
             || result.nativeAliasMatched
     }
 
+    // MARK: - Memoized Scorer Facts (per-result, pure)
+
+    /// Memoized `scorer.isLikelyRomaji` — pure unicode-scalar analysis of
+    /// the immutable lyric lines, computed once per result instance, ever.
+    private func isLikelyRomajiResult(_ result: LyricsFetchResult) -> Bool {
+        if let cached = result.selectionMemo.isLikelyRomaji { return cached }
+        #if DEBUG
+        LyricsSelectionMemoProbe.romajiAnalyses += 1
+        #endif
+        let value = scorer.isLikelyRomaji(result.lyrics)
+        result.selectionMemo.isLikelyRomaji = value
+        return value
+    }
+
+    /// Memoized `scorer.analyzeQuality(...).isValid` — text/timing analysis
+    /// of the immutable lyric lines; selection only ever consumes the Bool.
+    private func hasValidQualityAnalysis(_ result: LyricsFetchResult) -> Bool {
+        if let cached = result.selectionMemo.qualityIsValid { return cached }
+        #if DEBUG
+        LyricsSelectionMemoProbe.qualityAnalyses += 1
+        #endif
+        let value = scorer.analyzeQuality(result.lyrics).isValid
+        result.selectionMemo.qualityIsValid = value
+        return value
+    }
+
     // MARK: - selectReliable (CJK vs romaji + album preference)
 
     func selectReliable(_ reliable: [LyricsFetchResult], songDuration: TimeInterval = 0) -> LyricsFetchResult? {
         guard !reliable.isEmpty else { return nil }
 
         // Partition into CJK and romaji results
-        let cjk = reliable.filter { !scorer.isLikelyRomaji($0.lyrics) }
-        let romaji = reliable.filter { scorer.isLikelyRomaji($0.lyrics) }
+        let cjk = reliable.filter { !isLikelyRomajiResult($0) }
+        let romaji = reliable.filter { isLikelyRomajiResult($0) }
 
         // 🔑 Album match is the strongest cross-source version signal.
         func pickWithAlbumPreference(_ pool: [LyricsFetchResult]) -> LyricsFetchResult? {
-            let valid = pool.filter { scorer.analyzeQuality($0.lyrics).isValid }
+            let valid = pool.filter { hasValidQualityAnalysis($0) }
             let workingPool = valid.isEmpty ? pool : valid
             guard let top = workingPool.first else { return nil }
 

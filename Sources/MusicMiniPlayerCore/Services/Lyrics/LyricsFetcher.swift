@@ -1,6 +1,6 @@
 /**
  * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils, LyricsSourceProfile (typed source registry)
- * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource; every result carries a write-once LyricsSelectionMemo (identity tokens + solo verdict computed once per result, reused across drain-loop events)
+ * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource; every result carries a write-once LyricsSelectionMemo (identity tokens + solo verdict + DrainExitFacts computed once per result, reused across drain-loop events — the exit closures keep only pool composition, elapsed time and branch flags event-side)
  * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
  * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound; the authoritative backfill is hard-bounded by AuthoritativeBackfillBudget (every child via addBoundedSourceTask, 9s overall sentinel, witness = 3s parallel discovery + 6s probe) and marker-only foreground sets take the empty fast exit with unclamped evidence windows (review #6+#7)
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
@@ -77,6 +77,35 @@ public final class LyricsFetcher {
         var identityTokens: Set<String>?
         /// Memoized solo verdict, keyed by the duration it was computed for.
         var soloVerdict: (songDuration: TimeInterval, isSelectable: Bool)?
+        /// Memoized drain-loop exit facts, keyed by the duration they were
+        /// computed for (only `hasSaneTimeline` depends on it).
+        var drainFacts: (songDuration: TimeInterval, facts: DrainExitFacts)?
+        /// Memoized `scorer.isLikelyRomaji(lyrics)`.
+        var isLikelyRomaji: Bool?
+        /// Memoized `scorer.analyzeQuality(lyrics).isValid`.
+        var qualityIsValid: Bool?
+    }
+
+    // ┌──────────────────────────────────────────────────────────────────────┐
+    // │ DrainExitFacts — the per-result PURE half of the drain loop's exit  │
+    // │ decisions (review 8b). Every field is a function of the immutable   │
+    // │ result plus the fetch-constant song duration; event state (pool     │
+    // │ composition, elapsed time, branch-flag boxes) never enters here and │
+    // │ stays inline in the drain-loop closures.                            │
+    // └──────────────────────────────────────────────────────────────────────┘
+    struct DrainExitFacts: Equatable {
+        /// `lyrics.contains { $0.hasSyllableSync }`
+        let hasSyllableSyncedLine: Bool
+        /// `lyrics.contains { LanguageUtils.containsCJK($0.text) }`
+        let lyricsContainCJK: Bool
+        /// `isLikelyRomanizedCJKLyrics(lyrics, source:)`
+        let isLikelyRomanizedCJK: Bool
+        /// `hasSaneForegroundTimeline(lyrics, duration:)` — duration-keyed.
+        let hasSaneTimeline: Bool
+        /// `selectedHasStrongNativeAliasIdentity(result)`
+        let strongNativeAliasIdentity: Bool
+        /// `selectedHasTightCatalogAliasIdentity(result)`
+        let tightCatalogAliasIdentity: Bool
     }
 
     /// Lyrics search result.
@@ -1038,6 +1067,13 @@ public final class LyricsFetcher {
             // 🔑 When the caller provides an album hint, high-score results
             // from entries WITHOUT album match no longer trigger early return.
             let hasAlbumHint = !alb.isEmpty
+            // Review 8b exit-closure split: per-result PURE terms live in the
+            // write-once DrainExitFacts memo (computed once per result, at
+            // arrival); fetch-constant input facts are hoisted here. Pool
+            // composition, elapsed time and branch-flag boxes are the only
+            // terms that stay inline in the per-event closures below.
+            let inputTitleHasCJK = LanguageUtils.containsCJK(ot)
+            let inputArtistHasCJK = LanguageUtils.containsCJK(oa)
             for await result in group {
                 let elapsed = Date().timeIntervalSince(fetchStart)
                 if Task.isCancelled {
@@ -1048,17 +1084,18 @@ public final class LyricsFetcher {
                 if let r = result {
                     results.append(r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
+                    let rFacts = self.drainExitFacts(for: r, songDuration: d)
                     let isLineTimedCJKNativeProviderResult = shouldProtectNativeProviderRace
                         && r.source.profile.isCJKNativeProvider
                         && r.kind == .synced
-                        && !r.lyrics.contains(where: { $0.hasSyllableSync })
+                        && !rFacts.hasSyllableSyncedLine
 
                     let hasStrongCatalogEvidence = r.albumMatched
                         || (r.matchedDurationDiff.map { $0 < 1.0 } ?? false)
                         || (r.titleMatched && (r.matchedDurationDiff.map { $0 < 1.5 } ?? false))
                         || (r.nativeAliasMatched && (r.matchedDurationDiff.map { $0 < 1.5 } ?? false))
-                        || self.selectedHasStrongNativeAliasIdentity(r)
-                        || self.selectedHasTightCatalogAliasIdentity(r)
+                        || rFacts.strongNativeAliasIdentity
+                        || rFacts.tightCatalogAliasIdentity
                     let hasAlbumExactSyncedResult = r.kind == .synced
                         && r.albumMatched
                         && r.titleMatched
@@ -1110,7 +1147,7 @@ public final class LyricsFetcher {
                         group.cancelAll()
                         break
                     }
-                    if self.selectedHasTightCatalogAliasIdentity(r),
+                    if rFacts.tightCatalogAliasIdentity,
                        r.source.profile.canTriggerEarlyReturn,
                        !isLineTimedCJKNativeProviderResult {
                         DebugLogger.log("⚡ Early return: \(r.source) tight catalog-alias score=\(String(format: "%.1f", r.score))")
@@ -1182,24 +1219,25 @@ public final class LyricsFetcher {
                     continue
                 }
                 let hasFastExitSyncedResult = results.contains {
+                    let facts = self.drainExitFacts(for: $0, songDuration: d)
                     let lineTimedCJKNativeProvider = shouldProtectNativeProviderRace
                         && $0.source.profile.isCJKNativeProvider
                         && $0.kind == .synced
-                        && !$0.lyrics.contains(where: { $0.hasSyllableSync })
+                        && !facts.hasSyllableSyncedLine
                     let looseNativeAlias = $0.nativeAliasMatched
                         && !$0.titleMatched
                         && !$0.albumMatched
-                        && !self.selectedHasStrongNativeAliasIdentity($0)
-                    let lrclibCanFastExit = !LanguageUtils.containsCJK(ot)
-                        && !LanguageUtils.containsCJK(oa)
-                        && !$0.lyrics.contains(where: { LanguageUtils.containsCJK($0.text) })
-                        && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)
+                        && !facts.strongNativeAliasIdentity
+                    let lrclibCanFastExit = !inputTitleHasCJK
+                        && !inputArtistHasCJK
+                        && !facts.lyricsContainCJK
+                        && !facts.isLikelyRomanizedCJK
                     let exactLibraryCanFastExit = self.isLibraryFallbackSource($0.source)
                         && $0.titleMatched
                         && !$0.nativeAliasMatched
                         && ($0.matchedDurationDiff.map { $0 < 1.0 } ?? false)
                         && $0.score >= 50
-                        && self.hasSaneForegroundTimeline($0.lyrics, duration: d)
+                        && facts.hasSaneTimeline
                     let nativeProviderStillPendingForLibraryFastExit =
                         shouldProtectNativeProviderRace
                         && (!netEaseProviderLanded.value || !qqProviderLanded.value)
@@ -1217,7 +1255,7 @@ public final class LyricsFetcher {
                             exactLibraryCanFastExit
                             || (lrclibCanFastExit && $0.source.profile.isLibraryFallback && $0.score >= 50)
                         )
-                    let tightCatalogAliasCanFastExit = self.selectedHasTightCatalogAliasIdentity($0)
+                    let tightCatalogAliasCanFastExit = facts.tightCatalogAliasIdentity
                     return $0.kind == .synced
                         && !lineTimedCJKNativeProvider
                         && !looseNativeAlias
@@ -1231,12 +1269,12 @@ public final class LyricsFetcher {
                         )
                 }
                 let hasTrustedExactSyncedResult = results.contains {
-                    let tightCatalogAlias = self.selectedHasTightCatalogAliasIdentity($0)
+                    let facts = self.drainExitFacts(for: $0, songDuration: d)
                     guard $0.kind == .synced,
                           $0.titleMatched,
                           ($0.matchedDurationDiff.map { $0 < 1.5 } ?? false),
-                          ($0.score >= 40 || tightCatalogAlias),
-                          !($0.nativeAliasMatched && !self.selectedHasStrongNativeAliasIdentity($0) && !tightCatalogAlias) else {
+                          ($0.score >= 40 || facts.tightCatalogAliasIdentity),
+                          !($0.nativeAliasMatched && !facts.strongNativeAliasIdentity && !facts.tightCatalogAliasIdentity) else {
                         return false
                     }
                     return self.soloSelectionVerdict(for: $0, songDuration: d)
@@ -1256,20 +1294,22 @@ public final class LyricsFetcher {
                     && !shouldProtectNativeProviderRace
                     && !shouldProtectAsciiNativeAlias
                 let hasOnlyLooseNativeAliasSyncedResults = hasAnySyncedResult && results.allSatisfy {
-                    $0.kind != .synced || (
+                    let facts = self.drainExitFacts(for: $0, songDuration: d)
+                    return $0.kind != .synced || (
                         $0.nativeAliasMatched
                         && !$0.titleMatched
                         && !$0.albumMatched
-                        && !self.selectedHasStrongNativeAliasIdentity($0)
-                        && !self.selectedHasTightCatalogAliasIdentity($0)
+                        && !facts.strongNativeAliasIdentity
+                        && !facts.tightCatalogAliasIdentity
                     )
                 }
                 let hasAnyPotentiallyUsableSyncedResult = results.contains {
-                    $0.kind == .synced && (
+                    let facts = self.drainExitFacts(for: $0, songDuration: d)
+                    return $0.kind == .synced && (
                         $0.score >= 18 ||
-                        ($0.source == .lrclib && $0.score >= 45 && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)) ||
-                        ($0.source == .lrclibSearch && $0.score >= 50 && !self.isLikelyRomanizedCJKLyrics($0.lyrics, source: $0.source)) ||
-                        $0.lyrics.contains { $0.hasSyllableSync }
+                        ($0.source == .lrclib && $0.score >= 45 && !facts.isLikelyRomanizedCJK) ||
+                        ($0.source == .lrclibSearch && $0.score >= 50 && !facts.isLikelyRomanizedCJK) ||
+                        facts.hasSyllableSyncedLine
                     )
                 }
                 let branch3NeedsLandingWindow = branch3Fired.value
@@ -1309,15 +1349,16 @@ public final class LyricsFetcher {
                     continue
                 }
                 let hasHighConfidenceResult = results.contains {
+                    let facts = self.drainExitFacts(for: $0, songDuration: d)
                     let lineTimedCJKNativeProvider = shouldProtectNativeProviderRace
                         && $0.source.profile.isCJKNativeProvider
                         && $0.kind == .synced
-                        && !$0.lyrics.contains(where: { $0.hasSyllableSync })
+                        && !facts.hasSyllableSyncedLine
                     return $0.kind == .synced
                         && !lineTimedCJKNativeProvider
                         && $0.score >= 60
                         && $0.source.profile.canTriggerEarlyReturn
-                        && ($0.titleMatched || self.selectedHasStrongNativeAliasIdentity($0))
+                        && ($0.titleMatched || facts.strongNativeAliasIdentity)
                 }
                 if hasOnlyLooseNativeAliasSyncedResults && (branch2Fired.value || albumScopedBranchFired.value) && elapsed < 3.5 {
                     continue
@@ -2904,6 +2945,31 @@ public final class LyricsFetcher {
         guard tokens.count >= 12 else { return false }
         let hits = tokens.filter { romanizedSyllables.contains($0) }.count
         return Double(hits) / Double(tokens.count) >= 0.45
+    }
+
+    /// Per-result exit facts for the drain loop, through the write-once
+    /// memo: computed at most once per result per duration, then reused by
+    /// every exit-decision closure on every loop event (review 8b).
+    /// Concurrency: written only on the drain-loop task — a result reaches
+    /// it through group completion (happens-before), then every touch is a
+    /// serial `for await` iteration. Same total order as the 8a fields.
+    func drainExitFacts(for result: LyricsFetchResult, songDuration: TimeInterval) -> DrainExitFacts {
+        if let memo = result.selectionMemo.drainFacts, memo.songDuration == songDuration {
+            return memo.facts
+        }
+        #if DEBUG
+        LyricsSelectionMemoProbe.drainFactsComputations += 1
+        #endif
+        let facts = DrainExitFacts(
+            hasSyllableSyncedLine: result.lyrics.contains { $0.hasSyllableSync },
+            lyricsContainCJK: result.lyrics.contains { LanguageUtils.containsCJK($0.text) },
+            isLikelyRomanizedCJK: isLikelyRomanizedCJKLyrics(result.lyrics, source: result.source),
+            hasSaneTimeline: hasSaneForegroundTimeline(result.lyrics, duration: songDuration),
+            strongNativeAliasIdentity: selectedHasStrongNativeAliasIdentity(result),
+            tightCatalogAliasIdentity: selectedHasTightCatalogAliasIdentity(result)
+        )
+        result.selectionMemo.drainFacts = (songDuration, facts)
+        return facts
     }
 
     private func withHardTimeout<T: Sendable>(
