@@ -3,12 +3,56 @@
  * [OUTPUT]: resolveSearchMetadata/fetchChineseMetadata/fetchLocalizedMetadata/fetchMetadataFromRegion
  * [POS]: Lyrics 的元信息子模块，负责 MusicKit 全球目录元信息获取；
  *        CN 与多区域两层各自持久化到磁盘缓存的独立字典（tier-separated），
- *        回放行必须重过 matchCNResult/对应校验门（postmortem 006）
+ *        回放行必须重过 matchCNResult/对应校验门（postmortem 006）；
+ *        四个公开入口各有 single-flight 合流层（同 key 并发咨询共享一次解析，
+ *        仅去重不缓存；awaiter 取消不传播给共享任务）
  * [PROTOCOL]: 变更时更新此头部，然后检查 Services/Lyrics/CLAUDE.md
  */
 
 import Foundation
 import MusicKit
+
+#if DEBUG
+// ============================================================
+// MARK: - Resolve Probe (DEBUG only — compiled out of release)
+// ============================================================
+
+/// Test-visible execution counters for the resolver entry-point bodies.
+/// Single-flight coalescing must make N concurrent same-key consults run
+/// the underlying resolution body exactly ONCE — these counters prove it.
+///
+/// Counters are lock-guarded: pre-coalescing, concurrent bodies increment
+/// from racing tasks, and a torn read-modify-write could hide a duplicate
+/// execution from the failing-first assertion.
+enum MetadataResolveProbe {
+    private static let lock = NSLock()
+    private static var counts: [String: Int] = [:]
+
+    /// Optional async gate awaited at body entry (AFTER counting). Tests
+    /// hold it open so an in-flight resolution stays in flight while more
+    /// callers pile onto the same key — deterministic coalescing windows.
+    static var entryGate: (@Sendable () async -> Void)?
+
+    static func note(_ body: String) {
+        lock.lock()
+        counts[body, default: 0] += 1
+        lock.unlock()
+    }
+
+    static func count(_ body: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts[body] ?? 0
+    }
+
+    static func reset() {
+        lock.lock()
+        counts = [:]
+        lock.unlock()
+        entryGate = nil
+    }
+}
+#endif
 
 // ============================================================
 // MARK: - 元信息解析器
@@ -19,13 +63,17 @@ public final class MetadataResolver {
 
     public static let shared = MetadataResolver()
 
-    private init() {}
-
     /// Disk-backed metadata cache. Shared across instances.
     /// Persists resolved metadata (localized + CN tiers, disjoint stores)
     /// so warm cold starts (second play of a known song) skip iTunes
     /// entirely — each tier replays only rows it produced.
-    public let diskCache = MetadataDiskCache(fileURL: MetadataDiskCache.defaultURL())
+    public let diskCache: MetadataDiskCache
+
+    /// Internal seam: tests construct an isolated resolver against a temp
+    /// cache file. Production always goes through `shared` (defaultURL).
+    init(diskCache: MetadataDiskCache = MetadataDiskCache(fileURL: MetadataDiskCache.defaultURL())) {
+        self.diskCache = diskCache
+    }
 
     // ────────────────────────────────────────────────────────────────
     // MARK: - Per-region Resolution Cache (in-process)
@@ -66,6 +114,60 @@ public final class MetadataResolver {
     }
     private let regionResolveCache = RegionResolveCache()
 
+    // ────────────────────────────────────────────────────────────────
+    // MARK: - Single-Flight Coalescing (in front of every entry point)
+    // ────────────────────────────────────────────────────────────────
+    //
+    // The fetch pipeline consults the resolver from several concurrent
+    // branches (foreground Branch-2/Branch-3 and the authoritative
+    // backfill composites). Before coalescing, two consults landing in
+    // the same second each fired the FULL network wave — duplicate
+    // `🇨🇳 CN 搜索开始` / region-search lines in the Live log. Each
+    // public entry point now shares ONE in-flight resolution per
+    // normalized key (entry point + title + artist + rounded duration).
+    //
+    // Dedupe-only, unlike RegionResolveCache: the entry is dropped on
+    // completion, so a later sequential consult re-enters the normal
+    // body (disk replay + live guards) — never a stale in-memory value.
+    private actor SingleFlight<Value> {
+        private var inflight: [String: Task<Value, Never>] = [:]
+
+        /// Returns the in-flight task for `key`, creating it via `build`
+        /// when absent. The shared task is UNSTRUCTURED on purpose: an
+        /// awaiting caller's cancellation must never cancel the resolution
+        /// other awaiters depend on (awaiting `value` on a never-failing
+        /// unstructured task does not forward cancellation), and a
+        /// zero-awaiter completion still warms the disk cache.
+        func taskFor(_ key: String, build: @Sendable @escaping () async -> Value) -> Task<Value, Never> {
+            if let existing = inflight[key] { return existing }
+            let task = Task<Value, Never> { [weak self] in
+                let value = await build()
+                if let self { await self.finish(key) }
+                return value
+            }
+            inflight[key] = task
+            return task
+        }
+
+        private func finish(_ key: String) {
+            inflight.removeValue(forKey: key)
+        }
+    }
+
+    // One store per entry point — the tier is part of the key by construction.
+    private let searchSingleFlight = SingleFlight<(title: String, artist: String)>()
+    private let chineseSingleFlight = SingleFlight<(title: String, artist: String, durationDiff: Double)?>()
+    private let localizedSingleFlight = SingleFlight<(title: String, artist: String, region: String, durationDiff: Double)?>()
+    private let albumScopedSingleFlight = SingleFlight<(title: String, artist: String, album: String, region: String, durationDiff: Double)?>()
+
+    /// Normalized coalescing key — same idiom as the region cache key.
+    private static func singleFlightKey(
+        _ title: String, _ artist: String, _ duration: TimeInterval, album: String = ""
+    ) -> String {
+        let base = "\(title.lowercased())|\(artist.lowercased())|\(Int(duration))"
+        return album.isEmpty ? base : "\(base)|\(album.lowercased())"
+    }
+
     // MARK: - 统一解析
 
     /// 获取统一的搜索元信息（优先本地化）
@@ -79,6 +181,24 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String) {
+        let key = Self.singleFlightKey(title, artist, duration)
+        let task = await searchSingleFlight.taskFor(key) { [weak self] in
+            guard let self else { return (title, artist) }
+            return await self.resolveSearchMetadataUncoalesced(title: title, artist: artist, duration: duration)
+        }
+        return await task.value
+    }
+
+    /// Uncoalesced impl — see the public wrapper for the single-flight layer.
+    private func resolveSearchMetadataUncoalesced(
+        title: String,
+        artist: String,
+        duration: TimeInterval
+    ) async -> (title: String, artist: String) {
+        #if DEBUG
+        MetadataResolveProbe.note("search")
+        if let gate = MetadataResolveProbe.entryGate { await gate() }
+        #endif
         // 🔑 双标题拆分：Apple Music 格式 "English Title / Romanized Title"
         // 先用完整标题尝试，失败则逐半尝试（后半优先：通常是原语言罗马字）
         let result = await resolveTitle(title: title, artist: artist, duration: duration)
@@ -135,6 +255,27 @@ public final class MetadataResolver {
         duration: TimeInterval,
         album: String
     ) async -> (title: String, artist: String, album: String, region: String, durationDiff: Double)? {
+        let key = Self.singleFlightKey(title, artist, duration, album: album)
+        let task = await albumScopedSingleFlight.taskFor(key) { [weak self] in
+            guard let self else { return nil }
+            return await self.resolveAlbumScopedMetadataUncoalesced(
+                title: title, artist: artist, duration: duration, album: album
+            )
+        }
+        return await task.value
+    }
+
+    /// Uncoalesced impl — see the public wrapper for the single-flight layer.
+    private func resolveAlbumScopedMetadataUncoalesced(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String
+    ) async -> (title: String, artist: String, album: String, region: String, durationDiff: Double)? {
+        #if DEBUG
+        MetadataResolveProbe.note("albumScoped")
+        if let gate = MetadataResolveProbe.entryGate { await gate() }
+        #endif
         let cleanAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanAlbum.isEmpty else { return nil }
         guard LanguageUtils.isPureASCII(title) || LanguageUtils.isPureASCII(cleanAlbum) else { return nil }
@@ -434,6 +575,24 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String, durationDiff: Double)? {
+        let key = Self.singleFlightKey(title, artist, duration)
+        let task = await chineseSingleFlight.taskFor(key) { [weak self] in
+            guard let self else { return nil }
+            return await self.fetchChineseMetadataUncoalesced(title: title, artist: artist, duration: duration)
+        }
+        return await task.value
+    }
+
+    /// Uncoalesced impl — see the public wrapper for the single-flight layer.
+    private func fetchChineseMetadataUncoalesced(
+        title: String,
+        artist: String,
+        duration: TimeInterval
+    ) async -> (title: String, artist: String, durationDiff: Double)? {
+        #if DEBUG
+        MetadataResolveProbe.note("chinese")
+        if let gate = MetadataResolveProbe.entryGate { await gate() }
+        #endif
         let inputArtistLower = artist.lowercased()
         let inputTitleLower = title.lowercased()
         let cleanedInputTitle = cleanTrackTitle(inputTitleLower)
@@ -701,6 +860,24 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String, region: String, durationDiff: Double)? {
+        let key = Self.singleFlightKey(title, artist, duration)
+        let task = await localizedSingleFlight.taskFor(key) { [weak self] in
+            guard let self else { return nil }
+            return await self.fetchLocalizedMetadataUncoalesced(title: title, artist: artist, duration: duration)
+        }
+        return await task.value
+    }
+
+    /// Uncoalesced impl — see the public wrapper for the single-flight layer.
+    private func fetchLocalizedMetadataUncoalesced(
+        title: String,
+        artist: String,
+        duration: TimeInterval
+    ) async -> (title: String, artist: String, region: String, durationDiff: Double)? {
+        #if DEBUG
+        MetadataResolveProbe.note("localized")
+        if let gate = MetadataResolveProbe.entryGate { await gate() }
+        #endif
         // Disk cache hit — skip iTunes entirely on warm cold starts.
         // Cached claims must carry the evidence that admitted them: replay
         // returns the REAL stored durationDiff so the postmortem-006 guard
