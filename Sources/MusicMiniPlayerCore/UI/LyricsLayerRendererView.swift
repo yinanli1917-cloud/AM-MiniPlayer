@@ -1857,12 +1857,28 @@ final class NativeLyricsSurfaceView: NSView {
                 break
             }
         }
+        // Opacity revert (the past-line brighten glitch): a line that ENDS dim (< 0.55)
+        // but bumps UP by > 0.12 somewhere mid-window and falls back. The 0.5 flash
+        // threshold above misses it, and the wobble plays out over ~8-12 ticks (wider
+        // than the 4-sample window), so scan a longer window. Generic — fires for any
+        // dimming line whose brightness reverses, whatever drives it upstream.
+        let revertWindow = Array(ring.suffix(12))
+        if revertWindow.count >= 5,
+           let endO = revertWindow.last?.opacity, endO < 0.55,
+           let startO = revertWindow.first?.opacity,
+           let peakIdx = revertWindow.indices.max(by: { revertWindow[$0].opacity < revertWindow[$1].opacity }) {
+            let peak = revertWindow[peakIdx].opacity
+            if peakIdx != 0, peakIdx != revertWindow.count - 1,
+               peak > startO + 0.12, peak > endO + 0.12 {
+                reasons.append("opacityRevert \(String(format: "%.2f↑%.2f↓%.2f", startO, peak, endO))")
+            }
+        }
         guard !reasons.isEmpty else { return }
         let lastDump = lastTrajectoryDump[rowID] ?? 0
         guard now - lastDump > 2 else { return }
         lastTrajectoryDump[rowID] = now
 
-        let trajectory = ring.suffix(8).map {
+        let trajectory = ring.suffix(14).map {
             String(format: "(t%+.0fms y%.0f o%.2f b%.1f s%.2f %@%@)",
                    ($0.time - now) * 1000, $0.y, $0.opacity, $0.blur, $0.scale,
                    $0.engineBacked ? "E" : "M", $0.snap ? " S" : "")

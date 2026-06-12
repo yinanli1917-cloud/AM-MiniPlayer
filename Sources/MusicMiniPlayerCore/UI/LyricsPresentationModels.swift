@@ -346,7 +346,8 @@ struct NativeLyricsVisualMotionState: Equatable {
                 target: target.opacity,
                 velocity: &opacityVelocity,
                 step: step,
-                spring: spring
+                spring: spring,
+                monotonic: true
             )
             scale = Self.advanceScalar(
                 value: scale,
@@ -378,13 +379,25 @@ struct NativeLyricsVisualMotionState: Equatable {
         target: CGFloat,
         velocity: inout CGFloat,
         step: CGFloat,
-        spring: LyricsPresentationSpringParameters
+        spring: LyricsPresentationSpringParameters,
+        monotonic: Bool = false
     ) -> CGFloat {
         let displacement = value - target
         let force = (-spring.stiffness * displacement) - (spring.damping * velocity)
         let acceleration = force / spring.mass
         velocity += acceleration * step
-        return value + velocity * step
+        let next = value + velocity * step
+        // Brightness must never overshoot. The visual spring is underdamped (it is shared
+        // with line position so the depth-of-field stays locked to the scroll), so a
+        // demotion lets opacity dip BELOW its dim target and rebound back up — a brightness
+        // direction-reversal that reads as a just-dimmed line "reverting to bright". For a
+        // monotonic channel, snap to target the instant the step would cross it: the
+        // approach stays smooth, but it never overshoots or rebounds.
+        if monotonic, displacement != 0, (next - target) * displacement < 0 {
+            velocity = 0
+            return target
+        }
+        return next
     }
 }
 
