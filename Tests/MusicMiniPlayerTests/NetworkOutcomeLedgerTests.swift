@@ -1,4 +1,5 @@
 import XCTest
+import MusicKit
 @testable import MusicMiniPlayerCore
 
 /// "No lyrics exist" and "the internet is down" must never be confused
@@ -81,6 +82,27 @@ final class NetworkOutcomeLedgerTests: XCTestCase {
             NetworkOutcomeLedger.classify(failure: NSError(domain: "test", code: 1)),
             .indeterminate
         )
+    }
+
+    /// Provider-CONFIG failures (latency-regression item D verification pin).
+    /// MusicKit token errors never route through the ledger at all — the only
+    /// recording sites are HTTPClient's two URLSession choke points, and
+    /// MusicKit owns its own transport. But even if a future refactor ever
+    /// forwarded them, a missing-entitlement config failure proves nothing
+    /// about the network: it must classify as indeterminate, never count as
+    /// a transport death (which would block the negative-verdict quorum),
+    /// and never fake a "network unreachable" verdict.
+    func testMusicKitTokenConfigFailureIsIndeterminate() {
+        XCTAssertEqual(
+            NetworkOutcomeLedger.classify(failure: MusicTokenRequestError.developerTokenRequestFailed),
+            .indeterminate
+        )
+
+        let ledger = NetworkOutcomeLedger()
+        ledger.record(failure: MusicTokenRequestError.developerTokenRequestFailed)
+        XCTAssertEqual(ledger.transportFailures, 0)
+        XCTAssertFalse(ledger.hadTransportFailures, "config failure must not block the quorum")
+        XCTAssertFalse(ledger.indicatesNetworkUnreachable)
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
