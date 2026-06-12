@@ -27,7 +27,7 @@ Sources/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限)
 │   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh)
 │   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias
-│   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale
+│   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale + 写一次记忆化（token/solo 裁决每结果只算一次）
 │   │       ├── LyricsParser.swift               - TTML/LRC/YRC parsing
 │   │       ├── LyricsScorer.swift               - Quality scoring
 │   │       └── MetadataResolver.swift           - iTunes multi-region metadata
@@ -70,8 +70,9 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 606 个单元测试
+Tests/MusicMiniPlayerTests/         - 611 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
+    ├── LyricsSelectionMemoizationTests.swift - 选择记忆化：token/solo 各算一次 + 排水循环 vs 单次等值 + duration 键安全
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     ├── LyricsSourceProfileTests.swift - 类型化源注册表 oracle 等值测试（旧硬编码阶梯字面量）
     ├── MatchingUtilsTests.swift   - 匹配评分 + 权重验证

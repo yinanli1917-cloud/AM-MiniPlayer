@@ -1,6 +1,6 @@
 /**
  * [INPUT]: LyricsParser, LyricsScorer, MetadataResolver, HTTPClient, LanguageUtils, LyricsSourceProfile (typed source registry)
- * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource
+ * [OUTPUT]: fetchAllSources parallel source requests with direct-title and native-alias identity evidence kept separate; LyricsFetchResult.source is typed LyricsSource; every result carries a write-once LyricsSelectionMemo (identity tokens + solo verdict computed once per result, reused across drain-loop events)
  * [POS]: Lyrics fetch sub-module; owns HTTP requests and result aggregation for all lyric sources
  * [NOTE]: NetEase/QQ share the searchAndSelectCandidate template and generic buildCandidates flow; album hints may fall back to exact title/artist/duration disk hits; ASCII punctuation variants run as metadata branches; per-source gates read declared profile traits and disk-cache source strings map once at the boundary; 24h availability verdicts are gated on NetworkOutcomeLedger quorum (no transport failures) — default-allow when unbound; the authoritative backfill is hard-bounded by AuthoritativeBackfillBudget (every child via addBoundedSourceTask, 9s overall sentinel, witness = 3s parallel discovery + 6s probe) and marker-only foreground sets take the empty fast exit with unclamped evidence windows (review #6+#7)
  * [SPLIT]: LyricsResultSelection.swift, LyricsCandidateSelection.swift, LyricsSourceFetchers.swift
@@ -50,8 +50,41 @@ public final class LyricsFetcher {
         Task { await loadAMLLIndex() }
     }
 
+    // ┌──────────────────────────────────────────────────────────────────────┐
+    // │ LyricsSelectionMemo — write-once cache carried by every result.     │
+    // │                                                                      │
+    // │ Selection re-runs 12+ times while the drain loop is hot, and two of │
+    // │ its per-result facts are pure functions of the immutable result     │
+    // │ (`lyrics` is `let`) plus the fetch-constant song duration:          │
+    // │ identity-token sets (all-pairs similarity) and the single-result    │
+    // │ ("solo") selection verdict. Compute once, reuse the answer.         │
+    // │                                                                      │
+    // │ Reference semantics: struct copies share one box, so a fact learned │
+    // │ in the drain loop stays learned in every snapshot/sorted copy.      │
+    // │ Every `init` creates a fresh box, so a box can never describe       │
+    // │ lyrics it was not built from (the Traditional-Chinese normalization │
+    // │ map constructs new results and therefore new boxes).                │
+    // │                                                                      │
+    // │ Concurrency: accesses are totally ordered — a result is produced    │
+    // │ inside one task-group child, handed to the serial drain loop via    │
+    // │ the group (happens-before at child completion), then consumed       │
+    // │ sequentially by the awaiting caller. No two tasks ever touch the    │
+    // │ same box concurrently, hence @unchecked Sendable without locks      │
+    // │ (same discipline as this file's `Box<T>` branch flags).             │
+    // └──────────────────────────────────────────────────────────────────────┘
+    final class LyricsSelectionMemo: @unchecked Sendable {
+        /// Memoized `lyricIdentityTokens(result.lyrics)`.
+        var identityTokens: Set<String>?
+        /// Memoized solo verdict, keyed by the duration it was computed for.
+        var soloVerdict: (songDuration: TimeInterval, isSelectable: Bool)?
+    }
+
     /// Lyrics search result.
     public struct LyricsFetchResult {
+        /// Write-once selection memo (see `LyricsSelectionMemo`). Not part
+        /// of the result's value: the type declares no Equatable/Hashable/
+        /// Codable conformance anywhere, so the box affects none of them.
+        let selectionMemo = LyricsSelectionMemo()
         public let lyrics: [LyricLine]
         public let source: LyricsSource
         public let score: Double
@@ -464,7 +497,7 @@ public final class LyricsFetcher {
                         titleMatched: true,
                         matchedDurationDiff: cached.matchedDurationDiff
                     )
-                    if selectBestResult(from: [cachedResult], songDuration: d) != nil {
+                    if soloSelectionVerdict(for: cachedResult, songDuration: d) {
                         return [cachedResult]
                     }
                 }
@@ -571,7 +604,7 @@ public final class LyricsFetcher {
                        album: alb
                    )
                }),
-               selectBestResult(from: [cachedNative], songDuration: d) != nil {
+               soloSelectionVerdict(for: cachedNative, songDuration: d) {
                 DebugLogger.log("⚡ Preflight decorated-title metadata cache: '\(ot)' -> '\(cached.resolvedTitle)' by '\(cachedArtist)'")
                 return [cachedNative]
             }
@@ -1039,9 +1072,9 @@ public final class LyricsFetcher {
                         $0.source != r.source && $0.source.profile.isLyricIdentityWitness
                     }
                     let hasConflictingIdentityWitness = identityWitnesses.contains { witness in
-                        self.lyricIdentityTokens(r.lyrics).count >= 6
-                            && self.lyricIdentityTokens(witness.lyrics).count >= 6
-                            && self.lyricSimilarity(r.lyrics, witness.lyrics) < 0.18
+                        self.lyricIdentityTokens(for: r).count >= 6
+                            && self.lyricIdentityTokens(for: witness).count >= 6
+                            && self.lyricSimilarity(r, witness) < 0.18
                     }
                     let hasIdentityWitness = !identityWitnesses.isEmpty && !hasConflictingIdentityWitness
                     let albumScopedEvidencePending = hasAlbumHint
@@ -1206,7 +1239,7 @@ public final class LyricsFetcher {
                           !($0.nativeAliasMatched && !self.selectedHasStrongNativeAliasIdentity($0) && !tightCatalogAlias) else {
                         return false
                     }
-                    return self.selectBestResult(from: [$0], songDuration: d) != nil
+                    return self.soloSelectionVerdict(for: $0, songDuration: d)
                 }
                 let hasAlbumMatchedSyncedResult = results.contains {
                     $0.kind == .synced && $0.albumMatched && $0.score >= 30
@@ -2753,9 +2786,9 @@ public final class LyricsFetcher {
                     $0.source != result.source && $0.source.profile.isLyricIdentityWitness
                 }
                 let hasConflictingIdentityWitness = identityWitnesses.contains { witness in
-                    self.lyricIdentityTokens(result.lyrics).count >= 6
-                        && self.lyricIdentityTokens(witness.lyrics).count >= 6
-                        && self.lyricSimilarity(result.lyrics, witness.lyrics) < 0.18
+                    self.lyricIdentityTokens(for: result).count >= 6
+                        && self.lyricIdentityTokens(for: witness).count >= 6
+                        && self.lyricSimilarity(result, witness) < 0.18
                 }
                 let hasIdentityWitness = !identityWitnesses.isEmpty && !hasConflictingIdentityWitness
                 if result.score >= self.earlyReturnThreshold

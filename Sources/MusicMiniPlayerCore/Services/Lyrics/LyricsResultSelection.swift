@@ -1,11 +1,26 @@
 /**
- * [INPUT]: LyricsFetchResult from LyricsFetcher's parallel pipeline, LyricsSourceProfile declared traits (admission ladders, mirror group, risk checks)
- * [OUTPUT]: selectBestResult — single best lyrics result after quality/identity/timing gates
+ * [INPUT]: LyricsFetchResult from LyricsFetcher's parallel pipeline (carries the write-once LyricsSelectionMemo), LyricsSourceProfile declared traits (admission ladders, mirror group, risk checks)
+ * [OUTPUT]: selectBestResult — single best lyrics result after quality/identity/timing gates; memoized per-result facts (lyricIdentityTokens(for:), result-pair lyricSimilarity, soloSelectionVerdict) — compute once per result, output-identical to the raw paths
  * [POS]: Result selection sub-module of LyricsFetcher — quality filtering + scoring + fallback
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
 import Foundation
+
+#if DEBUG
+// ============================================================
+// MARK: - Memo Probe (DEBUG only — compiled out of release)
+// ============================================================
+
+/// Test-visible counters proving the per-result memos prevent recomputation.
+/// Release builds compile every probe touch out entirely (zero cost).
+enum LyricsSelectionMemoProbe {
+    /// Full `lyricIdentityTokens` tokenization passes (memo misses).
+    static var tokenizationPasses = 0
+    /// Full single-result selection verdicts (memo misses).
+    static var soloVerdictComputations = 0
+}
+#endif
 
 // ============================================================
 // MARK: - Result Selection (extension of LyricsFetcher)
@@ -172,7 +187,7 @@ extension LyricsFetcher {
                 return true
             }
             return albumMatchedCandidates.contains { albumCandidate in
-                lyricSimilarity(r.lyrics, albumCandidate.lyrics) >= 0.28
+                lyricSimilarity(r, albumCandidate) >= 0.28
             }
         }
         if !wordLevelPool.isEmpty {
@@ -182,6 +197,26 @@ extension LyricsFetcher {
         return selectReliable(usableSynced, songDuration: songDuration)
     }
 
+    // MARK: - Solo Selection Verdict
+
+    /// Would `selectBestResult` accept this result on its own? The drain
+    /// loop's exit decisions ask this for every accumulated result on every
+    /// loop event, yet the answer is a pure function of the immutable result
+    /// plus the fetch-constant song duration — computed once, then reused
+    /// from the result's write-once memo (keyed by duration, so a result
+    /// re-judged against a different duration recomputes).
+    func soloSelectionVerdict(for result: LyricsFetchResult, songDuration: TimeInterval) -> Bool {
+        if let memo = result.selectionMemo.soloVerdict, memo.songDuration == songDuration {
+            return memo.isSelectable
+        }
+        #if DEBUG
+        LyricsSelectionMemoProbe.soloVerdictComputations += 1
+        #endif
+        let isSelectable = selectBestResult(from: [result], songDuration: songDuration) != nil
+        result.selectionMemo.soloVerdict = (songDuration, isSelectable)
+        return isSelectable
+    }
+
     // MARK: - Unsynced Fallback
 
     private func selectUnsyncedFallback(from results: [LyricsFetchResult]) -> LyricsFetchResult? {
@@ -189,14 +224,14 @@ extension LyricsFetcher {
             $0.kind == .unsynced &&
             $0.score > 0 &&
             !$0.lyrics.isEmpty &&
-            lyricIdentityTokens($0.lyrics).count >= 6
+            lyricIdentityTokens(for: $0).count >= 6
         }
         guard !plainCandidates.isEmpty else { return nil }
 
         if plainCandidates.count >= 2 {
             let threshold = 0.24
             let clusters: [[LyricsFetchResult]] = plainCandidates.map { anchor in
-                plainCandidates.filter { lyricSimilarity(anchor.lyrics, $0.lyrics) >= threshold }
+                plainCandidates.filter { lyricSimilarity(anchor, $0) >= threshold }
             }
             if let bestCluster = clusters.max(by: { lhs, rhs in
                 if lhs.count != rhs.count { return lhs.count < rhs.count }
@@ -258,14 +293,14 @@ extension LyricsFetcher {
         guard result.kind == .synced,
               result.score >= 10,
               result.lyrics.count >= 12,
-              lyricIdentityTokens(result.lyrics).count >= 6 else { return false }
+              lyricIdentityTokens(for: result).count >= 6 else { return false }
 
         return uniqueSourceResults(allResults).contains { witness in
             areIndependentLyricSources(result.source, witness.source)
                 && witness.score > 0
                 && !witness.lyrics.isEmpty
-                && lyricIdentityTokens(witness.lyrics).count >= 6
-                && (lyricSimilarity(result.lyrics, witness.lyrics) >= 0.18
+                && lyricIdentityTokens(for: witness).count >= 6
+                && (lyricSimilarity(result, witness) >= 0.18
                     || firstComparableLyricLine(result.lyrics) == firstComparableLyricLine(witness.lyrics))
         }
     }
@@ -284,13 +319,13 @@ extension LyricsFetcher {
         }
 
         let candidates = uniqueSourceResults(allResults).filter {
-            $0.score > 0 && !$0.lyrics.isEmpty && lyricIdentityTokens($0.lyrics).count >= 6
+            $0.score > 0 && !$0.lyrics.isEmpty && lyricIdentityTokens(for: $0).count >= 6
         }
         guard candidates.count >= 3 else { return (false, syncedResults) }
 
         let threshold = 0.34
         let clusters: [[LyricsFetchResult]] = candidates.map { anchor in
-            candidates.filter { lyricSimilarity(anchor.lyrics, $0.lyrics) >= threshold }
+            candidates.filter { lyricSimilarity(anchor, $0) >= threshold }
         }
         guard let bestCluster = clusters.max(by: { lhs, rhs in
             if lhs.count != rhs.count { return lhs.count < rhs.count }
@@ -337,7 +372,7 @@ extension LyricsFetcher {
         }
         let rejectedAreOutliers = rejected.allSatisfy { rejectedResult in
             let bestSimilarity = bestCluster
-                .map { lyricSimilarity(rejectedResult.lyrics, $0.lyrics) }
+                .map { lyricSimilarity(rejectedResult, $0) }
                 .max() ?? 0
             return bestSimilarity < 0.18
         }
@@ -476,15 +511,38 @@ extension LyricsFetcher {
 
     // MARK: - Lyric Similarity / Identity
 
+    /// Memoized identity tokens — computed once per result instance, ever.
+    /// Lyric text is immutable (`lyrics` is `let`), so the cached set can
+    /// never go stale; struct copies share the same write-once box.
+    func lyricIdentityTokens(for result: LyricsFetchResult) -> Set<String> {
+        if let cached = result.selectionMemo.identityTokens { return cached }
+        let tokens = lyricIdentityTokens(result.lyrics)
+        result.selectionMemo.identityTokens = tokens
+        return tokens
+    }
+
+    /// Result-pair similarity through the per-result token memo. All
+    /// result-to-result comparisons in selection go through this overload;
+    /// the array overload remains for raw candidate text not yet wrapped
+    /// in a result.
+    func lyricSimilarity(_ lhs: LyricsFetchResult, _ rhs: LyricsFetchResult) -> Double {
+        tokenSimilarity(lyricIdentityTokens(for: lhs), lyricIdentityTokens(for: rhs))
+    }
+
     func lyricSimilarity(_ lhs: [LyricLine], _ rhs: [LyricLine]) -> Double {
-        let a = lyricIdentityTokens(lhs)
-        let b = lyricIdentityTokens(rhs)
+        tokenSimilarity(lyricIdentityTokens(lhs), lyricIdentityTokens(rhs))
+    }
+
+    private func tokenSimilarity(_ a: Set<String>, _ b: Set<String>) -> Double {
         guard !a.isEmpty, !b.isEmpty else { return 0 }
         let intersection = a.intersection(b).count
         return Double(intersection) / Double(min(a.count, b.count))
     }
 
     func lyricIdentityTokens(_ lyrics: [LyricLine]) -> Set<String> {
+        #if DEBUG
+        LyricsSelectionMemoProbe.tokenizationPasses += 1
+        #endif
         let lines = lyrics.filter {
             let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
