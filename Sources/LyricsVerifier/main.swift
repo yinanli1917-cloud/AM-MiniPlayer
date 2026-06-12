@@ -373,6 +373,14 @@ private func runBenchmark(args: [String]) async {
         enableLocalTranslation = false
     }
 
+    // --json-out <path>: write all results as one clean JSON file after the
+    // run. Streamed stdout JSONL gets torn by concurrent pipeline logging
+    // (~28% of rows unparseable in practice); gate diffs must read this file.
+    var jsonOutPath: String? = nil
+    if let idx = args.firstIndex(of: "--json-out"), idx + 1 < args.count {
+        jsonOutPath = args[idx + 1]
+    }
+
     // 加载用例
     var cases = loadBenchmarkCases()
     guard !cases.isEmpty else {
@@ -444,6 +452,27 @@ private func runBenchmark(args: [String]) async {
     }
 
     printBenchmarkSummary(results)
+
+    if let path = jsonOutPath {
+        writeBenchmarkJSON(results: results, path: path)
+    }
+}
+
+/// Single atomic post-run write — immune to the stdout interleaving that
+/// tears streamed JSONL rows.
+private func writeBenchmarkJSON(results: [BenchmarkResult], path: String) {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+    guard let data = try? encoder.encode(results) else {
+        log("⚠️ --json-out 编码失败")
+        return
+    }
+    do {
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        log("📝 基准结果已写入 \(path)")
+    } catch {
+        log("⚠️ --json-out 写入失败: \(error.localizedDescription)")
+    }
 }
 
 // =========================================================================
