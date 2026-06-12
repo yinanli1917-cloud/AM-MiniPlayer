@@ -2,7 +2,7 @@
  * [INPUT]: Raw search results from NetEase/QQ APIs
  * [OUTPUT]: selectBestCandidate — unified priority-chain candidate matching with explicit title-evidence state
  * [POS]: Candidate selection sub-module of LyricsFetcher — SearchCandidate + matching + alias resolution
- * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, provider-ranked native title evidence, bounded English-title/native pinyin aliases, compilation-artist safety, and buildCandidates generic builder; source param is typed LyricsSource — the QQ-only candidate guard binds to .qq (no more log-label substring sniffing)
+ * [NOTE]: NetEase/QQ share searchAndSelectCandidate template, confirmed CJK alias probes, query-provenance gates, provider-ranked native title evidence, bounded English-title/native pinyin aliases, compilation-artist safety, and buildCandidates generic builder; source param is typed LyricsSource — the QQ-only candidate guard binds to .qq (no more log-label substring sniffing). isTitleMatch admits romanized⇄CJK pairs via Japanese reading EQUALITY (LanguageUtils.japaneseReadingKeys — replaced the romaji alias whitelist); containment is floored at >=4 Latin identity chars
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
@@ -458,8 +458,12 @@ extension LyricsFetcher {
         let simplifiedCleanedInput = LanguageUtils.toSimplifiedChinese(cleanedInput)
         let compactInput = compactTitleIdentity(cleanedInput)
         let compactResult = compactTitleIdentity(cleanedResult)
-        let romanizedAliases = japaneseRomanizedTitleAliases(for: compactInput)
-        let hasJapaneseRomanizedAlias = romanizedAliases.contains(compactResult)
+        let hasJapaneseReadingMatch = japaneseReadingTitleMatch(
+            cleanedInput: cleanedInput,
+            cleanedResult: cleanedResult,
+            compactInput: compactInput,
+            compactResult: compactResult
+        )
         let hasNativePinyinAlias = nativePinyinTitleAliasesMatch(
             input: cleanedInput,
             result: cleanedResult,
@@ -470,10 +474,49 @@ extension LyricsFetcher {
         return cleanedInput == cleanedResult ||
                simplifiedCleanedInput == simplifiedResult ||
                (!compactInput.isEmpty && compactInput == compactResult) ||
-               hasJapaneseRomanizedAlias ||
+               hasJapaneseReadingMatch ||
                hasNativePinyinAlias ||
-               cleanedInput.contains(cleanedResult) || cleanedResult.contains(cleanedInput) ||
-               simplifiedCleanedInput.contains(simplifiedResult) || simplifiedResult.contains(simplifiedCleanedInput)
+               titleContainmentMatch(cleanedInput, cleanedResult) ||
+               titleContainmentMatch(simplifiedCleanedInput, simplifiedResult)
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Japanese reading identity (romanized ⇄ kanji/kana titles).
+    //
+    // Replaces the former hardcoded romaji→kanji alias table. The CJK
+    // side's Japanese reading (CFStringTokenizer Latin transcription, long
+    // vowels folded) must EQUAL the romanized side's folded compact
+    // identity. Equality only — prefix-extended different songs ("namida"
+    // vs 涙色 "namidairo") must NOT pass this admission door; the 0.6
+    // fuzz lives only at the ranking doors (romanizedTitleCorroboration).
+    // ────────────────────────────────────────────────────────────────────
+    private func japaneseReadingTitleMatch(
+        cleanedInput: String,
+        cleanedResult: String,
+        compactInput: String,
+        compactResult: String
+    ) -> Bool {
+        let inputHasCJK = LanguageUtils.containsCJK(cleanedInput)
+        let resultHasCJK = LanguageUtils.containsCJK(cleanedResult)
+        guard inputHasCJK != resultHasCJK else { return false }
+        let romajiKey = LanguageUtils.romajiComparisonKey(inputHasCJK ? compactResult : compactInput)
+        guard romajiKey.count >= 4 else { return false }  // same identity floor as the pinyin door
+        let cjkTitle = inputHasCJK ? cleanedInput : cleanedResult
+        return LanguageUtils.japaneseReadingKeys(cjkTitle).contains(romajiKey)
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Containment with an identity floor: the contained title must carry
+    // >= 4 Latin characters of identity (the same >= 4 floor the native
+    // pinyin alias door uses). Blocks trivially-short containments —
+    // 涙 ("lei") ⊂ 涙色, "e" ⊂ "everything" — while real decorated titles
+    // (晴天 "qingtian" ⊂ 晴天 翻唱版) keep matching.
+    // ────────────────────────────────────────────────────────────────────
+    private func titleContainmentMatch(_ a: String, _ b: String) -> Bool {
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        let (outer, inner) = a.count >= b.count ? (a, b) : (b, a)
+        guard outer.contains(inner) else { return false }
+        return LanguageUtils.toLatinLower(inner).count >= 4
     }
 
     private func nativePinyinTitleAliasesMatch(
@@ -505,29 +548,6 @@ extension LyricsFetcher {
             return asciiWordCount >= 1 && cjkCount <= 8
         }
         return asciiWordCount >= 2 || cjkCount <= 3
-    }
-
-    private func japaneseRomanizedTitleAliases(for compactInput: String) -> Set<String> {
-        switch compactInput {
-        case "hatsukoi":
-            return ["初恋"]
-        case "koibito", "koibitotachi":
-            return ["恋人", "恋人たち"]
-        case "mayonaka":
-            return ["真夜中"]
-        case "namida":
-            return ["涙", "泪"]
-        case "yumeno", "yume":
-            return ["夢", "梦"]
-        case "sora":
-            return ["空"]
-        case "kaze":
-            return ["風", "风"]
-        case "hoshi":
-            return ["星"]
-        default:
-            return []
-        }
     }
 
     private func compactTitleIdentity(_ value: String) -> String {

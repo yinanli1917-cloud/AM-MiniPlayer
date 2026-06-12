@@ -148,3 +148,49 @@ Commit: (this commit)
   AMLL in all runs); candidate for a later admission audit.
 
 #9 verdict: LANDED — warm CN replays serve from disk with zero network.
+
+## #11 — Japanese reading corroboration (whitelist deleted, schema v7)
+
+Commit: (this commit)
+
+- Mechanism: real Japanese-reading function in LanguageUtils (CFStringTokenizer
+  ja-locale Latin transcription; long-vowel fold derived from probed
+  transcriptions — 東京→toukyou folds to tokyo class; S/T retry covers 梦/风;
+  FAIL-CLOSED on any empty token). The one shared corroboration helper
+  (romanizedTitleCorroboration) gains a reading lane (pinyin lane extracted
+  byte-identical); every postmortem-006 door now reading-aware with thresholds
+  and order untouched. isTitleMatch's whitelist alias lookup replaced by
+  reading EQUALITY (no fuzz at this door); containment shortcut floored at the
+  existing ≥4 Latin-identity rule; `japaneseRomanizedTitleAliases` DELETED —
+  grep-proven zero whitelists remain. Schema 6→7 flushes rows judged under
+  pinyin-only corroboration.
+- TDD: 16 new tests, 27 RED first (transcription keys, ranking pins,
+  containment floor, negatives) → green. Suite: 640 tests 0 failures (includes
+  a CONCURRENT session's 3 WIP renderer tests in the same tree — isolation run
+  637/0 with --skip; commit stages only this campaign's files).
+- Verifier 77/82: every marker change audited — C02 + X01 improved, H11/H27
+  torn-row artifacts (verdicts identical), X34 still the established
+  environmental failure.
+- Benchmark 92→91/100 with ZERO pass flips vs #9 and vs baseline run1
+  (full-coverage json diffs). Focused --region ja 11/12 and zh 10/12: one flip
+  each (BM-JA-05 紅蓮華, BM-ZH-01 晴天) minutes after both PASSED in the full
+  #11 run — neither reproduces individually (both PASS on recheck; 晴天's
+  recheck also exercised the #9 CN disk row, Δ0.75 hit before correct lyrics).
+- BM-JA-11 すずめ source flip (NetEase→QQ, translations 31→1) fully diagnosed,
+  NOT #11: today NetEase's own search results no longer contain the studio
+  すずめ row (raw candidate lists show only 東京上空/すずめの涙/feat.十明), its
+  fallback pick すずめの涙 is the WRONG song at 91pts, and the cross-source
+  identity cluster correctly rejects it for QQ+Genius's agreeing correct
+  content (QQ 40L dump-verified: 君の中にある赤と青き線…). Pre-#11 stash
+  control in the same window picks NetEase-91 only because QQ's fetch flaked
+  there (its candidate logs show the identical pick). #9-era record shows both
+  sources present with NetEase content passing the oracle — provider data rot
+  mid-day, pipeline routed around it. Self-heals when NetEase's row returns.
+- Real-app (binary 971506a4): romaji-titled track OUTSIDE the 8 words —
+  'Yuki No Hana' / Akina Nakamori (covers album): NetEase candidate 雪の華
+  marked T=true and selected at P1 Δ0.8s (only the reading door can produce
+  that match), Applied 48L in ~1s with the exact 雪の華 opening line
+  のびた人陰を　舗道に並べ. Playback state restored.
+
+#11 verdict: LANDED — Japanese title matching generalizes from 8 words to the
+language; a whitelist is deleted from production.

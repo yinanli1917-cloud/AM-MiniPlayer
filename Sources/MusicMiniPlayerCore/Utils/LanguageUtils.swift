@@ -1,8 +1,11 @@
 //
-//  LanguageUtils.swift
-//  MusicMiniPlayer
+//  LanguageUtils.swift — 语言检测与文本处理工具
 //
-//  语言检测与文本处理工具
+//  [OUTPUT]: script detection, S/T conversion, toLatinLower (pinyin),
+//            japaneseReadingKeys/romajiComparisonKey (CFStringTokenizer ja
+//            readings), two-lane romanized→CJK title corroboration
+//  [POS]: corroboration choke point for MetadataResolver doors, candidate
+//         ranking, and the LyricsFetcher cache guard
 //
 
 import Foundation
@@ -519,15 +522,109 @@ public extension LanguageUtils {
     }
 
     // ====================================================================
+    // MARK: - Japanese reading (romaji) transliteration
+    //
+    // `toLatinLower` (Any-Latin) gives Mandarin pinyin for kanji — never
+    // Japanese readings — so "hatsukoi" scored zero against 初恋 at every
+    // corroboration door. CFStringTokenizer's Latin transcription (ja
+    // locale) supplies the real reading: offline, deterministic, no popups.
+    // Fail closed: a CJK token without a transcription voids the whole
+    // reading — never a crash, never a partial-reading false positive.
+    // ====================================================================
+
+    private static let japaneseReadingCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 128
+        return cache
+    }()
+
+    /// Raw concatenated Latin transcription of `text` (ja locale), or ""
+    /// when any CJK token lacks a transcription. ASCII tokens pass through.
+    private static func japaneseReadingRaw(_ text: String) -> String {
+        let str = text as CFString
+        let range = CFRange(location: 0, length: CFStringGetLength(str))
+        let locale = CFLocaleCreate(kCFAllocatorDefault, CFLocaleIdentifier("ja" as CFString))
+        guard let tokenizer = CFStringTokenizerCreate(
+            kCFAllocatorDefault, str, range, kCFStringTokenizerUnitWordBoundary, locale
+        ) else { return "" }
+        let nsText = text as NSString
+        var pieces: [String] = []
+        while CFStringTokenizerAdvanceToNextToken(tokenizer) != [] {
+            let tokenRange = CFStringTokenizerGetCurrentTokenRange(tokenizer)
+            let token = nsText.substring(with: NSRange(location: tokenRange.location, length: tokenRange.length))
+            let latin = CFStringTokenizerCopyCurrentTokenAttribute(
+                tokenizer, kCFStringTokenizerAttributeLatinTranscription
+            ) as? String
+            if let latin, !latin.isEmpty {
+                pieces.append(latin)
+            } else if containsCJK(token) {
+                return ""  // fail closed: untranscribable ideograph voids the reading
+            } else {
+                pieces.append(token)  // Latin/digit token passes through as-is
+            }
+        }
+        return pieces.joined()
+    }
+
+    /// One uniform long-vowel rule for BOTH comparison sides: the tokenizer
+    /// emits kana-spelling long vowels ("toukyou", no macrons) while library
+    /// titles usually write Hepburn ("Tokyo"). "ou" and doubled vowels fold
+    /// to the short vowel; diphthongs ("oi"/"ai") are untouched.
+    private static func foldLongVowels(_ s: String) -> String {
+        var folded: [Character] = []
+        for ch in s {
+            if let last = folded.last, vowels.contains(last) {
+                if ch == last { continue }                  // oo / uu / aa / ii / ee
+                if ch == "u" && last == "o" { continue }    // kana long o: "ou"
+            }
+            folded.append(ch)
+        }
+        return String(folded)
+    }
+
+    /// Normalized Japanese reading key of `text`, or "" when unavailable.
+    /// `toLatinLower` is a pure lowercase/diacritic/alnum fold here — the
+    /// reading is already Latin, so Any-Latin is a no-op.
+    private static func japaneseReadingKey(_ text: String) -> String {
+        let cacheKey = text as NSString
+        if let cached = japaneseReadingCache.object(forKey: cacheKey) { return cached as String }
+        let key = foldLongVowels(toLatinLower(japaneseReadingRaw(text)))
+        japaneseReadingCache.setObject(key as NSString, forKey: cacheKey)
+        return key
+    }
+
+    /// All usable Japanese reading keys of a CJK title. Catalogs may index
+    /// Simplified glyphs (梦/风) the ja tokenizer cannot read — their
+    /// Traditional forms (夢/風) can, so both variants are tried. Equality
+    /// at the doors keeps the extra variant safe: wrong readings match nothing.
+    static func japaneseReadingKeys(_ text: String) -> [String] {
+        guard containsCJK(text) else { return [] }
+        var keys: [String] = []
+        let rawKey = japaneseReadingKey(text)
+        if !rawKey.isEmpty { keys.append(rawKey) }
+        let traditional = toTraditionalChinese(text)
+        if traditional != text {
+            let tradKey = japaneseReadingKey(traditional)
+            if !tradKey.isEmpty && !keys.contains(tradKey) { keys.append(tradKey) }
+        }
+        return keys
+    }
+
+    /// Folded Latin key for the romanized side — the same long-vowel rule
+    /// the reading keys go through ("Toukyou"/"Tokyo"/東京 → "tokyo").
+    static func romajiComparisonKey(_ text: String) -> String {
+        foldLongVowels(toLatinLower(text))
+    }
+
+    // ====================================================================
     // MARK: - Romanized→CJK title corroboration
     //
     // A romanized (ASCII) library title — e.g. "Er Shi Sui De Lang Man" —
-    // must only resolve to a CJK catalog title whose own transliteration is
-    // consistent with the input. Without this, a *different* song by the same
-    // or a featured artist (or a sibling track on the same album) with a
+    // must only resolve to a CJK catalog title whose own transliteration
+    // is consistent with the input; otherwise a *different* song with a
     // near-identical duration is accepted purely on artist/album+duration
-    // (postmortem 006: romanized→CJK must verify the TITLE). Reuses
-    // `toLatinLower` so it covers Pinyin (Hanzi) and Romaji (Kana).
+    // (postmortem 006: romanized→CJK must verify the TITLE). Two lanes:
+    // Mandarin pinyin (`toLatinLower`) and the Japanese reading above.
     // ====================================================================
 
     /// Score at/above which a CJK candidate is considered a corroborated match
@@ -546,16 +643,41 @@ public extension LanguageUtils {
     /// Latin signal on either side → caller should NOT treat this as a match,
     /// but is free to fall back to duration-based evidence (graceful fallback).
     public static func romanizedTitleCorroboration(input: String, candidateTitle: String) -> Double {
-        let inputLatin = toLatinLower(stripTitleDecorations(input))
-        let candidateLatin = toLatinLower(stripTitleDecorations(candidateTitle))
-        guard inputLatin.count >= 2, candidateLatin.count >= 2 else { return 0 }
-        if inputLatin == candidateLatin { return 1.0 }
-        let shorter = min(inputLatin.count, candidateLatin.count)
-        let longer = max(inputLatin.count, candidateLatin.count)
-        if candidateLatin.contains(inputLatin) || inputLatin.contains(candidateLatin) {
-            return Double(shorter) / Double(longer)
+        let strippedInput = stripTitleDecorations(input)
+        let strippedCandidate = stripTitleDecorations(candidateTitle)
+        // Pinyin lane — byte-identical to the pre-#11 behavior.
+        var best = latinPairScore(toLatinLower(strippedInput), toLatinLower(strippedCandidate))
+        if best >= 1.0 { return best }
+        // Japanese-reading lane — only when a side carries CJK, so
+        // ASCII↔ASCII pairs keep their exact pre-reading scores (the
+        // long-vowel fold must never turn "house" into "hose" here).
+        guard containsCJK(strippedInput) || containsCJK(strippedCandidate) else { return best }
+        for a in readingLaneKeys(strippedInput) {
+            for b in readingLaneKeys(strippedCandidate) {
+                best = max(best, latinPairScore(a, b))
+            }
         }
-        return characterBigramJaccard(inputLatin, candidateLatin)
+        return best
+    }
+
+    /// Keys a title contributes to the Japanese-reading comparison lane:
+    /// its reading(s) when it carries CJK, its folded Latin form otherwise.
+    /// A CJK side with no usable reading contributes nothing (fail closed).
+    private static func readingLaneKeys(_ strippedTitle: String) -> [String] {
+        containsCJK(strippedTitle)
+            ? japaneseReadingKeys(strippedTitle)
+            : [romajiComparisonKey(strippedTitle)]
+    }
+
+    /// 0...1 score for one pair of Latin transliterations: exact match,
+    /// containment ratio, then bigram Jaccard (the pre-#11 scoring body).
+    private static func latinPairScore(_ a: String, _ b: String) -> Double {
+        guard a.count >= 2, b.count >= 2 else { return 0 }
+        if a == b { return 1.0 }
+        if a.contains(b) || b.contains(a) {
+            return Double(min(a.count, b.count)) / Double(max(a.count, b.count))
+        }
+        return characterBigramJaccard(a, b)
     }
 
     /// Drop parenthetical / bracketed decorations ("(feat. X)", "[Remaster]",
@@ -563,11 +685,7 @@ public extension LanguageUtils {
     /// the title transliteration.
     private static func stripTitleDecorations(_ title: String) -> String {
         title
-            .replacingOccurrences(
-                of: #"[\(（\[【][^\)）\]】]*[\)）\]】]"#,
-                with: "",
-                options: .regularExpression
-            )
+            .replacingOccurrences(of: #"[\(（\[【][^\)）\]】]*[\)）\]】]"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
     }
 

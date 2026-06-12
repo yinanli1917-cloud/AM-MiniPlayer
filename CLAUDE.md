@@ -26,7 +26,7 @@ Sources/
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限) + DrainExitFacts（排水循环退出闭包拆分：纯项每结果只算一次，事件项留在闭包内）
 │   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh)
-│   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias
+│   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias + 日语读音相等门（取代 romaji 白名单）+ 包含匹配 ≥4 拉丁字符下限
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale + 写一次记忆化（token/solo/romaji/quality 每结果只算一次；单结果池统一走 solo 裁决备忘录）
 │   │       ├── LyricsParser.swift               - TTML/LRC/YRC parsing
 │   │       ├── LyricsScorer.swift               - Quality scoring
@@ -50,7 +50,7 @@ Sources/
 │   │       └── LiquidBackgroundView.swift
 │   ├── Utils/
 │   │   ├── HTTPClient.swift           - HTTP requests + retry + connection warmup + NetworkOutcomeLedger (protocol vs transport)
-│   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion
+│   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion + Japanese reading (CFStringTokenizer) + two-lane romanized-title corroboration
 │   │   ├── MatchingUtils.swift        - Matching score utilities
 │   │   ├── DebugLogger.swift          - Debug logging
 │   │   ├── NSImage+AverageColor.swift - Color extraction + brightness sampling
@@ -70,8 +70,9 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 621 个单元测试
+Tests/MusicMiniPlayerTests/         - 637 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
+    ├── JapaneseReadingTests.swift - 日语读音判定（8 对旧白名单 fixture + 前缀扩展负例 + 长音折叠 + fail-closed + 包含下限）
     ├── MetadataDiskCacheTierTests.swift - 元数据缓存层隔离（CN/多区域互不覆盖）+ CN 证据元组往返 + v6 schema 冲洗 + 防抖合并写
     ├── LyricsSelectionMemoizationTests.swift - 选择记忆化：token/solo/排水事实/romaji/quality 各算一次 + 钉死值等值 + duration 键安全 + 单结果池 chokepoint
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试

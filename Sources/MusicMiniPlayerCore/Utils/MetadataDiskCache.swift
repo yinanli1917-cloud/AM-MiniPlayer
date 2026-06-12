@@ -102,11 +102,12 @@ private struct MetadataCacheFile: Codable {
 
 public final class MetadataDiskCache {
 
-    /// v6: CN-tier rows moved into their own `cn_entries` dictionary (tier
-    /// separation) and the dead preflightExact slot is gone. The bump
-    /// flushes all v5 rows once — cheaper and safer than migration code;
-    /// the cache self-heals as songs resolve again.
-    public static let schemaVersion = 6
+    /// v7: romanized→CJK corroboration learned Japanese readings (review
+    /// #11 — the romaji whitelist is gone). Rows admitted or rejected under
+    /// pinyin-only corroboration must flush; the bump invalidates them all
+    /// once and the cache self-heals as songs resolve again.
+    /// (v6: CN-tier rows split into `cn_entries`, preflightExact removed.)
+    public static let schemaVersion = 7
     public static let ttlSeconds: TimeInterval = 30 * 86400  // 30 days
 
     private let fileURL: URL
