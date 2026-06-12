@@ -1,6 +1,6 @@
 /**
  * [INPUT]: Depends on MusicMiniPlayerCore MusicController/LyricsService/SnappablePanel/MiniPlayerView
- *          and SettingsView SettingsWindowView.
+ *          and SettingsView SettingsWindowView; MetadataResolver.diskCache for the terminate flush.
  * [OUTPUT]: Exports AppMain, the application entry point.
  * [POS]: MusicMiniPlayerApp AppDelegate and window management.
  */
@@ -95,6 +95,9 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         DiagnosticsService.shared.prepareForTermination()
+        // Metadata cache persists on a debounce — force the pending write
+        // out before the process dies (bundle swap must stay last).
+        MetadataResolver.shared.diskCache.flush()
         UpdateApplier.applyIfStaged()
     }
 

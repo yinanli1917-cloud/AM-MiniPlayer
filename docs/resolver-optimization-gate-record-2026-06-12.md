@@ -104,3 +104,47 @@ Commit: (this commit)
   before backfill. Playback state restored (自寻烦恼 paused @ 141.25).
 
 8b verdict: LANDED — #8 family complete, perf gate satisfied.
+
+## #9 — CN-tier resolver cache (tier-separated, schema v6)
+
+Commit: (this commit)
+
+- Mechanism: CN-tier resolutions persist to their own `cn_entries` dictionary
+  (separate store → cross-tier overwrite structurally impossible; the 5 external
+  readers of the localized store are untouched). Replay rebuilds the cached row
+  as a synthetic iTunes result and pushes it back through matchCNResult itself —
+  zero guard duplication: S/T title match, same-script artist rule, romanized
+  corroboration (postmortem 006), Δ window vs the stored REAL durationDiff.
+  Guard failure → stale row logged, fresh search overwrites. Successes only —
+  no negative rows. Dead preflightExact chain deleted (grep: zero call sites of
+  its only caller; live store was already empty). persist() debounced (~1s) on
+  the SAME pre-existing serial queue; flush() on app terminate (before bundle
+  swap) and at verifier-CLI exit (gate determinism). Schema 5→6 flushes all old
+  rows once. MetadataResolver net SMALLER (1249→1216).
+- TDD: tier-overwrite RED (TW write destroyed CN row, "1 != 2") + schema-flush
+  RED + API-absence compile reds → all green; 621 tests (616+5), 0 failures,
+  fresh orchestrator run (/tmp/swift-test-9-orch.log).
+- Cold/warm (targeted, per noise methodology — full-benchmark doubles are
+  weather-confounded): 自寻烦恼/Buddha Jump — cold persisted 佛跳墙 Δ0.15 row
+  (2118ms), warm ts-unchanged + identical result (1258ms), instrumented warm
+  shows 💾 CN disk hit ×2 with ZERO 搜索开始; Love You More & More/Rene Liu —
+  cold persisted 很爱很爱你/刘若英 Δ0.00, warm disk hit, zero refires. Tiers
+  coexist live (18 CN rows after the suite; localized store independent).
+- Verifier 78/82 (baseline 77), ZERO pass flips among parsed cases. Marker-level
+  audit of every verdict change: C02 + X04 improved (weather); X13/X14 torn-row
+  artifacts (verdicts unchanged); X34 PASS→FAIL — proven ENVIRONMENTAL by
+  control experiment: pre-#9 binary (stash) fails identically (NetEase 54pts,
+  3.8s) in the same window; direct cause visible in logs — iTunes CN/HK/TW
+  returned 无结果 for every term incl. bare 'Li Ronghao'; no CN row existed for
+  the song (no cache involvement possible).
+- Benchmark 92/100, ZERO pass flips vs baseline run1 AND vs 8b (full-coverage
+  json-out diff, no salvage gaps).
+- Real-app (binary a1d75ee8): restart + play CN track → fetch START, 💾 CN disk
+  hit ×2, Applied 35L correct content — all within the same log second, row
+  written by a different process (CLI). 3s budget: met with ~2.9s headroom.
+- Observation recorded (pre-existing, NOT #9): the CN translated-candidate door
+  admits cross-script artist rows (e.g. 'Shape of You'/Ed Sheeran → 七元 cover,
+  Δ0.32) — downstream lyric-level three-rule guards hold (BM-EN-01 passes via
+  AMLL in all runs); candidate for a later admission audit.
+
+#9 verdict: LANDED — warm CN replays serve from disk with zero network.

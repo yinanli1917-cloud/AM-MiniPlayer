@@ -45,6 +45,9 @@ final class MetadataDiskCacheTests: XCTestCase {
             durationDiff: 0.42
         )
 
+        // Persist is debounced — force the pending write before reloading.
+        writer.flush()
+
         // Fresh instance at the same URL exercises the full Codable
         // round-trip — the value the guard reads on a cold start.
         let reader = MetadataDiskCache(fileURL: url)

@@ -54,7 +54,7 @@ Sources/
 │   │   ├── MatchingUtils.swift        - Matching score utilities
 │   │   ├── DebugLogger.swift          - Debug logging
 │   │   ├── NSImage+AverageColor.swift - Color extraction + brightness sampling
-│   │   ├── MetadataDiskCache.swift    - Persistent metadata cache
+│   │   ├── MetadataDiskCache.swift    - Persistent metadata cache（CN/多区域两层独立字典 + 防抖落盘 + flush）
 │   │   ├── SBTimeoutRunner.swift      - ScriptingBridge timeout wrapper
 │   │   ├── DebugConfig.swift          - Debug configuration
 │   │   └── AppleScriptRunner.swift    - Music.app osascript execution + parsing
@@ -70,8 +70,9 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 616 个单元测试
+Tests/MusicMiniPlayerTests/         - 621 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
+    ├── MetadataDiskCacheTierTests.swift - 元数据缓存层隔离（CN/多区域互不覆盖）+ CN 证据元组往返 + v6 schema 冲洗 + 防抖合并写
     ├── LyricsSelectionMemoizationTests.swift - 选择记忆化：token/solo/排水事实/romaji/quality 各算一次 + 钉死值等值 + duration 键安全 + 单结果池 chokepoint
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     ├── LyricsSourceProfileTests.swift - 类型化源注册表 oracle 等值测试（旧硬编码阶梯字面量）

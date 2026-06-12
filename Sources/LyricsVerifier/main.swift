@@ -37,6 +37,9 @@ Task {
         exit(1)
     }
 
+    // The metadata cache persists on a debounce; exit() would drop writes
+    // from the final window and make warm-replay gates nondeterministic.
+    MetadataResolver.shared.diskCache.flush()
     exit(0)
 }
 

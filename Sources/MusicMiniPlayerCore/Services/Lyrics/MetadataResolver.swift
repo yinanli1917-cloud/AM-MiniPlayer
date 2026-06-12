@@ -1,7 +1,9 @@
 /**
- * [INPUT]: LanguageUtils, MatchingUtils, MusicKit
+ * [INPUT]: LanguageUtils, MatchingUtils, MusicKit, MetadataDiskCache
  * [OUTPUT]: resolveSearchMetadata/fetchChineseMetadata/fetchLocalizedMetadata/fetchMetadataFromRegion
- * [POS]: Lyrics 的元信息子模块，负责 MusicKit 全球目录元信息获取
+ * [POS]: Lyrics 的元信息子模块，负责 MusicKit 全球目录元信息获取；
+ *        CN 与多区域两层各自持久化到磁盘缓存的独立字典（tier-separated），
+ *        回放行必须重过 matchCNResult/对应校验门（postmortem 006）
  * [PROTOCOL]: 变更时更新此头部，然后检查 Services/Lyrics/CLAUDE.md
  */
 
@@ -20,23 +22,10 @@ public final class MetadataResolver {
     private init() {}
 
     /// Disk-backed metadata cache. Shared across instances.
-    /// Persists resolved metadata AND preflight exact-match flags so warm
-    /// cold starts (second play of a known song) skip iTunes entirely.
+    /// Persists resolved metadata (localized + CN tiers, disjoint stores)
+    /// so warm cold starts (second play of a known song) skip iTunes
+    /// entirely — each tier replays only rows it produced.
     public let diskCache = MetadataDiskCache(fileURL: MetadataDiskCache.defaultURL())
-
-    // ────────────────────────────────────────────────────────────────
-    // MARK: - Exact-match Preflight
-    // ────────────────────────────────────────────────────────────────
-
-    /// In-process memoization for preflight exact-match checks.
-    /// Stores resolved values by key; concurrent parallel callers may each
-    /// fire once on a cache miss, but subsequent reads are instant.
-    private actor PreflightCache {
-        private var cache: [String: Bool] = [:]
-        func get(_ key: String) -> Bool? { cache[key] }
-        func set(_ key: String, _ value: Bool) { cache[key] = value }
-    }
-    private let preflightCache = PreflightCache()
 
     // ────────────────────────────────────────────────────────────────
     // MARK: - Per-region Resolution Cache (in-process)
@@ -76,73 +65,6 @@ public final class MetadataResolver {
         }
     }
     private let regionResolveCache = RegionResolveCache()
-
-    /// Returns true if iTunes confirms `(title, artist, ~duration)` exists
-    /// as an exact match in any inferred JP/KR/HK/TW region. This is the
-    /// signal that the input title is NOT a romanization — it's the real
-    /// title — so downstream matchers MUST NOT apply romanized→CJK escapes
-    /// (e.g., NetEase P3 CJK-title rule) that would pick same-artist
-    /// duration collisions like "Invisible"→"不確か" by mei ehara.
-    ///
-    /// - Only called for pure-ASCII input (CJK input is already original).
-    /// - Memoized per-song for the process lifetime.
-    /// - Parallelizes region queries and short-circuits on first hit.
-    public func hasOriginalExactMatch(
-        title: String,
-        artist: String,
-        duration: TimeInterval
-    ) async -> Bool {
-        let key = "\(title.lowercased())|\(artist.lowercased())|\(Int(duration))"
-        if let cached = await preflightCache.get(key) {
-            return cached
-        }
-        // Disk cache check — warm cold starts skip iTunes entirely.
-        if let diskHit = diskCache.getPreflightExact(title: title, artist: artist, duration: duration) {
-            await preflightCache.set(key, diskHit)
-            if diskHit {
-                DebugLogger.log("MetadataResolver", "💾 Preflight disk hit (exact): '\(title)' by '\(artist)'")
-            }
-            return diskHit
-        }
-
-        // Reuse `fetchMetadataFromRegionWithExactFlag` (which the fetcher
-        // already calls for Branch-2 speculative resolution). Piggybacking
-        // on that path uses the same searchITunes calls, the same results,
-        // and inherits its reliability — avoids the race conditions a
-        // separate iTunes probe had.
-        let regions = inferRegions(title: title, artist: artist)
-        guard !regions.isEmpty else {
-            await preflightCache.set(key, false)
-            return false
-        }
-
-        let found = await withTaskGroup(of: Bool.self) { group in
-            for region in regions {
-                group.addTask {
-                    let (_, hasExact) = await self.fetchMetadataFromRegionWithExactFlag(
-                        title: title, artist: artist, duration: duration, region: region
-                    )
-                    return hasExact
-                }
-            }
-            var hit = false
-            for await regionHasExact in group {
-                if regionHasExact {
-                    hit = true
-                    group.cancelAll()
-                    break
-                }
-            }
-            return hit
-        }
-
-        await preflightCache.set(key, found)
-        diskCache.setPreflightExact(title: title, artist: artist, duration: duration, isExact: found)
-        if found {
-            DebugLogger.log("MetadataResolver", "🛑 hasOriginalExactMatch: '\(title)' by '\(artist)' — P3 CJK escape disabled")
-        }
-        return found
-    }
 
     // MARK: - 统一解析
 
@@ -512,14 +434,51 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String, durationDiff: Double)? {
+        let inputArtistLower = artist.lowercased()
+        let inputTitleLower = title.lowercased()
+        let cleanedInputTitle = cleanTrackTitle(inputTitleLower)
+
+        // ────────────────────────────────────────────────────────────────
+        // Disk replay — CN tier. A hit skips the CN search wave (3 terms ×
+        // MusicKit+iTunes ≈ 6 network calls) entirely. The cached row must
+        // pass the SAME per-result guards a fresh result faces, so we rebuild
+        // it as a synthetic iTunes row and push it back through matchCNResult:
+        // S/T-normalized title match, same-script artist rule, romanized-
+        // title corroboration, Δ<3s window — judged against the stored REAL
+        // durationDiff (postmortem 006: cached claims carry the evidence
+        // that admitted them). A row that fails any guard falls through to a
+        // fresh search, whose outcome then overwrites it. Result-SET vettings
+        // (cnHasExact collision guard, translated-candidate uniqueness) ran
+        // at admission time and are embodied in the row's existence — the
+        // same precedent as the localized-tier replay.
+        // ────────────────────────────────────────────────────────────────
+        if let cached = diskCache.getChinese(title: title, artist: artist, duration: duration),
+           let storedDiff = cached.durationDiff {
+            let synthetic: [String: Any] = [
+                "trackName": cached.resolvedTitle,
+                "artistName": cached.resolvedArtist,
+                "trackTimeMillis": Int((duration + storedDiff) * 1000)
+            ]
+            let verdict = matchCNResult(
+                synthetic, title: title, artist: artist, duration: duration,
+                searchTerm: "\(inputTitleLower) \(inputArtistLower)",
+                cleanedInputTitle: cleanedInputTitle,
+                inputTitleLower: inputTitleLower, inputArtistLower: inputArtistLower
+            )
+            switch verdict {
+            case .direct, .translated:
+                DebugLogger.log("MetadataResolver", "💾 🇨🇳 CN disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (Δ\(String(format: "%.2f", storedDiff))s)")
+                return (cached.resolvedTitle, cached.resolvedArtist, storedDiff)
+            case .none:
+                DebugLogger.log("MetadataResolver", "🧹 Ignoring stale CN cache: '\(cached.resolvedTitle)' for input '\(title)'")
+            }
+        }
+
         // 🔑 搜索顺序：combined 最精确放最后，先用 artist/title 搜再用 combined 补充
         let searchTerms = [artist, title, "\(title) \(artist)"]
         DebugLogger.log("MetadataResolver", "🇨🇳 CN 搜索开始: '\(title)' by '\(artist)' (\(Int(duration))s)")
 
         var candidates: [CNCandidate] = []
-        let inputArtistLower = artist.lowercased()
-        let inputTitleLower = title.lowercased()
-        let cleanedInputTitle = cleanTrackTitle(inputTitleLower)
 
         // 🔑 Parallel fetch — fire all 3 search terms simultaneously.
         // Was sequential: 3 × 1-2s = 3-6s. Now: max(latencies) ≈ 1-2s.
@@ -602,6 +561,14 @@ public final class MetadataResolver {
         }
 
         guard let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) else { return nil }
+        // Persist successful CN resolutions only — no negative caching. The
+        // row carries the REAL measured durationDiff that admitted it, the
+        // same evidence discipline as the localized tier (postmortem 006).
+        diskCache.setChinese(
+            title: title, artist: artist, duration: duration,
+            resolvedTitle: best.title, resolvedArtist: best.artist,
+            durationDiff: best.durationDiff
+        )
         return (best.title, best.artist, best.durationDiff)
     }
 
