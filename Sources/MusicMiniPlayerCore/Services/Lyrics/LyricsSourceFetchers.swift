@@ -1,12 +1,83 @@
 /**
  * [INPUT]: Song metadata (title, artist, duration) + SearchParams from candidate selection + LyricsSource typed registry
  * [OUTPUT]: LyricsFetchResult from each of the 8 sources (AppleMusic, AMLL, NetEase, QQ, LRCLIB, LRCLIB-Search, Genius, lyrics.ovh), stamped with typed LyricsSource cases
- * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 8 lyric sources; provider catalog aliases stay behind strict title/artist/duration/context evidence
+ * [POS]: Source fetcher sub-module of LyricsFetcher — HTTP calls + parsing for all 8 lyric sources; provider catalog aliases stay behind strict title/artist/duration/context evidence; AppleMusicCapabilityLatch skips MusicKit after the first developer-token failure (process-lifetime, capability not build flag)
  * [PROTOCOL]: Changes here → update this header, then check Services/Lyrics/CLAUDE.md
  */
 
 import Foundation
 import MusicKit
+
+// ============================================================
+// MARK: - AppleMusic Capability Latch
+// ============================================================
+
+/// Process-lifetime latch for the MusicKit developer-token capability.
+///
+/// Builds signed without the MusicKit entitlement fail EVERY catalog request
+/// with `MusicTokenRequestError.developerTokenRequestFailed` — the capability
+/// is fixed at code-signing time and can never appear mid-process. Without
+/// the latch each lyrics fetch burned 2-3 doomed MusicKit requests and logged
+/// the same token error every time (Live log evidence, 2026-06-12 session).
+///
+/// Capability, not configuration: there is no build-flag check anywhere.
+/// Entitled builds get their token, never throw the arming error, and keep
+/// the AppleMusic source fully active. Account-state token errors (signed
+/// out, permission pending) can change mid-process, so they never arm it.
+final class AppleMusicCapabilityLatch {
+
+    /// What `record` saw — drives the single-log-line rule at the catch site.
+    enum RecordOutcome: Equatable {
+        /// First capability failure: log ONE "source disabled" line.
+        case armed
+        /// Latch already armed (concurrent first wave): stay silent.
+        case alreadyArmed
+        /// Transient/account error: keep the normal error log, do not latch.
+        case notCapabilityFailure
+    }
+
+    /// Production instance — process-lifetime by design.
+    static let shared = AppleMusicCapabilityLatch()
+
+    // NSLock: fetches arrive concurrently from the foreground task group and
+    // the backfill; the arm transition must be reported exactly once.
+    private let lock = NSLock()
+    private var armed = false
+
+    /// True once the process has proven it cannot mint a developer token.
+    var isArmed: Bool {
+        lock.withLock { armed }
+    }
+
+    /// Classify a thrown error and arm the latch on the first capability
+    /// failure. Pure decision, pinned by AppleMusicCapabilityLatchTests.
+    ///
+    /// Arming cases are the typed process-permanent ones of MusicKit's own
+    /// closed error enum: developerTokenRequestFailed (entitlement, fixed at
+    /// signing time) and permissionDenied (authorization — live-log evidence
+    /// 2026-06-12 shows it repeating every fetch in unauthorized builds, with
+    /// the failure identity drifting between the two across sessions).
+    /// Account-state errors and transport errors stay non-arming.
+    func record(_ error: Error) -> RecordOutcome {
+        switch error {
+        case MusicTokenRequestError.developerTokenRequestFailed,
+             MusicTokenRequestError.permissionDenied:
+            return lock.withLock {
+                if armed { return .alreadyArmed }
+                armed = true
+                return .armed
+            }
+        default:
+            return .notCapabilityFailure
+        }
+    }
+
+    /// Test seam: unit tests exercise arm/skip cycles on fresh instances and
+    /// must be able to restore any instance to the disarmed state.
+    func reset() {
+        lock.withLock { armed = false }
+    }
+}
 
 // ============================================================
 // MARK: - Source Fetchers (extension of LyricsFetcher)
@@ -3181,6 +3252,10 @@ extension LyricsFetcher {
     }
 
     func fetchFromAppleMusic(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
+        // Capability latch: once this process has failed to mint a developer
+        // token, every further MusicKit request is doomed — skip silently
+        // (no request, no log, no result). Entitled builds never arm this.
+        guard !AppleMusicCapabilityLatch.shared.isArmed else { return nil }
         do {
             // Step 1: locate the song in Apple's catalog
             var request = MusicCatalogSearchRequest(term: "\(title) \(artist)", types: [Song.self])
@@ -3237,7 +3312,17 @@ extension LyricsFetcher {
             DebugLogger.log("AppleMusic", "✅ '\(title)' by '\(artist)' — \(parsed.count) lines (TTML)")
             return LyricsFetchResult(lyrics: parsed, source: .appleMusic, score: score, kind: kind)
         } catch {
-            DebugLogger.log("AppleMusic", "❌ MusicDataRequest error: \(error.localizedDescription)")
+            // Single-log-line rule: the arming failure logs once for the
+            // whole process; concurrent first-wave failures stay silent;
+            // transient errors keep the normal per-request error line.
+            switch AppleMusicCapabilityLatch.shared.record(error) {
+            case .armed:
+                DebugLogger.log("AppleMusic", "❌ developer token unavailable — source disabled for this process")
+            case .alreadyArmed:
+                break
+            case .notCapabilityFailure:
+                DebugLogger.log("AppleMusic", "❌ MusicDataRequest error: \(error.localizedDescription)")
+            }
             return nil
         }
     }
