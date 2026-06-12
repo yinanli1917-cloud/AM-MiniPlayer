@@ -19,14 +19,15 @@ Sources/
 │   │   ├── MusicController.swift          - Thin facade: @Published state + notifications/polling/Timer
 │   │   ├── MusicController+Artwork.swift  - Artwork extraction/fetching/caching
 │   │   ├── MusicController+Playback.swift - Playback controls + volume + favorites + AppleEventCode
-│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService) + NWPathMonitor offline self-recovery + LyricsDisplayState machine (deep-search never demotes content)
+│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService) + NWPathMonitor offline self-recovery + LyricsDisplayState machine (deep-search never demotes content) + 会话未命中备忘三集成点（确认未命中记录/抓取开始短路/forceRefresh 旁路清除）
+│   │   ├── LyricsMissMemo.swift           - 会话级已确认无歌词备忘（20min TTL，纯内存不落盘，重启即清；取消/离线永不记录）
 │   │   ├── MenuBarHealer.swift            - Self-heal macOS 26 ControlCenter plist at launch
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
 │   │   ├── MetadataWarmupSweep.swift      - 启动元数据预热：每 schema 版本一次，后台串行解析队列/最近曲目缺失行（utility QoS + 让位前台抓取 + 可整体取消，仅元数据不抓歌词）
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限) + DrainExitFacts（排水循环退出闭包拆分：纯项每结果只算一次，事件项留在闭包内）
-│   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh)
+│   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh) + AppleMusicCapabilityLatch（首次 developer-token 失败后进程级跳过 MusicKit，按能力非编译开关）
 │   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias + 日语读音相等门（取代 romaji 白名单）+ 包含匹配 ≥4 拉丁字符下限
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale + 写一次记忆化（token/solo/romaji/quality 每结果只算一次；单结果池统一走 solo 裁决备忘录）
 │   │       ├── LyricsParser.swift               - TTML/LRC/YRC parsing
@@ -71,7 +72,7 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 649 个单元测试
+Tests/MusicMiniPlayerTests/         - 665 个单元测试
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── JapaneseReadingTests.swift - 日语读音判定（8 对旧白名单 fixture + 前缀扩展负例 + 长音折叠 + fail-closed + 包含下限）
     ├── MetadataDiskCacheTierTests.swift - 元数据缓存层隔离（CN/多区域互不覆盖）+ CN 证据元组往返 + v6 schema 冲洗 + 防抖合并写
@@ -79,10 +80,12 @@ Tests/MusicMiniPlayerTests/         - 649 个单元测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     ├── LyricsSourceProfileTests.swift - 类型化源注册表 oracle 等值测试（旧硬编码阶梯字面量）
     ├── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
-    ├── NetworkOutcomeLedgerTests.swift - 网络结果分类表 + 负面裁决配额 + task-local default-allow
+    ├── NetworkOutcomeLedgerTests.swift - 网络结果分类表 + 负面裁决配额 + task-local default-allow + MusicKit 配置失败 indeterminate 钉死
     ├── AuthoritativeBackfillBudgetTests.swift - 回填预算算术（9s 哨兵 ≥ 最长链 7.7s）+ 并行别名发现合并顺序 oracle + marker-only 证据窗口
     ├── ResolverSingleFlightTests.swift - 解析器 single-flight：同 key 并发咨询只执行一次解析体 + 异 key 不合流 + awaiter 取消不杀共享任务
     ├── MetadataWarmupTests.swift  - 预热扫描：每 schema 版本一次 + 有行即跳过 + 让位前台 + 取消不盖戳（全 seam 注入，零网络）
+    ├── AppleMusicCapabilityLatchTests.swift - AM 能力闩锁：developer-token 失败武装一次 + 瞬态/账户态错误不武装 + reset 测试缝
+    ├── LyricsMissMemoTests.swift  - 会话未命中备忘：TTL 命中/过期剪枝 + 裁决载荷往返 + clear + 记录门（取消/离线拒绝）
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix

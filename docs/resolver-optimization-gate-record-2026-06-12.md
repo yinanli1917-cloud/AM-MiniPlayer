@@ -227,3 +227,48 @@ re-ran the full sweep on every replay. Immediate mitigation: manual
 
 A+B verdict: LANDED — duplicate waves gone, schema flushes can never silently
 cold the library again.
+
+## Latency-regression fix C+D+E — miss-path waste (post-round-2)
+
+Commits: (C, D, E — this trio)
+
+- C AppleMusic capability latch: process-lifetime skip of the MusicKit lyrics
+  source after the first typed capability failure. Live evidence forced one
+  broadening mid-gate: the failure identity DRIFTED between sessions
+  (developerTokenRequestFailed in the morning, permissionDenied at 10:02) —
+  the latch arms on both typed cases of MusicKit's closed error enum;
+  account-state and transport errors never arm. Real-app: 0 MusicDataRequest
+  error lines in the session (was 10+), exactly one arm line.
+- D verified NO-CHANGE: AM failures never routed through the network ledger
+  (MusicKit owns its transport; ledger records only at HTTPClient's two
+  chokepoints), and -999 deadline clips were already quorum-EXCLUDED by
+  design with truncation safety carried by backfillDeadlineClipped. Premise
+  retired with a pinning test; persistence rules untouched.
+- E session miss memo: TWO integration bugs found by real-app gating that
+  unit tests could not see (the global verification rule in action):
+  (1) the memo's cancellation veto suppressed every legitimate memo — the
+  bounded miss path TERMINATES via the 9s sentinel's cancellation by design,
+  so Task.isCancelled is true at the real terminal (proof: 10:10:18 backfill
+  UNAVAILABLE published, no memo). Gate re-keyed on verdict only; moot
+  publications stay excluded by the still-current+empty and backfill
+  generation guards. (2) replay identity broke on songID duration drift —
+  the same track keyed |266 then |265 across player snapshots; memo now keys
+  on title|artist|album with the duration in the payload and the ±3s
+  tolerance check the disk cache and P1 matching already use.
+- TDD: compile-RED + assertion-RED for every change (latch permissionDenied
+  2 reds; gate truth-table; key-drift helpers 3 tests); suite 678/0.
+- Suites (degraded provider window, 87/100 73/82): every flip vs #11 and vs
+  A+B adjudicated — ES-09/KO-05/FR-03/PT-04/PT-06 the established weather
+  churn set, KO-11 (LILAC/IU) and PT-04 recover individually. C/D/E touch no
+  CLI-exercised selection path (the latch only skips an always-failing
+  source).
+- Real-app (binary post-678): Oceanside Café full bounded miss (~14s, once)
+  → switch away → replay: [MissMemo] line, terminal shown <1s, fetchAllSources
+  count for the whole session = 1. AM: zero error lines, one arm line.
+- Observations for follow-up (chipped/noted): the in-memory lyrics NSCache
+  still uses exact songID keys and misses across the same duration drift;
+  foreground persistence tail lacks a backfillDeadlineClipped-equivalent
+  (review #6/#7 adjudicated the fast exit deliberately — flag only).
+
+C+D+E verdict: LANDED — dead source silent, miss replays answer instantly,
+premise-driven ledger change correctly rejected by verification.

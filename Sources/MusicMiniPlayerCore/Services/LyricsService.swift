@@ -2,7 +2,7 @@
  * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver), Network (NWPathMonitor)
  * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state + LyricsDisplayState machine (isLoading is a derived compat shim)
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
- * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7)
+ * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7); confirmed terminal misses memo into LyricsMissMemo for the session (20min TTL) — replay answers instantly, forceRefresh bypasses+clears, never recorded on cancellation/offline
  * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
@@ -231,6 +231,14 @@ public class LyricsService: ObservableObject {
     private var lastGoodLyricsTime: Date?
     /// Cooldown: refuse re-fetches within this window unless forceRefresh
     private let stabilityGuardCooldown: TimeInterval = 3.0
+
+    /// Session memo of CONFIRMED no-lyrics verdicts (latency-regression item
+    /// E): replaying a hard-miss song answers instantly instead of re-running
+    /// the full ~14s sweep. In-memory only — relaunch clears it; TTL expiry
+    /// (20 min) re-searches; forceRefresh bypasses AND clears. Recorded only
+    /// through the terminal transition in applyNoLyricsMissIfStillCurrentAndEmpty,
+    /// gated by shouldRecordTerminalMiss (never on cancellation or offline).
+    private let missMemo = LyricsMissMemo<TerminalMissMemoRecord>()
 
     // Silent self-recovery for the "No internet connection" terminal: when
     // connectivity returns, re-issue the fetch for the current track. No
@@ -567,6 +575,45 @@ public class LyricsService: ObservableObject {
 
         var appliedProvisionalCache = false
 
+        // Memo BYPASS+CLEAR point: a user-initiated retry must always really
+        // search — drop the session verdict before anything can answer from it.
+        if forceRefresh {
+            missMemo.clear(forKey: Self.missMemoKey(forSongID: songID))
+        }
+
+        // Memo HIT point: a song whose confirmed no-lyrics terminal this
+        // session already reached (and showed) answers instantly — the full
+        // multi-source sweep is skipped entirely until the TTL expires.
+        // Keyed WITHOUT the duration component (player snapshots drift ±1s
+        // between plays of the same track — live-log proof |266 vs |265);
+        // the stored duration is tolerance-checked instead, so same-titled
+        // sibling recordings never inherit each other's verdict.
+        if !forceRefresh,
+           let hit = missMemo.confirmedMiss(forKey: Self.missMemoKey(forSongID: songID)),
+           Self.shouldServeMemoHit(storedDuration: hit.duration, currentDuration: duration) {
+            let verdict = hit.verdict
+            lyrics = []
+            currentLineIndex = nil
+            refreshTranslationAvailability()
+            currentSongID = songID
+            currentSongTitle = title
+            currentSongArtist = artist
+            currentStableSongID = stableSongID
+            currentSongDuration = duration
+            currentSongAlbum = album
+            displayState = verdict.displayState
+            error = verdict.errorMessage
+            DebugLogger.log("MissMemo", "⚡ confirmed-miss replay served from session memo: '\(songID)' (\(verdict.errorMessage))")
+            recordDiagnosticsLyricsMiss(
+                title: title,
+                artist: artist,
+                album: album,
+                duration: duration,
+                resultCount: 0
+            )
+            return
+        }
+
         // Check cache with expiration.
         if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
             let cachedNeedsGranularityRefresh = Self.shouldRefreshCachedLyricsForGranularity(
@@ -856,6 +903,53 @@ public class LyricsService: ObservableObject {
     /// recovery keys off this exact value to know a re-fetch is worthwhile.
     static let networkUnreachableErrorMessage = "No internet connection"
 
+    /// One session-memo record: the verdict plus the duration the search ran
+    /// with. The duration lives in the PAYLOAD, not the key — player
+    /// snapshots report the same track's duration with ±1s drift, so it can
+    /// never be part of replay identity (only a tolerance check).
+    struct TerminalMissMemoRecord {
+        let verdict: TerminalMissVerdict
+        let duration: Double?
+    }
+
+    /// Replay identity for the session memo: songID without its drifting
+    /// duration component (title|artist|album). A songID with no parseable
+    /// duration tail is used as-is.
+    static func missMemoKey(forSongID songID: String) -> String {
+        let parts = songID.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count >= 2, Double(parts[parts.count - 1]) != nil else { return songID }
+        return parts.dropLast().joined(separator: "|")
+    }
+
+    /// The duration component a songID was built with, when parseable.
+    static func missMemoDuration(forSongID songID: String) -> Double? {
+        let parts = songID.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count >= 2 else { return nil }
+        return Double(parts[parts.count - 1])
+    }
+
+    /// Serve a memo hit only when both durations are known and within the
+    /// same ±3s window P1 matching and the disk cache's nearby-duration
+    /// lookup use — unknown durations fail to SEARCH, never to a verdict.
+    static func shouldServeMemoHit(storedDuration: Double?, currentDuration: Double?) -> Bool {
+        guard let stored = storedDuration, let current = currentDuration else { return false }
+        return abs(stored - current) <= 3.0
+    }
+
+    /// Memo gate: the offline terminal is a statement about the NETWORK, not
+    /// the song — it never memos. Cancellation is deliberately NOT consulted:
+    /// the bounded miss path terminates via the 9s sentinel's group
+    /// cancellation BY DESIGN (review #6+#7), so Task.isCancelled is true at
+    /// the legitimate terminal — a cancellation veto here suppressed every
+    /// real memo (live-log proof 2026-06-12 10:10:18). Moot publications are
+    /// excluded upstream instead: the still-current+empty guard in
+    /// applyNoLyricsMissIfStillCurrentAndEmpty kills track-change leftovers,
+    /// and the backfill generation guard kills stale-task publications.
+    /// Pinned by LyricsMissMemoTests.
+    static func shouldRecordTerminalMiss(verdict: TerminalMissVerdict) -> Bool {
+        verdict != .networkUnreachable
+    }
+
     @MainActor
     private func applyNoLyricsMissIfStillCurrentAndEmpty(songID: String, verdict: TerminalMissVerdict = .noLyrics) {
         guard Self.shouldApplyNoLyricsMiss(
@@ -865,6 +959,18 @@ public class LyricsService: ObservableObject {
         ) else {
             DebugLogger.log("LyricsService", "⏭️ Ignoring stale no-lyrics miss after lyrics/backfill applied: '\(songID)'")
             return
+        }
+        // Memo SET point — the single chokepoint every terminal no-lyrics
+        // transition flows through (foreground instrumental, backfill miss,
+        // backfill instrumental/unavailable). The still-current+empty guard
+        // above and the backfill generation guard upstream are what exclude
+        // moot publications; sentinel-cancelled bounded misses memo on
+        // purpose (that cancellation is the miss path's normal completion).
+        if Self.shouldRecordTerminalMiss(verdict: verdict) {
+            missMemo.record(
+                TerminalMissMemoRecord(verdict: verdict, duration: Self.missMemoDuration(forSongID: songID)),
+                forKey: Self.missMemoKey(forSongID: songID)
+            )
         }
         displayState = verdict.displayState
         error = verdict.errorMessage
