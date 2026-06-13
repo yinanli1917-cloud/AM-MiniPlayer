@@ -437,6 +437,31 @@ enum NativeLyricsSeekClassifier {
         if liveIndex == previous || liveIndex == previous + 1 { return false }
         return true
     }
+
+    // Interpolated playback time is allowed to drift BACKWARD by up to ~0.5s so a poll resync can
+    // correct interpolation overshoot. When such a sub-tolerance correction crosses a line boundary
+    // it regresses the live index (N+1 → N). isSeek() would call that a seek and the renderer would
+    // SNAP back to the demoted line — reactivating it at full brightness (the dim→bright revert).
+    //
+    // This classifies precisely that jitter: a NON-explicit backward index move whose backward time
+    // step is within the resync tolerance. The renderer holds the active line for these instead of
+    // snapping, so a just-dimmed line keeps dimming from where it was. A real scrub sets explicitSeek
+    // (always a seek), and a backward jump beyond the tolerance is a genuine discontinuity (also a seek).
+    static func isResyncRewind(
+        previousIndex: Int?,
+        liveIndex: Int,
+        previousPlaybackTime: TimeInterval?,
+        playbackTime: TimeInterval,
+        explicitSeek: Bool,
+        tolerance: TimeInterval
+    ) -> Bool {
+        guard !explicitSeek,
+              let previousIndex,
+              let previousPlaybackTime,
+              liveIndex < previousIndex else { return false }
+        let backwardStep = previousPlaybackTime - playbackTime
+        return backwardStep > 0 && backwardStep <= tolerance
+    }
 }
 
 enum NativeLyricsTimelinePolicy {

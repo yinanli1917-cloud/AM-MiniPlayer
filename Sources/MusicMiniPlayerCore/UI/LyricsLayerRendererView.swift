@@ -913,6 +913,32 @@ final class NativeLyricsSurfaceView: NSView {
         )
         let liveIndex = provisional.semanticIndex
         lastObservedSeekGeneration = seekToken
+        // A sub-tolerance backward time correction (poll resync overshoot) just pulled the live index
+        // back across a line boundary. That is NOT a seek — snapping back would reactivate the
+        // just-demoted line at full brightness (the dim→bright revert). Hold the active line: keep the
+        // prior semantic index + timeline so the demoted line keeps dimming from where it already was.
+        if NativeLyricsSeekClassifier.isResyncRewind(
+            previousIndex: nativeSemanticCurrentIndex,
+            liveIndex: liveIndex,
+            previousPlaybackTime: nativeTimelineState?.playbackTime,
+            playbackTime: playbackTime,
+            explicitSeek: explicitSeek,
+            tolerance: Self.resyncRewindTolerance
+        ) {
+            if let heldIndex = nativeSemanticCurrentIndex {
+                configuration.nativeSemanticCurrentIndex = heldIndex
+            }
+            if let held = nativeTimelineState {
+                configuration.nativeScrollTargetIndex = held.scrollToIndex
+                configuration.nativeHotActiveIndices = held.hotGroups
+                configuration.nativeBufferedActiveIndices = held.bufferedGroups
+            }
+            #if LOCAL_DEVELOPER_BUILD
+            DebugLogger.log("RewindHold", String(format: "held idx=%d (live=%d) backStep=%.3fs — jitter, not a seek (was the dim→bright revert)",
+                nativeSemanticCurrentIndex ?? -1, liveIndex, (nativeTimelineState?.playbackTime ?? playbackTime) - playbackTime))
+            #endif
+            return
+        }
         let isSeek = NativeLyricsSeekClassifier.isSeek(
             previousIndex: nativeSemanticCurrentIndex,
             liveIndex: liveIndex,
@@ -1212,6 +1238,12 @@ final class NativeLyricsSurfaceView: NSView {
     /// rendering as a misplaced blurred line for a frame). Snap modes are exempt —
     /// they teleport by design.
     private static let naturalModeMaxYStepPerTick: CGFloat = 60
+
+    /// Interpolated playback time may drift backward by up to this much for a poll resync to correct
+    /// overshoot (matches the interpolateTime backward-correction allowance). A non-explicit backward
+    /// index move within this window is resync jitter — the renderer holds the active line instead of
+    /// snapping back to a just-demoted one (the dim→bright revert guard).
+    private static let resyncRewindTolerance: TimeInterval = 0.5
 
     private func applyFrame(
         for row: LayerBackedLyricRow,
