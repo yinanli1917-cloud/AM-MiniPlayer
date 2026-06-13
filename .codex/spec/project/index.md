@@ -1,25 +1,22 @@
-# Project Spec
+# Project Specs
 
-Durable project knowledge for Codex sessions.
+## Project-Specific
 
-Use this folder for rules that should survive conversation compaction:
+- [Audio Output Routing](audio-output-routing.md)
+- [Auto-Update Pipeline](auto-update-pipeline.md)
+- [Distribution And Compliance](distribution-and-compliance.md)
+- [Lyrics Pipeline](lyrics-pipeline.md)
+- [Lyrics Renderer Performance](lyrics-renderer-performance.md)
+- [Lyrics UX Benchmark (LUXB)](lyrics-ux-benchmark.md)
+- [Owner Diagnostics](owner-diagnostics.md)
+- [Playback Artwork](playback-artwork.md)
+- [Playback State Sync](playback-state-sync.md)
+- [Visual Background System](visual-background-system.md)
+- [Window Management](window-management.md)
 
-- architecture decisions
-- recurring failure modes
-- project-specific testing commands
-- file ownership and module boundaries
-- release or operational procedures
+## Harness (Projected Templates)
 
-## Pre-Development Checklist
+- [Cross-Session Continuity](cross-session-continuity.md)
+- [GEB Documentation Protocol](geb-documentation.md)
+- [Spec Update Protocol](spec-update-protocol.md)
 
-- Check this index for relevant project rules.
-- Add task-specific context to `implement.jsonl` and `check.jsonl` instead of relying on memory.
-
-## Quality Check
-
-- If the task taught a durable lesson, add or update a focused spec file here.
-
-## Specs
-
-- [Cross-Session Continuity](cross-session-continuity.md) - Bounded task continuity matching, compact task memory, and multi-session safety rules.
-- [Spec Update Protocol](spec-update-protocol.md) - Trellis-style durable spec update rules for project, module, and workflow knowledge.

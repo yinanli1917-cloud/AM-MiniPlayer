@@ -321,3 +321,75 @@ Do not collapse all empty lyric outcomes into "no lyrics".
   are measured. Do not briefly render the full lyric payload during partial
   measurement; that path causes page-switch frame stalls on translated or
   syllable-synced tracks.
+
+## Per-Result Memoization (review #8, 2026-06-12)
+
+- Every `LyricsFetchResult` carries a write-once `LyricsSelectionMemo`
+  (reference box, survives struct copies): identity tokens, duration-keyed solo
+  verdict, `DrainExitFacts`, scorer romaji/quality verdicts. Pure per-result
+  facts compute once at arrival; pool composition, elapsed time, and branch
+  flags stay event-side in the drain-loop closures.
+- 1-element `selectBestResult` pools route through the solo-verdict memo. This
+  is sound only while selection returns elements of its input pool — never a
+  constructed/transformed result. Keep it that way, or remove the chokepoint.
+- Box access must remain totally ordered (task-group child → serial drain →
+  sequential continuation). No locks; do not introduce cross-task box sharing.
+
+## Resolver Metadata Cache Tiers (review #9, 2026-06-12)
+
+- CN-tier and multi-region resolutions live in DISJOINT stores; cross-tier
+  overwrite must remain structurally impossible; each tier replays only rows it
+  produced.
+- A replayed row must re-pass the SAME per-result guards a fresh resolution
+  faces (rebuild as synthetic result → `matchCNResult`); guard failure falls
+  through to a fresh search whose outcome overwrites the row. Persist successes
+  only — never negative resolver verdicts.
+- Cache persistence is debounced on the cache's own serial queue; `flush()` on
+  app terminate and at verifier-CLI exit. Any matching-semantics change to the
+  corroboration doors requires a `MetadataDiskCache.schemaVersion` bump.
+
+## Romanized-Title Corroboration Lanes (review #11, 2026-06-12)
+
+- One shared helper (`LanguageUtils.romanizedTitleCorroboration`) serves every
+  corroboration door (postmortem 006 sites + ranking comparator + Branch-2
+  cache guard). It tries Mandarin pinyin AND Japanese readings
+  (CFStringTokenizer ja-locale Latin transcription, long-vowel fold, S/T retry,
+  FAIL-CLOSED on empty transcriptions).
+- Title-match ADMISSION uses reading EQUALITY only; fuzzy (0.6) comparisons are
+  allowed only at the pre-existing ranking doors. Containment shortcuts require
+  the >= 4 Latin-identity floor. No word whitelists in production code — known
+  pairs live as test fixtures (JapaneseReadingTests).
+
+## Gate Methodology For Pipeline Changes (2026-06-12)
+
+- Live-provider suites are weather-noisy (same-code verdict flips within
+  minutes are routine). Never gate on absolute pass counts: diff per-case
+  against same-day baselines, individually `check`-recheck every flip, and
+  accept only reproducible regressions as real. When attribution is contested,
+  run the stash control: same check on the pre-change binary in the same
+  weather window.
+- Benchmark gate diffs must read `--json-out` files (streamed stdout JSONL
+  tears under concurrent logging). For CLI debug evidence set
+  `NANOPOD_DEBUG_LOG=1` and read `/tmp/nanopod_debug.log`.
+
+## Cache Identity And Schema Flushes (regression fix, 2026-06-12)
+
+- `MetadataDiskCache.schemaVersion` bumps FLUSH every row and cold the whole
+  library — bump only when the row SHAPE changes. Semantic/judgment changes
+  rely on replay re-validation (every replay re-passes the live guards), so
+  they need NO flush. The launch warm-up sweep (once per schema version,
+  stamped only on completion) is the backstop, not a license to flush.
+- songID duration components DRIFT between player snapshots of the same track
+  (|266 vs |265 observed). Duration must never be part of replay identity —
+  key on title|artist|album and tolerance-check the duration (±3s, the
+  nearby-duration idiom). The session miss memo does this; the in-memory
+  lyrics NSCache still has the exact-key flaw (chipped follow-up).
+- The bounded miss path TERMINATES via the 9s sentinel's group cancellation
+  by design — `Task.isCancelled` is TRUE at the legitimate no-lyrics
+  terminal. Any gate at the publication chokepoint must key on verdict and
+  the still-current/generation guards, never on cancellation state.
+- The AppleMusic lyrics source arms a process-lifetime skip latch on typed
+  capability failures (developerTokenRequestFailed, permissionDenied — the
+  observed failure identity drifts between sessions). Resolver consults are
+  single-flight coalesced per entry point; the shared task is unstructured
+  so awaiter cancellation never kills it.
