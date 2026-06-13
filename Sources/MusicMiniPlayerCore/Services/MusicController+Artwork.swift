@@ -324,8 +324,18 @@ extension MusicController {
             guard let self = self else { return }
             defer { DispatchQueue.main.async { self.lastArtworkQueueHeartbeat = Date() } }
 
-            guard let app = self.artworkApp ?? self.musicApp,
-                  app.isRunning else { return }
+            // NEVER fall back to musicApp — accessing the same SBApplication from two
+            // queues concurrently corrupts AppleEvent state (EXC_BAD_ACCESS crash).
+            let app: SBApplication
+            if let existing = self.artworkApp {
+                app = existing
+            } else if let fresh = SBApplication(bundleIdentifier: "com.apple.Music") {
+                self.artworkApp = fresh
+                app = fresh
+            } else {
+                return
+            }
+            guard app.isRunning else { return }
             guard self.artworkFetchGeneration == generation else {
                 self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
                 self.recordDiagnosticsArtworkDropped(
@@ -1055,13 +1065,28 @@ extension MusicController {
             return cached
         }
 
-        // 🔑 Use dedicated artworkQueue — separate SB instance, won't block position polls
+        // 🔑 Use dedicated artworkQueue — separate SB instance, won't block position polls.
+        // NEVER fall back to musicApp: accessing the same SBApplication from both the artwork
+        // queue and scriptingBridgeQueue concurrently corrupts AppleEvent state (EXC_BAD_ACCESS
+        // SIGSEGV with pointer-auth failure during rapid track switching).
         let controller = WeakSendableReference(self)
         let image: NSImage? = await withCheckedContinuation { continuation in
             artworkQueue.async {
-                guard let self = controller.value,
-                      let app = self.artworkApp ?? self.musicApp,
-                      app.isRunning else {
+                guard let self = controller.value else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let app: SBApplication
+                if let existing = self.artworkApp {
+                    app = existing
+                } else if let fresh = SBApplication(bundleIdentifier: "com.apple.Music") {
+                    self.artworkApp = fresh
+                    app = fresh
+                } else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                guard app.isRunning else {
                     continuation.resume(returning: nil)
                     return
                 }
