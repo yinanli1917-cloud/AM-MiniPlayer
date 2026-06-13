@@ -506,7 +506,16 @@ final class NativeLyricsSurfaceView: NSView {
     private var localEventMonitor: Any?
     private var lastConfigureEventSignature: String?
     private var lastAppliedConfigureSignature: String?
+    #if DEBUG
+    var debugSkipDedupe = false
+    #endif
     private var initialMeasurementsPending = true
+    #if DEBUG
+    var debugInitialMeasurementsPending: Bool {
+        get { initialMeasurementsPending }
+        set { initialMeasurementsPending = newValue }
+    }
+    #endif
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var deferredDeactivationIndex: Int?
@@ -697,9 +706,15 @@ final class NativeLyricsSurfaceView: NSView {
         // the row reconcile each time is what flashes. Skip structural duplicates. A real track
         // change, line advance, measurement update, or translation change all change the signature.
         let signature = Self.configureSignature(configuration)
+        #if DEBUG
+        if !debugSkipDedupe, !isTrackChange, signature == lastAppliedConfigureSignature {
+            return
+        }
+        #else
         if !isTrackChange, signature == lastAppliedConfigureSignature {
             return
         }
+        #endif
         lastAppliedConfigureSignature = signature
         if let previous = self.configuration?.trackContext,
            !Self.isSameTrackIdentity(previous, configuration.trackContext) {
@@ -873,6 +888,16 @@ final class NativeLyricsSurfaceView: NSView {
         for (_, view) in rowViews where view.frame.size != .zero {
             view.layoutSubtreeIfNeeded()
         }
+        // Bloom diagnostic: count rows carrying the karaoke bright overlay. >1 means
+        // multiple rows are rendering full-brightness text simultaneously — the bloom
+        // signature. Logged in the LOCAL_DEVELOPER_BUILD configuration (build_app.sh).
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        let ovlCount = rowViews.values.filter { $0.debugMainBrightOverlayActive }.count
+        // Log unconditionally: ovl count is the bloom signal (>1 = multiple bright overlays),
+        // and the total rows + current index help correlate with the user's repro steps.
+        // ovl>=2 + row count spike = the bloom signature we've been chasing for weeks.
+        DebugLogger.log("BLoomDiag", "ovl=\(ovlCount) rows=\(visibleRows.count) curIdx=\(activeTextPhaseIndex) mounted=\(mountedCount) unmounted=\(unmountedCount)")
+        #endif
         CATransaction.commit()
         lastConfiguredTextPhaseIndex = activeTextPhaseIndex
         renderTelemetry.recordLifecycle(
