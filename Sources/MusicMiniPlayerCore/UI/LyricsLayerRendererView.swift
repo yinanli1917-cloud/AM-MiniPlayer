@@ -506,6 +506,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var localEventMonitor: Any?
     private var lastConfigureEventSignature: String?
     private var lastAppliedConfigureSignature: String?
+    private var initialMeasurementsPending = true
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var deferredDeactivationIndex: Int?
@@ -615,7 +616,14 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func installLocalEventMonitor() {
         guard localEventMonitor == nil else { return }
-        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .mouseMoved]) { [weak self] event in
+        // Left-mouse-down is deliberately NOT in the local monitor. Tap-to-jump is handled by the
+        // surface's own mouseDown: which goes through proper AppKit hit testing: reserved overlay
+        // zones pass through (calls super, event reaches the SwiftUI responder chain), and clicks
+        // on lyrics rows fire the tap handler. Intercepting at the app level created a timing bug:
+        // the first click of a hover entered before configuration.controlsVisible propagated, so
+        // the zone check failed and the click was eaten — triggering tap-to-jump through the
+        // buttons/controls the user was aiming for (the "click-through" bug).
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .mouseMoved]) { [weak self] event in
             guard let self,
                   self.window === event.window,
                   self.shouldHandleLocalEvent(event) else {
@@ -624,8 +632,6 @@ final class NativeLyricsSurfaceView: NSView {
             switch event.type {
             case .scrollWheel:
                 return self.handleNativeScrollWheel(event) ? nil : event
-            case .leftMouseDown:
-                return self.handleNativeMouseDown(event) ? nil : event
             case .mouseMoved:
                 self.updateNativeHoverFromEvent(event)
                 return event
@@ -671,7 +677,7 @@ final class NativeLyricsSurfaceView: NSView {
         // Every render-affecting field. If two configs share this, re-running the full row
         // reconcile is pure churn — the source of the staged-load flash storm.
         var s = "n\(c.rows.count)|f\(c.rows.first?.id ?? "-")|l\(c.rows.last?.id ?? "-")"
-        s += "|i\(c.currentIndex)|r\(c.renderedIndices.count)|h\(c.accumulatedHeights.count)"
+        s += "|i\(c.effectiveCurrentIndex)|r\(c.renderedIndices.count)|h\(c.accumulatedHeights.count)"
         s += "|a\(Int(c.anchorY))|w\(Int(c.rowWidth))|il\(c.interludeAfterIndex ?? -1)"
         s += "|m\(String(describing: c.playbackMode))|ms\(c.isManualScrolling ? 1 : 0)"
         s += "|tr\(c.showTranslation ? 1 : 0)\(c.isTranslating ? 1 : 0)\(c.translationFailed ? 1 : 0)"
@@ -710,9 +716,13 @@ final class NativeLyricsSurfaceView: NSView {
             pausedSemanticLocked = false
             lastTextPhaseUpdateAt = nil
             deferredDeactivationIndex = nil
+            initialMeasurementsPending = true
             #if LOCAL_DEVELOPER_BUILD
             DebugLogger.log("RendererReset", "track='\(configuration.trackContext.title.prefix(20))' rows=\(configuration.rows.count) — full wipe (visualStates/measuredHeights cleared)")
             #endif
+        }
+        if self.configuration == nil {
+            initialMeasurementsPending = true
         }
         self.configuration = configuration
         #if LOCAL_DEVELOPER_BUILD
@@ -1313,7 +1323,8 @@ final class NativeLyricsSurfaceView: NSView {
         if view.frame.size != frame.size || view.frame.origin != .zero {
             view.frame = frame
         }
-        view.layer?.opacity = Float(visual.opacity)
+        let appliedOpacity = initialMeasurementsPending ? 0 : Float(visual.opacity)
+        view.layer?.opacity = appliedOpacity
         view.layer?.setAffineTransform(
             CGAffineTransform(translationX: 0, y: y)
                 .scaledBy(x: visual.scale, y: visual.scale)
@@ -1635,6 +1646,7 @@ final class NativeLyricsSurfaceView: NSView {
         } else {
             applyFrames()
         }
+        initialMeasurementsPending = false
     }
 
     private func applyFramesForCurrentConfiguration(snap: Bool, managesTransaction: Bool = true) {
