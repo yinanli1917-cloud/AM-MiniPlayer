@@ -777,6 +777,11 @@ final class NativeLyricsSurfaceView: NSView {
         }
 
         scheduleNativeLineAdvanceTimerIfNeeded(configuration: runtimeConfiguration)
+        // Rows were laid out at opacity 0 during the initial-measurements guard; the
+        // reconcile just finished, so heights are seeded and rows are positioned. Clear
+        // the suppression NOW — even if the presentation loop hasn't started yet — so the
+        // next configure or tick renders rows at their real opacities.
+        initialMeasurementsPending = false
     }
 
     @discardableResult
@@ -1646,7 +1651,6 @@ final class NativeLyricsSurfaceView: NSView {
         } else {
             applyFrames()
         }
-        initialMeasurementsPending = false
     }
 
     private func applyFramesForCurrentConfiguration(snap: Bool, managesTransaction: Bool = true) {
