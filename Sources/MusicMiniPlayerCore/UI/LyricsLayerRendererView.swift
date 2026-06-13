@@ -505,6 +505,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var surfaceTrackingArea: NSTrackingArea?
     private var localEventMonitor: Any?
     private var lastConfigureEventSignature: String?
+    private var lastAppliedConfigureSignature: String?
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var deferredDeactivationIndex: Int?
@@ -666,8 +667,34 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
 
+    private static func configureSignature(_ c: LyricsLayerRendererConfiguration) -> String {
+        // Every render-affecting field. If two configs share this, re-running the full row
+        // reconcile is pure churn — the source of the staged-load flash storm.
+        var s = "n\(c.rows.count)|f\(c.rows.first?.id ?? "-")|l\(c.rows.last?.id ?? "-")"
+        s += "|i\(c.currentIndex)|r\(c.renderedIndices.count)|h\(c.accumulatedHeights.count)"
+        s += "|a\(Int(c.anchorY))|w\(Int(c.rowWidth))|il\(c.interludeAfterIndex ?? -1)"
+        s += "|m\(String(describing: c.playbackMode))|ms\(c.isManualScrolling ? 1 : 0)"
+        s += "|tr\(c.showTranslation ? 1 : 0)\(c.isTranslating ? 1 : 0)\(c.translationFailed ? 1 : 0)"
+        s += "|pt\(c.pendingTranslationLineIndices.count)|sy\(c.hasSyllableSync ? 1 : 0)"
+        s += "|rm\(c.reduceMotion ? 1 : 0)|si\(c.suppressInitialMotion ? 1 : 0)"
+        return s
+    }
+
     func configure(_ configuration: LyricsLayerRendererConfiguration) {
         installLocalEventMonitor()
+        let isTrackChange = self.configuration.map {
+            !Self.isSameTrackIdentity($0.trackContext, configuration.trackContext)
+        } ?? false
+        // Coalesce the reconfigure storm: SwiftUI calls updateNSView→configure on every body
+        // re-eval (a dozen onChange handlers + per-tick time). During an uncached staged load
+        // (blank → first match → refined match) most of those carry IDENTICAL structure; re-running
+        // the row reconcile each time is what flashes. Skip structural duplicates. A real track
+        // change, line advance, measurement update, or translation change all change the signature.
+        let signature = Self.configureSignature(configuration)
+        if !isTrackChange, signature == lastAppliedConfigureSignature {
+            return
+        }
+        lastAppliedConfigureSignature = signature
         if let previous = self.configuration?.trackContext,
            !Self.isSameTrackIdentity(previous, configuration.trackContext) {
             cancelManualScrollTimers()
@@ -683,8 +710,14 @@ final class NativeLyricsSurfaceView: NSView {
             pausedSemanticLocked = false
             lastTextPhaseUpdateAt = nil
             deferredDeactivationIndex = nil
+            #if LOCAL_DEVELOPER_BUILD
+            DebugLogger.log("RendererReset", "track='\(configuration.trackContext.title.prefix(20))' rows=\(configuration.rows.count) — full wipe (visualStates/measuredHeights cleared)")
+            #endif
         }
         self.configuration = configuration
+        #if LOCAL_DEVELOPER_BUILD
+        DebugLogger.log("RendererConfigure", "track='\(configuration.trackContext.title.prefix(20))' rows=\(configuration.rows.count) rendered=\(configuration.renderedIndices.count) curIdx=\(configuration.effectiveCurrentIndex) mode=\(configuration.playbackMode)")
+        #endif
 
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         updateNativeLineMotionSamplingTimer(configuration: runtimeConfiguration)
@@ -1593,6 +1626,9 @@ final class NativeLyricsSurfaceView: NSView {
                 self.applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snap)
             }
             self.updateSurfaceInterludeDots(configuration: runtimeConfiguration, snap: snap)
+            #if LOCAL_DEVELOPER_BUILD
+            self.recordAggregateBrightness(configuration: runtimeConfiguration, snap: snap)
+            #endif
         }
         if managesTransaction {
             withDisabledLayerActions(applyFrames)
@@ -1819,6 +1855,64 @@ final class NativeLyricsSurfaceView: NSView {
         /// Whether the y came from the presentation engine (vs the snapY model
         /// fallback) — distinguishes engine-entry-drop glitches from model skew.
         let engineBacked: Bool
+    }
+
+    // Objective aggregate-brightness sensor. The reported glitches ("overlapping bright
+    // text at the start", "dim→suddenly bright revert", a blur flash) could be driven by
+    // opacity, blur, spatial stacking, or a reflow — we do NOT assume which. Each frame we
+    // log ALL dimensions as scalars and only when a frame looks abnormal, so the time-series
+    // spike's SIGNATURE attributes the cause. Numbers, never visual judgement.
+    private var aggLastRowCount: Int = 0
+    private var aggLastMaxBlur: CGFloat = 0
+    private var aggFrameCounter: Int = 0
+
+    private func recordAggregateBrightness(
+        configuration: LyricsLayerRendererConfiguration,
+        snap: Bool
+    ) {
+        aggFrameCounter += 1
+        let rows = visibleRows(for: configuration)
+        struct R { let idx: Int; let op: CGFloat; let blur: CGFloat; let top: CGFloat; let bot: CGFloat; let overlay: Bool }
+        var rs: [R] = []
+        for row in rows {
+            guard let st = visualStates[row.index] else { continue }
+            let y = lastAppliedYByRowID[row.id] ?? 0
+            let h = measuredHeightsByIndex[row.index] ?? 0
+            // The actual applied opacity (the row's visual-spring output), plus the bright karaoke
+            // overlay — the channel model-opacity misses. >1 overlay at once = the bloom signature.
+            let overlay = rowViews[row.id]?.debugMainBrightOverlayActive ?? false
+            rs.append(R(idx: row.index, op: st.opacity, blur: st.blur, top: y, bot: y + h, overlay: overlay))
+        }
+        guard !rs.isEmpty else { return }
+        let overlayCount = rs.filter { $0.overlay }.count
+        let brightCount = rs.filter { $0.op > 0.6 }.count
+        let sumO = rs.reduce(0) { $0 + $1.op }
+        let maxBlur = rs.map(\.blur).max() ?? 0
+        // Spatial stacking: two non-faint rows physically overlapping in Y → additive light.
+        var stack: CGFloat = 0
+        var stackPair = ""
+        for i in 0..<rs.count {
+            for j in (i + 1)..<rs.count where rs[i].op > 0.3 && rs[j].op > 0.3 {
+                let overlap = max(0, min(rs[i].bot, rs[j].bot) - max(rs[i].top, rs[j].top))
+                let minH = max(1, min(rs[i].bot - rs[i].top, rs[j].bot - rs[j].top))
+                let score = min(rs[i].op, rs[j].op) * (overlap / minH)
+                if score > stack { stack = score; stackPair = "\(rs[i].idx)\u{00D7}\(rs[j].idx)" }
+            }
+        }
+        let blurJump = abs(maxBlur - aggLastMaxBlur)
+        let rowChurn = rs.count != aggLastRowCount
+        // >1 bright overlay = the bloom signature (multiple lines carry the karaoke-bright glyphs).
+        let abnormal = brightCount >= 2 || overlayCount >= 2 || stack > 0.05 || blurJump > 6 || rowChurn
+        let heartbeat = aggFrameCounter % 60 == 0
+        defer { aggLastRowCount = rs.count; aggLastMaxBlur = maxBlur }
+        guard abnormal || heartbeat else { return }
+        let detail = rs.filter { $0.op > 0.3 || $0.overlay }
+            .sorted { $0.idx < $1.idx }
+            .map { String(format: "%d:o%.2f:b%.1f%@:y%.0f-%.0f", $0.idx, $0.op, $0.blur, $0.overlay ? ":OVL" : "", $0.top, $0.bot) }
+            .joined(separator: " ")
+        DebugLogger.log("AggBright", String(format: "bright=%d ovl=%d sumO=%.2f maxBlur=%.1f stack=%.2f(%@) rows=%d%@ | %@",
+            brightCount, overlayCount, sumO, maxBlur, stack, stackPair.isEmpty ? "-" : stackPair, rs.count,
+            snap ? " SNAP" : "", detail))
     }
 
     private func recordVisualTrajectory(
@@ -3245,6 +3339,19 @@ final class NativeLyricsRowView: NSView {
     /// Animation keys attached to the translation base layer. Implicit-action leaks show up
     /// here as property-name keys ("position", "bounds", ...) that no renderer code ever adds.
     var debugTranslationTextLayerAnimationKeys: [String] { translationTextLayer.animationKeys() ?? [] }
+    #endif
+
+    // Available to both the unit tests (DEBUG) and the in-app brightness diagnostic
+    // (LOCAL_DEVELOPER_BUILD release build). The karaoke bright overlay (full-brightAlpha
+    // glyphs) is meant for ONE active line; if several rows carry it at once the panel blooms
+    // (the #1 initial-load / rapid-switch overlap), and if a demoted line keeps it the line
+    // flashes bright (the #3 revert). Counting it is the channel the model-opacity sensor missed.
+    #if DEBUG || LOCAL_DEVELOPER_BUILD
+    var debugMainBrightOverlayActive: Bool {
+        mainBrightTextLayer.string != nil && !mainBrightTextLayer.isHidden
+    }
+
+    var debugRowLayerOpacity: Float { layer?.opacity ?? 1 }
     #endif
 
 
