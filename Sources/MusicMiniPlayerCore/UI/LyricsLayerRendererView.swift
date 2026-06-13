@@ -863,6 +863,16 @@ final class NativeLyricsSurfaceView: NSView {
                 applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
             }
         }
+        // Synchronous layout BEFORE the commit: applyFrame set each row view's frame, but
+        // text sublayer frames are computed inside NSView.layout(), which AppKit runs
+        // asynchronously on the next layout pass. Without forcing layout NOW, all text
+        // sublayers render at frame .zero (new views) or stale positions (recycled) for
+        // the first display frame — and with CIGaussianBlur on every row, the mispositioned
+        // text at every row creates the "overlapping, bright, heavily blurred" first-frame
+        // bloom. Force layout into THIS transaction so the display never sees the stale state.
+        for (_, view) in rowViews where view.frame.size != .zero {
+            view.layoutSubtreeIfNeeded()
+        }
         CATransaction.commit()
         lastConfiguredTextPhaseIndex = activeTextPhaseIndex
         renderTelemetry.recordLifecycle(
