@@ -98,13 +98,41 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
             displayIndex: 15, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(far.blur, 18.5, accuracy: 1e-6, "distance-10: max(0, 10-0.75)*2 = 18.5 (uncapped)")
+        // distance=10 raw blur = max(0, 10-0.75)*2 = 18.5, capped at 9.0
+        XCTAssertEqual(far.blur, 9.0, accuracy: 1e-6, "distance-10: capped at 9.0 (was 18.5 uncapped, caused cumulative-bloom glow)")
 
         let next = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 6, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(next.blur, 0.5, accuracy: 1e-6, "distance-1: max(0, 1-0.75)*2 = 0.5")
+        // distance=1: max(0, 1-0.75)*2 = 0.5, below the 9.0 cap — unaffected
+        XCTAssertEqual(next.blur, 0.5, accuracy: 1e-6, "distance-1: 0.5 (below cap, unchanged)")
+    }
+
+    /// Distant inactive rows fade below 0.35 to prevent their (capped) blur glow from
+    /// accumulating into a bloom. Near rows stay at 0.35; beyond taperStart=15 they
+    /// drop linearly to 0.05.
+    func test_inactiveOpacity_tapersForDistantRows() {
+        let near = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 20, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [5], isManualScrolling: false
+        )
+        // dist=15: at the taper start, still 0.35
+        XCTAssertEqual(near.opacity, 0.35, accuracy: 0.01, "distance-15: at taper threshold, still 0.35")
+
+        let mid = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 30, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [5], isManualScrolling: false
+        )
+        // dist=25: 0.35 - (25-15)*0.03 = 0.35 - 0.30 = 0.05
+        XCTAssertEqual(mid.opacity, 0.05, accuracy: 0.01, "distance-25: tapered to floor 0.05")
+
+        let far = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 40, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [5], isManualScrolling: false
+        )
+        // dist=35: would be 0.35 - 20*0.03 = -0.25, clamped to 0.05
+        XCTAssertEqual(far.opacity, 0.05, accuracy: 0.01, "distance-35: clamped at floor 0.05 (never goes below)")
     }
 
     /// The LOGICAL depth value (abs*1.5, uncapped) is rendered through CIGaussianBlur, which reads

@@ -266,9 +266,22 @@ struct NativeLyricsVisualTarget: Equatable {
             )
         }
         let dist = CGFloat(abs(displayIndex - currentIndex))
-        let renderedBlur = max(0, dist - 0.75) * 2.0
+        // Blur grows with distance for depth-of-field, but is CAPPED at 9.0 visual units
+        // (≈3.0 effective CIGaussianBlur radius after sqrt calibration). Above this cap the
+        // blur glow extends well beyond the row bounds, and with 25+ rows simultaneously
+        // rendered + masksToBounds=false, the overlapping glows composite into a bright
+        // "bloom" — the initial-load / page-switch bright flash. The cap preserves depth
+        // (near rows are sharp, mid rows are softened) without the additive glow.
+        let renderedBlur = min(max(0, dist - 0.75) * 2.0, 9.0)
+        // Fade distant rows to near-invisible so their (capped) blur glow doesn't
+        // accumulate even at the cap. Near rows stay at 0.35; beyond 15 lines they taper
+        // linearly to 0.05 (just above invisible — prevents a pop when they un-hide).
+        let taperStart: CGFloat = 15
+        let fadeOpacity: CGFloat = dist > taperStart
+            ? max(0.05, 0.35 - (dist - taperStart) * 0.03)
+            : 0.35
         return NativeLyricsVisualTarget(
-            opacity: 0.35,
+            opacity: fadeOpacity,
             scale: 0.95,
             blur: renderedBlur,
             isActive: false
