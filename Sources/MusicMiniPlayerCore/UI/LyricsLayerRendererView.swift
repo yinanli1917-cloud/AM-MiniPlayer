@@ -2734,18 +2734,21 @@ final class NativeLyricsSurfaceView: NSView {
     private func handleNativeLineAdvanceTimer() {
         nativeLineAdvanceTimer = nil
         nativeLineAdvanceTimerTargetPlaybackTime = nil
-        guard let configuration else { return }
-        let previousSemanticIndex = nativeSemanticCurrentIndex
-        let previousTimelineState = nativeTimelineState
-        let changed = updateNativeTimelineForCurrentPlaybackIfNeeded(
-            previousIndex: previousSemanticIndex,
-            previousTimelineState: previousTimelineState,
-            runtimeConfiguration: runtimeConfiguration(from: configuration)
-        )
-        if changed {
-            applyFramesForCurrentConfiguration(snap: false)
-            startPresentationLoop()
-        }
+        guard configuration != nil else { return }
+        // Run a FULL presentation tick, not a partial position-only update. The previous handler
+        // advanced the timeline + engine (position → new line centered) and applied frames, but
+        // never re-synced the per-row VISUAL targets (opacity/blur) or the text phase (karaoke
+        // highlight). When a line advanced via this idle-line timer (the presentation loop is
+        // stopped between line changes) rather than an active display-link tick, the previous
+        // line's visual + highlight targets were left untouched — so it stayed fully bright while
+        // the new line centered: the intermittent "current line not updated / highlight stuck on
+        // the previous line" bug. presentationTick() captures previousSemanticIndex BEFORE
+        // runtimeConfiguration mutates it, so it detects the change and runs the same path the
+        // display-link uses (syncVisualTargets + refreshTextRowsForActiveLineChange +
+        // updateTextPhases + applyFrames) and re-arms the next line-advance timer. One code path,
+        // both channels (position + visuals) advance together.
+        presentationTick(displayInterval: nil, displayTimestamp: nil)
+        startPresentationLoop()
     }
 
     private func cancelNativeLineAdvanceTimer() {
