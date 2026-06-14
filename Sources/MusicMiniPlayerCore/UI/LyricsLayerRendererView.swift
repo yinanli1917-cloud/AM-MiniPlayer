@@ -3001,8 +3001,18 @@ final class NativeLyricsSurfaceView: NSView {
     private func updateTextPhasesForCurrentConfiguration(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
-        guard let (_, view) = activeTextPhaseRow(for: runtimeConfiguration),
-              let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false) else {
+        guard let (_, view) = activeTextPhaseRow(for: runtimeConfiguration) else { return }
+        // updatePlaybackPhase decides per-word (syllable) sweep vs whole-line sweep from the
+        // bright text-layer's BOUNDS. On a per-line advance, refreshTextRowsForActiveLineChange
+        // may have just changed this row's content (needsLayout), and AppKit lays text sublayers
+        // out ASYNCHRONOUSLY — so without forcing layout here we read .zero/stale bounds,
+        // geometryReady comes out false, and the row degrades to line-level (the random
+        // "时不时逐字、时不时逐行" toggle). Force the active row's layout BEFORE reading its
+        // geometry for the phase — same ordering fix as the reconcile path.
+        if view.frame.size != .zero {
+            view.layoutSubtreeIfNeeded()
+        }
+        guard let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false) else {
             return
         }
         renderTelemetry.recordTextPhase(textSample)
