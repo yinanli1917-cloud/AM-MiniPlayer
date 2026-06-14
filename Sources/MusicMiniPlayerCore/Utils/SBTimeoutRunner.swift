@@ -43,7 +43,15 @@ public enum SBTimeoutRunner {
         "positionPoll",
         "queueSnapshot",
         "stateSync",
-        "trackMetadata"
+        "trackMetadata",
+        // Artwork reads Music.app through its OWN SBApplication proxy (artworkApp). Left on a
+        // separate lane it dispatched AppleEvents concurrently with the position poll / state
+        // read, and macOS 26 crashed EXC_BAD_ACCESS in AECreateAppleEvent
+        // (getArtworkImageByPersistentID, captured 2026-06-13). Grouping it onto the serial
+        // musicRead lane makes concurrent AE dispatch to Music.app structurally impossible.
+        // The artwork SB scan is bounded (see getArtworkImageByPersistentID) so sharing the
+        // lane cannot starve the lightweight position poll.
+        "artwork"
     ]
     private static let queuesLock = NSLock()
     private static var workerQueues: [String: DispatchQueue] = [
