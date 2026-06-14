@@ -517,6 +517,13 @@ final class NativeLyricsSurfaceView: NSView {
     var debugSkipDedupe = false
     #endif
     private var initialMeasurementsPending = true
+    // Reveal gate. Freshly-mounted rows are positioned ONLY by their layer transform, so for the
+    // first display cycle after mount the presentation layer still shows the pre-commit identity
+    // (every row at the top) for ~1 frame — a brief stacked/blurred flash even though the model is
+    // already spread. Keep the rows at opacity 0 for this many presentation ticks after a mount so
+    // they are only revealed once the loop has committed a real, spread frame. Counted down in
+    // presentationTick; a fallback in configure reveals immediately when no loop will run.
+    private var initialRevealTicksRemaining = 0
     #if DEBUG
     var debugInitialMeasurementsPending: Bool {
         get { initialMeasurementsPending }
@@ -541,6 +548,15 @@ final class NativeLyricsSurfaceView: NSView {
     // from the top (the "stacked at top → slide down" bloom). Set on the track-change wipe;
     // applied by forcing suppressInitialMotion in runtimeConfiguration(from:).
     private var forceSnapUntil: CFTimeInterval = 0
+    // ───────────────────────────────────────────────────────────────────────────
+    // Bloom trajectory probe (LOCAL_DEVELOPER_BUILD only). Captures the ABSOLUTE
+    // on-screen Y of the active row per configure + per frame during the appear
+    // window, alongside the inputs that determine it (anchorY, engine y/targetY,
+    // playbackMode, forceSnap). This is the objective measurement of the "stacked
+    // at top → slide down" bloom: it shows EXACTLY which value travels 0→anchorY.
+    // ───────────────────────────────────────────────────────────────────────────
+    private var bloomTrajUntil: CFTimeInterval = 0
+    private var bloomTrajArmedAt: CFTimeInterval = 0
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
     private let surfaceInterludeOverlay: NSView = {
         let v = _FlippedView()
@@ -759,13 +775,35 @@ final class NativeLyricsSurfaceView: NSView {
             lastTextPhaseUpdateAt = nil
             deferredDeactivationIndex = nil
             initialMeasurementsPending = true
+            initialRevealTicksRemaining = 2
             #if LOCAL_DEVELOPER_BUILD
             bloomPresentationDiagUntil = CACurrentMediaTime() + 1.5
+            bloomTrajUntil = CACurrentMediaTime() + 2.0
+            bloomTrajArmedAt = CACurrentMediaTime()
             DebugLogger.log("RendererReset", "track='\(configuration.trackContext.title.prefix(20))' rows=\(configuration.rows.count) — full wipe (visualStates/measuredHeights cleared)")
+            #endif
+        }
+        // Lyrics for an UNCACHED track arrive seconds after the track wipe (fetch latency) — long
+        // after the wipe's 0.8s force-snap window expired, and the empty-row configures in between
+        // re-set the engine's lastCurrentIndex, so by the time the rows finally appear the engine
+        // no longer snaps and springs them in from the top instead = the slide-down bloom (verified
+        // in the user's screen recording). Re-arm the engine snap + force-snap window at the exact
+        // moment the rows first appear (empty → non-empty), which is when they actually get positioned.
+        if (self.configuration?.rows.isEmpty ?? true) && !configuration.rows.isEmpty {
+            presentationEngine.resetForTrackChange()
+            forceSnapUntil = CACurrentMediaTime() + 0.8
+            // Rows are mounting NOW (empty → non-empty). Hide them until the loop commits a spread
+            // frame so the first-frame pre-commit identity never shows as a stacked flash.
+            initialMeasurementsPending = true
+            initialRevealTicksRemaining = 2
+            #if LOCAL_DEVELOPER_BUILD
+            bloomTrajUntil = CACurrentMediaTime() + 2.0
+            bloomTrajArmedAt = CACurrentMediaTime()
             #endif
         }
         if self.configuration == nil {
             initialMeasurementsPending = true
+            initialRevealTicksRemaining = 2
         }
         self.configuration = configuration
         #if LOCAL_DEVELOPER_BUILD
@@ -807,7 +845,7 @@ final class NativeLyricsSurfaceView: NSView {
             snapVisuals: shouldSnapVisuals
         )
         if shouldSnap {
-            if hasActiveTextAnimation(configuration: runtimeConfiguration) {
+            if hasActiveTextAnimation(configuration: runtimeConfiguration) || isWithinAppearWindow {
                 startPresentationLoop()
             } else {
                 stopPresentationLoopIfIdle()
@@ -820,12 +858,89 @@ final class NativeLyricsSurfaceView: NSView {
         }
 
         scheduleNativeLineAdvanceTimerIfNeeded(configuration: runtimeConfiguration)
-        // Rows were laid out at opacity 0 during the initial-measurements guard; the
-        // reconcile just finished, so heights are seeded and rows are positioned. Clear
-        // the suppression NOW — even if the presentation loop hasn't started yet — so the
-        // next configure or tick renders rows at their real opacities.
-        initialMeasurementsPending = false
+        #if LOCAL_DEVELOPER_BUILD
+        appendBloomTraj(phase: "cfg", configuration: runtimeConfiguration)
+        // Post-commit sample: during the force-snap window the presentation LOOP is not running,
+        // so the only in-window samples are these configure-time ones — taken mid-CATransaction,
+        // where presentation() still reads the pre-commit identity. Re-read on the NEXT runloop
+        // turn (after the transaction commits) to get the TRUE on-screen Y. If cfg-post still
+        // shows presSpread=0 it is a real collapse; if it shows the model spread the cfg reading
+        // was a pre-commit artifact.
+        if CACurrentMediaTime() < bloomTrajUntil {
+            let cfg = runtimeConfiguration
+            DispatchQueue.main.async { [weak self] in
+                self?.appendBloomTraj(phase: "cfg-post", configuration: cfg)
+            }
+        }
+        #endif
+        // Reveal policy. The reconcile just positioned the rows (model spread), but the presentation
+        // layer needs one committed display cycle before it reflects those positions. When the
+        // presentation loop is running it performs the reveal after that cycle (initialRevealTicksRemaining,
+        // counted down in presentationTick). When NO loop will run (static/paused lyrics, or a plain
+        // re-configure with no pending reveal), reveal immediately so rows never stay hidden.
+        if initialRevealTicksRemaining == 0 || displayLink == nil {
+            initialMeasurementsPending = false
+            initialRevealTicksRemaining = 0
+        }
     }
+
+    #if LOCAL_DEVELOPER_BUILD
+    /// Objective bloom measurement. Logs the active row's absolute on-screen Y and every
+    /// input that determines it, one line per call, during the `bloomTrajUntil` window.
+    /// Direct-file sink so the path/format literals survive Release stripping if ever needed.
+    private func appendBloomTraj(phase: String, configuration: LyricsLayerRendererConfiguration) {
+        let now = CACurrentMediaTime()
+        guard now < bloomTrajUntil else { return }
+        guard let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_traj.log") else { return }
+        let t = Int((now - bloomTrajArmedAt) * 1000)
+        let curIdx = configuration.effectiveCurrentIndex
+        let anchorY = configuration.anchorY
+        let engine = presentationEngine.presentation(for: curIdx)
+        let engineY = engine?.y
+        let engineTgt = engine?.targetY
+        // Absolute on-screen Y of the active row = its presentation layer transform ty.
+        var presY: CGFloat?
+        var appliedY: CGFloat?
+        if let id = rowIDByIndex[curIdx] {
+            appliedY = lastAppliedYByRowID[id]
+            if let layer = rowViews[id]?.layer {
+                presY = layer.presentation()?.affineTransform().ty ?? layer.affineTransform().ty
+            }
+        }
+        func f(_ v: CGFloat?) -> String { v.map { String(format: "%.1f", $0) } ?? "nil" }
+        let forceSnap = now < forceSnapUntil
+        // Cross-row spread: the "stacked at top → spread out" symptom is a collapse of the
+        // ON-SCREEN row spread, invisible to the active-only sample above. Capture model spread
+        // (appY min/max) vs presentation-layer spread (presY min/max) + active animation count
+        // + zero-geometry (un-laid-out bright text = full blur) across every mounted row.
+        var appYs: [CGFloat] = []
+        var presYs: [CGFloat] = []
+        var anims = 0
+        var zeroGeo = 0
+        for (_, view) in rowViews {
+            guard let layer = view.layer else { continue }
+            appYs.append(layer.affineTransform().ty)
+            presYs.append(layer.presentation()?.affineTransform().ty ?? layer.affineTransform().ty)
+            anims += layer.animationKeys()?.count ?? 0
+            if view.debugMainBrightBoundsEmpty { zeroGeo += 1 }
+        }
+        let appSpread = (appYs.max() ?? 0) - (appYs.min() ?? 0)
+        let presSpread = (presYs.max() ?? 0) - (presYs.min() ?? 0)
+        let presTop = presYs.min() ?? 0
+        // Height bookkeeping at this instant: snapY returns anchorY for EVERY row when the
+        // accumulated offsets are missing/flat — the all-rows-stacked collapse. accH/rIdx/measH
+        // counts vs rows.count show whether the heights cover the rows; tgtOff/rowOff are the
+        // active row's offsets that feed snapY = anchorY - tgtOff + rowOff.
+        let accH = configuration.accumulatedHeights.count
+        let rIdx = configuration.renderedIndices.count
+        let measH = measuredHeightsByIndex.count
+        let tgtOff = configuration.accumulatedHeights[curIdx]
+        let line = "[Traj] t=\(t) ph=\(phase) cur=\(curIdx) anchorY=\(f(anchorY)) engY=\(f(engineY)) engTgt=\(f(engineTgt)) appY=\(f(appliedY)) presY=\(f(presY)) | mRows=\(rowViews.count) appSpread=\(Int(appSpread)) presSpread=\(Int(presSpread)) presTop=\(Int(presTop)) anims=\(anims) zeroGeo=\(zeroGeo) | accH=\(accH) rIdx=\(rIdx) measH=\(measH) tgtOff=\(f(tgtOff)) | mode=\(configuration.playbackMode) forceSnap=\(forceSnap) rows=\(configuration.rows.count) initPend=\(initialMeasurementsPending)\n"
+        fh.seekToEndOfFile()
+        fh.write(line.data(using: .utf8)!)
+        fh.closeFile()
+    }
+    #endif
 
     @discardableResult
     private func reconcileVisibleRowViews(
@@ -1768,6 +1883,7 @@ final class NativeLyricsSurfaceView: NSView {
             self.updateSurfaceInterludeDots(configuration: runtimeConfiguration, snap: snap)
             #if LOCAL_DEVELOPER_BUILD
             self.recordAggregateBrightness(configuration: runtimeConfiguration, snap: snap)
+            self.appendBloomTraj(phase: snap ? "frm-s" : "frm", configuration: runtimeConfiguration)
             #endif
         }
         if managesTransaction {
@@ -1829,8 +1945,17 @@ final class NativeLyricsSurfaceView: NSView {
         stopPresentationLoopIfIdle(runtimeConfiguration: runtimeConfiguration(from: configuration))
     }
 
+    /// The post-track-switch "appear" window. While true, freshly-mounted rows are positioned
+    /// ONLY by their layer transform (frame.origin stays 0,0); AppKit's first layout pass after the
+    /// mount collapses those transforms, and in directSnap mode the engine has no motion so the
+    /// loop would stop and never re-apply them — leaving every row stacked at the top, heavily
+    /// blurred, until natural mode resumes ~0.8 s later (the "bloom", confirmed on-device). Keep the
+    /// loop alive and re-applying for the whole window so the rows stay at their settled positions.
+    private var isWithinAppearWindow: Bool { CACurrentMediaTime() < forceSnapUntil }
+
     private func stopPresentationLoopIfIdle(runtimeConfiguration: LyricsLayerRendererConfiguration) {
-        guard pendingTapToLineSettleTiming == nil,
+        guard !isWithinAppearWindow,
+              pendingTapToLineSettleTiming == nil,
               !presentationEngine.hasActiveMotion,
               !hasActiveVisualMotion,
               !hasActiveTextAnimation(configuration: runtimeConfiguration),
@@ -1866,6 +1991,16 @@ final class NativeLyricsSurfaceView: NSView {
             ?? displayInterval
             ?? 0
         lastPresentationTick = now
+        // Reveal gate countdown: hold the just-mounted rows hidden until the loop has committed a
+        // spread frame, then reveal them already in position (no first-frame stacked flash). The
+        // tick that reaches 0 applies frames at real opacity in THIS pass, after the prior tick's
+        // spread positions have committed to the presentation layer.
+        if initialRevealTicksRemaining > 0 {
+            initialRevealTicksRemaining -= 1
+            if initialRevealTicksRemaining == 0 {
+                initialMeasurementsPending = false
+            }
+        }
         let semanticChanged = updateNativeTimelineForCurrentPlaybackIfNeeded(
             previousIndex: previousSemanticIndex,
             previousTimelineState: previousTimelineState,
@@ -1912,6 +2047,10 @@ final class NativeLyricsSurfaceView: NSView {
             || visualTargetsChanged
             || visualMotionChanged
             || hasActiveVisualMotion
+            // During the appear window re-apply every tick: the rows have no engine motion in
+            // directSnap mode, but AppKit keeps collapsing their transforms after the mount, so
+            // they must be re-pinned each frame until natural mode (with its springs) takes over.
+            || isWithinAppearWindow
         manualPresentationNeedsApply = false
         withDisabledLayerActions {
             if activeTextLineChanged {
