@@ -528,6 +528,10 @@ final class NativeLyricsSurfaceView: NSView {
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var deferredDeactivationIndex: Int?
+    // Window (CACurrentMediaTime deadline) during which presentationTick logs the PRESENTATION
+    // layer's row spread vs the model — to catch a bloom that lives in the on-screen animation
+    // (model correct, layers still animating in) which the reconcile model-Y probe is blind to.
+    private var bloomPresentationDiagUntil: CFTimeInterval = 0
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
     private let surfaceInterludeOverlay: NSView = {
         let v = _FlippedView()
@@ -731,6 +735,10 @@ final class NativeLyricsSurfaceView: NSView {
             cancelNativeLineAdvanceTimer()
             manualScrollState.reset()
             manualPresentationNeedsApply = false
+            // Drop the engine's cross-track state so the new track snaps to position on frame 0
+            // instead of briefly placing rows at ty=0 (the presentation-layer overlap bloom,
+            // confirmed via the bloom probe: presSpread=0 while the model ySpread was normal).
+            presentationEngine.resetForTrackChange()
             visualStates.removeAll()
             interludeBlendStates.removeAll()
             measuredHeightsByIndex.removeAll()
@@ -742,6 +750,7 @@ final class NativeLyricsSurfaceView: NSView {
             deferredDeactivationIndex = nil
             initialMeasurementsPending = true
             #if LOCAL_DEVELOPER_BUILD
+            bloomPresentationDiagUntil = CACurrentMediaTime() + 1.5
             DebugLogger.log("RendererReset", "track='\(configuration.trackContext.title.prefix(20))' rows=\(configuration.rows.count) — full wipe (visualStates/measuredHeights cleared)")
             #endif
         }
@@ -928,8 +937,21 @@ final class NativeLyricsSurfaceView: NSView {
             let ySpread = (ys.max() ?? 0) - (ys.min() ?? 0)
             let avgGap = ys.count > 1 ? ySpread / CGFloat(ys.count - 1) : 0
             let maxBlur = visibleRows.compactMap { visualStates[$0.index]?.blur }.max() ?? 0
+            // On-screen (presentation layer) state of the mounted rows — what the EYE sees,
+            // possibly mid-animation, vs the model above. presSpread collapsing toward 0 while
+            // ySpread is normal = the rows overlap ON SCREEN (animating in) = the real bloom.
+            // Rows are positioned by layer.setAffineTransform(translationY:), NOT layer.position —
+            // so the on-screen Y is the presentation layer's transform ty.
+            var presYs: [CGFloat] = []
+            var anims = 0
+            for (_, view) in rowViews {
+                guard let layer = view.layer else { continue }
+                presYs.append(layer.presentation()?.affineTransform().ty ?? layer.affineTransform().ty)
+                anims += layer.animationKeys()?.count ?? 0
+            }
+            let presSpread = (presYs.max() ?? 0) - (presYs.min() ?? 0)
             fh.seekToEndOfFile()
-            fh.write("[Bloom] curIdx=\(activeTextPhaseIndex) rows=\(visibleRows.count) ovl=\(ovlCount) zeroGeo=\(zeroGeo) ySpread=\(Int(ySpread)) avgGap=\(Int(avgGap)) maxBlur=\(String(format: "%.1f", maxBlur)) snap=\(snapPositions) initPending=\(initialMeasurementsPending)\n".data(using: .utf8)!)
+            fh.write("[Bloom] curIdx=\(activeTextPhaseIndex) rows=\(visibleRows.count) ovl=\(ovlCount) zeroGeo=\(zeroGeo) ySpread=\(Int(ySpread)) presSpread=\(Int(presSpread)) anims=\(anims) avgGap=\(Int(avgGap)) maxBlur=\(String(format: "%.1f", maxBlur)) snap=\(snapPositions) initPending=\(initialMeasurementsPending)\n".data(using: .utf8)!)
             fh.closeFile()
         }
         #endif
@@ -1911,6 +1933,30 @@ final class NativeLyricsSurfaceView: NSView {
         checkPendingTapToLineSettleTiming(now: now)
         #if LOCAL_DEVELOPER_BUILD
         auditImplicitAnimationsIfNeeded(now: now)
+        // Presentation-layer bloom probe: during the post-track-switch window, log what the rows
+        // look like ON SCREEN (presentation layers), not just in the model. presSpread = on-screen
+        // vertical spread of the mounted rows; mpDiv = max |model − presentation| per row; anims =
+        // total live animations. If presSpread collapses toward 0 (or mpDiv/anims spike) while the
+        // model probe reports a normal spread, the bloom is an on-screen transient, not the model.
+        if now < bloomPresentationDiagUntil, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_bloom.log") {
+            var presYs: [CGFloat] = []
+            var mpDiv: CGFloat = 0
+            var anims = 0
+            var blurred = 0
+            for (_, view) in rowViews {
+                guard let layer = view.layer else { continue }
+                let modelY = layer.position.y
+                let presY = layer.presentation()?.position.y ?? modelY
+                presYs.append(presY)
+                mpDiv = max(mpDiv, abs(modelY - presY))
+                anims += layer.animationKeys()?.count ?? 0
+                if (layer.presentation()?.filters?.isEmpty == false) || (layer.filters?.isEmpty == false) { blurred += 1 }
+            }
+            let presSpread = (presYs.max() ?? 0) - (presYs.min() ?? 0)
+            fh.seekToEndOfFile()
+            fh.write("[BloomPres] presSpread=\(Int(presSpread)) mpDiv=\(Int(mpDiv)) anims=\(anims) blurred=\(blurred) rows=\(rowViews.count)\n".data(using: .utf8)!)
+            fh.closeFile()
+        }
         #endif
         stopPresentationLoopIfIdle(runtimeConfiguration: runtimeConfiguration)
     }

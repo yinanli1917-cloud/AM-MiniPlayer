@@ -221,6 +221,20 @@ final class LyricsPresentationEngine {
         latestConfiguration = nil
     }
 
+    /// Drop ALL cross-track continuity on a track switch. stop() leaves lastCurrentIndex and
+    /// lineTargetIndices behind, so the next update() for the NEW track can take the wave/animate
+    /// path (or hold stale rowStates) instead of snapping — which surfaced as the new track's rows
+    /// briefly sitting at ty=0 on screen (presentation collapse = the "initial overlapping" bloom).
+    /// After this reset, update() hits the `lastCurrentIndex == nil` branch and snaps every row to
+    /// its target position on the very first frame.
+    func resetForTrackChange() {
+        cancelPendingWave(deferred: true)
+        rowStates.removeAll()
+        lineTargetIndices.removeAll()
+        lastCurrentIndex = nil
+        recoverySnapAdvancesRemaining = 0
+    }
+
     nonisolated static func makeNaturalWavePlan(
         existingTargets: [Int: Int],
         renderedIndices: [Int],

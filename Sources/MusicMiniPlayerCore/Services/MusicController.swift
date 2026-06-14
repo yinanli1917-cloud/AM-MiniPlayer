@@ -345,6 +345,13 @@ public class MusicController: ObservableObject {
         setupNotifications()
         startTimers()
 
+        // Launch straight onto the lyrics page when asked (NANOPOD_START_LYRICS=1). Lets the
+        // renderer run immediately after a rebuild for diagnostics, instead of defaulting to
+        // .album and waiting for a manual page switch.
+        if ProcessInfo.processInfo.environment["NANOPOD_START_LYRICS"] == "1" {
+            currentPage = .lyrics
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             debugPrint("🎯 [MusicController] connect() timer fired\n")
             self?.connect()
