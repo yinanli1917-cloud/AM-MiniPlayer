@@ -557,6 +557,9 @@ final class NativeLyricsSurfaceView: NSView {
     // ───────────────────────────────────────────────────────────────────────────
     private var bloomTrajUntil: CFTimeInterval = 0
     private var bloomTrajArmedAt: CFTimeInterval = 0
+    // #2c dim-line blink probe state (LOCAL_DEVELOPER_BUILD).
+    private var dimProbeIndex: Int?
+    private var dimProbeUntil: CFTimeInterval = 0
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
     private let surfaceInterludeOverlay: NSView = {
         let v = _FlippedView()
@@ -2060,6 +2063,17 @@ final class NativeLyricsSurfaceView: NSView {
                     runtimeConfiguration: runtimeConfiguration
                 )
             }
+            // Fade the receding line's bright sung-overlay toward 0 in step with its opacity recede,
+            // so it never snaps off at finalization (#2c blink). Progress maps the row's current
+            // opacity (active ≈1.0 → past ≈0.35) onto [1,0]; finalizeDeferredDeactivation then clears
+            // the (already near-invisible) overlay + mask once the row settles.
+            if let deferredIdx = deferredDeactivationIndex,
+               let id = rowIDByIndex[deferredIdx],
+               let view = rowViews[id] {
+                let opacity = visualStates[deferredIdx]?.opacity ?? 1.0
+                let progress = max(0, min(1, (opacity - 0.35) / 0.65))
+                view.updateDeactivationFade(progress: progress)
+            }
             finalizeDeferredDeactivation(runtimeConfiguration: runtimeConfiguration)
             if shouldUpdateTextPhase {
                 updateTextPhasesForCurrentConfiguration(runtimeConfiguration: runtimeConfiguration)
@@ -2114,6 +2128,23 @@ final class NativeLyricsSurfaceView: NSView {
             let presSpread = (presYs.max() ?? 0) - (presYs.min() ?? 0)
             fh.seekToEndOfFile()
             fh.write("[BloomPres] presSpread=\(Int(presSpread)) mpDiv=\(Int(mpDiv)) anims=\(anims) blurred=\(blurred) rows=\(rowViews.count)\n".data(using: .utf8)!)
+            fh.closeFile()
+        }
+        // #2c dim-line blink probe: on each line advance, track the JUST-RECEDED line for ~1.2s and
+        // log its row opacity + bright-overlay opacity per tick. A clean recede is monotonic; a blink
+        // shows as opacity rising after it started to fall, or the bright overlay jumping.
+        if activeTextLineChanged, let prev = previousSemanticIndex {
+            dimProbeIndex = prev
+            dimProbeUntil = now + 1.2
+        }
+        if now < dimProbeUntil, let idx = dimProbeIndex,
+           let id = rowIDByIndex[idx], let view = rowViews[id],
+           let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_dim.log") {
+            let rowOp = view.debugRowLayerOpacity
+            let brightOp = view.debugMainBrightOpacity
+            let deferred = idx == deferredDeactivationIndex
+            fh.seekToEndOfFile()
+            fh.write("[Dim] idx=\(idx) cur=\(runtimeConfiguration.effectiveCurrentIndex) rowOp=\(String(format: "%.3f", rowOp)) brightOp=\(String(format: "%.3f", brightOp)) deferred=\(deferred)\n".data(using: .utf8)!)
             fh.closeFile()
         }
         #endif
@@ -2351,6 +2382,11 @@ final class NativeLyricsSurfaceView: NSView {
                 // already deferred
             } else {
                 deferredDeactivationIndex = previousIndex
+                // Capture the receding line's bright-overlay opacity so it can fade out smoothly
+                // with the recede instead of staying frozen and snapping to 0 at finalization (#2c).
+                if let id = rowIDByIndex[previousIndex] {
+                    rowViews[id]?.beginDeactivationFade()
+                }
             }
         }
         if let row = runtimeConfiguration.rows.first(where: { $0.index == currentIndex }),
@@ -2364,6 +2400,7 @@ final class NativeLyricsSurfaceView: NSView {
         deferredDeactivationIndex = nil
         guard let row = runtimeConfiguration.rows.first(where: { $0.index == index }),
               let view = rowViews[row.id] else { return }
+        view.endDeactivationFade()
         view.clearSweepState()
         view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false)
         _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
@@ -2381,6 +2418,7 @@ final class NativeLyricsSurfaceView: NSView {
         deferredDeactivationIndex = nil
         guard let row = runtimeConfiguration.rows.first(where: { $0.index == idx }),
               let view = rowViews[row.id] else { return }
+        view.endDeactivationFade()
         view.clearSweepState()
         view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false)
         _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
@@ -3517,6 +3555,38 @@ final class NativeLyricsRowView: NSView {
         updateHoverBackground()
     }
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // Deactivation overlay fade (#2c). A line that just lost focus is "deferred":
+    // its karaoke sweep MASK is preserved (so the highlight does not reset) while the
+    // row recedes, but updatePlaybackPhase is skipped — so the bright sung-overlay
+    // stays frozen at its active opacity and then snaps to 0 when the deferral
+    // finalizes (a brightness step on the receding line = the "blink"). beginDeactivationFade
+    // captures the overlay's current opacity; updateDeactivationFade scales it toward 0 with
+    // the recede so the highlight fades out smoothly instead of popping.
+    // ───────────────────────────────────────────────────────────────────────────
+    private var mainDeactivationOverlayBaseline: Float?
+    private var translationDeactivationOverlayBaseline: Float?
+
+    func beginDeactivationFade() {
+        mainDeactivationOverlayBaseline = mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity
+        translationDeactivationOverlayBaseline = translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity
+    }
+
+    func updateDeactivationFade(progress: CGFloat) {
+        let f = Float(max(0, min(1, progress)))
+        if let base = mainDeactivationOverlayBaseline {
+            mainBrightTextLayer.opacity = base * f
+        }
+        if let base = translationDeactivationOverlayBaseline {
+            translationBrightTextLayer.opacity = base * f
+        }
+    }
+
+    func endDeactivationFade() {
+        mainDeactivationOverlayBaseline = nil
+        translationDeactivationOverlayBaseline = nil
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         row = nil
@@ -3525,6 +3595,8 @@ final class NativeLyricsRowView: NSView {
         onHoverChanged = nil
         onHoverBackgroundVisible = nil
         onTap = nil
+        mainDeactivationOverlayBaseline = nil
+        translationDeactivationOverlayBaseline = nil
         layer?.opacity = 0
         backgroundLayer.isHidden = true
         lastHoverBackgroundVisible = false
@@ -3687,6 +3759,12 @@ final class NativeLyricsRowView: NSView {
     }
 
     var debugRowLayerOpacity: Float { layer?.opacity ?? 1 }
+
+    /// Bright karaoke-overlay opacity + presence. The #2c "dim line blinks while receding" suspect
+    /// is the deferred-deactivation clearing this overlay abruptly (a brightness step) while the row
+    /// is still partly visible. Sampling it per tick across a line advance shows whether the recede
+    /// is monotonic (clean) or has a brighten-then-dim step (blink).
+    var debugMainBrightOpacity: Float { mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity }
 
     /// True when the bright text layer has NOT been laid out yet (bounds ≈ .zero). A row in
     /// this state renders its text at frame origin + full depth-of-field blur — exactly the
