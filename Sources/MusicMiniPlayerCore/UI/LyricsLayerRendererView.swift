@@ -392,7 +392,11 @@ struct LyricsLayerRendererConfiguration {
     let isWaveTimelineDiagnosticsEnabled: Bool
     let isManualScrolling: Bool
     let reduceMotion: Bool
-    let suppressInitialMotion: Bool
+    // var so the renderer can FORCE-snap the first frames after a track switch. The SwiftUI side
+    // lets a freshly-scheduled line wave defeat its own suppression (`&& !isLineWaveActive`), which
+    // drops the renderer into natural mode and lets the engine spring the new rows in from the top
+    // = the "lines stacked at top, then slide down" bloom. See runtimeConfiguration(from:).
+    var suppressInitialMotion: Bool
     let pendingTranslationLineIndices: Set<Int>
     let showTranslation: Bool
     let isTranslating: Bool
@@ -532,6 +536,11 @@ final class NativeLyricsSurfaceView: NSView {
     // layer's row spread vs the model — to catch a bloom that lives in the on-screen animation
     // (model correct, layers still animating in) which the reconcile model-Y probe is blind to.
     private var bloomPresentationDiagUntil: CFTimeInterval = 0
+    // Window after a track switch during which the renderer FORCES snap mode (directSnap) so the
+    // new track's rows appear at their settled positions instead of the engine springing them in
+    // from the top (the "stacked at top → slide down" bloom). Set on the track-change wipe;
+    // applied by forcing suppressInitialMotion in runtimeConfiguration(from:).
+    private var forceSnapUntil: CFTimeInterval = 0
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
     private let surfaceInterludeOverlay: NSView = {
         let v = _FlippedView()
@@ -739,6 +748,7 @@ final class NativeLyricsSurfaceView: NSView {
             // instead of briefly placing rows at ty=0 (the presentation-layer overlap bloom,
             // confirmed via the bloom probe: presSpread=0 while the model ySpread was normal).
             presentationEngine.resetForTrackChange()
+            forceSnapUntil = CACurrentMediaTime() + 0.8
             visualStates.removeAll()
             interludeBlendStates.removeAll()
             measuredHeightsByIndex.removeAll()
@@ -982,6 +992,16 @@ final class NativeLyricsSurfaceView: NSView {
         // here when it is missing is exact, not a heuristic — it just closes the one-frame gap.
         if runtimeConfiguration.renderedIndices.isEmpty && !runtimeConfiguration.rows.isEmpty {
             runtimeConfiguration.renderedIndices = runtimeConfiguration.rows.map(\.index)
+        }
+        // For the first ~0.8s after a track switch, FORCE snap mode (directSnap) regardless of what
+        // the SwiftUI side sent. Otherwise a line wave scheduled for the new track's first line
+        // defeats suppressInitialMotion (`&& !isLineWaveActive`), the renderer runs natural mode, and
+        // the engine springs the rows in from the top = the "stacked at top → slide down" bloom.
+        // While forced, playbackMode == .directSnap so both the engine and applyFrame snap to the
+        // settled positions; by the time the window ends the engine is parked there, so natural mode
+        // resumes without a jump.
+        if CACurrentMediaTime() < forceSnapUntil {
+            runtimeConfiguration.suppressInitialMotion = true
         }
         runtimeConfiguration.nativeManualScrollSnapshot = manualScrollState.activeSnapshot
         if let request = configuration.directSnapRequest,
