@@ -515,6 +515,12 @@ final class NativeLyricsSurfaceView: NSView {
         get { initialMeasurementsPending }
         set { initialMeasurementsPending = newValue }
     }
+    /// Look up a mounted row view by its semantic index (tests assert per-row render state
+    /// after driving the real configure → reconcile pipeline).
+    func debugRowView(forIndex index: Int) -> NativeLyricsRowView? {
+        guard let id = rowIDByIndex[index] else { return nil }
+        return rowViews[id]
+    }
     #endif
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
@@ -870,12 +876,22 @@ final class NativeLyricsSurfaceView: NSView {
                 if needsActivationRefresh && !contentUpdated {
                     view.configure(row: row, configuration: runtimeConfiguration)
                 }
+                // Set the row's frame FIRST, then (for the active row only) force its text
+                // sublayers to lay out BEFORE applying the karaoke phase. updatePlaybackPhase's
+                // per-word sweep needs the bright text-layer bounds; if it runs while the bounds
+                // are still .zero (a freshly mounted or pooled row whose frame was just assigned)
+                // applyActiveMainPhase falls back to the whole-line (line-level) sweep — the
+                // "word-level lyrics inexplicably become line-level" symptom. Laying the active
+                // row out here makes geometryReady true on the very first phase application.
+                applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
                 if row.index == activeTextPhaseIndex {
+                    if view.frame.size != .zero {
+                        view.layoutSubtreeIfNeeded()
+                    }
                     if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
                         renderTelemetry.recordTextPhase(textSample)
                     }
                 }
-                applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
             }
         }
         // Synchronous layout BEFORE the commit: applyFrame set each row view's frame, but
@@ -3406,6 +3422,12 @@ final class NativeLyricsRowView: NSView {
     }
 
     var debugRowLayerOpacity: Float { layer?.opacity ?? 1 }
+
+    /// The per-run-sweep decision from the most recent ACTIVE updatePlaybackPhase. `true` =
+    /// per-word karaoke wavefront; `false` = whole-line (line-level) sweep. For a row WITH
+    /// syllable sync this must be `true`; if it is `false` the active line degraded to
+    /// line-level because its text geometry was not laid out when the phase was computed.
+    private(set) var debugLastAppliedActivePerRunSweep = false
     #endif
 
 
@@ -3830,6 +3852,9 @@ final class NativeLyricsRowView: NSView {
             let appliedMainProgress = expectsPerRunSweep
                 ? applyActiveMainPhase(plan: plan, currentTime: renderTime)
                 : applyStaticActiveTextPhase(plan: plan)
+            #if DEBUG || LOCAL_DEVELOPER_BUILD
+            debugLastAppliedActivePerRunSweep = appliedMainProgress.appliedPerRunSweep
+            #endif
             let appliedTranslation = plan.translation != nil
                 ? applyActiveTranslationPhase(plan: plan)
                 : nil

@@ -83,7 +83,9 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
         rowWidth: CGFloat = 320,
         currentIndex: Int = 0,
         showTranslation: Bool = false,
-        pendingTranslationLineIndices: Set<Int> = []
+        pendingTranslationLineIndices: Set<Int> = [],
+        hasSyllableSync: Bool = false,
+        musicController: MusicController? = nil
     ) -> LyricsLayerRendererConfiguration {
         LyricsLayerRendererConfiguration(
             rows: rows,
@@ -94,7 +96,7 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
             accumulatedHeights: [:],
             lineTargetIndices: [:],
             lineInterval: nil,
-            hasSyllableSync: false,
+            hasSyllableSync: hasSyllableSync,
             trackContext: DiagnosticTrackContext(title: "T", artist: "A", album: "Al", duration: 100),
             isWaveTimelineDiagnosticsEnabled: false,
             isManualScrolling: false,
@@ -107,7 +109,7 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
             interludeAfterIndex: nil,
             directSnapRequest: nil,
             controlsVisible: true,
-            musicController: MusicController(preview: true),
+            musicController: musicController ?? MusicController(preview: true),
             onLineTap: { _ in },
             onDirectSnapConsumed: { _ in },
             onManualScrollStarted: { _ in },
@@ -200,6 +202,47 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
         XCTAssertTrue(
             stray.isEmpty,
             "no layer in the renderer tree may carry an implicit animation; found: \(stray.map { "\($0.path): \($0.keys)" }.joined(separator: " | "))"
+        )
+    }
+
+    // MARK: - The reported bug: word-level lyrics render as line-level on a fresh active mount
+
+    /// A row WITH per-word (syllable) timing must render the per-word karaoke sweep the very
+    /// first time it becomes active. In the live app the active row's `updatePlaybackPhase`
+    /// ran during reconcile BEFORE the row's frame + text-sublayer layout, so its text-layer
+    /// bounds were `.zero` → `geometryReady == false` → `applyActiveMainPhase` fell back to the
+    /// whole-line (line-level) sweep. The line then stayed line-level until a later tick — the
+    /// "word-level lyrics inexplicably become line-level" symptom. Drive ONE real configure()
+    /// (the first-mount path) and assert the active row applied the per-word sweep.
+    @MainActor
+    func test_freshActiveRowWithSyllableSync_appliesPerWordSweep_notLineLevel() {
+        let mc = MusicController(preview: true)
+        mc.isPlaying = true
+        mc.duration = 100
+        // Land the render clock mid-line (words span 0–2s) so the active sweep is genuinely running.
+        mc.syncPlaybackClock(to: 1.0, playing: true)
+
+        let surface = NativeLyricsSurfaceView(frame: CGRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface)
+
+        let words = [
+            LyricWord(word: "Hello ", startTime: 0.0, endTime: 1.0),
+            LyricWord(word: "world", startTime: 1.0, endTime: 2.0)
+        ]
+        let active = row(LyricLine(text: "Hello world", startTime: 0, endTime: 2, words: words), index: 0)
+        let next = row(line("second line that follows", index: 1), index: 1)
+
+        // Single configure() = the live first-mount path. No extra layout / tick.
+        surface.configure(makeConfiguration(
+            rows: [active, next], currentIndex: 0, hasSyllableSync: true, musicController: mc
+        ))
+
+        guard let activeView = surface.debugRowView(forIndex: 0) else {
+            return XCTFail("active row must be mounted by reconcile")
+        }
+        XCTAssertTrue(
+            activeView.debugLastAppliedActivePerRunSweep,
+            "a freshly-mounted active row WITH word timings must render per-word sweep, not line-level"
         )
     }
 }
