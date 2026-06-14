@@ -1808,6 +1808,25 @@ final class NativeLyricsSurfaceView: NSView {
         let motionChanged = presentationEngine.advance(delta: delta)
         let shouldApplyManualPresentation = manualPresentationNeedsApply
         let activeTextLineChanged = previousSemanticIndex != runtimeConfiguration.effectiveCurrentIndex
+        #if LOCAL_DEVELOPER_BUILD
+        // #2a lag detector: when the active line finally advances, record how far past the new
+        // line's own start time the playback clock already was (= how late the refresh landed)
+        // and via which path. displayInterval == nil ⇒ the idle line-advance Timer fired (the
+        // path most exposed to main-thread contention); a positive lag here is the "song
+        // progresses while lyrics fail to refresh" symptom captured with a number + a source.
+        if activeTextLineChanged, runtimeConfiguration.playbackMode == .natural {
+            let newIdx = runtimeConfiguration.effectiveCurrentIndex
+            if let newStart = runtimeConfiguration.rows.first(where: { $0.index == newIdx })?.displayLine.line.startTime {
+                let lag = configuration.musicController.lyricRenderTime() - newStart
+                if lag > 0.25, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sync.log") {
+                    let src = displayInterval == nil ? "idleTimer" : "displayLink"
+                    fh.seekToEndOfFile()
+                    fh.write("[SyncLag] lag=\(String(format: "%.2f", lag))s idx=\(previousSemanticIndex.map(String.init) ?? "nil")→\(newIdx) src=\(src)\n".data(using: .utf8)!)
+                    fh.closeFile()
+                }
+            }
+        }
+        #endif
         let shouldUpdateTextPhase = shouldUpdateActiveTextPhase(
             runtimeConfiguration: runtimeConfiguration,
             now: now,
