@@ -380,7 +380,10 @@ struct LyricsLayerRendererConfiguration {
     let currentIndex: Int
     let anchorY: CGFloat
     let rowWidth: CGFloat
-    let renderedIndices: [Int]
+    // var so the renderer can self-heal a transient track-switch frame where rows arrived but
+    // renderedIndices did not (empty indices collapse every row to Y=0 = the bloom). See the
+    // derive in runtimeConfiguration(from:).
+    var renderedIndices: [Int]
     var accumulatedHeights: [Int: CGFloat]
     let lineTargetIndices: [Int: Int]
     let lineInterval: TimeInterval?
@@ -909,10 +912,26 @@ final class NativeLyricsSurfaceView: NSView {
         // signature. Logged in the LOCAL_DEVELOPER_BUILD configuration (build_app.sh).
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         let ovlCount = rowViews.values.filter { $0.debugMainBrightOverlayActive }.count
-        // Log unconditionally: ovl count is the bloom signal (>1 = multiple bright overlays),
-        // and the total rows + current index help correlate with the user's repro steps.
-        // ovl>=2 + row count spike = the bloom signature we've been chasing for weeks.
         DebugLogger.log("BLoomDiag", "ovl=\(ovlCount) rows=\(visibleRows.count) curIdx=\(activeTextPhaseIndex) mounted=\(mountedCount) unmounted=\(unmountedCount)")
+        #endif
+        #if LOCAL_DEVELOPER_BUILD
+        // Bloom probe (direct-file sink survives release stripping; touch /tmp/nanopod_bloom.log
+        // to arm). One line per reconcile records, at the actual bloom moment:
+        //   zeroGeo = visible rows whose bright text layer is NOT laid out (bounds≈0) → these
+        //             render at origin + full blur = the "overlapping heavily blurred" bloom;
+        //   ySpread/avgGap = how spread the row Ys are (small spread = rows bunched/overlapping);
+        //   maxBlur = peak depth-of-field blur; ovl = simultaneous bright overlays.
+        // The combination tells us which bloom mechanism is real instead of guessing.
+        if let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_bloom.log") {
+            let zeroGeo = rowViews.values.filter { $0.debugMainBrightBoundsEmpty }.count
+            let ys = visibleRows.compactMap { lastAppliedYByRowID[$0.id] }
+            let ySpread = (ys.max() ?? 0) - (ys.min() ?? 0)
+            let avgGap = ys.count > 1 ? ySpread / CGFloat(ys.count - 1) : 0
+            let maxBlur = visibleRows.compactMap { visualStates[$0.index]?.blur }.max() ?? 0
+            fh.seekToEndOfFile()
+            fh.write("[Bloom] curIdx=\(activeTextPhaseIndex) rows=\(visibleRows.count) ovl=\(ovlCount) zeroGeo=\(zeroGeo) ySpread=\(Int(ySpread)) avgGap=\(Int(avgGap)) maxBlur=\(String(format: "%.1f", maxBlur)) snap=\(snapPositions) initPending=\(initialMeasurementsPending)\n".data(using: .utf8)!)
+            fh.closeFile()
+        }
         #endif
         CATransaction.commit()
         lastConfiguredTextPhaseIndex = activeTextPhaseIndex
@@ -930,6 +949,18 @@ final class NativeLyricsSurfaceView: NSView {
         from configuration: LyricsLayerRendererConfiguration
     ) -> LyricsLayerRendererConfiguration {
         var runtimeConfiguration = configuration
+        // ROOT FIX for the track-switch bloom (verified via the bloom probe: rows=42, ySpread=0,
+        // maxBlur=9 on the first frame after a switch). A configure can arrive with `rows`
+        // populated but `renderedIndices` still empty (the two cross into the NSViewRepresentable
+        // on slightly different ticks). With NO indices the height accumulator returns {}, EVERY
+        // row falls back to Y=0, and the viewport selector then counts ALL rows as on-screen —
+        // dozens of lines stacked at the top, each at full depth-of-field blur = the "initial
+        // overlapping heavily blurred" bloom. renderedIndices is, by construction, exactly
+        // rows.map(\.index) (LyricsView.refreshDisplayLineCache sets it that way), so deriving it
+        // here when it is missing is exact, not a heuristic — it just closes the one-frame gap.
+        if runtimeConfiguration.renderedIndices.isEmpty && !runtimeConfiguration.rows.isEmpty {
+            runtimeConfiguration.renderedIndices = runtimeConfiguration.rows.map(\.index)
+        }
         runtimeConfiguration.nativeManualScrollSnapshot = manualScrollState.activeSnapshot
         if let request = configuration.directSnapRequest,
            !consumedDirectSnapRequestIDs.contains(request.id) {
@@ -3451,6 +3482,14 @@ final class NativeLyricsRowView: NSView {
     }
 
     var debugRowLayerOpacity: Float { layer?.opacity ?? 1 }
+
+    /// True when the bright text layer has NOT been laid out yet (bounds ≈ .zero). A row in
+    /// this state renders its text at frame origin + full depth-of-field blur — exactly the
+    /// "overlapping heavily blurred" first-frame bloom. Used by the reconcile bloom probe to
+    /// count how many visible rows escape the layout barrier on a track switch.
+    var debugMainBrightBoundsEmpty: Bool {
+        mainBrightTextLayer.bounds.width <= 1 || mainBrightTextLayer.bounds.height <= 1
+    }
 
     /// The per-run-sweep decision from the most recent ACTIVE updatePlaybackPhase. `true` =
     /// per-word karaoke wavefront; `false` = whole-line (line-level) sweep. For a row WITH
