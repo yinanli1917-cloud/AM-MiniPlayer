@@ -78,6 +78,47 @@ show translation loading affordances for the specific eligible lines currently
 being filled. Transparent translation placeholders make line heights look random
 and break the perceived cadence of the protected wave animation.
 
+## Track-Switch Bloom And Recede Blink (verified 2026-06-14)
+
+Two renderer-engine defects were root-caused by per-frame ON-SCREEN measurement
+(the layer presentation transform and opacity, not the model) plus on-device
+60 fps capture, and fixed in `LyricsLayerRendererView.swift`. Do not regress them,
+and do not re-diagnose them against the model — the model was correct in both.
+
+Track-switch bloom — rows stacked at the top, heavily blurred, then sliding and
+spreading into place over roughly 0.6 s — was NOT anchorY (stable) and NOT missing
+accumulated heights (present). The cause was the presentation loop STOPPING: on a
+track switch the renderer enters `directSnap` for the force-snap window, which has
+no engine motion, so `stopPresentationLoopIfIdle` stopped the loop right after the
+rows mounted. Rows are positioned only by their layer transform (`view.frame.origin`
+is always `0,0`), and AppKit's first layout pass after the mount collapses those
+transforms; with the loop stopped nothing re-applied them, so every row sat at the
+top until natural mode resumed. The force-snap that an earlier pass added to fix the
+bloom was itself what stopped the loop. Invariant: keep the presentation loop alive
+AND re-applying frames for the whole appear window (`isWithinAppearWindow` ==
+within `forceSnapUntil`) — `stopPresentationLoopIfIdle` must bail, `configure` must
+start the loop, and `presentationTick` must force a frame apply. Freshly mounted
+rows stay at opacity 0 for a short reveal gate (`initialRevealTicksRemaining`) so
+they appear only after the loop has committed a spread frame, never during the
+one-frame pre-commit identity. Do not "fix" this by patching the position model.
+
+Recede blink — a line dimming to the past flashes once — came from the deferred
+(receding) line freezing its bright karaoke overlay. A line that loses focus is
+deferred so its sweep mask is preserved while it recedes, but `updatePlaybackPhase`
+is skipped, so the bright sung-overlay stayed frozen at its active opacity and then
+snapped to 0 at finalization (a roughly 0.33 effective one-frame step). Invariant:
+the deferred line's bright overlay must fade out smoothly with the recede
+(`beginDeactivationFade` captures the overlay opacity, `updateDeactivationFade`
+scales it toward 0 in step with the row opacity), so finalization only clears an
+already near-invisible overlay. Only the deferred row may be touched; the active
+line's sweep is unchanged.
+
+Methodology: both defects were invisible to model probes and to pixel/`cacheDisplay`
+unit tests. Diagnose renderer transients by sampling the presentation layer per
+frame (a direct-file probe — the sink file must already exist or `FileHandle`
+returns nil) and by on-device `ffmpeg` 60 fps capture with scene-detect; never trust
+the model or a single-frame snapshot for an on-screen transient.
+
 ## What Fixed The May 2026 CPU Regression
 
 The largest CPU waste was not the word renderer alone. It was broad SwiftUI invalidation caused by high-frequency playback time observation.
