@@ -1913,7 +1913,7 @@ public struct LyricsView: View {
         for (sourceIndex, line) in lyrics.enumerated() {
             if isPreludeEllipsis(line.text) || isInstrumentalNotice(line.text) {
                 result.append(DisplayLyricLine(
-                    id: "\(line.id.uuidString)-0",
+                    id: "\(sourceIndex)-0",
                     sourceIndex: sourceIndex,
                     segmentIndex: 0,
                     segmentCount: 1,
@@ -1924,7 +1924,7 @@ public struct LyricsView: View {
 
             if line.hasSyllableSync {
                 result.append(DisplayLyricLine(
-                    id: "\(line.id.uuidString)-0",
+                    id: "\(sourceIndex)-0",
                     sourceIndex: sourceIndex,
                     segmentIndex: 0,
                     segmentCount: 1,
@@ -1937,7 +1937,7 @@ public struct LyricsView: View {
             let segmentCount = max(textSegments.count, 1)
             if shouldKeepDisplayLineUnsplit(line, generatedSegmentCount: segmentCount) {
                 result.append(DisplayLyricLine(
-                    id: "\(line.id.uuidString)-0",
+                    id: "\(sourceIndex)-0",
                     sourceIndex: sourceIndex,
                     segmentIndex: 0,
                     segmentCount: 1,
@@ -1969,7 +1969,7 @@ public struct LyricsView: View {
                         : nil
                 )
                 result.append(DisplayLyricLine(
-                    id: "\(line.id.uuidString)-\(segmentIndex)",
+                    id: "\(sourceIndex)-\(segmentIndex)",
                     sourceIndex: sourceIndex,
                     segmentIndex: segmentIndex,
                     segmentCount: segmentCount,
