@@ -417,6 +417,11 @@ public struct LyricsView: View {
     /// native surface = a visible "refresh". 0 = nothing committed yet.
     @State private var lastCommittedRowsFingerprint: Int = 0
     @State private var contentTransitionOpacity: Double = 1
+    // "向下生长" intro: the whole lyrics page drops down into place + fades on every track load.
+    // Paired with contentTransitionOpacity and animated together in refreshDisplayLineCache. This
+    // lives at the SwiftUI container level (a pure .offset transform) — deliberately OUTSIDE the
+    // native renderer's per-row reveal path, so it cannot reintroduce the track-switch bloom.
+    @State private var contentTransitionOffset: CGFloat = 0
     @State private var cachedNativeRenderedIndices: [Int] = []
     @State private var nativeLyricsManualScrollActive = false
     @State private var nativeLyricsDirectSnapRequest: NativeLyricsDirectSnapRequest?
@@ -493,6 +498,8 @@ public struct LyricsView: View {
             //    in by refreshDisplayLineCache once the new track's state is ready —
             //    so spinner/lyrics enter with a soft fade instead of popping.
             .opacity(trackCacheMatchesCurrentTrack ? contentTransitionOpacity : 0)
+            // "向下生长": the page enters shifted up and settles down (paired with the fade above).
+            .offset(y: trackCacheMatchesCurrentTrack ? contentTransitionOffset : 0)
         }
         .overlay(alignment: .topLeading) { diagnosticLineMotionProbe }
         .overlay(bottomControlsOverlay)
@@ -563,8 +570,11 @@ public struct LyricsView: View {
             cachedLayerRows.removeAll()
             cachedLayerRowsTrackKey = ""
             lastCommittedRowsFingerprint = 0
-            // Start the new track's content dark; refreshDisplayLineCache fades it in.
+            // Start the new track's content dark AND shifted up; refreshDisplayLineCache fades it
+            // in while settling it down ("向下生长" intro). Set with no animation here (content is
+            // invisible at opacity 0), so only the reveal animates.
             contentTransitionOpacity = 0
+            contentTransitionOffset = -18
             cachedNativeRenderedIndices.removeAll()
             cachedFirstRealDisplayIndex = 0
             displayCurrentLineIndex = nil
@@ -2071,10 +2081,15 @@ public struct LyricsView: View {
         }
         cachedLayerRows = layerRows
         cachedLayerRowsTrackKey = Self.layerRowsTrackKey(for: musicController)
-        // The new track's state is ready (even if it's just the loading/empty layout):
-        // fade the content container back in if a track change dipped it out.
-        if contentTransitionOpacity < 1 {
-            withAnimation(.easeInOut(duration: 0.25)) { contentTransitionOpacity = 1 }
+        // The new track's state is ready (even if it's just the loading/empty layout): reveal the
+        // content container with the "向下生长" intro — fade in while settling down from the upward
+        // offset. A gentle spring gives the organic "grow/descend" feel (tunable). Both properties
+        // animate in the same transaction so the drop and fade stay in sync.
+        if contentTransitionOpacity < 1 || contentTransitionOffset != 0 {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
+                contentTransitionOpacity = 1
+                contentTransitionOffset = 0
+            }
         }
         cachedNativeRenderedIndices = layerRows.map(\.index)
         displayCurrentLineIndex = displayIndex(
