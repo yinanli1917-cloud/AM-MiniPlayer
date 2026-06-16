@@ -3344,11 +3344,11 @@ final class NativeLyricsSurfaceView: NSView {
             || activeRow.isPrelude {
             return true
         }
-        if configuration.showTranslation,
-           let translation = activeRow.displayLine.line.translation,
-           !translation.isEmpty {
-            return true
-        }
+        // REGRESSION FIX (cfb5308ae, 2026-06-08): keeping the loop alive for a line-level song's
+        // translation sweep made line-level playback run the render loop every frame (~50% CPU),
+        // where it used to idle between advances. Line-level main text is static; its translation
+        // should be too — so do NOT hold the loop open for it. Word-timed songs already return true
+        // above (their main sweep needs the loop, and the translation sweep rides along).
         return false
     }
 
@@ -4133,7 +4133,10 @@ final class NativeLyricsRowView: NSView {
         activeHiddenEmphasisSignature = nil
         hideEmphasisGlyphLayers()
         if let translation = plan.translation {
-            let appliesTranslationSweep = isActive
+            // Sweep the translation ONLY for word-timed songs (match appliesMainSweep's gating).
+            // Line-level songs render the translation statically at the active opacity — sweeping it
+            // forced the render loop to run every frame (cfb5308ae), the line-level CPU regression.
+            let appliesTranslationSweep = isActive && row.displayLine.line.hasSyllableSync
             let translationBaseAlpha = appliesTranslationSweep
                 ? translation.dimAlpha
                 : plan.constants.currentTranslationOpacityFactor
@@ -4279,10 +4282,14 @@ final class NativeLyricsRowView: NSView {
             #if DEBUG || LOCAL_DEVELOPER_BUILD
             debugLastAppliedActivePerRunSweep = appliedMainProgress.appliedPerRunSweep
             #endif
-            let appliedTranslation = plan.translation != nil
+            // Only the per-frame translation sweep for word-timed songs. Line-level translations
+            // render statically (updateTextLayers), so skipping the sweep here lets the loop idle
+            // between line advances — the fix for the line-level playback CPU regression.
+            let translationSweeps = plan.translation != nil && row.displayLine.line.hasSyllableSync
+            let appliedTranslation = translationSweeps
                 ? applyActiveTranslationPhase(plan: plan)
                 : nil
-            if plan.translation == nil {
+            if !translationSweeps {
                 translationBrightTextLayer.isHidden = true
                 hideTranslationSweepMaskLayers()
             }
