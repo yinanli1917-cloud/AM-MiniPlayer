@@ -2162,7 +2162,7 @@ final class NativeLyricsSurfaceView: NSView {
     // implicit action lives 0.25 s, so every leak is observed at least once. Each
     // unique signature logs at most once per 2 s to keep the log readable.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    private static let explicitAnimationKeys: Set<String> = ["translationLoadingOpacity"]
+    private static let explicitAnimationKeys: Set<String> = ["translationLoadingOpacity", "translationGrowIn"]
 
     private func auditImplicitAnimationsIfNeeded(now: CFTimeInterval) {
         implicitAnimationAuditTickCounter += 1
@@ -4078,6 +4078,14 @@ final class NativeLyricsRowView: NSView {
             return
         }
 
+        // "向下生长" gate: translation is async (Apple Translation framework, ~0.7s after the
+        // lyrics show). While awaiting, this row shows the loading dots. When the translation
+        // text then arrives we want it to grow in gently (fade + slide down) instead of popping.
+        // Capture whether we were awaiting BEFORE this update mutates the dots/text below — the
+        // dots-visible → translation transition is exactly the async arrival, and never fires on a
+        // fresh scroll-mount of an already-translated row (dots never showed there).
+        let wasAwaitingTranslation = !translationLoadingDotContainerLayer.isHidden
+
         let plan = textRenderPlan(row: row, configuration: configuration)
         let isActive = row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying
         let appliesMainSweep = isActive && row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
@@ -4139,6 +4147,13 @@ final class NativeLyricsRowView: NSView {
                 : nil
             if !appliesTranslationSweep {
                 hideTranslationSweepMaskLayers()
+            }
+            // Async translation just arrived for this row → grow it in (fade + slide down).
+            if wasAwaitingTranslation {
+                playTranslationGrowIn(on: translationTextLayer)
+                if !translationBrightTextLayer.isHidden, translationBrightTextLayer.string != nil {
+                    playTranslationGrowIn(on: translationBrightTextLayer)
+                }
             }
         } else if configuration.showTranslation && isAwaitingTranslation(row: row, configuration: configuration) {
             translationTextLayer.string = nil
@@ -5468,6 +5483,30 @@ final class NativeLyricsRowView: NSView {
             width: max(frame.width, totalWidth),
             height: frame.height
         )
+    }
+
+    // Animation key for the translation "grow in" reveal. Must stay listed in the implicit-anim
+    // allowlists (the presentationTick auditor `explicitAnimationKeys` and the
+    // NativeLyricsImplicitAnimationTests allowlist) so this DELIBERATE animation is not flagged as
+    // a stray implicit-action leak.
+    static let translationGrowInAnimationKey = "translationGrowIn"
+
+    /// "向下生长" reveal for an async-arriving translation: fade the text up from transparent while
+    /// sliding it down a few points into its (already-correct) frame. Explicit named animation, so it
+    /// bypasses the .lyricsInert action gate and never drifts (the frame is set instantly elsewhere —
+    /// only opacity + a settle offset animate). Tunable: duration / slide distance.
+    private func playTranslationGrowIn(on layer: CALayer) {
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.0
+        fade.toValue = layer.opacity
+        let slide = CABasicAnimation(keyPath: "transform.translation.y")
+        slide.fromValue = -8.0
+        slide.toValue = 0.0
+        let group = CAAnimationGroup()
+        group.animations = [fade, slide]
+        group.duration = 0.5
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(group, forKey: Self.translationGrowInAnimationKey)
     }
 
     private func startTranslationLoadingDots() {

@@ -22,7 +22,7 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
 
     /// Animation keys the renderer adds explicitly, by name. Anything else in the tree
     /// is an implicit-action leak.
-    private static let explicitAnimationKeys: Set<String> = ["translationLoadingOpacity"]
+    private static let explicitAnimationKeys: Set<String> = ["translationLoadingOpacity", "translationGrowIn"]
 
     private var hostWindow: NSWindow?
 
@@ -84,6 +84,7 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
         currentIndex: Int = 0,
         showTranslation: Bool = false,
         pendingTranslationLineIndices: Set<Int> = [],
+        isTranslating: Bool = false,
         hasSyllableSync: Bool = false,
         musicController: MusicController? = nil
     ) -> LyricsLayerRendererConfiguration {
@@ -104,7 +105,7 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
             suppressInitialMotion: false,
             pendingTranslationLineIndices: pendingTranslationLineIndices,
             showTranslation: showTranslation,
-            isTranslating: false,
+            isTranslating: isTranslating,
             translationFailed: false,
             interludeAfterIndex: nil,
             directSnapRequest: nil,
@@ -154,7 +155,7 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
         let bare = row(line("Now that I have found you"), index: 0)
         let view = NativeLyricsRowView(frame: .zero)
         hostInWindow(view)
-        view.configure(row: bare, configuration: makeConfiguration(rows: [bare], showTranslation: true, pendingTranslationLineIndices: [0]))
+        view.configure(row: bare, configuration: makeConfiguration(rows: [bare], showTranslation: true, pendingTranslationLineIndices: [0], isTranslating: true))
         view.frame = CGRect(x: 0, y: 0, width: width, height: view.measuredHeight(width: width))
         view.debugForceLayout()
         XCTAssertEqual(view.debugTranslationTextLayerFrame, .zero, "precondition: translation layer parked at .zero while loading")
@@ -167,9 +168,18 @@ final class NativeLyricsImplicitAnimationTests: XCTestCase {
         view.debugForceLayout()
 
         XCTAssertNotEqual(view.debugTranslationTextLayerFrame, .zero, "precondition: translation layer received its real frame")
+        // The frame must be set instantly (no implicit drift-from-origin). The ONLY animation
+        // permitted is the deliberate "向下生长" grow-in (opacity + a small settle offset, not a
+        // frame animation) — filter it out and assert nothing else (implicit) remains.
+        let strayKeys = view.debugTranslationTextLayerAnimationKeys.filter { !Self.explicitAnimationKeys.contains($0) }
         XCTAssertEqual(
-            view.debugTranslationTextLayerAnimationKeys, [],
+            strayKeys, [],
             "translation layer must not implicitly animate its frame (drifts in from top-left on screen)"
+        )
+        // And the async-arrival grow-in MUST have fired (this is the reveal the user asked for).
+        XCTAssertTrue(
+            view.debugTranslationTextLayerAnimationKeys.contains("translationGrowIn"),
+            "async translation arrival should play the explicit grow-in reveal"
         )
     }
 
