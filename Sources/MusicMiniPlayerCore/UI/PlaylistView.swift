@@ -52,7 +52,6 @@ public struct PlaylistView: View {
     @State private var isCoverAnimating: Bool = false
 
     // 滚动控制状态
-    @State private var lastVelocity: CGFloat = 0
     @State private var scrollLocked: Bool = false
     @State private var hasTriggeredSlowScroll: Bool = false
 
@@ -431,7 +430,6 @@ public struct PlaylistView: View {
 
     private func handleScrollStarted() {
         isManualScrolling = true
-        lastVelocity = 0
         scrollLocked = false
         hasTriggeredSlowScroll = false
         autoScrollTimer?.invalidate()
@@ -447,7 +445,6 @@ public struct PlaylistView: View {
             }
             withAnimation(.easeInOut(duration: 0.3)) {
                 isManualScrolling = false
-                lastVelocity = 0
                 scrollLocked = false
                 hasTriggeredSlowScroll = false
             }
@@ -468,8 +465,9 @@ public struct PlaylistView: View {
             hasTriggeredSlowScroll = true
             if !controlsVisible { showControlsWithAnimation() }
         }
-
-        lastVelocity = absVelocity
+        // NOTE: deliberately no per-event @State write here. Writing an (unread) velocity into
+        // @State on every scroll event invalidated this view → full SwiftUI re-layout each frame
+        // during playlist scroll (same class of bug as LyricsView's removed scroll.lastVelocity).
     }
 
     private func handleHover(hovering: Bool) {

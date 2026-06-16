@@ -270,7 +270,16 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(lyricsViewSource.contains("lineMotionMonitoringEnabled && !lyricsLayerRendererActive"))
         XCTAssertFalse(lyricsViewSource.contains("nativeLineMotionFrameCaptureSequence"))
         XCTAssertFalse(source.contains("lineMotionFrameCaptureSequence"))
-        XCTAssertFalse(lyricsViewSource.contains("scroll.lastVelocity = absVelocity"))
+        // `scroll` is a struct in @State, so ANY field write per scroll event invalidates
+        // LyricsView → SwiftUI re-runs body + a full NSHostingView layout pass every display
+        // cycle (the scroll-time CPU spike, doubled at 120 Hz). `lastVelocity` was a write-only
+        // dead field whose per-event write reintroduced exactly this. The previous guard checked
+        // the literal "scroll.lastVelocity = absVelocity" and missed the "abs(velocity)" variant —
+        // assert the field is gone entirely so no spelling can bring it back.
+        XCTAssertFalse(
+            lyricsViewSource.contains("scroll.lastVelocity"),
+            "scroll.lastVelocity must not exist: per-scroll-event @State writes force a full SwiftUI re-layout"
+        )
         XCTAssertTrue(lyricsViewSource.contains("recordLyricsRendererModeEvent(reason: \"track\")"))
         XCTAssertFalse(source.contains("if reason != \"interval\" {\n            flushRenderTelemetry"))
     }

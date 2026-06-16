@@ -17,7 +17,6 @@ private struct ScrollState {
     var isManualScrolling = false
     var manualScrollOffset: CGFloat = 0     // Display offset, including rubber banding.
     var rawScrollOffset: CGFloat = 0        // Raw accumulated offset, excluding rubber banding.
-    var lastVelocity: CGFloat = 0
     var scrollLocked = false
     var hasTriggeredSlowScroll = false
     var lockedLineIndex: Int? = nil
@@ -410,6 +409,13 @@ public struct LyricsView: View {
     @State private var cachedFirstRealDisplayIndex: Int = 0
     @State private var cachedLayerRows: [LayerBackedLyricRow] = []
     @State private var cachedLayerRowsTrackKey: String = ""
+    /// Fingerprint of the inputs that produced the last committed rows. The
+    /// staged lyrics load drives onChange(lyrics) AND onChange(displayState),
+    /// each of which calls refreshDisplayLineCache(); without a dedup the same
+    /// logical state is committed 2-3x (verified in the stage log: byte-
+    /// identical commits 1-4ms apart) and every redundant commit re-pokes the
+    /// native surface = a visible "refresh". 0 = nothing committed yet.
+    @State private var lastCommittedRowsFingerprint: Int = 0
     @State private var contentTransitionOpacity: Double = 1
     @State private var cachedNativeRenderedIndices: [Int] = []
     @State private var nativeLyricsManualScrollActive = false
@@ -556,6 +562,7 @@ public struct LyricsView: View {
             cachedDisplayLyrics.removeAll()
             cachedLayerRows.removeAll()
             cachedLayerRowsTrackKey = ""
+            lastCommittedRowsFingerprint = 0
             // Start the new track's content dark; refreshDisplayLineCache fades it in.
             contentTransitionOpacity = 0
             cachedNativeRenderedIndices.removeAll()
@@ -1685,7 +1692,6 @@ public struct LyricsView: View {
         scroll.lockedLineIndex = currentIdx
         scroll.frozenDisplayIndex = currentIdx  // Freeze the highlighted row.
         scroll.isManualScrolling = true
-        scroll.lastVelocity = 0
         scroll.scrollLocked = false
         scroll.hasTriggeredSlowScroll = false
 
@@ -1728,7 +1734,6 @@ public struct LyricsView: View {
         scroll.rawScrollOffset = scroll.manualScrollOffset
         scroll.isManualScrolling = true
         lyricsService.isManualScrolling = true
-        scroll.lastVelocity = 0
         scroll.scrollLocked = false
         scroll.hasTriggeredSlowScroll = false
     }
@@ -1811,8 +1816,12 @@ public struct LyricsView: View {
     }
 
     private func handleNativeScrollChromeDelta(_ deltaY: CGFloat, velocity: CGFloat) {
+        // NOTE: must NOT write any @State here per scroll event. `scroll` is a struct in
+        // @State, so any field write invalidates this view → SwiftUI re-runs body + a full
+        // NSHostingView layout pass on the next display cycle. At a scroll's event rate (and
+        // doubled at 120 Hz) that re-layout dominates scroll-time CPU. handleScrollChromeDelta
+        // only mutates `scroll` on genuine show/hide transitions, which is fine.
         handleScrollChromeDelta(deltaY, velocity: velocity)
-        scroll.lastVelocity = abs(velocity)
     }
 
     private func handleNativeManualScrollStarted(frozenDisplayIndex: Int) {
@@ -1826,7 +1835,6 @@ public struct LyricsView: View {
         scroll.frozenDisplayIndex = frozenDisplayIndex
         scroll.scrollLocked = false
         scroll.hasTriggeredSlowScroll = false
-        scroll.lastVelocity = 0
     }
 
     private func handleNativeManualScrollEnded() {
@@ -1839,7 +1847,6 @@ public struct LyricsView: View {
         scroll.frozenDisplayIndex = nil
         scroll.scrollLocked = false
         scroll.hasTriggeredSlowScroll = false
-        scroll.lastVelocity = 0
         updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
         if let idx = displayCurrentLineIndex {
             wave.lastCurrentIndex = idx
@@ -2024,7 +2031,36 @@ public struct LyricsView: View {
         cachedLayerRowsTrackKey == Self.layerRowsTrackKey(for: musicController)
     }
 
+    /// Hash of every input that determines the committed rows. Same inputs ⇒
+    /// same rows ⇒ a commit would be a no-op reconcile that still re-pokes the
+    /// native surface. LyricLine.id is a fresh UUID per object, so we hash the
+    /// content (text + translation) explicitly, never the line identity.
+    private func displayLineInputFingerprint() -> Int {
+        var hasher = Hasher()
+        hasher.combine(Self.layerRowsTrackKey(for: musicController))
+        hasher.combine(lyricsService.showTranslation)
+        hasher.combine(lyricsService.firstRealLyricIndex)
+        hasher.combine(lyricsService.interludeAfterIndex)
+        let lyrics = lyricsService.lyrics
+        hasher.combine(lyrics.count)
+        for line in lyrics {
+            hasher.combine(line.text)
+            hasher.combine(line.translation)
+        }
+        return hasher.finalize()
+    }
+
     private func refreshDisplayLineCache() {
+        // ---- Dedup guard ----------------------------------------------------
+        // The staged load fires onChange(lyrics) AND onChange(displayState),
+        // each calling here; the stage log showed the same logical state
+        // committed 2-3x (byte-identical, 1-4ms apart). A redundant commit
+        // re-pokes the native surface for no reason = a visible "refresh".
+        // Bail when the inputs that determine the rows are unchanged.
+        let inputFingerprint = displayLineInputFingerprint()
+        guard inputFingerprint != lastCommittedRowsFingerprint else { return }
+        lastCommittedRowsFingerprint = inputFingerprint
+
         let displayLines = makeDisplayLyricLines(from: lyricsService.lyrics)
         let firstRealDisplayIndex = displayFirstRealLyricIndex(in: displayLines)
         cachedDisplayLines = displayLines
