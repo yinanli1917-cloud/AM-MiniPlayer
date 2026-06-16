@@ -9,6 +9,17 @@ enum NativeLyricsTextMeasurement {
         let usedRect: CGRect
     }
 
+    #if DEBUG
+    // ─────────────────────────────────────────────────────────────────────
+    // Test-only counter. Each call below spins up a full NSLayoutManager/
+    // NSTypesetter stack — the dominant scroll-time cost. The layout()
+    // memoization in NativeLyricsRowView exists to keep this from being hit
+    // on every CATransaction commit; the regression test asserts that an
+    // unchanged re-layout does NOT increment this counter.
+    // ─────────────────────────────────────────────────────────────────────
+    nonisolated(unsafe) static var debugMeasureCount = 0
+    #endif
+
     static func metrics(
         _ text: String,
         width: CGFloat,
@@ -18,6 +29,9 @@ enum NativeLyricsTextMeasurement {
         guard !text.isEmpty, width > 1 else {
             return Metrics(height: 0, lineCount: 0, usedRect: .zero)
         }
+        #if DEBUG
+        debugMeasureCount += 1
+        #endif
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping

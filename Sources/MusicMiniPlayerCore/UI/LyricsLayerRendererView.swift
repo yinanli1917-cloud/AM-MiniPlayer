@@ -3427,6 +3427,26 @@ final class NativeLyricsRowView: NSView {
     private var lastMainSweepWavefrontX: [Int: CGFloat] = [:]
     private var lastTranslationSweepWavefrontX: [Int: CGFloat] = [:]
     private var lastLineLayoutMetrics = LineLayoutAppliedMetrics.inactive
+    // ─────────────────────────────────────────────────────────────────────
+    // layout() memoization. layout() runs on every CATransaction commit for
+    // any view AppKit considers dirty — i.e. every presentation tick during
+    // scroll/playback. Its body re-measures text via NSLayoutManager (two
+    // measuredTextHeight calls) and reassigns every text-layer frame. Those
+    // outputs depend ONLY on the inputs captured below; when none changed the
+    // re-layout is pure waste (it was ~85% of main-thread time during scroll).
+    // Early-return on an identical key so repeated layouts are ~free.
+    private struct LineLayoutCacheKey: Equatable {
+        let boundsWidth: CGFloat
+        let boundsHeight: CGFloat
+        let textWidth: CGFloat
+        let isPrelude: Bool
+        let displayText: String
+        let constants: NativeLyricsTextConstants
+        let showTranslation: Bool
+        let translation: String?
+        let awaitingTranslation: Bool
+    }
+    private var lastLineLayoutCacheKey: LineLayoutCacheKey?
     private let blurFilter = CIFilter(name: "CIGaussianBlur")
     private let dotBlurFilter = CIFilter(name: "CIGaussianBlur")
     private var appliedBlurRadius: CGFloat = -.greatestFiniteMagnitude
@@ -3612,6 +3632,7 @@ final class NativeLyricsRowView: NSView {
         cachedTranslationSweepLinePlan = []
         cachedStaticTextPlanKey = nil
         cachedStaticTextPlan = nil
+        lastLineLayoutCacheKey = nil
         activeHiddenEmphasisSignature = nil
         [
             mainTextLayer,
@@ -3723,6 +3744,11 @@ final class NativeLyricsRowView: NSView {
 
     func debugForceLayout() { layoutSubtreeIfNeeded() }
 
+    /// Invokes layout() directly, bypassing AppKit's `needsLayout` gate. AppKit calls layout()
+    /// on every commit while a view is dirty; this reproduces that repeated invocation so the
+    /// layout() memoization can be asserted (an unchanged re-layout must not re-measure text).
+    func debugInvokeLayoutDirectly() { layout() }
+
     /// Drives the active main phase at a controlled time (bypassing the live player clock) and
     /// returns the per-word float telemetry, so tests can prove each word floats by its OWN amount
     /// (spread > 0 = the cascade) instead of one collapsed line-level value.
@@ -3790,6 +3816,25 @@ final class NativeLyricsRowView: NSView {
         // width from configuration.rowWidth instead of bounds.width removes the last bounds-timing
         // hazard, so the frame can never disagree with the baked line-breaks even on the first pass.
         let textWidth = contentTextWidth(configuration)
+        // Memoization gate: build the key from cheap/cached inputs (staticTextPlan is cached) and
+        // skip the whole layout body when nothing that affects it changed. layout() is invoked on
+        // every commit; the body's NSLayoutManager measurement + frame writes are idempotent, so an
+        // unchanged re-run produces identical frames — pure waste during scroll/playback.
+        let staticPlan = staticTextPlan(for: row)
+        let cacheKey = LineLayoutCacheKey(
+            boundsWidth: bounds.width,
+            boundsHeight: bounds.height,
+            textWidth: textWidth,
+            isPrelude: row.isPrelude,
+            displayText: staticPlan.displayText,
+            constants: staticPlan.constants,
+            showTranslation: configuration.showTranslation,
+            translation: row.displayLine.line.translation,
+            awaitingTranslation: configuration.showTranslation
+                && isAwaitingTranslation(row: row, configuration: configuration)
+        )
+        if cacheKey == lastLineLayoutCacheKey { return }
+        lastLineLayoutCacheKey = cacheKey
         let plan = textRenderPlan(row: row, configuration: configuration)
         backgroundLayer.frame = Self.hoverBackgroundFrame(in: bounds)
         var y: CGFloat = 8
