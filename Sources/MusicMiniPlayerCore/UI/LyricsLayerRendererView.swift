@@ -3413,6 +3413,18 @@ final class NativeLyricsRowView: NSView {
     private var cachedTextGlyphGeometryMetrics: TextGlyphGeometryMetrics?
     private var cachedTranslationSweepLayoutKey: TranslationSweepLayoutCacheKey?
     private var cachedTranslationSweepLinePlan: [NativeLyricsTranslationSweepVisualLinePlan] = []
+    // Per-frame memo for the active translation's measured height. applyActiveTranslationPhase runs
+    // every display-link tick during playback; the height depends only on (text, width, font) which
+    // are constant while a line is active — only the sweep PROGRESS changes per frame. Re-running the
+    // full NSLayoutManager/NSTypesetter each frame was ~37% of the per-frame main-thread cost.
+    private struct ActiveTranslationHeightKey: Equatable {
+        let text: String
+        let width: CGFloat
+        let fontSize: CGFloat
+        let lineSpacing: CGFloat
+    }
+    private var cachedActiveTranslationHeightKey: ActiveTranslationHeightKey?
+    private var cachedActiveTranslationHeight: CGFloat = 0
     private var translationSweepLineLayers: [NativeLyricsSweepMaskLineLayer] = []
     private var emphasisGlyphLayers: [CATextLayer] = []
     private var emphasisGlyphLayerSignatures: [EmphasisGlyphLayerSignature?] = []
@@ -3630,6 +3642,7 @@ final class NativeLyricsRowView: NSView {
         cachedTextGlyphGeometryMetrics = nil
         cachedTranslationSweepLayoutKey = nil
         cachedTranslationSweepLinePlan = []
+        cachedActiveTranslationHeightKey = nil
         cachedStaticTextPlanKey = nil
         cachedStaticTextPlan = nil
         lastLineLayoutCacheKey = nil
@@ -4590,12 +4603,27 @@ final class NativeLyricsRowView: NSView {
         translationBrightTextLayer.isHidden = translation.progress <= 0.001 || translation.postLineFade <= 0.001
         guard let configuration else { return nil }
         let textWidth = contentTextWidth(configuration)
-        let translationHeight = measuredTextHeight(
-            translation.text,
+        // Memoized: only re-measure when the translation text / width / font actually change, not on
+        // every per-frame sweep tick (the height is constant while the line is active).
+        let heightKey = ActiveTranslationHeightKey(
+            text: translation.text,
             width: textWidth,
-            font: .systemFont(ofSize: plan.constants.translationFontSize, weight: .semibold),
+            fontSize: plan.constants.translationFontSize,
             lineSpacing: plan.constants.translationLineSpacing
         )
+        let translationHeight: CGFloat
+        if let cached = cachedActiveTranslationHeightKey, cached == heightKey {
+            translationHeight = cachedActiveTranslationHeight
+        } else {
+            translationHeight = measuredTextHeight(
+                translation.text,
+                width: textWidth,
+                font: .systemFont(ofSize: plan.constants.translationFontSize, weight: .semibold),
+                lineSpacing: plan.constants.translationLineSpacing
+            )
+            cachedActiveTranslationHeightKey = heightKey
+            cachedActiveTranslationHeight = translationHeight
+        }
         let bounds = CGRect(x: 0, y: 0, width: textWidth, height: translationHeight + Self.textBottomClipPad)
         return updateTranslationSweepMask(
             translation: translation,
