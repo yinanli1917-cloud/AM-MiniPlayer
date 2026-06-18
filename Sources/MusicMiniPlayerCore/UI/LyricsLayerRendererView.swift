@@ -1528,6 +1528,22 @@ final class NativeLyricsSurfaceView: NSView {
     /// rendering as a misplaced blurred line for a frame). Snap modes are exempt —
     /// they teleport by design.
     private static let naturalModeMaxYStepPerTick: CGFloat = 60
+    // A row's presentation transform sits at its un-positioned default (top — proven py≈0 in the
+    // render census) for the first frame after it mounts, while its MODEL Y is already correct
+    // (far). Core Animation paints it there, blurred — the line-switch "blurred row flash" and,
+    // when many rows mount on a seek, the blurred pile. Suppress that single frame: once the
+    // presentation Y reaches the model Y (next commit) the row reveals at the right place. The
+    // census showed settled rows diverge ≤10px and normally-springing rows ≤150px, while
+    // just-mounted rows diverge >150 (stuck at 0/edge) — so this threshold cleanly separates
+    // "not yet positioned" from "legitimately moving". Tunable knob.
+    static let unpositionedDivergenceThreshold: CGFloat = 150
+    /// True when a row has not yet been positioned on screen (its presentation Y is still far
+    /// from its model Y) — so it must not paint this frame. A nil presentation (never rendered)
+    /// counts as unpositioned.
+    static func isRowUnpositioned(presentationY: CGFloat?, modelY: CGFloat) -> Bool {
+        guard let presentationY else { return true }
+        return abs(presentationY - modelY) > unpositionedDivergenceThreshold
+    }
 
     /// Interpolated playback time may drift backward by up to this much for a poll resync to correct
     /// overshoot (matches the interpolateTime backward-correction allowance). A non-explicit backward
@@ -1570,7 +1586,15 @@ final class NativeLyricsSurfaceView: NSView {
         if view.frame.size != frame.size || view.frame.origin != .zero {
             view.frame = frame
         }
-        let appliedOpacity = initialMeasurementsPending ? 0 : Float(visual.opacity)
+        var appliedOpacity = initialMeasurementsPending ? 0 : Float(visual.opacity)
+        // Suppress a just-mounted row for the one frame its presentation layer is still at its
+        // un-positioned default (top) while the model Y is already far — otherwise it paints there
+        // blurred (the line-switch flash / seek pile, proven in the presentation census). Natural
+        // mode only; deliberate snaps are handled by the existing reveal gates. Once the
+        // presentation Y catches up to the model Y (next commit) the row reveals at the right place.
+        if !snap, Self.isRowUnpositioned(presentationY: view.layer?.presentation()?.affineTransform().ty, modelY: y) {
+            appliedOpacity = 0
+        }
         view.layer?.opacity = appliedOpacity
         view.layer?.setAffineTransform(
             CGAffineTransform(translationX: 0, y: y)
@@ -1887,6 +1911,7 @@ final class NativeLyricsSurfaceView: NSView {
             #if LOCAL_DEVELOPER_BUILD
             self.recordAggregateBrightness(configuration: runtimeConfiguration, snap: snap)
             self.appendBloomTraj(phase: snap ? "frm-s" : "frm", configuration: runtimeConfiguration)
+            self.recordPresentationCensus(snap: snap)
             #endif
         }
         if managesTransaction {
@@ -1895,6 +1920,60 @@ final class NativeLyricsSurfaceView: NSView {
             applyFrames()
         }
     }
+
+    #if LOCAL_DEVELOPER_BUILD
+    // ───────────────────────────────────────────────────────────────────────────
+    // Presentation census (render-truth probe). The model state probes all read clean,
+    // yet the owner sees a blurred row flash on line-switch and a blurred mess on drag.
+    // That means the truth is on the PRESENTATION layer, not the model. Each paint we
+    // read every mounted row's presentation-layer state (on-screen Y, opacity, applied
+    // blur, the text it shows) and dump a full census whenever two visible rows overlap
+    // on screen (the visible "two lines stacked / blurred residual" signature) — plus a
+    // heartbeat. Direct file sink (survives release stripping); arm with:
+    //     touch /tmp/nanopod_census.log
+    // ───────────────────────────────────────────────────────────────────────────
+    private var censusFrameCounter = 0
+    private func recordPresentationCensus(snap: Bool) {
+        guard let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_census.log") else { return }
+        defer { fh.closeFile() }
+        censusFrameCounter += 1
+        struct CRow { let idx: Int; let content: String; let presY: CGFloat; let modelY: CGFloat; let presOp: Float; let blur: CGFloat; let h: CGFloat; let laidOut: Bool }
+        var rows: [CRow] = []
+        for (_, view) in rowViews {
+            guard let row = view.currentRow else { continue }
+            let h = measuredHeightsByIndex[row.index] ?? view.frame.height
+            rows.append(CRow(
+                idx: row.index, content: view.debugContentPrefix,
+                presY: view.debugPresentationY, modelY: view.debugModelY,
+                presOp: view.debugPresentationOpacity, blur: view.debugAppliedBlurRadius,
+                h: h, laidOut: !view.debugMainBrightBoundsEmpty
+            ))
+        }
+        guard !rows.isEmpty else { return }
+        // On-screen overlap between two rows that are BOTH visible enough to read.
+        var anomaly = false
+        var pair = ""
+        let vis = rows.filter { $0.presOp > 0.25 }
+        for i in 0..<vis.count {
+            for j in (i + 1)..<vis.count {
+                let a = vis[i], b = vis[j]
+                let overlap = max(0, min(a.presY + a.h, b.presY + b.h) - max(a.presY, b.presY))
+                let minH = max(1, min(a.h, b.h))
+                if overlap / minH > 0.4 {
+                    anomaly = true
+                    pair = "\(a.idx)x\(b.idx)#\(Int(overlap))"
+                }
+            }
+        }
+        let heartbeat = censusFrameCounter % 120 == 0
+        guard anomaly || heartbeat else { return }
+        let detail = rows.sorted { $0.idx < $1.idx }.map {
+            String(format: "%d'%@'py%.0f my%.0f op%.2f b%.1f%@", $0.idx, $0.content, $0.presY, $0.modelY, $0.presOp, $0.blur, $0.laidOut ? "" : " UNLAID")
+        }.joined(separator: " | ")
+        fh.seekToEndOfFile()
+        fh.write("[Census] \(anomaly ? "ANOMALY " + pair : "hb")\(snap ? " SNAP" : "") n=\(rows.count) | \(detail)\n".data(using: .utf8)!)
+    }
+    #endif
 
     private func applyFramesForCurrentConfiguration(snap: Bool, managesTransaction: Bool = true) {
         guard let configuration else { return }
@@ -3812,6 +3891,21 @@ final class NativeLyricsRowView: NSView {
     var debugMainBrightBoundsEmpty: Bool {
         mainBrightTextLayer.bounds.width <= 1 || mainBrightTextLayer.bounds.height <= 1
     }
+
+    // ── Presentation census accessors (render-truth probe) ──
+    /// First few characters the MAIN (dim) text layer is actually showing — so the census can
+    /// say WHICH line a blurred painted row belongs to (duplicate? stale? neighbor?).
+    var debugContentPrefix: String {
+        let s = (mainTextLayer.string as? NSAttributedString)?.string ?? (mainTextLayer.string as? String) ?? ""
+        return String(s.prefix(6))
+    }
+    /// The CIGaussianBlur radius actually applied to this row's layer (the depth-of-field blur).
+    var debugAppliedBlurRadius: CGFloat { max(0, appliedBlurRadius) }
+    /// The PRESENTATION-layer on-screen Y (transform ty) — what Core Animation is rendering NOW,
+    /// which can diverge from the committed model Y during a transition.
+    var debugPresentationY: CGFloat { (layer?.presentation()?.affineTransform().ty) ?? (layer?.affineTransform().ty ?? 0) }
+    var debugModelY: CGFloat { layer?.affineTransform().ty ?? 0 }
+    var debugPresentationOpacity: Float { layer?.presentation()?.opacity ?? layer?.opacity ?? 0 }
 
     /// The per-run-sweep decision from the most recent ACTIVE updatePlaybackPhase. `true` =
     /// per-word karaoke wavefront; `false` = whole-line (line-level) sweep. For a row WITH
