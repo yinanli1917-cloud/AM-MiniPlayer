@@ -378,7 +378,9 @@ final class NativeLyricsSurfaceController {
 struct LyricsLayerRendererConfiguration {
     let rows: [LayerBackedLyricRow]
     let currentIndex: Int
-    let anchorY: CGFloat
+    // var so the renderer can advance the anchor during an interlude (so the dots take the active
+    // centre and the preceding line recedes — the interlude behaving like a real lyric line).
+    var anchorY: CGFloat
     let rowWidth: CGFloat
     // var so the renderer can self-heal a transient track-switch frame where rows arrived but
     // renderedIndices did not (empty indices collapse every row to Y=0 = the bloom). See the
@@ -628,7 +630,11 @@ final class NativeLyricsSurfaceView: NSView {
                 ?? snapY(for: row, configuration: configuration)
         }
         let rowHeight = measuredHeightsByIndex[row.index] ?? 36
-        let y = baseY + configuration.effectiveManualOffset + rowHeight + 8
+        // Centre the dots in the reserved interlude gap. baseY already carries the interlude anchor
+        // advance (runtimeConfiguration), so at full interlude this lands exactly on the active
+        // centre; before/after it sits centred in the gap below the preceding line.
+        let y = baseY + configuration.effectiveManualOffset + rowHeight
+            + NativeLyricsHeightAccumulator.interludeGapHeight / 2 - NativeLyricsDotPhasePlan.baseDotSize / 2
         surfaceInterludeOverlay.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
         let dotSize = NativeLyricsDotPhasePlan.baseDotSize
         let spacing = NativeLyricsDotPhasePlan.baseDotSpacing
@@ -1147,6 +1153,17 @@ final class NativeLyricsSurfaceView: NSView {
             measuredHeights: measuredHeightsByIndex,
             interludeAfterIndex: runtimeConfiguration.interludeAfterIndex
         )
+        // Interlude scroll advance — makes the interlude behave like a real lyric line. While an
+        // interlude is active, advance the anchor so the gap reserved after the preceding line
+        // reaches the active centre: the three dots take the centre, the preceding line recedes
+        // above, the rows below stay below — exactly a line in the wave. Living in the anchor
+        // (not a post-engine offset) keeps the interlude→next-line handoff a small spring, not a
+        // reset jump. Ramped smoothly by interludeBlend.
+        if let interludeIdx = runtimeConfiguration.interludeAfterIndex {
+            let blend = interludeBlend(for: interludeIdx, isPrecedingInterlude: true, now: CACurrentMediaTime())
+            let interludeRowHeight = measuredHeightsByIndex[interludeIdx] ?? 36
+            runtimeConfiguration.anchorY -= blend * (interludeRowHeight + NativeLyricsHeightAccumulator.interludeGapHeight / 2)
+        }
         synchronizeNativeSemanticIndex(configuration: &runtimeConfiguration)
         return runtimeConfiguration
     }
@@ -1596,7 +1613,7 @@ final class NativeLyricsSurfaceView: NSView {
             appliedOpacity = 0
         }
         view.layer?.opacity = appliedOpacity
-        view.layer?.setAffineTransform(
+        view.setPositioning(
             CGAffineTransform(translationX: 0, y: y)
                 .scaledBy(x: visual.scale, y: visual.scale)
         )
@@ -1921,57 +1938,92 @@ final class NativeLyricsSurfaceView: NSView {
         }
     }
 
+    /// Smooth motion moves a channel in ONE direction (or holds). A stumble / flicker / repeat
+    /// is a channel that BOTH rises and falls (beyond epsilon) inside a short window — it
+    /// hesitated, doubled back, or oscillated. Returns true for that signature. Pure + tested.
+    static func censusOscillates(_ values: [CGFloat], epsilon: CGFloat) -> Bool {
+        guard values.count >= 3 else { return false }
+        var rose = false
+        var fell = false
+        for i in 1..<values.count {
+            let d = values[i] - values[i - 1]
+            if d > epsilon { rose = true }
+            if d < -epsilon { fell = true }
+        }
+        return rose && fell
+    }
+
     #if LOCAL_DEVELOPER_BUILD
     // ───────────────────────────────────────────────────────────────────────────
-    // Presentation census (render-truth probe). The model state probes all read clean,
-    // yet the owner sees a blurred row flash on line-switch and a blurred mess on drag.
-    // That means the truth is on the PRESENTATION layer, not the model. Each paint we
-    // read every mounted row's presentation-layer state (on-screen Y, opacity, applied
-    // blur, the text it shows) and dump a full census whenever two visible rows overlap
-    // on screen (the visible "two lines stacked / blurred residual" signature) — plus a
-    // heartbeat. Direct file sink (survives release stripping); arm with:
-    //     touch /tmp/nanopod_census.log
+    // Presentation census (render-truth probe). The model probes read clean, yet the owner
+    // sees flashing, stumbling, hesitating, repeating motion. Those are PRESENTATION-layer
+    // anomalies. Each paint we read every mounted row's presentation state across ALL visible
+    // channels — Y, opacity, blur, karaoke-bright, scale — keep a short per-row history, and
+    // dump whenever ANY channel OSCILLATES (rises and falls within the window = a stumble /
+    // flicker / repeat), or two rows overlap on screen. Direct file sink (survives release
+    // stripping); arm with:  touch /tmp/nanopod_census.log
     // ───────────────────────────────────────────────────────────────────────────
     private var censusFrameCounter = 0
+    private struct CensusTrack { var y: [CGFloat] = []; var op: [CGFloat] = []; var blur: [CGFloat] = []; var bright: [CGFloat] = []; var scale: [CGFloat] = [] }
+    private var censusTracks: [Int: CensusTrack] = [:]
     private func recordPresentationCensus(snap: Bool) {
         guard let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_census.log") else { return }
         defer { fh.closeFile() }
         censusFrameCounter += 1
-        struct CRow { let idx: Int; let content: String; let presY: CGFloat; let modelY: CGFloat; let presOp: Float; let blur: CGFloat; let h: CGFloat; let laidOut: Bool }
+        let window = 6
+        var live = Set<Int>()
+        var anomalies: [String] = []
+        struct CRow { let idx: Int; let content: String; let presY: CGFloat; let presOp: Float; let h: CGFloat }
         var rows: [CRow] = []
         for (_, view) in rowViews {
             guard let row = view.currentRow else { continue }
-            let h = measuredHeightsByIndex[row.index] ?? view.frame.height
-            rows.append(CRow(
-                idx: row.index, content: view.debugContentPrefix,
-                presY: view.debugPresentationY, modelY: view.debugModelY,
-                presOp: view.debugPresentationOpacity, blur: view.debugAppliedBlurRadius,
-                h: h, laidOut: !view.debugMainBrightBoundsEmpty
-            ))
+            live.insert(row.index)
+            let y = view.debugPresentationY
+            let op = CGFloat(view.debugPresentationOpacity)
+            let blur = view.debugAppliedBlurRadius
+            let bright = CGFloat(view.debugMainBrightOpacity)
+            let scale = view.debugPresentationScale
+            var t = censusTracks[row.index] ?? CensusTrack()
+            t.y.append(y); t.op.append(op); t.blur.append(blur); t.bright.append(bright); t.scale.append(scale)
+            if t.y.count > window {
+                t.y.removeFirst(); t.op.removeFirst(); t.blur.removeFirst(); t.bright.removeFirst(); t.scale.removeFirst()
+            }
+            censusTracks[row.index] = t
+            // Oscillation = the stumble / flicker signature. Skip deliberate snaps.
+            if !snap {
+                func fmt(_ v: [CGFloat], _ f: String) -> String { v.map { String(format: f, $0) }.joined(separator: ",") }
+                var ch: [String] = []
+                if Self.censusOscillates(t.op, epsilon: 0.05) { ch.append("OP[\(fmt(t.op, "%.2f"))]") }
+                if Self.censusOscillates(t.bright, epsilon: 0.05) { ch.append("BRIGHT[\(fmt(t.bright, "%.2f"))]") }
+                if Self.censusOscillates(t.blur, epsilon: 1.0) { ch.append("BLUR[\(fmt(t.blur, "%.1f"))]") }
+                if Self.censusOscillates(t.y, epsilon: 12) { ch.append("Y[\(fmt(t.y, "%.0f"))]") }
+                if Self.censusOscillates(t.scale, epsilon: 0.02) { ch.append("SCALE[\(fmt(t.scale, "%.3f"))]") }
+                if !ch.isEmpty { anomalies.append("idx\(row.index)'\(view.debugContentPrefix)' \(ch.joined(separator: " "))") }
+            }
+            rows.append(CRow(idx: row.index, content: view.debugContentPrefix, presY: y, presOp: Float(op), h: measuredHeightsByIndex[row.index] ?? view.frame.height))
         }
+        censusTracks = censusTracks.filter { live.contains($0.key) }
         guard !rows.isEmpty else { return }
-        // On-screen overlap between two rows that are BOTH visible enough to read.
-        var anomaly = false
-        var pair = ""
+        // On-screen overlap between two readable rows (the "two lines stacked" signature).
         let vis = rows.filter { $0.presOp > 0.25 }
         for i in 0..<vis.count {
             for j in (i + 1)..<vis.count {
                 let a = vis[i], b = vis[j]
                 let overlap = max(0, min(a.presY + a.h, b.presY + b.h) - max(a.presY, b.presY))
-                let minH = max(1, min(a.h, b.h))
-                if overlap / minH > 0.4 {
-                    anomaly = true
-                    pair = "\(a.idx)x\(b.idx)#\(Int(overlap))"
+                if overlap / max(1, min(a.h, b.h)) > 0.4 {
+                    anomalies.append("OVERLAP \(a.idx)'\(a.content)'x\(b.idx)'\(b.content)'#\(Int(overlap))")
                 }
             }
         }
-        let heartbeat = censusFrameCounter % 120 == 0
-        guard anomaly || heartbeat else { return }
-        let detail = rows.sorted { $0.idx < $1.idx }.map {
-            String(format: "%d'%@'py%.0f my%.0f op%.2f b%.1f%@", $0.idx, $0.content, $0.presY, $0.modelY, $0.presOp, $0.blur, $0.laidOut ? "" : " UNLAID")
-        }.joined(separator: " | ")
+        let heartbeat = censusFrameCounter % 180 == 0
+        guard !anomalies.isEmpty || heartbeat else { return }
         fh.seekToEndOfFile()
-        fh.write("[Census] \(anomaly ? "ANOMALY " + pair : "hb")\(snap ? " SNAP" : "") n=\(rows.count) | \(detail)\n".data(using: .utf8)!)
+        if anomalies.isEmpty {
+            let detail = rows.sorted { $0.idx < $1.idx }.map { String(format: "%d'%@'y%.0f op%.2f", $0.idx, $0.content, $0.presY, $0.presOp) }.joined(separator: " ")
+            fh.write("[Census] hb n=\(rows.count) | \(detail)\n".data(using: .utf8)!)
+        } else {
+            fh.write("[Census] f\(censusFrameCounter)\(snap ? " SNAP" : "") | \(anomalies.joined(separator: " ; "))\n".data(using: .utf8)!)
+        }
     }
     #endif
 
@@ -3906,6 +3958,12 @@ final class NativeLyricsRowView: NSView {
     var debugPresentationY: CGFloat { (layer?.presentation()?.affineTransform().ty) ?? (layer?.affineTransform().ty ?? 0) }
     var debugModelY: CGFloat { layer?.affineTransform().ty ?? 0 }
     var debugPresentationOpacity: Float { layer?.presentation()?.opacity ?? layer?.opacity ?? 0 }
+    /// The PRESENTATION-layer scale (from the transform) — a stumbling scale oscillation reads as
+    /// the active line "breathing" / jittering.
+    var debugPresentationScale: CGFloat {
+        let t = layer?.presentation()?.affineTransform() ?? layer?.affineTransform() ?? .identity
+        return sqrt(t.a * t.a + t.c * t.c)
+    }
 
     /// The per-run-sweep decision from the most recent ACTIVE updatePlaybackPhase. `true` =
     /// per-word karaoke wavefront; `false` = whole-line (line-level) sweep. For a row WITH
@@ -3915,8 +3973,21 @@ final class NativeLyricsRowView: NSView {
     #endif
 
 
+    // The row's on-screen position lives in a manual layer transform (not the view frame, so a
+    // pure position change never triggers a text re-measure). AppKit's layout pass resets a
+    // layer-backed view's transform to identity — proven by NativeLyricsRevealGateTests — which
+    // snaps the row to the top for one frame (the load-correlated 花屏: more layout passes under
+    // high CPU → more resets). Store the intended transform and re-assert it on every layout.
+    private(set) var positioningTransform: CGAffineTransform = .identity
+    func setPositioning(_ transform: CGAffineTransform) {
+        positioningTransform = transform
+        layer?.setAffineTransform(transform)
+    }
+
     override func layout() {
         super.layout()
+        // Re-assert the positioning transform AppKit's layout just reset (see above).
+        layer?.setAffineTransform(positioningTransform)
         guard let row, let configuration else { return }
         let textX = nativeLyricContentLeadingInset
         // Single source of truth (same value updateTextLayers baked against). Deriving the frame
