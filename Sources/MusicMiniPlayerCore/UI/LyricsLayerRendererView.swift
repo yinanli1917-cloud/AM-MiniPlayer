@@ -537,6 +537,11 @@ final class NativeLyricsSurfaceView: NSView {
         guard let id = rowIDByIndex[index] else { return nil }
         return rowViews[id]
     }
+    /// The interlude overlay dots' centre X positions (in the dot container's coordinate space).
+    /// Tests assert these stay horizontally spaced — i.e. the "三个点重合" overlap can't recur.
+    var debugInterludeDotCenterXs: [CGFloat] {
+        surfaceInterludeDots.map { $0.position.x }
+    }
     #endif
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
@@ -596,18 +601,33 @@ final class NativeLyricsSurfaceView: NSView {
     private func setupSurfaceInterludeDots() {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let dotSize = NativeLyricsDotPhasePlan.baseDotSize
+        let spacing = NativeLyricsDotPhasePlan.baseDotSpacing
         surfaceInterludeOverlay.wantsLayer = true
         surfaceInterludeOverlay.layer?.masksToBounds = false
         surfaceInterludeOverlay.alphaValue = 0
         addSubview(surfaceInterludeOverlay)
         surfaceInterludeDotContainer.masksToBounds = false
         surfaceInterludeDotContainer.contentsScale = scale
+        // ── Static dot layout — set ONCE, never re-derived per frame ──────────────────────────
+        // The three dots' bounds + horizontal spacing are CONSTANT. Re-writing them every frame in
+        // updateSurfaceInterludeDots meant that any frame that mutated the container WITHOUT re-
+        // running the spacing loop (e.g. a manual-scroll reconcile path) could leave the dots at a
+        // collapsed/origin position — the "三个点重合" overlap. Pinning the layout here makes the
+        // dots structurally incapable of collapsing; the per-frame update only touches dynamic
+        // state (overall Y, opacity, scale, blur).
+        let totalWidth = dotSize * CGFloat(surfaceInterludeDots.count)
+            + spacing * CGFloat(max(0, surfaceInterludeDots.count - 1))
+        surfaceInterludeDotContainer.bounds = CGRect(x: 0, y: 0, width: totalWidth, height: dotSize)
+        var x: CGFloat = 0
         for dot in surfaceInterludeDots {
             dot.contentsScale = scale
+            dot.bounds = CGRect(x: 0, y: 0, width: dotSize, height: dotSize)
+            dot.position = CGPoint(x: x + dotSize / 2, y: dotSize / 2)
             dot.cornerRadius = dotSize / 2
             dot.backgroundColor = NSColor.white.cgColor
             dot.masksToBounds = false
             surfaceInterludeDotContainer.addSublayer(dot)
+            x += dotSize + spacing
         }
         surfaceInterludeOverlay.layer?.addSublayer(surfaceInterludeDotContainer)
     }
@@ -637,13 +657,14 @@ final class NativeLyricsSurfaceView: NSView {
             + NativeLyricsHeightAccumulator.interludeGapHeight / 2 - NativeLyricsDotPhasePlan.baseDotSize / 2
         surfaceInterludeOverlay.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
         let dotSize = NativeLyricsDotPhasePlan.baseDotSize
-        let spacing = NativeLyricsDotPhasePlan.baseDotSpacing
-        let totalWidth = dotSize * CGFloat(surfaceInterludeDots.count)
-            + spacing * CGFloat(max(0, surfaceInterludeDots.count - 1))
         let containerX = nativeLyricContentLeadingInset
-        surfaceInterludeDotContainer.bounds = CGRect(x: 0, y: 0, width: totalWidth, height: dotSize)
-        surfaceInterludeDotContainer.position = CGPoint(x: containerX + totalWidth / 2, y: y + dotSize / 2)
-        var x: CGFloat = 0
+        // The container bounds and per-dot positions are STATIC (set once in setupSurfaceInterludeDots),
+        // so they can never collapse here. Only the group's screen position (Y travels with the gap),
+        // opacity, scale and blur are dynamic.
+        surfaceInterludeDotContainer.position = CGPoint(
+            x: containerX + surfaceInterludeDotContainer.bounds.width / 2,
+            y: y + dotSize / 2
+        )
         let currentTime = configuration.musicController.lyricRenderTime()
         let plan = NativeLyricsDotPhasePlan.make(
             startTime: interlude.startTime,
@@ -660,13 +681,9 @@ final class NativeLyricsSurfaceView: NSView {
             surfaceInterludeDotContainer.filters = nil
         }
         for (index, dot) in surfaceInterludeDots.enumerated() {
-            dot.bounds = CGRect(x: 0, y: 0, width: dotSize, height: dotSize)
-            dot.position = CGPoint(x: x + dotSize / 2, y: dotSize / 2)
-            dot.cornerRadius = dotSize / 2
             dot.opacity = Float(plan.opacities[index])
             dot.setAffineTransform(CGAffineTransform(scaleX: plan.scales[index], y: plan.scales[index]))
             dot.isHidden = false
-            x += dotSize + spacing
         }
     }
 
@@ -4350,7 +4367,12 @@ final class NativeLyricsRowView: NSView {
             hideTranslationSweepMaskLayers()
         }
         interludeTextLayer.string = nil
-        dotContainerLayer.isHidden = row.interlude == nil
+        // Interlude dots are rendered by the surfaceInterludeDots OVERLAY (positioned at the gap
+        // centre, tracks the manual-scroll offset). The per-row dotContainerLayer is ONLY for the
+        // prelude (handled in the isPrelude early-return above). Leaving it visible for interlude
+        // rows produced a SECOND, un-laid-out set of dots (collapsed at the row origin) that
+        // overlapped the overlay during manual scroll. Keep it hidden here.
+        dotContainerLayer.isHidden = true
         if let textSample = updatePlaybackPhase(configuration: configuration) {
             (superview as? NativeLyricsSurfaceView)?.recordTextPhase(textSample)
         }

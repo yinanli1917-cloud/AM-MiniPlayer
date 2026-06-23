@@ -107,7 +107,12 @@ echo "🔨 Building nanoPod..."
     -c "Set :CFBundleVersion $VERSION" \
     -c "Set :CFBundleShortVersionString $VERSION" \
     Sources/MusicMiniPlayerApp/Info.plist
-swift build -c release -Xswiftc -DLOCAL_DEVELOPER_BUILD
+# NOTE: -DLOCAL_DEVELOPER_BUILD compiled in ~8 per-frame /tmp/nanopod_*.log probe sinks
+# (sweep/census/dim/bloom/traj/sync) + the ~4Hz implicit-anim auditor. Those direct-file
+# writes hit the MAIN THREAD every frame and ballooned to 100s of MB, repeatedly hanging the
+# app + the machine during scroll. The DAILY app must be a clean release build with NO probes.
+# To debug with probes again, re-add the flag TEMPORARILY and rate-limit the probes first.
+swift build -c release
 
 echo "📦 Creating app bundle..."
 if pgrep -x nanoPod >/dev/null 2>&1; then

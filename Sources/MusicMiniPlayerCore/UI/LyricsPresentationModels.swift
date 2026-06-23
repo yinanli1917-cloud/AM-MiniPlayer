@@ -250,10 +250,21 @@ struct NativeLyricsVisualTarget: Equatable {
             )
         }
         if isHotActive {
+            // During an interlude the three dots take the active centre; this row (the PRECEDING
+            // line — still the current index until the gap ends) must recede to a past line as
+            // interludeBlend ramps 0→1. The param was accepted here but never used, so the
+            // preceding line held full active form for the whole interlude — the "上一句不退场" bug
+            // (instrumentation confirmed blend reaches 1.0; only the form was never wired through).
+            // At blend=1 it lands on the same past-line look the depth tier uses.
+            let blend = min(1, max(0, interludeBlend))
+            // Land EXACTLY on a natural dist-1 past line so the just-finished line reads like a
+            // normal recent-past lyric — not blurrier than the OLDER lines above it. (blur 1.5 here
+            // inverted the depth gradient: the line just above the dots looked more washed-out than
+            // the line above IT. dist-1 blur = max(0,1-0.75)*2 = 0.5.)
             return NativeLyricsVisualTarget(
-                opacity: 1.0,
-                scale: 1.0,
-                blur: 0,
+                opacity: 1.0 - blend * 0.65,   // → 0.35 (dist-1 past opacity)
+                scale: 1.0 - blend * 0.05,     // → 0.95 (dist-1 past scale)
+                blur: blend * 0.5,             // → 0.5 (dist-1 past blur — sharpest past tier)
                 isActive: true
             )
         }

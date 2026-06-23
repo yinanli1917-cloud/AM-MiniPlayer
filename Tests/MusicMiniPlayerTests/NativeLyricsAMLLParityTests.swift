@@ -135,6 +135,29 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         XCTAssertEqual(far.opacity, 0.05, accuracy: 0.01, "distance-35: clamped at floor 0.05 (never goes below)")
     }
 
+    /// During an interlude the three dots take the active centre and the PRECEDING line — still the
+    /// current index until the gap ends — must recede to a past line as interludeBlend ramps 0→1.
+    /// Regression: amllTarget accepted the interludeBlend param but never used it, so the preceding
+    /// line stayed at full active form (opacity 1 / scale 1 / blur 0) for the whole interlude — the
+    /// "上一句不退场" bug. The /tmp/nanopod_interlude.log probe proved blend DOES reach 1.0; only the
+    /// visual form was never wired through.
+    func test_interludeBlend_recedesPrecedingLine_whenDotsTakeOver() {
+        let settled = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [], isManualScrolling: false, interludeBlend: 1.0
+        )
+        XCTAssertLessThan(settled.opacity, 0.5, "preceding line must fade toward a past line at blend=1")
+        XCTAssertLessThan(settled.scale, 1.0, "preceding line must shrink toward a past line at blend=1")
+        XCTAssertGreaterThan(settled.blur, 0, "preceding line must blur into depth at blend=1")
+
+        // blend=0 (no interlude) keeps the active line fully active — unchanged.
+        let active = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [], isManualScrolling: false, interludeBlend: 0
+        )
+        assertTarget(active, opacity: 1.0, scale: 1.0, blur: 0, isActive: true, "active line, no interlude")
+    }
+
     /// The LOGICAL depth value (abs*1.5, uncapped) is rendered through CIGaussianBlur, which reads
     /// perceptually heavier than v2.8's SwiftUI .blur and fades upcoming lines into nothing. The
     /// render boundary scales the radius by `blurRenderCalibration` (< 1) so upcoming lines stay
@@ -220,14 +243,25 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         XCTAssertNotEqual(amllFuture.blur, v28Future.blur, "native blur diverges from v2.8 at dist-2 (softer ramp)")
     }
 
-    /// DIVERGENCE: native active-row interlude scale is 1 - blend*0.03 (= 0.97 at blend 1),
-    /// while v2.8 used 1 - blend*0.05 (= 0.95). A 0.02 difference at full interlude.
-    func test_interludeBlend_lineStaysBright() {
+    /// During an interlude the three dots take the active centre, so the PRECEDING active line
+    /// recedes to a NATURAL dist-1 past line as interludeBlend ramps 0→1: opacity 1→0.35, scale
+    /// 1→0.95, blur 0→0.5. It must land on the SAME values a real dist-1 past line gets (the
+    /// sharpest past tier) — using blur 1.5 inverted the depth gradient (the line just above the
+    /// dots looked more washed-out than the OLDER line above it). It previously (even earlier)
+    /// stayed fully bright because amllTarget accepted but never used interludeBlend.
+    func test_interludeBlend_precedingLineRecedesAtFullBlend() {
         let amllActive = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false, interludeBlend: 1.0
         )
-        assertTarget(amllActive, opacity: 1.0, scale: 1.0, blur: 0, isActive: true, "v2.8: line stays bright during interlude")
+        assertTarget(amllActive, opacity: 0.35, scale: 0.95, blur: 0.5, isActive: true, "preceding line recedes to a natural dist-1 past line at full interlude")
+
+        // The retired line must NOT be blurrier than a real dist-1 past line (the gradient-inversion bug).
+        let realDist1 = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 6, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [5], isManualScrolling: false
+        )
+        XCTAssertEqual(amllActive.blur, realDist1.blur, accuracy: 1e-6, "retired interlude line blur == real dist-1 past blur (no inversion)")
     }
 
     /// CHARACTERIZATION of the "smeared active row / wrong brightness" report: native keeps
