@@ -1592,9 +1592,11 @@ final class NativeLyricsSurfaceView: NSView {
         snap: Bool
     ) {
         let engineState = snap ? nil : presentationEngine.presentation(for: row.index)
-        let baseY = snap
-            ? snapY(for: row, configuration: configuration)
-            : (engineState?.y ?? snapY(for: row, configuration: configuration))
+        let baseY = NativeLyricsSnapMath.renderY(
+            snap: snap,
+            engineY: engineState?.y,
+            snappedY: snapY(for: row, configuration: configuration)
+        )
         let requestedY = baseY + configuration.effectiveManualOffset
         var y = requestedY
         // Teleport guard: a settled row must never jump a large distance for a single

@@ -722,6 +722,15 @@ enum NativeLyricsSnapMath {
         let targetOffset = accumulatedHeights[targetIndex] ?? 0
         return anchorY - targetOffset + rowOffset
     }
+
+    /// The Y a row paints at this frame. Snap mode teleports to the snapped target
+    /// by design; natural mode rides the engine's integrated current position,
+    /// falling back to the snapped target when the engine has no state for the row
+    /// yet (just-mounted / window handoff). This is applyFrame's baseY, lifted to a
+    /// pure seam so the snapshot builder and the live path resolve Y identically.
+    static func renderY(snap: Bool, engineY: CGFloat?, snappedY: CGFloat) -> CGFloat {
+        snap ? snappedY : (engineY ?? snappedY)
+    }
 }
 
 struct NativeLyricsManualScrollState: Equatable {

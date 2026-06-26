@@ -142,4 +142,30 @@ final class NativeLyricsRenderSnapshotPositionTests: XCTestCase {
         XCTAssertEqual(manualY, 200 - 220 + 150, accuracy: 0.0001)   // target row 5
         XCTAssertEqual(naturalY, 200 - 40 + 150, accuracy: 0.0001)   // target row 1
     }
+
+    // ------------------------------------------------------------------------
+    // Render-Y resolution — the per-frame Y a row paints at. Snap mode teleports
+    // to the snapped target by design; natural mode rides the engine's integrated
+    // current position, falling back to the snapped target when the engine has no
+    // state for the row yet. This is exactly applyFrame's baseY, lifted to a pure
+    // seam so the snapshot builder and the live path resolve position identically.
+    // ------------------------------------------------------------------------
+
+    func testRenderYInSnapModeTeleportsToSnappedTargetIgnoringEngine() {
+        let y = NativeLyricsSnapMath.renderY(snap: true, engineY: 12, snappedY: 340)
+        XCTAssertEqual(y, 340, accuracy: 0.0001)
+    }
+
+    func testRenderYInNaturalModeRidesEngineThenFallsBackToSnapped() {
+        // Engine has integrated a current position → ride it.
+        XCTAssertEqual(
+            NativeLyricsSnapMath.renderY(snap: false, engineY: 128, snappedY: 340),
+            128, accuracy: 0.0001
+        )
+        // Engine has no state yet → fall back to the snapped target.
+        XCTAssertEqual(
+            NativeLyricsSnapMath.renderY(snap: false, engineY: nil, snappedY: 340),
+            340, accuracy: 0.0001
+        )
+    }
 }
