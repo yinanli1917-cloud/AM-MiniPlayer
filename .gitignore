@@ -36,8 +36,10 @@ tmp/visual/
 .claude/workflow.md
 .claude/tasks/
 
-# Codex harness — runtime, tasks, agents, hooks, config, workspace.
-# Process/scratch files, not product. Already-tracked specs stay tracked.
+# Codex harness — personal AI-agent tooling, projected from the global
+# ~/.codex/harness (regenerable via codex_harness.py migrate). Kept OUT of this
+# public product repo: not part of nanoPod, and its probe dumps had captured
+# machine-local personal state. Continuity lives in the private global harness.
 .codex/
 
 # Build / release artifacts (regenerable)
@@ -48,5 +50,6 @@ dist/
 tmp/
 __pycache__/
 
-# Codex runtime state
-.codex/runtime/
+# Kymograph visual-regression baseline recordings (machine-local, large binaries;
+# recovered from the pre-migration machine — see .kymo-baseline/README.md)
+.kymo-baseline/
