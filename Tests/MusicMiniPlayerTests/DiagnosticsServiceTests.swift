@@ -1520,17 +1520,23 @@ final class DiagnosticsServiceTests: XCTestCase {
                 evidence: ["track": "Motion Spam Song / Motion Spam Artist"]
             ))
         }
-        let memoryIncidents = (0..<6).map { index in
-            DiagnosticIncident(
+        // Built with an explicit for-loop and typed locals (mirrors the
+        // lineMotionIncidents loop above): the equivalent `.map` closure trips a
+        // Swift 6.3 type-check timeout on the interpolation + dict-literal arithmetic.
+        var memoryIncidents: [DiagnosticIncident] = []
+        for index in 0..<6 {
+            let detail = "Resident memory reached \(650 + index) MB."
+            let metrics: [String: Double] = ["rssMB": Double(650 + index), "cpuPercent": Double(10 + index)]
+            memoryIncidents.append(DiagnosticIncident(
                 timestamp: base.addingTimeInterval(-Double(70 + index * 5)),
                 category: .memorySpike,
                 severity: .warning,
                 title: "Memory spike detected",
-                detail: "Resident memory reached \(650 + index) MB.",
+                detail: detail,
                 automaticallyDetected: true,
-                metrics: ["rssMB": Double(650 + index), "cpuPercent": Double(10 + index)],
+                metrics: metrics,
                 evidence: [:]
-            )
+            ))
         }
 
         let snapshot = TestSnapshot(
