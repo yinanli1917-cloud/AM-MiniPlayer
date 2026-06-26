@@ -687,6 +687,43 @@ struct NativeLyricsPresentationSnapshot: Equatable {
     let manualScrollSnapshot: NativeLyricsManualScrollSnapshot?
 }
 
+// ============================================================================
+// Snap geometry — single source of truth for where a row snaps to.
+//
+// The same target-Y formula (anchor - targetOffset + rowOffset) was derived
+// independently in three places: the engine's presentationY, the renderer's
+// snapY, and the presentation-snapshot builder's fallback. They agreed on the
+// arithmetic but diverged on WHICH target index a row snaps toward during manual
+// scrolling — snapY pinned every row to the user's scroll target, the snapshot
+// fallback always used the engine's per-line target. Routing every caller
+// through these pure helpers removes that divergence and gives Stage 2's shared
+// snapshot builder one tested seam.
+// ============================================================================
+enum NativeLyricsSnapMath {
+    /// The row index a given row snaps toward. Manual scrolling pins every row to
+    /// the user's scroll target; otherwise the engine's per-line target wins.
+    static func targetIndex(
+        isManualScrolling: Bool,
+        scrollTargetIndex: Int,
+        engineTargetIndex: Int
+    ) -> Int {
+        isManualScrolling ? scrollTargetIndex : engineTargetIndex
+    }
+
+    /// A row's snapped Y: anchor minus the target row's accumulated offset plus
+    /// this row's accumulated offset. A missing height contributes zero offset.
+    static func targetY(
+        rowIndex: Int,
+        targetIndex: Int,
+        anchorY: CGFloat,
+        accumulatedHeights: [Int: CGFloat]
+    ) -> CGFloat {
+        let rowOffset = accumulatedHeights[rowIndex] ?? 0
+        let targetOffset = accumulatedHeights[targetIndex] ?? 0
+        return anchorY - targetOffset + rowOffset
+    }
+}
+
 struct NativeLyricsManualScrollState: Equatable {
     private(set) var isActive = false
     private(set) var frozenDisplayIndex: Int?

@@ -1858,14 +1858,24 @@ final class NativeLyricsSurfaceView: NSView {
                 targetMinYByIndex[index] = presentation.targetY
                 velocityYByIndex[index] = presentation.velocity
             } else {
-                let targetIndex = presentationEngine.targetIndex(
-                    for: index,
-                    fallback: configuration.effectiveScrollTargetIndex
+                // Same seam as snapY: honor the manual-scroll target-index override
+                // the old fallback ignored, so the diagnostic snapshot agrees with
+                // the renderer's live snap target.
+                let targetIndex = NativeLyricsSnapMath.targetIndex(
+                    isManualScrolling: configuration.effectiveIsManualScrolling,
+                    scrollTargetIndex: configuration.effectiveScrollTargetIndex,
+                    engineTargetIndex: presentationEngine.targetIndex(
+                        for: index,
+                        fallback: configuration.effectiveScrollTargetIndex
+                    )
                 )
                 targetIndices[index] = targetIndex
-                let rowOffset = configuration.accumulatedHeights[index] ?? 0
-                let targetOffset = configuration.accumulatedHeights[targetIndex] ?? 0
-                targetMinYByIndex[index] = configuration.anchorY - targetOffset + rowOffset
+                targetMinYByIndex[index] = NativeLyricsSnapMath.targetY(
+                    rowIndex: index,
+                    targetIndex: targetIndex,
+                    anchorY: configuration.anchorY,
+                    accumulatedHeights: configuration.accumulatedHeights
+                )
             }
         }
         return NativeLyricsPresentationSnapshot(
@@ -1920,15 +1930,20 @@ final class NativeLyricsSurfaceView: NSView {
         for row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration
     ) -> CGFloat {
-        let targetIndex = configuration.effectiveIsManualScrolling
-            ? configuration.effectiveScrollTargetIndex
-            : presentationEngine.targetIndex(
+        let targetIndex = NativeLyricsSnapMath.targetIndex(
+            isManualScrolling: configuration.effectiveIsManualScrolling,
+            scrollTargetIndex: configuration.effectiveScrollTargetIndex,
+            engineTargetIndex: presentationEngine.targetIndex(
                 for: row.index,
                 fallback: configuration.effectiveScrollTargetIndex
             )
-        let rowOffset = configuration.accumulatedHeights[row.index] ?? 0
-        let targetOffset = configuration.accumulatedHeights[targetIndex] ?? 0
-        return configuration.anchorY - targetOffset + rowOffset
+        )
+        return NativeLyricsSnapMath.targetY(
+            rowIndex: row.index,
+            targetIndex: targetIndex,
+            anchorY: configuration.anchorY,
+            accumulatedHeights: configuration.accumulatedHeights
+        )
     }
 
     private func applyFrames(

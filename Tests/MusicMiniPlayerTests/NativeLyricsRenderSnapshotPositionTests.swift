@@ -1,0 +1,145 @@
+//
+//  NativeLyricsRenderSnapshotPositionTests.swift
+//
+//  Stage 2 Step 0 — pins the shared snap-geometry seam that the renderer's snapY,
+//  the presentation-snapshot fallback, and the engine's presentationY all derived
+//  independently. The three agreed on the formula but diverged on WHICH target
+//  index a row snaps toward during manual scrolling: snapY pinned every row to the
+//  user's scroll target, the snapshot fallback always used the engine's per-line
+//  target. Routing both through NativeLyricsSnapMath removes that divergence; these
+//  tests are the equivalence net that lets every later step trust the helper.
+//
+
+import XCTest
+import CoreGraphics
+@testable import MusicMiniPlayerCore
+
+final class NativeLyricsRenderSnapshotPositionTests: XCTestCase {
+    // ------------------------------------------------------------------------
+    // Target-index selection — the exact divergence Step 0 removes.
+    // ------------------------------------------------------------------------
+
+    func testManualScrollPinsTargetIndexToScrollTarget() {
+        // Manual scrolling must override the engine's per-line target with the
+        // user's scroll target. The snapshot fallback used to ignore this and
+        // return the engine target — the bug this seam fixes.
+        let resolved = NativeLyricsSnapMath.targetIndex(
+            isManualScrolling: true,
+            scrollTargetIndex: 7,
+            engineTargetIndex: 3
+        )
+        XCTAssertEqual(resolved, 7)
+    }
+
+    // ------------------------------------------------------------------------
+    // Target-Y formula — anchor minus the target row's offset plus this row's.
+    // ------------------------------------------------------------------------
+
+    func testTargetYIsAnchorMinusTargetOffsetPlusRowOffset() {
+        // Row 3 snapping toward target row 1: anchor 200, this row's accumulated
+        // offset 150, target row's accumulated offset 40 → 200 - 40 + 150.
+        let y = NativeLyricsSnapMath.targetY(
+            rowIndex: 3,
+            targetIndex: 1,
+            anchorY: 200,
+            accumulatedHeights: [1: 40, 3: 150]
+        )
+        XCTAssertEqual(y, 310, accuracy: 0.0001)
+    }
+
+    func testNaturalScrollUsesEngineTargetIndex() {
+        // The other branch: without manual scrolling the engine's per-line target
+        // wins, regardless of the scroll target.
+        let resolved = NativeLyricsSnapMath.targetIndex(
+            isManualScrolling: false,
+            scrollTargetIndex: 7,
+            engineTargetIndex: 3
+        )
+        XCTAssertEqual(resolved, 3)
+    }
+
+    func testMissingHeightsContributeZeroOffset() {
+        // No accumulated height for either row → both offsets are zero, so the
+        // row snaps to the bare anchor.
+        let y = NativeLyricsSnapMath.targetY(
+            rowIndex: 4,
+            targetIndex: 2,
+            anchorY: 88,
+            accumulatedHeights: [:]
+        )
+        XCTAssertEqual(y, 88, accuracy: 0.0001)
+    }
+
+    // ------------------------------------------------------------------------
+    // Regression net — the helper must reproduce the legacy snapY computation
+    // exactly, including the manual-scroll target-index override the snapshot
+    // builder fallback used to ignore. This is the equivalence guard every later
+    // step relies on when it routes the live render path through the snapshot.
+    // ------------------------------------------------------------------------
+
+    func testHelperReproducesLegacySnapYAcrossBothBranches() {
+        let anchorY: CGFloat = 200
+        let heights: [Int: CGFloat] = [0: 0, 1: 40, 2: 90, 3: 150, 7: 360]
+        let scrollTarget = 7
+        let engineTarget = 2
+
+        // Oracle: the legacy snapY arithmetic, inlined.
+        func legacySnapY(rowIndex: Int, isManual: Bool) -> CGFloat {
+            let ti = isManual ? scrollTarget : engineTarget
+            let rowOffset = heights[rowIndex] ?? 0
+            let targetOffset = heights[ti] ?? 0
+            return anchorY - targetOffset + rowOffset
+        }
+        func routed(rowIndex: Int, isManual: Bool) -> CGFloat {
+            let ti = NativeLyricsSnapMath.targetIndex(
+                isManualScrolling: isManual,
+                scrollTargetIndex: scrollTarget,
+                engineTargetIndex: engineTarget
+            )
+            return NativeLyricsSnapMath.targetY(
+                rowIndex: rowIndex,
+                targetIndex: ti,
+                anchorY: anchorY,
+                accumulatedHeights: heights
+            )
+        }
+
+        for rowIndex in [0, 1, 2, 3, 7] {
+            for isManual in [true, false] {
+                XCTAssertEqual(
+                    routed(rowIndex: rowIndex, isManual: isManual),
+                    legacySnapY(rowIndex: rowIndex, isManual: isManual),
+                    accuracy: 0.0001,
+                    "row \(rowIndex) manual=\(isManual)"
+                )
+            }
+        }
+    }
+
+    func testManualBranchActuallyChangesTheResult() {
+        // Proves the manual-scroll override is not a no-op: when the scroll target
+        // and engine target differ, the snapped Y differs too. The snapshot
+        // fallback that ignored manual scrolling produced the natural value here —
+        // the exact divergence Step 0 removes.
+        let heights: [Int: CGFloat] = [1: 40, 5: 220, 3: 150]
+        let manualY = NativeLyricsSnapMath.targetY(
+            rowIndex: 3,
+            targetIndex: NativeLyricsSnapMath.targetIndex(
+                isManualScrolling: true, scrollTargetIndex: 5, engineTargetIndex: 1
+            ),
+            anchorY: 200,
+            accumulatedHeights: heights
+        )
+        let naturalY = NativeLyricsSnapMath.targetY(
+            rowIndex: 3,
+            targetIndex: NativeLyricsSnapMath.targetIndex(
+                isManualScrolling: false, scrollTargetIndex: 5, engineTargetIndex: 1
+            ),
+            anchorY: 200,
+            accumulatedHeights: heights
+        )
+        XCTAssertNotEqual(manualY, naturalY, accuracy: 0.0001)
+        XCTAssertEqual(manualY, 200 - 220 + 150, accuracy: 0.0001)   // target row 5
+        XCTAssertEqual(naturalY, 200 - 40 + 150, accuracy: 0.0001)   // target row 1
+    }
+}
