@@ -63,4 +63,31 @@ final class NativeLyricsGoldenTraceTests: XCTestCase {
         XCTAssertEqual(ys.last ?? 0, 200, accuracy: 1.0, "row 1 settles at the anchor")
         XCTAssertGreaterThan(abs((ys.first ?? 0) - (ys.last ?? 0)), 40, "row 1 genuinely moved")
     }
+
+    func testSeekSnapsCleanlyWithNoPostSeekDriftInTheEngine() {
+        // Diagnostic: symptom 2 is a post-seek jump that sits in an abnormal state for ~2.6s.
+        // The plan blames a renderer-side clock mismatch, not the engine. This pins that claim:
+        // the engine places the seeked-to line at the anchor immediately and HOLDS it, with no
+        // spring drift across the frames that follow. If the engine itself drifted, every later
+        // step that trusts it would be built on sand.
+        let rendered = Array(0...15)
+        var heights: [Int: CGFloat] = [:]
+        for i in rendered { heights[i] = CGFloat(i) * 60 }
+
+        let trace = NativeLyricsGoldenTrace(rendered: rendered, anchorY: 200, heights: heights)
+        trace.setCurrentIndex(0)
+        trace.advance(frames: 2)
+        // Before the seek, line 10 sits far below the anchor (anchor - h[0] + h[10] = 800).
+        XCTAssertEqual(trace.frames.last?[10] ?? 0, 800, accuracy: 1.0, "precondition: line 10 starts off-anchor")
+
+        let mark = trace.frames.count
+        trace.seek(toIndex: 10)         // a far seek (> largeJumpThreshold)
+        trace.advance(frames: 30)       // 0.5s after the seek
+
+        let postSeek = trace.frames[mark...].compactMap { $0[10] }
+        XCTAssertGreaterThan(postSeek.count, 25, "frames captured after the seek")
+        for (frame, y) in postSeek.enumerated() {
+            XCTAssertEqual(y, 200, accuracy: 1.0, "frame \(frame): seeked line must snap to the anchor and hold, no drift")
+        }
+    }
 }

@@ -35,7 +35,12 @@ final class NativeLyricsGoldenTrace {
     /// Point the engine at a new active/target line. Natural mode springs toward it; the
     /// first call (no prior index) snaps into position.
     func setCurrentIndex(_ index: Int) {
-        engine.update(configuration(currentIndex: index), onTargetsChanged: {})
+        engine.update(configuration(currentIndex: index, mode: .natural), onTargetsChanged: {})
+    }
+
+    /// Jump to a line the way a user seek does: direct-snap, no spring travel.
+    func seek(toIndex index: Int) {
+        engine.update(configuration(currentIndex: index, mode: .directSnap(.seek)), onTargetsChanged: {})
     }
 
     /// Advance the springs by `count` fixed-delta ticks, capturing a frame after each.
@@ -63,7 +68,10 @@ final class NativeLyricsGoldenTrace {
         frames.append(frame)
     }
 
-    private func configuration(currentIndex: Int) -> LyricsPresentationEngineConfiguration {
+    private func configuration(
+        currentIndex: Int,
+        mode: LyricsPresentationPlaybackMode
+    ) -> LyricsPresentationEngineConfiguration {
         LyricsPresentationEngineConfiguration(
             currentIndex: currentIndex,
             renderedIndices: rendered,
@@ -73,7 +81,7 @@ final class NativeLyricsGoldenTrace {
             hasSyllableSync: false,
             trackContext: DiagnosticTrackContext(title: "T", artist: "A", album: "Al", duration: 100),
             isWaveTimelineDiagnosticsEnabled: false,
-            playbackMode: .natural
+            playbackMode: mode
         )
     }
 }
