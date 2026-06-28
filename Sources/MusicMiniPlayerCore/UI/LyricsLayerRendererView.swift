@@ -1617,30 +1617,28 @@ final class NativeLyricsSurfaceView: NSView {
         let fallbackTarget = visualTarget(for: row, configuration: configuration, now: CACurrentMediaTime())
         let visual = visualStates[row.index] ?? NativeLyricsVisualMotionState(target: fallbackTarget)
         let height = measuredHeightsByIndex[row.index] ?? max(1, view.frame.height)
-        let frame = CGRect(x: 0, y: 0, width: configuration.rowWidth, height: max(1, height))
+        // Position the row by its FRAME origin (AppKit preserves it across the commit), not a layer
+        // transform translation (which AppKit resets to the origin on every commit = the bloom).
+        let frame = CGRect(x: 0, y: y, width: configuration.rowWidth, height: max(1, height))
 
-        if view.frame.size != frame.size || view.frame.origin != .zero {
+        if view.frame != frame {
             view.frame = frame
         }
-        var appliedOpacity = initialMeasurementsPending ? 0 : Float(visual.opacity)
-        // Suppress a just-mounted row for the one frame its presentation layer is still at its
-        // un-positioned default (top) while the model Y is already far — otherwise it paints there
-        // blurred (the line-switch flash / seek pile, proven in the presentation census). Natural
-        // mode only; deliberate snaps are handled by the existing reveal gates. Once the
-        // presentation Y catches up to the model Y (next commit) the row reveals at the right place.
-        if !snap, Self.isRowUnpositioned(presentationY: view.layer?.presentation()?.affineTransform().ty, modelY: y) {
-            appliedOpacity = 0
-        }
+        let appliedOpacity = initialMeasurementsPending ? 0 : Float(visual.opacity)
+        // Row Y is carried by the view FRAME (set above), which AppKit preserves across the commit;
+        // the old per-row "unpositioned" hide existed only because the previous transform-based Y was
+        // reset to the origin by AppKit on every commit, so a just-mounted row briefly painted at the
+        // top. Frame positioning removes that origin state entirely, so the hide is no longer needed.
         view.layer?.opacity = appliedOpacity
-        view.setPositioning(
-            CGAffineTransform(translationX: 0, y: y)
-                .scaledBy(x: visual.scale, y: visual.scale)
-        )
+        // The transform now carries ONLY scale — never translation. (Translation here was the bug:
+        // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
+        // row to the origin for a frame; the frame does not get reset.)
+        view.setPositioning(CGAffineTransform(scaleX: visual.scale, y: visual.scale))
         let appliedTransform = view.layer?.affineTransform() ?? .identity
         let appliedScale = sqrt(appliedTransform.a * appliedTransform.a + appliedTransform.c * appliedTransform.c)
         recordRowFrameParityIfChanged(rowID: row.id, sample: NativeLyricsRowFrameParitySample(
             expectedY: y,
-            appliedY: appliedTransform.ty,
+            appliedY: view.frame.origin.y,
             expectedHeight: frame.height,
             appliedHeight: view.frame.height,
             expectedScale: visual.scale,
