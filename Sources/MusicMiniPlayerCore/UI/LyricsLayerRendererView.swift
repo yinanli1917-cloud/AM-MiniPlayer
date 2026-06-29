@@ -3780,6 +3780,12 @@ final class NativeLyricsRowView: NSView {
     func endDeactivationFade() {
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
+        // Restore the resting opacity. updateDeactivationFade scaled the bright overlays toward 0 as
+        // the line receded; leaving them at that residual fraction made a still-mounted row relight
+        // from the dim value when it was shown again (the "dim-then-relight"). 1 is the same resting
+        // value prepareForReuse uses, and updatePlaybackPhase assumes it on re-activation.
+        mainBrightTextLayer.opacity = 1
+        translationBrightTextLayer.opacity = 1
     }
 
     override func prepareForReuse() {
@@ -3792,6 +3798,10 @@ final class NativeLyricsRowView: NSView {
         onTap = nil
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
+        // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
+        // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
+        // size for one frame before applyFrame writes the new scale (the seek size-pop).
+        setPositioning(.identity)
         layer?.opacity = 0
         backgroundLayer.isHidden = true
         lastHoverBackgroundVisible = false
@@ -4002,6 +4012,10 @@ final class NativeLyricsRowView: NSView {
     /// syllable sync this must be `true`; if it is `false` the active line degraded to
     /// line-level because its text geometry was not laid out when the phase was computed.
     private(set) var debugLastAppliedActivePerRunSweep = false
+    /// The translation sung-overlay opacity (mirrors debugMainBrightOpacity). The deactivation fade
+    /// scales it toward 0 as a line recedes; a teardown that forgets to restore it to 1 makes a
+    /// re-shown row relight from the residual fraction. The reuse-state test reads it.
+    var debugTranslationBrightOpacity: Float { translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity }
     #endif
 
 
