@@ -1579,11 +1579,16 @@ final class NativeLyricsSurfaceView: NSView {
         return abs(presentationY - modelY) > unpositionedDivergenceThreshold
     }
 
-    /// Interpolated playback time may drift backward by up to this much for a poll resync to correct
-    /// overshoot (matches the interpolateTime backward-correction allowance). A non-explicit backward
-    /// index move within this window is resync jitter — the renderer holds the active line instead of
-    /// snapping back to a just-demoted one (the dim→bright revert guard).
-    private static let resyncRewindTolerance: TimeInterval = 0.5
+    /// lyricRenderTime (the clock the renderer reads) may step BACKWARD by up to the clock's own
+    /// non-seek window when a poll resync corrects interpolation overshoot. MusicController treats a
+    /// backward jump as a real seek only above ~2s (it hard-syncs there); anything below is resync
+    /// jitter the clock silently applies. A non-explicit backward index move within THIS window is
+    /// therefore jitter, not a seek — the renderer holds the active line instead of snapping back to a
+    /// just-demoted one (the dim→bright revert guard). This must match the clock's 2s seek threshold,
+    /// NOT the interpolateTime 0.5s currentTime allowance (which governs a different, forward-only
+    /// lyric path); the old 0.5s value let 0.5–2s poll overshoots — increasingly common as drift
+    /// accumulates over a long track — escape the hold and re-light the just-passed line.
+    static let resyncRewindTolerance: TimeInterval = 2.0
 
     private func applyFrame(
         for row: LayerBackedLyricRow,

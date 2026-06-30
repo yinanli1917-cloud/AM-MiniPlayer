@@ -123,4 +123,39 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
             "cold start has no prior line to revert from"
         )
     }
+
+    // ── The gap that kept the revert alive: poll overshoots in the 0.5–2s band. ──
+    // lyricRenderTime (what the renderer reads) takes its BACKWARD jumps from the poll, which the clock
+    // treats as non-seek jitter all the way to ~2s (only >2s hard-syncs as a seek). The renderer's hold
+    // tolerance must match THAT window, not the unrelated 0.5s interpolateTime currentTime allowance —
+    // otherwise a 0.5–2s poll overshoot (increasingly common as drift accumulates over a long track)
+    // escapes the hold and re-lights the just-passed line.
+
+    /// A non-explicit backward correction anywhere within the clock's non-seek window must hold.
+    func test_isResyncRewind_holdsPollOvershootWithinClockSeekWindow() {
+        for backStep in [0.7, 1.4, 1.9] as [TimeInterval] {
+            XCTAssertTrue(
+                NativeLyricsSeekClassifier.isResyncRewind(
+                    previousIndex: 5, liveIndex: 4,
+                    previousPlaybackTime: 20.30, playbackTime: 20.30 - backStep,
+                    explicitSeek: false,
+                    tolerance: NativeLyricsSurfaceView.resyncRewindTolerance
+                ),
+                "a \(backStep)s non-explicit poll overshoot is drift the clock silently applies (<2s) — must hold, not re-light"
+            )
+        }
+    }
+
+    /// A backward jump beyond the clock's seek threshold (~2s) is a genuine external seek — must snap.
+    func test_isResyncRewind_snapsBeyondClockSeekWindow() {
+        XCTAssertFalse(
+            NativeLyricsSeekClassifier.isResyncRewind(
+                previousIndex: 5, liveIndex: 0,
+                previousPlaybackTime: 22.5, playbackTime: 0.5,   // 22s backward = a real external seek
+                explicitSeek: false,
+                tolerance: NativeLyricsSurfaceView.resyncRewindTolerance
+            ),
+            "a >2s backward jump is a real external seek — must snap, not hold"
+        )
+    }
 }
