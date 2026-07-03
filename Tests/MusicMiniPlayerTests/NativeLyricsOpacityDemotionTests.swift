@@ -116,4 +116,38 @@ final class NativeLyricsOpacityDemotionTests: XCTestCase {
         XCTAssertEqual(trajectory.last ?? -1, demotedTarget().opacity, accuracy: 0.01,
                        "demoted line must settle at the dim target opacity")
     }
+
+    // ── scale + blur must also never overshoot the dim target (AMLL: a passed line never re-raises). ──
+
+    private func demotionTrajectories(frames: Int = 40, frameDelta: TimeInterval = 1.0 / 60.0)
+        -> (scale: [CGFloat], blur: [CGFloat]) {
+        var state = NativeLyricsVisualMotionState(target: activeTarget())
+        state.quickRetarget(to: demotedTarget())
+        var scales: [CGFloat] = [state.scale]
+        var blurs: [CGFloat] = [state.blur]
+        for _ in 0..<frames {
+            state.advance(delta: frameDelta, spring: .amllNatural)
+            scales.append(state.scale)
+            blurs.append(state.blur)
+        }
+        return (scales, blurs)
+    }
+
+    /// Demotion shrinks scale 1.0 → 0.95; the underdamped spring must NOT dip below 0.95 and rebound.
+    func testDemotedLineScaleNeverUndershootsDimTarget() {
+        let s = demotionTrajectories().scale
+        let dim = demotedTarget().scale // 0.95
+        let pretty = s.map { String(format: "%.3f", $0) }.joined(separator: " ")
+        XCTAssertGreaterThanOrEqual(s.min() ?? 0, dim - 0.005,
+            "scale undershot below its dim target (\(dim)) then rebounded — a size reversal. [\(pretty)]")
+    }
+
+    /// Demotion grows blur 0 → 0.5; the underdamped spring must NOT exceed 0.5 and rebound.
+    func testDemotedLineBlurNeverOvershootsDimTarget() {
+        let b = demotionTrajectories().blur
+        let dim = demotedTarget().blur // 0.5
+        let pretty = b.map { String(format: "%.3f", $0) }.joined(separator: " ")
+        XCTAssertLessThanOrEqual(b.max() ?? 99, dim + 0.005,
+            "blur overshot above its dim target (\(dim)) then rebounded — a sharpness reversal. [\(pretty)]")
+    }
 }

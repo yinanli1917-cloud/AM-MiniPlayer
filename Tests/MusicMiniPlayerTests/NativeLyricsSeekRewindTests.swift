@@ -41,6 +41,20 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
         }
     }
 
+    // Rows with explicit [start, end) spans, so a span can OUTLAST the next line's start (overlap).
+    private func rows(_ spans: [(start: TimeInterval, end: TimeInterval)]) -> [LayerBackedLyricRow] {
+        spans.enumerated().map { i, span in
+            let line = LyricLine(text: "line \(i)", startTime: span.start, endTime: span.end)
+            let displayLine = DisplayLyricLine(
+                id: "r\(i)", sourceIndex: i, segmentIndex: 0, segmentCount: 1, line: line
+            )
+            return LayerBackedLyricRow(
+                id: displayLine.id, index: i, displayLine: displayLine,
+                sourceLine: line, isPrelude: false, preludeEndTime: 0, interlude: nil
+            )
+        }
+    }
+
     // ── The raw signal: amllState follows playback time, so backward time regresses the index. ──
 
     /// Just past the 0→1 boundary the active line is 1; a tiny backward correction to just before the
@@ -68,7 +82,6 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
     func test_isResyncRewind_holdsSubToleranceBackwardJitter() {
         XCTAssertTrue(
             NativeLyricsSeekClassifier.isResyncRewind(
-                previousIndex: 1, liveIndex: 0,
                 previousPlaybackTime: 4.10, playbackTime: 3.90,
                 explicitSeek: false, tolerance: 0.5
             ),
@@ -80,7 +93,6 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
     func test_isResyncRewind_ignoresLargeBackwardJump() {
         XCTAssertFalse(
             NativeLyricsSeekClassifier.isResyncRewind(
-                previousIndex: 2, liveIndex: 0,
                 previousPlaybackTime: 9.0, playbackTime: 0.5,
                 explicitSeek: false, tolerance: 0.5
             ),
@@ -92,7 +104,6 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
     func test_isResyncRewind_neverHoldsExplicitSeek() {
         XCTAssertFalse(
             NativeLyricsSeekClassifier.isResyncRewind(
-                previousIndex: 1, liveIndex: 0,
                 previousPlaybackTime: 4.10, playbackTime: 3.90,
                 explicitSeek: true, tolerance: 0.5
             ),
@@ -104,7 +115,6 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
     func test_isResyncRewind_ignoresForwardMotion() {
         XCTAssertFalse(
             NativeLyricsSeekClassifier.isResyncRewind(
-                previousIndex: 0, liveIndex: 1,
                 previousPlaybackTime: 3.90, playbackTime: 4.10,
                 explicitSeek: false, tolerance: 0.5
             ),
@@ -116,7 +126,6 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
     func test_isResyncRewind_requiresPriorState() {
         XCTAssertFalse(
             NativeLyricsSeekClassifier.isResyncRewind(
-                previousIndex: nil, liveIndex: 0,
                 previousPlaybackTime: nil, playbackTime: 0,
                 explicitSeek: false, tolerance: 0.5
             ),
@@ -136,7 +145,6 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
         for backStep in [0.7, 1.4, 1.9] as [TimeInterval] {
             XCTAssertTrue(
                 NativeLyricsSeekClassifier.isResyncRewind(
-                    previousIndex: 5, liveIndex: 4,
                     previousPlaybackTime: 20.30, playbackTime: 20.30 - backStep,
                     explicitSeek: false,
                     tolerance: NativeLyricsSurfaceView.resyncRewindTolerance
@@ -150,12 +158,84 @@ final class NativeLyricsSeekRewindTests: XCTestCase {
     func test_isResyncRewind_snapsBeyondClockSeekWindow() {
         XCTAssertFalse(
             NativeLyricsSeekClassifier.isResyncRewind(
-                previousIndex: 5, liveIndex: 0,
                 previousPlaybackTime: 22.5, playbackTime: 0.5,   // 22s backward = a real external seek
                 explicitSeek: false,
                 tolerance: NativeLyricsSurfaceView.resyncRewindTolerance
             ),
             "a >2s backward jump is a real external seek — must snap, not hold"
+        )
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // The RESIDUAL "状态突变": the previous line partially re-brightens with NO index regression.
+    //
+    // 逐字 (word-level) lyrics overlap — a line's end-time outlasts the next line's start. While both
+    // overlap, both are "hot" (the harmony tier, opacity 0.85). When time passes the earlier line's
+    // end it drops out of hotGroups and recedes to a past line (opacity 0.35). A backward poll-resync
+    // dip back across that end-time REGROWS hotGroups to re-include the earlier line — but the MAX
+    // index is unchanged (the later line is still hot), so semanticIndex does not regress. The
+    // index-keyed isResyncRewind hold never fires, the regrown hotGroups reach the surface, and the
+    // just-receded line bumps 0.35 → 0.85: a partial brighten, occasional, more frequent as drift grows.
+    //
+    // The fix: the hold must key on the backward TIME step (resync jitter), not on the index regressing.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Overlapping lines: a backward dip across the earlier line's end regrows hotGroups to re-include
+    /// it, while the max (semantic) index stays on the later line. This is the upstream mechanism.
+    func test_amllState_regrowsHotGroupsOnBackwardDipIntoOverlap() {
+        // line 1: [16, 21)  — outlasts line 2's start (overlap [20, 21)).
+        // line 2: [20, 24)
+        let overlap = rows([(0, 16), (16, 21), (20, 24)])
+
+        let afterEnd = NativeLyricsTimelinePolicy.amllState(
+            at: 21.20, rows: overlap, fallback: 0, previous: nil, isSeeking: false
+        )
+        XCTAssertEqual(afterEnd.hotGroups, [2], "past line 1's end: only line 2 is hot")
+        XCTAssertEqual(afterEnd.semanticIndex, 2)
+
+        let dipped = NativeLyricsTimelinePolicy.amllState(
+            at: 20.80, rows: overlap, fallback: 0, previous: afterEnd, isSeeking: false
+        )
+        XCTAssertEqual(
+            dipped.hotGroups, [1, 2],
+            "a 0.4s backward dip re-enters line 1's window — hotGroups regrows to include it"
+        )
+        XCTAssertEqual(
+            dipped.semanticIndex, 2,
+            "the MAX index is unchanged — the index-keyed hold has nothing to catch"
+        )
+    }
+
+    /// The visible cost of that regrow: feeding the regrown hot set to amllTarget bumps the just-receded
+    /// previous line from a past line (0.35) back up to the harmony tier (0.85) — the "状态突变".
+    func test_amllTarget_previousLineBumpsToHarmonyWhenHotGroupsRegrow() {
+        let recededPast = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 1, currentIndex: 2, scrollTargetIndex: 2,
+            hotActiveIndices: [2], isManualScrolling: false
+        )
+        XCTAssertEqual(recededPast.opacity, 0.35, accuracy: 0.001, "line 1 has receded to a past line")
+
+        let bumped = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 1, currentIndex: 2, scrollTargetIndex: 2,
+            hotActiveIndices: [1, 2], isManualScrolling: false
+        )
+        XCTAssertEqual(
+            bumped.opacity, 0.85, accuracy: 0.001,
+            "regrown hotGroups re-light line 1 to the harmony tier — the previous line's state jump"
+        )
+    }
+
+    /// The fix point. A sub-tolerance backward time dip is resync jitter the hold must catch EVEN when
+    /// the index is unchanged (the overlap regrow above). The classifier must key on the time step.
+    func test_isResyncRewind_holdsBackwardJitterWhenIndexUnchanged() {
+        XCTAssertTrue(
+            NativeLyricsSeekClassifier.isResyncRewind(
+                // index is UNCHANGED here (overlap regrow, not an index regression) — the hold keys on time
+                previousPlaybackTime: 21.20, playbackTime: 20.80,
+                explicitSeek: false,
+                tolerance: NativeLyricsSurfaceView.resyncRewindTolerance
+            ),
+            "a 0.4s non-explicit backward dip is resync jitter even with the index unchanged — hold so hotGroups can't regrow"
         )
     }
 }

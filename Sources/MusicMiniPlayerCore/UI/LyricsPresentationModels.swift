@@ -373,19 +373,24 @@ struct NativeLyricsVisualMotionState: Equatable {
                 spring: spring,
                 monotonic: true
             )
+            // AMLL sets blur/scale without an underdamped spring; we approach them on the shared
+            // spring but, like opacity, clamp monotone so a demotion can't overshoot the dim target
+            // and rebound (a sharpness/size reversal that reads as the just-dimmed line re-lifting).
             scale = Self.advanceScalar(
                 value: scale,
                 target: target.scale,
                 velocity: &scaleVelocity,
                 step: step,
-                spring: spring
+                spring: spring,
+                monotonic: true
             )
             blur = Self.advanceScalar(
                 value: blur,
                 target: target.blur,
                 velocity: &blurVelocity,
                 step: step,
-                spring: spring
+                spring: spring,
+                monotonic: true
             )
             remaining -= TimeInterval(step)
         }
@@ -411,11 +416,11 @@ struct NativeLyricsVisualMotionState: Equatable {
         let acceleration = force / spring.mass
         velocity += acceleration * step
         let next = value + velocity * step
-        // Brightness must never overshoot. The visual spring is underdamped (it is shared
-        // with line position so the depth-of-field stays locked to the scroll), so a
-        // demotion lets opacity dip BELOW its dim target and rebound back up — a brightness
-        // direction-reversal that reads as a just-dimmed line "reverting to bright". For a
-        // monotonic channel, snap to target the instant the step would cross it: the
+        // A dim channel must never overshoot. The visual spring is underdamped (it is shared
+        // with line position so the depth-of-field stays locked to the scroll), so a demotion
+        // lets opacity/scale/blur cross their dim target and rebound back — a brightness, size,
+        // or sharpness direction-reversal that reads as a just-dimmed line "reverting to bright".
+        // For a monotonic channel, snap to target the instant the step would cross it: the
         // approach stays smooth, but it never overshoots or rebounds.
         if monotonic, displacement != 0, (next - target) * displacement < 0 {
             velocity = 0
@@ -462,29 +467,61 @@ enum NativeLyricsSeekClassifier {
         return true
     }
 
-    // Interpolated playback time is allowed to drift BACKWARD by up to ~0.5s so a poll resync can
-    // correct interpolation overshoot. When such a sub-tolerance correction crosses a line boundary
-    // it regresses the live index (N+1 → N). isSeek() would call that a seek and the renderer would
-    // SNAP back to the demoted line — reactivating it at full brightness (the dim→bright revert).
+    // The playback clock may step BACKWARD by up to the clock's non-seek window when a poll resync
+    // corrects interpolation overshoot. This classifies precisely that jitter: a NON-explicit backward
+    // TIME step within the resync tolerance. The renderer HOLDS the whole timeline for these (semantic
+    // index AND hotGroups) instead of letting the dip re-shape it. Two failure modes it prevents:
     //
-    // This classifies precisely that jitter: a NON-explicit backward index move whose backward time
-    // step is within the resync tolerance. The renderer holds the active line for these instead of
-    // snapping, so a just-dimmed line keeps dimming from where it was. A real scrub sets explicitSeek
-    // (always a seek), and a backward jump beyond the tolerance is a genuine discontinuity (also a seek).
+    //   1. Index regression — a dip across a line boundary pulls semanticIndex N+1 → N; without the
+    //      hold isSeek() snaps back to the demoted line, reactivating it at full brightness.
+    //   2. hotGroups regrow — with overlapping (word-level) lines, a dip across the earlier line's end
+    //      re-adds it to hotGroups while the MAX index stays put; without the hold the regrown hot set
+    //      bumps the just-receded line from a past line (0.35) back to the harmony tier (0.85).
+    //
+    // The signal is the backward TIME step, not the index — case 2 has no index change to key on. A
+    // real scrub sets explicitSeek (always a seek); a backward jump beyond the tolerance is a genuine
+    // discontinuity (also a seek). Both fall through to isSeek() and snap.
     static func isResyncRewind(
-        previousIndex: Int?,
-        liveIndex: Int,
         previousPlaybackTime: TimeInterval?,
         playbackTime: TimeInterval,
         explicitSeek: Bool,
         tolerance: TimeInterval
     ) -> Bool {
-        guard !explicitSeek,
-              let previousIndex,
-              let previousPlaybackTime,
-              liveIndex < previousIndex else { return false }
+        guard !explicitSeek, let previousPlaybackTime else { return false }
         let backwardStep = previousPlaybackTime - playbackTime
         return backwardStep > 0 && backwardStep <= tolerance
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Monotonic render clock (AMLL alignment).
+    //
+    // AMLL is fed a monotonic host clock (HTMLAudioElement.currentTime) and its renderer carries NO
+    // backward-time guards. Our ScriptingBridge poll yanks the clock backward on resync, so we
+    // re-impose monotonicity at the renderer's INPUT instead of patching each visual channel. During
+    // normal playback the surface only ever sees time HOLD or ADVANCE; a sub-threshold backward dip is
+    // jitter and is held. A backward step beyond `seekThreshold`, or an explicit (progress-bar) seek,
+    // is a real discontinuity the clock FOLLOWS — the caller then resets the trail like a seek.
+    // ───────────────────────────────────────────────────────────────────────────
+    enum ClockStep: Equatable {
+        case advance   // forward or held — normal playback, never visibly backward
+        case seek      // followed a discontinuity (explicit seek, or backward beyond threshold)
+    }
+
+    static func monotonicTime(
+        previous: TimeInterval,
+        rawTime: TimeInterval,
+        explicitSeek: Bool,
+        seekThreshold: TimeInterval
+    ) -> (value: TimeInterval, step: ClockStep) {
+        // An explicit seek or a backward step BEYOND the threshold is a real discontinuity: follow it.
+        // (Forward is never a backward-jitter concern; a big forward jump stays an advance and is
+        // reset, if needed, by the index-based isSeek classifier — this gate only filters backward.)
+        if explicitSeek || rawTime < previous - seekThreshold {
+            return (rawTime, .seek)
+        }
+        // Otherwise hold monotone: forward tracks the raw clock, a sub-threshold backward dip is
+        // jitter and stays at the peak so the surface never sees time move backward.
+        return (max(previous, rawTime), .advance)
     }
 }
 

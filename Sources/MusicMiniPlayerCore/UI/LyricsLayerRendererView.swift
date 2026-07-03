@@ -496,6 +496,18 @@ final class NativeLyricsSurfaceView: NSView {
     private var frameSummaryStartedAt: CFTimeInterval?
     private var frameCadence = NativeLyricsFrameCadenceAccumulator()
     private var renderTelemetry = NativeLyricsRenderTelemetryAccumulator()
+    #if DEBUG
+    // In-memory presentation census (testable). Records the APPLIED render values per row on every
+    // applyFrame paint, so a headless test can run censusOscillates over each channel and catch a
+    // channel that rises-then-falls within the window — a stumble / flicker / refresh — which the
+    // settled-VALUE probes are blind to. The live file-sink census is LOCAL_DEVELOPER_BUILD only.
+    struct DebugCensusTrack { var opacity: [CGFloat] = []; var target: [CGFloat] = []; var scale: [CGFloat] = []; var blur: [CGFloat] = []; var y: [CGFloat] = [] }
+    private(set) var debugCensusByIndex: [Int: DebugCensusTrack] = [:]
+    private(set) var debugSemanticTrace: [Int] = []
+    private(set) var debugClockTrace: [TimeInterval] = []
+    var debugCensusEnabled = false
+    func debugResetCensus() { debugCensusByIndex = [:]; debugSemanticTrace = []; debugClockTrace = [] }
+    #endif
     private var manualScrollState = NativeLyricsManualScrollState()
     private var manualPresentationNeedsApply = false
     private var manualScrollEndTimer: Timer?
@@ -506,11 +518,21 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastNativeLineMotionSampleAt: Date = .distantPast
     private var nativeSemanticCurrentIndex: Int?
     private var nativeTimelineState: NativeLyricsTimelinePolicy.AMLLState?
+    // AMLL-aligned monotonic render clock: the last time value the surface was driven with. Backward
+    // poll jitter is held at this peak so amllState never re-derives an earlier (brighter) hot set; an
+    // explicit seek or a beyond-threshold backward jump follows it. nil until the first frame inits it.
+    private var nativeRenderClock: TimeInterval?
     private var pausedSemanticLocked = false
     private var lastObservedSeekGeneration: Int = 0
     private var lastTextPhaseUpdateAt: CFTimeInterval?
     private var lastScrollWheelTime: CFTimeInterval = 0
     private var hoveredRowIndex: Int?
+    // Last cursor position inside the surface (surface-space), or nil when the cursor is outside the
+    // surface / over a reserved overlay zone. The surface is the SINGLE hover authority: rows have no
+    // tracking areas of their own, so when a row slides out from under a stationary cursor (line-advance
+    // / scroll) AppKit fires no mouseExited. Re-resolving hover from this stored point on every layout
+    // pass closes that gap — a moving row's hover follows the geometry, not stale enter/exit events.
+    private var lastKnownCursorPoint: CGPoint?
     private var surfaceTrackingArea: NSTrackingArea?
     private var localEventMonitor: Any?
     private var lastConfigureEventSignature: String?
@@ -536,6 +558,23 @@ final class NativeLyricsSurfaceView: NSView {
     func debugRowView(forIndex index: Int) -> NativeLyricsRowView? {
         guard let id = rowIDByIndex[index] else { return nil }
         return rowViews[id]
+    }
+    /// The renderer's resolved semantic (active) line index — what the surface believes is current.
+    var debugNativeSemanticIndex: Int? { nativeSemanticCurrentIndex }
+    /// The row index the surface currently believes the cursor is over (single hover authority).
+    var debugHoveredRowIndex: Int? { hoveredRowIndex }
+    /// Drives the geometry hover resolver from a fixed surface-space point (headless: no NSEvent).
+    /// Mirrors updateNativeHoverFromEvent so tests exercise the SAME single-authority hover path,
+    /// including seeding lastKnownCursorPoint for the on-reposition re-resolution.
+    func debugMoveCursor(to point: CGPoint) {
+        guard let configuration else { return }
+        let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        guard !isPointInReservedOverlayZone(point, configuration: runtimeConfiguration) else {
+            clearNativeHover()
+            return
+        }
+        lastKnownCursorPoint = point
+        updateNativeHover(from: point, configuration: runtimeConfiguration)
     }
     /// The interlude overlay dots' centre X positions (in the dot container's coordinate space).
     /// Tests assert these stay horizontally spaced — i.e. the "三个点重合" overlap can't recur.
@@ -908,6 +947,10 @@ final class NativeLyricsSurfaceView: NSView {
             initialMeasurementsPending = false
             initialRevealTicksRemaining = 0
         }
+        // The reconcile repositioned rows on its own transaction (the presentation loop may not run
+        // for a static/paused re-configure). Re-resolve hover so it tracks the geometry even without
+        // a presentation tick.
+        withDisabledLayerActions { reresolveHoverAfterLayout() }
     }
 
     #if LOCAL_DEVELOPER_BUILD
@@ -1190,9 +1233,13 @@ final class NativeLyricsSurfaceView: NSView {
     ) {
         guard configuration.playbackMode == .natural else {
             let snapIndex = configuration.effectiveCurrentIndex
+            // A snap (seek / tap / direct snap) is a deliberate discontinuity: reset the monotonic
+            // clock to the snapped time so natural playback resumes without holding against a stale peak.
+            let snapTime = configuration.musicController.lyricRenderTime()
+            nativeRenderClock = snapTime
             nativeSemanticCurrentIndex = snapIndex
             nativeTimelineState = NativeLyricsTimelinePolicy.AMLLState(
-                playbackTime: configuration.musicController.lyricRenderTime(),
+                playbackTime: snapTime,
                 hotGroups: [snapIndex],
                 bufferedGroups: [snapIndex],
                 scrollToIndex: snapIndex,
@@ -1227,7 +1274,20 @@ final class NativeLyricsSurfaceView: NSView {
         } else if isPlaying && pausedSemanticLocked {
             pausedSemanticLocked = false
         }
-        let playbackTime = configuration.musicController.lyricRenderTime()
+        // AMLL alignment: drive the timeline off a MONOTONIC clock instead of the raw SB clock. A
+        // backward poll-resync dip within the seek window holds at the peak, so amllState re-derives
+        // the SAME hot set — no receded line regrows to the harmony tier (the "previous line pops").
+        // This subsumes the old isResyncRewind hold: there is nothing to "hold" once the input can't
+        // move backward. An explicit seek or a beyond-window backward jump reports .seek and resets.
+        let rawTime = configuration.musicController.lyricRenderTime()
+        let clock = NativeLyricsSeekClassifier.monotonicTime(
+            previous: nativeRenderClock ?? rawTime,
+            rawTime: rawTime,
+            explicitSeek: explicitSeek,
+            seekThreshold: Self.resyncRewindTolerance
+        )
+        nativeRenderClock = clock.value
+        let playbackTime = clock.value
         let provisional = NativeLyricsTimelinePolicy.amllState(
             at: playbackTime,
             rows: configuration.rows,
@@ -1237,37 +1297,15 @@ final class NativeLyricsSurfaceView: NSView {
         )
         let liveIndex = provisional.semanticIndex
         lastObservedSeekGeneration = seekToken
-        // A sub-tolerance backward time correction (poll resync overshoot) just pulled the live index
-        // back across a line boundary. That is NOT a seek — snapping back would reactivate the
-        // just-demoted line at full brightness (the dim→bright revert). Hold the active line: keep the
-        // prior semantic index + timeline so the demoted line keeps dimming from where it already was.
-        if NativeLyricsSeekClassifier.isResyncRewind(
-            previousIndex: nativeSemanticCurrentIndex,
-            liveIndex: liveIndex,
-            previousPlaybackTime: nativeTimelineState?.playbackTime,
-            playbackTime: playbackTime,
-            explicitSeek: explicitSeek,
-            tolerance: Self.resyncRewindTolerance
-        ) {
-            if let heldIndex = nativeSemanticCurrentIndex {
-                configuration.nativeSemanticCurrentIndex = heldIndex
-            }
-            if let held = nativeTimelineState {
-                configuration.nativeScrollTargetIndex = held.scrollToIndex
-                configuration.nativeHotActiveIndices = held.hotGroups
-                configuration.nativeBufferedActiveIndices = held.bufferedGroups
-            }
-            #if LOCAL_DEVELOPER_BUILD
-            DebugLogger.log("RewindHold", String(format: "held idx=%d (live=%d) backStep=%.3fs — jitter, not a seek (was the dim→bright revert)",
-                nativeSemanticCurrentIndex ?? -1, liveIndex, (nativeTimelineState?.playbackTime ?? playbackTime) - playbackTime))
-            #endif
-            return
-        }
-        let isSeek = NativeLyricsSeekClassifier.isSeek(
-            previousIndex: nativeSemanticCurrentIndex,
-            liveIndex: liveIndex,
-            explicitSeek: explicitSeek
-        )
+        // .seek = an explicit progress-bar seek OR an external backward scrub beyond the window. Both
+        // are real discontinuities that must reset the buffered trail. A forward jump of >1 line is
+        // also a seek (index monotonicity) and is caught by isSeek below.
+        let isSeek = clock.step == .seek
+            || NativeLyricsSeekClassifier.isSeek(
+                previousIndex: nativeSemanticCurrentIndex,
+                liveIndex: liveIndex,
+                explicitSeek: explicitSeek
+            )
         // On a seek, recompute with the buffered trail reset so the scroll snaps to the new line
         // instead of dragging the previous bright lines (and waving) toward it.
         let timelineState = isSeek
@@ -1634,7 +1672,7 @@ final class NativeLyricsSurfaceView: NSView {
         // the old per-row "unpositioned" hide existed only because the previous transform-based Y was
         // reset to the origin by AppKit on every commit, so a just-mounted row briefly painted at the
         // top. Frame positioning removes that origin state entirely, so the hide is no longer needed.
-        view.layer?.opacity = appliedOpacity
+        view.setRowOpacity(appliedOpacity)
         // The transform now carries ONLY scale — never translation. (Translation here was the bug:
         // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
         // row to the origin for a frame; the frame does not get reset.)
@@ -1650,6 +1688,17 @@ final class NativeLyricsSurfaceView: NSView {
             appliedScale: appliedScale
         ))
         let appliedBlur = view.applyBlurRadius(visual.blur)
+        #if DEBUG
+        if debugCensusEnabled {
+            var track = debugCensusByIndex[row.index] ?? DebugCensusTrack()
+            track.opacity.append(visual.opacity)
+            track.target.append(visual.target.opacity)
+            track.scale.append(visual.scale)
+            track.blur.append(appliedBlur)
+            track.y.append(y)
+            debugCensusByIndex[row.index] = track
+        }
+        #endif
         recordVisualParityIfChanged(rowID: row.id, sample: NativeLyricsVisualParitySample(
             expectedOpacity: visual.opacity,
             appliedOpacity: CGFloat(view.layer?.opacity ?? 0),
@@ -1957,11 +2006,19 @@ final class NativeLyricsSurfaceView: NSView {
         managesTransaction: Bool = true
     ) {
         let applyFrames = {
+            #if DEBUG
+            if self.debugCensusEnabled {
+                self.debugSemanticTrace.append(self.nativeSemanticCurrentIndex ?? -1)
+                self.debugClockTrace.append(self.nativeRenderClock ?? -1)
+            }
+            #endif
             for view in self.rowViews.values {
                 guard let row = view.currentRow else { continue }
                 self.applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snap)
             }
             self.updateSurfaceInterludeDots(configuration: runtimeConfiguration, snap: snap)
+            // Rows just moved — re-resolve hover so it follows the geometry under a stationary cursor.
+            self.reresolveHoverAfterLayout()
             #if LOCAL_DEVELOPER_BUILD
             self.recordAggregateBrightness(configuration: runtimeConfiguration, snap: snap)
             self.appendBloomTraj(phase: snap ? "frm-s" : "frm", configuration: runtimeConfiguration)
@@ -2732,8 +2789,7 @@ final class NativeLyricsSurfaceView: NSView {
         let hit = runtimeConfiguration.rows
             .compactMap { row -> (Int, CGRect)? in
                 guard let view = rowViews[row.id] else { return nil }
-                let y = renderedY(for: row, view: view, configuration: runtimeConfiguration)
-                return (row.index, CGRect(x: 0, y: y, width: view.frame.width, height: view.frame.height))
+                return (row.index, rowHitFrame(view))
             }
             .sorted { lhs, rhs in abs(lhs.1.midY - point.y) < abs(rhs.1.midY - point.y) }
             .first { _, frame in frame.contains(point) }
@@ -2746,9 +2802,7 @@ final class NativeLyricsSurfaceView: NSView {
            let hoveredRowIndex,
            let row = runtimeConfiguration.rows.first(where: { $0.index == hoveredRowIndex }),
            let view = rowViews[row.id] {
-            let y = renderedY(for: row, view: view, configuration: runtimeConfiguration)
-            let hoverFrame = CGRect(x: 0, y: y, width: view.frame.width, height: view.frame.height)
-                .insetBy(dx: 0, dy: -24)
+            let hoverFrame = rowHitFrame(view).insetBy(dx: 0, dy: -24)
             if hoverFrame.contains(point),
                let handler = rowTapHandlers[hoveredRowIndex] {
                 handler()
@@ -2766,10 +2820,12 @@ final class NativeLyricsSurfaceView: NSView {
             clearNativeHover()
             return
         }
+        lastKnownCursorPoint = point
         updateNativeHover(from: point, configuration: runtimeConfiguration)
     }
 
     private func clearNativeHover() {
+        lastKnownCursorPoint = nil
         guard let hoveredRowIndex else { return }
         if let configuration,
            let row = runtimeConfiguration(from: configuration).rows.first(where: { $0.index == hoveredRowIndex }),
@@ -3104,12 +3160,21 @@ final class NativeLyricsSurfaceView: NSView {
         }
     }
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // Pointer hit-testing uses the row's real on-screen FRAME. Rows are positioned by
+    // frame origin (applyFrame sets view.frame; the layer transform carries scale ONLY),
+    // so renderedY — which reads the transform ty — is ~0 for every row and must NOT be
+    // used here. Reading ty made the geometry hover/click path resolve every row at y≈0,
+    // i.e. dead: the app highlighted only via the per-row tracking areas, which is why the
+    // hover background could stick when a row slid out from under a stationary cursor.
+    // ───────────────────────────────────────────────────────────────────────────
+    private func rowHitFrame(_ view: NativeLyricsRowView) -> CGRect { view.frame }
+
     private func updateNativeHover(from point: CGPoint, configuration: LyricsLayerRendererConfiguration) {
         let hoveredIndex = visibleRows(for: configuration)
             .compactMap { row -> (Int, CGRect)? in
                 guard let view = rowViews[row.id] else { return nil }
-                let y = renderedY(for: row, view: view, configuration: configuration)
-                return (row.index, CGRect(x: 0, y: y, width: view.frame.width, height: view.frame.height))
+                return (row.index, rowHitFrame(view))
             }
             .sorted { lhs, rhs in abs(lhs.1.midY - point.y) < abs(rhs.1.midY - point.y) }
             .first { _, frame in frame.contains(point) }?
@@ -3136,6 +3201,18 @@ final class NativeLyricsSurfaceView: NSView {
             view.setPointerHovering(true)
         }
         hoveredRowIndex = hoveredIndex
+    }
+
+    /// Re-resolve hover from the last cursor position after a layout pass repositioned the rows.
+    /// Rows have no tracking areas of their own — the surface is the single hover authority — so a row
+    /// sliding out from under a stationary cursor (line-advance / scroll moves the frame, not the mouse)
+    /// gets no mouseExited. Re-running the geometry hit-test here makes hover follow the geometry: the
+    /// vacated row releases its background, the row now under the cursor lights up. No-op when the cursor
+    /// is outside the surface / over a reserved zone (lastKnownCursorPoint == nil), so idle playback with
+    /// no hover pays nothing.
+    private func reresolveHoverAfterLayout() {
+        guard let point = lastKnownCursorPoint, let configuration else { return }
+        updateNativeHover(from: point, configuration: runtimeConfiguration(from: configuration))
     }
 
     @discardableResult
@@ -3569,7 +3646,6 @@ final class NativeLyricsRowView: NSView {
     private let interludeTextLayer = CATextLayer().lyricsInert()
     private let dotContainerLayer = CALayer().lyricsInert()
     private let dotLayers: [CALayer] = (0..<3).map { _ in CALayer().lyricsInert() }
-    private var trackingAreaRef: NSTrackingArea?
     private var row: LayerBackedLyricRow?
     private var configuration: LyricsLayerRendererConfiguration?
     private var isHovering = false
@@ -3632,6 +3708,7 @@ final class NativeLyricsRowView: NSView {
     private var appliedBlurRadius: CGFloat = -.greatestFiniteMagnitude
     private var appliedDotBlurRadius: CGFloat = -.greatestFiniteMagnitude
     private var lastHoverBackgroundVisible = false
+    private var lastAppliedHoverFrame: CGRect?
     var onHoverChanged: ((Bool) -> Void)?
     var onHoverBackgroundVisible: (() -> Void)?
     var onTap: (() -> Void)?
@@ -3732,6 +3809,13 @@ final class NativeLyricsRowView: NSView {
     }
 
     func configure(row: LayerBackedLyricRow, configuration: LyricsLayerRendererConfiguration) {
+        // The monotone post-line fade floor belongs to ONE line. Reset it only when this row actually
+        // takes a different line (a genuine discontinuity) — never per frame, so a backward clock
+        // jitter on the SAME line can't re-light the just-faded overlay (the gap pop).
+        if self.row?.displayLine.id != row.displayLine.id {
+            mainPostLineFadeFloor = 1
+            translationPostLineFadeFloor = 1
+        }
         self.row = row
         self.configuration = configuration
         wantsLayer = true
@@ -3750,6 +3834,7 @@ final class NativeLyricsRowView: NSView {
         lastTranslationSweepWavefrontX.removeAll()
     }
 
+
     func refreshInteractionState(configuration: LyricsLayerRendererConfiguration) {
         self.configuration = configuration
         updateHoverBackground()
@@ -3766,6 +3851,17 @@ final class NativeLyricsRowView: NSView {
     // ───────────────────────────────────────────────────────────────────────────
     private var mainDeactivationOverlayBaseline: Float?
     private var translationDeactivationOverlayBaseline: Float?
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Monotonic post-line karaoke fade floor. postLineFadeOut is a pure function of
+    // (rawClock - lineEndTime), and updatePlaybackPhase reads the RAW lyricRenderTime,
+    // so a drift-driven backward poll resync shrinks timeSinceLineEnd and RAISES the
+    // fade — re-lighting a just-finished line's overlay mid-gap (the previous-line pop).
+    // The floor pins the fade monotone: once it has dimmed it never brightens again,
+    // until the clock is genuinely back inside the line's sung window (fade == 1).
+    // ───────────────────────────────────────────────────────────────────────────
+    private var mainPostLineFadeFloor: CGFloat = 1
+    private var translationPostLineFadeFloor: CGFloat = 1
 
     func beginDeactivationFade() {
         mainDeactivationOverlayBaseline = mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity
@@ -3803,6 +3899,8 @@ final class NativeLyricsRowView: NSView {
         onTap = nil
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
+        mainPostLineFadeFloor = 1
+        translationPostLineFadeFloor = 1
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
         // commit; if a recycled row keeps the previous row's scale, the next mount flashes that old
         // size for one frame before applyFrame writes the new scale (the seek size-pop).
@@ -3810,6 +3908,7 @@ final class NativeLyricsRowView: NSView {
         layer?.opacity = 0
         backgroundLayer.isHidden = true
         lastHoverBackgroundVisible = false
+        lastAppliedHoverFrame = nil
         layer?.filters = nil
         appliedBlurRadius = -.greatestFiniteMagnitude
         cachedMainSweepLayoutKey = nil
@@ -3933,6 +4032,10 @@ final class NativeLyricsRowView: NSView {
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
 
+    /// True when the hover background is actually painted for this row. Tests assert it clears once
+    /// the row is no longer under the cursor (the "hover bg stuck after the row moved away" bug).
+    var debugHoverBackgroundVisible: Bool { isHovering && !backgroundLayer.isHidden }
+
     func debugForceLayout() { layoutSubtreeIfNeeded() }
 
     /// Invokes layout() directly, bypassing AppKit's `needsLayout` gate. AppKit calls layout()
@@ -4030,9 +4133,26 @@ final class NativeLyricsRowView: NSView {
     // snaps the row to the top for one frame (the load-correlated 花屏: more layout passes under
     // high CPU → more resets). Store the intended transform and re-assert it on every layout.
     private(set) var positioningTransform: CGAffineTransform = .identity
+    /// Counts REAL per-frame layer mutations (transform + row opacity). A SETTLED row that keeps
+    /// re-writing its layer every frame forces a re-composite — and with a CIGaussianBlur filter
+    /// attached to a past line, that per-frame re-composite is the "refresh flicker". The headless
+    /// NativeLyricsRenderChurnTests pins this to 0 across steady frames.
+    private(set) var layerMutationCount = 0
+    /// Per-frame write ATTEMPTS (before the redundancy guard). attempts >> count on steady frames is
+    /// the reproduction: the render path re-writes every frame; the guard is what stops the re-composite.
+    private(set) var layerMutationAttempts = 0
     func setPositioning(_ transform: CGAffineTransform) {
+        layerMutationAttempts += 1
+        guard positioningTransform != transform else { return }
         positioningTransform = transform
         layer?.setAffineTransform(transform)
+        layerMutationCount += 1
+    }
+    func setRowOpacity(_ opacity: Float) {
+        layerMutationAttempts += 1
+        guard layer?.opacity != opacity else { return }
+        layer?.opacity = opacity
+        layerMutationCount += 1
     }
 
     override func layout() {
@@ -4183,28 +4303,11 @@ final class NativeLyricsRowView: NSView {
         return lines.joined(separator: "\n")
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingAreaRef {
-            removeTrackingArea(trackingAreaRef)
-        }
-        let next = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        trackingAreaRef = next
-        addTrackingArea(next)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        setPointerHovering(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        setPointerHovering(false)
-    }
+    // No per-row tracking area. The surface (NativeLyricsSurfaceView) is the SINGLE hover authority:
+    // it hit-tests the cursor against each row's real frame and drives setPointerHovering. A per-row
+    // tracking area could fire mouseEntered but not mouseExited when the row slid out from under a
+    // stationary cursor (its frame moved, the mouse did not), so the hover background stuck. The surface
+    // re-resolves hover on every layout pass instead, which tracks the geometry frame-by-frame.
 
     override func mouseDown(with event: NSEvent) {
         if let onTap {
@@ -4436,9 +4539,18 @@ final class NativeLyricsRowView: NSView {
 
     private func updateHoverBackground() {
         let visible = isHovering && row?.displayLine.line.text != "⋯"
-        backgroundLayer.frame = Self.hoverBackgroundFrame(in: bounds)
-        backgroundLayer.cornerRadius = Self.hoverBackgroundCornerRadius
-        backgroundLayer.isHidden = !visible
+        // Churn guard: the on-reposition re-resolution can call this every frame while a row stays
+        // hovered. Writing the layer each time re-composites it (the render-churn class this session
+        // killed). Skip the write when the value is unchanged — frame tracks bounds (constant), isHidden
+        // only flips on a hover transition. cornerRadius is a constant set once in commonInit.
+        let frame = Self.hoverBackgroundFrame(in: bounds)
+        if lastAppliedHoverFrame != frame {
+            backgroundLayer.frame = frame
+            lastAppliedHoverFrame = frame
+        }
+        if lastHoverBackgroundVisible != visible {
+            backgroundLayer.isHidden = !visible
+        }
         if visible && !lastHoverBackgroundVisible {
             onHoverBackgroundVisible?()
         }
@@ -4670,8 +4782,11 @@ final class NativeLyricsRowView: NSView {
             mainBrightTextLayer.setAffineTransform(floatTransform)
             wordFloatResult = .inactive
         }
-        mainBrightTextLayer.opacity = Float(plan.mainPostLineFade)
-        mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || plan.mainPostLineFade <= 0.001
+        // Pin the post-line fade monotone so a backward clock step can't re-light the overlay. The
+        // floor only falls here; it is reset solely by the line-key / explicit-seek guard at the top.
+        mainPostLineFadeFloor = min(mainPostLineFadeFloor, plan.mainPostLineFade)
+        mainBrightTextLayer.opacity = Float(mainPostLineFadeFloor)
+        mainBrightTextLayer.isHidden = plan.mainSweepProgress <= 0.001 || mainPostLineFadeFloor <= 0.001
         let sweepResult = updatePerRunSweepMask(
             plan: plan,
             currentTime: currentTime,
@@ -4820,8 +4935,9 @@ final class NativeLyricsRowView: NSView {
             translationBrightTextLayer.isHidden = true
             return nil
         }
-        translationBrightTextLayer.opacity = Float(translation.postLineFade)
-        translationBrightTextLayer.isHidden = translation.progress <= 0.001 || translation.postLineFade <= 0.001
+        translationPostLineFadeFloor = min(translationPostLineFadeFloor, translation.postLineFade)
+        translationBrightTextLayer.opacity = Float(translationPostLineFadeFloor)
+        translationBrightTextLayer.isHidden = translation.progress <= 0.001 || translationPostLineFadeFloor <= 0.001
         guard let configuration else { return nil }
         let textWidth = contentTextWidth(configuration)
         // Memoized: only re-measure when the translation text / width / font actually change, not on
