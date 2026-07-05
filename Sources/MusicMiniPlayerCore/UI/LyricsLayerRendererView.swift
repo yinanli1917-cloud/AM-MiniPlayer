@@ -607,6 +607,17 @@ final class NativeLyricsSurfaceView: NSView {
     private var dimProbeIndex: Int?
     private var dimProbeUntil: CFTimeInterval = 0
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
+
+    private func frameSnapMode(
+        for configuration: LyricsLayerRendererConfiguration,
+        now: CFTimeInterval = CACurrentMediaTime()
+    ) -> NativeLyricsSnapMode {
+        NativeLyricsSnapMode.resolve(
+            playbackMode: configuration.playbackMode,
+            isWithinAppearWindow: now < forceSnapUntil
+        )
+    }
+
     private let surfaceInterludeOverlay: NSView = {
         let v = _FlippedView()
         return v
@@ -886,6 +897,7 @@ final class NativeLyricsSurfaceView: NSView {
         updateNativeLineMotionSamplingTimer(configuration: runtimeConfiguration)
         consumeDirectSnapRequestIfNeeded(runtimeConfiguration)
         recordConfigureEventIfNeeded(configuration: runtimeConfiguration)
+        let snapMode = frameSnapMode(for: runtimeConfiguration)
         presentationEngine.update(
             LyricsPresentationEngineConfiguration(
                 currentIndex: runtimeConfiguration.effectiveCurrentIndex,
@@ -902,22 +914,22 @@ final class NativeLyricsSurfaceView: NSView {
                 trackContext: runtimeConfiguration.trackContext,
                 isWaveTimelineDiagnosticsEnabled: runtimeConfiguration.isWaveTimelineDiagnosticsEnabled
                     || DiagnosticsService.shared.isLyricWaveTimelineEnabled,
-                playbackMode: runtimeConfiguration.playbackMode
+                playbackMode: snapMode.playbackMode
             ),
             onTargetsChanged: { [weak self] in
                 self?.startPresentationLoop()
             }
         )
 
-        let shouldSnap = runtimeConfiguration.playbackMode != .natural
-        let shouldSnapVisuals = shouldSnapVisualState(configuration: runtimeConfiguration)
+        let shouldSnap = snapMode.snapsPositions
+        let shouldSnapVisuals = snapMode.snapsVisuals
         let visualTargetsChanged = reconcileVisibleRowViews(
             runtimeConfiguration: runtimeConfiguration,
             snapPositions: shouldSnap,
             snapVisuals: shouldSnapVisuals
         )
         if shouldSnap {
-            if hasActiveTextAnimation(configuration: runtimeConfiguration) || isWithinAppearWindow {
+            if hasActiveTextAnimation(configuration: runtimeConfiguration) || snapMode.keepsPresentationLoopAlive {
                 startPresentationLoop()
             } else {
                 stopPresentationLoopIfIdle()
@@ -1521,18 +1533,6 @@ final class NativeLyricsSurfaceView: NSView {
     private var hasActiveVisualMotion: Bool {
         visualStates.values.contains { !$0.isSettled }
             || interludeBlendStates.values.contains { !$0.isSettled }
-    }
-
-    private func shouldSnapVisualState(configuration: LyricsLayerRendererConfiguration) -> Bool {
-        switch configuration.playbackMode {
-        case .natural:
-            return false
-        case .directSnap(let reason):
-            switch reason {
-            case .initialLayout, .trackReset, .seek, .reducedMotion, .tapToLine, .manualScroll:
-                return true
-            }
-        }
     }
 
     @discardableResult
@@ -2294,10 +2294,9 @@ final class NativeLyricsSurfaceView: NSView {
     /// loop would stop and never re-apply them — leaving every row stacked at the top, heavily
     /// blurred, until natural mode resumes ~0.8 s later (the "bloom", confirmed on-device). Keep the
     /// loop alive and re-applying for the whole window so the rows stay at their settled positions.
-    private var isWithinAppearWindow: Bool { CACurrentMediaTime() < forceSnapUntil }
-
     private func stopPresentationLoopIfIdle(runtimeConfiguration: LyricsLayerRendererConfiguration) {
-        guard !isWithinAppearWindow,
+        let snapMode = frameSnapMode(for: runtimeConfiguration)
+        guard !snapMode.keepsPresentationLoopAlive,
               pendingTapToLineSettleTiming == nil,
               !presentationEngine.hasActiveMotion,
               !hasActiveVisualMotion,
@@ -2330,6 +2329,7 @@ final class NativeLyricsSurfaceView: NSView {
         let previousTimelineState = nativeTimelineState
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         let now = CACurrentMediaTime()
+        let snapMode = frameSnapMode(for: runtimeConfiguration, now: now)
         let delta = lastPresentationTick.map { max(0, now - $0) }
             ?? displayInterval
             ?? 0
@@ -2393,7 +2393,7 @@ final class NativeLyricsSurfaceView: NSView {
             // During the appear window re-apply every tick: the rows have no engine motion in
             // directSnap mode, but AppKit keeps collapsing their transforms after the mount, so
             // they must be re-pinned each frame until natural mode (with its springs) takes over.
-            || isWithinAppearWindow
+            || snapMode.keepsPresentationLoopAlive
         manualPresentationNeedsApply = false
         withDisabledLayerActions {
             if activeTextLineChanged {
@@ -3090,11 +3090,11 @@ final class NativeLyricsSurfaceView: NSView {
         guard !manualScrollState.isActive else { return }
         manualScrollState.begin(frozenDisplayIndex: configuration.effectiveScrollTargetIndex)
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
-        let shouldSnapVisuals = shouldSnapVisualState(configuration: runtimeConfiguration)
+        let snapMode = frameSnapMode(for: runtimeConfiguration)
         _ = reconcileVisibleRowViews(
             runtimeConfiguration: runtimeConfiguration,
-            snapPositions: true,
-            snapVisuals: shouldSnapVisuals
+            snapPositions: snapMode.snapsPositions,
+            snapVisuals: snapMode.snapsVisuals
         )
         renderTelemetry.recordManualScrollStart()
         refreshRowInteractionState(configuration: runtimeConfiguration)
@@ -3187,10 +3187,11 @@ final class NativeLyricsSurfaceView: NSView {
                 self?.startPresentationLoop()
             }
         )
+        let snapMode = frameSnapMode(for: runtimeConfiguration)
         let visualTargetsChanged = reconcileVisibleRowViews(
             runtimeConfiguration: runtimeConfiguration,
-            snapPositions: true,
-            snapVisuals: shouldSnapVisualState(configuration: runtimeConfiguration)
+            snapPositions: snapMode.snapsPositions,
+            snapVisuals: snapMode.snapsVisuals
         )
         if visualTargetsChanged || hasActiveVisualMotion || hasActiveTextAnimation(configuration: runtimeConfiguration) {
             startPresentationLoop()
@@ -3452,6 +3453,7 @@ final class NativeLyricsSurfaceView: NSView {
     ) -> LyricsPresentationEngineConfiguration {
         let currentIndex = configuration.effectiveCurrentIndex
         let scrollTargetIndex = configuration.effectiveScrollTargetIndex
+        let snapMode = frameSnapMode(for: configuration)
         return LyricsPresentationEngineConfiguration(
             currentIndex: currentIndex,
             scrollTargetIndex: scrollTargetIndex,
@@ -3469,7 +3471,7 @@ final class NativeLyricsSurfaceView: NSView {
             trackContext: configuration.trackContext,
             isWaveTimelineDiagnosticsEnabled: configuration.isWaveTimelineDiagnosticsEnabled
                 || DiagnosticsService.shared.isLyricWaveTimelineEnabled,
-            playbackMode: configuration.playbackMode
+            playbackMode: snapMode.playbackMode
         )
     }
 

@@ -49,7 +49,9 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("let updatedViewportIndex = manualViewportIndex(for: updatedRuntimeConfiguration)"))
         XCTAssertTrue(source.contains("if updatedViewportIndex != previousViewportIndex {"))
         XCTAssertTrue(source.contains("manualScrollState.begin(frozenDisplayIndex: configuration.effectiveScrollTargetIndex)"))
-        XCTAssertTrue(source.contains("reconcileVisibleRowViews(\n            runtimeConfiguration: runtimeConfiguration,\n            snapPositions: true"))
+        XCTAssertTrue(source.contains("let snapMode = frameSnapMode(for: runtimeConfiguration)"))
+        XCTAssertTrue(source.contains("snapPositions: snapMode.snapsPositions"))
+        XCTAssertTrue(source.contains("snapVisuals: snapMode.snapsVisuals"))
         XCTAssertTrue(source.contains("manualIndices.formUnion(geometryVisibleRowIndices(for: configuration))"))
     }
 
@@ -222,7 +224,9 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("onLineTap?(line)"))
         XCTAssertTrue(source.contains("deferParentCallback {\n            onManualScrollDelta(deltaY, velocity)\n        }"))
         XCTAssertTrue(source.contains("private func reconcileVisibleRowViews("))
-        XCTAssertTrue(source.contains("reconcileVisibleRowViews(\n            runtimeConfiguration: runtimeConfiguration,\n            snapPositions: true"))
+        XCTAssertTrue(source.contains("let snapMode = frameSnapMode(for: runtimeConfiguration)"))
+        XCTAssertTrue(source.contains("snapPositions: snapMode.snapsPositions"))
+        XCTAssertTrue(source.contains("snapVisuals: snapMode.snapsVisuals"))
         XCTAssertTrue(source.contains("semanticSpringRetarget("))
         XCTAssertTrue(source.contains("semanticSpringRetarget(to: liveIndex, reason: .manualScroll"))
         XCTAssertTrue(source.contains("NativeLyricsVisualMotionState"))

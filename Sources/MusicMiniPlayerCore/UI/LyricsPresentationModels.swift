@@ -134,6 +134,26 @@ enum LyricsPresentationPlaybackMode: Equatable {
     case directSnap(LyricsPresentationDirectSnapReason)
 }
 
+struct NativeLyricsSnapMode: Equatable {
+    let playbackMode: LyricsPresentationPlaybackMode
+    let snapsPositions: Bool
+    let snapsVisuals: Bool
+    let keepsPresentationLoopAlive: Bool
+
+    static func resolve(
+        playbackMode: LyricsPresentationPlaybackMode,
+        isWithinAppearWindow: Bool
+    ) -> NativeLyricsSnapMode {
+        let isDirectSnap = playbackMode != .natural
+        return NativeLyricsSnapMode(
+            playbackMode: playbackMode,
+            snapsPositions: isDirectSnap,
+            snapsVisuals: isDirectSnap,
+            keepsPresentationLoopAlive: isWithinAppearWindow
+        )
+    }
+}
+
 struct NativeLyricsDirectSnapRequest: Equatable {
     let id: UUID
     let displayIndex: Int
