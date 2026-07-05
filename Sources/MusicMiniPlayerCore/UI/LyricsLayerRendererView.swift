@@ -840,7 +840,7 @@ final class NativeLyricsSurfaceView: NSView {
             visualStates.removeAll()
             interludeBlendStates.removeAll()
             measuredHeightsByIndex.removeAll()
-            lastAppliedYByRowID.removeAll()
+            lastAppliedYByIndex.removeAll()
             nativeSemanticCurrentIndex = nil
             nativeTimelineState = nil
             pausedSemanticLocked = false
@@ -978,7 +978,7 @@ final class NativeLyricsSurfaceView: NSView {
         var presY: CGFloat?
         var appliedY: CGFloat?
         if let id = rowIDByIndex[curIdx] {
-            appliedY = lastAppliedYByRowID[id]
+            appliedY = lastAppliedYByIndex[curIdx]
             if let layer = rowViews[id]?.layer {
                 presY = layer.presentation()?.affineTransform().ty ?? layer.affineTransform().ty
             }
@@ -1035,7 +1035,6 @@ final class NativeLyricsSurfaceView: NSView {
             rowViews[id] = nil
             rowRenderKeys[id] = nil
             visualParitySignatures[id] = nil
-            lastAppliedYByRowID[id] = nil
             view.prepareForReuse()
             if rowViewReusePool.count < 80 {
                 rowViewReusePool.append(view)
@@ -1134,7 +1133,7 @@ final class NativeLyricsSurfaceView: NSView {
         // The combination tells us which bloom mechanism is real instead of guessing.
         if let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_bloom.log") {
             let zeroGeo = rowViews.values.filter { $0.debugMainBrightBoundsEmpty }.count
-            let ys = visibleRows.compactMap { lastAppliedYByRowID[$0.id] }
+            let ys = visibleRows.compactMap { lastAppliedYByIndex[$0.index] }
             let ySpread = (ys.max() ?? 0) - (ys.min() ?? 0)
             let avgGap = ys.count > 1 ? ySpread / CGFloat(ys.count - 1) : 0
             let maxBlur = visibleRows.compactMap { visualStates[$0.index]?.blur }.max() ?? 0
@@ -1674,7 +1673,7 @@ final class NativeLyricsSurfaceView: NSView {
         // momentarily missing → snapY fallback, or a configure carrying mid-update
         // heights). Step toward the new value instead; real springs converge well
         // under the cap, glitch spikes get absorbed and self-correct next tick.
-        if !snap, let previous = lastAppliedYByRowID[row.id] {
+        if !snap, let previous = lastAppliedYByIndex[row.index] {
             let delta = requestedY - previous
             if abs(delta) > Self.naturalModeMaxYStepPerTick {
                 y = previous + Self.naturalModeMaxYStepPerTick * (delta > 0 ? 1 : -1)
@@ -1683,7 +1682,7 @@ final class NativeLyricsSurfaceView: NSView {
                 #endif
             }
         }
-        lastAppliedYByRowID[row.id] = y
+        lastAppliedYByIndex[row.index] = y
         let fallbackTarget = visualTarget(for: row, configuration: configuration, now: CACurrentMediaTime())
         let visual = visualStates[row.index] ?? NativeLyricsVisualMotionState(target: fallbackTarget)
         let height = measuredHeightsByIndex[row.index] ?? max(1, view.frame.height)
@@ -1752,9 +1751,9 @@ final class NativeLyricsSurfaceView: NSView {
         #endif
     }
 
-    /// Last y actually applied per row (release builds too — feeds the teleport guard).
-    /// Pruned on row unmount and cleared on track-identity reset.
-    private var lastAppliedYByRowID: [String: CGFloat] = [:]
+    /// Last y actually applied per display index (release builds too — feeds the teleport guard).
+    /// Preserved across row unmount/remount and cleared on track-identity reset.
+    private var lastAppliedYByIndex: [Int: CGFloat] = [:]
 
     private func withDisabledLayerActions(_ body: () -> Void) {
         CATransaction.begin()
@@ -2481,7 +2480,7 @@ final class NativeLyricsSurfaceView: NSView {
         var rs: [R] = []
         for row in rows {
             guard let st = visualStates[row.index] else { continue }
-            let y = lastAppliedYByRowID[row.id] ?? 0
+            let y = lastAppliedYByIndex[row.index] ?? 0
             let h = measuredHeightsByIndex[row.index] ?? 0
             // The actual applied opacity (the row's visual-spring output), plus the bright karaoke
             // overlay — the channel model-opacity misses. >1 overlay at once = the bloom signature.

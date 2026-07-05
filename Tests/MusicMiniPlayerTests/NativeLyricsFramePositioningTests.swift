@@ -35,6 +35,14 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
         hostWindow = window
     }
 
+    @MainActor
+    private func spin(_ seconds: TimeInterval) {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
+        }
+    }
+
     private func songRows(count: Int) -> [LayerBackedLyricRow] {
         (0..<count).map { i in
             let line = LyricLine(text: "Lyric line number \(i) for positioning",
@@ -46,9 +54,14 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
     }
 
     @MainActor
-    private func config(rows: [LayerBackedLyricRow], currentIndex: Int) -> LyricsLayerRendererConfiguration {
+    private func config(
+        rows: [LayerBackedLyricRow],
+        currentIndex: Int,
+        musicController: MusicController? = nil
+    ) -> LyricsLayerRendererConfiguration {
         var heights: [Int: CGFloat] = [:]
         for r in rows { heights[r.index] = CGFloat(r.index) * 56 }
+        let controller = musicController ?? MusicController(preview: true)
         return LyricsLayerRendererConfiguration(
             rows: rows, currentIndex: currentIndex, anchorY: 250, rowWidth: 320,
             renderedIndices: rows.map(\.index), accumulatedHeights: heights, lineTargetIndices: [:],
@@ -57,7 +70,7 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
             isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: false, reduceMotion: false,
             suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: false,
             isTranslating: false, translationFailed: false, interludeAfterIndex: nil, directSnapRequest: nil,
-            controlsVisible: false, musicController: MusicController(preview: true),
+            controlsVisible: false, musicController: controller,
             onLineTap: { _ in }, onDirectSnapConsumed: { _ in }, onManualScrollStarted: { _ in },
             onManualScrollDelta: { _, _ in }, onManualScrollEnded: {}, onManualScrollRecovered: {},
             onManualScrollChromeReset: nil, onHeightMeasured: { _, _ in }, lineMotionSamplingEnabled: false,
@@ -92,5 +105,42 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
         if let active = surface.debugRowView(forIndex: 30) {
             XCTAssertEqual(active.frame.origin.y, 250, accuracy: 40, "the seeked-to active line sits at the anchor")
         }
+    }
+
+    @MainActor
+    func test_reenteringNaturalRowKeepsYHistoryAcrossUnmount() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface, size: NSSize(width: 360, height: 600))
+        let rows = songRows(count: 60)
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+
+        mc.syncPlaybackClock(to: rows[10].displayLine.line.startTime + 0.5, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 10, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+        spin(0.9)
+        guard let initial = surface.debugRowView(forIndex: 0)?.frame.origin.y else {
+            return XCTFail("row 0 should mount near the first viewport")
+        }
+
+        mc.syncPlaybackClock(to: rows[40].displayLine.line.startTime + 0.5, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 40, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+        XCTAssertNil(surface.debugRowView(forIndex: 0), "row 0 should be culled before the re-entry check")
+
+        mc.syncPlaybackClock(to: rows[12].displayLine.line.startTime + 0.5, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 12, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+        guard let reentered = surface.debugRowView(forIndex: 0)?.frame.origin.y else {
+            return XCTFail("row 0 should re-enter near current index 12")
+        }
+
+        let targetWithoutHistory = CGFloat(250 - 12 * 56)
+        XCTAssertLessThan(
+            abs(reentered - initial),
+            abs(targetWithoutHistory - initial),
+            "a re-entering natural row should step from its last applied Y, not jump directly to the new snapped target"
+        )
     }
 }
