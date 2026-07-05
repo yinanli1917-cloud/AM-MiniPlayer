@@ -273,11 +273,25 @@ struct NativeLyricsTextPhaseSample: Equatable {
 struct NativeLyricsDotPhasePlan: Equatable {
     static let baseDotSize: CGFloat = 8
     static let baseDotSpacing: CGFloat = 6
+    private static let interludeBlendDelay: TimeInterval = 0.5
+    private static let interludeBlendDuration: TimeInterval = 2.5
 
     let opacities: [CGFloat]
     let scales: [CGFloat]
     let blur: CGFloat
     let overallOpacity: CGFloat
+
+    static func interludeBlend(
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        currentTime: TimeInterval
+    ) -> CGFloat {
+        guard currentTime >= startTime, currentTime < endTime else { return 0 }
+        let elapsed = currentTime - startTime - interludeBlendDelay
+        guard elapsed > 0 else { return 0 }
+        let progress = min(1, max(0, elapsed / interludeBlendDuration))
+        return CGFloat(1 - pow(1 - progress, 3))
+    }
 
     static func make(
         startTime: TimeInterval,

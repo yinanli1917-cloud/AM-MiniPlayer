@@ -58,6 +58,28 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         XCTAssertEqual(NativeLyricsDotPhasePlan.baseDotSpacing, 6)
     }
 
+    func testInterludeBlendPlanUsesTheDotTimelineWindow() {
+        XCTAssertEqual(
+            NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 10.25),
+            0,
+            accuracy: 0.0001
+        )
+
+        let mid = NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 11.75)
+        XCTAssertEqual(mid, 0.875, accuracy: 0.0001)
+
+        XCTAssertEqual(
+            NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 13.0),
+            1,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 15.0),
+            0,
+            accuracy: 0.0001
+        )
+    }
+
     func testTranslationLoadingDotsMatchLegacySizeSpacingAndSinePhase() {
         let plan = NativeLyricsTranslationLoadingDotPhasePlan.make(animationPhase: 0)
 

@@ -15,55 +15,6 @@ private let nativeLyricsTopLeadingReservedWidth: CGFloat = 150
 private let nativeLyricsTopTrailingReservedWidth: CGFloat = 72
 private let nativeLyricsBottomControlsReservedHeight: CGFloat = 148
 
-private struct NativeLyricsInterludeBlendState: Equatable {
-    private(set) var value: CGFloat
-    private(set) var target: CGFloat
-    private var startValue: CGFloat
-    private var startedAt: CFTimeInterval
-    private var delay: TimeInterval
-    private let duration: TimeInterval = 2.5
-
-    init(value: CGFloat = 0, now: CFTimeInterval = CACurrentMediaTime()) {
-        self.value = value
-        target = value
-        startValue = value
-        startedAt = now
-        delay = 0
-    }
-
-    var isSettled: Bool {
-        abs(value - target) < 0.001
-    }
-
-    mutating func setTarget(_ nextTarget: CGFloat, now: CFTimeInterval) -> Bool {
-        let clampedTarget = min(1, max(0, nextTarget))
-        guard abs(target - clampedTarget) > 0.001 else { return false }
-        value = currentValue(at: now)
-        target = clampedTarget
-        startValue = value
-        startedAt = now
-        delay = clampedTarget > value ? 0.5 : 0
-        return true
-    }
-
-    mutating func value(at now: CFTimeInterval) -> CGFloat {
-        value = currentValue(at: now)
-        if isSettled {
-            value = target
-        }
-        return value
-    }
-
-    private func currentValue(at now: CFTimeInterval) -> CGFloat {
-        let elapsed = max(0, now - startedAt - delay)
-        guard elapsed > 0 else { return startValue }
-        if elapsed >= duration { return target }
-        let t = CGFloat(elapsed / duration)
-        let eased = 1 - pow(1 - t, 3)
-        return startValue + (target - startValue) * eased
-    }
-}
-
 private final class NativeLyricsDisplayLinkScheduler {
     private let lock = NSLock()
     private var isTickQueued = false
@@ -479,7 +430,6 @@ final class NativeLyricsSurfaceView: NSView {
     private var visualParitySignatures: [String: VisualParitySignature] = [:]
     private var rowFrameParitySignatures: [String: RowFrameParitySignature] = [:]
     private var visualStates: [Int: NativeLyricsVisualMotionState] = [:]
-    private var interludeBlendStates: [Int: NativeLyricsInterludeBlendState] = [:]
     nonisolated(unsafe) private let displayLinkScheduler = NativeLyricsDisplayLinkScheduler()
     private var rowTapHandlers: [Int: () -> Void] = [:]
     private var measuredHeightsByIndex: [Int: CGFloat] = [:]
@@ -849,7 +799,6 @@ final class NativeLyricsSurfaceView: NSView {
             presentationEngine.resetForTrackChange()
             forceSnapUntil = CACurrentMediaTime() + 0.8
             visualStates.removeAll()
-            interludeBlendStates.removeAll()
             measuredHeightsByIndex.removeAll()
             lastAppliedYByIndex.removeAll()
             nativeSemanticCurrentIndex = nil
@@ -1057,11 +1006,8 @@ final class NativeLyricsSurfaceView: NSView {
         rowTapHandlers = rowTapHandlers.filter { rowIndex, _ in
             visibleRows.contains { $0.index == rowIndex }
         }
-        let visibleIndexSet = Set(visibleRows.map(\.index))
         let currentIndexSet = Set(runtimeConfiguration.rows.map(\.index))
         visualStates = visualStates.filter { currentIndexSet.contains($0.key) }
-        interludeBlendStates = interludeBlendStates.filter { visibleIndexSet.contains($0.key) }
-
         let visualTargetsChanged = syncVisualTargets(
             runtimeConfiguration: runtimeConfiguration,
             visibleRows: visibleRows,
@@ -1246,8 +1192,9 @@ final class NativeLyricsSurfaceView: NSView {
         // above, the rows below stay below — exactly a line in the wave. Living in the anchor
         // (not a post-engine offset) keeps the interlude→next-line handoff a small spring, not a
         // reset jump. Ramped smoothly by interludeBlend.
-        if let interludeIdx = runtimeConfiguration.interludeAfterIndex {
-            let blend = interludeBlend(for: interludeIdx, isPrecedingInterlude: true, now: CACurrentMediaTime())
+        if let interludeIdx = runtimeConfiguration.interludeAfterIndex,
+           let row = runtimeConfiguration.rows.first(where: { $0.index == interludeIdx }) {
+            let blend = interludeBlend(for: row, configuration: runtimeConfiguration)
             let interludeRowHeight = measuredHeightsByIndex[interludeIdx] ?? 36
             runtimeConfiguration.anchorY -= blend * (interludeRowHeight + NativeLyricsHeightAccumulator.interludeGapHeight / 2)
         }
@@ -1481,7 +1428,6 @@ final class NativeLyricsSurfaceView: NSView {
         lastTextPhaseUpdateAt = nil
         pendingTapToLineSettleTiming = nil
         visualStates.removeAll()
-        interludeBlendStates.removeAll()
         measuredHeightsByIndex.removeAll()
         stopNativeLineMotionSamplingTimer()
         presentationEngine.stop()
@@ -1532,7 +1478,6 @@ final class NativeLyricsSurfaceView: NSView {
 
     private var hasActiveVisualMotion: Bool {
         visualStates.values.contains { !$0.isSettled }
-            || interludeBlendStates.values.contains { !$0.isSettled }
     }
 
     @discardableResult
@@ -1545,10 +1490,9 @@ final class NativeLyricsSurfaceView: NSView {
             visibleRows: visibleRows ?? self.visibleRows(for: runtimeConfiguration),
             configuration: runtimeConfiguration
         )
-        let now = CACurrentMediaTime()
         var changed = false
         for row in rows {
-            let target = visualTarget(for: row, configuration: runtimeConfiguration, now: now)
+            let target = visualTarget(for: row, configuration: runtimeConfiguration)
             if visualStates[row.index] == nil {
                 visualStates[row.index] = NativeLyricsVisualMotionState(target: target)
                 changed = true
@@ -1596,15 +1540,9 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func visualTarget(
         for row: LayerBackedLyricRow,
-        configuration: LyricsLayerRendererConfiguration,
-        now: CFTimeInterval
+        configuration: LyricsLayerRendererConfiguration
     ) -> NativeLyricsVisualTarget {
-        let isPrecedingInterlude = configuration.interludeAfterIndex == row.index
-        let blend = interludeBlend(
-            for: row.index,
-            isPrecedingInterlude: isPrecedingInterlude,
-            now: now
-        )
+        let blend = interludeBlend(for: row, configuration: configuration)
         let visualCurrentIndex = visualCurrentIndex(for: row, configuration: configuration)
         let visualHotActiveIndices = visualCurrentIndex == configuration.effectiveCurrentIndex
             ? configuration.nativeHotActiveIndices
@@ -1636,16 +1574,18 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private func interludeBlend(
-        for rowIndex: Int,
-        isPrecedingInterlude: Bool,
-        now: CFTimeInterval
+        for row: LayerBackedLyricRow,
+        configuration: LyricsLayerRendererConfiguration
     ) -> CGFloat {
-        let nextTarget: CGFloat = isPrecedingInterlude ? 1 : 0
-        if interludeBlendStates[rowIndex] == nil {
-            interludeBlendStates[rowIndex] = NativeLyricsInterludeBlendState(value: 0, now: now)
+        guard configuration.interludeAfterIndex == row.index,
+              let interlude = row.interlude else {
+            return 0
         }
-        _ = interludeBlendStates[rowIndex]?.setTarget(nextTarget, now: now)
-        return interludeBlendStates[rowIndex]?.value(at: now) ?? nextTarget
+        return NativeLyricsDotPhasePlan.interludeBlend(
+            startTime: interlude.startTime,
+            endTime: interlude.endTime,
+            currentTime: configuration.musicController.lyricRenderTime()
+        )
     }
 
     /// Largest per-tick position change a row may take in NATURAL mode. Springs peak
@@ -1690,7 +1630,6 @@ final class NativeLyricsSurfaceView: NSView {
         configuration: LyricsLayerRendererConfiguration,
         snap: Bool
     ) -> NativeLyricsFrameRenderSnapshot {
-        let now = CACurrentMediaTime()
         var rowsByIndex: [Int: NativeLyricsFrameRowSnapshot] = [:]
         for row in rows {
             let engineState = snap ? nil : presentationEngine.presentation(for: row.index)
@@ -1726,7 +1665,7 @@ final class NativeLyricsSurfaceView: NSView {
             if let state = visualStates[row.index] {
                 visual = state
             } else {
-                let fallbackTarget = visualTarget(for: row, configuration: configuration, now: now)
+                let fallbackTarget = visualTarget(for: row, configuration: configuration)
                 visual = NativeLyricsVisualMotionState(target: fallbackTarget)
             }
             let fallbackHeight = rowViews[row.id].map { max(1, $0.frame.height) } ?? 1
