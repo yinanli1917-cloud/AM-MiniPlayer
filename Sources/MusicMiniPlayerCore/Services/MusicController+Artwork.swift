@@ -251,21 +251,23 @@ extension MusicController {
         }
 
         // ━━━ Path 0: Music.app UI cache — exact local cover, may arrive after the notification ━━━
-        Task { [weak self] in
-            guard let self else { return }
-            guard let image = await self.withArtworkTimeout(seconds: 1.6, operation: {
-                await PlaybackSessionArtworkFetcher.fetchArtwork(title: title, artist: artist, album: album)
-            }) else { return }
-            await MainActor.run {
-                self.applyArtworkIfCurrent(
-                    image,
-                    persistentID: persistentID,
-                    title: title,
-                    artist: artist,
-                    album: album,
-                    generation: generation,
-                    source: .playbackSession
-                )
+        if !isPreview {
+            Task { [weak self] in
+                guard let self else { return }
+                guard let image = await self.withArtworkTimeout(seconds: 1.6, operation: {
+                    await PlaybackSessionArtworkFetcher.fetchArtwork(title: title, artist: artist, album: album)
+                }) else { return }
+                await MainActor.run {
+                    self.applyArtworkIfCurrent(
+                        image,
+                        persistentID: persistentID,
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        generation: generation,
+                        source: .playbackSession
+                    )
+                }
             }
         }
 
@@ -320,38 +322,40 @@ extension MusicController {
         // from a hung IPC without deallocating the SBApplication; the stuck AE
         // call leaks one thread until Music.app eventually replies — bounded
         // and safe.
-        artworkQueue.async { [weak self] in
-            guard let self = self else { return }
-            defer { DispatchQueue.main.async { self.lastArtworkQueueHeartbeat = Date() } }
+        if !isPreview {
+            artworkQueue.async { [weak self] in
+                guard let self = self else { return }
+                defer { DispatchQueue.main.async { self.lastArtworkQueueHeartbeat = Date() } }
 
-            // NEVER fall back to musicApp — accessing the same SBApplication from two
-            // queues concurrently corrupts AppleEvent state (EXC_BAD_ACCESS crash).
-            let app: SBApplication
-            if let existing = self.artworkApp {
-                app = existing
-            } else if let fresh = SBApplication(bundleIdentifier: "com.apple.Music") {
-                self.artworkApp = fresh
-                app = fresh
-            } else {
-                return
-            }
-            guard app.isRunning else { return }
-            guard self.artworkFetchGeneration == generation else {
-                self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
-                self.recordDiagnosticsArtworkDropped(
-                    track: trackContext,
-                    generation: generation,
-                    source: ArtworkSource.sb.diagnosticName,
-                    reason: "generationMismatchBeforeFetch"
-                )
-                return
-            }
+                // NEVER fall back to musicApp — accessing the same SBApplication from two
+                // queues concurrently corrupts AppleEvent state (EXC_BAD_ACCESS crash).
+                let app: SBApplication
+                if let existing = self.artworkApp {
+                    app = existing
+                } else if let fresh = SBApplication(bundleIdentifier: "com.apple.Music") {
+                    self.artworkApp = fresh
+                    app = fresh
+                } else {
+                    return
+                }
+                guard app.isRunning else { return }
+                guard self.artworkFetchGeneration == generation else {
+                    self.logToFile("🎨 [SB] stale gen \(generation) vs \(self.artworkFetchGeneration), skipping")
+                    self.recordDiagnosticsArtworkDropped(
+                        track: trackContext,
+                        generation: generation,
+                        source: ArtworkSource.sb.diagnosticName,
+                        reason: "generationMismatchBeforeFetch"
+                    )
+                    return
+                }
 
-            self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
-            if let image = self.getArtworkImageFromApp(app) {
-                self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
-                DispatchQueue.main.async {
-                    self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .sb)
+                self.logToFile("🎨 [SB] Starting ScriptingBridge fetch...")
+                if let image = self.getArtworkImageFromApp(app) {
+                    self.logToFile("🎨 [SB] SUCCESS! Got image \(image.size)")
+                    DispatchQueue.main.async {
+                        self.applyArtworkIfCurrent(image, persistentID: persistentID, title: title, artist: artist, album: album, generation: generation, source: .sb)
+                    }
                 }
             }
         }

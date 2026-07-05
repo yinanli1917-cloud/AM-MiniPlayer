@@ -230,17 +230,21 @@ final class RapidSwitchTests: XCTestCase {
 
     func testArtworkCacheMissKeepsPreviousArtworkBrieflyUntilReplacement() async throws {
         let c = MusicController(preview: true)
-        c.currentTrackTitle = "Tout tout"
-        c.currentArtist = "Miel De Montagne & Blasé"
+        let nonce = UUID().uuidString
+        let title = "Tout tout missing \(nonce)"
+        let artist = "Miel De Montagne & Blasé"
+        let album = "Ouin Ouin Ouin missing \(nonce)"
+        c.currentTrackTitle = title
+        c.currentArtist = artist
         c.currentArtwork = NSImage(size: NSSize(width: 12, height: 12))
         c.currentArtworkIsPlaceholder = false
         c.appliedArtworkGeneration = 0
         let generation = c.incrementGeneration()
 
         c.fetchArtwork(
-            for: "Tout tout",
-            artist: "Miel De Montagne & Blasé",
-            album: "Ouin Ouin Ouin (Deluxe Edition)",
+            for: title,
+            artist: artist,
+            album: album,
             persistentID: "",
             generation: generation
         )
@@ -258,17 +262,21 @@ final class RapidSwitchTests: XCTestCase {
 
     func testInitialPlaceholderDoesNotCountAsRealArtworkForGeneration() async throws {
         let c = MusicController(preview: true)
-        c.currentTrackTitle = "Missing Cover"
-        c.currentArtist = "Diagnostics"
-        c.currentAlbum = "Debug Album"
+        let nonce = UUID().uuidString
+        let title = "Missing Cover \(nonce)"
+        let artist = "Diagnostics"
+        let album = "Debug Album \(nonce)"
+        c.currentTrackTitle = title
+        c.currentArtist = artist
+        c.currentAlbum = album
         c.currentArtwork = nil
         c.currentArtworkIsPlaceholder = false
         let generation = c.incrementGeneration()
 
         c.fetchArtwork(
-            for: "Missing Cover",
-            artist: "Diagnostics",
-            album: "Debug Album",
+            for: title,
+            artist: artist,
+            album: album,
             persistentID: "",
             generation: generation
         )
