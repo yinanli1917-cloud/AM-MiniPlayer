@@ -143,4 +143,44 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
             "a re-entering natural row should step from its last applied Y, not jump directly to the new snapped target"
         )
     }
+
+    @MainActor
+    func test_reenteringNaturalRowKeepsVisualHistoryAcrossUnmount() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface, size: NSSize(width: 360, height: 600))
+        let rows = songRows(count: 60)
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+
+        mc.syncPlaybackClock(to: rows[0].displayLine.line.startTime + 0.5, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 0, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+        spin(0.9)
+        guard let initialView = surface.debugRowView(forIndex: 0) else {
+            return XCTFail("row 0 should mount as the initial active row")
+        }
+        let initialOpacity = CGFloat(initialView.debugRowLayerOpacity)
+        XCTAssertGreaterThan(initialOpacity, 0.9, "row 0 should start from the active visual state")
+
+        mc.syncPlaybackClock(to: rows[40].displayLine.line.startTime + 0.5, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 40, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+        XCTAssertNil(surface.debugRowView(forIndex: 0), "row 0 should be culled before the visual re-entry check")
+
+        mc.syncPlaybackClock(to: rows[12].displayLine.line.startTime + 0.5, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 12, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+        guard let reenteredView = surface.debugRowView(forIndex: 0) else {
+            return XCTFail("row 0 should re-enter near current index 12")
+        }
+
+        let reenteredOpacity = CGFloat(reenteredView.debugRowLayerOpacity)
+        XCTAssertGreaterThan(
+            reenteredOpacity,
+            0.6,
+            "a quickly re-entering natural row should keep fading from its prior visual state, not snap straight to inactive opacity"
+        )
+        XCTAssertLessThanOrEqual(reenteredOpacity, initialOpacity + 0.01)
+    }
 }

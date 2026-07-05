@@ -1046,7 +1046,8 @@ final class NativeLyricsSurfaceView: NSView {
             visibleRows.contains { $0.index == rowIndex }
         }
         let visibleIndexSet = Set(visibleRows.map(\.index))
-        visualStates = visualStates.filter { visibleIndexSet.contains($0.key) }
+        let currentIndexSet = Set(runtimeConfiguration.rows.map(\.index))
+        visualStates = visualStates.filter { currentIndexSet.contains($0.key) }
         interludeBlendStates = interludeBlendStates.filter { visibleIndexSet.contains($0.key) }
 
         let visualTargetsChanged = syncVisualTargets(
@@ -1079,7 +1080,6 @@ final class NativeLyricsSurfaceView: NSView {
                 rowTapHandlers[row.index] = tapHandler
                 let isDeferredDeactivation = row.index == deferredDeactivationIndex
                 if isDeferredDeactivation {
-                    applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
                     continue
                 }
                 let contentUpdated = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
@@ -1088,6 +1088,14 @@ final class NativeLyricsSurfaceView: NSView {
                 if needsActivationRefresh && !contentUpdated {
                     view.configure(row: row, configuration: runtimeConfiguration)
                 }
+            }
+            let renderSnapshot = nativeFrameRenderSnapshot(
+                rows: visibleRows,
+                configuration: runtimeConfiguration,
+                snap: snapPositions
+            )
+            for row in visibleRows {
+                guard let view = rowViews[row.id] else { continue }
                 // Set the row's frame FIRST, then (for the active row only) force its text
                 // sublayers to lay out BEFORE applying the karaoke phase. updatePlaybackPhase's
                 // per-word sweep needs the bright text-layer bounds; if it runs while the bounds
@@ -1095,7 +1103,8 @@ final class NativeLyricsSurfaceView: NSView {
                 // applyActiveMainPhase falls back to the whole-line (line-level) sweep — the
                 // "word-level lyrics inexplicably become line-level" symptom. Laying the active
                 // row out here makes geometryReady true on the very first phase application.
-                applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snapPositions)
+                applyFrame(for: row, view: view, configuration: runtimeConfiguration, renderSnapshot: renderSnapshot)
+                guard row.index != deferredDeactivationIndex else { continue }
                 if row.index == activeTextPhaseIndex {
                     if view.frame.size != .zero {
                         view.layoutSubtreeIfNeeded()
@@ -1527,7 +1536,10 @@ final class NativeLyricsSurfaceView: NSView {
         visibleRows: [LayerBackedLyricRow]? = nil,
         snap: Bool
     ) -> Bool {
-        let rows = visibleRows ?? self.visibleRows(for: runtimeConfiguration)
+        let rows = visualRowsToSync(
+            visibleRows: visibleRows ?? self.visibleRows(for: runtimeConfiguration),
+            configuration: runtimeConfiguration
+        )
         let now = CACurrentMediaTime()
         var changed = false
         for row in rows {
@@ -1551,6 +1563,18 @@ final class NativeLyricsSurfaceView: NSView {
             }
         }
         return changed
+    }
+
+    private func visualRowsToSync(
+        visibleRows: [LayerBackedLyricRow],
+        configuration: LyricsLayerRendererConfiguration
+    ) -> [LayerBackedLyricRow] {
+        var rowsByIndex = Dictionary(uniqueKeysWithValues: visibleRows.map { ($0.index, $0) })
+        let allRowsByIndex = Dictionary(uniqueKeysWithValues: configuration.rows.map { ($0.index, $0) })
+        for index in visualStates.keys where rowsByIndex[index] == nil {
+            rowsByIndex[index] = allRowsByIndex[index]
+        }
+        return rowsByIndex.values.sorted { $0.index < $1.index }
     }
 
     @discardableResult
@@ -1643,6 +1667,77 @@ final class NativeLyricsSurfaceView: NSView {
         return abs(presentationY - modelY) > unpositionedDivergenceThreshold
     }
 
+    private struct NativeLyricsFrameRowSnapshot {
+        let requestedY: CGFloat
+        let y: CGFloat
+        let height: CGFloat
+        let visual: NativeLyricsVisualMotionState
+        let snap: Bool
+        let engineBacked: Bool
+    }
+
+    private struct NativeLyricsFrameRenderSnapshot {
+        let rowsByIndex: [Int: NativeLyricsFrameRowSnapshot]
+    }
+
+    private func nativeFrameRenderSnapshot(
+        rows: [LayerBackedLyricRow],
+        configuration: LyricsLayerRendererConfiguration,
+        snap: Bool
+    ) -> NativeLyricsFrameRenderSnapshot {
+        let now = CACurrentMediaTime()
+        var rowsByIndex: [Int: NativeLyricsFrameRowSnapshot] = [:]
+        for row in rows {
+            let engineState = snap ? nil : presentationEngine.presentation(for: row.index)
+            let baseY = NativeLyricsSnapMath.renderY(
+                snap: snap,
+                engineY: engineState?.y,
+                snappedY: snapY(for: row, configuration: configuration)
+            )
+            let requestedY = baseY + configuration.effectiveManualOffset
+            var y = requestedY
+            // Teleport guard: a settled row must never jump a large distance for a single
+            // tick in natural mode, whatever upstream produced the value (engine entry
+            // momentarily missing → snapY fallback, or a configure carrying mid-update
+            // heights). Step toward the new value instead; real springs converge well
+            // under the cap, glitch spikes get absorbed and self-correct next tick.
+            if !snap, let previous = lastAppliedYByIndex[row.index] {
+                let delta = requestedY - previous
+                if abs(delta) > Self.naturalModeMaxYStepPerTick {
+                    y = previous + Self.naturalModeMaxYStepPerTick * (delta > 0 ? 1 : -1)
+                    #if LOCAL_DEVELOPER_BUILD
+                    noteTeleportClamp(
+                        rowID: row.id,
+                        rowIndex: row.index,
+                        requestedY: requestedY,
+                        previousY: previous,
+                        engineBacked: engineState != nil
+                    )
+                    #endif
+                }
+            }
+            lastAppliedYByIndex[row.index] = y
+            let visual: NativeLyricsVisualMotionState
+            if let state = visualStates[row.index] {
+                visual = state
+            } else {
+                let fallbackTarget = visualTarget(for: row, configuration: configuration, now: now)
+                visual = NativeLyricsVisualMotionState(target: fallbackTarget)
+            }
+            let fallbackHeight = rowViews[row.id].map { max(1, $0.frame.height) } ?? 1
+            let height = measuredHeightsByIndex[row.index] ?? fallbackHeight
+            rowsByIndex[row.index] = NativeLyricsFrameRowSnapshot(
+                requestedY: requestedY,
+                y: y,
+                height: height,
+                visual: visual,
+                snap: snap,
+                engineBacked: snap || engineState != nil
+            )
+        }
+        return NativeLyricsFrameRenderSnapshot(rowsByIndex: rowsByIndex)
+    }
+
     /// lyricRenderTime (the clock the renderer reads) may step BACKWARD by up to the clock's own
     /// non-seek window when a poll resync corrects interpolation overshoot. MusicController treats a
     /// backward jump as a real seek only above ~2s (it hard-syncs there); anything below is resync
@@ -1658,34 +1753,12 @@ final class NativeLyricsSurfaceView: NSView {
         for row: LayerBackedLyricRow,
         view: NativeLyricsRowView,
         configuration: LyricsLayerRendererConfiguration,
-        snap: Bool
+        renderSnapshot: NativeLyricsFrameRenderSnapshot
     ) {
-        let engineState = snap ? nil : presentationEngine.presentation(for: row.index)
-        let baseY = NativeLyricsSnapMath.renderY(
-            snap: snap,
-            engineY: engineState?.y,
-            snappedY: snapY(for: row, configuration: configuration)
-        )
-        let requestedY = baseY + configuration.effectiveManualOffset
-        var y = requestedY
-        // Teleport guard: a settled row must never jump a large distance for a single
-        // tick in natural mode, whatever upstream produced the value (engine entry
-        // momentarily missing → snapY fallback, or a configure carrying mid-update
-        // heights). Step toward the new value instead; real springs converge well
-        // under the cap, glitch spikes get absorbed and self-correct next tick.
-        if !snap, let previous = lastAppliedYByIndex[row.index] {
-            let delta = requestedY - previous
-            if abs(delta) > Self.naturalModeMaxYStepPerTick {
-                y = previous + Self.naturalModeMaxYStepPerTick * (delta > 0 ? 1 : -1)
-                #if LOCAL_DEVELOPER_BUILD
-                noteTeleportClamp(rowID: row.id, rowIndex: row.index, requestedY: requestedY, previousY: previous, engineBacked: engineState != nil)
-                #endif
-            }
-        }
-        lastAppliedYByIndex[row.index] = y
-        let fallbackTarget = visualTarget(for: row, configuration: configuration, now: CACurrentMediaTime())
-        let visual = visualStates[row.index] ?? NativeLyricsVisualMotionState(target: fallbackTarget)
-        let height = measuredHeightsByIndex[row.index] ?? max(1, view.frame.height)
+        guard let rowSnapshot = renderSnapshot.rowsByIndex[row.index] else { return }
+        let y = rowSnapshot.y
+        let visual = rowSnapshot.visual
+        let height = rowSnapshot.height
         // Position the row by its FRAME origin (AppKit preserves it across the commit), not a layer
         // transform translation (which AppKit resets to the origin on every commit = the bloom).
         let frame = CGRect(x: 0, y: y, width: configuration.rowWidth, height: max(1, height))
@@ -1741,12 +1814,12 @@ final class NativeLyricsSurfaceView: NSView {
         recordVisualTrajectory(
             rowID: row.id,
             rowIndex: row.index,
-            y: requestedY,
+            y: rowSnapshot.requestedY,
             opacity: visual.opacity,
             blur: appliedBlur,
             scale: visual.scale,
-            snap: snap,
-            engineBacked: snap || engineState != nil
+            snap: rowSnapshot.snap,
+            engineBacked: rowSnapshot.engineBacked
         )
         #endif
     }
@@ -2038,9 +2111,20 @@ final class NativeLyricsSurfaceView: NSView {
                 self.debugClockTrace.append(self.nativeRenderClock ?? -1)
             }
             #endif
+            let rowsToApply = self.rowViews.values.compactMap(\.currentRow)
+            let renderSnapshot = self.nativeFrameRenderSnapshot(
+                rows: rowsToApply,
+                configuration: runtimeConfiguration,
+                snap: snap
+            )
             for view in self.rowViews.values {
                 guard let row = view.currentRow else { continue }
-                self.applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: snap)
+                self.applyFrame(
+                    for: row,
+                    view: view,
+                    configuration: runtimeConfiguration,
+                    renderSnapshot: renderSnapshot
+                )
             }
             self.updateSurfaceInterludeDots(configuration: runtimeConfiguration, snap: snap)
             // Rows just moved — re-resolve hover so it follows the geometry under a stationary cursor.
@@ -3131,10 +3215,24 @@ final class NativeLyricsSurfaceView: NSView {
             snap: false
         )
         withDisabledLayerActions {
-            for row in visibleRows(for: runtimeConfiguration) {
+            let rows = visibleRows(for: runtimeConfiguration)
+            for row in rows {
                 guard let view = rowViews[row.id] else { continue }
                 updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
-                applyFrame(for: row, view: view, configuration: runtimeConfiguration, snap: false)
+            }
+            let renderSnapshot = nativeFrameRenderSnapshot(
+                rows: rows,
+                configuration: runtimeConfiguration,
+                snap: false
+            )
+            for row in rows {
+                guard let view = rowViews[row.id] else { continue }
+                applyFrame(
+                    for: row,
+                    view: view,
+                    configuration: runtimeConfiguration,
+                    renderSnapshot: renderSnapshot
+                )
             }
         }
         if visualTargetsChanged || presentationEngine.hasActiveMotion || hasActiveVisualMotion || hasActiveTextAnimation(configuration: runtimeConfiguration) {
