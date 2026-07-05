@@ -1570,13 +1570,33 @@ final class NativeLyricsSurfaceView: NSView {
             isPrecedingInterlude: isPrecedingInterlude,
             now: now
         )
+        let visualCurrentIndex = visualCurrentIndex(for: row, configuration: configuration)
+        let visualHotActiveIndices = visualCurrentIndex == configuration.effectiveCurrentIndex
+            ? configuration.nativeHotActiveIndices
+            : [visualCurrentIndex]
         return NativeLyricsVisualTarget.amllTarget(
             displayIndex: row.index,
-            currentIndex: configuration.effectiveCurrentIndex,
-            scrollTargetIndex: configuration.effectiveScrollTargetIndex,
-            hotActiveIndices: configuration.nativeHotActiveIndices,
+            currentIndex: visualCurrentIndex,
+            scrollTargetIndex: visualCurrentIndex,
+            hotActiveIndices: visualHotActiveIndices,
             isManualScrolling: configuration.effectiveIsManualScrolling,
             interludeBlend: blend
+        )
+    }
+
+    private func visualCurrentIndex(
+        for row: LayerBackedLyricRow,
+        configuration: LyricsLayerRendererConfiguration
+    ) -> Int {
+        guard configuration.playbackMode == .natural,
+              !configuration.effectiveIsManualScrolling,
+              configuration.interludeAfterIndex == nil,
+              presentationEngine.isNaturalWaveActive else {
+            return configuration.effectiveCurrentIndex
+        }
+        return presentationEngine.targetIndex(
+            for: row.index,
+            fallback: configuration.effectiveScrollTargetIndex
         )
     }
 
@@ -2234,6 +2254,7 @@ final class NativeLyricsSurfaceView: NSView {
             previousTimelineState: previousTimelineState,
             runtimeConfiguration: runtimeConfiguration
         )
+        let motionChanged = presentationEngine.advance(delta: delta)
         let visualTargetsChanged = shouldSyncVisualTargetsOnPresentationTick(
             semanticChanged: semanticChanged,
             runtimeConfiguration: runtimeConfiguration
@@ -2241,7 +2262,6 @@ final class NativeLyricsSurfaceView: NSView {
             ? syncVisualTargets(runtimeConfiguration: runtimeConfiguration, snap: false)
             : false
         let visualMotionChanged = advanceVisualStates(delta: delta)
-        let motionChanged = presentationEngine.advance(delta: delta)
         let shouldApplyManualPresentation = manualPresentationNeedsApply
         let activeTextLineChanged = previousSemanticIndex != runtimeConfiguration.effectiveCurrentIndex
         #if LOCAL_DEVELOPER_BUILD
@@ -2656,6 +2676,7 @@ final class NativeLyricsSurfaceView: NSView {
         semanticChanged
             || runtimeConfiguration.effectiveIsManualScrolling
             || runtimeConfiguration.interludeAfterIndex != nil
+            || presentationEngine.isNaturalWaveActive
             || visualStates.isEmpty
     }
 

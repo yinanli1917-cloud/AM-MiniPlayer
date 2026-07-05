@@ -92,6 +92,29 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
     }
 
     @MainActor
+    private func drive(
+        surface: NativeLyricsSurfaceView,
+        musicController: MusicController,
+        rows: [LayerBackedLyricRow],
+        from startPlaybackTime: TimeInterval,
+        duration: TimeInterval,
+        noisy: Bool = true
+    ) {
+        let startReal = Date()
+        var i = 0
+        while Date().timeIntervalSince(startReal) < duration {
+            let elapsed = Date().timeIntervalSince(startReal)
+            let playbackTime = noisy
+                ? noisyClock(step: i, base: startPlaybackTime + elapsed)
+                : startPlaybackTime + elapsed
+            musicController.syncPlaybackClock(to: playbackTime, playing: true)
+            surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: musicController))
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
+            i += 1
+        }
+    }
+
+    @MainActor
     func test_presentationCensus_noChannelFlickersAcrossHandoffs() {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
         host(surface, NSSize(width: 360, height: 600))
@@ -164,5 +187,79 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         }
 
         XCTAssertTrue(report.isEmpty, "presentation channels flickered (rise-then-fall in a short window):\n\(report.joined(separator: "\n"))")
+    }
+
+    @MainActor
+    func test_previousLineDoesNotFadeBeforeItStartsMovingAcrossHandoff() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+        let rows = makeRows(20)
+
+        let previousIndex = 5
+        let nextIndex = previousIndex + 1
+        let previousStart = rows[previousIndex].displayLine.line.startTime
+        let handoffTime = rows[nextIndex].displayLine.line.startTime
+
+        mc.syncPlaybackClock(to: previousStart + 0.35, playing: true)
+        surface.configure(config(rows, current: previousIndex, mc: mc))
+        surface.layoutSubtreeIfNeeded()
+        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 0.35, duration: 0.25, noisy: false)
+
+        surface.debugResetCensus()
+        surface.debugCensusEnabled = true
+        drive(surface: surface, musicController: mc, rows: rows, from: handoffTime - 0.08, duration: 1.2, noisy: false)
+
+        guard let track = surface.debugCensusByIndex[previousIndex] else {
+            return XCTFail("previous row \(previousIndex) must stay mounted across the handoff")
+        }
+        let count = min(track.opacity.count, track.y.count, surface.debugSemanticTrace.count)
+        XCTAssertGreaterThan(count, 8, "precondition: handoff drive must paint enough frames")
+        let semantics = Array(surface.debugSemanticTrace.prefix(count))
+        let opacity = Array(track.opacity.prefix(count))
+        let y = Array(track.y.prefix(count))
+        guard let handoffFrame = semantics.firstIndex(of: nextIndex) else {
+            return XCTFail("semantic index never advanced to \(nextIndex); trace=\(semantics)")
+        }
+
+        let baselineY = y.prefix(max(3, handoffFrame)).reduce(0, +) / CGFloat(max(3, handoffFrame))
+        let baselineOpacity = opacity.prefix(max(3, handoffFrame)).max() ?? opacity[handoffFrame]
+        let motionThreshold: CGFloat = 0.5
+        let firstMotionFrame = y[0..<count].firstIndex {
+            abs($0 - baselineY) > motionThreshold
+        } ?? count - 1
+        let firstOpacityDropFrame = opacity[0..<count].firstIndex {
+            baselineOpacity - $0 > 0.02
+        } ?? count - 1
+        let preMotionRange = min(firstOpacityDropFrame, handoffFrame)...max(handoffFrame, firstMotionFrame - 1)
+        let minPreMotionOpacity = preMotionRange.map { opacity[$0] }.min() ?? opacity[handoffFrame]
+        let opacityDropBeforeMotion = baselineOpacity - minPreMotionOpacity
+        let maxYStep = zip(y, y.dropFirst()).map { abs($1 - $0) }.max() ?? 0
+
+        print(
+            "handoff previous=\(previousIndex) next=\(nextIndex) frame=\(handoffFrame) firstMotion=\(firstMotionFrame) firstOpacityDrop=\(firstOpacityDropFrame) " +
+            "opDropBeforeMotion=\(String(format: "%.3f", opacityDropBeforeMotion)) maxYStep=\(String(format: "%.2f", maxYStep)) baselineY=\(String(format: "%.1f", baselineY)) " +
+            "semantics=\(semantics[handoffFrame..<min(count, handoffFrame + 16)].map(String.init).joined(separator: ",")) " +
+            "op=\(opacity[handoffFrame..<min(count, handoffFrame + 16)].map { String(format: "%.3f", $0) }.joined(separator: ",")) " +
+            "y=\(y[handoffFrame..<min(count, handoffFrame + 16)].map { String(format: "%.1f", $0) }.joined(separator: ","))"
+        )
+
+        XCTAssertLessThanOrEqual(
+            firstMotionFrame,
+            firstOpacityDropFrame,
+            "previous row opacity started dropping before its Y started moving"
+        )
+        XCTAssertLessThanOrEqual(
+            opacityDropBeforeMotion,
+            0.02,
+            "previous row faded before its Y started moving; opacity and position are desynced"
+        )
+        XCTAssertLessThanOrEqual(
+            maxYStep,
+            12,
+            "previous row took a single-frame handoff step larger than the smooth-motion budget"
+        )
     }
 }
