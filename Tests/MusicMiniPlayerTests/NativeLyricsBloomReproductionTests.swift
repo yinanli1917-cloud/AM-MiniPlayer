@@ -130,6 +130,28 @@ final class NativeLyricsBloomReproductionTests: XCTestCase {
         return (bright, total)
     }
 
+    @MainActor
+    private func brightPercentAfterCommittedRender(
+        of view: NSView,
+        luminanceThreshold: UInt8,
+        timeout: TimeInterval = 1.0
+    ) -> Double? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastPercent: Double?
+        repeat {
+            view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
+            guard let rep = renderToBitmap(view) else { continue }
+            let (bright, total) = countBrightPixels(in: rep, luminanceThreshold: luminanceThreshold)
+            let percent = total > 0 ? Double(bright) / Double(total) * 100 : 0
+            lastPercent = percent
+            if percent > 0.5 {
+                return percent
+            }
+        } while Date() < deadline
+        return lastPercent
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // The reproduction test. Fresh surface mount (simulates page switch / first
     // load), render one frame into a bitmap, measure bright-pixel ratio. A bloom
@@ -208,37 +230,29 @@ final class NativeLyricsBloomReproductionTests: XCTestCase {
         let fewRows = songRows(count: 3, activeIndex: 1)
         surface.debugInitialMeasurementsPending = false
         surface.configure(makeConfiguration(rows: fewRows, currentIndex: 1))
-        surface.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-        if let rep = renderToBitmap(surface) {
-            let (b, t) = countBrightPixels(in: rep, luminanceThreshold: 60)
-            brightPcts.append(t > 0 ? Double(b)/Double(t)*100 : 0)
+        if let pct = brightPercentAfterCommittedRender(of: surface, luminanceThreshold: 60) {
+            brightPcts.append(pct)
         }
 
         // Stage 2: refined match (all rows arrive)
         let allRows = songRows(count: 25, activeIndex: 5)
         surface.debugSkipDedupe = true
         surface.configure(makeConfiguration(rows: allRows, currentIndex: 5))
-        surface.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-        if let rep = renderToBitmap(surface) {
-            let (b, t) = countBrightPixels(in: rep, luminanceThreshold: 60)
-            brightPcts.append(t > 0 ? Double(b)/Double(t)*100 : 0)
+        if let pct = brightPercentAfterCommittedRender(of: surface, luminanceThreshold: 60) {
+            brightPcts.append(pct)
         }
 
         // Stage 3: same rows, simulate translation arrival (different signature)
         surface.debugSkipDedupe = true
         surface.configure(makeConfiguration(rows: allRows, currentIndex: 5))
-        surface.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-        if let rep = renderToBitmap(surface) {
-            let (b, t) = countBrightPixels(in: rep, luminanceThreshold: 60)
-            brightPcts.append(t > 0 ? Double(b)/Double(t)*100 : 0)
+        if let pct = brightPercentAfterCommittedRender(of: surface, luminanceThreshold: 60) {
+            brightPcts.append(pct)
         }
 
         let pcts = brightPcts.map { String(format: "%.1f%%", $0) }.joined(separator: " → ")
         print("BLoomStorm: \(pcts)")
 
+        XCTAssertEqual(brightPcts.count, 3, "precondition: all staged loading frames should render")
         // No stage should spike above 15% — a bloom would push one stage far higher.
         for (i, pct) in brightPcts.enumerated() {
             XCTAssertLessThan(pct, 15.0,

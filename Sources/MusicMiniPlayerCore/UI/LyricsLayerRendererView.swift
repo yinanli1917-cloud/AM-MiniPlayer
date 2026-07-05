@@ -625,6 +625,13 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     deinit {
+        if let activeDisplayLink = displayLink {
+            CVDisplayLinkStop(activeDisplayLink)
+        }
+        nativeLineAdvanceTimer?.invalidate()
+        manualScrollEndTimer?.invalidate()
+        manualScrollRecoveryTimer?.invalidate()
+        nativeLineMotionSamplingTimer?.invalidate()
         if let localEventMonitor {
             NSEvent.removeMonitor(localEventMonitor)
         }
