@@ -70,6 +70,34 @@ final class NativeLyricsRenderSnapshotPositionTests: XCTestCase {
         XCTAssertEqual(y, 88, accuracy: 0.0001)
     }
 
+    func testTargetYCanAlignToPreludeDotCenterInsteadOfPreludeTop() {
+        let heights: [Int: CGFloat] = [0: 0, 1: 52]
+        let alignment = [0: NativeLyricsRowMeasurement.preludeDotCenterY]
+
+        XCTAssertEqual(
+            NativeLyricsSnapMath.targetY(
+                rowIndex: 0,
+                targetIndex: 0,
+                anchorY: 250,
+                accumulatedHeights: heights,
+                targetAlignmentOffsets: alignment
+            ),
+            250 - NativeLyricsRowMeasurement.preludeDotCenterY,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            NativeLyricsSnapMath.targetY(
+                rowIndex: 1,
+                targetIndex: 0,
+                anchorY: 250,
+                accumulatedHeights: heights,
+                targetAlignmentOffsets: alignment
+            ),
+            250 - NativeLyricsRowMeasurement.preludeDotCenterY + 52,
+            accuracy: 0.0001
+        )
+    }
+
     // ------------------------------------------------------------------------
     // Regression net — the helper must reproduce the legacy snapY computation
     // exactly, including the manual-scroll target-index override the snapshot

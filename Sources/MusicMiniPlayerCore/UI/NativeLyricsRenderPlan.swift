@@ -71,6 +71,19 @@ struct NativeLyricsRenderPlan: Equatable {
             defaultRowHeight: configuration.defaultRowHeight,
             rowSpacing: configuration.rowSpacing
         )
+        let roles = Dictionary(uniqueKeysWithValues: renderedIndices.compactMap { displayIndex -> (Int, NativeLyricsRenderRow.Role)? in
+            guard configuration.lyrics.indices.contains(displayIndex) else { return nil }
+            return (displayIndex, role(
+                displayIndex: displayIndex,
+                line: configuration.lyrics[displayIndex],
+                lyrics: configuration.lyrics,
+                firstRealLyricIndex: configuration.firstRealLyricIndex
+            ))
+        })
+        let targetAlignmentOffsets = Dictionary(uniqueKeysWithValues: roles.compactMap { entry -> (Int, CGFloat)? in
+            guard case .preludeDots = entry.value else { return nil }
+            return (entry.key, NativeLyricsRowMeasurement.preludeDotCenterY)
+        })
         let rows = renderedIndices.compactMap { displayIndex -> NativeLyricsRenderRow? in
             guard configuration.lyrics.indices.contains(displayIndex) else { return nil }
             let line = configuration.lyrics[displayIndex]
@@ -79,10 +92,14 @@ struct NativeLyricsRenderPlan: Equatable {
                 activeDisplayIndex: activeDisplayIndex,
                 configuration: configuration
             )
-            let accumulatedY = accumulatedHeights[displayIndex] ?? 0
-            let targetAccumulatedY = accumulatedHeights[targetDisplayIndex] ?? 0
             let height = configuration.measuredHeights[displayIndex] ?? configuration.defaultRowHeight
-            let y = configuration.anchorY - targetAccumulatedY + accumulatedY + manualOffset(configuration.mode)
+            let y = NativeLyricsSnapMath.targetY(
+                rowIndex: displayIndex,
+                targetIndex: targetDisplayIndex,
+                anchorY: configuration.anchorY,
+                accumulatedHeights: accumulatedHeights,
+                targetAlignmentOffsets: targetAlignmentOffsets
+            ) + manualOffset(configuration.mode)
             let visual = NativeLyricsVisualState.make(
                 displayIndex: displayIndex,
                 activeDisplayIndex: activeDisplayIndex
@@ -94,12 +111,7 @@ struct NativeLyricsRenderPlan: Equatable {
                 text: line.text,
                 translation: line.translation,
                 words: line.words,
-                role: role(
-                    displayIndex: displayIndex,
-                    line: line,
-                    lyrics: configuration.lyrics,
-                    firstRealLyricIndex: configuration.firstRealLyricIndex
-                ),
+                role: roles[displayIndex] ?? .lyric,
                 frame: CGRect(x: 0, y: y, width: 0, height: height),
                 targetDisplayIndex: targetDisplayIndex,
                 visual: visual

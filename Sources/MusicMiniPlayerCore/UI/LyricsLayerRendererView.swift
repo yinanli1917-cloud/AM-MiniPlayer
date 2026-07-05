@@ -857,6 +857,7 @@ final class NativeLyricsSurfaceView: NSView {
                 renderedIndices: runtimeConfiguration.renderedIndices,
                 anchorY: runtimeConfiguration.anchorY,
                 accumulatedHeights: runtimeConfiguration.accumulatedHeights,
+                targetAlignmentOffsets: targetAlignmentOffsets(for: runtimeConfiguration),
                 lineInterval: runtimeConfiguration.lineInterval,
                 hasSyllableSync: runtimeConfiguration.hasSyllableSync,
                 isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil,
@@ -1303,6 +1304,7 @@ final class NativeLyricsSurfaceView: NSView {
                     renderedIndices: configuration.renderedIndices,
                     anchorY: configuration.anchorY,
                     accumulatedHeights: configuration.accumulatedHeights,
+                    targetAlignmentOffsets: targetAlignmentOffsets(for: configuration),
                     lineInterval: lineInterval(around: resolvedIndex, rows: configuration.rows),
                     hasSyllableSync: configuration.rows.first(where: { $0.index == resolvedIndex })?.displayLine.line.hasSyllableSync ?? configuration.hasSyllableSync,
                     isInterludeActive: configuration.interludeAfterIndex != nil,
@@ -1631,12 +1633,17 @@ final class NativeLyricsSurfaceView: NSView {
         snap: Bool
     ) -> NativeLyricsFrameRenderSnapshot {
         var rowsByIndex: [Int: NativeLyricsFrameRowSnapshot] = [:]
+        let targetAlignmentOffsets = targetAlignmentOffsets(for: configuration)
         for row in rows {
             let engineState = snap ? nil : presentationEngine.presentation(for: row.index)
             let baseY = NativeLyricsSnapMath.renderY(
                 snap: snap,
                 engineY: engineState?.y,
-                snappedY: snapY(for: row, configuration: configuration)
+                snappedY: snapY(
+                    for: row,
+                    configuration: configuration,
+                    targetAlignmentOffsets: targetAlignmentOffsets
+                )
             )
             let requestedY = baseY + configuration.effectiveManualOffset
             var y = requestedY
@@ -1949,6 +1956,7 @@ final class NativeLyricsSurfaceView: NSView {
         var targetMinYByIndex: [Int: CGFloat] = [:]
         var velocityYByIndex: [Int: CGFloat] = [:]
         var targetIndices: [Int: Int] = [:]
+        let targetAlignmentOffsets = targetAlignmentOffsets(for: configuration)
         for index in lineIndices {
             if let presentation = presentationEngine.presentation(for: index) {
                 targetIndices[index] = presentation.targetIndex
@@ -1971,7 +1979,8 @@ final class NativeLyricsSurfaceView: NSView {
                     rowIndex: index,
                     targetIndex: targetIndex,
                     anchorY: configuration.anchorY,
-                    accumulatedHeights: configuration.accumulatedHeights
+                    accumulatedHeights: configuration.accumulatedHeights,
+                    targetAlignmentOffsets: targetAlignmentOffsets
                 )
             }
         }
@@ -2027,6 +2036,18 @@ final class NativeLyricsSurfaceView: NSView {
         for row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration
     ) -> CGFloat {
+        snapY(
+            for: row,
+            configuration: configuration,
+            targetAlignmentOffsets: targetAlignmentOffsets(for: configuration)
+        )
+    }
+
+    private func snapY(
+        for row: LayerBackedLyricRow,
+        configuration: LyricsLayerRendererConfiguration,
+        targetAlignmentOffsets: [Int: CGFloat]
+    ) -> CGFloat {
         let targetIndex = NativeLyricsSnapMath.targetIndex(
             isManualScrolling: configuration.effectiveIsManualScrolling,
             scrollTargetIndex: configuration.effectiveScrollTargetIndex,
@@ -2039,8 +2060,17 @@ final class NativeLyricsSurfaceView: NSView {
             rowIndex: row.index,
             targetIndex: targetIndex,
             anchorY: configuration.anchorY,
-            accumulatedHeights: configuration.accumulatedHeights
+            accumulatedHeights: configuration.accumulatedHeights,
+            targetAlignmentOffsets: targetAlignmentOffsets
         )
+    }
+
+    private func targetAlignmentOffsets(
+        for configuration: LyricsLayerRendererConfiguration
+    ) -> [Int: CGFloat] {
+        Dictionary(uniqueKeysWithValues: configuration.rows.compactMap { row in
+            row.isPrelude ? (row.index, NativeLyricsRowMeasurement.preludeDotCenterY) : nil
+        })
     }
 
     private func applyFrames(
@@ -3402,6 +3432,7 @@ final class NativeLyricsSurfaceView: NSView {
             renderedIndices: configuration.renderedIndices,
             anchorY: configuration.anchorY,
             accumulatedHeights: configuration.accumulatedHeights,
+            targetAlignmentOffsets: targetAlignmentOffsets(for: configuration),
             lineInterval: lineInterval(around: scrollTargetIndex, rows: configuration.rows)
                 ?? lineInterval(around: currentIndex, rows: configuration.rows)
                 ?? configuration.lineInterval,
@@ -4159,6 +4190,10 @@ final class NativeLyricsRowView: NSView {
     /// Animation keys attached to the translation base layer. Implicit-action leaks show up
     /// here as property-name keys ("position", "bounds", ...) that no renderer code ever adds.
     var debugTranslationTextLayerAnimationKeys: [String] { translationTextLayer.animationKeys() ?? [] }
+
+    var debugPreludeDotCenterYInSuperview: CGFloat {
+        frame.minY + dotContainerLayer.position.y
+    }
     #endif
 
     // Available to both the unit tests (DEBUG) and the in-app brightness diagnostic
@@ -4293,7 +4328,13 @@ final class NativeLyricsRowView: NSView {
             translationSweepMaskLayer.frame = .zero
             translationPerLineSweepMaskLayer.frame = .zero
             interludeTextLayer.frame = .zero
-            layoutDotContainer(frame: CGRect(x: textX, y: y, width: textWidth, height: 30))
+            y = NativeLyricsRowMeasurement.preludeDotContainerTopInset
+            layoutDotContainer(frame: CGRect(
+                x: textX,
+                y: y,
+                width: textWidth,
+                height: NativeLyricsRowMeasurement.preludeDotContainerHeight
+            ))
             lastLineLayoutMetrics = .inactive
             return
         }

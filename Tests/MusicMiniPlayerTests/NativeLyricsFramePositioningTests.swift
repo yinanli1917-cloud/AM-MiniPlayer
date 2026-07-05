@@ -53,6 +53,32 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
         }
     }
 
+    private func preludeRows() -> [LayerBackedLyricRow] {
+        let lyrics = [
+            LyricLine(text: "⋯", startTime: 0, endTime: 4),
+            LyricLine(text: "first real line", startTime: 4, endTime: 8),
+            LyricLine(text: "second real line", startTime: 8.5, endTime: 12)
+        ]
+        return lyrics.enumerated().map { index, line in
+            let displayLine = DisplayLyricLine(
+                id: "p\(index)",
+                sourceIndex: index,
+                segmentIndex: 0,
+                segmentCount: 1,
+                line: line
+            )
+            return LayerBackedLyricRow(
+                id: displayLine.id,
+                index: index,
+                displayLine: displayLine,
+                sourceLine: line,
+                isPrelude: index == 0,
+                preludeEndTime: 4,
+                interlude: nil
+            )
+        }
+    }
+
     @MainActor
     private func config(
         rows: [LayerBackedLyricRow],
@@ -105,6 +131,36 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
         if let active = surface.debugRowView(forIndex: 30) {
             XCTAssertEqual(active.frame.origin.y, 250, accuracy: 40, "the seeked-to active line sits at the anchor")
         }
+    }
+
+    @MainActor
+    func test_preludeDotsCenterOnActiveAnchor() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface, size: NSSize(width: 360, height: 600))
+        let rows = preludeRows()
+
+        surface.configure(config(rows: rows, currentIndex: 0))
+        surface.layoutSubtreeIfNeeded()
+
+        guard let prelude = surface.debugRowView(forIndex: 0) else {
+            return XCTFail("prelude row should mount")
+        }
+        guard let firstReal = surface.debugRowView(forIndex: 1) else {
+            return XCTFail("first real row should mount below the prelude")
+        }
+
+        XCTAssertEqual(
+            prelude.debugPreludeDotCenterYInSuperview,
+            250,
+            accuracy: 0.5,
+            "prelude dots should center on the active anchor, not the prelude row top"
+        )
+        XCTAssertEqual(
+            firstReal.frame.minY - prelude.frame.maxY,
+            NativeLyricsHeightAccumulator.rowSpacing,
+            accuracy: 0.5,
+            "centering the prelude target should preserve normal stack spacing"
+        )
     }
 
     @MainActor

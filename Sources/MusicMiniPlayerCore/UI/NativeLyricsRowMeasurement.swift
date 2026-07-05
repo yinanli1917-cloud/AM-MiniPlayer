@@ -6,6 +6,9 @@ enum NativeLyricsRowMeasurement {
     static let leadingInset: CGFloat = 32
     static let trailingInset: CGFloat = 32
     static let preludeHeight: CGFloat = 46
+    static let preludeDotContainerTopInset: CGFloat = 8
+    static let preludeDotContainerHeight: CGFloat = 30
+    static let preludeDotCenterY: CGFloat = preludeDotContainerTopInset + preludeDotContainerHeight / 2
     static let translationLoadingRowHeight: CGFloat = 8
 
     static func estimatedHeight(

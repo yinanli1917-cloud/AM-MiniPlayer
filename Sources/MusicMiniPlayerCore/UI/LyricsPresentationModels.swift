@@ -773,11 +773,13 @@ enum NativeLyricsSnapMath {
         rowIndex: Int,
         targetIndex: Int,
         anchorY: CGFloat,
-        accumulatedHeights: [Int: CGFloat]
+        accumulatedHeights: [Int: CGFloat],
+        targetAlignmentOffsets: [Int: CGFloat] = [:]
     ) -> CGFloat {
         let rowOffset = accumulatedHeights[rowIndex] ?? 0
         let targetOffset = accumulatedHeights[targetIndex] ?? 0
-        return anchorY - targetOffset + rowOffset
+        let targetAlignmentOffset = targetAlignmentOffsets[targetIndex] ?? 0
+        return anchorY - targetOffset - targetAlignmentOffset + rowOffset
     }
 
     /// The Y a row paints at this frame. Snap mode teleports to the snapped target

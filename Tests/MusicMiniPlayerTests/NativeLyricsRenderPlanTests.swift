@@ -57,6 +57,38 @@ final class NativeLyricsRenderPlanTests: XCTestCase {
         XCTAssertEqual(plan.rows.count, lyrics.count)
     }
 
+    func testPlanCentersPreludeDotsOnActiveAnchor() {
+        let lyrics = [
+            LyricLine(text: "⋯", startTime: 0, endTime: 3),
+            LyricLine(text: "line one", startTime: 3, endTime: 7)
+        ]
+
+        let plan = NativeLyricsRenderPlan.make(configuration: NativeLyricsRenderPlan.Configuration(
+            lyrics: lyrics,
+            firstRealLyricIndex: 1,
+            currentDisplayIndex: 0,
+            anchorY: 100,
+            measuredHeights: [0: NativeLyricsRowMeasurement.preludeHeight, 1: 52]
+        ))
+
+        guard let prelude = plan.rows.first(where: { $0.displayIndex == 0 }) else {
+            return XCTFail("prelude row should be present")
+        }
+        guard let firstReal = plan.rows.first(where: { $0.displayIndex == 1 }) else {
+            return XCTFail("first real row should be present")
+        }
+        XCTAssertEqual(
+            prelude.frame.minY + NativeLyricsRowMeasurement.preludeDotCenterY,
+            100,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            firstReal.frame.minY - prelude.frame.maxY,
+            NativeLyricsHeightAccumulator.rowSpacing,
+            accuracy: 0.0001
+        )
+    }
+
     func testManualScrollFreezesActiveDisplayIndexAndAppliesManualOffset() {
         let plan = NativeLyricsRenderPlan.make(configuration: NativeLyricsRenderPlan.Configuration(
             lyrics: sampleLyrics(),
