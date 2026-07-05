@@ -1489,14 +1489,19 @@ final class NativeLyricsSurfaceView: NSView {
     private func updateContentIfNeeded(
         view: NativeLyricsRowView,
         row: LayerBackedLyricRow,
-        configuration: LyricsLayerRendererConfiguration
+        configuration: LyricsLayerRendererConfiguration,
+        updatesPlaybackPhase: Bool = true
     ) -> Bool {
         let key = RowRenderKey(row: row, configuration: configuration)
         let needsContentUpdate = rowRenderKeys[row.id] != key
         if needsContentUpdate {
             renderTelemetry.recordContentUpdate()
             rowRenderKeys[row.id] = key
-            view.configure(row: row, configuration: configuration)
+            view.configure(
+                row: row,
+                configuration: configuration,
+                updatesPlaybackPhase: updatesPlaybackPhase
+            )
         }
 
         guard needsContentUpdate || measuredHeightsByIndex[row.index] == nil else { return false }
@@ -2735,10 +2740,13 @@ final class NativeLyricsSurfaceView: NSView {
         deferredDeactivationIndex = nil
         guard let row = runtimeConfiguration.rows.first(where: { $0.index == index }),
               let view = rowViews[row.id] else { return }
-        view.endDeactivationFade()
-        view.clearSweepState()
-        view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false)
-        _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
+        _ = updateContentIfNeeded(
+            view: view,
+            row: row,
+            configuration: runtimeConfiguration,
+            updatesPlaybackPhase: false
+        )
+        view.finalizeDeactivationState(renderTime: runtimeConfiguration.musicController.lyricRenderTime())
     }
 
     private func finalizeDeferredDeactivation(runtimeConfiguration: LyricsLayerRendererConfiguration) {
@@ -2753,10 +2761,13 @@ final class NativeLyricsSurfaceView: NSView {
         deferredDeactivationIndex = nil
         guard let row = runtimeConfiguration.rows.first(where: { $0.index == idx }),
               let view = rowViews[row.id] else { return }
-        view.endDeactivationFade()
-        view.clearSweepState()
-        view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false)
-        _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
+        _ = updateContentIfNeeded(
+            view: view,
+            row: row,
+            configuration: runtimeConfiguration,
+            updatesPlaybackPhase: false
+        )
+        view.finalizeDeactivationState(renderTime: runtimeConfiguration.musicController.lyricRenderTime())
     }
 
     private func shouldSyncVisualTargetsOnPresentationTick(
@@ -3933,7 +3944,11 @@ final class NativeLyricsRowView: NSView {
         commonInit()
     }
 
-    func configure(row: LayerBackedLyricRow, configuration: LyricsLayerRendererConfiguration) {
+    func configure(
+        row: LayerBackedLyricRow,
+        configuration: LyricsLayerRendererConfiguration,
+        updatesPlaybackPhase: Bool = true
+    ) {
         // The monotone post-line fade floor belongs to ONE line. Reset it only when this row actually
         // takes a different line (a genuine discontinuity) — never per frame, so a backward clock
         // jitter on the SAME line can't re-light the just-faded overlay (the gap pop).
@@ -3944,7 +3959,10 @@ final class NativeLyricsRowView: NSView {
         self.row = row
         self.configuration = configuration
         wantsLayer = true
-        updateTextLayers(textWidth: contentTextWidth(configuration))
+        updateTextLayers(
+            textWidth: contentTextWidth(configuration),
+            updatesPlaybackPhase: updatesPlaybackPhase
+        )
         updateHoverBackground()
         needsLayout = true
     }
@@ -4012,6 +4030,15 @@ final class NativeLyricsRowView: NSView {
         // value prepareForReuse uses, and updatePlaybackPhase assumes it on re-activation.
         mainBrightTextLayer.opacity = 1
         translationBrightTextLayer.opacity = 1
+    }
+
+    func finalizeDeactivationState(renderTime: TimeInterval) {
+        endDeactivationFade()
+        clearSweepState()
+        applyInactivePlaybackLayerState()
+        if let row {
+            updateDotsPhase(row: row, currentTime: renderTime)
+        }
     }
 
     override func prepareForReuse() {
@@ -4245,6 +4272,7 @@ final class NativeLyricsRowView: NSView {
     /// syllable sync this must be `true`; if it is `false` the active line degraded to
     /// line-level because its text geometry was not laid out when the phase was computed.
     private(set) var debugLastAppliedActivePerRunSweep = false
+    private(set) var debugPlaybackPhaseUpdateCount = 0
     /// The translation sung-overlay opacity (mirrors debugMainBrightOpacity). The deactivation fade
     /// scales it toward 0 as a line recedes; a teardown that forgets to restore it to 1 makes a
     /// re-shown row relight from the residual fraction. The reuse-state test reads it.
@@ -4515,7 +4543,10 @@ final class NativeLyricsRowView: NSView {
         }
     }
 
-    private func updateTextLayers(textWidth: CGFloat) {
+    private func updateTextLayers(
+        textWidth: CGFloat,
+        updatesPlaybackPhase: Bool = true
+    ) {
         guard let row, let configuration else { return }
         if row.isPrelude {
             mainTextLayer.string = nil
@@ -4531,7 +4562,9 @@ final class NativeLyricsRowView: NSView {
             hideTranslationSweepMaskLayers()
             interludeTextLayer.string = nil
             dotContainerLayer.isHidden = false
-            updatePlaybackPhase(configuration: configuration)
+            if updatesPlaybackPhase {
+                updatePlaybackPhase(configuration: configuration)
+            }
             return
         }
 
@@ -4635,7 +4668,8 @@ final class NativeLyricsRowView: NSView {
         // rows produced a SECOND, un-laid-out set of dots (collapsed at the row origin) that
         // overlapped the overlay during manual scroll. Keep it hidden here.
         dotContainerLayer.isHidden = true
-        if let textSample = updatePlaybackPhase(configuration: configuration) {
+        if updatesPlaybackPhase,
+           let textSample = updatePlaybackPhase(configuration: configuration) {
             (superview as? NativeLyricsSurfaceView)?.recordTextPhase(textSample)
         }
     }
@@ -4706,6 +4740,9 @@ final class NativeLyricsRowView: NSView {
         managesTransaction: Bool = true
     ) -> NativeLyricsTextPhaseSample? {
         guard let row else { return nil }
+        #if DEBUG
+        debugPlaybackPhaseUpdateCount += 1
+        #endif
         let renderTime = configuration.musicController.lyricRenderTime()
         let isActive = row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying
 
@@ -4811,25 +4848,29 @@ final class NativeLyricsRowView: NSView {
                 )
             }
         } else {
-            mainBrightTextLayer.isHidden = true
-            mainBrightTextLayer.mask = mainSweepMaskLayer
-            mainTextLayer.mask = nil
-            hideBaseRevealMaskLayers()
-            hidePerRunSweepMaskLayers()
-            hideEmphasisGlyphLayers()
-            hideMainWordGlyphLayers()
-            activeHiddenEmphasisSignature = nil
-            translationBrightTextLayer.isHidden = true
-            hideTranslationSweepMaskLayers()
-            mainTextLayer.setAffineTransform(.identity)
-            mainBrightTextLayer.setAffineTransform(.identity)
-            clearEmphasis(from: mainBrightTextLayer)
+            applyInactivePlaybackLayerState()
         }
         updateDotsPhase(row: row, currentTime: renderTime)
         if managesTransaction {
             CATransaction.commit()
         }
         return sample
+    }
+
+    private func applyInactivePlaybackLayerState() {
+        mainBrightTextLayer.isHidden = true
+        mainBrightTextLayer.mask = mainSweepMaskLayer
+        mainTextLayer.mask = nil
+        hideBaseRevealMaskLayers()
+        hidePerRunSweepMaskLayers()
+        hideEmphasisGlyphLayers()
+        hideMainWordGlyphLayers()
+        activeHiddenEmphasisSignature = nil
+        translationBrightTextLayer.isHidden = true
+        hideTranslationSweepMaskLayers()
+        mainTextLayer.setAffineTransform(.identity)
+        mainBrightTextLayer.setAffineTransform(.identity)
+        clearEmphasis(from: mainBrightTextLayer)
     }
 
     private struct MainTextPhaseAppliedMetrics {
