@@ -17,7 +17,11 @@ final class NativeLyricsBloomReproductionTests: XCTestCase {
 
     private var hostWindow: NSWindow?
 
+    @MainActor
     override func tearDown() {
+        if let contentView = hostWindow?.contentView {
+            stopHostedSurfaces(in: contentView)
+        }
         hostWindow?.orderOut(nil)
         hostWindow = nil
         super.tearDown()
@@ -36,6 +40,14 @@ final class NativeLyricsBloomReproductionTests: XCTestCase {
         window.contentView = view
         window.orderFrontRegardless()
         hostWindow = window
+    }
+
+    @MainActor
+    private func stopHostedSurfaces(in view: NSView) {
+        if let surface = view as? NativeLyricsSurfaceView {
+            surface.stopAnimations()
+        }
+        view.subviews.forEach { stopHostedSurfaces(in: $0) }
     }
 
     // 25 lines — a typical full song loaded at once (page switch, cached lyrics).

@@ -15,7 +15,16 @@ import AppKit
 final class NativeLyricsRenderChurnTests: XCTestCase {
 
     private var hostWindow: NSWindow?
-    override func tearDown() { hostWindow?.orderOut(nil); hostWindow = nil; super.tearDown() }
+    private var hostedSurfaces: [NativeLyricsSurfaceView] = []
+
+    @MainActor
+    override func tearDown() {
+        hostedSurfaces.forEach { $0.stopAnimations() }
+        hostedSurfaces.removeAll()
+        hostWindow?.orderOut(nil)
+        hostWindow = nil
+        super.tearDown()
+    }
 
     @MainActor
     private func host(_ view: NSView, _ size: NSSize) {
@@ -26,6 +35,9 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         w.contentView = view
         w.orderFrontRegardless()
         hostWindow = w
+        if let surface = view as? NativeLyricsSurfaceView {
+            hostedSurfaces.append(surface)
+        }
     }
 
     // Syllable-synced lines so the ACTIVE line's karaoke sweep animates every frame — this is what
@@ -100,17 +112,16 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         duration: TimeInterval,
         noisy: Bool = true
     ) {
-        let startReal = Date()
-        var i = 0
-        while Date().timeIntervalSince(startReal) < duration {
-            let elapsed = Date().timeIntervalSince(startReal)
+        let frameInterval = 1.0 / 60.0
+        let frameCount = max(1, Int((duration / frameInterval).rounded(.up)))
+        for i in 0..<frameCount {
+            let elapsed = TimeInterval(i) * frameInterval
             let playbackTime = noisy
                 ? noisyClock(step: i, base: startPlaybackTime + elapsed)
                 : startPlaybackTime + elapsed
             musicController.syncPlaybackClock(to: playbackTime, playing: true)
             surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: musicController))
-            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
-            i += 1
+            RunLoop.main.run(until: Date().addingTimeInterval(frameInterval))
         }
     }
 
@@ -125,6 +136,7 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
 
         surface.debugResetCensus()
         surface.debugCensusEnabled = true
+        surface.debugSkipDedupe = true
 
         // Warm up so the surface's index tracks the clock before we start scoring (avoids the
         // startup catch-up artifact). Then drive at ~1x REAL time so the wall-clock line-advance timer
@@ -136,15 +148,7 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         surface.debugResetCensus()
         surface.debugCensusEnabled = true
 
-        let startReal = Date()
-        var i = 0
-        while Date().timeIntervalSince(startReal) < 6.0 {
-            let elapsed = Date().timeIntervalSince(startReal)
-            mc.syncPlaybackClock(to: noisyClock(step: i, base: 0.6 + elapsed), playing: true)
-            surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: mc))
-            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
-            i += 1
-        }
+        drive(surface: surface, musicController: mc, rows: rows, from: 0.6, duration: 6.0, noisy: true)
 
         let painted = surface.debugCensusByIndex.values.reduce(0) { $0 + $1.opacity.count }
         print("census: rows=\(surface.debugCensusByIndex.count) totalPaints=\(painted)")
@@ -197,6 +201,7 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         mc.duration = 240
         mc.isPlaying = true
         let rows = makeRows(20)
+        surface.debugSkipDedupe = true
 
         let previousIndex = 5
         let nextIndex = previousIndex + 1
