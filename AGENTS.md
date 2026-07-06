@@ -42,7 +42,9 @@ Sources/
 │   ├── UI/
 │   │   ├── MiniPlayerView.swift   - Main player view + page switching
 │   │   ├── LyricsView.swift       - Lyrics display + scrolling + translation
-│   │   ├── LyricLineView.swift    - Lyric line / interlude animation / translation modifier
+│   │   ├── LyricsLayerRendererView.swift - Native lyrics surface + frame loop
+│   │   ├── NativeLyricsRowView.swift     - Native row text/dot layer rendering
+│   │   ├── NativeLyricsLayerSupport.swift - Display-link and inert-layer helpers
 │   │   ├── HoverableButtons.swift - Button components + Tab Bar + corner radius utilities
 │   │   ├── PlaylistView.swift     - Playlist queue + artwork loading
 │   │   ├── SnappablePanel.swift   - Snappable floating panel + gestures

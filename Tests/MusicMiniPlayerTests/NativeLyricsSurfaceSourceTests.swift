@@ -1,13 +1,27 @@
 import XCTest
 
 final class NativeLyricsSurfaceSourceTests: XCTestCase {
+    private func repoRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func readSource(_ relativePath: String) throws -> String {
+        try String(contentsOf: repoRoot().appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    private func nativeRendererSource() throws -> String {
+        try [
+            "Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift",
+            "Sources/MusicMiniPlayerCore/UI/NativeLyricsLayerSupport.swift",
+            "Sources/MusicMiniPlayerCore/UI/NativeLyricsRowView.swift"
+        ].map(readSource).joined(separator: "\n")
+    }
+
     func testNativeSurfaceReservesOverlayInteractionZones() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
-        let source = try String(contentsOf: surfaceURL, encoding: .utf8)
+        let source = try nativeRendererSource()
 
         XCTAssertTrue(source.contains("private func isPointInReservedOverlayZone"))
         XCTAssertTrue(source.contains("nativeLyricsBottomControlsReservedHeight"))
@@ -17,19 +31,12 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
     }
 
     func testNativeLyricsLayoutInsetsMatchV28SwiftUIRenderer() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
-        let lyricsViewURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
-        let measurementURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/NativeLyricsRowMeasurement.swift")
-        let surfaceSource = try String(contentsOf: surfaceURL, encoding: .utf8)
-        let lyricsViewSource = try String(contentsOf: lyricsViewURL, encoding: .utf8)
-        let measurementSource = try String(contentsOf: measurementURL, encoding: .utf8)
+        let surfaceSource = try nativeRendererSource()
+        let lyricsViewSource = try readSource("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let measurementSource = try readSource("Sources/MusicMiniPlayerCore/UI/NativeLyricsRowMeasurement.swift")
 
-        XCTAssertTrue(surfaceSource.contains("private let nativeLyricContentLeadingInset: CGFloat = 32"))
-        XCTAssertTrue(surfaceSource.contains("private let nativeLyricContentTrailingInset: CGFloat = 32"))
+        XCTAssertTrue(surfaceSource.contains("let nativeLyricContentLeadingInset: CGFloat = 32"))
+        XCTAssertTrue(surfaceSource.contains("let nativeLyricContentTrailingInset: CGFloat = 32"))
         XCTAssertTrue(lyricsViewSource.contains("private let lyricContentLeadingInset: CGFloat = 32"))
         XCTAssertTrue(lyricsViewSource.contains("private let lyricContentTrailingInset: CGFloat = 32"))
         XCTAssertTrue(measurementSource.contains("static let leadingInset: CGFloat = 32"))
@@ -37,12 +44,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
     }
 
     func testNativeSurfaceReconcilesViewportRowsDuringManualScroll() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
-        let source = try String(contentsOf: surfaceURL, encoding: .utf8)
+        let source = try nativeRendererSource()
 
         XCTAssertFalse(source.contains("if configuration.effectiveIsManualScrolling {\n            return configuration.rows\n        }"))
         XCTAssertTrue(source.contains("let previousViewportIndex = manualViewportIndex(for: runtimeConfiguration)"))
@@ -56,12 +58,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
     }
 
     func testNativeSurfaceKeepsGeometryVisibleRowsMounted() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
-        let source = try String(contentsOf: surfaceURL, encoding: .utf8)
+        let source = try nativeRendererSource()
 
         XCTAssertTrue(source.contains("private func geometryVisibleRowIndices("))
         XCTAssertTrue(source.contains("let viewportPadding: CGFloat = 120"))
@@ -71,12 +68,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
     }
 
     func testSplitDisplayLinesDoNotDuplicateFallbackTranslationAcrossSegments() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let lyricsViewURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
-        let source = try String(contentsOf: lyricsViewURL, encoding: .utf8)
+        let source = try readSource("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
         guard let functionStart = source.range(of: "private func makeDisplayLyricLines")?.lowerBound,
               let functionEnd = source.range(of: "private func shouldKeepDisplayLineUnsplit")?.lowerBound else {
             XCTFail("Could not locate makeDisplayLyricLines in LyricsView.swift")
@@ -91,16 +83,9 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
     }
 
     func testNativeSurfaceDoesNotHostSwiftUIRowViews() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let surfaceURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsLayerRendererView.swift")
-        let lyricsViewURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
-        let metricsURL = repoRoot.appendingPathComponent("Sources/MusicMiniPlayerCore/UI/NativeLyricsUXMetrics.swift")
-        let source = try String(contentsOf: surfaceURL, encoding: .utf8)
-        let lyricsViewSource = try String(contentsOf: lyricsViewURL, encoding: .utf8)
-        let metricsSource = try String(contentsOf: metricsURL, encoding: .utf8)
+        let source = try nativeRendererSource()
+        let lyricsViewSource = try readSource("Sources/MusicMiniPlayerCore/UI/LyricsView.swift")
+        let metricsSource = try readSource("Sources/MusicMiniPlayerCore/UI/NativeLyricsUXMetrics.swift")
 
         XCTAssertFalse(source.contains("NSHostingView"))
         XCTAssertFalse(source.contains("AnyView"))
@@ -193,7 +178,7 @@ final class NativeLyricsSurfaceSourceTests: XCTestCase {
         XCTAssertTrue(metricsSource.contains("blur: fadeOutProgress * 8"))
         XCTAssertFalse(metricsSource.contains("let targetBreatheDuration"))
         XCTAssertFalse(metricsSource.contains("globalOpacity"))
-        XCTAssertTrue(source.contains("fileprivate func recordTextPhase"))
+        XCTAssertTrue(source.contains("func recordTextPhase"))
         XCTAssertFalse(source.contains("|| (configuration.showTranslation && activeRow.displayLine.line.translation?.isEmpty == false)"))
         XCTAssertTrue(source.contains("lyricRenderTime()"))
         XCTAssertTrue(source.contains("runtimeConfiguration.nativeDirectSnapIndex = pending.targetIndex"))
