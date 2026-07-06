@@ -537,6 +537,14 @@ final class NativeLyricsSurfaceView: NSView {
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         return nativePresentationSnapshot(lineIndices: lineIndices, configuration: runtimeConfiguration)
     }
+
+    func debugNativeVisualTarget(forIndex index: Int) -> NativeLyricsVisualTarget? {
+        guard let configuration else { return nil }
+        let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        guard let row = runtimeConfiguration.rows.first(where: { $0.index == index }) else { return nil }
+        let presentationSnapshot = nativePresentationSnapshot(lineIndices: [index], configuration: runtimeConfiguration)
+        return visualTarget(for: row, configuration: runtimeConfiguration, presentationSnapshot: presentationSnapshot)
+    }
     #endif
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
@@ -1498,9 +1506,17 @@ final class NativeLyricsSurfaceView: NSView {
             visibleRows: visibleRows ?? self.visibleRows(for: runtimeConfiguration),
             configuration: runtimeConfiguration
         )
+        let presentationSnapshot = nativePresentationSnapshot(
+            lineIndices: rows.map(\.index),
+            configuration: runtimeConfiguration
+        )
         var changed = false
         for row in rows {
-            let target = visualTarget(for: row, configuration: runtimeConfiguration)
+            let target = visualTarget(
+                for: row,
+                configuration: runtimeConfiguration,
+                presentationSnapshot: presentationSnapshot
+            )
             if visualStates[row.index] == nil {
                 visualStates[row.index] = NativeLyricsVisualMotionState(target: target)
                 changed = true
@@ -1548,12 +1564,17 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func visualTarget(
         for row: LayerBackedLyricRow,
-        configuration: LyricsLayerRendererConfiguration
+        configuration: LyricsLayerRendererConfiguration,
+        presentationSnapshot: NativeLyricsPresentationSnapshot
     ) -> NativeLyricsVisualTarget {
         let blend = interludeBlend(for: row, configuration: configuration)
-        let visualCurrentIndex = visualCurrentIndex(for: row, configuration: configuration)
-        let visualHotActiveIndices = visualCurrentIndex == configuration.effectiveCurrentIndex
-            ? configuration.nativeHotActiveIndices
+        let visualCurrentIndex = visualCurrentIndex(
+            for: row,
+            configuration: configuration,
+            presentationSnapshot: presentationSnapshot
+        )
+        let visualHotActiveIndices = visualCurrentIndex == presentationSnapshot.semanticIndex
+            ? presentationSnapshot.hotActiveIndices
             : [visualCurrentIndex]
         return NativeLyricsVisualTarget.amllTarget(
             displayIndex: row.index,
@@ -1567,18 +1588,16 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func visualCurrentIndex(
         for row: LayerBackedLyricRow,
-        configuration: LyricsLayerRendererConfiguration
+        configuration: LyricsLayerRendererConfiguration,
+        presentationSnapshot: NativeLyricsPresentationSnapshot
     ) -> Int {
         guard configuration.playbackMode == .natural,
               !configuration.effectiveIsManualScrolling,
               configuration.interludeAfterIndex == nil,
               presentationEngine.isNaturalWaveActive else {
-            return configuration.effectiveCurrentIndex
+            return presentationSnapshot.semanticIndex
         }
-        return presentationEngine.targetIndex(
-            for: row.index,
-            fallback: configuration.effectiveScrollTargetIndex
-        )
+        return presentationSnapshot.targetIndices[row.index] ?? presentationSnapshot.scrollTargetIndex
     }
 
     private func interludeBlend(
@@ -1639,17 +1658,17 @@ final class NativeLyricsSurfaceView: NSView {
         snap: Bool
     ) -> NativeLyricsFrameRenderSnapshot {
         var rowsByIndex: [Int: NativeLyricsFrameRowSnapshot] = [:]
-        let targetAlignmentOffsets = targetAlignmentOffsets(for: configuration)
+        let presentationSnapshot = nativePresentationSnapshot(
+            lineIndices: rows.map(\.index),
+            configuration: configuration
+        )
         for row in rows {
             let engineState = snap ? nil : presentationEngine.presentation(for: row.index)
             let baseY = NativeLyricsSnapMath.renderY(
                 snap: snap,
                 engineY: engineState?.y,
-                snappedY: snapY(
-                    for: row,
-                    configuration: configuration,
-                    targetAlignmentOffsets: targetAlignmentOffsets
-                )
+                snappedY: presentationSnapshot.targetMinYByIndex[row.index]
+                    ?? snapY(for: row, configuration: configuration)
             )
             let requestedY = baseY + configuration.effectiveManualOffset
             var y = requestedY
@@ -1678,7 +1697,11 @@ final class NativeLyricsSurfaceView: NSView {
             if let state = visualStates[row.index] {
                 visual = state
             } else {
-                let fallbackTarget = visualTarget(for: row, configuration: configuration)
+                let fallbackTarget = visualTarget(
+                    for: row,
+                    configuration: configuration,
+                    presentationSnapshot: presentationSnapshot
+                )
                 visual = NativeLyricsVisualMotionState(target: fallbackTarget)
             }
             let fallbackHeight = rowViews[row.id].map { max(1, $0.frame.height) } ?? 1

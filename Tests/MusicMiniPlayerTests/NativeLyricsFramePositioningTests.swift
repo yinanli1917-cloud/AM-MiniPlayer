@@ -190,6 +190,22 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
         XCTAssertEqual(snapshot.scrollTargetIndex, 2)
         XCTAssertEqual(snapshot.hotActiveIndices, [2])
         XCTAssertEqual(snapshot.bufferedActiveIndices, [2])
+
+        guard let activeTarget = surface.debugNativeVisualTarget(forIndex: 2) else {
+            return XCTFail("active visual target should be available")
+        }
+        XCTAssertEqual(activeTarget.opacity, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(activeTarget.scale, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(activeTarget.blur, 0, accuracy: 1e-6)
+        XCTAssertTrue(activeTarget.isActive)
+
+        guard let previousTarget = surface.debugNativeVisualTarget(forIndex: 1) else {
+            return XCTFail("previous visual target should be available")
+        }
+        XCTAssertEqual(previousTarget.opacity, 0.35, accuracy: 1e-6)
+        XCTAssertEqual(previousTarget.scale, 0.95, accuracy: 1e-6)
+        XCTAssertEqual(previousTarget.blur, 0.5, accuracy: 1e-6)
+        XCTAssertFalse(previousTarget.isActive)
     }
 
     @MainActor
