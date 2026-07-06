@@ -531,6 +531,12 @@ final class NativeLyricsSurfaceView: NSView {
     var debugInterludeDotCenterXs: [CGFloat] {
         surfaceInterludeDots.map { $0.position.x }
     }
+
+    func debugNativePresentationSnapshot(lineIndices: [Int]) -> NativeLyricsPresentationSnapshot? {
+        guard let configuration else { return nil }
+        let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        return nativePresentationSnapshot(lineIndices: lineIndices, configuration: runtimeConfiguration)
+    }
     #endif
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
@@ -1985,6 +1991,10 @@ final class NativeLyricsSurfaceView: NSView {
             }
         }
         return NativeLyricsPresentationSnapshot(
+            semanticIndex: configuration.effectiveCurrentIndex,
+            scrollTargetIndex: configuration.effectiveScrollTargetIndex,
+            hotActiveIndices: configuration.nativeHotActiveIndices,
+            bufferedActiveIndices: configuration.nativeBufferedActiveIndices,
             targetIndices: targetIndices,
             targetMinYByIndex: targetMinYByIndex,
             velocityYByIndex: velocityYByIndex,

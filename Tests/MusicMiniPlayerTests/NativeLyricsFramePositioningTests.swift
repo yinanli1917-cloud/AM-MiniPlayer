@@ -164,6 +164,35 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
     }
 
     @MainActor
+    func test_presentationSnapshotCarriesNativeSemanticIndex() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface, size: NSSize(width: 360, height: 600))
+        let rows = songRows(count: 6)
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+
+        mc.syncPlaybackClock(to: rows[0].displayLine.line.startTime + 0.5, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 0, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+        spin(0.9)
+
+        mc.syncPlaybackClock(to: rows[2].displayLine.line.startTime + 0.5, playing: true)
+
+        surface.configure(config(rows: rows, currentIndex: 0, musicController: mc))
+        surface.layoutSubtreeIfNeeded()
+
+        guard let snapshot = surface.debugNativePresentationSnapshot(lineIndices: rows.map(\.index)) else {
+            return XCTFail("snapshot should be available after configure")
+        }
+        XCTAssertEqual(snapshot.semanticIndex, 2)
+        XCTAssertEqual(snapshot.semanticIndex, surface.debugNativeSemanticIndex)
+        XCTAssertEqual(snapshot.scrollTargetIndex, 2)
+        XCTAssertEqual(snapshot.hotActiveIndices, [2])
+        XCTAssertEqual(snapshot.bufferedActiveIndices, [2])
+    }
+
+    @MainActor
     func test_reenteringNaturalRowKeepsYHistoryAcrossUnmount() {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
         hostInWindow(surface, size: NSSize(width: 360, height: 600))

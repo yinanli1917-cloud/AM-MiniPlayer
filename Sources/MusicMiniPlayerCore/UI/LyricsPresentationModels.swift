@@ -738,6 +738,10 @@ struct NativeLyricsManualScrollSnapshot: Equatable {
 }
 
 struct NativeLyricsPresentationSnapshot: Equatable {
+    let semanticIndex: Int
+    let scrollTargetIndex: Int
+    let hotActiveIndices: Set<Int>
+    let bufferedActiveIndices: Set<Int>
     let targetIndices: [Int: Int]
     let targetMinYByIndex: [Int: CGFloat]
     let velocityYByIndex: [Int: CGFloat]
