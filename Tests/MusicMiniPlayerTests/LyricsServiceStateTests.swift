@@ -341,6 +341,58 @@ final class LyricsServiceStateTests: XCTestCase {
         XCTAssertEqual(state, .content)
     }
 
+    @MainActor
+    func testVisibleLyricsStayContentDuringSameSongMetadataRefresh() {
+        guard let fixture = NativeLyricsDebugFixture.fixture(named: "translated-word") else {
+            return XCTFail("missing debug fixture")
+        }
+        let service = LyricsService.shared
+        service.applyDebugFixture(fixture)
+        defer { service.applyDebugFixture(fixture) }
+
+        let visibleLineCount = service.lyrics.count
+        XCTAssertGreaterThan(visibleLineCount, 0)
+        XCTAssertEqual(service.displayState, .content)
+
+        service.debugExpireStabilityGuardForTesting()
+        service.fetchLyrics(
+            for: fixture.title,
+            artist: fixture.artist,
+            duration: fixture.duration + 2.0,
+            album: fixture.album
+        )
+
+        XCTAssertEqual(
+            service.displayState,
+            .content,
+            "same-song duration corrections must refresh in the background instead of blanking visible lyrics"
+        )
+        XCTAssertEqual(service.lyrics.count, visibleLineCount)
+    }
+
+    @MainActor
+    func testDifferentTrackFetchDropsStaleRowsBeforeSearching() {
+        guard let fixture = NativeLyricsDebugFixture.fixture(named: "translated-word") else {
+            return XCTFail("missing debug fixture")
+        }
+        let service = LyricsService.shared
+        service.applyDebugFixture(fixture)
+        defer { service.applyDebugFixture(fixture) }
+
+        XCTAssertFalse(service.lyrics.isEmpty)
+
+        service.debugExpireStabilityGuardForTesting()
+        service.fetchLyrics(
+            for: "Different Debug Track",
+            artist: "nanoPod Debug",
+            duration: fixture.duration,
+            album: fixture.album
+        )
+
+        XCTAssertEqual(service.displayState, .searching)
+        XCTAssertTrue(service.lyrics.isEmpty, "new-track searches must not let old rows block terminal no-lyrics publication")
+    }
+
     func testMissPathReachesLabeledTerminals() {
         // searching → deepSearching → terminal: a no-result search ends in an
         // explained terminal instead of an anonymous spinner.

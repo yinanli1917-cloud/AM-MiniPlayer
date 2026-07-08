@@ -2,7 +2,7 @@
  * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver), Network (NWPathMonitor)
  * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state + LyricsDisplayState machine (isLoading is a derived compat shim)
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
- * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7); confirmed terminal misses memo into LyricsMissMemo for the session (20min TTL) — replay answers instantly, forceRefresh bypasses+clears, never recorded on cancellation/offline
+ * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; refreshes may not demote displayed same-song lyrics to a spinner, while different-track fetches clear stale rows before searching; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7); confirmed terminal misses memo into LyricsMissMemo for the session (20min TTL) — replay answers instantly, forceRefresh bypasses+clears, never recorded on cancellation/offline
  * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
@@ -447,6 +447,11 @@ public class LyricsService: ObservableObject {
         )
         updateCurrentTime(fixture.startTime)
     }
+
+    @MainActor
+    public func debugExpireStabilityGuardForTesting() {
+        lastGoodLyricsTime = Date().addingTimeInterval(-(stabilityGuardCooldown + 1))
+    }
     #endif
 
     // ========================================================================
@@ -544,20 +549,49 @@ public class LyricsService: ObservableObject {
             forceRefresh: forceRefresh
         )
 
-        // 🔑 Reset stability guard — new fetch means we haven't confirmed good lyrics yet
-        lastGoodLyricsTime = nil
+        let shouldPreserveDisplayedLyricsDuringFetch = !forceRefresh
+            && !lyrics.isEmpty
+            && error == nil
+            && (
+                songID == currentSongID
+                || Self.isLikelySameSongMetadataCorrection(
+                    currentStableSongID: currentStableSongID,
+                    requestStableSongID: stableSongID,
+                    currentDuration: currentSongDuration,
+                    requestDuration: duration,
+                    currentAlbum: currentSongAlbum,
+                    requestAlbum: album
+                )
+            )
+
+        // 🔑 Reset stability guard only when visible lyrics are not being used as
+        // provisional content for a same-song metadata refresh.
+        if !shouldPreserveDisplayedLyricsDuringFetch {
+            lastGoodLyricsTime = nil
+        }
         // Clear error/state immediately so retry UI does not leak across track changes.
         error = nil
-        displayState = .searching
+        displayState = shouldPreserveDisplayedLyricsDuringFetch ? .content : .searching
 
-        // Reset translation state, including isTranslating, so a cancelled task cannot leave it stuck.
-        currentSongTranslationID = nil
-        translationsAreFromLyricsSource = false
-        isTranslating = false
-        translationFailed = false
+        if shouldPreserveDisplayedLyricsDuringFetch {
+            // Keep the current rows and translations visible while an Apple Music
+            // duration/album correction refreshes the same song in the background.
+            translationFailed = false
+        } else {
+            // Reset translation state, including isTranslating, so a cancelled task cannot leave it stuck.
+            currentSongTranslationID = nil
+            translationsAreFromLyricsSource = false
+            isTranslating = false
+            translationFailed = false
 
-        // Clear old translation data so hasTranslation cannot be read from stale lyrics.
-        clearAllTranslations()
+            // The visible request is for a different song or a forced retry. Drop
+            // stale rows now so terminal no-lyrics publication is not blocked by
+            // the previous track's still-populated array.
+            lyrics = []
+            currentLineIndex = nil
+            interludeAfterIndex = nil
+            isUnsyncedLyrics = false
+        }
         refreshTranslationAvailability()
 
         // 🔑 Cancel old fetch task early — before cache check.
@@ -704,8 +738,10 @@ public class LyricsService: ObservableObject {
         // cycle. A fetch that just applied provisional cached lyrics stays on
         // `.content`: its own granularity refetch must not demote visible
         // lyrics back to a spinner (review #5).
-        displayState = LyricsDisplayState.dispatchingFetch(showingProvisionalContent: appliedProvisionalCache)
-        if !appliedProvisionalCache {
+        displayState = LyricsDisplayState.dispatchingFetch(
+            showingProvisionalContent: appliedProvisionalCache || shouldPreserveDisplayedLyricsDuringFetch
+        )
+        if !appliedProvisionalCache && !shouldPreserveDisplayedLyricsDuringFetch {
             currentLineIndex = nil
         }
         error = nil
