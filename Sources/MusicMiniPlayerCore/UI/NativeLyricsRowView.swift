@@ -241,6 +241,8 @@ final class NativeLyricsRowView: NSView {
     // ───────────────────────────────────────────────────────────────────────────
     private var mainDeactivationOverlayBaseline: Float?
     private var translationDeactivationOverlayBaseline: Float?
+    private var parkedMainBrightOpacity: Float?
+    private var parkedTranslationBrightOpacity: Float?
 
     // ───────────────────────────────────────────────────────────────────────────
     // Monotonic post-line karaoke fade floor. postLineFadeOut is a pure function of
@@ -253,9 +255,32 @@ final class NativeLyricsRowView: NSView {
     private var mainPostLineFadeFloor: CGFloat = 1
     private var translationPostLineFadeFloor: CGFloat = 1
 
+    func freezeParkedTextPhaseOpacity() {
+        if parkedMainBrightOpacity == nil {
+            parkedMainBrightOpacity = mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity
+        }
+        if parkedTranslationBrightOpacity == nil {
+            parkedTranslationBrightOpacity = translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity
+        }
+        if let parkedMainBrightOpacity {
+            mainBrightTextLayer.opacity = parkedMainBrightOpacity
+        }
+        if let parkedTranslationBrightOpacity {
+            translationBrightTextLayer.opacity = parkedTranslationBrightOpacity
+        }
+    }
+
+    func clearParkedTextPhaseOpacity() {
+        parkedMainBrightOpacity = nil
+        parkedTranslationBrightOpacity = nil
+    }
+
     func beginDeactivationFade() {
-        mainDeactivationOverlayBaseline = mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity
-        translationDeactivationOverlayBaseline = translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity
+        mainDeactivationOverlayBaseline = parkedMainBrightOpacity
+            ?? (mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity)
+        translationDeactivationOverlayBaseline = parkedTranslationBrightOpacity
+            ?? (translationBrightTextLayer.isHidden ? 0 : translationBrightTextLayer.opacity)
+        clearParkedTextPhaseOpacity()
     }
 
     func updateDeactivationFade(progress: CGFloat) {
@@ -271,6 +296,7 @@ final class NativeLyricsRowView: NSView {
     func endDeactivationFade() {
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
+        clearParkedTextPhaseOpacity()
         // Restore the resting opacity. updateDeactivationFade scaled the bright overlays toward 0 as
         // the line receded; leaving them at that residual fraction made a still-mounted row relight
         // from the dim value when it was shown again (the "dim-then-relight"). 1 is the same resting
@@ -290,6 +316,9 @@ final class NativeLyricsRowView: NSView {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        #if DEBUG
+        debugPrepareForReuseCount += 1
+        #endif
         row = nil
         configuration = nil
         isHovering = false
@@ -298,6 +327,7 @@ final class NativeLyricsRowView: NSView {
         onTap = nil
         mainDeactivationOverlayBaseline = nil
         translationDeactivationOverlayBaseline = nil
+        clearParkedTextPhaseOpacity()
         mainPostLineFadeFloor = 1
         translationPostLineFadeFloor = 1
         // Clear the scale/position transform too. layout() re-asserts positioningTransform on every
@@ -547,8 +577,14 @@ final class NativeLyricsRowView: NSView {
     private(set) var layerMutationAttempts = 0
     func setPositioning(_ transform: CGAffineTransform) {
         layerMutationAttempts += 1
-        guard positioningTransform != transform else { return }
+        // Track the intended transform for layout()'s re-assertion regardless of whether we write now.
         positioningTransform = transform
+        // Guard on the ACTUAL layer transform, NOT a tracked ivar. AppKit resets a layer-backed view's
+        // transform to identity on its own layout/commit passes, desyncing the ivar from the layer. The
+        // old ivar guard then skipped re-applying the scale after such a reset, so a settled previous
+        // line's scale popped to 1.0 and stuck (the "scale pop"; NativeLyricsHandoffDesyncTests). Reading
+        // the layer is cheap and keeps this churn-safe: an already-correct layer still skips the write.
+        guard layer?.affineTransform() != transform else { return }
         layer?.setAffineTransform(transform)
         layerMutationCount += 1
     }
@@ -558,6 +594,15 @@ final class NativeLyricsRowView: NSView {
         layer?.opacity = opacity
         layerMutationCount += 1
     }
+
+    #if DEBUG
+    /// The tracked positioning-transform scale (what setPositioning believes is applied). Tests compare
+    /// this against the ACTUAL layer transform to catch a stale layer the churn guard refuses to correct.
+    var debugPositioningScale: CGFloat {
+        sqrt(positioningTransform.a * positioningTransform.a + positioningTransform.c * positioningTransform.c)
+    }
+    private(set) var debugPrepareForReuseCount = 0
+    #endif
 
     override func layout() {
         super.layout()
@@ -834,7 +879,7 @@ final class NativeLyricsRowView: NSView {
         let wasAwaitingTranslation = !translationLoadingDotContainerLayer.isHidden
 
         let plan = textRenderPlan(row: row, configuration: configuration)
-        let isActive = row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying
+        let isActive = row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying
         let appliesMainSweep = isActive && row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
         let mainAlpha = appliesMainSweep ? plan.constants.dimAlpha : 1
         // v2.8 karaoke: the dim base text stays fully visible at dimAlpha at ALL times; only
@@ -1001,7 +1046,7 @@ final class NativeLyricsRowView: NSView {
         debugPlaybackPhaseUpdateCount += 1
         #endif
         let renderTime = configuration.musicController.lyricRenderTime()
-        let isActive = row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying
+        let isActive = row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying
 
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
@@ -2449,7 +2494,7 @@ final class NativeLyricsRowView: NSView {
         NativeLyricsTextRenderPlan.Configuration(
             line: row.displayLine.line,
             currentTime: currentTime ?? configuration.musicController.lyricRenderTime(),
-            isActive: row.index == configuration.effectiveCurrentIndex && configuration.musicController.isPlaying,
+            isActive: row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying,
             staticOpacity: 1,
             showTranslation: configuration.showTranslation
         )

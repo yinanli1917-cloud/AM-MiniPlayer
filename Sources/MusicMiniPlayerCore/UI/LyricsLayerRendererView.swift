@@ -170,12 +170,17 @@ struct LyricsLayerRendererConfiguration {
     var nativeScrollTargetIndex: Int? = nil
     var nativeHotActiveIndices: Set<Int> = []
     var nativeBufferedActiveIndices: Set<Int> = []
+    var nativeTextActiveIndex: Int? = nil
 
     var effectiveCurrentIndex: Int {
         nativeDirectSnapIndex
             ?? nativeManualScrollSnapshot?.frozenDisplayIndex
             ?? nativeSemanticCurrentIndex
             ?? currentIndex
+    }
+
+    var effectiveTextActiveIndex: Int {
+        nativeTextActiveIndex ?? effectiveCurrentIndex
     }
 
     var effectiveScrollTargetIndex: Int {
@@ -244,7 +249,14 @@ final class NativeLyricsSurfaceView: NSView {
     // applyFrame paint, so a headless test can run censusOscillates over each channel and catch a
     // channel that rises-then-falls within the window — a stumble / flicker / refresh — which the
     // settled-VALUE probes are blind to. The live file-sink census is LOCAL_DEVELOPER_BUILD only.
-    struct DebugCensusTrack { var opacity: [CGFloat] = []; var target: [CGFloat] = []; var scale: [CGFloat] = []; var blur: [CGFloat] = []; var y: [CGFloat] = [] }
+    struct DebugCensusTrack {
+        var opacity: [CGFloat] = []
+        var target: [CGFloat] = []
+        var scale: [CGFloat] = []
+        var blur: [CGFloat] = []
+        var y: [CGFloat] = []
+        var bright: [CGFloat] = []
+    }
     private(set) var debugCensusByIndex: [Int: DebugCensusTrack] = [:]
     private(set) var debugSemanticTrace: [Int] = []
     private(set) var debugClockTrace: [TimeInterval] = []
@@ -268,6 +280,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var pausedSemanticLocked = false
     private var lastObservedSeekGeneration: Int = 0
     private var lastTextPhaseUpdateAt: CFTimeInterval?
+    private var textActiveByRowIndex: [Int: Bool] = [:]
     private var lastScrollWheelTime: CFTimeInterval = 0
     private var hoveredRowIndex: Int?
     // Last cursor position inside the surface (surface-space), or nil when the cursor is outside the
@@ -292,9 +305,13 @@ final class NativeLyricsSurfaceView: NSView {
     // presentationTick; a fallback in configure reveals immediately when no loop will run.
     private var initialRevealTicksRemaining = 0
     #if DEBUG
+    private var debugBypassInitialRevealGate = false
     var debugInitialMeasurementsPending: Bool {
         get { initialMeasurementsPending }
-        set { initialMeasurementsPending = newValue }
+        set {
+            initialMeasurementsPending = newValue
+            debugBypassInitialRevealGate = !newValue
+        }
     }
     /// Look up a mounted row view by its semantic index (tests assert per-row render state
     /// after driving the real configure → reconcile pipeline).
@@ -339,6 +356,18 @@ final class NativeLyricsSurfaceView: NSView {
         return visualTarget(for: row, configuration: runtimeConfiguration, presentationSnapshot: presentationSnapshot)
     }
     #endif
+
+    private func armInitialRevealGate() {
+        #if DEBUG
+        if debugBypassInitialRevealGate {
+            initialMeasurementsPending = false
+            initialRevealTicksRemaining = 0
+            return
+        }
+        #endif
+        initialMeasurementsPending = true
+        initialRevealTicksRemaining = 2
+    }
     private var consumedDirectSnapRequestIDs: Set<UUID> = []
     private var lastConfiguredTextPhaseIndex: Int?
     private var deferredDeactivationIndex: Int?
@@ -613,8 +642,7 @@ final class NativeLyricsSurfaceView: NSView {
             pausedSemanticLocked = false
             lastTextPhaseUpdateAt = nil
             deferredDeactivationIndex = nil
-            initialMeasurementsPending = true
-            initialRevealTicksRemaining = 2
+            armInitialRevealGate()
             #if LOCAL_DEVELOPER_BUILD
             bloomPresentationDiagUntil = CACurrentMediaTime() + 1.5
             bloomTrajUntil = CACurrentMediaTime() + 2.0
@@ -633,16 +661,14 @@ final class NativeLyricsSurfaceView: NSView {
             forceSnapUntil = CACurrentMediaTime() + 0.8
             // Rows are mounting NOW (empty → non-empty). Hide them until the loop commits a spread
             // frame so the first-frame pre-commit identity never shows as a stacked flash.
-            initialMeasurementsPending = true
-            initialRevealTicksRemaining = 2
+            armInitialRevealGate()
             #if LOCAL_DEVELOPER_BUILD
             bloomTrajUntil = CACurrentMediaTime() + 2.0
             bloomTrajArmedAt = CACurrentMediaTime()
             #endif
         }
         if self.configuration == nil {
-            initialMeasurementsPending = true
-            initialRevealTicksRemaining = 2
+            armInitialRevealGate()
         }
         self.configuration = configuration
         #if LOCAL_DEVELOPER_BUILD
@@ -821,9 +847,10 @@ final class NativeLyricsSurfaceView: NSView {
             visibleRows: visibleRows,
             snap: snapVisuals
         )
-        let previousTextPhaseIndex = lastConfiguredTextPhaseIndex
-        let activeTextPhaseIndex = runtimeConfiguration.effectiveCurrentIndex
-        let textPhaseIndexChanged = previousTextPhaseIndex != activeTextPhaseIndex
+        let presentationSnapshot = nativePresentationSnapshot(
+            lineIndices: visibleRows.map(\.index),
+            configuration: runtimeConfiguration
+        )
         var mountedCount = 0
         do {
             for row in visibleRows {
@@ -848,12 +875,25 @@ final class NativeLyricsSurfaceView: NSView {
                 if isDeferredDeactivation {
                     continue
                 }
-                let contentUpdated = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
-                let needsActivationRefresh = textPhaseIndexChanged
-                    && (row.index == activeTextPhaseIndex || row.index == previousTextPhaseIndex)
-                if needsActivationRefresh && !contentUpdated {
-                    view.configure(row: row, configuration: runtimeConfiguration)
+                let rowTextConfiguration = configurationForTextPhase(
+                    for: row,
+                    configuration: runtimeConfiguration,
+                    presentationSnapshot: presentationSnapshot
+                )
+                updateTextActivation(
+                    for: row,
+                    textConfiguration: rowTextConfiguration,
+                    runtimeConfiguration: runtimeConfiguration
+                )
+                updateParkedTextPhaseFreeze(
+                    for: row,
+                    textConfiguration: rowTextConfiguration,
+                    runtimeConfiguration: runtimeConfiguration
+                )
+                if row.index == deferredDeactivationIndex {
+                    continue
                 }
+                _ = updateContentIfNeeded(view: view, row: row, configuration: rowTextConfiguration)
             }
             let renderSnapshot = nativeFrameRenderSnapshot(
                 rows: visibleRows,
@@ -871,11 +911,16 @@ final class NativeLyricsSurfaceView: NSView {
                 // row out here makes geometryReady true on the very first phase application.
                 applyFrame(for: row, view: view, configuration: runtimeConfiguration, renderSnapshot: renderSnapshot)
                 guard row.index != deferredDeactivationIndex else { continue }
-                if row.index == activeTextPhaseIndex {
+                let rowTextConfiguration = configurationForTextPhase(
+                    for: row,
+                    configuration: runtimeConfiguration,
+                    presentationSnapshot: presentationSnapshot
+                )
+                if shouldDriveTextPhase(row: row, textConfiguration: rowTextConfiguration, runtimeConfiguration: runtimeConfiguration) {
                     if view.frame.size != .zero {
                         view.layoutSubtreeIfNeeded()
                     }
-                    if let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration) {
+                    if let textSample = view.updatePlaybackPhase(configuration: rowTextConfiguration) {
                         renderTelemetry.recordTextPhase(textSample)
                     }
                 }
@@ -896,7 +941,7 @@ final class NativeLyricsSurfaceView: NSView {
         // signature. Logged in the LOCAL_DEVELOPER_BUILD configuration (build_app.sh).
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         let ovlCount = rowViews.values.filter { $0.debugMainBrightOverlayActive }.count
-        DebugLogger.log("BLoomDiag", "ovl=\(ovlCount) rows=\(visibleRows.count) curIdx=\(activeTextPhaseIndex) mounted=\(mountedCount) unmounted=\(unmountedCount)")
+        DebugLogger.log("BLoomDiag", "ovl=\(ovlCount) rows=\(visibleRows.count) curIdx=\(runtimeConfiguration.effectiveCurrentIndex) mounted=\(mountedCount) unmounted=\(unmountedCount)")
         #endif
         #if LOCAL_DEVELOPER_BUILD
         // Bloom probe (direct-file sink survives release stripping; touch /tmp/nanopod_bloom.log
@@ -926,12 +971,11 @@ final class NativeLyricsSurfaceView: NSView {
             }
             let presSpread = (presYs.max() ?? 0) - (presYs.min() ?? 0)
             fh.seekToEndOfFile()
-            fh.write("[Bloom] curIdx=\(activeTextPhaseIndex) rows=\(visibleRows.count) ovl=\(ovlCount) zeroGeo=\(zeroGeo) ySpread=\(Int(ySpread)) presSpread=\(Int(presSpread)) anims=\(anims) avgGap=\(Int(avgGap)) maxBlur=\(String(format: "%.1f", maxBlur)) snap=\(snapPositions) initPending=\(initialMeasurementsPending)\n".data(using: .utf8)!)
+            fh.write("[Bloom] curIdx=\(runtimeConfiguration.effectiveCurrentIndex) rows=\(visibleRows.count) ovl=\(ovlCount) zeroGeo=\(zeroGeo) ySpread=\(Int(ySpread)) presSpread=\(Int(presSpread)) anims=\(anims) avgGap=\(Int(avgGap)) maxBlur=\(String(format: "%.1f", maxBlur)) snap=\(snapPositions) initPending=\(initialMeasurementsPending)\n".data(using: .utf8)!)
             fh.closeFile()
         }
         #endif
         CATransaction.commit()
-        lastConfiguredTextPhaseIndex = activeTextPhaseIndex
         renderTelemetry.recordLifecycle(
             mounted: mountedCount,
             unmounted: unmountedCount,
@@ -1393,6 +1437,95 @@ final class NativeLyricsSurfaceView: NSView {
         return presentationSnapshot.targetIndices[row.index] ?? presentationSnapshot.scrollTargetIndex
     }
 
+    private func configurationForTextPhase(
+        for row: LayerBackedLyricRow,
+        configuration: LyricsLayerRendererConfiguration,
+        presentationSnapshot: NativeLyricsPresentationSnapshot
+    ) -> LyricsLayerRendererConfiguration {
+        var textConfiguration = configuration
+        textConfiguration.nativeTextActiveIndex = visualCurrentIndex(
+            for: row,
+            configuration: configuration,
+            presentationSnapshot: presentationSnapshot
+        )
+        return textConfiguration
+    }
+
+    private func shouldDriveTextPhase(
+        row: LayerBackedLyricRow,
+        textConfiguration: LyricsLayerRendererConfiguration,
+        runtimeConfiguration: LyricsLayerRendererConfiguration
+    ) -> Bool {
+        row.index == textConfiguration.effectiveTextActiveIndex
+            && textConfiguration.effectiveTextActiveIndex == runtimeConfiguration.effectiveCurrentIndex
+    }
+
+    private func updateTextActivation(
+        for row: LayerBackedLyricRow,
+        textConfiguration: LyricsLayerRendererConfiguration,
+        runtimeConfiguration: LyricsLayerRendererConfiguration
+    ) {
+        let isActive = row.index == textConfiguration.effectiveTextActiveIndex
+            && textConfiguration.musicController.isPlaying
+        let wasActive = textActiveByRowIndex[row.index] ?? false
+        textActiveByRowIndex[row.index] = isActive
+        guard wasActive != isActive else { return }
+        if wasActive && !isActive {
+            beginDeferredDeactivation(index: row.index, runtimeConfiguration: runtimeConfiguration)
+        }
+        if isActive {
+            lastConfiguredTextPhaseIndex = row.index
+        }
+    }
+
+    private func updateParkedTextPhaseFreeze(
+        for row: LayerBackedLyricRow,
+        textConfiguration: LyricsLayerRendererConfiguration,
+        runtimeConfiguration: LyricsLayerRendererConfiguration
+    ) {
+        guard let rowID = rowIDByIndex[row.index],
+              let view = rowViews[rowID] else {
+            return
+        }
+        let isParkedFinishedLine = row.index == textConfiguration.effectiveTextActiveIndex
+            && textConfiguration.effectiveTextActiveIndex != runtimeConfiguration.effectiveCurrentIndex
+            && textConfiguration.musicController.isPlaying
+        if isParkedFinishedLine {
+            view.freezeParkedTextPhaseOpacity()
+        } else if row.index != deferredDeactivationIndex {
+            view.clearParkedTextPhaseOpacity()
+        }
+    }
+
+    private func refreshTextActivation(
+        runtimeConfiguration: LyricsLayerRendererConfiguration
+    ) {
+        let visibleRows = visibleRows(for: runtimeConfiguration)
+        let liveIndices = Set(runtimeConfiguration.rows.map(\.index))
+        textActiveByRowIndex = textActiveByRowIndex.filter { liveIndices.contains($0.key) }
+        let presentationSnapshot = nativePresentationSnapshot(
+            lineIndices: visibleRows.map(\.index),
+            configuration: runtimeConfiguration
+        )
+        for row in visibleRows {
+            let rowTextConfiguration = configurationForTextPhase(
+                for: row,
+                configuration: runtimeConfiguration,
+                presentationSnapshot: presentationSnapshot
+            )
+            updateTextActivation(
+                for: row,
+                textConfiguration: rowTextConfiguration,
+                runtimeConfiguration: runtimeConfiguration
+            )
+            updateParkedTextPhaseFreeze(
+                for: row,
+                textConfiguration: rowTextConfiguration,
+                runtimeConfiguration: runtimeConfiguration
+            )
+        }
+    }
+
     private func interludeBlend(
         for row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration
@@ -1568,6 +1701,7 @@ final class NativeLyricsSurfaceView: NSView {
             track.scale.append(visual.scale)
             track.blur.append(appliedBlur)
             track.y.append(y)
+            track.bright.append(CGFloat(view.debugMainBrightOpacity))
             debugCensusByIndex[row.index] = track
         }
         #endif
@@ -2191,13 +2325,7 @@ final class NativeLyricsSurfaceView: NSView {
             || snapMode.keepsPresentationLoopAlive
         manualPresentationNeedsApply = false
         withDisabledLayerActions {
-            if activeTextLineChanged {
-                refreshTextRowsForActiveLineChange(
-                    previousIndex: previousSemanticIndex,
-                    currentIndex: runtimeConfiguration.effectiveCurrentIndex,
-                    runtimeConfiguration: runtimeConfiguration
-                )
-            }
+            refreshTextActivation(runtimeConfiguration: runtimeConfiguration)
             // Fade the receding line's bright sung-overlay toward 0 in step with its opacity recede,
             // so it never snaps off at finalization (#2c blink). Progress maps the row's current
             // opacity (active ≈1.0 → past ≈0.35) onto [1,0]; finalizeDeferredDeactivation then clears
@@ -2504,31 +2632,18 @@ final class NativeLyricsSurfaceView: NSView {
     }
     #endif
 
-    private func refreshTextRowsForActiveLineChange(
-        previousIndex: Int?,
-        currentIndex: Int,
+    private func beginDeferredDeactivation(
+        index: Int,
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
-        if let oldDeferred = deferredDeactivationIndex, oldDeferred != currentIndex {
+        if let oldDeferred = deferredDeactivationIndex, oldDeferred != index {
             forceFinalizeDeactivation(index: oldDeferred, runtimeConfiguration: runtimeConfiguration)
         }
-        if let previousIndex, previousIndex != currentIndex {
-            if previousIndex == deferredDeactivationIndex {
-                // already deferred
-            } else {
-                deferredDeactivationIndex = previousIndex
-                // Capture the receding line's bright-overlay opacity so it can fade out smoothly
-                // with the recede instead of staying frozen and snapping to 0 at finalization (#2c).
-                if let id = rowIDByIndex[previousIndex] {
-                    rowViews[id]?.beginDeactivationFade()
-                }
-            }
+        guard deferredDeactivationIndex != index else { return }
+        deferredDeactivationIndex = index
+        if let id = rowIDByIndex[index] {
+            rowViews[id]?.beginDeactivationFade()
         }
-        if let row = runtimeConfiguration.rows.first(where: { $0.index == currentIndex }),
-           let view = rowViews[row.id] {
-            _ = updateContentIfNeeded(view: view, row: row, configuration: runtimeConfiguration)
-        }
-        lastConfiguredTextPhaseIndex = currentIndex
     }
 
     private func forceFinalizeDeactivation(index: Int, runtimeConfiguration: LyricsLayerRendererConfiguration) {
@@ -2546,13 +2661,9 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func finalizeDeferredDeactivation(runtimeConfiguration: LyricsLayerRendererConfiguration) {
         guard let idx = deferredDeactivationIndex else { return }
-        let settled: Bool
         if let state = visualStates[idx] {
-            settled = state.isSettled || state.opacity < 0.38
-        } else {
-            settled = true
+            guard state.opacity < 0.38 else { return }
         }
-        guard settled else { return }
         deferredDeactivationIndex = nil
         guard let row = runtimeConfiguration.rows.first(where: { $0.index == idx }),
               let view = rowViews[row.id] else { return }
@@ -3230,7 +3341,7 @@ final class NativeLyricsSurfaceView: NSView {
         // the new line centered: the intermittent "current line not updated / highlight stuck on
         // the previous line" bug. presentationTick() captures previousSemanticIndex BEFORE
         // runtimeConfiguration mutates it, so it detects the change and runs the same path the
-        // display-link uses (syncVisualTargets + refreshTextRowsForActiveLineChange +
+        // display-link uses (syncVisualTargets + refreshTextActivation +
         // updateTextPhases + applyFrames) and re-arms the next line-advance timer. One code path,
         // both channels (position + visuals) advance together.
         presentationTick(displayInterval: nil, displayTimestamp: nil)
@@ -3365,7 +3476,7 @@ final class NativeLyricsSurfaceView: NSView {
 
         init(row: LayerBackedLyricRow, configuration: LyricsLayerRendererConfiguration) {
             self.row = row
-            self.isCurrent = row.index == configuration.effectiveCurrentIndex
+            self.isCurrent = row.index == configuration.effectiveTextActiveIndex
             self.isPlaying = configuration.musicController.isPlaying
             self.showTranslation = configuration.showTranslation
             let awaitingTranslation = LyricLineTranslationLayoutPolicy.isAwaitingTranslation(
@@ -3377,7 +3488,7 @@ final class NativeLyricsSurfaceView: NSView {
             )
             self.isAwaitingTranslation = awaitingTranslation
             self.translationFailed = configuration.translationFailed
-                && row.index == configuration.effectiveCurrentIndex
+                && row.index == configuration.effectiveTextActiveIndex
                 && awaitingTranslation
             self.isPrecedingInterlude = configuration.interludeAfterIndex == row.index
             self.rowWidth = configuration.rowWidth
@@ -3454,39 +3565,69 @@ final class NativeLyricsSurfaceView: NSView {
     private func updateTextPhasesForCurrentConfiguration(
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
-        guard let (_, view) = activeTextPhaseRow(for: runtimeConfiguration) else { return }
+        let visibleRows = visibleRows(for: runtimeConfiguration)
+        let presentationSnapshot = nativePresentationSnapshot(
+            lineIndices: visibleRows.map(\.index),
+            configuration: runtimeConfiguration
+        )
+        guard let (row, view, textConfiguration) = activeTextPhaseRow(
+            for: runtimeConfiguration,
+            visibleRowList: visibleRows,
+            presentationSnapshot: presentationSnapshot
+        ) else { return }
+        guard shouldDriveTextPhase(
+            row: row,
+            textConfiguration: textConfiguration,
+            runtimeConfiguration: runtimeConfiguration
+        ) else { return }
         // updatePlaybackPhase decides per-word (syllable) sweep vs whole-line sweep from the
-        // bright text-layer's BOUNDS. On a per-line advance, refreshTextRowsForActiveLineChange
-        // may have just changed this row's content (needsLayout), and AppKit lays text sublayers
-        // out ASYNCHRONOUSLY — so without forcing layout here we read .zero/stale bounds,
-        // geometryReady comes out false, and the row degrades to line-level (the random
-        // "时不时逐字、时不时逐行" toggle). Force the active row's layout BEFORE reading its
-        // geometry for the phase — same ordering fix as the reconcile path.
+        // bright text-layer's BOUNDS. When a row becomes text-active, updateContentIfNeeded may
+        // have just changed this row's content (needsLayout), and AppKit lays text sublayers out
+        // ASYNCHRONOUSLY — so without forcing layout here we read .zero/stale bounds, geometryReady
+        // comes out false, and the row degrades to line-level (the random "时不时逐字、时不时逐行"
+        // toggle). Force the active row's layout BEFORE reading its geometry for the phase — same
+        // ordering fix as the reconcile path.
         if view.frame.size != .zero {
             view.layoutSubtreeIfNeeded()
         }
-        guard let textSample = view.updatePlaybackPhase(configuration: runtimeConfiguration, managesTransaction: false) else {
+        guard let textSample = view.updatePlaybackPhase(configuration: textConfiguration, managesTransaction: false) else {
             return
         }
         renderTelemetry.recordTextPhase(textSample)
     }
 
     private func activeTextPhaseRow(
-        for configuration: LyricsLayerRendererConfiguration
-    ) -> (LayerBackedLyricRow, NativeLyricsRowView)? {
-        let activeIndex = configuration.effectiveCurrentIndex
-        if let rowID = rowIDByIndex[activeIndex],
-           let view = rowViews[rowID],
-           let row = view.currentRow,
-           row.index == activeIndex {
-            return (row, view)
+        for configuration: LyricsLayerRendererConfiguration,
+        visibleRowList: [LayerBackedLyricRow]? = nil,
+        presentationSnapshot: NativeLyricsPresentationSnapshot? = nil
+    ) -> (LayerBackedLyricRow, NativeLyricsRowView, LyricsLayerRendererConfiguration)? {
+        let rows = visibleRowList ?? visibleRows(for: configuration)
+        let snapshot = presentationSnapshot ?? nativePresentationSnapshot(
+            lineIndices: rows.map(\.index),
+            configuration: configuration
+        )
+        var fallback: (LayerBackedLyricRow, NativeLyricsRowView, LyricsLayerRendererConfiguration)?
+        for row in rows {
+            let rowTextConfiguration = configurationForTextPhase(
+                for: row,
+                configuration: configuration,
+                presentationSnapshot: snapshot
+            )
+            guard row.index == rowTextConfiguration.effectiveTextActiveIndex,
+                  let rowID = rowIDByIndex[row.index],
+                  let view = rowViews[rowID],
+                  view.currentRow?.index == row.index else {
+                continue
+            }
+            let candidate = (row, view, rowTextConfiguration)
+            if shouldDriveTextPhase(row: row, textConfiguration: rowTextConfiguration, runtimeConfiguration: configuration) {
+                return candidate
+            }
+            if fallback == nil {
+                fallback = candidate
+            }
         }
-        guard let view = rowViews.values.first(where: { $0.currentRow?.index == activeIndex }),
-              let row = view.currentRow else {
-            return nil
-        }
-        rowIDByIndex[activeIndex] = row.id
-        return (row, view)
+        return fallback
     }
 
     private func shouldUpdateActiveTextPhase(
@@ -3514,7 +3655,12 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func hasActiveTextAnimation(configuration: LyricsLayerRendererConfiguration) -> Bool {
         guard configuration.musicController.isPlaying else { return false }
-        guard let activeRow = activeTextPhaseRow(for: configuration)?.0
+        let activeTuple = activeTextPhaseRow(for: configuration)
+        if let (row, _, textConfiguration) = activeTuple,
+           !shouldDriveTextPhase(row: row, textConfiguration: textConfiguration, runtimeConfiguration: configuration) {
+            return false
+        }
+        guard let activeRow = activeTuple?.0
             ?? configuration.rows.first(where: { $0.index == configuration.effectiveCurrentIndex }) else {
             return false
         }

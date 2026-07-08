@@ -220,10 +220,12 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         guard let track = surface.debugCensusByIndex[previousIndex] else {
             return XCTFail("previous row \(previousIndex) must stay mounted across the handoff")
         }
-        let count = min(track.opacity.count, track.y.count, surface.debugSemanticTrace.count)
+        let count = min(track.opacity.count, track.y.count, track.bright.count, surface.debugSemanticTrace.count)
         XCTAssertGreaterThan(count, 8, "precondition: handoff drive must paint enough frames")
         let semantics = Array(surface.debugSemanticTrace.prefix(count))
         let opacity = Array(track.opacity.prefix(count))
+        let bright = Array(track.bright.prefix(count))
+        let visualBrightness = zip(opacity, bright).map { $0 * max($1, 0.2) }
         let y = Array(track.y.prefix(count))
         guard let handoffFrame = semantics.firstIndex(of: nextIndex) else {
             return XCTFail("semantic index never advanced to \(nextIndex); trace=\(semantics)")
@@ -231,6 +233,7 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
 
         let baselineY = y.prefix(max(3, handoffFrame)).reduce(0, +) / CGFloat(max(3, handoffFrame))
         let baselineOpacity = opacity.prefix(max(3, handoffFrame)).max() ?? opacity[handoffFrame]
+        let baselineBrightness = visualBrightness.prefix(max(3, handoffFrame)).max() ?? visualBrightness[handoffFrame]
         let motionThreshold: CGFloat = 0.5
         let firstMotionFrame = y[0..<count].firstIndex {
             abs($0 - baselineY) > motionThreshold
@@ -238,19 +241,40 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         let firstOpacityDropFrame = opacity[0..<count].firstIndex {
             baselineOpacity - $0 > 0.02
         } ?? count - 1
+        let firstBrightnessDropFrame = visualBrightness[0..<count].firstIndex {
+            baselineBrightness - $0 > 0.02
+        } ?? count - 1
         let preMotionRange = min(firstOpacityDropFrame, handoffFrame)...max(handoffFrame, firstMotionFrame - 1)
         let minPreMotionOpacity = preMotionRange.map { opacity[$0] }.min() ?? opacity[handoffFrame]
         let opacityDropBeforeMotion = baselineOpacity - minPreMotionOpacity
+        let brightnessPreMotionRange = min(firstBrightnessDropFrame, handoffFrame)...max(handoffFrame, firstMotionFrame - 1)
+        let minPreMotionBrightness = brightnessPreMotionRange.map { visualBrightness[$0] }.min() ?? visualBrightness[handoffFrame]
+        let brightnessDropBeforeMotion = baselineBrightness - minPreMotionBrightness
         let maxYStep = zip(y, y.dropFirst()).map { abs($1 - $0) }.max() ?? 0
+        let maxScaleStep = zip(track.scale.prefix(count), track.scale.dropFirst().prefix(count - 1))
+            .map { abs($1 - $0) }
+            .max() ?? 0
 
         print(
-            "handoff previous=\(previousIndex) next=\(nextIndex) frame=\(handoffFrame) firstMotion=\(firstMotionFrame) firstOpacityDrop=\(firstOpacityDropFrame) " +
-            "opDropBeforeMotion=\(String(format: "%.3f", opacityDropBeforeMotion)) maxYStep=\(String(format: "%.2f", maxYStep)) baselineY=\(String(format: "%.1f", baselineY)) " +
+            "handoff previous=\(previousIndex) next=\(nextIndex) frame=\(handoffFrame) firstMotion=\(firstMotionFrame) firstOpacityDrop=\(firstOpacityDropFrame) firstBrightnessDrop=\(firstBrightnessDropFrame) " +
+            "opDropBeforeMotion=\(String(format: "%.3f", opacityDropBeforeMotion)) brightnessDropBeforeMotion=\(String(format: "%.3f", brightnessDropBeforeMotion)) maxYStep=\(String(format: "%.2f", maxYStep)) maxScaleStep=\(String(format: "%.3f", maxScaleStep)) baselineY=\(String(format: "%.1f", baselineY)) " +
             "semantics=\(semantics[handoffFrame..<min(count, handoffFrame + 16)].map(String.init).joined(separator: ",")) " +
             "op=\(opacity[handoffFrame..<min(count, handoffFrame + 16)].map { String(format: "%.3f", $0) }.joined(separator: ",")) " +
+            "bright=\(bright[handoffFrame..<min(count, handoffFrame + 16)].map { String(format: "%.3f", $0) }.joined(separator: ",")) " +
+            "visB=\(visualBrightness[handoffFrame..<min(count, handoffFrame + 16)].map { String(format: "%.3f", $0) }.joined(separator: ",")) " +
             "y=\(y[handoffFrame..<min(count, handoffFrame + 16)].map { String(format: "%.1f", $0) }.joined(separator: ","))"
         )
 
+        XCTAssertLessThanOrEqual(
+            firstMotionFrame,
+            firstBrightnessDropFrame,
+            "previous row brightness started dropping before its Y started moving"
+        )
+        XCTAssertLessThanOrEqual(
+            brightnessDropBeforeMotion,
+            0.02,
+            "previous row visually faded before its Y started moving; bright overlay and position are desynced"
+        )
         XCTAssertLessThanOrEqual(
             firstMotionFrame,
             firstOpacityDropFrame,
@@ -265,6 +289,11 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
             maxYStep,
             12,
             "previous row took a single-frame handoff step larger than the smooth-motion budget"
+        )
+        XCTAssertLessThanOrEqual(
+            maxScaleStep,
+            0.03,
+            "previous row took a single-frame scale step larger than the smooth-motion budget"
         )
     }
 }
