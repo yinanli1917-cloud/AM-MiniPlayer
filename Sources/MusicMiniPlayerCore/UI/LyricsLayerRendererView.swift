@@ -295,6 +295,9 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastAppliedConfigureSignature: String?
     #if DEBUG
     var debugSkipDedupe = false
+    /// A/B seam: when true, visualCurrentIndex binds the visual demotion to the SEMANTIC line index
+    /// (pre-1e1ffbf), instead of the scroll wave's per-row targetIndex (current). Headless-only.
+    static var debugForceSemanticVisualIndex = false
     #endif
     private var initialMeasurementsPending = true
     // Reveal gate. Freshly-mounted rows are positioned ONLY by their layer transform, so for the
@@ -1428,6 +1431,14 @@ final class NativeLyricsSurfaceView: NSView {
         configuration: LyricsLayerRendererConfiguration,
         presentationSnapshot: NativeLyricsPresentationSnapshot
     ) -> Int {
+        #if DEBUG
+        // A/B seam: forces the pre-1e1ffbf behavior (visual demotion bound to the SEMANTIC line index
+        // instead of the scroll wave's per-row targetIndex). Lets a headless test measure both handoff
+        // behaviors in one build. Never set in production.
+        if NativeLyricsSurfaceView.debugForceSemanticVisualIndex {
+            return presentationSnapshot.semanticIndex
+        }
+        #endif
         guard configuration.playbackMode == .natural,
               !configuration.effectiveIsManualScrolling,
               configuration.interludeAfterIndex == nil,

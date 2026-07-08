@@ -70,6 +70,67 @@ final class NativeLyricsHandoffDesyncTests: XCTestCase {
             onLineMotionFrames: { _, _, _, _ in })
     }
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // A/B: is the "scroll feels different" the demotion binding introduced by 1e1ffbf? Drive the SAME
+    // handoff twice — demotion bound to the scroll WAVE (current) vs the SEMANTIC index (pre-1e1ffbf) —
+    // and measure how spread the previous line's fade/shrink is relative to the semantic line change.
+    // ───────────────────────────────────────────────────────────────────────────
+    @MainActor
+    func test_ab_demotionBinding_waveVsSemantic() {
+        struct Result { var handoff = -1; var onset = -1; var settle = -1; var yOnset = -1; var op: [CGFloat] = []; var sc: [CGFloat] = []; var yy: [CGFloat] = []; var sem: [Int] = [] }
+        func measure(forceSemantic: Bool) -> Result {
+            NativeLyricsSurfaceView.debugForceSemanticVisualIndex = forceSemantic
+            let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+            host(surface, NSSize(width: 360, height: 600))
+            let mc = MusicController(preview: true); mc.duration = 240; mc.isPlaying = true
+            let rows = makeRows(20)
+            mc.syncPlaybackClock(to: 4.0, playing: true)
+            surface.configure(config(rows, current: 2, mc: mc)); surface.layoutSubtreeIfNeeded()
+            for _ in 0..<24 { RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0)) }
+            surface.debugResetCensus(); surface.debugCensusEnabled = true
+            let start = Date(); let base = 4.6
+            while Date().timeIntervalSince(start) < 2.6 {
+                mc.syncPlaybackClock(to: base + Date().timeIntervalSince(start), playing: true)
+                surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 2, mc: mc))
+                RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
+            }
+            var r = Result()
+            r.op = surface.debugCensusByIndex[2]?.opacity ?? []
+            r.sc = surface.debugCensusByIndex[2]?.scale ?? []
+            r.yy = surface.debugCensusByIndex[2]?.y ?? []
+            r.sem = surface.debugSemanticTrace
+            let n = min(r.op.count, min(r.yy.count, r.sem.count))
+            r.handoff = (0..<n).first { r.sem[$0] != 2 } ?? -1
+            r.onset = (0..<n).first { r.op[$0] < 0.9 } ?? -1
+            r.settle = (0..<n).first { r.op[$0] < 0.4 } ?? -1
+            let y0 = r.yy.first ?? 0
+            r.yOnset = (0..<n).first { abs(r.yy[$0] - y0) > 2 } ?? -1
+            hostWindow?.orderOut(nil); hostWindow = nil
+            return r
+        }
+        let wave = measure(forceSemantic: false)
+        let semantic = measure(forceSemantic: true)
+        NativeLyricsSurfaceView.debugForceSemanticVisualIndex = false
+
+        func report(_ label: String, _ r: Result) {
+            let visLag = r.onset - r.handoff, posLag = r.yOnset - r.handoff
+            // The distortion fingerprint: the LOOK (opacity) starts before the MOVEMENT (Y) = dim-in-place.
+            let lookBeforeMove = r.yOnset - r.onset
+            print("\n=== \(label) ===  handoff@\(r.handoff)  lookStart@\(r.onset)  moveStart@\(r.yOnset)")
+            print("  look starts \(visLag) frames after line change (~\(String(format: "%.3f", Double(visLag)/60))s)")
+            print("  move starts \(posLag) frames after line change (~\(String(format: "%.3f", Double(posLag)/60))s)")
+            print("  LOOK-before-MOVE gap = \(lookBeforeMove) frames (>0 = dim-in-place = DISTORTION risk)")
+            let lo = max(0, r.handoff - 2), hi = min(min(r.op.count, r.yy.count), r.handoff + 22)
+            if lo < hi {
+                print("  opacity: " + (lo..<hi).map { String(format: "%.2f", Double(r.op[$0])) }.joined(separator: " "))
+                print("  Y:       " + (lo..<hi).map { String(format: "%.0f", Double(r.yy[$0])) }.joined(separator: " "))
+            }
+        }
+        report("WAVE-bound (current)", wave)
+        report("SEMANTIC-bound (crisp-onset candidate)", semantic)
+        print("\nVERDICT: crisp-onset is SAFE only if its LOOK-before-MOVE gap ~= 0 (no dim-in-place).")
+    }
+
     @MainActor
     func test_diagnose_previousLineFadeMoveDesyncAcrossHandoff() {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
