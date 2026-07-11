@@ -70,6 +70,31 @@ struct PlaybackPositionCorrectionPolicy {
             && !isManualScrolling
             && abs(drift) >= visibleLyricCorrectionThreshold
     }
+
+    // Defect 2 (stale poll after track change): the notification path resets the
+    // clock to 0 and immediately fires an async ScriptingBridge poll; Music.app
+    // mid-transition can still answer with the OLD track's position, which the
+    // drift correction would apply — "new song at mid-song progress" until the
+    // next poll. Symmetric counterpart of shouldDeferTransientReset (which
+    // guards backward resets): defer forward jumps inconsistent with the fresh
+    // clock inside a short suspect window. A genuine mid-song start is accepted
+    // once the window passes or the deferral cap is reached.
+    static let postTrackChangeSuspectWindow: TimeInterval = 2.5
+    static let minimumSuspiciousForwardJump: TimeInterval = 5.0
+
+    static func shouldDeferPostTrackChangePoll(
+        polledPosition: TimeInterval,
+        interpolatedPosition: TimeInterval,
+        secondsSinceTrackChange: TimeInterval,
+        seekPending: Bool,
+        consecutiveDeferrals: Int = 0
+    ) -> Bool {
+        guard !seekPending else { return false }
+        guard consecutiveDeferrals < maxConsecutiveTransientResetDeferrals else { return false }
+        guard secondsSinceTrackChange >= 0,
+              secondsSinceTrackChange <= postTrackChangeSuspectWindow else { return false }
+        return polledPosition - interpolatedPosition > minimumSuspiciousForwardJump
+    }
 }
 
 // MARK: - MusicController
@@ -273,6 +298,9 @@ public class MusicController: ObservableObject {
     private var lastPositionPollStateReadAt: Date = .distantPast
     private var cachedPositionPollStateRaw: Int = MusicController.sbStopped
     private var transientPositionResetDeferrals: Int = 0
+    // Defect 2: opens the post-track-change suspect window for stale SB polls.
+    private var lastTrackChangeClockResetAt: Date = .distantPast
+    private var postTrackChangePollDeferrals: Int = 0
     private var transientPositionResetVerificationInFlight = false
 
     // 🔑 Radio track-change backstop: when persistentID is empty (radio/URL track),
@@ -939,6 +967,8 @@ public class MusicController: ObservableObject {
                 self.syncPlaybackClock(to: 0, playing: self.isPlaying)
                 self.lastPollTime = Date()
                 self.lastFrameTime = Date()
+                self.lastTrackChangeClockResetAt = Date()
+                self.postTrackChangePollDeferrals = 0
                 self.handleTrackChange(name: name, artist: artist, album: newAlbum ?? self.currentAlbum)
             }
 
@@ -1386,6 +1416,26 @@ public class MusicController: ObservableObject {
                 }
 
                 self.transientPositionResetDeferrals = 0
+
+                // Defect 2: a poll answered with the OLD track's position right after
+                // the track-change clock reset. Skip the cycle; the next poll (1s)
+                // carries the new track's real position.
+                let shouldDeferPostTrackChange = PlaybackPositionCorrectionPolicy.shouldDeferPostTrackChangePoll(
+                    polledPosition: position,
+                    interpolatedPosition: self.internalCurrentTime,
+                    secondsSinceTrackChange: Date().timeIntervalSince(self.lastTrackChangeClockResetAt),
+                    seekPending: self.seekPending,
+                    consecutiveDeferrals: self.postTrackChangePollDeferrals
+                )
+                if shouldDeferPostTrackChange {
+                    self.postTrackChangePollDeferrals += 1
+                    DebugLogger.log("Timing", "🧯 STALE POST-TRACK-CHANGE POLL: ignored polled=\(String(format: "%.2f", position)) interpolated=\(String(format: "%.2f", self.internalCurrentTime))")
+                    self.lastPollTime = measurementTime
+                    self.updateTimerState()
+                    return
+                }
+                self.postTrackChangePollDeferrals = 0
+
                 self.lastPolledPosition = position
                 if abs(drift) > 0.3 {
                     DebugLogger.log("Timing", "📐 DRIFT CORRECTION: drift=\(String(format: "%+.2f", drift))s polled=\(String(format: "%.2f", position)) interpolated=\(String(format: "%.2f", self.internalCurrentTime))")
@@ -1806,6 +1856,8 @@ public class MusicController: ObservableObject {
             logger.info("🎵 Track changed: \(s.trackName) by \(s.trackArtist)")
 
             lastPolledPosition = 0  // Reset position-jump detection
+            lastTrackChangeClockResetAt = Date()
+            postTrackChangePollDeferrals = 0
             let generation = incrementGeneration()
             currentPersistentID = s.persistentID
             let artworkPersistentID = currentTrackIsURLTrack ? "" : s.persistentID

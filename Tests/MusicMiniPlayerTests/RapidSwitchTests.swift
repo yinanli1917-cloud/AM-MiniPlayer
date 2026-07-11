@@ -1749,6 +1749,75 @@ final class RapidSwitchTests: XCTestCase {
         )
     }
 
+    // ── Defect 2: stale poll right after a track change ──
+    // The playerInfo notification resets the clock to 0 and immediately fires an
+    // async ScriptingBridge position poll; Music.app mid-transition can still
+    // answer with the OLD track's position, flashing "new song at mid-song
+    // progress" until the next poll. Within a short window after the reset, a
+    // forward jump inconsistent with the fresh clock must be deferred; a genuine
+    // mid-song start (resume) is accepted once the window passes or the deferral
+    // cap is reached.
+
+    func testPostTrackChangePollDefersStaleOldTrackPosition() {
+        XCTAssertTrue(
+            PlaybackPositionCorrectionPolicy.shouldDeferPostTrackChangePoll(
+                polledPosition: 154.2,
+                interpolatedPosition: 0.4,
+                secondsSinceTrackChange: 0.8,
+                seekPending: false,
+                consecutiveDeferrals: 0
+            )
+        )
+    }
+
+    func testPostTrackChangePollAcceptsAfterSuspectWindow() {
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferPostTrackChangePoll(
+                polledPosition: 154.2,
+                interpolatedPosition: 0.4,
+                secondsSinceTrackChange: PlaybackPositionCorrectionPolicy.postTrackChangeSuspectWindow + 0.5,
+                seekPending: false,
+                consecutiveDeferrals: 0
+            )
+        )
+    }
+
+    func testPostTrackChangePollAcceptsNormalStartPosition() {
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferPostTrackChangePoll(
+                polledPosition: 1.2,
+                interpolatedPosition: 0.6,
+                secondsSinceTrackChange: 0.8,
+                seekPending: false,
+                consecutiveDeferrals: 0
+            )
+        )
+    }
+
+    func testPostTrackChangePollDoesNotBlockSeek() {
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferPostTrackChangePoll(
+                polledPosition: 90,
+                interpolatedPosition: 0.2,
+                secondsSinceTrackChange: 0.5,
+                seekPending: true,
+                consecutiveDeferrals: 0
+            )
+        )
+    }
+
+    func testPostTrackChangePollEventuallyAcceptsRepeatedMidStart() {
+        XCTAssertFalse(
+            PlaybackPositionCorrectionPolicy.shouldDeferPostTrackChangePoll(
+                polledPosition: 90,
+                interpolatedPosition: 0.2,
+                secondsSinceTrackChange: 0.5,
+                seekPending: false,
+                consecutiveDeferrals: PlaybackPositionCorrectionPolicy.maxConsecutiveTransientResetDeferrals
+            )
+        )
+    }
+
     func testPlaybackPositionCorrectionAllowsNormalSmallDriftCorrection() {
         XCTAssertFalse(
             PlaybackPositionCorrectionPolicy.shouldDeferTransientReset(
