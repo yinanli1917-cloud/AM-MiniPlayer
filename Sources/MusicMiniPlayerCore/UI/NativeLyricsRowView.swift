@@ -86,10 +86,9 @@ final class NativeLyricsRowView: NSView {
         let awaitingTranslation: Bool
     }
     private var lastLineLayoutCacheKey: LineLayoutCacheKey?
-    private let blurFilter = CIFilter(name: "CIGaussianBlur")
-    private let dotBlurFilter = CIFilter(name: "CIGaussianBlur")
     private var appliedBlurRadius: CGFloat = -.greatestFiniteMagnitude
     private var appliedDotBlurRadius: CGFloat = -.greatestFiniteMagnitude
+    private var rasterizationEligible = false
     private var lastHoverBackgroundVisible = false
     private var lastAppliedHoverFrame: CGRect?
     var onHoverChanged: ((Bool) -> Void)?
@@ -340,6 +339,8 @@ final class NativeLyricsRowView: NSView {
         lastAppliedHoverFrame = nil
         layer?.filters = nil
         appliedBlurRadius = -.greatestFiniteMagnitude
+        rasterizationEligible = false
+        refreshRasterization()
         cachedMainSweepLayoutKey = nil
         cachedMainSweepLinePlan = []
         lastMainSweepWavefrontX.removeAll()
@@ -392,12 +393,61 @@ final class NativeLyricsRowView: NSView {
         appliedBlurRadius = quantizedRadius
         guard quantizedRadius > 0 else {
             layer?.filters = nil
+            refreshRasterization()
             return quantizedRadius
         }
+        // A FRESH CIFilter per radius change is load-bearing, not waste: Core Animation
+        // treats a filter attached to a layer as immutable — mutating the attached instance
+        // and reassigning the same object can be silently ignored by the render server, so
+        // rows keep their mount-time blur forever (user-visible: blur deepens as the song
+        // scrolls on until the centered lyrics are unreadable). Filters cannot be verified
+        // headlessly (only the render server applies them); do not "optimize" this back to
+        // a reused instance.
         let filter = CIFilter(name: "CIGaussianBlur")
         filter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
         layer?.filters = filter.map { [$0] }
+        refreshRasterization()
         return quantizedRadius
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Blur economy (rasterization of settled blurred rows)
+    //
+    // A resident CIGaussianBlur is re-evaluated by the compositor on EVERY recomposite of
+    // the surface — during the active line's karaoke sweep, every static blurred row bills
+    // WindowServer per frame (measured +38 CPU points on M1). Rasterizing a settled,
+    // non-active, blurred row caches its blurred bitmap in the render server; recomposite
+    // becomes a texture blit. Frame-origin moves do NOT invalidate the cache, so rasterized
+    // rows stay cheap while translating during scroll. The renderer supplies the motion
+    // verdict (only it sees the visual motion state); the row vetoes while a repeating dot
+    // animation is live in its subtree (each animation frame would invalidate the cache,
+    // which costs more than the live filter).
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // Temporary same-build A/B switch for the WindowServer measurement; remove after acceptance.
+    private static let rasterizationDisabledByEnv =
+        ProcessInfo.processInfo.environment["NANOPOD_BLUR_RASTER_OFF"] != nil
+
+    func applyRasterizationPolicy(isSettled: Bool, isActive: Bool) {
+        rasterizationEligible = isSettled && !isActive
+        refreshRasterization()
+    }
+
+    private var hasLiveDotAnimation: Bool {
+        !translationLoadingDotContainerLayer.isHidden || !dotContainerLayer.isHidden
+    }
+
+    private func refreshRasterization() {
+        let desired = rasterizationEligible
+            && appliedBlurRadius > 0.001
+            && !hasLiveDotAnimation
+            && !Self.rasterizationDisabledByEnv
+        guard let layer, layer.shouldRasterize != desired else { return }
+        if desired {
+            // Same contentsScale convention as commonInit; without it the cache renders at 1x.
+            layer.rasterizationScale = NSScreen.main?.backingScaleFactor ?? 2
+        }
+        layer.shouldRasterize = desired
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -490,6 +540,12 @@ final class NativeLyricsRowView: NSView {
 
     var debugTranslationTextLayerFrame: CGRect { translationTextLayer.frame }
 
+    /// True when the translation carries a karaoke sweep (bright overlay has text to reveal).
+    /// LINE-LEVEL songs must keep this false: they have no word timeline, so a "sweep" there
+    /// degrades into the whole-block gradient wipe (contract core rule 3 violation, regression
+    /// history cfb5308 → cfc152c fix → 7653221 bare revert).
+    var debugTranslationSweepEngaged: Bool { translationBrightTextLayer.string != nil }
+
     var debugTranslationTextLayerHidden: Bool { translationTextLayer.isHidden }
 
     /// Animation keys attached to the translation base layer. Implicit-action leaks show up
@@ -554,6 +610,13 @@ final class NativeLyricsRowView: NSView {
     /// line-level because its text geometry was not laid out when the phase was computed.
     private(set) var debugLastAppliedActivePerRunSweep = false
     private(set) var debugPlaybackPhaseUpdateCount = 0
+    // Active-line translation sweep truth captured on the last updatePlaybackPhase. `expected` is
+    // what the model wants (partial mid-line), `applied` is what the renderer actually clipped to,
+    // `brightOverlayPresent` is whether the sung overlay layer is even carrying text. A word-synced
+    // active line that renders "fully bright instantly" shows up here as overlay absent OR applied==1.
+    private(set) var debugLastTranslationExpectedProgress: CGFloat?
+    private(set) var debugLastTranslationAppliedProgress: CGFloat?
+    private(set) var debugLastTranslationBrightOverlayPresent = false
     /// The translation sung-overlay opacity (mirrors debugMainBrightOpacity). The deactivation fade
     /// scales it toward 0 as a line recedes; a teardown that forgets to restore it to 1 makes a
     /// re-shown row relight from the residual fraction. The reuse-state test reads it.
@@ -912,7 +975,12 @@ final class NativeLyricsRowView: NSView {
         activeHiddenEmphasisSignature = nil
         hideEmphasisGlyphLayers()
         if let translation = plan.translation {
-            let appliesTranslationSweep = isActive
+            // Sweep the translation ONLY for word-timed songs (match appliesMainSweep's gating).
+            // A line-level song has no word timeline, so a "sweep" degrades into one gradient
+            // mask wiping the whole translation block — contract core rule 3 violation. This
+            // gate was fixed in cfc152c and lost to the bare revert 7653221; the revert's
+            // actual suspect was the loop-idling half of that commit, which stays out.
+            let appliesTranslationSweep = isActive && row.displayLine.line.hasSyllableSync
             let translationBaseAlpha = appliesTranslationSweep
                 ? translation.dimAlpha
                 : plan.constants.currentTranslationOpacityFactor
@@ -1056,7 +1124,7 @@ final class NativeLyricsRowView: NSView {
         #if LOCAL_DEVELOPER_BUILD
         do {
             let hasTranslation = row.displayLine.line.translation != nil
-            if let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sweep.log") {
+            if DebugConfig.probeSinksEnabled, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sweep.log") {
                 fh.seekToEndOfFile()
                 fh.write("[Phase] isActive=\(isActive) isPlaying=\(configuration.musicController.isPlaying) idx=\(row.index) curIdx=\(configuration.effectiveCurrentIndex) hasTrans=\(hasTranslation)\n".data(using: .utf8)!)
                 fh.closeFile()
@@ -1083,6 +1151,12 @@ final class NativeLyricsRowView: NSView {
                 translationBrightTextLayer.isHidden = true
                 hideTranslationSweepMaskLayers()
             }
+            #if DEBUG
+            debugLastTranslationExpectedProgress = plan.translation?.progress
+            debugLastTranslationAppliedProgress = appliedTranslation?.progress
+            debugLastTranslationBrightOverlayPresent =
+                !translationBrightTextLayer.isHidden && translationBrightTextLayer.string != nil
+            #endif
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep
                 && mainBrightTextLayer.string != nil
@@ -1558,7 +1632,7 @@ final class NativeLyricsRowView: NSView {
             let rowID = row?.id ?? "?"
             if translationSweepDiagRowID != rowID {
                 translationSweepDiagRowID = rowID
-                if let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sweep.log") {
+                if DebugConfig.probeSinksEnabled, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sweep.log") {
                     fh.seekToEndOfFile()
                     let text = translation.text.prefix(60)
                     fh.write("[SweepDiag] row=\(rowID) text=\"\(text)\" bounds=\(bounds) planCount=\(linePlan.count) linesCount=\(lines.count) progress=\(String(format: "%.3f", translation.progress)) maskUsed=\(lines.isEmpty ? "gradient" : "perLine")\n".data(using: .utf8)!)
@@ -2366,6 +2440,7 @@ final class NativeLyricsRowView: NSView {
             ))
             dot.add(animation, forKey: "translationLoadingOpacity")
         }
+        refreshRasterization()
     }
 
     private func hideTranslationLoadingDots() {
@@ -2377,6 +2452,7 @@ final class NativeLyricsRowView: NSView {
             dot.removeAllAnimations()
             dot.setAffineTransform(.identity)
         }
+        refreshRasterization()
     }
 
     private func updateDotsPhase(row: LayerBackedLyricRow, currentTime: TimeInterval) {
@@ -2430,6 +2506,7 @@ final class NativeLyricsRowView: NSView {
             expectedOverallOpacity: plan.overallOpacity,
             appliedOverallOpacity: CGFloat(dotContainerLayer.opacity)
         ))
+        refreshRasterization()
     }
 
     @discardableResult
@@ -2442,8 +2519,10 @@ final class NativeLyricsRowView: NSView {
             dotContainerLayer.filters = nil
             return quantizedRadius
         }
-        dotBlurFilter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
-        dotContainerLayer.filters = dotBlurFilter.map { [$0] }
+        // Fresh instance per change — attached filters are immutable to CA; see applyBlurRadius.
+        let filter = CIFilter(name: "CIGaussianBlur")
+        filter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
+        dotContainerLayer.filters = filter.map { [$0] }
         return quantizedRadius
     }
 
@@ -2458,6 +2537,7 @@ final class NativeLyricsRowView: NSView {
             dot.setAffineTransform(.identity)
         }
         dotContainerLayer.setAffineTransform(.identity)
+        refreshRasterization()
     }
 
     private func textRenderPlan(

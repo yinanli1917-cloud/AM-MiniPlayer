@@ -252,7 +252,9 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         XCTAssertTrue(plan.wordRuns.isEmpty)
         XCTAssertEqual(plan.mainSweepProgress, 1)
         XCTAssertEqual(plan.mainPostLineFade, 1)
-        XCTAssertEqual(Double(plan.translation?.progress ?? -1), 1.0, accuracy: 0.0001)
+        // Line-synced translation sweeps by line progress (currentTime 13 in [10,16] = 0.5), matching
+        // the static main line's reveal. a5daf28 regressed this to 1.0 (instant full); restored here.
+        XCTAssertEqual(Double(plan.translation?.progress ?? -1), 0.5, accuracy: 0.0001)
         XCTAssertEqual(plan.translation?.opacity, plan.constants.currentTranslationOpacityFactor)
     }
 

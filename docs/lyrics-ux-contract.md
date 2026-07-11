@@ -142,8 +142,31 @@ default renderer since 2026-05-31; SwiftUI remains the explicit fallback (`Lyric
 5. **Polish parity**: emphasis activation, pause keeps active lit, translation sweep. Verify: live + tests.
 6. **Verification integrity**: unit tests → v2.8 ground truth; remove brittle source-string pins.
 
-## Current status snapshot (2026-06-05)
+## Status snapshot (2026-06-05 — superseded below)
 - ✅ Interlude dots 12→8pt / 10→6 (built, suite 535 green, md5 verified).
 - ☑️ Verified-matching v2.8: blur law, inactive 0.35/0.95, visual spring, manual-scroll 0.6/0.95/0, anchor 0.24, 30Hz tick, controls state machine values, dots breathing, per-word baseFloat formula.
 - 🔧 Next (Phase 1): per-character float + from-nothing.
+
+## Current status snapshot (2026-07-10 — reconciled against code + open reports)
+
+Landed since 06-05 (commits + working tree): row-frame positioning (f519e4b), hover single-authority (fc1d7c1), scale-pop + brightness decoupling (b061442), same-song refresh preservation (a9bc3d5), implicit-animation layer-level kill (postmortem 009), blur economy (rasterize settled blurred rows + blur snaps at retarget; kill-switch `NANOPOD_BLUR_RASTER_OFF` pending gate; CIFilter fresh-instance contract after the mutation-ignored regression).
+
+⚠️ Constants divergence to reconcile: this file says inactive blur `|dist|×1.5 uncapped`; code ships tiered blur capped at 9 (`amllTarget`) + snap-at-retarget. Decide which wins and update the loser.
+
+### Open defects (P0 first)
+| # | Defect | Contract rule | State |
+|---|---|---|---|
+| 1 | LINE-LEVEL songs: translation swept as one gradient wipe across the block | 🔴 Core rule 3 | ✅ **Fixed 2026-07-10.** Root cause: `appliesTranslationSweep = isActive` lost its `hasSyllableSync` gate — widened by cfb5308, fixed by cfc152c, un-fixed by bare revert 7653221 (whose actual suspect was the loop-idling half; that half stays out). Gate restored in `updateTextLayers`; guarded by `test_lineLevelActiveRow_hasNoTranslationSweepOverlay` + word-synced control test. Word-synced translation sweep unchanged (user directive + Phase 5). Awaiting user visual confirm on a line-synced song. |
+| 2 | Track switch briefly shows new song at mid-song progress | §A sync | Clock reset exists on notification path (MusicController:939); gap is ordering/branch (:971-981, :1305-1309). Reproduce via preview-mode notification test FIRST. |
+| 3 | Flicker migrated to the NEXT line after handoff-timing changes | §B handoff | Candidates: blur snap on promoted row (2026-07-10 change) and/or residual multi-channel races. Verify inside Stage 2 framework; user recordings as symptom input. |
+| 4 | Blur economy acceptance | §G CPU | **Measured 2026-07-10 (interleaved, sweep-verified, busy desktop): gate FAILED.** Rasterization saves only ~4 WS pts; row-blur residency was never the whale. Cost model: panel merely existing (paused, ANY page) ≈ +29 over adjacent ambient (pages identical 69.4/70.5, app CPU ~0 → compositor-side; prime suspect = behind-window glass backdrop re-sampling a busy desktop; morning's "+5 idle" was a calm desktop); word-sweep playback adds ~+13 (30Hz recomposite; ~4 of it was row-blur eval, now cached). Keep rasterization (free win, tested); pre-blurred-bitmap fallback is DEAD (same cost class). Next lever = panel glass/backdrop tradeoff — DESIGN DECISION, experiment build first to price the saving. |
+
+| 5 | Panel bills WindowServer while PAUSED and static | §G CPU | **Root-caused + FIXED 2026-07-10 (mechanism verified on device; quantitative gate awaits a calm desktop).** Chain: paused panel froze a loop-stop veto → CVDisplayLink ticked at 60 Hz → every tick committed → WindowServer re-evaluated the ~50 resident blur filters on a static panel (+20.3 adjacent-pairwise). TWO stuck vetoes found and fixed via the new `LoopStopVeto` log (each named itself in turn): (1) `interlude` — `interludeAfterIndex` is playback-time-derived and pause freezes playback time, so a pause inside a ≥5 s gap vetoed forever; interlude veto now gated on `isPlaying` (dots are playback-time-driven, already frozen when paused — zero UX change). (2) `deferredDeactivation` — pause-mid-handoff re-resolves the current line back to the deferred row (log: deferred=17 cur=18 in flight, stuck for 6+ min when frozen), whose active-high opacity can never cross the <0.38 finalize threshold; a deferral aimed at the CURRENT row is now cancelled (`endDeactivationFade` restores resting overlay) instead of awaited. Both rules live in `NativeLyricsLoopIdleDecision` (pure, 8 tests). Verified: pause → `LoopStop` the same second, zero standing vetoes, app 0.1%; paused-panel delta +3.4 (pair 1, was +20.3); pair 2 ran into a saturated ambient (37-51 range) — re-measure the gate on a quiet desktop alongside the blur-economy gate. Exonerated by `WindowAnimationCensus` (`nanopod://debug/animsweep`): zero attached CAAnimations + zero NSVisualEffectView in both virgin and paused states (server-side-animation hypothesis dead). OPEN remainder: virgin panel +7.9 with zero commits/animations (27 resident filters; suspect = window texture/shadow composite tax) — hunt with a fresh process sample next. |
+
+### Queue after P0 (unchanged phases)
+Scroll-lift/wave prompt-movement fix (root cause measured: row Y starts ~0.18s after line change) → Stage 2 single-snapshot presentation refactor (structural fix for defect-3 class) → dots unification + prelude centering → stale 🔍/⏳ audit rows in sections A-F.
+
+Parallel lane: Codex lyrics-service evidence-first task (currently breaks the LyricsVerifier target → `build_app.sh` blocked; app binary is being swapped manually).
+
+**Process rule (2026-07-10):** every renderer session starts by reading this file; every landed change updates this snapshot. Chat-only plans are void.
 - Maps to your complaints: clip=E · vanish=E · float=A · from-nothing=A · depth/spring=B/C · manual-scroll+controls=D · dots=F(done).

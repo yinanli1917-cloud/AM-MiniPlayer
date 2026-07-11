@@ -185,9 +185,13 @@ struct NativeLyricsTextRenderPlan: Equatable {
               !translation.isEmpty else { return nil }
         let appliesTimedWordSweep = line.hasSyllableSync && !line.words.isEmpty
         let lineEndTime = line.words.last?.endTime ?? line.endTime
+        // Word-synced lines sweep the translation per word; line-synced lines (no per-word timing)
+        // sweep it gradually across the line duration, in step with the main line-level sweep. The
+        // hardcoded `1` here (a5daf28) made line-synced translations pop fully bright instantly — the
+        // main line kept sweeping while the translation lost its reveal (postmortem: 逐字遮罩消失).
         let progress: CGFloat = appliesTimedWordSweep
             ? wordCountProgress(words: line.words, currentTime: currentTime, lineStartTime: line.startTime, lineEndTime: lineEndTime)
-            : 1
+            : linearProgress(currentTime: currentTime, startTime: line.startTime, endTime: lineEndTime)
         let postLineFade = postLineFadeOut(currentTime: currentTime, lineEndTime: lineEndTime)
         let opacity: CGFloat
         if isActiveLine && appliesTimedWordSweep {

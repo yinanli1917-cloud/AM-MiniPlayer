@@ -60,7 +60,8 @@ Sources/
 │   │   ├── NSImage+AverageColor.swift - Color extraction + brightness sampling
 │   │   ├── MetadataDiskCache.swift    - Persistent metadata cache（CN/多区域两层独立字典 + 防抖落盘 + flush）
 │   │   ├── SBTimeoutRunner.swift      - ScriptingBridge timeout wrapper
-│   │   ├── DebugConfig.swift          - Debug configuration
+│   │   ├── DebugConfig.swift          - Debug configuration + NANOPOD_PROBES 每帧探针总闸（默认关；/tmp 旧探针文件会静默重新武装探针，曾写出数百 MB 挂机）
+│   │   ├── WindowAnimationCensus.swift - 缺陷5仪器：全窗口层树动画普查（挂着的 CAAnimation + NSVisualEffectView 清单），nanopod://debug/animsweep 按需一次性 dump，永不每帧
 │   │   └── AppleScriptRunner.swift    - Music.app osascript execution + parsing
 │   ├── Models/
 │   │   ├── LyricModels.swift          - Lyrics data structures + shared constants
@@ -88,6 +89,9 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     ├── MetadataWarmupTests.swift  - 预热扫描：每 schema 版本一次 + 有行即跳过 + 让位前台 + 取消不盖戳（全 seam 注入，零网络）
     ├── AppleMusicCapabilityLatchTests.swift - AM 能力闩锁：developer-token 失败武装一次 + 瞬态/账户态错误不武装 + reset 测试缝
     ├── LyricsMissMemoTests.swift  - 会话未命中备忘：TTL 命中/过期剪枝 + 裁决载荷往返 + clear + 记录门（取消/离线拒绝）
+    ├── NativeLyricsBlurEconomyTests.swift - 模糊经济：settled 模糊行光栅化（backing scale）+ 活跃行豁免 + 加载点动画否决 + reuse 清除 + blur 阶跃（setTarget/quickRetarget 即达且立即 settled）
+    ├── WindowAnimationCensusTests.swift - 动画普查契约：隐藏层/mask 层上的无限动画可被发现 + 安静树报零 + effect view 清单 + 格式化输出
+    ├── NativeLyricsLoopIdleTests.swift - 呈现 loop 空闲裁决：暂停+间奏必须放行停摆（缺陷5根因）+ 播放中间奏保活 + 未settled运动不分播放态 + appear 窗不分播放态
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
@@ -155,6 +159,8 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ Layer-level kill: `.lyricsInert()` on every renderer-created layer (NativeLyricsInertLayerDelegate) + ImplicitAnimLeak runtime auditor (LOCAL_DEVELOPER_BUILD, ~4Hz) + NativeLyricsImplicitAnimationTests (must host in NSWindow + CATransaction.flush between phases or the bug is unreproducible)
 - ❌ SwiftUI `onChange(currentTrackTitle)` runs AFTER body → first post-track-change render feeds the native surface NEW identity + OLD cachedLayerRows = one-frame stale-rows flash
   ✅ `cachedLayerRowsTrackKey` identity gate: rows cached for another track render as `[]`
+- ❌ Resident CIGaussianBlur on static lyric rows → the compositor re-evaluates every resident filter each frame it recomposites the surface; during the active line's word sweep the ~12-25 static blurred rows billed WindowServer +38 CPU points on M1 while the app itself stayed cheap (~10%)
+  ✅ Blur economy: rasterize settled non-active blurred rows (`applyRasterizationPolicy` + `refreshRasterization` in NativeLyricsRowView; dot-animation veto; backing-scale rasterizationScale) + blur is a stepped depth cue (snaps in setTarget/quickRetarget so blur-only retargets settle instantly and stay rasterized through handoffs); guarded by NativeLyricsBlurEconomyTests
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)

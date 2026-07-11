@@ -411,10 +411,10 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
 
         XCTAssertTrue(state.setTarget(next))
         XCTAssertTrue(state.advance(delta: 1.0 / 60.0))
-        // v2.8 parity: ALL visual properties (blur, opacity, scale) spring-animate together.
-        // After one frame, blur and opacity are mid-transition (not yet at target).
-        XCTAssertGreaterThan(state.blur, 0)
-        XCTAssertLessThan(state.blur, next.blur)
+        // Blur economy supersedes the v2.8 all-spring contract: blur STEPS to its new depth
+        // tier at retarget (so blur-only rows settle instantly and stay rasterized through
+        // handoffs — see NativeLyricsBlurEconomyTests); opacity and scale keep the spring.
+        XCTAssertEqual(state.blur, next.blur, accuracy: 0.0001)
         XCTAssertLessThan(state.opacity, 1)
         XCTAssertGreaterThan(state.opacity, next.opacity)
         XCTAssertLessThan(state.scale, 1)

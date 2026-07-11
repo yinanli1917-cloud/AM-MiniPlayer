@@ -154,6 +154,52 @@ struct NativeLyricsSnapMode: Equatable {
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Presentation-loop idle decision.
+//
+// The display link may stop only when nothing on screen can still change.
+// Conditions are named so the LOCAL_DEVELOPER_BUILD veto log can report which
+// one keeps a paused panel ticking (defect 5: a stuck veto = 60 Hz commits =
+// WindowServer re-evaluating the resident blur stack on a static panel).
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+enum NativeLyricsLoopIdleDecision {
+    /// Names of the conditions vetoing a loop stop; empty means the loop may stop.
+    static func vetoes(
+        keepsAppearWindowAlive: Bool,
+        hasPendingTapSettle: Bool,
+        hasEngineMotion: Bool,
+        hasVisualMotion: Bool,
+        hasActiveTextAnimation: Bool,
+        hasInterlude: Bool,
+        hasDeferredDeactivation: Bool,
+        isPlaying: Bool
+    ) -> [String] {
+        [
+            keepsAppearWindowAlive ? "appearWindow" : nil,
+            hasPendingTapSettle ? "tapSettle" : nil,
+            hasEngineMotion ? "engineMotion" : nil,
+            hasVisualMotion ? "visualMotion" : nil,
+            hasActiveTextAnimation ? "textAnim" : nil,
+            // Interlude dots are driven by PLAYBACK time (NativeLyricsDotPhasePlan
+            // inputs are track times only). Paused ⇒ playback time frozen ⇒ the
+            // dots cannot change a pixel, so a paused interlude must not keep the
+            // display link alive; playback resume restarts the loop via the
+            // configure path (hasActiveTextAnimation is true on interlude rows).
+            hasInterlude && isPlaying ? "interlude" : nil,
+            hasDeferredDeactivation ? "deferredDeactivation" : nil
+        ].compactMap { $0 }
+    }
+
+    /// A deferral aimed at the row that is CURRENT again can never finalize: the
+    /// finalize threshold is opacity < 0.38 but an active row targets ≈1.0. This
+    /// happens when a pause lands mid-handoff and the frozen playback time
+    /// re-resolves the current line back to the just-receded row. Deactivating
+    /// the current row is moot in any playback state — cancel, don't wait.
+    static func shouldCancelDeferredDeactivation(deferredIndex: Int?, currentIndex: Int) -> Bool {
+        deferredIndex == currentIndex
+    }
+}
+
 struct NativeLyricsDirectSnapRequest: Equatable {
     let id: UUID
     let displayIndex: Int
@@ -354,6 +400,12 @@ struct NativeLyricsVisualMotionState: Equatable {
     mutating func setTarget(_ nextTarget: NativeLyricsVisualTarget) -> Bool {
         guard target != nextTarget else { return false }
         target = nextTarget
+        // Blur economy: blur is a stepped depth cue, not a springed channel (AMLL sets it without
+        // an underdamped spring — see advance()). Snapping it here also lets rows whose retarget
+        // changed ONLY the blur tier stay settled — and therefore rasterized — through the handoff
+        // scroll, instead of holding every far row unsettled for the whole spring.
+        blur = nextTarget.blur
+        blurVelocity = 0
         return true
     }
 
@@ -372,7 +424,9 @@ struct NativeLyricsVisualMotionState: Equatable {
         let kick: CGFloat = 12
         opacityVelocity = (nextTarget.opacity - opacity) * kick
         scaleVelocity = (nextTarget.scale - scale) * kick
-        blurVelocity = (nextTarget.blur - blur) * kick
+        // Blur snaps at retarget (see setTarget); only opacity/scale keep the kick.
+        blur = nextTarget.blur
+        blurVelocity = 0
     }
 
     @discardableResult

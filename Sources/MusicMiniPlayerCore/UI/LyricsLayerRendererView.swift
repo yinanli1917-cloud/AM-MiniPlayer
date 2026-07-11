@@ -234,6 +234,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var displayLink: CVDisplayLink?
     private var lastPresentationTick: CFTimeInterval?
     #if LOCAL_DEVELOPER_BUILD
+    private var lastLoopStopVetoLog: CFTimeInterval = 0
     private var lastImplicitAnimationAuditLog: [String: CFTimeInterval] = [:]
     private var implicitAnimationAuditTickCounter = 0
     private var visualTrajectories: [String: [VisualTrajectorySample]] = [:]
@@ -413,6 +414,7 @@ final class NativeLyricsSurfaceView: NSView {
     }()
     private let surfaceInterludeDotContainer = CALayer().lyricsInert()
     private let surfaceInterludeDots: [CALayer] = (0..<3).map { _ in CALayer().lyricsInert() }
+    private var appliedSurfaceDotBlurRadius: CGFloat = -.greatestFiniteMagnitude
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -519,18 +521,31 @@ final class NativeLyricsSurfaceView: NSView {
             gateByTimeRange: true
         )
         surfaceInterludeOverlay.alphaValue = CGFloat(plan.overallOpacity)
-        if plan.blur > 0.01 {
-            let filter = CIFilter(name: "CIGaussianBlur")
-            filter?.setValue(Double(plan.blur), forKey: kCIInputRadiusKey)
-            surfaceInterludeDotContainer.filters = filter.map { [$0] }
-        } else {
-            surfaceInterludeDotContainer.filters = nil
-        }
+        applySurfaceDotBlurRadius(plan.blur)
         for (index, dot) in surfaceInterludeDots.enumerated() {
             dot.opacity = Float(plan.opacities[index])
             dot.setAffineTransform(CGAffineTransform(scaleX: plan.scales[index], y: plan.scales[index]))
             dot.isHidden = false
         }
+    }
+
+    // Quantized + guarded like NativeLyricsRowView.applyDotBlurRadius: this runs on every
+    // applyFrames pass while an interlude is configured, and an unguarded filters rewrite
+    // re-composites the container each frame even when the radius has not changed.
+    private func applySurfaceDotBlurRadius(_ radius: CGFloat) {
+        let effectiveRadius = radius > 0.1 ? radius : 0
+        let quantizedRadius = (effectiveRadius * 4).rounded(.toNearestOrAwayFromZero) / 4
+        guard abs(appliedSurfaceDotBlurRadius - quantizedRadius) > 0.001 else { return }
+        appliedSurfaceDotBlurRadius = quantizedRadius
+        guard quantizedRadius > 0 else {
+            surfaceInterludeDotContainer.filters = nil
+            return
+        }
+        // Fresh instance per change — attached filters are immutable to CA; see
+        // NativeLyricsRowView.applyBlurRadius.
+        let filter = CIFilter(name: "CIGaussianBlur")
+        filter?.setValue(Double(quantizedRadius), forKey: kCIInputRadiusKey)
+        surfaceInterludeDotContainer.filters = filter.map { [$0] }
     }
 
     private func installLocalEventMonitor() {
@@ -765,7 +780,7 @@ final class NativeLyricsSurfaceView: NSView {
     private func appendBloomTraj(phase: String, configuration: LyricsLayerRendererConfiguration) {
         let now = CACurrentMediaTime()
         guard now < bloomTrajUntil else { return }
-        guard let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_traj.log") else { return }
+        guard DebugConfig.probeSinksEnabled, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_traj.log") else { return }
         let t = Int((now - bloomTrajArmedAt) * 1000)
         let curIdx = configuration.effectiveCurrentIndex
         let anchorY = configuration.anchorY
@@ -954,7 +969,7 @@ final class NativeLyricsSurfaceView: NSView {
         //   ySpread/avgGap = how spread the row Ys are (small spread = rows bunched/overlapping);
         //   maxBlur = peak depth-of-field blur; ovl = simultaneous bright overlays.
         // The combination tells us which bloom mechanism is real instead of guessing.
-        if let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_bloom.log") {
+        if DebugConfig.probeSinksEnabled, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_bloom.log") {
             let zeroGeo = rowViews.values.filter { $0.debugMainBrightBoundsEmpty }.count
             let ys = visibleRows.compactMap { lastAppliedYByIndex[$0.index] }
             let ySpread = (ys.max() ?? 0) - (ys.min() ?? 0)
@@ -1454,11 +1469,12 @@ final class NativeLyricsSurfaceView: NSView {
         presentationSnapshot: NativeLyricsPresentationSnapshot
     ) -> LyricsLayerRendererConfiguration {
         var textConfiguration = configuration
-        textConfiguration.nativeTextActiveIndex = visualCurrentIndex(
-            for: row,
-            configuration: configuration,
-            presentationSnapshot: presentationSnapshot
-        )
+        // The ACTIVE-text PHASE (karaoke sweep, translation reveal, active/dim decision) follows the
+        // SEMANTIC singing line — NOT the scroll wave's per-row visual target. Binding phase to the
+        // wave (1e1ffbf) suppressed the singing line's sweep for the whole wave duration (A/B proof:
+        // singing-line translation absent 1258/1258 frames wave-bound vs 3/1258 semantic). POSITION /
+        // movement still follows the wave via visualTarget; only the phase input is decoupled here.
+        textConfiguration.nativeTextActiveIndex = presentationSnapshot.semanticIndex
         return textConfiguration
     }
 
@@ -1704,6 +1720,7 @@ final class NativeLyricsSurfaceView: NSView {
             appliedScale: appliedScale
         ))
         let appliedBlur = view.applyBlurRadius(visual.blur)
+        view.applyRasterizationPolicy(isSettled: visual.isSettled, isActive: visual.target.isActive)
         #if DEBUG
         if debugCensusEnabled {
             var track = debugCensusByIndex[row.index] ?? DebugCensusTrack()
@@ -2116,7 +2133,7 @@ final class NativeLyricsSurfaceView: NSView {
     private struct CensusTrack { var y: [CGFloat] = []; var op: [CGFloat] = []; var blur: [CGFloat] = []; var bright: [CGFloat] = []; var scale: [CGFloat] = [] }
     private var censusTracks: [Int: CensusTrack] = [:]
     private func recordPresentationCensus(snap: Bool) {
-        guard let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_census.log") else { return }
+        guard DebugConfig.probeSinksEnabled, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_census.log") else { return }
         defer { fh.closeFile() }
         censusFrameCounter += 1
         let window = 6
@@ -2218,6 +2235,11 @@ final class NativeLyricsSurfaceView: NSView {
         lastFrameCadenceTick = nil
         resetFrameSummary()
         CVDisplayLinkStart(link)
+        #if LOCAL_DEVELOPER_BUILD
+        // Restart-storm diagnosis: pair with "LoopStop" lines; the caller frames name
+        // who keeps resurrecting the loop on a paused panel.
+        DebugLogger.log("LoopStart", Thread.callStackSymbols.dropFirst(2).prefix(3).joined(separator: " | "))
+        #endif
     }
 
     private func stopPresentationLoopIfIdle() {
@@ -2236,13 +2258,26 @@ final class NativeLyricsSurfaceView: NSView {
     /// loop alive and re-applying for the whole window so the rows stay at their settled positions.
     private func stopPresentationLoopIfIdle(runtimeConfiguration: LyricsLayerRendererConfiguration) {
         let snapMode = frameSnapMode(for: runtimeConfiguration)
-        guard !snapMode.keepsPresentationLoopAlive,
-              pendingTapToLineSettleTiming == nil,
-              !presentationEngine.hasActiveMotion,
-              !hasActiveVisualMotion,
-              !hasActiveTextAnimation(configuration: runtimeConfiguration),
-              runtimeConfiguration.interludeAfterIndex == nil,
-              deferredDeactivationIndex == nil else { return }
+        let vetoes = NativeLyricsLoopIdleDecision.vetoes(
+            keepsAppearWindowAlive: snapMode.keepsPresentationLoopAlive,
+            hasPendingTapSettle: pendingTapToLineSettleTiming != nil,
+            hasEngineMotion: presentationEngine.hasActiveMotion,
+            hasVisualMotion: hasActiveVisualMotion,
+            hasActiveTextAnimation: hasActiveTextAnimation(configuration: runtimeConfiguration),
+            hasInterlude: runtimeConfiguration.interludeAfterIndex != nil,
+            hasDeferredDeactivation: deferredDeactivationIndex != nil,
+            isPlaying: runtimeConfiguration.musicController.isPlaying
+        )
+        guard vetoes.isEmpty else {
+            #if LOCAL_DEVELOPER_BUILD
+            let now = CACurrentMediaTime()
+            if now - lastLoopStopVetoLog > 2 {
+                lastLoopStopVetoLog = now
+                DebugLogger.log("LoopStopVeto", "\(vetoes.joined(separator: ",")) isPlaying=\(runtimeConfiguration.musicController.isPlaying) deferred=\(deferredDeactivationIndex.map(String.init) ?? "nil") cur=\(runtimeConfiguration.effectiveCurrentIndex)")
+            }
+            #endif
+            return
+        }
         stopPresentationLoop()
     }
 
@@ -2254,6 +2289,9 @@ final class NativeLyricsSurfaceView: NSView {
         lastFrameCadenceTick = nil
         displayLinkScheduler.reset()
         flushFrameSummary(reason: "stop")
+        #if LOCAL_DEVELOPER_BUILD
+        DebugLogger.log("LoopStop", "presentation loop stopped")
+        #endif
     }
 
     private func presentationTick(
@@ -2309,7 +2347,7 @@ final class NativeLyricsSurfaceView: NSView {
             let newIdx = runtimeConfiguration.effectiveCurrentIndex
             if let newStart = runtimeConfiguration.rows.first(where: { $0.index == newIdx })?.displayLine.line.startTime {
                 let lag = configuration.musicController.lyricRenderTime() - newStart
-                if lag > 0.25, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sync.log") {
+                if lag > 0.25, DebugConfig.probeSinksEnabled, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_sync.log") {
                     let src = displayInterval == nil ? "idleTimer" : "displayLink"
                     fh.seekToEndOfFile()
                     fh.write("[SyncLag] lag=\(String(format: "%.2f", lag))s idx=\(previousSemanticIndex.map(String.init) ?? "nil")→\(newIdx) src=\(src)\n".data(using: .utf8)!)
@@ -2385,7 +2423,7 @@ final class NativeLyricsSurfaceView: NSView {
         // vertical spread of the mounted rows; mpDiv = max |model − presentation| per row; anims =
         // total live animations. If presSpread collapses toward 0 (or mpDiv/anims spike) while the
         // model probe reports a normal spread, the bloom is an on-screen transient, not the model.
-        if now < bloomPresentationDiagUntil, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_bloom.log") {
+        if now < bloomPresentationDiagUntil, DebugConfig.probeSinksEnabled, let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_bloom.log") {
             var presYs: [CGFloat] = []
             var mpDiv: CGFloat = 0
             var anims = 0
@@ -2413,6 +2451,7 @@ final class NativeLyricsSurfaceView: NSView {
         }
         if now < dimProbeUntil, let idx = dimProbeIndex,
            let id = rowIDByIndex[idx], let view = rowViews[id],
+           DebugConfig.probeSinksEnabled,
            let fh = FileHandle(forWritingAtPath: "/tmp/nanopod_dim.log") {
             let rowOp = view.debugRowLayerOpacity
             let brightOp = view.debugMainBrightOpacity
@@ -2672,6 +2711,20 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func finalizeDeferredDeactivation(runtimeConfiguration: LyricsLayerRendererConfiguration) {
         guard let idx = deferredDeactivationIndex else { return }
+        if NativeLyricsLoopIdleDecision.shouldCancelDeferredDeactivation(
+            deferredIndex: idx,
+            currentIndex: runtimeConfiguration.effectiveCurrentIndex
+        ) {
+            // The row is current again (pause-mid-handoff revert): hand it back to
+            // normal activation — finalizing would strip the active overlay;
+            // waiting would veto the loop stop forever. endDeactivationFade
+            // restores the resting overlay opacity updatePlaybackPhase assumes.
+            deferredDeactivationIndex = nil
+            if let id = rowIDByIndex[idx] {
+                rowViews[id]?.endDeactivationFade()
+            }
+            return
+        }
         if let state = visualStates[idx] {
             guard state.opacity < 0.38 else { return }
         }

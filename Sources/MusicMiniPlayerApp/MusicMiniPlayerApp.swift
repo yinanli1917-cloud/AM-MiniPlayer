@@ -153,6 +153,12 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         case "debug-lyrics":
             openDebugLyricsFixture(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        case "debug":
+            // nanopod://debug/animsweep — one-shot whole-window animation census
+            // (defect 5: names server-side animation survivors on a static panel).
+            if url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased() == "animsweep" {
+                Task { @MainActor in WindowAnimationCensus.dump() }
+            }
         #endif
         default:
             break

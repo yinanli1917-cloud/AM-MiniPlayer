@@ -16,6 +16,16 @@ public enum DebugConfig {
     #else
     public static let enableStderrLog = false
     #endif
+
+    /// Master switch for the per-frame /tmp/nanopod_*.log probe sinks (sweep/traj/
+    /// census/sync/bloom/dim). Each opens a FileHandle on the MAIN THREAD every frame
+    /// once its /tmp file exists, and stale files from an old session silently re-arm
+    /// them the next time LOCAL_DEVELOPER_BUILD is compiled in; a full set once wrote
+    /// hundreds of MB and hung the machine. Default OFF so an instrumented build
+    /// measures clean — launch with NANOPOD_PROBES=1 to arm. One-shot dumps
+    /// (WindowAnimationCensus) are not gated.
+    public static let probeSinksEnabled =
+        ProcessInfo.processInfo.environment["NANOPOD_PROBES"] == "1"
 }
 
 /// 调试日志输出（仅在 enableStderrLog 为 true 时输出）
