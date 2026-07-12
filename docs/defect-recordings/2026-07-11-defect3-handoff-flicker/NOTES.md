@@ -36,6 +36,16 @@ OpenCV band clustering + eyes-on frame crops.
   translation enters already in that state → suspect row reuse without resetting
   sweep/mask progress (reuse pool hands back a row carrying a completed mask).
 
+## Outcome (2026-07-12)
+
+Defect A ROOT-CAUSED and fixed in 6832716: the text phase read the RAW SB clock while the
+semantic index used the monotonic render clock; backward resync dips at line start collapsed
+the active plan to progress 0 for a frame. Headless repro (noisy-clock 1x drive, census
+bright channels): flash segments 26 -> 0 after unifying phase timing on nativePhaseClock.
+Defect B remains OPEN: not reproduced headless; the row-reuse lead below is NOT confirmed.
+Standing hazards: the monotonic translation wavefront memo pins any one-frame overshoot
+permanently, and the per-line applied-metrics echo EXPECTED (value gates blind to a pin).
+
 ## Perception limits
 
 46.57 fps sampling (transients <21 ms invisible), compressed video (cannot separate
