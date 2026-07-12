@@ -418,6 +418,177 @@ final class NativeLyricsTranslationSweepTests: XCTestCase {
         print("[LIVE] semantic  (proposed):  singing-line translation ABSENT on \(semantic.absent)/\(semantic.total) frames, \(semantic.transitions) transitions")
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 2026-07-11 recording repro (docs/defect-recordings/2026-07-11-defect3-handoff-flicker):
+    //   Defect B — the newly-promoted line's translation arrives FULLY BRIGHT and stays frozen
+    //     while the main line sweeps normally. Structural suspect: lastTranslationSweepWavefrontX
+    //     is a monotonic max that survives every frame of the row's active life, so ONE overshoot
+    //     frame (clock glitch / pre-layout wavefront) pins the mask at full reveal permanently.
+    //   Defect A — rows flash active-style bright for 1-2 frames (2-3 times) BEFORE the scroll
+    //     moves, staggered down the panel.
+    // This drives REAL wrapped-CJK data at ~1x through two handoffs with a noisy clock and scans
+    // the census: (B) applied progress must never exceed expected mid-line; (A) a row's bright
+    // channels must show no short spike segment before its sustained active run.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Segments of `values` where value > threshold, as (start, length) pairs.
+    private func spikeSegments(_ values: [CGFloat], threshold: CGFloat) -> [(start: Int, length: Int)] {
+        var segs: [(Int, Int)] = []
+        var runStart: Int?
+        for (i, v) in values.enumerated() {
+            if v > threshold {
+                if runStart == nil { runStart = i }
+            } else if let s = runStart {
+                segs.append((s, i - s)); runStart = nil
+            }
+        }
+        if let s = runStart { segs.append((s, values.count - s)) }
+        return segs
+    }
+
+    /// A short (≤ maxLen) above-threshold segment separated from the NEXT segment by ≥ minGap
+    /// clean frames = a pre-activation flash (defect A shape: on, off again, then the real run).
+    private func preActivationFlashes(_ values: [CGFloat], threshold: CGFloat,
+                                      maxLen: Int = 5, minGap: Int = 3) -> [(start: Int, length: Int)] {
+        let segs = spikeSegments(values, threshold: threshold)
+        guard segs.count >= 2 else { return [] }
+        var flashes: [(Int, Int)] = []
+        for i in 0..<(segs.count - 1) {
+            let cur = segs[i], next = segs[i + 1]
+            if cur.length <= maxLen && (next.start - (cur.start + cur.length)) >= minGap {
+                flashes.append(cur)
+            }
+        }
+        return flashes
+    }
+
+    // A deterministic noisy clock like the real SB clock (matches NativeLyricsRenderChurnTests).
+    private func noisyClock(step i: Int, base: TimeInterval) -> TimeInterval {
+        let jitter: TimeInterval = (i % 3 == 0) ? 0.30 : (i % 3 == 1 ? -0.28 : 0.0)
+        return max(0, base + jitter)
+    }
+
+    @MainActor
+    func test_LIVE_handoffs_translationMaskPinAndPreActivationFlash() {
+        let rows = realRows()
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface, size: NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true); mc.duration = 240; mc.isPlaying = true
+
+        // Warm up mid line 0 (span 19.33-28.89) so the surface settles before scoring.
+        mc.syncPlaybackClock(to: 24.0, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 0, mc: mc))
+        surface.layoutSubtreeIfNeeded()
+        for _ in 0..<40 { RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0)) }
+
+        surface.debugResetCensus()
+        surface.debugCensusEnabled = true
+        surface.debugSkipDedupe = true
+
+        // Drive 27.0 → 45.0 at ~1x (handoffs at 29.04 and 39.8) with the noisy clock.
+        let frameInterval = 1.0 / 60.0
+        let frames = Int(18.0 / frameInterval)
+        for i in 0..<frames {
+            let base = 27.0 + Double(i) * frameInterval
+            mc.syncPlaybackClock(to: noisyClock(step: i, base: base), playing: true)
+            surface.configure(config(rows: rows, currentIndex: surface.debugNativeSemanticIndex ?? 0, mc: mc))
+            RunLoop.main.run(until: Date().addingTimeInterval(frameInterval))
+        }
+
+        var pinViolations: [String] = []
+        var flashViolations: [String] = []
+        for (idx, track) in surface.debugCensusByIndex.sorted(by: { $0.key < $1.key }) {
+            let n = min(track.transBright.count, min(track.transExpected.count, track.transApplied.count))
+            // Defect B: while the bright overlay is actually visible and the expected sweep is
+            // mid-line, the applied progress must track it — never sit far above (the pin).
+            for f in 0..<n {
+                let exp = track.transExpected[f], app = track.transApplied[f]
+                if track.transBright[f] > 0.5, exp > 0.05, exp < 0.8, app > exp + 0.25 {
+                    pinViolations.append("idx=\(idx) frame=\(f) expected=\(String(format: "%.2f", exp)) applied=\(String(format: "%.2f", app))")
+                }
+            }
+            // Defect A: short bright segment, dark gap, then the real run — on either bright channel.
+            for (ch, name) in [(track.bright, "mainBright"), (track.transBright, "transBright")] {
+                for flash in preActivationFlashes(ch, threshold: 0.5) {
+                    flashViolations.append("idx=\(idx) ch=\(name) flashStart=\(flash.start) len=\(flash.length)")
+                }
+            }
+        }
+        let paints = surface.debugCensusByIndex.values.map(\.transBright.count).max() ?? 0
+        print("[LiveHandoff] rows=\(surface.debugCensusByIndex.count) maxPaints=\(paints)")
+        print("[LiveHandoff] PIN violations (defect B): \(pinViolations.count)")
+        pinViolations.prefix(12).forEach { print("  ", $0) }
+        print("[LiveHandoff] FLASH violations (defect A): \(flashViolations.count)")
+        flashViolations.prefix(12).forEach { print("  ", $0) }
+        // Dump the active rows' progress traces around each handoff for eyes-on diagnosis.
+        for idx in [1, 2] {
+            if let t = surface.debugCensusByIndex[idx] {
+                let n = min(t.transExpected.count, t.transApplied.count)
+                let firstActive = (0..<n).first { t.transBright[$0] > 0.5 } ?? 0
+                let end = min(n, firstActive + 24)
+                if firstActive < end {
+                    print("idx=\(idx) transExpected[\(firstActive)..<\(end)]: " + t.transExpected[firstActive..<end].map { String(format: "%.2f", $0) }.joined(separator: " "))
+                    print("idx=\(idx) transApplied [\(firstActive)..<\(end)]: " + t.transApplied[firstActive..<end].map { String(format: "%.2f", $0) }.joined(separator: " "))
+                    print("idx=\(idx) transBright  [\(firstActive)..<\(end)]: " + t.transBright[firstActive..<end].map { String(format: "%.2f", $0) }.joined(separator: " "))
+                }
+            }
+        }
+        XCTAssertGreaterThan(paints, 200, "precondition: the drive must have painted")
+        XCTAssertTrue(pinViolations.isEmpty, "translation sweep applied progress exceeded expected (full-reveal pin):\n\(pinViolations.prefix(20).joined(separator: "\n"))")
+        XCTAssertTrue(flashViolations.isEmpty, "bright channel flashed before activation (handoff style flash):\n\(flashViolations.prefix(20).joined(separator: "\n"))")
+    }
+
+    // Variant with the REAL app's currentIndex coupling: LyricsView derives currentIndex from the
+    // SAME jittery clock (time → line mapping), so at a boundary the CONFIG input itself flaps
+    // N↔N+1 — harsher than feeding back the surface's own smoothed semantic index. Covers all
+    // four handoffs of the real data. Hunts the defect-B pin under realistic input.
+    @MainActor
+    func test_LIVE_handoffs_realCurrentIndexCoupling_maskPin() {
+        let rows = realRows()
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        hostInWindow(surface, size: NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true); mc.duration = 240; mc.isPlaying = true
+
+        func lineIndex(at t: TimeInterval) -> Int {
+            var idx = 0
+            for (i, r) in rows.enumerated() where t >= r.displayLine.line.startTime { idx = i }
+            return idx
+        }
+
+        mc.syncPlaybackClock(to: 24.0, playing: true)
+        surface.configure(config(rows: rows, currentIndex: 0, mc: mc))
+        surface.layoutSubtreeIfNeeded()
+        for _ in 0..<40 { RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0)) }
+
+        surface.debugResetCensus()
+        surface.debugCensusEnabled = true
+        surface.debugSkipDedupe = true
+
+        // 27.0 → 58.0 covers handoffs at 29.04, 39.8, 49.43, 53.9.
+        let frameInterval = 1.0 / 60.0
+        let frames = Int(31.0 / frameInterval)
+        for i in 0..<frames {
+            let noisy = noisyClock(step: i, base: 27.0 + Double(i) * frameInterval)
+            mc.syncPlaybackClock(to: noisy, playing: true)
+            surface.configure(config(rows: rows, currentIndex: lineIndex(at: noisy), mc: mc))
+            RunLoop.main.run(until: Date().addingTimeInterval(frameInterval))
+        }
+
+        var pinViolations: [String] = []
+        for (idx, track) in surface.debugCensusByIndex.sorted(by: { $0.key < $1.key }) {
+            let n = min(track.transBright.count, min(track.transExpected.count, track.transApplied.count))
+            for f in 0..<n {
+                let exp = track.transExpected[f], app = track.transApplied[f]
+                if track.transBright[f] > 0.5, exp > 0.05, exp < 0.8, app > exp + 0.25 {
+                    pinViolations.append("idx=\(idx) frame=\(f) expected=\(String(format: "%.2f", exp)) applied=\(String(format: "%.2f", app))")
+                }
+            }
+        }
+        print("[RealCoupling] PIN violations (defect B): \(pinViolations.count)")
+        pinViolations.prefix(16).forEach { print("  ", $0) }
+        XCTAssertTrue(pinViolations.isEmpty, "translation sweep pinned above expected under real currentIndex coupling:\n\(pinViolations.prefix(20).joined(separator: "\n"))")
+    }
+
     // cacheDisplay composites the layer-backed view (the pattern NativeLyricsBloomReproductionTests
     // uses). Reduce to a cols×rows mean-luminance grid (luminance premultiplied by alpha so
     // transparent gaps read as dark, only painted text contributes).

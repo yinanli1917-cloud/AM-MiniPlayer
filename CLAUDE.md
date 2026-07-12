@@ -98,6 +98,7 @@ scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fi
 
 docs/lyrics_test_cases.json        - 15 条预定义歌词测试用例
 docs/lyrics_benchmark_cases.json   - 100 首全球基准测试（10 语言区域 × 10 首）
+docs/defect-recordings/            - 缺陷录屏逐帧证据归档（含 NOTES.md 分析）
 postmortem/001~006                 - 已知 bug 根因 + 解决方案
 ```
 

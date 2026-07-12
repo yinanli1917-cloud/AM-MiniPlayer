@@ -171,6 +171,19 @@ struct LyricsLayerRendererConfiguration {
     var nativeHotActiveIndices: Set<Int> = []
     var nativeBufferedActiveIndices: Set<Int> = []
     var nativeTextActiveIndex: Int? = nil
+    // Monotonic phase clock (defect-A fix, 2026-07-12). The semantic index is protected from the
+    // SB clock's backward resync dips by the renderer's monotonic clock, but the TEXT PHASE
+    // (karaoke sweep, translation reveal, bright overlays, dots) read the RAW clock — so in the
+    // first ~0.3s of every line a backward dip pulled the raw time before the line start,
+    // collapsed the active plan to progress 0 (overlay hidden / style reverted) and the next
+    // forward frame re-lit it: the 2-3 style flashes per handoff on the 2026-07-11 recording.
+    // Every phase-side consumer must read time through this closure so position and style
+    // channels share ONE clock. nil (tests building bare configs) falls back to the raw clock.
+    var nativePhaseClock: (() -> TimeInterval)? = nil
+
+    func phaseRenderTime() -> TimeInterval {
+        nativePhaseClock?() ?? musicController.lyricRenderTime()
+    }
 
     var effectiveCurrentIndex: Int {
         nativeDirectSnapIndex
@@ -257,6 +270,12 @@ final class NativeLyricsSurfaceView: NSView {
         var blur: [CGFloat] = []
         var y: [CGFloat] = []
         var bright: [CGFloat] = []
+        // Translation channels: bright-overlay opacity plus the sweep's expected vs applied
+        // progress (-1 when no translation phase ran). A frozen `transApplied` while
+        // `transExpected` advances is the stuck-full-reveal signature (defect-B class).
+        var transBright: [CGFloat] = []
+        var transExpected: [CGFloat] = []
+        var transApplied: [CGFloat] = []
     }
     private(set) var debugCensusByIndex: [Int: DebugCensusTrack] = [:]
     private(set) var debugSemanticTrace: [Int] = []
@@ -513,7 +532,7 @@ final class NativeLyricsSurfaceView: NSView {
             x: containerX + surfaceInterludeDotContainer.bounds.width / 2,
             y: y + dotSize / 2
         )
-        let currentTime = configuration.musicController.lyricRenderTime()
+        let currentTime = configuration.phaseRenderTime()
         let plan = NativeLyricsDotPhasePlan.make(
             startTime: interlude.startTime,
             endTime: interlude.endTime,
@@ -1075,6 +1094,23 @@ final class NativeLyricsSurfaceView: NSView {
     private func synchronizeNativeSemanticIndex(
         configuration: inout LyricsLayerRendererConfiguration
     ) {
+        // Install the monotonic phase clock: advance the shared peak on every read so the
+        // presentation loop's per-tick phase updates (which run between configure() calls) get
+        // fresh, never-backward time. A backward step beyond the resync tolerance is a real
+        // discontinuity and is followed; synchronize itself re-anchors on explicit seeks below.
+        let musicController = configuration.musicController
+        configuration.nativePhaseClock = { [weak self] in
+            let raw = musicController.lyricRenderTime()
+            guard let self else { return raw }
+            let held = NativeLyricsSeekClassifier.monotonicTime(
+                previous: self.nativeRenderClock ?? raw,
+                rawTime: raw,
+                explicitSeek: false,
+                seekThreshold: Self.resyncRewindTolerance
+            )
+            self.nativeRenderClock = held.value
+            return held.value
+        }
         guard configuration.playbackMode == .natural else {
             let snapIndex = configuration.effectiveCurrentIndex
             // A snap (seek / tap / direct snap) is a deliberate discontinuity: reset the monotonic
@@ -1564,7 +1600,7 @@ final class NativeLyricsSurfaceView: NSView {
         return NativeLyricsDotPhasePlan.interludeBlend(
             startTime: interlude.startTime,
             endTime: interlude.endTime,
-            currentTime: configuration.musicController.lyricRenderTime()
+            currentTime: configuration.phaseRenderTime()
         )
     }
 
@@ -1730,6 +1766,9 @@ final class NativeLyricsSurfaceView: NSView {
             track.blur.append(appliedBlur)
             track.y.append(y)
             track.bright.append(CGFloat(view.debugMainBrightOpacity))
+            track.transBright.append(CGFloat(view.debugTranslationBrightOpacity))
+            track.transExpected.append(view.debugLastTranslationExpectedProgress ?? -1)
+            track.transApplied.append(view.debugLastTranslationAppliedProgress ?? -1)
             debugCensusByIndex[row.index] = track
         }
         #endif
@@ -2706,7 +2745,7 @@ final class NativeLyricsSurfaceView: NSView {
             configuration: runtimeConfiguration,
             updatesPlaybackPhase: false
         )
-        view.finalizeDeactivationState(renderTime: runtimeConfiguration.musicController.lyricRenderTime())
+        view.finalizeDeactivationState(renderTime: runtimeConfiguration.phaseRenderTime())
     }
 
     private func finalizeDeferredDeactivation(runtimeConfiguration: LyricsLayerRendererConfiguration) {
@@ -2737,7 +2776,7 @@ final class NativeLyricsSurfaceView: NSView {
             configuration: runtimeConfiguration,
             updatesPlaybackPhase: false
         )
-        view.finalizeDeactivationState(renderTime: runtimeConfiguration.musicController.lyricRenderTime())
+        view.finalizeDeactivationState(renderTime: runtimeConfiguration.phaseRenderTime())
     }
 
     private func shouldSyncVisualTargetsOnPresentationTick(

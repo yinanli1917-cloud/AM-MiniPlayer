@@ -1113,7 +1113,10 @@ final class NativeLyricsRowView: NSView {
         #if DEBUG
         debugPlaybackPhaseUpdateCount += 1
         #endif
-        let renderTime = configuration.musicController.lyricRenderTime()
+        // Phase timing MUST come from the shared monotonic clock (phaseRenderTime), never the raw
+        // SB clock: a backward resync dip at line start collapses the active plan to progress 0
+        // for a frame — the handoff style flash (docs/defect-recordings/2026-07-11).
+        let renderTime = configuration.phaseRenderTime()
         let isActive = row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying
 
         var sample: NativeLyricsTextPhaseSample?
@@ -2573,7 +2576,7 @@ final class NativeLyricsRowView: NSView {
     ) -> NativeLyricsTextRenderPlan.Configuration {
         NativeLyricsTextRenderPlan.Configuration(
             line: row.displayLine.line,
-            currentTime: currentTime ?? configuration.musicController.lyricRenderTime(),
+            currentTime: currentTime ?? configuration.phaseRenderTime(),
             isActive: row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying,
             staticOpacity: 1,
             showTranslation: configuration.showTranslation
