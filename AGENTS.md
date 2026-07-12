@@ -32,13 +32,13 @@ Sources/
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
 │   │   ├── UpdateApplier.swift            - Spawn detached shell script on quit to swap bundle + relaunch
 │   │   └── Lyrics/
-│   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources
+│   │       ├── LyricsFetcher.swift              - GAMMA orchestration + 2.70s OS wall-clock foreground deadline + bounded authoritative backfill
 │   │       ├── LyricsSourceFetchers.swift       - 7 source fetch methods (AMLL/NE/QQ/LRCLIB/Genius/AM/ovh)
 │   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale
 │   │       ├── LyricsParser.swift               - TTML/LRC/YRC parsing
 │   │       ├── LyricsScorer.swift               - Quality scoring
-│   │       └── MetadataResolver.swift           - iTunes multi-region metadata
+│   │       └── MetadataResolver.swift           - iTunes multi-region metadata + song-scoped exact-first waves + single-flight
 │   ├── UI/
 │   │   ├── MiniPlayerView.swift   - Main player view + page switching
 │   │   ├── LyricsView.swift       - Lyrics display + scrolling + translation
@@ -71,7 +71,7 @@ Sources/
 │   ├── Models/LyricModels.swift   - Lyrics data structures + shared constants
 │   └── Shaders/blur.metal
 └── LyricsVerifier/                - 歌词管线 CLI 测试工具
-    ├── main.swift                 - CLI 入口 (run/check/library/benchmark)
+    ├── main.swift                 - CLI 入口 (run/check/library/benchmark + DEBUG-only --network-only)
     ├── TestRunner.swift           - 测试编排 + JSON 输出
     ├── TestCases.swift            - 用例加载 + AM 资料库 (osascript)
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
@@ -155,6 +155,7 @@ swift build                           # Build only (quick validation)
 open nanoPod.app                      # Launch
 swift test                            # 77 unit tests (Parser/Scorer/Matching)
 swift run LyricsVerifier run          # Run 15 lyrics regression tests
+swift run LyricsVerifier run --network-only  # Developer/verifier cache-isolated diagnostic (not in release app)
 swift run LyricsVerifier check "Song" "Artist" duration  # Test a single song
 swift run LyricsVerifier library --recent 20                              # AM 资料库测试
 swift run LyricsVerifier benchmark                                       # 100 首全球基准测试

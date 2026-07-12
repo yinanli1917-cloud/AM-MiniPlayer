@@ -50,6 +50,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 | POSTM-007 | Chinese Translation Leak — Three Root Causes | 2026-03-22 | Bug | P1 | ✅ 已完成 |
 | POSTM-008 | Localized-title lyrics fallback missed synced sources | 2026-05-01 | Bug / Process | P1 | ✅ 已完成 |
 | POSTM-009 | 隐式 CALayer 动画闪烁家族（翻译左上角漂入/鬼影行/换轨陈旧行） | 2026-06-09 | Architecture | P1 | ✅ 已完成 |
+| POSTM-010 | 歌词别名证据泄漏与批次截止延迟 | 2026-07-12 | Architecture / Process | P1 | ✅ 已完成 |
 
 ---
 
@@ -61,6 +62,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - [POSTM-003](./003-artwork-concurrent-blocking.md) - 封面加载并发阻塞
 - [POSTM-004](./004-lyrics-scroll-spacing.md) - 歌词视图滚动和间距
 - [POSTM-009](./009-implicit-calayer-animation-flicker-family.md) - 隐式 CALayer 动画闪烁家族（层级阻断 + 审计器 + 窗口托管测试）
+- [POSTM-010](./010-lyrics-alias-evidence-and-deadline.md) - 跨脚本别名证据边界与总截止 wall-clock 交付
 
 #### 🐛 Bug (代码缺陷)
 - [POSTM-006](./006-romanized-cjk-false-positive.md) - romanized→CJK ASCII→ASCII 错配
@@ -76,6 +78,7 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 #### 📋 Process (流程问题)
 - [POSTM-005](./005-metadata-resolver-regressions.md) - MetadataResolver 多轮优化引发批量回归
 - [POSTM-008](./008-lyrics-resolver-localized-title-fallback.md) - localized-title source fallback 未被 fixture 固化
+- [POSTM-010](./010-lyrics-alias-evidence-and-deadline.md) - 单跑验证不足以覆盖批次负载与兄弟歌曲碰撞
 
 ---
 
@@ -95,6 +98,8 @@ cp TEMPLATE.md $(date +%Y%m%d)-brief-title.md
 - 共享 Unicode 范围需要上下文 - POSTM-007: CJK Unified 不等于"中文"，日文汉字需假名上下文区分
 - 安全策略也有副作用 - POSTM-007: "不丢弃任何行"导致翻译泄漏持续存在
 - fallback 成功条件必须匹配 source 索引方式 - POSTM-008: localized title 需要 fan-out 到所有 title-keyed synced sources，而不是只补部分平台
+- 别名证据不能跨层升级 - POSTM-010: 专辑/时长只能缩小候选，不能在重新查询后变成标题已证实
+- 总截止必须独立于 cooperative executor - POSTM-010: 内层 source timeout 和外层 aggregate sentinel 都必须使用 wall-clock timer
 
 ---
 
