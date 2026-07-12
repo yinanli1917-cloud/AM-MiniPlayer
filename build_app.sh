@@ -67,6 +67,14 @@ assert_build_marker_hash_matches_release_binary() {
     fi
 }
 
+assert_binary_excludes_diagnostic_cache_mode() {
+    local binary="$1"
+    if strings "$binary" | grep -Eq 'network-only|LyricsCacheMode|LyricsCachePolicy|LyricsCacheDiagnostics'; then
+        echo "❌ Developer-only cache diagnostics leaked into $binary"
+        exit 1
+    fi
+}
+
 write_signed_hash_manifest() {
     local bundle_hash
     bundle_hash="$(shasum -a 256 nanoPod.app/Contents/MacOS/nanoPod | awk '{print $1}')"
@@ -112,7 +120,8 @@ echo "🔨 Building nanoPod..."
 # writes hit the MAIN THREAD every frame and ballooned to 100s of MB, repeatedly hanging the
 # app + the machine during scroll. The DAILY app must be a clean release build with NO probes.
 # To debug with probes again, re-add the flag TEMPORARILY and rate-limit the probes first.
-swift build -c release
+swift build -c release --product MusicMiniPlayer
+assert_binary_excludes_diagnostic_cache_mode .build/release/MusicMiniPlayer
 
 echo "📦 Creating app bundle..."
 if pgrep -x nanoPod >/dev/null 2>&1; then
@@ -140,6 +149,7 @@ if [ "$SOURCE_HASH" != "$BUNDLE_HASH" ]; then
     echo "   bundle:  $BUNDLE_HASH"
     exit 1
 fi
+assert_binary_excludes_diagnostic_cache_mode nanoPod.app/Contents/MacOS/nanoPod
 echo "✅ Bundle executable matches freshly built release binary ($BUNDLE_HASH)"
 BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 GIT_REV="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"

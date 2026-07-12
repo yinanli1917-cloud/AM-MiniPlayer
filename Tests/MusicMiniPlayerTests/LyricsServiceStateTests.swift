@@ -404,6 +404,11 @@ final class LyricsServiceStateTests: XCTestCase {
         XCTAssertEqual(LyricsService.TerminalMissVerdict.noLyrics.displayState, .noLyrics)
         XCTAssertEqual(LyricsService.TerminalMissVerdict.instrumental.displayState, .noLyrics)
         XCTAssertEqual(LyricsService.TerminalMissVerdict.networkUnreachable.displayState, .networkUnreachable)
+        XCTAssertEqual(LyricsService.TerminalMissVerdict.searchIncomplete.displayState, .noLyrics)
+        XCTAssertEqual(
+            LyricsService.TerminalMissVerdict.searchIncomplete.errorMessage,
+            "Couldn't finish searching lyrics"
+        )
     }
 
     func testIsLoadingCompatibilityDerivesFromSearchPhases() {

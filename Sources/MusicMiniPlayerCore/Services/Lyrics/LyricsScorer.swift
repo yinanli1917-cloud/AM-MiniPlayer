@@ -252,36 +252,7 @@ public final class LyricsScorer {
 
     /// 过滤真正的歌词行（排除元信息和省略号）
     private func filterRealLyrics(_ lyrics: [LyricLine]) -> [LyricLine] {
-        let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・", ""]
-        let instrumentalPatterns = kInstrumentalPatterns
-        let metadataKeywords = [
-            "作词", "作曲", "编曲", "制作人", "和声", "录音", "混音", "母带",
-            "吉他", "贝斯", "鼓", "钢琴", "键盘", "弦乐", "管乐",
-            "词:", "曲:", "编:", "制作:", "和声:",
-            "Lyrics", "Music", "Arrangement", "Producer", "Vocals",
-            "Guitar", "Bass", "Drums", "Piano", "Keyboards", "Strings", "Brass",
-            "Mix", "Mastering", "Recording", "Engineer"
-        ]
-
-        return lyrics.filter { line in
-            let trimmed = line.text.trimmingCharacters(in: .whitespaces)
-
-            // 跳过省略号和空行
-            if ellipsisPatterns.contains(trimmed) { return false }
-
-            // 跳过纯音乐提示
-            if instrumentalPatterns.contains(where: { trimmed.localizedCaseInsensitiveContains($0) }) { return false }
-
-            // 跳过元信息行
-            let lowercased = trimmed.lowercased()
-            let hasMetadataKeyword = metadataKeywords.contains { lowercased.contains($0.lowercased()) }
-            let hasColonFormat = (trimmed.contains("：") || trimmed.contains(":"))
-            let isVeryShortWithColon = hasColonFormat && trimmed.count < 25
-
-            if hasMetadataKeyword || isVeryShortWithColon { return false }
-
-            return true
-        }
+        lyrics.filter { LyricsParser.shared.isRealLyricLine($0.text) }
     }
 
     /// 检测是否可能是罗马音歌词

@@ -78,6 +78,42 @@ public struct MetadataCacheEntry: Codable, Equatable {
     }
 }
 
+#if DEBUG
+extension MetadataDiskCache {
+    public func get(title: String, artist: String, duration: TimeInterval, policy: LyricsCachePolicy) -> MetadataCacheEntry? {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            get(title: title, artist: artist, duration: duration)
+        }
+    }
+
+    public func set(title: String, artist: String, duration: TimeInterval,
+                    resolvedTitle: String, resolvedArtist: String, region: String,
+                    durationDiff: Double, policy: LyricsCachePolicy) {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            set(title: title, artist: artist, duration: duration,
+                resolvedTitle: resolvedTitle, resolvedArtist: resolvedArtist,
+                region: region, durationDiff: durationDiff)
+        }
+    }
+
+    public func getChinese(title: String, artist: String, duration: TimeInterval, policy: LyricsCachePolicy) -> MetadataCacheEntry? {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            getChinese(title: title, artist: artist, duration: duration)
+        }
+    }
+
+    public func setChinese(title: String, artist: String, duration: TimeInterval,
+                           resolvedTitle: String, resolvedArtist: String,
+                           durationDiff: Double, policy: LyricsCachePolicy) {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            setChinese(title: title, artist: artist, duration: duration,
+                       resolvedTitle: resolvedTitle, resolvedArtist: resolvedArtist,
+                       durationDiff: durationDiff)
+        }
+    }
+}
+#endif
+
 // ============================================================================
 // MARK: - Cache File Envelope
 // ============================================================================
@@ -154,6 +190,14 @@ public final class MetadataDiskCache {
     // ------------------------------------------------------------------------
 
     public func get(title: String, artist: String, duration: TimeInterval) -> MetadataCacheEntry? {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsReads else {
+            effectivePolicy.recordRead(.metadata, bypassed: true)
+            return nil
+        }
+        effectivePolicy.recordRead(.metadata, bypassed: false)
+        #endif
         let key = Self.cacheKey(title: title, artist: artist, duration: duration)
         return queue.sync {
             ensureLoaded()
@@ -167,6 +211,14 @@ public final class MetadataDiskCache {
     public func set(title: String, artist: String, duration: TimeInterval,
                     resolvedTitle: String, resolvedArtist: String, region: String,
                     durationDiff: Double) {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else {
+            effectivePolicy.recordWrite(.metadata, bypassed: true)
+            return
+        }
+        effectivePolicy.recordWrite(.metadata, bypassed: false)
+        #endif
         let key = Self.cacheKey(title: title, artist: artist, duration: duration)
         let entry = Self.makeEntry(resolvedTitle: resolvedTitle, resolvedArtist: resolvedArtist,
                                    region: region, durationDiff: durationDiff)
@@ -182,6 +234,14 @@ public final class MetadataDiskCache {
     // ------------------------------------------------------------------------
 
     public func getChinese(title: String, artist: String, duration: TimeInterval) -> MetadataCacheEntry? {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsReads else {
+            effectivePolicy.recordRead(.metadata, bypassed: true)
+            return nil
+        }
+        effectivePolicy.recordRead(.metadata, bypassed: false)
+        #endif
         let key = Self.cacheKey(title: title, artist: artist, duration: duration)
         return queue.sync {
             ensureLoaded()
@@ -194,6 +254,14 @@ public final class MetadataDiskCache {
     public func setChinese(title: String, artist: String, duration: TimeInterval,
                            resolvedTitle: String, resolvedArtist: String,
                            durationDiff: Double) {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else {
+            effectivePolicy.recordWrite(.metadata, bypassed: true)
+            return
+        }
+        effectivePolicy.recordWrite(.metadata, bypassed: false)
+        #endif
         let key = Self.cacheKey(title: title, artist: artist, duration: duration)
         let entry = Self.makeEntry(resolvedTitle: resolvedTitle, resolvedArtist: resolvedArtist,
                                    region: "CN", durationDiff: durationDiff)

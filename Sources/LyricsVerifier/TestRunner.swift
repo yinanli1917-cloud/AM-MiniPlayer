@@ -36,6 +36,7 @@ struct VerifyResult: Codable {
     let translationCount: Int
     let firstRealLineTimeS: Double?
     let lastLineTimeS: Double?
+    let cacheDiagnostics: LyricsCacheDiagnosticsSnapshot
 }
 
 struct SourceResult: Codable {
@@ -58,20 +59,25 @@ func testSongWithLyrics(
     expectation: TestExpectation?,
     translationEnabled: Bool = false,
     album: String = "",
-    enforceExpectationIdentityOracle: Bool = true
+    enforceExpectationIdentityOracle: Bool = true,
+    cacheMode: LyricsCacheMode = .normal
 ) async -> (result: VerifyResult, lyrics: [LyricLine]) {
     let fetcher = LyricsFetcher.shared
+    let cacheDiagnostics = LyricsCacheDiagnostics()
+    let cachePolicy = LyricsCachePolicy(mode: cacheMode, diagnostics: cacheDiagnostics)
     let start = CFAbsoluteTimeGetCurrent()
 
     var fetchResults = await fetcher.fetchAllSources(
         title: title, artist: artist,
         duration: duration, translationEnabled: translationEnabled,
-        album: album
+        album: album,
+        cachePolicy: cachePolicy
     )
 
     var selectedResult = fetcher.selectBestResult(from: fetchResults, songDuration: duration)
     let foregroundElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
     var backfillElapsedMs: Int? = nil
+    var backfillIncomplete = false
     let foregroundTerminalResult: LyricsFetcher.LyricsFetchResult?
     if selectedResult == nil {
         foregroundTerminalResult = fetcher.selectInstrumentalResult(from: fetchResults)
@@ -87,7 +93,8 @@ func testSongWithLyrics(
             artist: artist,
             duration: duration,
             translationEnabled: translationEnabled,
-            album: album
+            album: album,
+            cachePolicy: cachePolicy
         ) {
             backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
             switch backfill {
@@ -101,6 +108,8 @@ func testSongWithLyrics(
                 fetchResults.append(instrumental)
             case .unavailable(let unavailable):
                 fetchResults.append(unavailable)
+            case .incomplete:
+                backfillIncomplete = true
             }
         } else {
             backfillElapsedMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000) - foregroundElapsedMs
@@ -184,6 +193,9 @@ func testSongWithLyrics(
     if let backfillElapsedMs, backfillElapsedMs > 3000 {
         warnings.append("⚠️ 后台权威回填耗时 \(backfillElapsedMs)ms；不计入前台交互预算")
     }
+    if backfillIncomplete {
+        warnings.append("⚠️ 后台权威回填不完整；不得据此判定歌曲无歌词")
+    }
     if lyrics.isEmpty && classificationString == "unavailable" {
         warnings.append("⚠️ 来源目录已匹配，但来源未返回歌词正文；不会标记为无歌词")
     } else if lyrics.isEmpty && classificationString == "none" {
@@ -212,7 +224,8 @@ func testSongWithLyrics(
         realLineCount: lyricStats.realLines.count,
         translationCount: lyricStats.translationCount,
         firstRealLineTimeS: firstReal?.startTime,
-        lastLineTimeS: lyrics.last?.startTime
+        lastLineTimeS: lyrics.last?.startTime,
+        cacheDiagnostics: cacheDiagnostics.snapshot(mode: cacheMode)
     )
 
     return (result, lyrics)
@@ -260,8 +273,7 @@ private func collectLyricStats(_ lyrics: [LyricLine], firstRealIndex: Int) -> Pr
 }
 
 private func isRealLyricText(_ text: String) -> Bool {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    return !trimmed.isEmpty && trimmed != "..." && trimmed != "…" && trimmed != "⋯"
+    LyricsParser.shared.isRealLyricLine(text)
 }
 
 /// Convenience wrapper when caller doesn't need raw lyrics
@@ -273,14 +285,16 @@ func testSong(
     expectation: TestExpectation?,
     translationEnabled: Bool = false,
     album: String = "",
-    enforceExpectationIdentityOracle: Bool = true
+    enforceExpectationIdentityOracle: Bool = true,
+    cacheMode: LyricsCacheMode = .normal
 ) async -> VerifyResult {
     await testSongWithLyrics(
         id: id, title: title, artist: artist,
         duration: duration, expectation: expectation,
         translationEnabled: translationEnabled,
         album: album,
-        enforceExpectationIdentityOracle: enforceExpectationIdentityOracle
+        enforceExpectationIdentityOracle: enforceExpectationIdentityOracle,
+        cacheMode: cacheMode
     ).result
 }
 
@@ -605,10 +619,7 @@ private func validateTimelineSanity(lines: [LyricLine], duration: TimeInterval) 
     let firstStart = lines[0].startTime
     let firstStartLimit = min(90.0, max(45.0, duration * 0.30))
     if firstStart > firstStartLimit {
-        let realLines = lines.filter { line in
-            let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
-        }
+        let realLines = lines.filter { LyricsParser.shared.isRealLyricLine($0.text) }
         let lastStart = lines.last?.startTime ?? 0
         let tailGap = duration - lastStart
         let maxGap = zip(lines, lines.dropFirst()).map { $1.startTime - $0.startTime }.max() ?? 0
@@ -846,6 +857,8 @@ func printResultLine(_ r: VerifyResult) {
         line += "  ->  UNRESOLVED"
     }
     line += "  [\(r.elapsedMs)ms]"
+    let d = r.cacheDiagnostics
+    line += " [cache:\(d.mode.rawValue), lyric-bypass:\(d.lyricReadBypasses + d.lyricWriteBypasses), metadata-bypass:\(d.metadataReadBypasses + d.metadataWriteBypasses)]"
     if r.hasSyllableSync { line += " [syllable]" }
     if r.hasTranslation { line += " [trans]" }
     log(line)

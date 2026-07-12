@@ -138,6 +138,23 @@ extension LyricsFetcher {
         let inputWordCount = inputTokens.count
         let likelyJapaneseRomaji = LanguageUtils.isLikelyRomanizedJapanese(inputTitle)
         let inputLooksEnglish = LanguageUtils.isLikelyEnglishTitle(inputTitle)
+        let hasCrossScriptTitleEvidence: (SearchCandidate<ID>) -> Bool = { candidate in
+            if candidate.titleMatch { return true }
+            guard LanguageUtils.isPureASCII(inputTitle),
+                  candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else {
+                return false
+            }
+            if inputLooksEnglish && !likelyJapaneseRomaji {
+                return self.localizedEnglishTitleAliasMatches(
+                    inputTitle: inputTitle,
+                    nativeTitle: candidate.name
+                )
+            }
+            return LanguageUtils.isRomanizedTitleCorroborated(
+                input: inputTitle,
+                candidateTitle: candidate.name
+            )
+        }
         // Was armed by sniffing the substring "qq" in the log label — a rename
         // would have silently disarmed it. Now bound to the QQ case directly.
         let sourceIsQQ = source == .qq
@@ -174,6 +191,7 @@ extension LyricsFetcher {
                   candidate.resultIndex <= 1,
                   candidate.durationDiff < 0.35,
                   candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }),
+                  ((inputWordCount <= 4 && !candidate.albumMatch) || hasCrossScriptTitleEvidence(candidate)),
                   !hasSameArtistTitleEvidence,
                   !isBackingTrack(candidate) else {
                 return false
@@ -232,6 +250,7 @@ extension LyricsFetcher {
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
                 guard candidate.durationDiff < 1.5 else { return false }
                 guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
+                guard hasCrossScriptTitleEvidence(candidate) else { return false }
                 return !isBackingTrack(candidate)
             }),
             ("P1c", 0, { candidate in
@@ -251,7 +270,9 @@ extension LyricsFetcher {
                 guard candidate.artistMatch else { return false }
                 guard LanguageUtils.isPureASCII(inputTitle) else { return false }
                 guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
-                if candidate.durationDiff < 1.0, candidate.albumMatch {
+                if candidate.durationDiff < 1.0,
+                   candidate.albumMatch,
+                   hasCrossScriptTitleEvidence(candidate) {
                     return true
                 }
                 let artistIsCJK = candidate.artist.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) })
@@ -310,6 +331,7 @@ extension LyricsFetcher {
                     || candidate.searchDescriptor.hasPrefix("alias album+artist") else { return false }
                 guard candidate.name.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else { return false }
                 guard candidate.durationDiff < 2.0 else { return false }
+                guard hasCrossScriptTitleEvidence(candidate) else { return false }
                 return !isBackingTrack(candidate)
             }),
             ("P2c", 2, { candidate in
@@ -377,6 +399,7 @@ extension LyricsFetcher {
                 }
                 let resultTitleHasCJK = candidate.name.unicodeScalars.contains { LanguageUtils.isCJKScalar($0) }
                 if resultTitleHasCJK && candidate.albumMatch && aliasConfirmedCJK && candidate.durationDiff < 5.0 {
+                    guard hasCrossScriptTitleEvidence(candidate) else { return false }
                     return true
                 }
                 if inputLooksEnglish && aliasConfirmedCJK {
@@ -384,6 +407,9 @@ extension LyricsFetcher {
                 }
                 if resultTitleHasCJK && candidate.durationDiff < 1.0 {
                     guard looksRomanized || aliasConfirmedCJK || candidate.albumMatch else { return false }
+                    if candidate.albumMatch {
+                        guard hasCrossScriptTitleEvidence(candidate) else { return false }
+                    }
                     if inputWordCount <= 1 && !candidate.albumMatch && !hasSameArtistTitleEvidence {
                         return false
                     }

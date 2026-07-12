@@ -633,33 +633,93 @@ public final class MetadataResolver {
             }
         }
 
-        // 🔑 搜索顺序：combined 最精确放最后，先用 artist/title 搜再用 combined 补充
-        let searchTerms = [artist, title, "\(title) \(artist)"]
+        let searchWaves = Self.songScopedSearchWaves(title: title, artist: artist)
         DebugLogger.log("MetadataResolver", "🇨🇳 CN 搜索开始: '\(title)' by '\(artist)' (\(Int(duration))s)")
 
         var candidates: [CNCandidate] = []
 
-        // 🔑 Parallel fetch — fire all 3 search terms simultaneously.
-        // Was sequential: 3 × 1-2s = 3-6s. Now: max(latencies) ≈ 1-2s.
         var fetchedResults: [(String, [[String: Any]])] = []
-        await withTaskGroup(of: (Int, String, [[String: Any]]?).self) { group in
-            for (i, searchTerm) in searchTerms.enumerated() {
-                group.addTask {
-                    let results = await self.searchITunes(term: searchTerm, region: "CN")
-                    return (i, searchTerm, results)
-                }
-            }
+        for (waveIndex, searchTerms) in searchWaves.enumerated() {
             var indexed: [(Int, String, [[String: Any]])] = []
-            for await (i, term, results) in group {
-                if let r = results {
-                    DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(term)' 返回 \(r.count) 条")
-                    indexed.append((i, term, r))
-                } else {
-                    DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(term)' 无结果")
+            await withTaskGroup(of: (Int, String, [[String: Any]]?).self) { group in
+                for (i, searchTerm) in searchTerms.enumerated() {
+                    group.addTask {
+                        let results = await self.searchITunes(term: searchTerm, region: "CN")
+                        return (i, searchTerm, results)
+                    }
+                }
+                for await (i, term, results) in group {
+                    if let r = results {
+                        DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(term)' 返回 \(r.count) 条")
+                        indexed.append((i, term, r))
+                    } else {
+                        DebugLogger.log("MetadataResolver", "🇨🇳 [CN] 搜索 '\(term)' 无结果")
+                    }
                 }
             }
-            // Preserve original processing order for promoteSafeTranslatedCandidates semantics
-            fetchedResults = indexed.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
+            let ordered = indexed.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
+            fetchedResults.append(contentsOf: ordered)
+
+            if waveIndex == 0,
+               let exact = Self.strictExactOriginalResult(
+                   in: ordered.flatMap { $0.1 },
+                   title: title,
+                   artist: artist,
+                   duration: duration
+               ) {
+                diskCache.setChinese(
+                    title: title,
+                    artist: artist,
+                    duration: duration,
+                    resolvedTitle: exact.title,
+                    resolvedArtist: exact.artist,
+                    durationDiff: exact.durationDiff
+                )
+                DebugLogger.log("MetadataResolver", "🎯 🇨🇳 exact song preflight hit; skipping fuzzy rescue")
+                return exact
+            }
+
+            // The combined title+artist query is already song-scoped. If it
+            // yields one candidate that passes the same direct/translated
+            // evidence gates used below, do not issue artist-only and
+            // title-only rescue requests. Besides saving two network calls,
+            // this prevents a later same-artist sibling with a slightly
+            // closer duration from entering the candidate set.
+            if waveIndex == 0 {
+                var songScopedCandidates: [CNCandidate] = []
+                for (searchTerm, results) in ordered {
+                    var translated: [CNCandidate] = []
+                    for result in results {
+                        switch matchCNResult(
+                            result, title: title, artist: artist, duration: duration,
+                            searchTerm: searchTerm, cleanedInputTitle: cleanedInputTitle,
+                            inputTitleLower: inputTitleLower, inputArtistLower: inputArtistLower
+                        ) {
+                        case .direct(let candidate):
+                            songScopedCandidates.append(candidate)
+                        case .translated(let candidate):
+                            translated.append(candidate)
+                        case .none:
+                            break
+                        }
+                    }
+                    promoteSafeTranslatedCandidates(
+                        roundTranslated: translated,
+                        searchTerm: searchTerm,
+                        inputArtistLower: inputArtistLower,
+                        candidates: &songScopedCandidates
+                    )
+                }
+                if let best = songScopedCandidates.min(by: { $0.durationDiff < $1.durationDiff }) {
+                    diskCache.setChinese(
+                        title: title, artist: artist, duration: duration,
+                        resolvedTitle: best.title, resolvedArtist: best.artist,
+                        durationDiff: best.durationDiff
+                    )
+                    DebugLogger.log("MetadataResolver", "🎯 🇨🇳 song-scoped alias hit; skipping fuzzy rescue")
+                    return (best.title, best.artist, best.durationDiff)
+                }
+            }
         }
 
         // 🔑 CN-side exact-vs-translated collision guard (mirrors the per-region
@@ -670,23 +730,12 @@ public final class MetadataResolver {
         // translation alias. Dropping those candidates blocks cases like
         // SUNDAY BRUNCH → 不確かなI LOVE YOU (TW/CN catalog quirk where
         // Kanako Wada's different songs have identical 236s duration).
-        var cnHasExact = false
-        for (_, results) in fetchedResults {
-            for result in results {
-                guard let trackName = result["trackName"] as? String,
-                      let artistName = result["artistName"] as? String,
-                      let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
-                let trackDuration = Double(trackTimeMillis) / 1000.0
-                if abs(trackDuration - duration) < 1.0
-                    && trackName.lowercased() == inputTitleLower
-                    && artistName.lowercased() == inputArtistLower {
-                    DebugLogger.log("MetadataResolver", "🛑 🇨🇳 [CN] exact original match: '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", abs(trackDuration - duration)))s")
-                    cnHasExact = true
-                    break
-                }
-            }
-            if cnHasExact { break }
-        }
+        let cnHasExact = Self.strictExactOriginalResult(
+            in: fetchedResults.flatMap { $0.1 },
+            title: title,
+            artist: artist,
+            duration: duration
+        ) != nil
 
         // Sequential candidate processing (fast CPU-only, preserves original semantics)
         for (searchTerm, results) in fetchedResults {
@@ -914,19 +963,36 @@ public final class MetadataResolver {
         // showing the original Japanese title). The filter discarded the
         // only available lyrics for those tracks. Allow all resolved
         // candidates; downstream selectBest already vets them.
-        var regionOutputs: [(region: String, resolved: (String, String, String, Double)?, hasExact: Bool)] = []
-        await withTaskGroup(of: (String, (String, String, String, Double)?, Bool).self) { group in
-            for region in regions {
-                group.addTask {
-                    let (resolved, hasExact) = await self.fetchMetadataFromRegionWithExactFlag(
-                        title: title, artist: artist, duration: duration, region: region
-                    )
-                    return (region, resolved, hasExact)
+        let primaryRegion = regions[0]
+        let primary = await fetchMetadataFromRegionWithExactFlag(
+            title: title,
+            artist: artist,
+            duration: duration,
+            region: primaryRegion
+        )
+        var regionOutputs: [(region: String, resolved: (String, String, String, Double)?, hasExact: Bool)] = [
+            (primaryRegion, primary.resolved, primary.hasExactMatch)
+        ]
+        let primaryExactCanStop = primary.hasExactMatch
+            && LanguageUtils.isPureASCII(title)
+            && LanguageUtils.isLikelyEnglishTitle(title)
+            && !LanguageUtils.isLikelyRomanizedJapanese(title)
+        if !primaryExactCanStop {
+            await withTaskGroup(of: (String, (String, String, String, Double)?, Bool).self) { group in
+                for region in regions.dropFirst() {
+                    group.addTask {
+                        let (resolved, hasExact) = await self.fetchMetadataFromRegionWithExactFlag(
+                            title: title, artist: artist, duration: duration, region: region
+                        )
+                        return (region, resolved, hasExact)
+                    }
+                }
+                for await (region, resolved, hasExact) in group {
+                    regionOutputs.append((region, resolved, hasExact))
                 }
             }
-            for await (region, resolved, hasExact) in group {
-                regionOutputs.append((region, resolved, hasExact))
-            }
+        } else {
+            DebugLogger.log("MetadataResolver", "🎯 Primary region exact song hit; skipping multi-region rescue")
         }
 
         let trustedOutputs = regionOutputs
@@ -1014,6 +1080,32 @@ public final class MetadataResolver {
         LanguageUtils.inferRegions(title: title, artist: artist)
     }
 
+    static func songScopedSearchWaves(title: String, artist: String) -> [[String]] {
+        [["\(title) \(artist)"], [artist, title]]
+    }
+
+    static func strictExactOriginalResult(
+        in results: [[String: Any]],
+        title: String,
+        artist: String,
+        duration: TimeInterval
+    ) -> (title: String, artist: String, durationDiff: Double)? {
+        let inputTitle = LanguageUtils.normalizeTrackName(title).lowercased()
+        let inputArtist = LanguageUtils.normalizeArtistName(artist).lowercased()
+        return results.compactMap { result in
+            guard let trackName = result["trackName"] as? String,
+                  let artistName = result["artistName"] as? String,
+                  let trackTimeMillis = result["trackTimeMillis"] as? Int else { return nil }
+            let durationDiff = abs(Double(trackTimeMillis) / 1000.0 - duration)
+            guard durationDiff < 1.0,
+                  LanguageUtils.normalizeTrackName(trackName).lowercased() == inputTitle,
+                  LanguageUtils.normalizeArtistName(artistName).lowercased() == inputArtist else {
+                return nil
+            }
+            return (trackName, artistName, durationDiff)
+        }.min { $0.durationDiff < $1.durationDiff }
+    }
+
     private func shouldUseCachedLocalizedMetadata(inputTitle: String, cachedTitle: String, cachedArtist: String) -> Bool {
         let inputNorm = LanguageUtils.normalizeTrackName(inputTitle).lowercased()
         let cachedNorm = LanguageUtils.normalizeTrackName(cachedTitle).lowercased()
@@ -1082,25 +1174,41 @@ public final class MetadataResolver {
         duration: TimeInterval,
         region: String
     ) async -> (resolved: (String, String, String, Double)?, hasExactMatch: Bool) {
-        let searchTerms = ["\(title) \(artist)", artist, title]
-
-        // 🔑 Parallel fetch — fire all search terms simultaneously.
+        let searchWaves = Self.songScopedSearchWaves(title: title, artist: artist)
         var fetchedResults: [(Int, [[String: Any]])] = []
-        await withTaskGroup(of: (Int, String, [[String: Any]]?).self) { group in
-            for (i, searchTerm) in searchTerms.enumerated() {
-                group.addTask {
-                    let results = await self.searchITunes(term: searchTerm, region: region)
-                    return (i, searchTerm, results)
+        var hasExact = false
+        var globalIndex = 0
+        for (waveIndex, searchTerms) in searchWaves.enumerated() {
+            var waveResults: [(Int, [[String: Any]])] = []
+            await withTaskGroup(of: (Int, String, [[String: Any]]?).self) { group in
+                for (i, searchTerm) in searchTerms.enumerated() {
+                    group.addTask {
+                        let results = await self.searchITunes(term: searchTerm, region: region)
+                        return (i, searchTerm, results)
+                    }
+                }
+                for await (i, term, results) in group {
+                    if let r = results {
+                        DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(term)' 返回 \(r.count) 条")
+                        waveResults.append((globalIndex + i, r))
+                    } else {
+                        DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(term)' 无结果")
+                    }
                 }
             }
-            for await (i, term, results) in group {
-                if let r = results {
-                    DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(term)' 返回 \(r.count) 条")
-                    fetchedResults.append((i, r))
-                } else {
-                    DebugLogger.log("MetadataResolver", "[\(region)] 搜索 '\(term)' 无结果")
-                }
+            fetchedResults.append(contentsOf: waveResults)
+            if waveIndex == 0,
+               Self.strictExactOriginalResult(
+                   in: waveResults.flatMap { $0.1 },
+                   title: title,
+                   artist: artist,
+                   duration: duration
+               ) != nil {
+                hasExact = true
+                DebugLogger.log("MetadataResolver", "🎯 [\(region)] exact song preflight hit; skipping fuzzy rescue")
+                break
             }
+            globalIndex += searchTerms.count
         }
 
         // 🔑 Detect exact-original match across all collected results (per region).
@@ -1113,24 +1221,13 @@ public final class MetadataResolver {
         // This distinguishes "romanized→CJK alias" (both in same region) from
         // "unrelated same-artist same-duration CJK track in another region"
         // (e.g., Invisible→不確か where exact is in KR/HK/TW but 不確か is only in JP).
-        let inputTitleLower = title.lowercased()
-        let inputArtistLower = artist.lowercased()
-        var hasExact = false
-        for (_, results) in fetchedResults {
-            for result in results {
-                guard let trackName = result["trackName"] as? String,
-                      let artistName = result["artistName"] as? String,
-                      let trackTimeMillis = result["trackTimeMillis"] as? Int else { continue }
-                let trackDuration = Double(trackTimeMillis) / 1000.0
-                if abs(trackDuration - duration) < 1.0
-                    && trackName.lowercased() == inputTitleLower
-                    && artistName.lowercased() == inputArtistLower {
-                    DebugLogger.log("MetadataResolver", "🛑 [\(region)] exact original match found: '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", abs(trackDuration - duration)))s")
-                    hasExact = true
-                    break
-                }
-            }
-            if hasExact { break }
+        if !hasExact {
+            hasExact = Self.strictExactOriginalResult(
+                in: fetchedResults.flatMap { $0.1 },
+                title: title,
+                artist: artist,
+                duration: duration
+            ) != nil
         }
 
         // Also compute resolved candidate regardless — caller decides whether to use it.

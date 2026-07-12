@@ -249,7 +249,8 @@ extension LyricsFetcher {
             $0.kind == .unsynced &&
             $0.score > 0 &&
             !$0.lyrics.isEmpty &&
-            lyricIdentityTokens(for: $0).count >= 6
+            lyricIdentityTokens(for: $0).count >= 6 &&
+            $0.lyrics.filter { LyricsParser.shared.isRealLyricLine($0.text) }.count >= 6
         }
         guard !plainCandidates.isEmpty else { return nil }
 
@@ -270,14 +271,13 @@ extension LyricsFetcher {
             }
         }
 
-        let candidates = plainCandidates.filter { result in
-            if result.score >= 28 { return true }
-            // Per-source relaxed floor, declared in the trait profile
-            // (lyrics.ovh: 24 with >= 16 lines; Genius: 24).
-            guard let relaxed = result.source.profile.unsyncedFallbackRelaxation else { return false }
-            return result.score >= relaxed.minScore && result.lyrics.count >= relaxed.minLineCount
-        }
-        return candidates.max(by: { $0.score < $1.score })
+        // A single plain-text provider proves only that a page was found for
+        // the title/artist query. It cannot prove recording/version identity,
+        // language, or completeness because it has no timestamps or duration
+        // evidence. Keep static lyrics as an explicit degraded fallback only
+        // when an independent provider corroborates the same payload above.
+        // This deliberately prefers unresolved over confidently-wrong text.
+        return nil
     }
 
     // MARK: - Lyric Identity Helpers
@@ -440,16 +440,14 @@ extension LyricsFetcher {
             return false
         }
         let firstRealStart = result.lyrics.first {
-            let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+            LyricsParser.shared.isRealLyricLine($0.text)
         }?.startTime ?? result.lyrics.first?.startTime ?? 0
         if lastStart > songDuration {
             return (lastStart - songDuration) > max(10.0, songDuration * 0.05)
         }
         let tailGap = songDuration - lastStart
         let realLines = result.lyrics.filter {
-            let text = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !text.isEmpty && text != "..." && text != "…" && text != "⋯"
+            LyricsParser.shared.isRealLyricLine($0.text)
         }
         let firstText = realLines.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let startsWithCatalogMarker = firstText.contains("******")

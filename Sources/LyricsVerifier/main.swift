@@ -8,6 +8,7 @@
  *   swift run LyricsVerifier check "歌名" "艺术家" [秒数]  (秒数省略自动查询)
  *   swift run LyricsVerifier library [--recent N]
  *   swift run LyricsVerifier benchmark [--region CODE] [--no-local-translation]
+ *   Add `--cache-mode network-only` (or `--network-only`) to bypass lyric and metadata caches.
  */
 
 import Foundation
@@ -50,6 +51,7 @@ dispatchMain()
 // =========================================================================
 
 private func runPredefined(args: [String]) async {
+    let cacheMode = parseCacheMode(args)
     var filterID: String? = nil
     if let idx = args.firstIndex(of: "--case"), idx + 1 < args.count {
         filterID = args[idx + 1]
@@ -89,7 +91,8 @@ private func runPredefined(args: [String]) async {
             id: tc.id, title: tc.title,
             artist: tc.artist, duration: tc.duration,
             expectation: tc.expectation,
-            album: tc.album ?? ""
+            album: tc.album ?? "",
+            cacheMode: cacheMode
         )
         results.append(r)
         printResultLine(r)
@@ -224,11 +227,12 @@ private func shellOutput(_ cmd: String) -> String? {
 // =========================================================================
 
 private func runAdHoc(args: [String]) async {
+    let cacheMode = parseCacheMode(args)
     let dumpMode = args.contains("--dump")
     let skipFixtureOracle = args.contains("--no-fixture-oracle")
     // --album "专辑" 供候选选择时匹配版本 (可选, 用于多版本歧义消解)
     var albumArg = ""
-    var filtered = args.filter { $0 != "--dump" && $0 != "--no-fixture-oracle" }
+    var filtered = args.filter { $0 != "--dump" && $0 != "--no-fixture-oracle" && $0 != "--network-only" && $0 != "--cache-mode" && $0 != "network-only" && $0 != "normal" }
     if let idx = filtered.firstIndex(of: "--album"), idx + 1 < filtered.count {
         albumArg = filtered[idx + 1]
         filtered.remove(at: idx + 1)
@@ -271,7 +275,8 @@ private func runAdHoc(args: [String]) async {
         artist: artist, duration: dur,
         expectation: fixture?.expectation,
         translationEnabled: true,
-        album: albumArg
+        album: albumArg,
+        cacheMode: cacheMode
     )
     printResultLine(r)
     emitJSON(r)
@@ -296,6 +301,7 @@ private func runAdHoc(args: [String]) async {
 // =========================================================================
 
 private func runLibrary(args: [String]) async {
+    let cacheMode = parseCacheMode(args)
     var count = 10
     if let idx = args.firstIndex(of: "--recent"), idx + 1 < args.count,
        let n = Int(args[idx + 1]) {
@@ -320,7 +326,8 @@ private func runLibrary(args: [String]) async {
             id: "LIB-\(String(format: "%02d", i + 1))",
             title: track.title, artist: track.artist,
             duration: track.duration, expectation: fixture?.expectation,
-            album: track.album
+            album: track.album,
+            cacheMode: cacheMode
         )
         results.append(r)
         printResultLine(r)
@@ -365,6 +372,7 @@ private func fixtureKey(_ value: String) -> String {
 // =========================================================================
 
 private func runBenchmark(args: [String]) async {
+    let cacheMode = parseCacheMode(args)
     // 解析参数
     var filterRegion: String? = nil
     var enableLocalTranslation = true
@@ -414,7 +422,8 @@ private func runBenchmark(args: [String]) async {
             artist: bc.artist, duration: bc.duration,
             expectation: bc.expectation,
             translationEnabled: true,
-            enforceExpectationIdentityOracle: false
+            enforceExpectationIdentityOracle: false,
+            cacheMode: cacheMode
         )
 
         // 2. 增强验证
@@ -459,6 +468,15 @@ private func runBenchmark(args: [String]) async {
     if let path = jsonOutPath {
         writeBenchmarkJSON(results: results, path: path)
     }
+}
+
+private func parseCacheMode(_ args: [String]) -> LyricsCacheMode {
+    if args.contains("--network-only") { return .networkOnly }
+    if let idx = args.firstIndex(of: "--cache-mode"), idx + 1 < args.count,
+       let mode = LyricsCacheMode(rawValue: args[idx + 1]) {
+        return mode
+    }
+    return .normal
 }
 
 /// Single atomic post-run write — immune to the stdout interleaving that

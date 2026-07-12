@@ -121,6 +121,10 @@ final class LyricsMissMemoTests: XCTestCase {
             LyricsService.shouldRecordTerminalMiss(verdict: .networkUnreachable),
             "offline is never a confirmed miss"
         )
+        XCTAssertFalse(
+            LyricsService.shouldRecordTerminalMiss(verdict: .searchIncomplete),
+            "a clipped or transport-degraded sweep is never a confirmed miss"
+        )
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

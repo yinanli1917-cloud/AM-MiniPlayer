@@ -2,7 +2,7 @@
  * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver), Network (NWPathMonitor)
  * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state + LyricsDisplayState machine (isLoading is a derived compat shim)
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
- * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; refreshes may not demote displayed same-song lyrics to a spinner, while different-track fetches clear stale rows before searching; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7); confirmed terminal misses memo into LyricsMissMemo for the session (20min TTL) — replay answers instantly, forceRefresh bypasses+clears, never recorded on cancellation/offline
+ * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; clipped/transport-degraded sweeps publish a retryable incomplete-search state and never a no-lyrics memo; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; refreshes may not demote displayed same-song lyrics to a spinner, while different-track fetches clear stale rows before searching; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7); confirmed terminal misses memo into LyricsMissMemo for the session (20min TTL) — replay answers instantly, forceRefresh bypasses+clears, never recorded on cancellation/offline/incomplete sweeps
  * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
@@ -649,7 +649,10 @@ public class LyricsService: ObservableObject {
         }
 
         // Check cache with expiration.
-        if !forceRefresh, !canRetryWithBetterDuration, let cached = lyricsCache.object(forKey: songID as NSString), !cached.isExpired {
+        if !forceRefresh,
+           !canRetryWithBetterDuration,
+           let cached = lyricsCache.object(forKey: songID as NSString),
+           !cached.isExpired {
             let cachedNeedsGranularityRefresh = Self.shouldRefreshCachedLyricsForGranularity(
                 lyrics: cached.lyrics,
                 isNoLyrics: cached.isNoLyrics,
@@ -917,12 +920,14 @@ public class LyricsService: ObservableObject {
         case noLyrics
         case instrumental
         case networkUnreachable
+        case searchIncomplete
 
         var errorMessage: String {
             switch self {
             case .noLyrics: return "Lyrics unavailable"
             case .instrumental: return "Instrumental track"
             case .networkUnreachable: return LyricsService.networkUnreachableErrorMessage
+            case .searchIncomplete: return "Couldn't finish searching lyrics"
             }
         }
 
@@ -983,7 +988,7 @@ public class LyricsService: ObservableObject {
     /// and the backfill generation guard kills stale-task publications.
     /// Pinned by LyricsMissMemoTests.
     static func shouldRecordTerminalMiss(verdict: TerminalMissVerdict) -> Bool {
-        verdict != .networkUnreachable
+        verdict == .noLyrics || verdict == .instrumental
     }
 
     @MainActor
@@ -1068,16 +1073,21 @@ public class LyricsService: ObservableObject {
                     // Same honesty rule as the foreground: a miss with zero
                     // protocol responses and transport deaths is "the network
                     // died", not "the song has no lyrics".
-                    let verdict: TerminalMissVerdict = backfillLedger.indicatesNetworkUnreachable
-                        ? .networkUnreachable
-                        : .noLyrics
-                    DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)'\(verdict == .networkUnreachable ? " — network unreachable (protocol=0, transport=\(backfillLedger.transportFailures))" : "")")
+                    let verdict: TerminalMissVerdict
+                    if backfillLedger.indicatesNetworkUnreachable {
+                        verdict = .networkUnreachable
+                    } else if backfillLedger.hadTransportFailures {
+                        verdict = .searchIncomplete
+                    } else {
+                        verdict = .noLyrics
+                    }
+                    DebugLogger.log("LyricsService", "🧭 Background backfill miss: '\(songID)' verdict=\(verdict) protocol=\(backfillLedger.protocolResponses) transport=\(backfillLedger.transportFailures)")
                     self.recordDiagnosticsLyricsBackfillFinished(
                         title: title,
                         artist: artist,
                         album: album,
                         duration: duration,
-                        result: verdict == .networkUnreachable ? "network-unreachable" : "miss",
+                        result: verdict == .networkUnreachable ? "network-unreachable" : (verdict == .searchIncomplete ? "incomplete" : "miss"),
                         source: nil,
                         score: nil,
                         lineCount: 0
@@ -1147,10 +1157,27 @@ public class LyricsService: ObservableObject {
                         artist: artist,
                         album: album,
                         duration: duration,
-                        classification: "unavailable"
+                        classification: "search-incomplete-provider-unavailable"
                     )
                     await MainActor.run {
-                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID)
+                        self.applyNoLyricsMissIfStillCurrentAndEmpty(
+                            songID: songID,
+                            verdict: .searchIncomplete
+                        )
+                    }
+                case .incomplete:
+                    self.recordDiagnosticsLyricsBackfillFinished(
+                        title: title,
+                        artist: artist,
+                        album: album,
+                        duration: duration,
+                        result: "incomplete",
+                        source: nil,
+                        score: nil,
+                        lineCount: 0
+                    )
+                    await MainActor.run {
+                        self.applyNoLyricsMissIfStillCurrentAndEmpty(songID: songID, verdict: .searchIncomplete)
                     }
                 }
                 await self.clearBackfillIfCurrent(generation: generation)

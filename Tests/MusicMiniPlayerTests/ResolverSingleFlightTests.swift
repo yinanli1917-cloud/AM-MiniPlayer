@@ -43,6 +43,45 @@ private actor ResolutionLatch {
 
 final class ResolverSingleFlightTests: XCTestCase {
 
+    func testMetadataSearchPlanRunsExactSongBeforeFuzzyRescue() {
+        XCTAssertEqual(
+            MetadataResolver.songScopedSearchWaves(title: "Song", artist: "Artist"),
+            [["Song Artist"], ["Artist", "Song"]]
+        )
+    }
+
+    func testStrictExactOriginalRejectsSameArtistDurationWrongTitle() {
+        let results: [[String: Any]] = [[
+            "trackName": "他不爱我",
+            "artistName": "Karen Mok",
+            "trackTimeMillis": 239_100
+        ]]
+
+        XCTAssertNil(MetadataResolver.strictExactOriginalResult(
+            in: results,
+            title: "A Candlelight Dinner With Only Ice Cream",
+            artist: "Karen Mok",
+            duration: 239
+        ))
+    }
+
+    func testStrictExactOriginalAcceptsNormalizedSongIdentity() {
+        let results: [[String: Any]] = [[
+            "trackName": "A Candlelight Dinner With Only Ice Cream",
+            "artistName": "Karen Mok",
+            "trackTimeMillis": 239_400
+        ]]
+
+        let match = MetadataResolver.strictExactOriginalResult(
+            in: results,
+            title: "A Candlelight Dinner With Only Ice Cream",
+            artist: "Karen Mok",
+            duration: 239
+        )
+        XCTAssertEqual(match?.title, "A Candlelight Dinner With Only Ice Cream")
+        XCTAssertEqual(match?.durationDiff ?? -1, 0.4, accuracy: 0.001)
+    }
+
     // Test fixture inputs. All-CJK so every consult stays on deterministic
     // paths: CN/localized replay rows (seeded below) or fast guard exits —
     // zero network in this suite.

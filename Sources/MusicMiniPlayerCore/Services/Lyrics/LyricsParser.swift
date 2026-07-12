@@ -410,15 +410,7 @@ public final class LyricsParser {
     public func createUnsyncedLyrics(_ plainText: String, duration: TimeInterval) -> [LyricLine] {
         let textLines = plainText.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { text in
-                guard !text.isEmpty else { return false }
-                if isMetadataKeywordLine(text) { return false }
-                if isByCreditLine(text) { return false }
-                if isDecorativeMarker(text) { return false }
-                if isSectionTagLine(text) { return false }
-                if isPureSymbols(text) { return false }
-                return true
-            }
+            .filter(isRealLyricLine)
 
         guard !textLines.isEmpty else { return [] }
 
@@ -436,6 +428,25 @@ public final class LyricsParser {
                 endTime: introMargin + Double(index + 1) * timePerLine
             )
         }
+    }
+
+    /// Shared content predicate for scoring, static fallback admission, and
+    /// verifier reporting. A line that is only a section/credit/catalog
+    /// marker is not lyric evidence, even when a provider returned it in a
+    /// lyric payload.
+    public func isRealLyricLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !["...", "…", "⋯", "。。。", "···", "・・・"].contains(trimmed) else {
+            return false
+        }
+        return !isMetadataKeywordLine(trimmed)
+            && !isInstrumentalNotice(trimmed)
+            && !isByCreditLine(trimmed)
+            && !isSourceCreditLine(trimmed)
+            && !isDecorativeMarker(trimmed)
+            && !isSectionTagLine(trimmed)
+            && !isPureSymbols(trimmed)
     }
 
     // MARK: - Lyrics Kind Detection
@@ -611,6 +622,9 @@ public final class LyricsParser {
             if isTitleSeparatorLine(trimmed) && line.startTime <= 5.0 { return nil }
             // 信用行（"Mastering by X @ Y"）无冒号但有明确 role keyword + @/by
             if isByCreditLine(trimmed) { return nil }
+            // Some providers append publishing/recording credits without a
+            // colon. These are catalog metadata, not lyric evidence.
+            if isSourceCreditLine(trimmed) { return nil }
             // Source editor credits sometimes appear as boundary timed rows:
             // "edit morrison tsai". Keep this boundary-scoped so a real lyric
             // containing "edit ..." in the middle of a song is not stripped.
@@ -751,6 +765,20 @@ public final class LyricsParser {
         return hasLocationMarker || isShortName
     }
 
+    private func isSourceCreditLine(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
+        let prefixes = [
+            "mixed at ", "mixing at ", "published by ", "published at ",
+            "recorded at ", "recording at ", "mastered at ", "mastering at ",
+            "administered by ", "copyright ", "℗ ", "© "
+        ]
+        guard prefixes.contains(where: { normalized.hasPrefix($0) }) else { return false }
+        return normalized.count >= 12
+    }
+
     private func isLeadingRoleCreditLine(_ text: String) -> Bool {
         let normalized = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -814,7 +842,23 @@ public final class LyricsParser {
             "副歌", "主歌", "桥段", "间奏", "前奏", "尾奏", "过门", "副歌 ", "副歌1", "副歌2"
         ]
         let innerLower = inner.lowercased()
-        return sectionKeywords.contains(where: { innerLower.contains($0) })
+        if sectionKeywords.contains(where: { innerLower.contains($0) }) {
+            return true
+        }
+
+        // Providers localize section labels (for example, French
+        // "[Couplet 2]") and new labels appear over time. A bracket-only,
+        // punctuation-free structural label with a short shape is safer to
+        // drop than to count as lyric identity evidence. Long bracketed
+        // sentences remain eligible lyric text.
+        let hasSentencePunctuation = inner.unicodeScalars.contains { scalar in
+            CharacterSet.punctuationCharacters.contains(scalar)
+                && scalar != "-"
+                && scalar != "_"
+        }
+        let wordCount = inner.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).count
+        let hasOrdinal = inner.range(of: #"\d"#, options: .regularExpression) != nil
+        return !hasSentencePunctuation && inner.count <= 32 && (hasOrdinal || wordCount <= 4)
     }
 
     /// Detect title/credit separator lines: "Song - Artist", "Song -Artist",
@@ -1187,7 +1231,7 @@ public final class LyricsParser {
         // 匹配 "Composed by：A/B/C"、"词：无"、"Producer: xxx" 等任意信用格式
         // 🔑 Widened label limit to 60 chars to catch "Background Vocals and
         //    arrangement" (32) and similar compound role labels.
-        for sep in ["：", ": "] {
+        for sep in ["：", ": ", ":"] {
             guard let range = trimmed.range(of: sep) else { continue }
             let label = String(trimmed[trimmed.startIndex..<range.lowerBound])
             let value = String(trimmed[range.upperBound...])

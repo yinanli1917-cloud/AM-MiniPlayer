@@ -166,6 +166,16 @@ public final class LyricsFetcher {
         case lyrics(LyricsFetchResult)
         case instrumental(LyricsFetchResult)
         case unavailable(LyricsFetchResult)
+        /// The sweep was clipped or lost one or more requests in transport.
+        /// This is not evidence that the song has no lyrics.
+        case incomplete
+    }
+
+    static func backfillSweepIsIncomplete(
+        deadlineClipped: Bool,
+        hadTransportFailures: Bool
+    ) -> Bool {
+        deadlineClipped || hadTransportFailures
     }
 
     // ┌──────────────────────────────────────────────────────────────────────┐
@@ -203,6 +213,20 @@ public final class LyricsFetcher {
     private let foregroundTextFallbackTimeout: TimeInterval = 1.8
     private let foregroundAlbumTextFallbackTimeout: TimeInterval = 1.0
     private let foregroundLibraryNativeTitleEmptyTimeout: TimeInterval = 2.20
+    /// One wall-clock ceiling for the visible track switch. The source race
+    /// has many branch-local budgets, but those budgets are not additive-safe:
+    /// metadata preflights, drain sentinels, and structured-group teardown can
+    /// otherwise stack into a long tail. Keep rescue/backfill outside this
+    /// foreground API so the UI never waits for it.
+    // Keep delivery headroom below the user-visible 3s contract. The timeout
+    // continuation still needs to be scheduled after the wall timer fires;
+    // a 2.95s internal cap left only 50ms and repeatedly surfaced as 3.1-4.0s
+    // foreground latency under provider/executor load.
+    static let foregroundHardDeadline: TimeInterval = 2.70
+
+    var foregroundHardDeadlineForTesting: TimeInterval {
+        Self.foregroundHardDeadline
+    }
 
     // MARK: - Authoritative Backfill Budget (review #6+#7, corrected arithmetic)
     //
@@ -447,6 +471,101 @@ public final class LyricsFetcher {
         translationEnabled: Bool,
         album: String = ""
     ) async -> [LyricsFetchResult] {
+        await fetchAllSourcesUncached(
+            title: title,
+            artist: artist,
+            duration: duration,
+            translationEnabled: translationEnabled,
+            album: album
+        )
+    }
+
+    #if DEBUG
+    /// Verifier-only cache isolation entry point. Excluded from release so the
+    /// shipped app has no diagnostic cache-mode API or symbols.
+    public func fetchAllSources(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String = "",
+        cachePolicy: LyricsCachePolicy
+    ) async -> [LyricsFetchResult] {
+        await LyricsCachePolicyContext.$current.withValue(cachePolicy) {
+            await fetchAllSources(
+                title: title,
+                artist: artist,
+                duration: duration,
+                translationEnabled: translationEnabled,
+                album: album
+            )
+        }
+    }
+    #endif
+
+    private func fetchAllSourcesUncached(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String = ""
+    ) async -> [LyricsFetchResult] {
+        let started = Date()
+        let partialResults = Box<[LyricsFetchResult]>([])
+        let completed = await withHardTimeout(seconds: Self.foregroundHardDeadline) {
+            await self.fetchAllSourcesWithinForegroundBudget(
+                title: title,
+                artist: artist,
+                duration: duration,
+                translationEnabled: translationEnabled,
+                album: album,
+                partialResults: partialResults
+            )
+        }
+        let result: [LyricsFetchResult]
+        if let completed {
+            result = completed
+        } else {
+            // The source group may still be draining cancellation, but every
+            // result that arrived before the wall deadline is safe to retain.
+            // Availability markers are excluded: a clipped sweep can prove a
+            // provider answered, never that every other source lacks lyrics.
+            let normalizedPartial = normalizeForegroundResultScripts(
+                partialResults.value,
+                title: title,
+                artist: artist,
+                album: album
+            ).filter { $0.kind == .synced || $0.kind == .unsynced }
+            persistTrustedForegroundLyrics(
+                from: normalizedPartial,
+                title: title,
+                artist: artist,
+                duration: duration,
+                album: album
+            )
+            result = normalizedPartial.sorted { $0.score > $1.score }
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        if elapsed >= Self.foregroundHardDeadline {
+            DebugLogger.log("⏱️ fetchAllSources foreground hard deadline reached at \(String(format: "%.3f", elapsed))s")
+        }
+        return result
+    }
+
+    private func fetchAllSourcesWithinForegroundBudget(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String = "",
+        partialResults: Box<[LyricsFetchResult]>
+    ) async -> [LyricsFetchResult] {
+        // One absolute clock covers cache preflights and the source group.
+        // The inner sentinel helps the group drain promptly; the outer caller
+        // deadline remains authoritative if structured cancellation teardown
+        // stalls. Results are mirrored into partialResults as they land so the
+        // outer deadline can return usable lyrics instead of discarding them.
+        let fetchStart = Date()
         let cleanTitle = title.replacingOccurrences(of: "\"", with: "")
         let cleanArtist = artist.replacingOccurrences(of: "\"", with: "")
         let cleanAlbum = album.replacingOccurrences(of: "\"", with: "")
@@ -534,7 +653,6 @@ public final class LyricsFetcher {
         }
 
         var results: [LyricsFetchResult] = []
-        let fetchStart = Date()
         let branch2Fired = Box(false)
         let branch2Landed = Box(false)
         let albumScopedBranchFired = Box(false)
@@ -547,6 +665,7 @@ public final class LyricsFetcher {
         let branch3Landed = Box(false)
         let netEaseProviderLanded = Box(false)
         let qqProviderLanded = Box(false)
+        let foregroundDeadlineFired = Box(false)
         let shouldDelayLowTierFallbacks = !alb.isEmpty
             && !(titleIsASCII && LanguageUtils.isLikelyEnglishTitle(ot))
         let lowTierFallbackDelay: UInt64 = shouldDelayLowTierFallbacks ? 700_000_000 : 0
@@ -640,6 +759,28 @@ public final class LyricsFetcher {
         }
 
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            let remainingForegroundBudget = max(
+                0,
+                Self.foregroundHardDeadline - Date().timeIntervalSince(fetchStart)
+            )
+            group.addTask {
+                if remainingForegroundBudget > 0 {
+                    // Route the aggregate foreground deadline through the
+                    // same OS-backed timer as per-source hard timeouts. A
+                    // Task.sleep sentinel can be starved by synchronous
+                    // provider parsing under a long verifier batch, turning
+                    // a 2.7s budget into 3.5s+ despite every source wrapper.
+                    _ = await self.withHardMetadataTimeout(
+                        seconds: remainingForegroundBudget
+                    ) {
+                        try? await Task.sleep(nanoseconds: 60_000_000_000)
+                        return true
+                    }
+                }
+                foregroundDeadlineFired.value = true
+                return nil
+            }
+
             // ───────────────────────────────────────────────────────────────
             // Branch 1 — unconditional, original params
             // ───────────────────────────────────────────────────────────────
@@ -1055,15 +1196,6 @@ public final class LyricsFetcher {
                 try? await Task.sleep(nanoseconds: UInt64(emptyResultDeadline * 1_000_000_000))
                 return nil
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 3_500_000_000)
-                return nil
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                return nil
-            }
-
             // 🔑 When the caller provides an album hint, high-score results
             // from entries WITHOUT album match no longer trigger early return.
             let hasAlbumHint = !alb.isEmpty
@@ -1083,6 +1215,7 @@ public final class LyricsFetcher {
 
                 if let r = result {
                     results.append(r)
+                    partialResults.value = results
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
                     let rFacts = self.drainExitFacts(for: r, songDuration: d)
                     let isLineTimedCJKNativeProviderResult = shouldProtectNativeProviderRace
@@ -1163,6 +1296,13 @@ public final class LyricsFetcher {
                         group.cancelAll()
                         break
                     }
+                }
+
+                if foregroundDeadlineFired.value,
+                   elapsed >= Self.foregroundHardDeadline {
+                    DebugLogger.log("⏱️ Foreground absolute deadline → returning \(results.count) partial results")
+                    group.cancelAll()
+                    break
                 }
 
                 // Review #6+#7: a result set holding ONLY provider availability
@@ -1373,8 +1513,8 @@ public final class LyricsFetcher {
                     || (!protectNativeProviderRace && branch2Fired.value && !branch2Landed.value && !libraryNativeTitleBranchFired.value && elapsed >= 2.2)
                     || (!protectNativeProviderRace && branch3Fired.value && !branch3Landed.value && elapsed >= 2.2)
                     || (hasAnySyncedResult && !protectNativeProviderRace && elapsed >= 2.2)
-                    || (protectNativeProviderRace && elapsed >= 3.5)
-                    || elapsed >= 5.0 {
+                    || (protectNativeProviderRace && elapsed >= 2.9)
+                    || elapsed >= 2.9 {
                     DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
                     group.cancelAll()
                     break
@@ -1390,46 +1530,12 @@ public final class LyricsFetcher {
         let elapsed = Date().timeIntervalSince(fetchStart)
         DebugLogger.log("🏁 fetchAllSources: \(results.count) results in \(String(format: "%.1f", elapsed))s (branch3=\(branch3Fired.value))")
 
-        // 🔑 Script normalization — convert Simplified lyrics to Traditional
-        // when the user's input signals a Traditional/HK/TW context.
-        let inputWantsTraditional = LanguageUtils.containsTraditionalOnlyChars(ot)
-            || LanguageUtils.containsTraditionalOnlyChars(oa)
-            || LanguageUtils.containsTraditionalOnlyChars(alb)
-        let hasSimplifiedInput = LanguageUtils.containsSimplifiedOnlyChars(ot)
-            || LanguageUtils.containsSimplifiedOnlyChars(oa)
-            || LanguageUtils.containsSimplifiedOnlyChars(alb)
-        let localeID = Locale.current.identifier.lowercased()
-        let localeRegion = Locale.current.language.region?.identifier ?? ""
-        let localePrefersTraditional = localeRegion == "HK" || localeRegion == "TW"
-            || localeID.contains("_hk") || localeID.contains("_tw")
-            || localeID.contains("-hk") || localeID.contains("-tw")
-            || localeID.contains("hant")
-        let inputSignalsTraditional = !hasSimplifiedInput
-            && (inputWantsTraditional || localePrefersTraditional)
-
-        let normalizedResults = results.map { r -> LyricsFetchResult in
-            let contentHasCantonese = r.lyrics.contains { line in
-                LanguageUtils.containsCantoneseMarkers(line.text)
-            }
-            let shouldConvert = inputSignalsTraditional
-                || (contentHasCantonese && !hasSimplifiedInput)
-            guard shouldConvert else { return r }
-            let converted = r.lyrics.map { line -> LyricLine in
-                let tradText = LanguageUtils.toTraditionalChinese(line.text)
-                let tradTranslation = line.translation.map { LanguageUtils.toTraditionalChinese($0) }
-                let tradWords = line.words.map { w in
-                    LyricWord(word: LanguageUtils.toTraditionalChinese(w.word),
-                              startTime: w.startTime, endTime: w.endTime)
-                }
-                return LyricLine(text: tradText, startTime: line.startTime, endTime: line.endTime,
-                                 words: tradWords, translation: tradTranslation)
-            }
-            return LyricsFetchResult(lyrics: converted, source: r.source, score: r.score,
-                                     kind: r.kind, albumMatched: r.albumMatched,
-                                     titleMatched: r.titleMatched,
-                                     matchedDurationDiff: r.matchedDurationDiff,
-                                     nativeAliasMatched: r.nativeAliasMatched)
-        }
+        let normalizedResults = normalizeForegroundResultScripts(
+            results,
+            title: ot,
+            artist: oa,
+            album: alb
+        )
         let shouldSuppressWeakTerminalAvailability = shouldSuppressWeakTerminalAvailabilityForNativeAliasMiss(
             album: alb,
             results: normalizedResults,
@@ -1440,20 +1546,16 @@ public final class LyricsFetcher {
             ? normalizedResults.filter { !($0.kind == .instrumental || $0.kind == .unavailable) || $0.albumMatched }
             : normalizedResults
 
-        if let selected = selectBestResult(from: finalResults, songDuration: d),
-           selected.kind == .synced,
-           !selected.lyrics.isEmpty,
-           selectedHasPersistentIdentity(selected) {
-            lyricsDiskCache.set(
-                title: ot,
-                artist: oa,
-                duration: d,
-                album: alb,
-                source: selected.source.rawValue,
-                lines: selected.lyrics,
-                matchedDurationDiff: selected.matchedDurationDiff
-            )
-        } else if let instrumental = selectInstrumentalResult(from: finalResults),
+        let selectedForeground = selectBestResult(from: finalResults, songDuration: d)
+        persistTrustedForegroundLyrics(
+            from: finalResults,
+            title: ot,
+            artist: oa,
+            duration: d,
+            album: alb
+        )
+        if selectedForeground == nil,
+           let instrumental = selectInstrumentalResult(from: finalResults),
                   shouldPersistAvailabilityResult(instrumental, requestedAlbum: alb) {
             // Negative-verdict quorum: the terminal evidence itself is real
             // (a protocol response delivered it), but with requests dead in
@@ -1473,7 +1575,8 @@ public final class LyricsFetcher {
             } else {
                 DebugLogger.log("🛜 INSTRUMENTAL verdict NOT persisted — transport failures during fetch (quorum unmet)")
             }
-        } else if let unavailable = selectUnavailableResult(from: finalResults),
+        } else if selectedForeground == nil,
+                  let unavailable = selectUnavailableResult(from: finalResults),
                   shouldPersistAvailabilityResult(unavailable, requestedAlbum: alb) {
             if negativeVerdictQuorumMet {
                 lyricsDiskCache.setAvailability(
@@ -1492,6 +1595,85 @@ public final class LyricsFetcher {
         }
 
         return finalResults.sorted { $0.score > $1.score }
+    }
+
+    private func normalizeForegroundResultScripts(
+        _ results: [LyricsFetchResult],
+        title: String,
+        artist: String,
+        album: String
+    ) -> [LyricsFetchResult] {
+        let inputWantsTraditional = LanguageUtils.containsTraditionalOnlyChars(title)
+            || LanguageUtils.containsTraditionalOnlyChars(artist)
+            || LanguageUtils.containsTraditionalOnlyChars(album)
+        let hasSimplifiedInput = LanguageUtils.containsSimplifiedOnlyChars(title)
+            || LanguageUtils.containsSimplifiedOnlyChars(artist)
+            || LanguageUtils.containsSimplifiedOnlyChars(album)
+        let localeID = Locale.current.identifier.lowercased()
+        let localeRegion = Locale.current.language.region?.identifier ?? ""
+        let localePrefersTraditional = localeRegion == "HK" || localeRegion == "TW"
+            || localeID.contains("_hk") || localeID.contains("_tw")
+            || localeID.contains("-hk") || localeID.contains("-tw")
+            || localeID.contains("hant")
+        let inputSignalsTraditional = !hasSimplifiedInput
+            && (inputWantsTraditional || localePrefersTraditional)
+
+        return results.map { result in
+            let contentHasCantonese = result.lyrics.contains {
+                LanguageUtils.containsCantoneseMarkers($0.text)
+            }
+            guard inputSignalsTraditional || (contentHasCantonese && !hasSimplifiedInput) else {
+                return result
+            }
+            let converted = result.lyrics.map { line in
+                LyricLine(
+                    text: LanguageUtils.toTraditionalChinese(line.text),
+                    startTime: line.startTime,
+                    endTime: line.endTime,
+                    words: line.words.map {
+                        LyricWord(
+                            word: LanguageUtils.toTraditionalChinese($0.word),
+                            startTime: $0.startTime,
+                            endTime: $0.endTime
+                        )
+                    },
+                    translation: line.translation.map { LanguageUtils.toTraditionalChinese($0) }
+                )
+            }
+            return LyricsFetchResult(
+                lyrics: converted,
+                source: result.source,
+                score: result.score,
+                kind: result.kind,
+                albumMatched: result.albumMatched,
+                titleMatched: result.titleMatched,
+                matchedDurationDiff: result.matchedDurationDiff,
+                nativeAliasMatched: result.nativeAliasMatched,
+                scriptMismatchSuspected: result.scriptMismatchSuspected
+            )
+        }
+    }
+
+    private func persistTrustedForegroundLyrics(
+        from results: [LyricsFetchResult],
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String
+    ) {
+        guard let selected = selectBestResult(from: results, songDuration: duration),
+              selected.kind == .synced,
+              !selected.lyrics.isEmpty,
+              selectedHasPersistentIdentity(selected) else { return }
+        lyricsDiskCache.set(
+            title: title,
+            artist: artist,
+            duration: duration,
+            album: album,
+            source: selected.source.rawValue,
+            lines: selected.lyrics,
+            matchedDurationDiff: selected.matchedDurationDiff
+        )
     }
 
     private func fetchAsciiNativeArtistAliasForeground(
@@ -1575,6 +1757,63 @@ public final class LyricsFetcher {
     }
 
     public func backfillAuthoritativeLyrics(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String = ""
+    ) async -> AuthoritativeBackfillResult? {
+        await backfillAuthoritativeLyricsUncached(
+            title: title,
+            artist: artist,
+            duration: duration,
+            translationEnabled: translationEnabled,
+            album: album
+        )
+    }
+
+    #if DEBUG
+    public func backfillAuthoritativeSyncedLyrics(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String = "",
+        cachePolicy: LyricsCachePolicy
+    ) async -> LyricsFetchResult? {
+        guard let result = await backfillAuthoritativeLyrics(
+            title: title,
+            artist: artist,
+            duration: duration,
+            translationEnabled: translationEnabled,
+            album: album,
+            cachePolicy: cachePolicy
+        ) else { return nil }
+        if case .lyrics(let lyricsResult) = result { return lyricsResult }
+        return nil
+    }
+
+    public func backfillAuthoritativeLyrics(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        translationEnabled: Bool,
+        album: String = "",
+        cachePolicy: LyricsCachePolicy
+    ) async -> AuthoritativeBackfillResult? {
+        await LyricsCachePolicyContext.$current.withValue(cachePolicy) {
+            await backfillAuthoritativeLyrics(
+                title: title,
+                artist: artist,
+                duration: duration,
+                translationEnabled: translationEnabled,
+                album: album
+            )
+        }
+    }
+    #endif
+
+    private func backfillAuthoritativeLyricsUncached(
         title: String,
         artist: String,
         duration: TimeInterval,
@@ -1780,6 +2019,18 @@ public final class LyricsFetcher {
               selected.kind == .synced,
               !selected.lyrics.isEmpty,
               selectedHasReturnableIdentity(selected) else {
+            // A timed-out or transport-degraded sweep cannot publish any
+            // song-level terminal verdict. This is the intermittent path
+            // where a manual retry often succeeds immediately: one provider
+            // answered while another (possibly the only source with lyrics)
+            // died or was clipped. Preserve that uncertainty explicitly.
+            if Self.backfillSweepIsIncomplete(
+                deadlineClipped: backfillDeadlineClipped,
+                hadTransportFailures: !negativeVerdictQuorumMet
+            ) {
+                DebugLogger.log("🧭 Authoritative lyrics backfill INCOMPLETE — refusing no-lyrics terminal (clipped=\(backfillDeadlineClipped))")
+                return .incomplete
+            }
             if let instrumental = selectInstrumentalResult(from: results) {
                 if !shouldPersistAvailabilityResult(instrumental, requestedAlbum: cleanAlbum) {
                     DebugLogger.log("🧭 Authoritative lyrics backfill INSTRUMENTAL not cached without album evidence")
@@ -1815,29 +2066,11 @@ public final class LyricsFetcher {
                 return .instrumental(instrumental)
             }
             if let unavailable = selectUnavailableResult(from: results) {
-                if !shouldPersistAvailabilityResult(unavailable, requestedAlbum: cleanAlbum) {
-                    DebugLogger.log("🧭 Authoritative lyrics backfill UNAVAILABLE not cached without album evidence")
-                    return .unavailable(unavailable)
-                }
-                if backfillDeadlineClipped {
-                    DebugLogger.log("⏱️ Authoritative lyrics backfill UNAVAILABLE not cached — overall budget clipped the sweep")
-                    return .unavailable(unavailable)
-                }
-                if !negativeVerdictQuorumMet {
-                    DebugLogger.log("🛜 Authoritative lyrics backfill UNAVAILABLE not cached — transport failures (quorum unmet)")
-                    return .unavailable(unavailable)
-                }
-                lyricsDiskCache.setAvailability(
-                    title: cleanTitle,
-                    artist: cleanArtist,
-                    duration: duration,
-                    album: cleanAlbum,
-                    source: unavailable.source.rawValue,
-                    kind: .unavailable,
-                    lines: unavailable.lyrics,
-                    matchedDurationDiff: unavailable.matchedDurationDiff
-                )
-                DebugLogger.log("🧭 Authoritative lyrics backfill UNAVAILABLE: \(unavailable.source) in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
+                // This marker proves only that one provider matched the track
+                // but returned no lyric body. It is not evidence that lyrics
+                // do not exist elsewhere, so it must never poison the disk
+                // cache or become a song-level terminal verdict.
+                DebugLogger.log("🧭 Authoritative lyrics backfill PROVIDER UNAVAILABLE (retryable): \(unavailable.source) in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
                 return .unavailable(unavailable)
             }
             DebugLogger.log("🧭 Authoritative lyrics backfill MISS in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
@@ -2499,6 +2732,18 @@ public final class LyricsFetcher {
         let normalized = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(name))
         let cjkCount = normalized.unicodeScalars.filter { LanguageUtils.isCJKScalar($0) }.count
         guard cjkCount >= 2, cjkCount <= 14 else { return nil }
+        // Album membership plus a near-identical duration does not prove that
+        // a CJK title is the translation of an English title. Same-album
+        // sibling tracks routinely satisfy both facts (Karen Mok: Hiroshima
+        // mon amour -> 慢慢的流, Candlelight Dinner -> 他不爱我). English
+        // aliases must arrive through the evidence-name/bilingual-title path;
+        // this duration-only catalog fallback remains available for romanized
+        // titles, where independent transliteration checks run downstream.
+        guard Self.allowsDurationOnlyAlbumScopedNativeAlias(
+            inputTitle: inputTitle,
+            candidateTitle: normalized,
+            albumScoped: albumScoped
+        ) else { return nil }
         if requiresTitleAlbumEcho {
             let normalizedAlbumName = LanguageUtils.toSimplifiedChinese(LanguageUtils.normalizeTrackName(albumName))
             guard !normalizedAlbumName.isEmpty,
@@ -2524,6 +2769,18 @@ public final class LyricsFetcher {
             return normalized
         }
         return nil
+    }
+
+    static func allowsDurationOnlyAlbumScopedNativeAlias(
+        inputTitle: String,
+        candidateTitle: String,
+        albumScoped: Bool
+    ) -> Bool {
+        guard albumScoped, LanguageUtils.isPureASCII(inputTitle) else { return true }
+        return LanguageUtils.isRomanizedTitleCorroborated(
+            input: inputTitle,
+            candidateTitle: candidateTitle
+        )
     }
 
     private func titleHasCollaborationCredit(_ title: String) -> Bool {
@@ -2688,7 +2945,10 @@ public final class LyricsFetcher {
         _ result: LyricsFetchResult,
         requestedAlbum: String
     ) -> Bool {
-        guard result.kind == .instrumental || result.kind == .unavailable else { return false }
+        // A provider-level `.unavailable` means its catalog entry had no lyric
+        // body; another source (or a retry) may still succeed. Only an explicit
+        // instrumental payload is durable song-level availability evidence.
+        guard result.kind == .instrumental else { return false }
         let requestedAlbumID = MetadataDiskCache.normalize(requestedAlbum)
         guard !requestedAlbumID.isEmpty else { return true }
         return result.albumMatched
@@ -2986,9 +3246,12 @@ public final class LyricsFetcher {
                     let value = await worker.value
                     state.resume(value)
                 }
-                Task {
-                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    state.cancelWorker()
+                // Use an OS-backed wall timer. A Task.sleep deadline can be
+                // delayed when synchronous provider work saturates Swift's
+                // cooperative executor, which defeats a user-visible hard cap.
+                LyricsTimeoutScheduler.queue.asyncAfter(
+                    deadline: .now() + seconds
+                ) {
                     state.resume(nil)
                 }
             }
@@ -2997,6 +3260,15 @@ public final class LyricsFetcher {
             state.resume(nil)
         }
     }
+}
+
+private enum LyricsTimeoutScheduler {
+    /// Dedicated queue so provider work on the global cooperative/GCD pools
+    /// cannot starve delivery of the user-visible wall-clock deadline.
+    static let queue = DispatchQueue(
+        label: "com.yinanli.nanoPod.lyrics-timeout",
+        qos: .userInteractive
+    )
 }
 
 // MARK: - Box (reference wrapper for cross-task mutation)

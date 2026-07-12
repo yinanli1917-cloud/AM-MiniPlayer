@@ -7,6 +7,140 @@
 import Foundation
 import CryptoKit
 
+#if DEBUG
+// Developer/verifier-only cache isolation. The release app product does not
+// compile these types or the network-only string into MusicMiniPlayerCore.
+public enum LyricsCacheStore: String, Codable, Sendable {
+    case lyrics
+    case metadata
+}
+
+extension LyricsDiskCache {
+    public func get(title: String, artist: String, duration: TimeInterval, album: String = "", policy: LyricsCachePolicy) -> LyricsDiskCacheEntry? {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            get(title: title, artist: artist, duration: duration, album: album)
+        }
+    }
+
+    public func candidates(title: String, artist: String, duration: TimeInterval, album: String = "", policy: LyricsCachePolicy) -> [LyricsDiskCacheEntry] {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            candidates(title: title, artist: artist, duration: duration, album: album)
+        }
+    }
+
+    public func set(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, syncedLyrics: String, matchedDurationDiff: TimeInterval?, policy: LyricsCachePolicy) {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            set(title: title, artist: artist, duration: duration, album: album, source: source, syncedLyrics: syncedLyrics, matchedDurationDiff: matchedDurationDiff)
+        }
+    }
+
+    public func set(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, lines: [LyricLine], matchedDurationDiff: TimeInterval?, policy: LyricsCachePolicy) {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            set(title: title, artist: artist, duration: duration, album: album, source: source, lines: lines, matchedDurationDiff: matchedDurationDiff)
+        }
+    }
+
+    public func setAvailability(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, kind: LyricsKind, lines: [LyricLine], matchedDurationDiff: TimeInterval?, policy: LyricsCachePolicy) {
+        LyricsCachePolicyContext.$current.withValue(policy) {
+            setAvailability(title: title, artist: artist, duration: duration, album: album, source: source, kind: kind, lines: lines, matchedDurationDiff: matchedDurationDiff)
+        }
+    }
+}
+
+public enum LyricsCacheMode: String, Codable, Sendable {
+    case normal
+    case networkOnly = "network-only"
+}
+
+public struct LyricsCacheDiagnosticsSnapshot: Codable, Equatable, Sendable {
+    public let mode: LyricsCacheMode
+    public let lyricReads: Int
+    public let lyricReadBypasses: Int
+    public let lyricWrites: Int
+    public let lyricWriteBypasses: Int
+    public let metadataReads: Int
+    public let metadataReadBypasses: Int
+    public let metadataWrites: Int
+    public let metadataWriteBypasses: Int
+}
+
+public final class LyricsCacheDiagnostics: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts = (lyricReads: 0, lyricReadBypasses: 0, lyricWrites: 0, lyricWriteBypasses: 0,
+                          metadataReads: 0, metadataReadBypasses: 0, metadataWrites: 0, metadataWriteBypasses: 0)
+
+    public init() {}
+
+    fileprivate func recordRead(_ store: LyricsCacheStore, bypassed: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        switch (store, bypassed) {
+        case (.lyrics, false): counts.lyricReads += 1
+        case (.lyrics, true): counts.lyricReadBypasses += 1
+        case (.metadata, false): counts.metadataReads += 1
+        case (.metadata, true): counts.metadataReadBypasses += 1
+        }
+    }
+
+    fileprivate func recordWrite(_ store: LyricsCacheStore, bypassed: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        switch (store, bypassed) {
+        case (.lyrics, false): counts.lyricWrites += 1
+        case (.lyrics, true): counts.lyricWriteBypasses += 1
+        case (.metadata, false): counts.metadataWrites += 1
+        case (.metadata, true): counts.metadataWriteBypasses += 1
+        }
+    }
+
+    public func snapshot(mode: LyricsCacheMode) -> LyricsCacheDiagnosticsSnapshot {
+        lock.lock(); defer { lock.unlock() }
+        return LyricsCacheDiagnosticsSnapshot(
+            mode: mode,
+            lyricReads: counts.lyricReads,
+            lyricReadBypasses: counts.lyricReadBypasses,
+            lyricWrites: counts.lyricWrites,
+            lyricWriteBypasses: counts.lyricWriteBypasses,
+            metadataReads: counts.metadataReads,
+            metadataReadBypasses: counts.metadataReadBypasses,
+            metadataWrites: counts.metadataWrites,
+            metadataWriteBypasses: counts.metadataWriteBypasses
+        )
+    }
+}
+
+public struct LyricsCachePolicy: Sendable {
+    public let mode: LyricsCacheMode
+    public let diagnostics: LyricsCacheDiagnostics?
+
+    public init(mode: LyricsCacheMode = .normal, diagnostics: LyricsCacheDiagnostics? = nil) {
+        self.mode = mode
+        self.diagnostics = diagnostics
+    }
+
+    public static let normal = LyricsCachePolicy()
+
+    public static func networkOnly(diagnostics: LyricsCacheDiagnostics? = nil) -> LyricsCachePolicy {
+        LyricsCachePolicy(mode: .networkOnly, diagnostics: diagnostics)
+    }
+
+    public var allowsReads: Bool { mode == .normal }
+    public var allowsWrites: Bool { mode == .normal }
+}
+
+public enum LyricsCachePolicyContext {
+    @TaskLocal public static var current = LyricsCachePolicy.normal
+}
+
+extension LyricsCachePolicy {
+    func recordRead(_ store: LyricsCacheStore, bypassed: Bool) {
+        diagnostics?.recordRead(store, bypassed: bypassed)
+    }
+
+    func recordWrite(_ store: LyricsCacheStore, bypassed: Bool) {
+        diagnostics?.recordWrite(store, bypassed: bypassed)
+    }
+}
+#endif
+
 public struct LyricsDiskCacheEntry: Codable, Equatable {
     public let source: String
     public let syncedLyrics: String
@@ -38,7 +172,10 @@ private struct LyricsDiskCacheFile: Codable {
 }
 
 public final class LyricsDiskCache {
-    public static let schemaVersion = 28  // 28: complete romanized→CJK title corroboration (all 5 matcher doors) — flush all pre-fix collision rows
+    // 30: provider-level unavailable markers are retryable evidence, not
+    // durable no-lyrics verdicts. Invalidate schema 29 rows that could force
+    // a false miss until manual refresh.
+    public static let schemaVersion = 30
     public static let ttlSeconds: TimeInterval = 30 * 86400
     public static let unavailableTTLSeconds: TimeInterval = 24 * 3600
     public static let defaultMaxEntryCount = 450
@@ -70,6 +207,14 @@ public final class LyricsDiskCache {
     }
 
     public func candidates(title: String, artist: String, duration: TimeInterval, album: String = "") -> [LyricsDiskCacheEntry] {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsReads else {
+            effectivePolicy.recordRead(.lyrics, bypassed: true)
+            return []
+        }
+        effectivePolicy.recordRead(.lyrics, bypassed: false)
+        #endif
         let keys = Self.cacheKeys(title: title, artist: artist, duration: duration, album: album)
         return queue.sync {
             ensureLoaded()
@@ -93,6 +238,14 @@ public final class LyricsDiskCache {
     }
 
     public func set(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, syncedLyrics: String, matchedDurationDiff: TimeInterval?) {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else {
+            effectivePolicy.recordWrite(.lyrics, bypassed: true)
+            return
+        }
+        effectivePolicy.recordWrite(.lyrics, bypassed: false)
+        #endif
         let entry = LyricsDiskCacheEntry(
             source: source,
             syncedLyrics: syncedLyrics,
@@ -107,6 +260,14 @@ public final class LyricsDiskCache {
     }
 
     public func set(title: String, artist: String, duration: TimeInterval, album: String = "", source: String, lines: [LyricLine], matchedDurationDiff: TimeInterval?) {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else {
+            effectivePolicy.recordWrite(.lyrics, bypassed: true)
+            return
+        }
+        effectivePolicy.recordWrite(.lyrics, bypassed: false)
+        #endif
         let cachedLines = LyricsWordRepair.repair(lines: lines).map { line in
             CachedLyricLine(
                 text: line.text,
@@ -139,7 +300,15 @@ public final class LyricsDiskCache {
         lines: [LyricLine],
         matchedDurationDiff: TimeInterval?
     ) {
-        guard kind == .instrumental || kind == .unavailable else { return }
+        guard kind == .instrumental else { return }
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else {
+            effectivePolicy.recordWrite(.lyrics, bypassed: true)
+            return
+        }
+        effectivePolicy.recordWrite(.lyrics, bypassed: false)
+        #endif
         let cachedLines = LyricsWordRepair.repair(lines: lines).map { line in
             CachedLyricLine(
                 text: line.text,

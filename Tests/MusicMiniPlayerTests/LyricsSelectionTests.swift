@@ -24,6 +24,10 @@ final class LyricsSelectionTests: XCTestCase {
         }
     }
 
+    private func makeCompleteStaticLyrics(prefix: String) -> [LyricLine] {
+        makeLines((1...20).map { "\(prefix) corroborated lyric line \($0) through the night" })
+    }
+
     func testArtistAliasRequiresProviderConfirmation() {
         XCTAssertTrue(
             LyricsFetcher.isConfirmedArtistAlias(
@@ -428,27 +432,13 @@ final class LyricsSelectionTests: XCTestCase {
     func testUnsyncedConsensusCanReturnStaticFallbackWhenNoSyncedSurvives() {
         let fetcher = LyricsFetcher.shared
         let plainA = LyricsFetcher.LyricsFetchResult(
-            lyrics: makeLines([
-                "when the morning comes I keep walking",
-                "through the city lights and the rain",
-                "every little road is calling",
-                "take me back to you again",
-                "I can hear the chorus rising",
-                "I can feel it in my name"
-            ]),
+            lyrics: makeCompleteStaticLyrics(prefix: "morning city"),
             source: .genius,
             score: 31,
             kind: .unsynced
         )
         let plainB = LyricsFetcher.LyricsFetchResult(
-            lyrics: makeLines([
-                "when the morning comes I keep walking",
-                "through the city lights and the rain",
-                "every little road is calling",
-                "take me back to you again",
-                "I can hear the chorus rising",
-                "I can feel it in my name"
-            ]),
+            lyrics: plainA.lyrics,
             source: .lyricsOvh,
             score: 28,
             kind: .unsynced
@@ -509,7 +499,7 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertNil(selected)
     }
 
-    func testExactLyricsOvhCanBeStaticFallbackWhenSyncedIsMissing() {
+    func testExactLyricsOvhAloneIsNotTrustedAsStaticFallback() {
         let fetcher = LyricsFetcher.shared
         let plain = LyricsFetcher.LyricsFetchResult(
             lyrics: makeLines([
@@ -537,8 +527,10 @@ final class LyricsSelectionTests: XCTestCase {
 
         let selected = fetcher.selectBestResult(from: [plain], songDuration: 225)
 
-        XCTAssertEqual(selected?.kind, .unsynced)
-        XCTAssertEqual(selected?.source, .lyricsOvh)
+        // Plain text has no recording/version/timing evidence. Even a long,
+        // plausible payload from one endpoint is not enough to cross the
+        // service's wrong-lyrics safety boundary.
+        XCTAssertNil(selected)
     }
 
     func testUnsyncedConsensusReplacesMissingSyncedResultWithStaticFallback() {
@@ -557,14 +549,7 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .synced
         )
         let plainA = LyricsFetcher.LyricsFetchResult(
-            lyrics: makeLines([
-                "when the morning comes I keep walking",
-                "through the city lights and the rain",
-                "every little road is calling",
-                "take me back to you again",
-                "I can hear the chorus rising",
-                "I can feel it in my name"
-            ]),
+            lyrics: makeCompleteStaticLyrics(prefix: "morning city"),
             source: .genius,
             score: 31,
             kind: .unsynced
@@ -645,14 +630,7 @@ final class LyricsSelectionTests: XCTestCase {
             kind: .synced
         )
         let plainA = LyricsFetcher.LyricsFetchResult(
-            lyrics: makeLines([
-                "the real song starts in the morning",
-                "the real song keeps moving on",
-                "the real song has the same chorus",
-                "the real song belongs here",
-                "the real song is not the outlier",
-                "the real song closes the night"
-            ]),
+            lyrics: makeCompleteStaticLyrics(prefix: "real song"),
             source: .genius,
             score: 31,
             kind: .unsynced
@@ -1364,6 +1342,113 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.nativeAliasMatched, true)
     }
 
+    func testLongEnglishTitleRejectsSameArtistAlbumDurationCollision() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 4002,
+                name: "他不爱我",
+                artist: "莫文蔚",
+                album: "回蔚",
+                durationDiff: 0.1,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: true,
+                normalizedNameLength: 5,
+                resultIndex: 0,
+                searchDescriptor: "album+artist"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: .netEase,
+            inputTitle: "A Candlelight Dinner With Only Ice Cream",
+            inputArtist: "Karen Mok",
+            aliasConfirmedCJK: true,
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertNil(selected, "same artist, album, and duration cannot replace missing title evidence")
+    }
+
+    func testLongEnglishTitleRejectsProviderTopRankNativeCollision() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 4003,
+                name: "他不爱我",
+                artist: "Karen Mok",
+                album: "回蔚",
+                durationDiff: 0.1,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: true,
+                normalizedNameLength: 5,
+                resultIndex: 0,
+                searchDescriptor: "title+artist:A Candlelight Dinner With Only Ice Cream Karen Mok"
+            )
+        ]
+
+        let selected = fetcher.selectBestCandidate(
+            candidates,
+            source: .netEase,
+            inputTitle: "A Candlelight Dinner With Only Ice Cream",
+            inputArtist: "Karen Mok",
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        )
+
+        XCTAssertNil(selected, "provider rank is not semantic title evidence")
+    }
+
+    func testShortEnglishTitleRejectsAlbumMatchedNativeCollision() {
+        let fetcher = LyricsFetcher.shared
+        let candidates = [
+            LyricsFetcher.SearchCandidate(
+                id: 4004,
+                name: "慢慢的流",
+                artist: "Karen Mok",
+                album: "回蔚",
+                durationDiff: 0.1,
+                titleMatch: false,
+                artistMatch: true,
+                albumMatch: true,
+                normalizedNameLength: 5,
+                resultIndex: 0,
+                searchDescriptor: "title+artist"
+            )
+        ]
+
+        XCTAssertNil(fetcher.selectBestCandidate(
+            candidates,
+            source: .netEase,
+            inputTitle: "Hiroshima mon amour",
+            inputArtist: "Karen Mok",
+            hasAlbumHint: true,
+            allowNativeTitleAlias: true
+        ), "album identity cannot replace missing cross-script title evidence")
+    }
+
+    func testEnglishTitleRejectsDurationOnlyAlbumScopedWitnessAlias() {
+        XCTAssertFalse(LyricsFetcher.allowsDurationOnlyAlbumScopedNativeAlias(
+            inputTitle: "Hiroshima mon amour",
+            candidateTitle: "慢慢的流",
+            albumScoped: true
+        ))
+        XCTAssertFalse(LyricsFetcher.allowsDurationOnlyAlbumScopedNativeAlias(
+            inputTitle: "A Candlelight Dinner With Only Ice Cream",
+            candidateTitle: "他不爱我",
+            albumScoped: true
+        ))
+        XCTAssertTrue(LyricsFetcher.allowsDurationOnlyAlbumScopedNativeAlias(
+            inputTitle: "Mayonaka No Shujinkou",
+            candidateTitle: "真夜中の主人公",
+            albumScoped: true
+        ))
+    }
+
     func testGenericEnglishTokenDoesNotCreateAliasTitleOverlap() {
         let fetcher = LyricsFetcher.shared
         let candidates = [
@@ -1697,6 +1782,30 @@ final class LyricsSelectionTests: XCTestCase {
         )
 
         XCTAssertLessThanOrEqual(deadline, 2.25)
+    }
+
+    func testForegroundFetchHasSingleHardDeadlineUnderInteractionBudget() {
+        XCTAssertLessThanOrEqual(
+            LyricsFetcher.shared.foregroundHardDeadlineForTesting,
+            2.70
+        )
+    }
+
+    func testHardTimeoutReturnsWhileWorkerIgnoresCancellation() async {
+        let started = Date()
+        _ = await LyricsFetcher.shared.withHardSourceTimeout(seconds: 0.05) {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.50) {
+                    continuation.resume(returning: Optional<LyricsFetcher.LyricsFetchResult>.none)
+                }
+            }
+        }
+
+        XCTAssertLessThan(
+            Date().timeIntervalSince(started),
+            0.25,
+            "wall-clock timeout must resume without waiting for a blocking provider worker"
+        )
     }
 
     func testAlbumTitleEchoDoesNotUseLibraryNativeTitleCachePreflight() {
@@ -2301,7 +2410,7 @@ final class LyricsSelectionTests: XCTestCase {
         ))
     }
 
-    func testAlbumScopedTerminalAvailabilityRequiresAlbumEvidenceToPersist() {
+    func testProviderUnavailableNeverPersistsAsSongAvailability() {
         let fetcher = LyricsFetcher.shared
         let unavailable = LyricsFetcher.LyricsFetchResult(
             lyrics: [],
@@ -2317,7 +2426,7 @@ final class LyricsSelectionTests: XCTestCase {
             unavailable,
             requestedAlbum: "Known Album"
         ))
-        XCTAssertTrue(fetcher.shouldPersistAvailabilityResult(
+        XCTAssertFalse(fetcher.shouldPersistAvailabilityResult(
             unavailable,
             requestedAlbum: ""
         ))

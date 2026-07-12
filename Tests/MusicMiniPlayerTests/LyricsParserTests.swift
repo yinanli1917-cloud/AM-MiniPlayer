@@ -312,6 +312,43 @@ final class LyricsParserTests: XCTestCase {
         ])
     }
 
+    func testCreateUnsyncedLyrics_stripsLocalizedSectionMarkers() {
+        let text = """
+        [Couplet 2]
+        La nuit tombe sur la ville
+        [Refrain]
+        Je cherche encore ta voix
+        """
+
+        let lines = parser.createUnsyncedLyrics(text, duration: 120)
+
+        XCTAssertEqual(lines.map(\.text), [
+            "La nuit tombe sur la ville",
+            "Je cherche encore ta voix"
+        ])
+    }
+
+    func testIsRealLyricLineUsesSharedMetadataAndSectionRules() {
+        XCTAssertFalse(parser.isRealLyricLine("[Couplet 2]"))
+        XCTAssertFalse(parser.isRealLyricLine("编曲：某某"))
+        XCTAssertFalse(parser.isRealLyricLine("编曲:某某"))
+        XCTAssertFalse(parser.isRealLyricLine("Mixed at The Mixsuite (South London)"))
+        XCTAssertFalse(parser.isRealLyricLine("Instrumental"))
+        XCTAssertTrue(parser.isRealLyricLine("La nuit tombe sur la ville"))
+    }
+
+    func testProcessLyrics_stripsSourceCreditRowsWithoutColon() {
+        let raw = [
+            LyricLine(text: "Mixed at The Mixsuite (South London)", startTime: 200, endTime: 201),
+            LyricLine(text: "La nuit tombe sur la ville", startTime: 10, endTime: 15),
+            LyricLine(text: "Mastered at Metropolis Mastering", startTime: 202, endTime: 203)
+        ]
+
+        let (lyrics, _) = parser.processLyrics(raw)
+
+        XCTAssertEqual(lyrics.dropFirst().map(\.text), ["La nuit tombe sur la ville"])
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - processLyrics 后处理
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

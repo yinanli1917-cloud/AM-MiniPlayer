@@ -99,7 +99,10 @@ final class LyricsDiskCacheTests: XCTestCase {
         XCTAssertEqual(cached?.lines?.first?.text, "Instrumental")
     }
 
-    func testAvailabilityCachePreservesUnavailableKind() {
+    // Provider-unavailable is retryable evidence, never a durable negative
+    // verdict: setAvailability must drop it instead of persisting a 24h row
+    // (spec: lyrics-pipeline.md "Provider unavailable is not song unavailable").
+    func testAvailabilityCacheDropsUnavailableKind() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("json")
@@ -117,8 +120,7 @@ final class LyricsDiskCacheTests: XCTestCase {
         )
 
         let cached = cache.get(title: "Memento", artist: "Resavoir & Matt Gold", duration: 228, album: "Horizon")
-        XCTAssertEqual(cached?.kind, .unavailable)
-        XCTAssertEqual(cached?.source, "NetEase")
+        XCTAssertNil(cached)
     }
 
     func testCachePrunesOldEntriesToBoundMemoryGrowth() {

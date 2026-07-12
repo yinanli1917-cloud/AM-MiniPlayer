@@ -87,6 +87,21 @@ final class AuthoritativeBackfillBudgetTests: XCTestCase {
         }
     }
 
+    func testClippedOrTransportDegradedSweepIsIncomplete() {
+        XCTAssertFalse(LyricsFetcher.backfillSweepIsIncomplete(
+            deadlineClipped: false,
+            hadTransportFailures: false
+        ))
+        XCTAssertTrue(LyricsFetcher.backfillSweepIsIncomplete(
+            deadlineClipped: true,
+            hadTransportFailures: false
+        ))
+        XCTAssertTrue(LyricsFetcher.backfillSweepIsIncomplete(
+            deadlineClipped: false,
+            hadTransportFailures: true
+        ))
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - Marker-only fast exit: unclamped evidence windows (review #7)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
