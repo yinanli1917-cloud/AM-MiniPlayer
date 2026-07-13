@@ -284,10 +284,12 @@ struct NativeLyricsVisualTarget: Equatable {
         }
         if isActive {
             let blend = min(1, max(0, interludeBlend))
+            // Recede = dim + shrink ONLY (user 2026-07-12): blurring while the row is still
+            // at/near the centre read as "sinking into fog" on top of the dim.
             return NativeLyricsVisualTarget(
                 opacity: 1.0 - blend * 0.65,
                 scale: 1.0 - blend * 0.05,
-                blur: blend * 1.5,
+                blur: 0,
                 isActive: true
             )
         }
@@ -331,14 +333,15 @@ struct NativeLyricsVisualTarget: Equatable {
             // (instrumentation confirmed blend reaches 1.0; only the form was never wired through).
             // At blend=1 it lands on the same past-line look the depth tier uses.
             let blend = min(1, max(0, interludeBlend))
-            // Land EXACTLY on a natural dist-1 past line so the just-finished line reads like a
-            // normal recent-past lyric — not blurrier than the OLDER lines above it. (blur 1.5 here
-            // inverted the depth gradient: the line just above the dots looked more washed-out than
-            // the line above IT. dist-1 blur = max(0,1-0.75)*2 = 0.5.)
+            // Recede = dim + shrink ONLY (user 2026-07-12): the fold lands on the plain
+            // inactive look with NO added blur. Even the old dist-1 landing (0.5) read as
+            // "sinking into fog" while the row was still at/near the centre; once the row
+            // genuinely stops being hot, the standard distance formula takes over via the
+            // spring and depth blur applies at its true distance.
             return NativeLyricsVisualTarget(
-                opacity: 1.0 - blend * 0.65,   // → 0.35 (dist-1 past opacity)
-                scale: 1.0 - blend * 0.05,     // → 0.95 (dist-1 past scale)
-                blur: blend * 0.5,             // → 0.5 (dist-1 past blur — sharpest past tier)
+                opacity: 1.0 - blend * 0.65,   // → 0.35 (inactive opacity)
+                scale: 1.0 - blend * 0.05,     // → 0.95 (inactive scale)
+                blur: 0,
                 isActive: true
             )
         }
@@ -732,7 +735,25 @@ enum NativeLyricsTimelinePolicy {
         let nextStartTime = sortedRows[(position + 1)...]
             .first { !$0.isPrelude && $0.displayLine.line.startTime > startTime + lineAdvanceEpsilon }?
             .displayLine.line.startTime
-        return nextStartTime ?? startTime + 0.4
+        let fallback = nextStartTime ?? startTime + 0.4
+        // A zero-length line is the flattened remnant of a SIMULTANEOUS harmony part
+        // (NetEase serializes duet lines back-to-back at one instant). Its hot window
+        // rides its co-starting sibling's REAL end — never the next DISTINCT start.
+        // Outliving the sibling left it the only hot row in the gap after the sibling
+        // ended, and semanticIndex (= hotGroups.max()) regressed to it for a frame:
+        // the up-down scroll stutter on backing-vocal lines (Puzzle「（I want you）」).
+        let coStartingSiblingEnd = sortedRows
+            .filter {
+                $0.index != row.index && !$0.isPrelude
+                    && abs($0.displayLine.line.startTime - startTime) <= lineAdvanceEpsilon
+                    && $0.displayLine.line.endTime > startTime + lineAdvanceEpsilon
+            }
+            .map(\.displayLine.line.endTime)
+            .max()
+        if let coStartingSiblingEnd {
+            return min(coStartingSiblingEnd, fallback)
+        }
+        return fallback
     }
 }
 

@@ -59,17 +59,21 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
     }
 
     func testInterludeBlendPlanUsesTheDotTimelineWindow() {
+        // User 2026-07-12: the dots must take the centre like a NORMAL line handoff —
+        // a short 0.1s guard then a 0.6s ease-out; the position spring adds its own
+        // smoothing on top. The old 0.5s + 2.5s ramp read as the dots drifting to the
+        // centre with a ~3s delay.
         XCTAssertEqual(
-            NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 10.25),
+            NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 10.05),
             0,
             accuracy: 0.0001
         )
 
-        let mid = NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 11.75)
+        let mid = NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 10.4)
         XCTAssertEqual(mid, 0.875, accuracy: 0.0001)
 
         XCTAssertEqual(
-            NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 13.0),
+            NativeLyricsDotPhasePlan.interludeBlend(startTime: 10, endTime: 15, currentTime: 10.8),
             1,
             accuracy: 0.0001
         )
@@ -339,7 +343,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
 
         XCTAssertEqual(visual.opacity, 0.35, accuracy: 0.0001)
         XCTAssertEqual(visual.scale, 0.95, accuracy: 0.0001)
-        XCTAssertEqual(visual.blur, 1.5, accuracy: 0.0001)
+        // User 2026-07-12: the recede is dim + shrink only — no added blur.
+        XCTAssertEqual(visual.blur, 0, accuracy: 0.0001)
         XCTAssertTrue(visual.isActive)
     }
 

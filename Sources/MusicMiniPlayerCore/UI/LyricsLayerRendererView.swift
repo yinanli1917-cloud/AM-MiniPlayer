@@ -318,6 +318,13 @@ final class NativeLyricsSurfaceView: NSView {
     /// A/B seam: when true, visualCurrentIndex binds the visual demotion to the SEMANTIC line index
     /// (pre-1e1ffbf), instead of the scroll wave's per-row targetIndex (current). Headless-only.
     static var debugForceSemanticVisualIndex = false
+    /// Headless seam for the tap-hit tests: enters manual-scroll state without synthesizing
+    /// phase-tagged scroll-wheel events (NSEvent cannot fabricate those).
+    func debugBeginManualScroll() {
+        guard let configuration else { return }
+        beginNativeManualScrollIfNeeded(configuration: runtimeConfiguration(from: configuration))
+    }
+    var debugManualScrollActive: Bool { manualScrollState.isActive }
     #endif
     private var initialMeasurementsPending = true
     // Reveal gate. Freshly-mounted rows are positioned ONLY by their layer transform, so for the
@@ -636,6 +643,11 @@ final class NativeLyricsSurfaceView: NSView {
         s += "|tr\(c.showTranslation ? 1 : 0)\(c.isTranslating ? 1 : 0)\(c.translationFailed ? 1 : 0)"
         s += "|pt\(c.pendingTranslationLineIndices.count)|sy\(c.hasSyllableSync ? 1 : 0)"
         s += "|rm\(c.reduceMotion ? 1 : 0)|si\(c.suppressInitialMotion ? 1 : 0)"
+        // controlsVisible arms the bottom reserved tap zone. Omitting it deduped the
+        // "controls faded out" reconfigure whenever nothing else changed (frozen index
+        // during manual scroll = exactly that), so the invisible controls kept eating
+        // taps in the bottom region — the "taps dead in reserved zones" report.
+        s += "|cv\(c.controlsVisible ? 1 : 0)"
         return s
     }
 

@@ -273,8 +273,14 @@ struct NativeLyricsTextPhaseSample: Equatable {
 struct NativeLyricsDotPhasePlan: Equatable {
     static let baseDotSize: CGFloat = 8
     static let baseDotSpacing: CGFloat = 6
-    private static let interludeBlendDelay: TimeInterval = 0.5
-    private static let interludeBlendDuration: TimeInterval = 2.5
+    // The dots take the centre like a NORMAL line handoff (user 2026-07-12): a short
+    // guard then a fast ease-out; the position spring adds its own smoothing on top.
+    // The old 0.5s + 2.5s ramp read as the dots drifting in with a ~3s delay.
+    private static let interludeBlendDelay: TimeInterval = 0.1
+    private static let interludeBlendDuration: TimeInterval = 0.6
+    // The ordinary-gap fold keeps the original gentle pace — there is no dots handoff
+    // to synchronize with; the row just relaxes into the inactive form in place.
+    private static let gapRecedeDuration: TimeInterval = 2.5
 
     let opacities: [CGFloat]
     let scales: [CGFloat]
@@ -308,7 +314,7 @@ struct NativeLyricsDotPhasePlan: Equatable {
     ) -> CGFloat {
         let elapsed = currentTime - lineEndTime - gapRecedeDelay
         guard elapsed > 0 else { return 0 }
-        let progress = min(1, max(0, elapsed / interludeBlendDuration))
+        let progress = min(1, max(0, elapsed / gapRecedeDuration))
         return CGFloat(1 - pow(1 - progress, 3))
     }
 

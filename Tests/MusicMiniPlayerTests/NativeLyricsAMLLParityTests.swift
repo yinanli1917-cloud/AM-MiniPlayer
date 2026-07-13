@@ -148,7 +148,9 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         )
         XCTAssertLessThan(settled.opacity, 0.5, "preceding line must fade toward a past line at blend=1")
         XCTAssertLessThan(settled.scale, 1.0, "preceding line must shrink toward a past line at blend=1")
-        XCTAssertGreaterThan(settled.blur, 0, "preceding line must blur into depth at blend=1")
+        // User 2026-07-12: the recede must read EXACTLY like an inactive row — dim + shrink
+        // only. Blurring during the fold read as "sinking into fog" on top of the dim.
+        XCTAssertEqual(settled.blur, 0, accuracy: 0.0001, "recede adds NO blur — inactive look only")
 
         // blend=0 (no interlude) keeps the active line fully active — unchanged.
         let active = NativeLyricsVisualTarget.amllTarget(
@@ -189,7 +191,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         assertTarget(passed1, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: false, "v2.8 passed dist-1 = 0.8 (symmetric)")
 
         let interludeActive = NativeLyricsVisualTarget.legacyTarget(displayIndex: 5, currentIndex: 5, isManualScrolling: false, interludeBlend: 1.0)
-        assertTarget(interludeActive, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: true, "v2.8 interlude scale = 1 - b*0.05 = 0.95")
+        assertTarget(interludeActive, opacity: 0.35, scale: 0.95, blur: 0, isActive: true, "recede lands on the inactive look — no added blur (user 2026-07-12)")
     }
 
     /// Depth field must be monotonic: the accumulated BUFFERED trail (recently-passed lines that are
@@ -244,24 +246,24 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     }
 
     /// During an interlude the three dots take the active centre, so the PRECEDING active line
-    /// recedes to a NATURAL dist-1 past line as interludeBlend ramps 0→1: opacity 1→0.35, scale
-    /// 1→0.95, blur 0→0.5. It must land on the SAME values a real dist-1 past line gets (the
-    /// sharpest past tier) — using blur 1.5 inverted the depth gradient (the line just above the
-    /// dots looked more washed-out than the OLDER line above it). It previously (even earlier)
-    /// stayed fully bright because amllTarget accepted but never used interludeBlend.
+    /// recedes as interludeBlend ramps 0→1: opacity 1→0.35, scale 1→0.95, blur stays 0 (user
+    /// 2026-07-12: the fold is dim + shrink ONLY — even the dist-1 landing 0.5 read as "sinking
+    /// into fog" while the row was still near the centre). Earlier bugs on this path: blur 1.5
+    /// inverted the depth gradient; before that the line stayed fully bright because amllTarget
+    /// accepted but never used interludeBlend.
     func test_interludeBlend_precedingLineRecedesAtFullBlend() {
         let amllActive = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false, interludeBlend: 1.0
         )
-        assertTarget(amllActive, opacity: 0.35, scale: 0.95, blur: 0.5, isActive: true, "preceding line recedes to a natural dist-1 past line at full interlude")
+        assertTarget(amllActive, opacity: 0.35, scale: 0.95, blur: 0, isActive: true, "preceding line folds to the inactive look at full interlude — no added blur")
 
         // The retired line must NOT be blurrier than a real dist-1 past line (the gradient-inversion bug).
         let realDist1 = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 6, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertEqual(amllActive.blur, realDist1.blur, accuracy: 1e-6, "retired interlude line blur == real dist-1 past blur (no inversion)")
+        XCTAssertLessThanOrEqual(amllActive.blur, realDist1.blur, "retired interlude line is never blurrier than a real dist-1 past line (no inversion)")
     }
 
     /// CHARACTERIZATION of the "smeared active row / wrong brightness" report: native keeps
