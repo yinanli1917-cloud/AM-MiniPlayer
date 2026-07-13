@@ -227,7 +227,6 @@ final class NativeLyricsTextRenderPlanTests: XCTestCase {
         ))
 
         XCTAssertEqual(active.translation?.progress ?? -1, 0.5, accuracy: 0.0001)
-        XCTAssertEqual(active.translation?.dimAlpha, 0.20)
         XCTAssertEqual(active.translation?.brightAlpha, 0.75)
         XCTAssertEqual(fading.translation?.postLineFade ?? 0, 0.75, accuracy: 0.0001)
     }

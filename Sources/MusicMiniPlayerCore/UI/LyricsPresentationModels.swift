@@ -259,6 +259,12 @@ struct NativeLyricsVisualTarget: Equatable {
     let scale: CGFloat
     let blur: CGFloat
     let isActive: Bool
+    // Effective brightness the hot row's UNSWEPT dim base must read (defect 3 second root
+    // cause, user decision 2026-07-12): equal to the inactive-row tier, so a handoff moves
+    // NOTHING but the bright sweep. Consumed only by sweep-active rows, which divide it by
+    // the springing row opacity to keep the on-screen product continuous. Manual scroll
+    // lifts it to the all-clear 0.6 tier so the hot row reads like its neighbours.
+    var dimBaseBrightness: CGFloat = 0.35
 
     static func legacyTarget(
         displayIndex: Int,
@@ -272,7 +278,8 @@ struct NativeLyricsVisualTarget: Equatable {
                 opacity: 0.6,
                 scale: 0.95,
                 blur: 0,
-                isActive: isActive
+                isActive: isActive,
+                dimBaseBrightness: 0.6
             )
         }
         if isActive {
@@ -312,7 +319,8 @@ struct NativeLyricsVisualTarget: Equatable {
                 opacity: 0.6,
                 scale: 0.95,
                 blur: 0,
-                isActive: isHotActive
+                isActive: isHotActive,
+                dimBaseBrightness: 0.6
             )
         }
         if isHotActive {
@@ -831,13 +839,26 @@ enum NativeLyricsSnapMath {
         rowIndex: Int,
         targetIndex: Int,
         anchorY: CGFloat,
-        accumulatedHeights: [Int: CGFloat],
-        targetAlignmentOffsets: [Int: CGFloat] = [:]
+        accumulatedHeights: [Int: CGFloat]
     ) -> CGFloat {
+        // Every row — text, prelude, mid-song ellipsis — anchors its TOP at the anchor
+        // when it is the target. Prelude dot rows need no alignment shim: their dot
+        // centre (top inset 8 + container 30/2 = 23) coincides with a text row's
+        // first-line centre by design, so plain row anchoring puts the dots exactly
+        // where the active line's text reads (defect 3).
         let rowOffset = accumulatedHeights[rowIndex] ?? 0
         let targetOffset = accumulatedHeights[targetIndex] ?? 0
-        let targetAlignmentOffset = targetAlignmentOffsets[targetIndex] ?? 0
-        return anchorY - targetOffset - targetAlignmentOffset + rowOffset
+        return anchorY - targetOffset + rowOffset
+    }
+
+    /// Anchor advance while an interlude is active: brings the reserved gap to the
+    /// active slot so the overlay dots land on the ACTIVE TEXT CENTRE (anchorY +
+    /// preludeDotCenterY) at full blend — the dots read exactly like a current line,
+    /// not a group parked on the bare anchor line above it (defect 3).
+    static func interludeAnchorAdvance(blend: CGFloat, rowHeight: CGFloat) -> CGFloat {
+        blend * (rowHeight
+            + NativeLyricsHeightAccumulator.interludeGapHeight / 2
+            - NativeLyricsRowMeasurement.preludeDotCenterY)
     }
 
     /// The Y a row paints at this frame. Snap mode teleports to the snapped target

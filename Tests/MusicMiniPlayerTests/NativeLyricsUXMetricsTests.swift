@@ -80,6 +80,23 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
         )
     }
 
+    // Defect 2 (user, 2026-07-12): a sung-out hot row inside an ORDINARY gap (too short
+    // for an official interlude) held its full active form — a third style neither active
+    // nor inactive. It must fold back to the plain inactive form: same ease-out ramp as
+    // the interlude recede, anchored on the line end, delayed until the post-line bright
+    // remnant has finished fading (postLineFadeOut = 1.5s).
+    func testGapRecedeBlendFoldsSungOutRowAfterRemnantFade() {
+        // Before and during the line: no recede.
+        XCTAssertEqual(NativeLyricsDotPhasePlan.gapRecedeBlend(lineEndTime: 10, currentTime: 9.0), 0, accuracy: 0.0001)
+        // Remnant-fade window (line end → +1.5s): the bright overlay is still fading, hold.
+        XCTAssertEqual(NativeLyricsDotPhasePlan.gapRecedeBlend(lineEndTime: 10, currentTime: 11.4), 0, accuracy: 0.0001)
+        // Past the delay the fold ramps up ease-out (same 2.5s curve as the interlude blend).
+        let mid = NativeLyricsDotPhasePlan.gapRecedeBlend(lineEndTime: 10, currentTime: 12.75)
+        XCTAssertEqual(mid, 0.875, accuracy: 0.0001)
+        // Fully folded: the row now carries exactly the inactive form.
+        XCTAssertEqual(NativeLyricsDotPhasePlan.gapRecedeBlend(lineEndTime: 10, currentTime: 14.0), 1, accuracy: 0.0001)
+    }
+
     func testTranslationLoadingDotsMatchLegacySizeSpacingAndSinePhase() {
         let plan = NativeLyricsTranslationLoadingDotPhasePlan.make(animationPhase: 0)
 

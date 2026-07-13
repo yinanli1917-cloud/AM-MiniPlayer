@@ -134,7 +134,7 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
     }
 
     @MainActor
-    func test_preludeDotsCenterOnActiveAnchor() {
+    func test_preludeDotsReadAtTheActiveTextPosition() {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
         hostInWindow(surface, size: NSSize(width: 360, height: 600))
         let rows = preludeRows()
@@ -149,11 +149,15 @@ final class NativeLyricsFramePositioningTests: XCTestCase {
             return XCTFail("first real row should mount below the prelude")
         }
 
+        // Defect 3 (user, 2026-07-12): the dots sit where the ACTIVE LINE'S TEXT reads —
+        // row top on the anchor like every row, dot centre at its in-row position (23),
+        // which coincides with a text row's first-line centre. Centering the dots on the
+        // bare anchor LINE (the old shim) parked them 23pt above the text position.
         XCTAssertEqual(
             prelude.debugPreludeDotCenterYInSuperview,
-            250,
+            250 + NativeLyricsRowMeasurement.preludeDotCenterY,
             accuracy: 0.5,
-            "prelude dots should center on the active anchor, not the prelude row top"
+            "prelude dots read at the active line's text position (anchor + in-row dot centre)"
         )
         XCTAssertEqual(
             firstReal.frame.minY - prelude.frame.maxY,

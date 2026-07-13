@@ -727,7 +727,6 @@ final class NativeLyricsSurfaceView: NSView {
                 renderedIndices: runtimeConfiguration.renderedIndices,
                 anchorY: runtimeConfiguration.anchorY,
                 accumulatedHeights: runtimeConfiguration.accumulatedHeights,
-                targetAlignmentOffsets: targetAlignmentOffsets(for: runtimeConfiguration),
                 lineInterval: runtimeConfiguration.lineInterval,
                 hasSyllableSync: runtimeConfiguration.hasSyllableSync,
                 isInterludeActive: runtimeConfiguration.interludeAfterIndex != nil,
@@ -1085,7 +1084,10 @@ final class NativeLyricsSurfaceView: NSView {
            let row = runtimeConfiguration.rows.first(where: { $0.index == interludeIdx }) {
             let blend = interludeBlend(for: row, configuration: runtimeConfiguration)
             let interludeRowHeight = measuredHeightsByIndex[interludeIdx] ?? 36
-            runtimeConfiguration.anchorY -= blend * (interludeRowHeight + NativeLyricsHeightAccumulator.interludeGapHeight / 2)
+            runtimeConfiguration.anchorY -= NativeLyricsSnapMath.interludeAnchorAdvance(
+                blend: blend,
+                rowHeight: interludeRowHeight
+            )
         }
         synchronizeNativeSemanticIndex(configuration: &runtimeConfiguration)
         return runtimeConfiguration
@@ -1209,7 +1211,6 @@ final class NativeLyricsSurfaceView: NSView {
                     renderedIndices: configuration.renderedIndices,
                     anchorY: configuration.anchorY,
                     accumulatedHeights: configuration.accumulatedHeights,
-                    targetAlignmentOffsets: targetAlignmentOffsets(for: configuration),
                     lineInterval: lineInterval(around: resolvedIndex, rows: configuration.rows),
                     hasSyllableSync: configuration.rows.first(where: { $0.index == resolvedIndex })?.displayLine.line.hasSyllableSync ?? configuration.hasSyllableSync,
                     isInterludeActive: configuration.interludeAfterIndex != nil,
@@ -1593,13 +1594,22 @@ final class NativeLyricsSurfaceView: NSView {
         for row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration
     ) -> CGFloat {
-        guard configuration.interludeAfterIndex == row.index,
-              let interlude = row.interlude else {
-            return 0
+        if configuration.interludeAfterIndex == row.index, let interlude = row.interlude {
+            return NativeLyricsDotPhasePlan.interludeBlend(
+                startTime: interlude.startTime,
+                endTime: interlude.endTime,
+                currentTime: configuration.phaseRenderTime()
+            )
         }
-        return NativeLyricsDotPhasePlan.interludeBlend(
-            startTime: interlude.startTime,
-            endTime: interlude.endTime,
+        // Ordinary gap (defect 2): once this row's line is sung out and the post-line
+        // remnant faded, fold it to the inactive form. Computed for every row but only
+        // CONSUMED by amllTarget's hot branch, and a row inside a gap stays the semantic
+        // current — past rows' nonzero values are inert.
+        guard !row.isPrelude else { return 0 }
+        let line = row.displayLine.line
+        let lineEnd = max(line.endTime, line.words.last?.endTime ?? 0)
+        return NativeLyricsDotPhasePlan.gapRecedeBlend(
+            lineEndTime: lineEnd,
             currentTime: configuration.phaseRenderTime()
         )
     }
@@ -1740,7 +1750,7 @@ final class NativeLyricsSurfaceView: NSView {
         // the old per-row "unpositioned" hide existed only because the previous transform-based Y was
         // reset to the origin by AppKit on every commit, so a just-mounted row briefly painted at the
         // top. Frame positioning removes that origin state entirely, so the hide is no longer needed.
-        view.setRowOpacity(appliedOpacity)
+        view.setRowOpacity(appliedOpacity, dimBaseBrightness: Float(visual.target.dimBaseBrightness))
         // The transform now carries ONLY scale — never translation. (Translation here was the bug:
         // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
         // row to the origin for a frame; the frame does not get reset.)
@@ -1979,7 +1989,6 @@ final class NativeLyricsSurfaceView: NSView {
         var targetMinYByIndex: [Int: CGFloat] = [:]
         var velocityYByIndex: [Int: CGFloat] = [:]
         var targetIndices: [Int: Int] = [:]
-        let targetAlignmentOffsets = targetAlignmentOffsets(for: configuration)
         for index in lineIndices {
             if let presentation = presentationEngine.presentation(for: index) {
                 targetIndices[index] = presentation.targetIndex
@@ -2002,8 +2011,7 @@ final class NativeLyricsSurfaceView: NSView {
                     rowIndex: index,
                     targetIndex: targetIndex,
                     anchorY: configuration.anchorY,
-                    accumulatedHeights: configuration.accumulatedHeights,
-                    targetAlignmentOffsets: targetAlignmentOffsets
+                    accumulatedHeights: configuration.accumulatedHeights
                 )
             }
         }
@@ -2063,18 +2071,6 @@ final class NativeLyricsSurfaceView: NSView {
         for row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration
     ) -> CGFloat {
-        snapY(
-            for: row,
-            configuration: configuration,
-            targetAlignmentOffsets: targetAlignmentOffsets(for: configuration)
-        )
-    }
-
-    private func snapY(
-        for row: LayerBackedLyricRow,
-        configuration: LyricsLayerRendererConfiguration,
-        targetAlignmentOffsets: [Int: CGFloat]
-    ) -> CGFloat {
         let targetIndex = NativeLyricsSnapMath.targetIndex(
             isManualScrolling: configuration.effectiveIsManualScrolling,
             scrollTargetIndex: configuration.effectiveScrollTargetIndex,
@@ -2087,17 +2083,8 @@ final class NativeLyricsSurfaceView: NSView {
             rowIndex: row.index,
             targetIndex: targetIndex,
             anchorY: configuration.anchorY,
-            accumulatedHeights: configuration.accumulatedHeights,
-            targetAlignmentOffsets: targetAlignmentOffsets
+            accumulatedHeights: configuration.accumulatedHeights
         )
-    }
-
-    private func targetAlignmentOffsets(
-        for configuration: LyricsLayerRendererConfiguration
-    ) -> [Int: CGFloat] {
-        Dictionary(uniqueKeysWithValues: configuration.rows.compactMap { row in
-            row.isPrelude ? (row.index, NativeLyricsRowMeasurement.preludeDotCenterY) : nil
-        })
     }
 
     private func applyFrames(
@@ -3472,7 +3459,6 @@ final class NativeLyricsSurfaceView: NSView {
             renderedIndices: configuration.renderedIndices,
             anchorY: configuration.anchorY,
             accumulatedHeights: configuration.accumulatedHeights,
-            targetAlignmentOffsets: targetAlignmentOffsets(for: configuration),
             lineInterval: lineInterval(around: scrollTargetIndex, rows: configuration.rows)
                 ?? lineInterval(around: currentIndex, rows: configuration.rows)
                 ?? configuration.lineInterval,

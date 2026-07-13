@@ -80,10 +80,6 @@ struct NativeLyricsRenderPlan: Equatable {
                 firstRealLyricIndex: configuration.firstRealLyricIndex
             ))
         })
-        let targetAlignmentOffsets = Dictionary(uniqueKeysWithValues: roles.compactMap { entry -> (Int, CGFloat)? in
-            guard case .preludeDots = entry.value else { return nil }
-            return (entry.key, NativeLyricsRowMeasurement.preludeDotCenterY)
-        })
         let rows = renderedIndices.compactMap { displayIndex -> NativeLyricsRenderRow? in
             guard configuration.lyrics.indices.contains(displayIndex) else { return nil }
             let line = configuration.lyrics[displayIndex]
@@ -97,8 +93,7 @@ struct NativeLyricsRenderPlan: Equatable {
                 rowIndex: displayIndex,
                 targetIndex: targetDisplayIndex,
                 anchorY: configuration.anchorY,
-                accumulatedHeights: accumulatedHeights,
-                targetAlignmentOffsets: targetAlignmentOffsets
+                accumulatedHeights: accumulatedHeights
             ) + manualOffset(configuration.mode)
             let visual = NativeLyricsVisualState.make(
                 displayIndex: displayIndex,

@@ -57,7 +57,7 @@ final class NativeLyricsRenderPlanTests: XCTestCase {
         XCTAssertEqual(plan.rows.count, lyrics.count)
     }
 
-    func testPlanCentersPreludeDotsOnActiveAnchor() {
+    func testPlanAnchorsPreludeRowLikeATextRow() {
         let lyrics = [
             LyricLine(text: "⋯", startTime: 0, endTime: 3),
             LyricLine(text: "line one", startTime: 3, endTime: 7)
@@ -77,11 +77,9 @@ final class NativeLyricsRenderPlanTests: XCTestCase {
         guard let firstReal = plan.rows.first(where: { $0.displayIndex == 1 }) else {
             return XCTFail("first real row should be present")
         }
-        XCTAssertEqual(
-            prelude.frame.minY + NativeLyricsRowMeasurement.preludeDotCenterY,
-            100,
-            accuracy: 0.0001
-        )
+        // Defect 3 (user, 2026-07-12): prelude rows anchor like any row (top at anchorY),
+        // so the dots inherently read at the active line's text position.
+        XCTAssertEqual(prelude.frame.minY, 100, accuracy: 0.0001)
         XCTAssertEqual(
             firstReal.frame.minY - prelude.frame.maxY,
             NativeLyricsHeightAccumulator.rowSpacing,

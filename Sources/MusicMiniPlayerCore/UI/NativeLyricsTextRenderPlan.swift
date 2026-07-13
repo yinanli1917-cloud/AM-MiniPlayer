@@ -208,7 +208,6 @@ struct NativeLyricsTextRenderPlan: Equatable {
             lineStartTime: line.startTime,
             lineEndTime: lineEndTime,
             opacity: opacity,
-            dimAlpha: constants.translationDimAlpha,
             brightAlpha: constants.translationBrightAlpha,
             fadeHalfPoint: constants.translationFadeHalfPoint,
             postLineFade: postLineFade
@@ -260,10 +259,11 @@ struct NativeLyricsTextConstants: Equatable {
     let translationFontSize: CGFloat = 24 * 0.67
     let translationLineSpacing: CGFloat = 2
     let brightAlpha: CGFloat = 0.85
-    let dimAlpha: CGFloat = 0.25
+    // The dim tier is no longer a baked alpha: the unswept base reads at the row's
+    // dimBaseBrightness (inactive tier 0.35, user decision 2026-07-12) via layer-opacity
+    // compensation in NativeLyricsRowView.applyDimBaseCompensation.
     let fadeHalfPoint: CGFloat = 12
     let translationBrightAlpha: CGFloat = 0.75
-    let translationDimAlpha: CGFloat = 0.20
     let translationFadeHalfPoint: CGFloat = 8
     let currentTranslationOpacityFactor: CGFloat = 0.85
     let baseFloatTargetY: CGFloat = -2
@@ -324,7 +324,6 @@ struct NativeLyricsWordRunPlan: Equatable {
             opacity: opacity,
             sweep: NativeLyricsSweepPlan(
                 progress: isActiveLine ? progress : 1,
-                dimAlpha: constants.dimAlpha,
                 brightAlpha: constants.brightAlpha,
                 fadeHalfPoint: constants.fadeHalfPoint,
                 postLineFade: postLineFade
@@ -363,7 +362,6 @@ struct NativeLyricsWordRunPlan: Equatable {
 
 struct NativeLyricsSweepPlan: Equatable {
     let progress: CGFloat
-    let dimAlpha: CGFloat
     let brightAlpha: CGFloat
     let fadeHalfPoint: CGFloat
     let postLineFade: CGFloat
@@ -376,7 +374,6 @@ struct NativeLyricsTranslationRenderPlan: Equatable {
     let lineStartTime: TimeInterval
     let lineEndTime: TimeInterval
     let opacity: CGFloat
-    let dimAlpha: CGFloat
     let brightAlpha: CGFloat
     let fadeHalfPoint: CGFloat
     let postLineFade: CGFloat

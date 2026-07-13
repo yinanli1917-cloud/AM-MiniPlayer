@@ -293,6 +293,25 @@ struct NativeLyricsDotPhasePlan: Equatable {
         return CGFloat(1 - pow(1 - progress, 3))
     }
 
+    // Ordinary-gap recede (defect 2): a sung-out hot row must fold back to the plain
+    // inactive form even when the gap is too short to be an official interlude (no dots,
+    // no anchor advance). The delay equals the post-line remnant fade (postLineFadeOut,
+    // 1.5s) so the sequence reads: bright remnant fades out first, then the row form
+    // recedes — never a third style. Same ease-out ramp as the interlude blend. No end
+    // guard: the moment the next line starts, this row stops being hot and the blend is
+    // no longer consumed.
+    private static let gapRecedeDelay: TimeInterval = 1.5
+
+    static func gapRecedeBlend(
+        lineEndTime: TimeInterval,
+        currentTime: TimeInterval
+    ) -> CGFloat {
+        let elapsed = currentTime - lineEndTime - gapRecedeDelay
+        guard elapsed > 0 else { return 0 }
+        let progress = min(1, max(0, elapsed / interludeBlendDuration))
+        return CGFloat(1 - pow(1 - progress, 3))
+    }
+
     static func make(
         startTime: TimeInterval,
         endTime: TimeInterval,

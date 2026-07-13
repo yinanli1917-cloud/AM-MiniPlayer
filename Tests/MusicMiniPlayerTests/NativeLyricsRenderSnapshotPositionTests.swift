@@ -70,19 +70,23 @@ final class NativeLyricsRenderSnapshotPositionTests: XCTestCase {
         XCTAssertEqual(y, 88, accuracy: 0.0001)
     }
 
-    func testTargetYCanAlignToPreludeDotCenterInsteadOfPreludeTop() {
+    // Defect 3 (user, 2026-07-12): prelude/ellipsis dot rows must anchor EXACTLY like a
+    // text row — row top at the anchor. The dot container inside the row (top inset 8,
+    // height 30 → centre 23) was designed to coincide with a text row's first-line centre
+    // (top inset 8 + half line height), so no alignment shim is needed or allowed: the old
+    // targetAlignmentOffsets shim lifted the whole row by preludeDotCenterY, which is what
+    // parked the dots ABOVE where the active line's text reads.
+    func testPreludeRowAnchorsExactlyLikeATextRow() {
         let heights: [Int: CGFloat] = [0: 0, 1: 52]
-        let alignment = [0: NativeLyricsRowMeasurement.preludeDotCenterY]
 
         XCTAssertEqual(
             NativeLyricsSnapMath.targetY(
                 rowIndex: 0,
                 targetIndex: 0,
                 anchorY: 250,
-                accumulatedHeights: heights,
-                targetAlignmentOffsets: alignment
+                accumulatedHeights: heights
             ),
-            250 - NativeLyricsRowMeasurement.preludeDotCenterY,
+            250,
             accuracy: 0.0001
         )
         XCTAssertEqual(
@@ -90,10 +94,31 @@ final class NativeLyricsRenderSnapshotPositionTests: XCTestCase {
                 rowIndex: 1,
                 targetIndex: 0,
                 anchorY: 250,
-                accumulatedHeights: heights,
-                targetAlignmentOffsets: alignment
+                accumulatedHeights: heights
             ),
-            250 - NativeLyricsRowMeasurement.preludeDotCenterY + 52,
+            302,
+            accuracy: 0.0001
+        )
+    }
+
+    // The interlude overlay dots sit at baseY + rowHeight + gap/2, where baseY carries the
+    // anchor advance. For the dots' centre to land on the ACTIVE TEXT CENTRE (anchorY +
+    // preludeDotCenterY) at full blend — not the bare anchor line 23pt above it — the
+    // advance must fall short of the gap centre by exactly preludeDotCenterY.
+    func testInterludeAnchorAdvanceLandsDotsOnTheActiveTextCenter() {
+        XCTAssertEqual(NativeLyricsSnapMath.interludeAnchorAdvance(blend: 0, rowHeight: 52), 0, accuracy: 0.0001)
+        let full = NativeLyricsSnapMath.interludeAnchorAdvance(blend: 1, rowHeight: 52)
+        let gapCentre = 52 + NativeLyricsHeightAccumulator.interludeGapHeight / 2
+        XCTAssertEqual(
+            full,
+            gapCentre - NativeLyricsRowMeasurement.preludeDotCenterY,
+            accuracy: 0.0001
+        )
+        // Dots centre at full blend: (anchorY - advance) + rowHeight + gap/2 == anchorY + dot centre.
+        let anchorY: CGFloat = 250
+        XCTAssertEqual(
+            anchorY - full + gapCentre,
+            anchorY + NativeLyricsRowMeasurement.preludeDotCenterY,
             accuracy: 0.0001
         )
     }

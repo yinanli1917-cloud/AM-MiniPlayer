@@ -10,7 +10,6 @@ struct LyricsPresentationEngineConfiguration {
     let renderedIndices: [Int]
     let anchorY: CGFloat
     let accumulatedHeights: [Int: CGFloat]
-    let targetAlignmentOffsets: [Int: CGFloat]
     let lineInterval: TimeInterval?
     let hasSyllableSync: Bool
     let isInterludeActive: Bool
@@ -27,7 +26,6 @@ struct LyricsPresentationEngineConfiguration {
         renderedIndices: [Int],
         anchorY: CGFloat,
         accumulatedHeights: [Int: CGFloat],
-        targetAlignmentOffsets: [Int: CGFloat] = [:],
         lineInterval: TimeInterval?,
         hasSyllableSync: Bool,
         isInterludeActive: Bool = false,
@@ -43,7 +41,6 @@ struct LyricsPresentationEngineConfiguration {
         self.renderedIndices = renderedIndices
         self.anchorY = anchorY
         self.accumulatedHeights = accumulatedHeights
-        self.targetAlignmentOffsets = targetAlignmentOffsets
         self.lineInterval = lineInterval
         self.hasSyllableSync = hasSyllableSync
         self.isInterludeActive = isInterludeActive
@@ -500,8 +497,7 @@ final class LyricsPresentationEngine {
             rowIndex: index,
             targetIndex: targetIndex,
             anchorY: configuration.anchorY,
-            accumulatedHeights: configuration.accumulatedHeights,
-            targetAlignmentOffsets: configuration.targetAlignmentOffsets
+            accumulatedHeights: configuration.accumulatedHeights
         )
     }
 

@@ -354,6 +354,11 @@ final class NativeLyricsRowView: NSView {
         cachedStaticTextPlan = nil
         lastLineLayoutCacheKey = nil
         activeHiddenEmphasisSignature = nil
+        // The base-layer opacity reset below (opacity = 1) is only safe because the
+        // compensation flags reset with it — a recycled row must start uncompensated.
+        mainDimCompensationActive = false
+        translationDimCompensationActive = false
+        lastDimBaseTier = 0.35
         [
             mainTextLayer,
             mainBrightTextLayer,
@@ -569,6 +574,21 @@ final class NativeLyricsRowView: NSView {
 
     var debugRowLayerOpacity: Float { layer?.opacity ?? 1 }
 
+    /// Dim-base continuity channels (NativeLyricsDimBaseContinuityTests). The effective
+    /// on-screen dim brightness is the PRODUCT rowOpacity × baseLayerOpacity × attrAlpha;
+    /// the tests pin that product across handoff frames, so each factor is exposed.
+    var debugMainBaseLayerOpacity: Float { mainTextLayer.opacity }
+    var debugMainBaseAttrAlpha: CGFloat { Self.firstRunForegroundAlpha(mainTextLayer) }
+    var debugTranslationBaseLayerOpacity: Float { translationTextLayer.opacity }
+    var debugTranslationBaseAttrAlpha: CGFloat { Self.firstRunForegroundAlpha(translationTextLayer) }
+
+    private static func firstRunForegroundAlpha(_ layer: CATextLayer) -> CGFloat {
+        guard let attributed = layer.string as? NSAttributedString, attributed.length > 0,
+              let color = attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        else { return 1 }
+        return color.alphaComponent
+    }
+
     /// Bright karaoke-overlay opacity + presence. The #2c "dim line blinks while receding" suspect
     /// is the deferred-deactivation clearing this overlay abruptly (a brightness step) while the row
     /// is still partly visible. Sampling it per tick across a line advance shows whether the recede
@@ -651,11 +671,49 @@ final class NativeLyricsRowView: NSView {
         layer?.setAffineTransform(transform)
         layerMutationCount += 1
     }
-    func setRowOpacity(_ opacity: Float) {
+    func setRowOpacity(_ opacity: Float, dimBaseBrightness: Float) {
         layerMutationAttempts += 1
-        guard layer?.opacity != opacity else { return }
-        layer?.opacity = opacity
-        layerMutationCount += 1
+        lastDimBaseTier = dimBaseBrightness
+        if layer?.opacity != opacity {
+            layer?.opacity = opacity
+            layerMutationCount += 1
+        }
+        applyDimBaseCompensation()
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Dim-base compensation (defect 3, second root cause — the brightness step).
+    // The dim base of a sweeping row must read at the SAME effective brightness as
+    // an inactive row (dimBaseBrightness, normally 0.35), while the ROW opacity
+    // springs 0.35→1.0 through a handoff. Attributed alphas are state-independent
+    // (baked at the inactive look), so the tier is expressed here: the base layers'
+    // opacity is the tier divided by the current row opacity, re-derived on every
+    // row-opacity write. At the activation frame (row opacity still 0.35) the
+    // compensation is exactly 1 — identical to the inactive rendering — so the
+    // product is continuous by construction and only the bright sweep moves.
+    private var mainDimCompensationActive = false
+    private var translationDimCompensationActive = false
+    private var lastDimBaseTier: Float = 0.35
+
+    private func applyDimBaseCompensation() {
+        let rowOpacity = layer?.opacity ?? 1
+        let compensated = min(1, lastDimBaseTier / max(rowOpacity, 0.001))
+        let mainValue: Float = mainDimCompensationActive ? compensated : 1
+        if mainTextLayer.opacity != mainValue {
+            mainTextLayer.opacity = mainValue
+            layerMutationCount += 1
+        }
+        let translationValue: Float = translationDimCompensationActive ? compensated : 1
+        if translationTextLayer.opacity != translationValue {
+            translationTextLayer.opacity = translationValue
+            layerMutationCount += 1
+        }
+    }
+
+    /// The effective dim alpha the compensated base currently renders at — the single
+    /// source for sibling layers (emphasis glyphs) that must match the base's dim level.
+    private func dimBaseEffectiveAlpha() -> CGFloat {
+        CGFloat(mainTextLayer.opacity)
     }
 
     #if DEBUG
@@ -914,6 +972,9 @@ final class NativeLyricsRowView: NSView {
     ) {
         guard let row, let configuration else { return }
         if row.isPrelude {
+            mainDimCompensationActive = false
+            translationDimCompensationActive = false
+            applyDimBaseCompensation()
             mainTextLayer.string = nil
             mainBrightTextLayer.string = nil
             mainTextLayer.mask = nil
@@ -944,7 +1005,12 @@ final class NativeLyricsRowView: NSView {
         let plan = textRenderPlan(row: row, configuration: configuration)
         let isActive = row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying
         let appliesMainSweep = isActive && row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
-        let mainAlpha = appliesMainSweep ? plan.constants.dimAlpha : 1
+        // The attributed alpha is STATE-INDEPENDENT (always the inactive look). The dim tier of a
+        // sweeping row rides mainTextLayer.opacity via applyDimBaseCompensation, in lockstep with
+        // the row-opacity spring — an instant alpha re-bake here multiplied against the mid-spring
+        // row opacity was the handoff brightness dip (defect 3, second root cause).
+        let mainAlpha: CGFloat = 1
+        mainDimCompensationActive = appliesMainSweep
         // v2.8 karaoke: the dim base text stays fully visible at dimAlpha at ALL times; only
         // the bright overlay sweeps over it. Masking the base made unsung words invisible until
         // the wavefront reached them — the "从无到有 / words materialize from nothing" bug.
@@ -981,9 +1047,10 @@ final class NativeLyricsRowView: NSView {
             // gate was fixed in cfc152c and lost to the bare revert 7653221; the revert's
             // actual suspect was the loop-idling half of that commit, which stays out.
             let appliesTranslationSweep = isActive && row.displayLine.line.hasSyllableSync
-            let translationBaseAlpha = appliesTranslationSweep
-                ? translation.dimAlpha
-                : plan.constants.currentTranslationOpacityFactor
+            // Same state-independent bake as the main text: the sweep dim tier is expressed via
+            // translationTextLayer.opacity (applyDimBaseCompensation), never an alpha re-bake.
+            let translationBaseAlpha = plan.constants.currentTranslationOpacityFactor
+            translationDimCompensationActive = appliesTranslationSweep
             let wrappedTranslationText = Self.displayWrapped(
                 translation.text,
                 width: displayTextWidth,
@@ -1018,19 +1085,26 @@ final class NativeLyricsRowView: NSView {
         } else if configuration.showTranslation && isAwaitingTranslation(row: row, configuration: configuration) {
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
+            translationDimCompensationActive = false
             startTranslationLoadingDots()
             hideTranslationSweepMaskLayers()
         } else if configuration.showTranslation && isTranslationFailureVisible(row: row, configuration: configuration) {
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
+            translationDimCompensationActive = false
             hideTranslationLoadingDots()
             hideTranslationSweepMaskLayers()
         } else {
             translationTextLayer.string = nil
             translationBrightTextLayer.string = nil
+            translationDimCompensationActive = false
             hideTranslationLoadingDots()
             hideTranslationSweepMaskLayers()
         }
+        // Flags are final for this pass — bring the base layers' compensated opacity in line
+        // with the CURRENT row opacity now, so a settled row (no setRowOpacity traffic) still
+        // picks up an activation/deactivation the same frame it re-renders.
+        applyDimBaseCompensation()
         interludeTextLayer.string = nil
         // Interlude dots are rendered by the surfaceInterludeDots OVERLAY (positioned at the gap
         // centre, tracks the manual-scroll offset). The per-row dotContainerLayer is ONLY for the
@@ -1887,7 +1961,9 @@ final class NativeLyricsRowView: NSView {
                     wavefrontX: wavefront,
                     fadeHalfPoint: plan.constants.fadeHalfPoint,
                     brightAlpha: plan.constants.brightAlpha * plan.mainPostLineFade,
-                    dimAlpha: plan.constants.dimAlpha,
+                    // Emphasis glyphs are SIBLINGS of the compensated base (mainEmphasisLayer),
+                    // so their dim endpoint must be fed the base's current effective alpha.
+                    dimAlpha: dimBaseEffectiveAlpha(),
                     currentTime: currentTime
                 )
                 if metrics.hasMotion {
@@ -1934,7 +2010,7 @@ final class NativeLyricsRowView: NSView {
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
-            alpha: plan.constants.dimAlpha,
+            alpha: 1,
             hiddenOrders: hiddenOrders,
             wordRuns: plan.wordRuns
         )
@@ -1953,7 +2029,7 @@ final class NativeLyricsRowView: NSView {
         mainTextLayer.string = attributedText(
             plan.displayText,
             fontSize: plan.constants.mainFontSize,
-            alpha: plan.constants.dimAlpha
+            alpha: 1
         )
         mainBrightTextLayer.string = attributedText(
             plan.displayText,
@@ -2025,7 +2101,9 @@ final class NativeLyricsRowView: NSView {
         }
         ensureMainWordGlyphLayerCount(inputs.count)
         let fontSize = plan.constants.mainFontSize
-        let dimColor = NSColor.white.withAlphaComponent(plan.constants.dimAlpha).cgColor
+        // Dim glyph copies live INSIDE mainTextLayer and inherit its compensated opacity —
+        // bake them at full alpha, exactly like the whole-line base string they stand in for.
+        let dimColor = NSColor.white.withAlphaComponent(1).cgColor
         let brightColor = NSColor.white.withAlphaComponent(plan.constants.brightAlpha).cgColor
         var minFloat = CGFloat.greatestFiniteMagnitude
         var maxFloat = -CGFloat.greatestFiniteMagnitude

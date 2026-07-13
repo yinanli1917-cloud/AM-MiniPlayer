@@ -90,6 +90,7 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     ├── AppleMusicCapabilityLatchTests.swift - AM 能力闩锁：developer-token 失败武装一次 + 瞬态/账户态错误不武装 + reset 测试缝
     ├── LyricsMissMemoTests.swift  - 会话未命中备忘：TTL 命中/过期剪枝 + 裁决载荷往返 + clear + 记录门（取消/离线拒绝）
     ├── NativeLyricsBlurEconomyTests.swift - 模糊经济：settled 模糊行光栅化（backing scale）+ 活跃行豁免 + 加载点动画否决 + reuse 清除 + blur 阶跃（setTarget/quickRetarget 即达且立即 settled）
+    ├── NativeLyricsDimBaseContinuityTests.swift - 暗底亮度连续性（缺陷3第二根源）：切行任一帧有效亮度=行opacity×基层opacity×attr alpha 钉死 0.35 等于非活跃档 + 翻译基底同治 + 手动滚动 0.6 档 + reuse 复位 + 防抖
     ├── WindowAnimationCensusTests.swift - 动画普查契约：隐藏层/mask 层上的无限动画可被发现 + 安静树报零 + effect view 清单 + 格式化输出
     ├── NativeLyricsLoopIdleTests.swift - 呈现 loop 空闲裁决：暂停+间奏必须放行停摆（缺陷5根因）+ 播放中间奏保活 + 未settled运动不分播放态 + appear 窗不分播放态
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
