@@ -936,10 +936,11 @@ public final class MetadataResolver {
         // 30 days. Rows without stored evidence are never replayed.
         if let cached = diskCache.get(title: title, artist: artist, duration: duration) {
             if let storedDurationDiff = cached.durationDiff,
-               shouldUseCachedLocalizedMetadata(
+               Self.shouldReplayLocalizedRow(
                    inputTitle: title,
                    cachedTitle: cached.resolvedTitle,
-                   cachedArtist: cached.resolvedArtist
+                   cachedArtist: cached.resolvedArtist,
+                   evidence: cached.evidence
                ) {
                 DebugLogger.log("MetadataResolver", "💾 fetchLocalizedMetadata disk hit: '\(cached.resolvedTitle)' by '\(cached.resolvedArtist)' (region: \(cached.region), Δ\(String(format: "%.2f", storedDurationDiff))s)")
                 return (cached.resolvedTitle, cached.resolvedArtist, cached.region, storedDurationDiff)
@@ -1064,12 +1065,14 @@ public final class MetadataResolver {
             DebugLogger.log("MetadataResolver", "⚠️ 所有区域均无匹配结果")
         } else if let m = bestMatch {
             // Persist successful resolutions only — no negative caching.
-            // m.3 is the measured durationDiff that admitted this row; storing
-            // it means replay faces the same scrutiny as this fresh result.
+            // m.3 is the measured durationDiff that admitted this row; the
+            // evidence stamp records WHY it was admitted so replay can trust
+            // the row without re-deriving script heuristics.
             diskCache.set(
                 title: title, artist: artist, duration: duration,
                 resolvedTitle: m.0, resolvedArtist: m.1, region: m.2,
-                durationDiff: m.3
+                durationDiff: m.3,
+                evidence: Self.localizedAdmissionEvidence(inputTitle: title, resolvedTitle: m.0)
             )
         }
         return bestMatch
@@ -1104,17 +1107,6 @@ public final class MetadataResolver {
             }
             return (trackName, artistName, durationDiff)
         }.min { $0.durationDiff < $1.durationDiff }
-    }
-
-    private func shouldUseCachedLocalizedMetadata(inputTitle: String, cachedTitle: String, cachedArtist: String) -> Bool {
-        let inputNorm = LanguageUtils.normalizeTrackName(inputTitle).lowercased()
-        let cachedNorm = LanguageUtils.normalizeTrackName(cachedTitle).lowercased()
-        if inputNorm == cachedNorm {
-            return LanguageUtils.containsCJK(cachedTitle) || LanguageUtils.containsCJK(cachedArtist)
-        }
-        guard LanguageUtils.isPureASCII(inputTitle) else { return true }
-        if LanguageUtils.isLikelyRomanizedJapanese(inputTitle) { return true }
-        return !LanguageUtils.containsCJK(cachedTitle)
     }
 
     /// 区域候选结构（三层分类）
@@ -1231,12 +1223,20 @@ public final class MetadataResolver {
         }
 
         // Also compute resolved candidate regardless — caller decides whether to use it.
+        // Query index 0 is the song-scoped "<title> <artist>" term (wave 0);
+        // only ITS candidate pool may claim catalog-alias consensus. Artist
+        // and title dumps (wave 1, indices 1+) never carry title evidence.
         var resolved: (String, String, String, Double)? = nil
-        for (_, results) in fetchedResults.sorted(by: { $0.0 < $1.0 }) {
+        for (queryIndex, results) in fetchedResults.sorted(by: { $0.0 < $1.0 }) {
+            let isSongScopedQuery = queryIndex == 0
             let tiers = classifyRegionResults(
-                results, title: title, artist: artist, duration: duration, region: region
+                results, title: title, artist: artist, duration: duration, region: region,
+                isSongScopedQuery: isSongScopedQuery
             )
-            if let best = selectBestRegionCandidate(tiers, inputTitle: title, region: region) {
+            if let best = selectBestRegionCandidate(
+                tiers, inputTitle: title, region: region,
+                isSongScopedQuery: isSongScopedQuery
+            ) {
                 resolved = best
                 break
             }
@@ -1271,7 +1271,8 @@ public final class MetadataResolver {
     /// 区域结果三层分类：titleMatch > artist+CJK > romanized→CJK
     private func classifyRegionResults(
         _ results: [[String: Any]],
-        title: String, artist: String, duration: TimeInterval, region: String
+        title: String, artist: String, duration: TimeInterval, region: String,
+        isSongScopedQuery: Bool = false
     ) -> (title: [RegionCandidate], artistCJK: [RegionCandidate], romanized: [RegionCandidate]) {
         var titleCandidates: [RegionCandidate] = []
         var artistCJKCandidates: [RegionCandidate] = []
@@ -1332,7 +1333,11 @@ public final class MetadataResolver {
                 let titleLooksJapanese = (LanguageUtils.isPureASCII(artist) && !LanguageUtils.isLikelyEnglishTitle(title))
                     || LanguageUtils.isLikelyRomanizedJapanese(title)
                     || (LanguageUtils.containsCJK(artist) && hasJapaneseRomanizationParticle(title))
-                if titleLooksJapanese && resultTitleHasCJK && !artistBlocked {
+                // Song-scoped queries also collect plainly-English titles: a
+                // translated alias ("The Season In The Sun") never looks
+                // Japanese, yet its query pool can carry catalog-alias
+                // consensus. Dumps keep the script heuristic.
+                if (titleLooksJapanese || isSongScopedQuery) && resultTitleHasCJK && !artistBlocked {
                     DebugLogger.log("MetadataResolver", "[\(region)] 候选(romanized→CJK): '\(trackName)' by '\(artistName)' Δ\(String(format: "%.2f", durationDiff))s")
                     romanizedCandidates.append((trackName, artistName, durationDiff))
                 }
@@ -1348,11 +1353,12 @@ public final class MetadataResolver {
         return words.contains { particles.contains($0) }
     }
 
-    /// 区域候选选择 — titleMatch > artist+CJK(唯一) > romanized→CJK(安全)
+    /// 区域候选选择 — titleMatch > artist+CJK(唯一) > romanized→CJK(印证/目录别名)
     private func selectBestRegionCandidate(
         _ tiers: (title: [RegionCandidate], artistCJK: [RegionCandidate], romanized: [RegionCandidate]),
         inputTitle: String,
-        region: String
+        region: String,
+        isSongScopedQuery: Bool = false
     ) -> (String, String, String, Double)? {
         // titleMatch 最可靠 → 取最佳（同时长时优先无后缀标题）
         if !tiers.title.isEmpty {
@@ -1370,13 +1376,19 @@ public final class MetadataResolver {
             DebugLogger.log("MetadataResolver", "[\(region)] artist+CJK 唯一候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s")
             return (best.trackName, best.artistName, region, best.durationDiff)
         }
-        // romanized→CJK：唯一候选 或 所有候选标题相同（同一首歌不同版本）
+        // romanized→CJK：仅接受标题印证的候选；无印证保持未解析
         guard !tiers.romanized.isEmpty else { return nil }
-        // 🔑 Title corroboration: prefer the CJK candidate whose transliteration
-        // matches the romanized input; drop the rest. Graceful fallback when none
-        // corroborate (postmortem 006).
+        // 🔑 Title corroboration: accept only CJK candidates whose
+        // transliteration matches the romanized input. Uniqueness and duration
+        // are not title evidence: a storefront query can return one sibling
+        // track from the same artist/EP (Love Lee -> Fry's Dream, Dinner ->
+        // 写封信给你), and re-querying that title would otherwise upgrade weak
+        // metadata into an apparently exact provider match.
         let corroborating = tiers.romanized.filter {
-            LanguageUtils.isRomanizedTitleCorroborated(input: inputTitle, candidateTitle: $0.trackName)
+            Self.hasRomanizedRegionTitleEvidence(
+                inputTitle: inputTitle,
+                candidateTitle: $0.trackName
+            )
         }
         if !corroborating.isEmpty {
             let best = corroborating.sorted {
@@ -1388,14 +1400,88 @@ public final class MetadataResolver {
             DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 标题印证: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s [\(corroborating.count)/\(tiers.romanized.count)]")
             return (best.trackName, best.artistName, region, best.durationDiff)
         }
-        let sorted = tiers.romanized.sorted { $0.durationDiff < $1.durationDiff }
-        let best = sorted[0]
-        // 清理标题后比较（忽略 "2024 Remaster" 等后缀）
-        let uniqueTitles = Set(sorted.map { LanguageUtils.normalizeTrackName($0.trackName) })
-        let isSafe = sorted.count == 1 || uniqueTitles.count == 1
-        guard isSafe else { return nil }
-        DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 候选: '\(best.trackName)' Δ\(String(format: "%.2f", best.durationDiff))s [\(sorted.count)个, \(uniqueTitles.count)种]")
-        return (best.trackName, best.artistName, region, best.durationDiff)
+        // Apple-index catalog alias: the song-scoped query's pool collapses
+        // to one identity — Apple itself asserts the translated-title bridge.
+        if isSongScopedQuery, let alias = Self.titleQueryAliasCandidate(tiers.romanized) {
+            DebugLogger.log("MetadataResolver", "[\(region)] romanized→CJK 目录别名共识: '\(alias.trackName)' Δ\(String(format: "%.2f", alias.durationDiff))s [\(tiers.romanized.count)条同一身份]")
+            return (alias.trackName, alias.artistName, region, alias.durationDiff)
+        }
+        DebugLogger.log("MetadataResolver", "⏭️ [\(region)] romanized→CJK 候选无标题印证，保持未解析")
+        return nil
+    }
+
+    static func hasRomanizedRegionTitleEvidence(
+        inputTitle: String,
+        candidateTitle: String
+    ) -> Bool {
+        LanguageUtils.isRomanizedTitleCorroborated(
+            input: inputTitle,
+            candidateTitle: candidateTitle
+        )
+    }
+
+    // ------------------------------------------------------------------------
+    // MARK: - Catalog-alias consensus (Apple-index title bridge)
+    // ------------------------------------------------------------------------
+
+    /// Accepts a localized-title alias asserted by Apple's own search index:
+    /// the candidates of ONE song-scoped query ("<title> <artist>") collapse
+    /// to a single song identity (releases may differ, the song may not).
+    /// This bridges translated titles that can never corroborate phonetically
+    /// ("Dinner" → 三個人的晚餐, "The Season In The Sun" → シーズン・イン・ザ・サン).
+    /// Sibling-track dumps (postmortem 006) surface as mixed identities and
+    /// are rejected; artist-only queries must never reach this gate.
+    static func titleQueryAliasCandidate(
+        _ candidates: [(trackName: String, artistName: String, durationDiff: Double)]
+    ) -> (trackName: String, artistName: String, durationDiff: Double)? {
+        guard let first = candidates.first else { return nil }
+        func identity(_ c: (trackName: String, artistName: String, durationDiff: Double)) -> String {
+            let t = LanguageUtils.normalizeTrackName(c.trackName).lowercased()
+            let a = LanguageUtils.normalizeArtistName(c.artistName).lowercased()
+            return "\(t)|\(a)"
+        }
+        let firstIdentity = identity(first)
+        guard candidates.allSatisfy({ identity($0) == firstIdentity }) else { return nil }
+        return candidates.min { $0.durationDiff < $1.durationDiff }
+    }
+
+    /// Admission-evidence kind persisted with a localized resolution.
+    /// Replay trusts stamped rows outright (`shouldReplayLocalizedRow`);
+    /// deriving the kind here keeps the write path honest about WHY the
+    /// row was admitted.
+    static func localizedAdmissionEvidence(
+        inputTitle: String,
+        resolvedTitle: String
+    ) -> String {
+        let inputNorm = LanguageUtils.normalizeTrackName(inputTitle).lowercased()
+        let resolvedNorm = LanguageUtils.normalizeTrackName(resolvedTitle).lowercased()
+        if inputNorm == resolvedNorm { return "exact-title" }
+        if hasRomanizedRegionTitleEvidence(inputTitle: inputTitle, candidateTitle: resolvedTitle) {
+            return "phonetic"
+        }
+        return "catalog-alias"
+    }
+
+    /// Replay gate for localized disk rows. Rows stamped with admission
+    /// evidence replay directly — the evidence was earned at write time
+    /// under the current admission rules. Unstamped rows (decode tolerance)
+    /// fall back to the cross-script heuristic, which distrusts
+    /// English→CJK mappings it cannot re-derive.
+    static func shouldReplayLocalizedRow(
+        inputTitle: String,
+        cachedTitle: String,
+        cachedArtist: String,
+        evidence: String?
+    ) -> Bool {
+        if evidence != nil { return true }
+        let inputNorm = LanguageUtils.normalizeTrackName(inputTitle).lowercased()
+        let cachedNorm = LanguageUtils.normalizeTrackName(cachedTitle).lowercased()
+        if inputNorm == cachedNorm {
+            return LanguageUtils.containsCJK(cachedTitle) || LanguageUtils.containsCJK(cachedArtist)
+        }
+        guard LanguageUtils.isPureASCII(inputTitle) else { return true }
+        if LanguageUtils.isLikelyRomanizedJapanese(inputTitle) { return true }
+        return !LanguageUtils.containsCJK(cachedTitle)
     }
 
     // MARK: - 工具方法

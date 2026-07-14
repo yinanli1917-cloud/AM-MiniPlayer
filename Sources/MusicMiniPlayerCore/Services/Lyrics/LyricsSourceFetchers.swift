@@ -85,6 +85,24 @@ final class AppleMusicCapabilityLatch {
 
 extension LyricsFetcher {
 
+    /// Title evidence for discography-fallback alias claims: the candidate
+    /// title must equal (normalized) or phonetically corroborate one of the
+    /// dual-title halves. Input-only alias heuristics carry no evidence.
+    static func discographyAliasTitleEvidence(
+        rawTitle: String,
+        rawOriginalTitle: String,
+        candidateTitle: String
+    ) -> Bool {
+        let candidateNorm = LanguageUtils.normalizeTrackName(candidateTitle).lowercased()
+        for input in [rawTitle, rawOriginalTitle] {
+            if LanguageUtils.normalizeTrackName(input).lowercased() == candidateNorm { return true }
+            if LanguageUtils.isRomanizedTitleCorroborated(input: input, candidateTitle: candidateTitle) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func joinedProviderArtists(_ artists: [[String: Any]], nameKey: String = "name") -> String {
         artists.compactMap { artist in
             (artist[nameKey] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1833,6 +1851,16 @@ extension LyricsFetcher {
                 && candidateArtistOK
                 && resultTitleHasCJK
                 && (inputLooksRomanizedAlias(params) || inputLooksEnglishTranslationAlias(params))
+                // 🔑 The candidate title must corroborate the input — an
+                // input-only "looks like an alias" guess admitted 女朋友男朋友
+                // for "Dinner" (Δ1.4s, 99.9pts wrong lyrics). Translation
+                // aliases arrive pre-resolved via the catalog-alias bridge
+                // and match by title instead of riding this arm.
+                && Self.discographyAliasTitleEvidence(
+                    rawTitle: params.rawTitle,
+                    rawOriginalTitle: params.rawOriginalTitle,
+                    candidateTitle: name
+                )
                 && !looksBackingTrack
                 && (inputWordCount >= 2 || inputLooksEnglish || !inputLooksRomanizedJapanese)
                 && (!inputLooksRomanizedJapanese || inputWordCount >= 2)

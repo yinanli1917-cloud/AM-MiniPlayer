@@ -67,6 +67,10 @@ public struct MetadataCacheEntry: Codable, Equatable {
     /// Optional only for decode tolerance — every writer stores a value.
     /// Replay must return this REAL evidence, never a fabricated 0.
     public let durationDiff: Double?
+    /// Admission-evidence kind for localized rows ("exact-title" / "phonetic"
+    /// / "catalog-alias"). Stamped rows replay without re-deriving script
+    /// heuristics; nil (CN tier, decode tolerance) stays heuristic-gated.
+    public let evidence: String?
 
     enum CodingKeys: String, CodingKey {
         case resolvedTitle  = "resolved_title"
@@ -75,6 +79,7 @@ public struct MetadataCacheEntry: Codable, Equatable {
         case ts
         case source
         case durationDiff   = "duration_diff"
+        case evidence
     }
 }
 
@@ -138,12 +143,13 @@ private struct MetadataCacheFile: Codable {
 
 public final class MetadataDiskCache {
 
-    /// v7: romanized→CJK corroboration learned Japanese readings (review
-    /// #11 — the romaji whitelist is gone). Rows admitted or rejected under
-    /// pinyin-only corroboration must flush; the bump invalidates them all
-    /// once and the cache self-heals as songs resolve again.
-    /// (v6: CN-tier rows split into `cn_entries`, preflightExact removed.)
-    public static let schemaVersion = 7
+    /// v8: localized rows carry the admission-evidence kind (`evidence`),
+    /// and the romanized→CJK tier accepts Apple-index catalog aliases
+    /// (title-query consensus). Rows written under uniqueness-fallback or
+    /// heuristic-only admission must flush once; the cache self-heals.
+    /// (v7: Japanese-reading corroboration replaced the romaji whitelist.
+    ///  v6: CN-tier rows split into `cn_entries`, preflightExact removed.)
+    public static let schemaVersion = 8
     public static let ttlSeconds: TimeInterval = 30 * 86400  // 30 days
 
     private let fileURL: URL
@@ -207,10 +213,11 @@ public final class MetadataDiskCache {
 
     /// `durationDiff` is mandatory: cached claims must carry the evidence
     /// that admitted them, so the writer is forced to pass the real measured
-    /// gap instead of letting replay fabricate one.
+    /// gap instead of letting replay fabricate one. `evidence` stamps the
+    /// admission kind; unstamped rows stay heuristic-gated at replay.
     public func set(title: String, artist: String, duration: TimeInterval,
                     resolvedTitle: String, resolvedArtist: String, region: String,
-                    durationDiff: Double) {
+                    durationDiff: Double, evidence: String? = nil) {
         #if DEBUG
         let effectivePolicy = LyricsCachePolicyContext.current
         guard effectivePolicy.allowsWrites else {
@@ -221,7 +228,7 @@ public final class MetadataDiskCache {
         #endif
         let key = Self.cacheKey(title: title, artist: artist, duration: duration)
         let entry = Self.makeEntry(resolvedTitle: resolvedTitle, resolvedArtist: resolvedArtist,
-                                   region: region, durationDiff: durationDiff)
+                                   region: region, durationDiff: durationDiff, evidence: evidence)
         queue.sync {
             ensureLoaded()
             memory[key] = entry
@@ -322,14 +329,16 @@ public final class MetadataDiskCache {
     }
 
     private static func makeEntry(resolvedTitle: String, resolvedArtist: String,
-                                  region: String, durationDiff: Double) -> MetadataCacheEntry {
+                                  region: String, durationDiff: Double,
+                                  evidence: String? = nil) -> MetadataCacheEntry {
         MetadataCacheEntry(
             resolvedTitle: resolvedTitle,
             resolvedArtist: resolvedArtist,
             region: region,
             ts: Date().timeIntervalSince1970,
             source: "metadata-cache-v1",
-            durationDiff: durationDiff
+            durationDiff: durationDiff,
+            evidence: evidence
         )
     }
 

@@ -293,6 +293,14 @@ extension LyricsFetcher {
                     }
                     return true
                 }
+                // 🔑 Every artist-only arm below requires cross-script title
+                // evidence — a dump candidate whose title never relates to
+                // the input is a sibling-track trap regardless of duration
+                // ("Dinner" 259s accepted 女朋友男朋友 Δ1.4s at 99.9pts).
+                // Translated aliases now arrive pre-resolved via the
+                // catalog-alias bridge and match P1 directly, so these arms
+                // lose no legitimate recall.
+                guard hasCrossScriptTitleEvidence(candidate) else { return false }
                 if LanguageUtils.isLikelyEnglishTitle(inputTitle),
                    !LanguageUtils.isLikelyRomanizedJapanese(inputTitle) {
                     if inputWordCount >= 2,

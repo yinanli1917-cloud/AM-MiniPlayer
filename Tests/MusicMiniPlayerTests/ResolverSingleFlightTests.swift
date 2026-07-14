@@ -82,6 +82,90 @@ final class ResolverSingleFlightTests: XCTestCase {
         XCTAssertEqual(match?.durationDiff ?? -1, 0.4, accuracy: 0.001)
     }
 
+    func testRomanizedRegionCandidateRequiresTitleCorroboration() {
+        XCTAssertFalse(MetadataResolver.hasRomanizedRegionTitleEvidence(
+            inputTitle: "Love Lee",
+            candidateTitle: "후라이의 꿈"
+        ))
+        XCTAssertFalse(MetadataResolver.hasRomanizedRegionTitleEvidence(
+            inputTitle: "Dinner",
+            candidateTitle: "写封信给你"
+        ))
+        XCTAssertTrue(MetadataResolver.hasRomanizedRegionTitleEvidence(
+            inputTitle: "Mayonaka No Shujinkou",
+            candidateTitle: "真夜中の主人公"
+        ))
+    }
+
+    // ============================================================
+    // MARK: - Title-query alias consensus (Apple-index bridge)
+    // ============================================================
+    // A song-scoped query ("<title> <artist>") whose surviving candidates
+    // collapse to ONE song identity is Apple's own index asserting the
+    // localized-title alias (Dinner -> 三個人的晚餐 on 5 storefronts).
+    // Artist-dump queries and mixed-identity pools never qualify.
+
+    func testTitleQueryAliasAcceptsSingleIdentityPool() {
+        let single = MetadataResolver.titleQueryAliasCandidate([
+            (trackName: "三個人的晚餐", artistName: "黃韻玲", durationDiff: 0.11)
+        ])
+        XCTAssertEqual(single?.trackName, "三個人的晚餐")
+
+        // Same song across releases (Season In The Sun): collapses, min-Δ wins.
+        let multiRelease = MetadataResolver.titleQueryAliasCandidate([
+            (trackName: "シーズン・イン・ザ・サン", artistName: "TUBE", durationDiff: 0.95),
+            (trackName: "シーズン・イン・ザ・サン", artistName: "TUBE", durationDiff: 0.05)
+        ])
+        XCTAssertEqual(multiRelease?.durationDiff ?? -1, 0.05, accuracy: 0.001)
+    }
+
+    func testTitleQueryAliasRejectsMixedIdentityPool() {
+        // Sibling-track dump (postmortem 006 class): two distinct songs
+        // survive the duration filter -> no consensus, stay unresolved.
+        XCTAssertNil(MetadataResolver.titleQueryAliasCandidate([
+            (trackName: "二十歲的浪漫", artistName: "藍心湄", durationDiff: 0.50),
+            (trackName: "快节奏", artistName: "藍心湄", durationDiff: 0.27)
+        ]))
+        XCTAssertNil(MetadataResolver.titleQueryAliasCandidate([]))
+    }
+
+    // ============================================================
+    // MARK: - Localized replay trust (persisted admission evidence)
+    // ============================================================
+    // Rows stamped with the evidence kind that admitted them replay
+    // directly; the cross-script heuristic only governs unstamped rows.
+    // (Root cause: 'The Season In The Sun' -> 'シーズン・イン・ザ・サン'
+    // was re-resolved from network EVERY session because English->CJK
+    // rows were unconditionally distrusted.)
+
+    func testLocalizedReplayTrustsStampedEvidence() {
+        XCTAssertTrue(MetadataResolver.shouldReplayLocalizedRow(
+            inputTitle: "The Season In The Sun",
+            cachedTitle: "シーズン・イン・ザ・サン",
+            cachedArtist: "TUBE",
+            evidence: MetadataResolver.localizedAdmissionEvidence(
+                inputTitle: "The Season In The Sun",
+                resolvedTitle: "シーズン・イン・ザ・サン"
+            )
+        ))
+        // Unstamped legacy row: heuristic still rejects English->CJK.
+        XCTAssertFalse(MetadataResolver.shouldReplayLocalizedRow(
+            inputTitle: "The Season In The Sun",
+            cachedTitle: "シーズン・イン・ザ・サン",
+            cachedArtist: "TUBE",
+            evidence: nil
+        ))
+    }
+
+    func testLocalizedAdmissionEvidenceKinds() {
+        XCTAssertEqual(MetadataResolver.localizedAdmissionEvidence(
+            inputTitle: "How Sweet", resolvedTitle: "How Sweet (Remaster)"), "exact-title")
+        XCTAssertEqual(MetadataResolver.localizedAdmissionEvidence(
+            inputTitle: "Mayonaka No Shujinkou", resolvedTitle: "真夜中の主人公"), "phonetic")
+        XCTAssertEqual(MetadataResolver.localizedAdmissionEvidence(
+            inputTitle: "Dinner", resolvedTitle: "三個人的晚餐"), "catalog-alias")
+    }
+
     // Test fixture inputs. All-CJK so every consult stays on deterministic
     // paths: CN/localized replay rows (seeded below) or fast guard exits —
     // zero network in this suite.

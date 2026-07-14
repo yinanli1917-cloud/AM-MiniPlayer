@@ -1082,6 +1082,118 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertEqual(selected?.id, 1)
     }
 
+    /// P1b artist-only arms must carry cross-script title evidence. Without
+    /// it, "Dinner" (Kay Huang, 259s) accepted the sibling 女朋友男朋友 at
+    /// Δ1.4s from an alias-artist-only dump and served 99.9-point wrong
+    /// lyrics — the candidate title never related to the input title at all.
+    func testArtistOnlyAliasWithoutTitleEvidenceStaysRejected() {
+        let fetcher = LyricsFetcher.shared
+        // Live-state fixture: the CN alias wave had already resolved the
+        // artist to 黄韵玲, so the dump candidate carries artistMatch=true.
+        let params = LyricsFetcher.SearchParams(
+            title: "Dinner",
+            artist: "黄韵玲",
+            originalTitle: "Dinner",
+            originalArtist: "Kay Huang",
+            duration: 259
+        )
+        let songs: [[String: Any]] = [[
+            "id": 1,
+            "name": "女朋友男朋友",
+            "artist": "黄韵玲",
+            "duration": 257.6,
+            "album": "永恒承诺"
+        ]]
+        let candidates: [LyricsFetcher.SearchCandidate<Int>] = fetcher.buildCandidates(
+            songs: songs,
+            params: params,
+            searchDescriptor: "alias artist only:黄韵玲",
+            extractSong: { song in
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let artist = song["artist"] as? String,
+                      let duration = song["duration"] as? Double,
+                      let album = song["album"] as? String else { return nil }
+                return (id, name, artist, duration, album)
+            }
+        )
+        XCTAssertNil(fetcher.selectBestCandidate(
+            candidates,
+            source: .netEase,
+            inputTitle: "Dinner",
+            inputArtist: "Kay Huang",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        ))
+    }
+
+    /// The same arm keeps a genuine romanized alias: the candidate title
+    /// romanizes to the input, so cross-script evidence exists.
+    func testArtistOnlyAliasWithPhoneticEvidenceStillSelected() {
+        let fetcher = LyricsFetcher.shared
+        let params = LyricsFetcher.SearchParams(
+            title: "Hatsukoi",
+            artist: "Kozo Murashita",
+            originalTitle: "Hatsukoi",
+            originalArtist: "Kozo Murashita",
+            duration: 225
+        )
+        let songs: [[String: Any]] = [[
+            "id": 1,
+            "name": "初恋",
+            "artist": "村下孝蔵",
+            "duration": 224.6,
+            "album": "初恋~浅き夢みし~"
+        ]]
+        let candidates: [LyricsFetcher.SearchCandidate<Int>] = fetcher.buildCandidates(
+            songs: songs,
+            params: params,
+            searchDescriptor: "alias artist only:村下孝蔵",
+            extractSong: { song in
+                guard let id = song["id"] as? Int,
+                      let name = song["name"] as? String,
+                      let artist = song["artist"] as? String,
+                      let duration = song["duration"] as? Double,
+                      let album = song["album"] as? String else { return nil }
+                return (id, name, artist, duration, album)
+            }
+        )
+        XCTAssertEqual(fetcher.selectBestCandidate(
+            candidates,
+            source: .netEase,
+            inputTitle: "Hatsukoi",
+            inputArtist: "Kozo Murashita",
+            aliasConfirmedCJK: true,
+            allowNativeTitleAlias: true
+        )?.id, 1)
+    }
+
+    /// The NetEase artist-discography fallback may only claim a native-title
+    /// alias when the candidate title actually corroborates the input
+    /// (phonetically, via either title half). Input-only "looks like an
+    /// alias" heuristics admitted 女朋友男朋友 for "Dinner" at Δ1.4s (99.9pts
+    /// wrong lyrics). Translation aliases resolve upstream via the
+    /// catalog-alias bridge and arrive as title matches, not guesses.
+    func testDiscographyAliasRequiresCandidateTitleEvidence() {
+        XCTAssertFalse(LyricsFetcher.discographyAliasTitleEvidence(
+            rawTitle: "Dinner",
+            rawOriginalTitle: "Dinner",
+            candidateTitle: "女朋友男朋友"
+        ))
+        XCTAssertTrue(LyricsFetcher.discographyAliasTitleEvidence(
+            rawTitle: "Hatsukoi",
+            rawOriginalTitle: "Hatsukoi",
+            candidateTitle: "初恋"
+        ))
+        // Dual-title: the resolved half corroborates even when the original
+        // does not (resolved CJK title round-trips through its own script).
+        XCTAssertTrue(LyricsFetcher.discographyAliasTitleEvidence(
+            rawTitle: "三个人的晚餐",
+            rawOriginalTitle: "Dinner",
+            candidateTitle: "三个人的晚餐"
+        ))
+    }
+
     func testCompactRomanizedTitleMatchesProviderParticleSpacing() {
         let fetcher = LyricsFetcher.shared
 
@@ -1969,22 +2081,18 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertTrue(selected?.nativeAliasMatched == true)
     }
 
-    func testSingleWordEnglishTitleUsesOnlyTightNativeArtistAlias() {
+    /// CONTRACT CHANGE (evidence-first): an artist-only dump candidate with
+    /// no title relation to the input is never selected, even at tight Δ.
+    /// The old arm accepted "Deep"→无底洞 (right) by the same rule that
+    /// accepted "Dinner"→女朋友男朋友 (99.9pts wrong lyrics) — a coin flip.
+    /// Translated aliases resolve upstream via the catalog-alias bridge
+    /// (title-scoped storefront query collapsing to one identity) and then
+    /// match P1 by title. Known cost: catalog-ambiguous single-word aliases
+    /// (Deep-class: Apple lists BOTH 無底洞 and "Deep" at the same duration)
+    /// stay unresolved rather than guessed.
+    func testSingleWordEnglishTitleWithoutEvidenceStaysUnresolved() {
         let fetcher = LyricsFetcher.shared
         let candidates = [
-            LyricsFetcher.SearchCandidate(
-                id: 1,
-                name: "坠落",
-                artist: "蔡健雅",
-                album: "天使与魔鬼的对话",
-                durationDiff: 6.1,
-                titleMatch: false,
-                artistMatch: true,
-                albumMatch: false,
-                normalizedNameLength: 2,
-                resultIndex: 1,
-                searchDescriptor: "alias+title:蔡健雅"
-            ),
             LyricsFetcher.SearchCandidate(
                 id: 2,
                 name: "无底洞",
@@ -2000,19 +2108,21 @@ final class LyricsSelectionTests: XCTestCase {
             )
         ]
 
-        let selected = fetcher.selectBestCandidate(
+        XCTAssertNil(fetcher.selectBestCandidate(
             candidates,
             source: .netEase,
             inputTitle: "Deep",
             inputArtist: "Tanya Chua",
             aliasConfirmedCJK: true,
             allowNativeTitleAlias: true
-        )
-
-        XCTAssertEqual(selected?.id, 2)
+        ))
     }
 
-    func testMultiWordEnglishTitleCanUseNearExactNativeArtistProbe() {
+    /// Same contract for multi-word English inputs: "Strange Weather" no
+    /// longer rides the bare artist-only probe. Its alias 怪天气 is a single
+    /// collapsed identity on the TW/CN storefronts, so the catalog-alias
+    /// bridge resolves the native title upstream and P1 matches it by title.
+    func testMultiWordEnglishTitleWithoutEvidenceStaysUnresolved() {
         let fetcher = LyricsFetcher.shared
         let candidates = [
             LyricsFetcher.SearchCandidate(
@@ -2030,16 +2140,13 @@ final class LyricsSelectionTests: XCTestCase {
             )
         ]
 
-        let selected = fetcher.selectBestCandidate(
+        XCTAssertNil(fetcher.selectBestCandidate(
             candidates,
             source: .netEase,
             inputTitle: "Strange Weather",
             inputArtist: "YELLOW & 9m88",
             allowNativeTitleAlias: true
-        )
-
-        XCTAssertEqual(selected?.id, 1)
-        XCTAssertEqual(selected?.nativeAliasMatched, true)
+        ))
     }
 
     func testAlbumHintBlocksLooseEnglishNativeArtistProbeCollision() {

@@ -56,6 +56,36 @@ final class MetadataDiskCacheTierTests: XCTestCase {
     }
 
     // ------------------------------------------------------------------
+    // MARK: - (a2) Localized admission-evidence round-trip
+    // ------------------------------------------------------------------
+
+    /// Localized rows persist the evidence kind that admitted them so
+    /// replay can trust the row without re-deriving script heuristics
+    /// (English->CJK aliases were re-resolved from network every session).
+    func testLocalizedEvidenceKindRoundTripsAcrossReload() {
+        let url = temporaryFileURL()
+        let cache = MetadataDiskCache(fileURL: url)
+        cache.set(
+            title: "The Season In The Sun", artist: "TUBE", duration: 244,
+            resolvedTitle: "シーズン・イン・ザ・サン", resolvedArtist: "TUBE",
+            region: "JP", durationDiff: 0.05, evidence: "catalog-alias"
+        )
+        cache.flush()
+
+        let reloaded = MetadataDiskCache(fileURL: url)
+        let row = reloaded.get(title: "The Season In The Sun", artist: "TUBE", duration: 244)
+        XCTAssertEqual(row?.evidence, "catalog-alias")
+
+        // Writers that pass no evidence produce an unstamped (untrusted) row.
+        cache.set(
+            title: "Other Song", artist: "Artist", duration: 200,
+            resolvedTitle: "他曲", resolvedArtist: "歌手",
+            region: "TW", durationDiff: 0.2
+        )
+        XCTAssertNil(cache.get(title: "Other Song", artist: "Artist", duration: 200)?.evidence)
+    }
+
+    // ------------------------------------------------------------------
     // MARK: - (b) CN evidence tuple round-trip
     // ------------------------------------------------------------------
 

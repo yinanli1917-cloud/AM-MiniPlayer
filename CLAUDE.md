@@ -32,7 +32,7 @@ Sources/
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale + 写一次记忆化（token/solo/romaji/quality 每结果只算一次；单结果池统一走 solo 裁决备忘录）
 │   │       ├── LyricsParser.swift               - TTML/LRC/YRC parsing
 │   │       ├── LyricsScorer.swift               - Quality scoring
-│   │       └── MetadataResolver.swift           - iTunes multi-region metadata + 四入口 single-flight 合流（同 key 并发咨询共享一次解析，仅去重不缓存）
+│   │       └── MetadataResolver.swift           - iTunes multi-region metadata + 四入口 single-flight 合流（同 key 并发咨询共享一次解析，仅去重不缓存）+ 目录别名共识桥（song-scoped 查询坍缩单一身份 = Apple 索引断言翻译标题，Dinner→三個人的晚餐）+ 行级证据戳回放（exact-title/phonetic/catalog-alias，英→CJK 缓存行不再每会话重解析）
 │   ├── UI/
 │   │   ├── MiniPlayerView.swift   - Main player view + page switching
 │   │   ├── LyricsView.swift       - Lyrics display + scrolling + translation
@@ -58,7 +58,7 @@ Sources/
 │   │   ├── MatchingUtils.swift        - Matching score utilities
 │   │   ├── DebugLogger.swift          - Debug logging
 │   │   ├── NSImage+AverageColor.swift - Color extraction + brightness sampling
-│   │   ├── MetadataDiskCache.swift    - Persistent metadata cache（CN/多区域两层独立字典 + 防抖落盘 + flush）
+│   │   ├── MetadataDiskCache.swift    - Persistent metadata cache（CN/多区域两层独立字典 + 防抖落盘 + flush + v8 行级 evidence 戳）
 │   │   ├── SBTimeoutRunner.swift      - ScriptingBridge timeout wrapper
 │   │   ├── DebugConfig.swift          - Debug configuration + NANOPOD_PROBES 每帧探针总闸（默认关；/tmp 旧探针文件会静默重新武装探针，曾写出数百 MB 挂机）
 │   │   ├── WindowAnimationCensus.swift - 缺陷5仪器：全窗口层树动画普查（挂着的 CAAnimation + NSVisualEffectView 清单），nanopod://debug/animsweep 按需一次性 dump，永不每帧

@@ -378,7 +378,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ"],
-      "firstLineContains": "なぜかしら"
+      "firstLineContains": "Friday Night"
     }
   },
   {
