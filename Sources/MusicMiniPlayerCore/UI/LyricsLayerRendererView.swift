@@ -1471,7 +1471,6 @@ final class NativeLyricsSurfaceView: NSView {
         configuration: LyricsLayerRendererConfiguration,
         presentationSnapshot: NativeLyricsPresentationSnapshot
     ) -> NativeLyricsVisualTarget {
-        let blend = interludeBlend(for: row, configuration: configuration)
         let visualCurrentIndex = visualCurrentIndex(
             for: row,
             configuration: configuration,
@@ -1486,7 +1485,8 @@ final class NativeLyricsSurfaceView: NSView {
             scrollTargetIndex: visualCurrentIndex,
             hotActiveIndices: visualHotActiveIndices,
             isManualScrolling: configuration.effectiveIsManualScrolling,
-            interludeBlend: blend
+            interludeBlend: interludeBlend(for: row, configuration: configuration),
+            gapRecedeBlend: gapRecedeBlend(for: row, configuration: configuration)
         )
     }
 
@@ -1606,18 +1606,26 @@ final class NativeLyricsSurfaceView: NSView {
         for row: LayerBackedLyricRow,
         configuration: LyricsLayerRendererConfiguration
     ) -> CGFloat {
-        if configuration.interludeAfterIndex == row.index, let interlude = row.interlude {
-            return NativeLyricsDotPhasePlan.interludeBlend(
-                startTime: interlude.startTime,
-                endTime: interlude.endTime,
-                currentTime: configuration.phaseRenderTime()
-            )
+        guard configuration.interludeAfterIndex == row.index, let interlude = row.interlude else {
+            return 0
         }
-        // Ordinary gap (defect 2): once this row's line is sung out and the post-line
-        // remnant faded, fold it to the inactive form. Computed for every row but only
-        // CONSUMED by amllTarget's hot branch, and a row inside a gap stays the semantic
-        // current — past rows' nonzero values are inert.
-        guard !row.isPrelude else { return 0 }
+        return NativeLyricsDotPhasePlan.interludeBlend(
+            startTime: interlude.startTime,
+            endTime: interlude.endTime,
+            currentTime: configuration.phaseRenderTime()
+        )
+    }
+
+    /// Ordinary-gap fold (defect 2): once this row's line is sung out and the post-line
+    /// remnant faded, it relaxes into the inactive form IN PLACE (no blur — distinct from
+    /// the interlude fold, where the dots take the centre and the row becomes a dist-1
+    /// past line). Computed for every row but only CONSUMED by amllTarget's hot branch;
+    /// past rows' nonzero values are inert.
+    private func gapRecedeBlend(
+        for row: LayerBackedLyricRow,
+        configuration: LyricsLayerRendererConfiguration
+    ) -> CGFloat {
+        guard configuration.interludeAfterIndex != row.index, !row.isPrelude else { return 0 }
         let line = row.displayLine.line
         let lineEnd = max(line.endTime, line.words.last?.endTime ?? 0)
         return NativeLyricsDotPhasePlan.gapRecedeBlend(

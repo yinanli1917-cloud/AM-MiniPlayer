@@ -123,6 +123,47 @@ final class NativeLyricsHarmonyTimelineDiagnosticTests: XCTestCase {
         XCTAssertEqual(live.semanticIndex, 3, "the real (co-starting) line stays the primary")
     }
 
+    /// User 2026-07-13: 和声应该同时播放 — a backing-vocal line (fully bracket-wrapped,
+    /// the convention every source uses for background parts) must LIGHT UP alongside the
+    /// melody but never CLAIM the primary slot: the scroll and the sweep stay on the
+    /// melody line, so a 0.4s "（I want you）" no longer yanks the anchor down and back.
+    func test_backingVocalLine_lightsSimultaneously_neverClaimsPrimary() {
+        // Call-response pattern from Puzzle (shifted): melody A, bracketed backing, melody B.
+        let spec: [(TimeInterval, TimeInterval, String)] = [
+            (0.0, 3.0, "眠れないの"),
+            (3.0, 3.44, "（I want you）"),
+            (3.44, 8.0, "愛してるよと言って"),
+        ]
+        let rows = spec.enumerated().map { index, item -> LayerBackedLyricRow in
+            let (s, e, text) = item
+            let line = LyricLine(text: text, startTime: s, endTime: e)
+            let dl = DisplayLyricLine(id: "bv\(index)", sourceIndex: index, segmentIndex: 0, segmentCount: 1, line: line)
+            return LayerBackedLyricRow(id: dl.id, index: index, displayLine: dl, sourceLine: line,
+                                       isPrelude: false, preludeEndTime: 0, interlude: nil)
+        }
+
+        // Inside the backing window: it is HOT (lights up as harmony) but the primary
+        // slot stays on the latest melody line — no anchor jump onto the 0.4s part.
+        let during = NativeLyricsTimelinePolicy.amllState(
+            at: 3.2, rows: rows, fallback: 0, previous: nil, isSeeking: false
+        )
+        XCTAssertTrue(during.hotGroups.contains(1), "backing part lights up while it is live")
+        XCTAssertEqual(during.semanticIndex, 0, "the melody line keeps the primary slot")
+        XCTAssertNotEqual(during.scrollToIndex, 1, "the scroll never targets the backing part")
+
+        // After the backing window: primary advances to melody B directly.
+        let after = NativeLyricsTimelinePolicy.amllState(
+            at: 3.6, rows: rows, fallback: 0, previous: during, isSeeking: false
+        )
+        XCTAssertEqual(after.semanticIndex, 2, "primary hands off melody-to-melody")
+
+        // ASCII brackets are the same convention.
+        XCTAssertTrue(NativeLyricsTimelinePolicy.isBackingVocalText("(ooh ooh)"))
+        XCTAssertTrue(NativeLyricsTimelinePolicy.isBackingVocalText(" （I want you） "))
+        XCTAssertFalse(NativeLyricsTimelinePolicy.isBackingVocalText("普通歌词 (with aside)"))
+        XCTAssertFalse(NativeLyricsTimelinePolicy.isBackingVocalText("()"))
+    }
+
     @MainActor
     func test_zeroDurationHarmonyLine_scrollStaysMonotone() {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))

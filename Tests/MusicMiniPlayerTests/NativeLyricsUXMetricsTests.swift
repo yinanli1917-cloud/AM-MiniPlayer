@@ -343,8 +343,8 @@ final class NativeLyricsUXMetricsTests: XCTestCase {
 
         XCTAssertEqual(visual.opacity, 0.35, accuracy: 0.0001)
         XCTAssertEqual(visual.scale, 0.95, accuracy: 0.0001)
-        // User 2026-07-12: the recede is dim + shrink only — no added blur.
-        XCTAssertEqual(visual.blur, 0, accuracy: 0.0001)
+        // User 2026-07-13: the interlude fold lands as the PREVIOUS line — dist-1 blur included.
+        XCTAssertEqual(visual.blur, 1.5, accuracy: 0.0001)
         XCTAssertTrue(visual.isActive)
     }
 

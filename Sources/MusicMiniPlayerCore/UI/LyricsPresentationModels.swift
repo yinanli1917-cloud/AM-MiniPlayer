@@ -270,7 +270,8 @@ struct NativeLyricsVisualTarget: Equatable {
         displayIndex: Int,
         currentIndex: Int,
         isManualScrolling: Bool,
-        interludeBlend: CGFloat = 0
+        interludeBlend: CGFloat = 0,
+        gapRecedeBlend: CGFloat = 0
     ) -> NativeLyricsVisualTarget {
         let isActive = displayIndex == currentIndex
         if isManualScrolling {
@@ -283,13 +284,15 @@ struct NativeLyricsVisualTarget: Equatable {
             )
         }
         if isActive {
-            let blend = min(1, max(0, interludeBlend))
-            // Recede = dim + shrink ONLY (user 2026-07-12): blurring while the row is still
-            // at/near the centre read as "sinking into fog" on top of the dim.
+            // Two fold flavors (user 2026-07-12/13): the INTERLUDE fold makes this row the
+            // previous (dist-1) line — depth blur included; the in-place ORDINARY-GAP fold
+            // keeps the centre — dim + shrink only, no blur.
+            let interlude = min(1, max(0, interludeBlend))
+            let fold = max(interlude, min(1, max(0, gapRecedeBlend)))
             return NativeLyricsVisualTarget(
-                opacity: 1.0 - blend * 0.65,
-                scale: 1.0 - blend * 0.05,
-                blur: 0,
+                opacity: 1.0 - fold * 0.65,
+                scale: 1.0 - fold * 0.05,
+                blur: interlude * 1.5,
                 isActive: true
             )
         }
@@ -307,7 +310,8 @@ struct NativeLyricsVisualTarget: Equatable {
         scrollTargetIndex: Int,
         hotActiveIndices: Set<Int>,
         isManualScrolling: Bool,
-        interludeBlend: CGFloat = 0
+        interludeBlend: CGFloat = 0,
+        gapRecedeBlend: CGFloat = 0
     ) -> NativeLyricsVisualTarget {
         let isHotActive = displayIndex == currentIndex
         // The bright + sharp tier applies ONLY to genuinely HOT lines (the primary active + any
@@ -332,16 +336,17 @@ struct NativeLyricsVisualTarget: Equatable {
             // preceding line held full active form for the whole interlude — the "上一句不退场" bug
             // (instrumentation confirmed blend reaches 1.0; only the form was never wired through).
             // At blend=1 it lands on the same past-line look the depth tier uses.
-            let blend = min(1, max(0, interludeBlend))
-            // Recede = dim + shrink ONLY (user 2026-07-12): the fold lands on the plain
-            // inactive look with NO added blur. Even the old dist-1 landing (0.5) read as
-            // "sinking into fog" while the row was still at/near the centre; once the row
-            // genuinely stops being hot, the standard distance formula takes over via the
-            // spring and depth blur applies at its true distance.
+            // Two fold flavors (user 2026-07-12/13):
+            //  - INTERLUDE: the dots take the centre, so this row becomes the previous
+            //    (dist-1) line — it lands WITH the natural dist-1 depth blur (0.5).
+            //  - ORDINARY GAP: the row keeps the centre and just relaxes into the
+            //    inactive form in place — dim + shrink only, NO blur ("sinking into fog").
+            let interlude = min(1, max(0, interludeBlend))
+            let fold = max(interlude, min(1, max(0, gapRecedeBlend)))
             return NativeLyricsVisualTarget(
-                opacity: 1.0 - blend * 0.65,   // → 0.35 (inactive opacity)
-                scale: 1.0 - blend * 0.05,     // → 0.95 (inactive scale)
-                blur: 0,
+                opacity: 1.0 - fold * 0.65,    // → 0.35 (inactive opacity)
+                scale: 1.0 - fold * 0.05,      // → 0.95 (inactive scale)
+                blur: interlude * 0.5,         // → 0.5 (dist-1 past blur) for interludes only
                 isActive: true
             )
         }
@@ -621,6 +626,19 @@ enum NativeLyricsTimelinePolicy {
         let semanticIndex: Int
     }
 
+    /// A line whose whole text is bracket-wrapped is a BACKING-VOCAL part — the convention
+    /// every lyric source uses for background/duet parts (（I want you）, (ooh ooh)). Backing
+    /// parts light up alongside the melody (they stay in hotGroups) but never claim the
+    /// PRIMARY slot: the scroll and the karaoke sweep follow the melody line (user
+    /// 2026-07-13: 和声同时播放，滚动不跳). Structural rule, no per-song lists.
+    static func isBackingVocalText(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 2, let first = trimmed.first, let last = trimmed.last else { return false }
+        let opens: Set<Character> = ["(", "（"]
+        let closes: Set<Character> = [")", "）"]
+        return opens.contains(first) && closes.contains(last)
+    }
+
     static func liveDisplayIndex(
         at playbackTime: TimeInterval,
         rows: [LayerBackedLyricRow],
@@ -628,15 +646,23 @@ enum NativeLyricsTimelinePolicy {
     ) -> Int {
         var bestIndex: Int?
         var bestStartTime = -TimeInterval.greatestFiniteMagnitude
+        // All-backing safety net: a song made entirely of bracketed lines still resolves.
+        var bestAnyIndex: Int?
+        var bestAnyStartTime = -TimeInterval.greatestFiniteMagnitude
         for row in rows where !row.isPrelude {
             let startTime = row.displayLine.line.startTime
             guard startTime <= playbackTime else { continue }
+            if startTime > bestAnyStartTime || (startTime == bestAnyStartTime && row.index > (bestAnyIndex ?? Int.min)) {
+                bestAnyStartTime = startTime
+                bestAnyIndex = row.index
+            }
+            guard !isBackingVocalText(row.displayLine.line.text) else { continue }
             if startTime > bestStartTime || (startTime == bestStartTime && row.index > (bestIndex ?? Int.min)) {
                 bestStartTime = startTime
                 bestIndex = row.index
             }
         }
-        return bestIndex ?? fallback
+        return bestIndex ?? bestAnyIndex ?? fallback
     }
 
     static func amllState(
@@ -662,8 +688,14 @@ enum NativeLyricsTimelinePolicy {
             rows: sortedRows,
             fallback: fallback
         )
+        let backingIndices = Set(
+            sortedRows.filter { isBackingVocalText($0.displayLine.line.text) }.map(\.index)
+        )
         let firstFutureIndex = sortedRows
-            .filter { !$0.isPrelude && $0.displayLine.line.startTime > playbackTime + lineAdvanceEpsilon }
+            .filter {
+                !$0.isPrelude && !backingIndices.contains($0.index)
+                    && $0.displayLine.line.startTime > playbackTime + lineAdvanceEpsilon
+            }
             .min { lhs, rhs in lhs.displayLine.line.startTime < rhs.displayLine.line.startTime }?
             .index
 
@@ -687,17 +719,22 @@ enum NativeLyricsTimelinePolicy {
             bufferedGroups = previousBuffered.isEmpty ? hotGroups : previousBuffered.union(hotGroups)
         }
 
+        // Backing parts stay in hotGroups (they LIGHT simultaneously) but never lead:
+        // the primary slot and the scroll resolve on melody lines only, falling back to
+        // the unfiltered sets when a window contains nothing else.
         let scrollToIndex: Int
-        if let firstBuffered = bufferedGroups.min() {
+        if let firstBuffered = bufferedGroups.subtracting(backingIndices).min() {
             scrollToIndex = firstBuffered
         } else if isSeeking, let firstFutureIndex {
             scrollToIndex = firstFutureIndex
         } else {
+            // Buffered set empty or backing-only: hold the melody. latestStartedIndex
+            // itself falls back to backing rows when a song has nothing else.
             scrollToIndex = previous?.scrollToIndex ?? latestStartedIndex
         }
 
-        let semanticIndex = hotGroups.max()
-            ?? bufferedGroups.max()
+        let semanticIndex = hotGroups.subtracting(backingIndices).max()
+            ?? bufferedGroups.subtracting(backingIndices).max()
             ?? latestStartedIndex
 
         return AMLLState(

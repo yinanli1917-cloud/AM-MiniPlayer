@@ -148,9 +148,10 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         )
         XCTAssertLessThan(settled.opacity, 0.5, "preceding line must fade toward a past line at blend=1")
         XCTAssertLessThan(settled.scale, 1.0, "preceding line must shrink toward a past line at blend=1")
-        // User 2026-07-12: the recede must read EXACTLY like an inactive row — dim + shrink
-        // only. Blurring during the fold read as "sinking into fog" on top of the dim.
-        XCTAssertEqual(settled.blur, 0, accuracy: 0.0001, "recede adds NO blur — inactive look only")
+        // User 2026-07-13: once the dots take the centre this row IS the previous (dist-1)
+        // line, so the interlude fold lands WITH the standard dist-1 depth blur. Only the
+        // in-place ordinary-gap fold (gapRecedeBlend) stays blur-free.
+        XCTAssertEqual(settled.blur, 0.5, accuracy: 0.0001, "interlude fold lands on the dist-1 past look, blur included")
 
         // blend=0 (no interlude) keeps the active line fully active — unchanged.
         let active = NativeLyricsVisualTarget.amllTarget(
@@ -191,7 +192,7 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
         assertTarget(passed1, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: false, "v2.8 passed dist-1 = 0.8 (symmetric)")
 
         let interludeActive = NativeLyricsVisualTarget.legacyTarget(displayIndex: 5, currentIndex: 5, isManualScrolling: false, interludeBlend: 1.0)
-        assertTarget(interludeActive, opacity: 0.35, scale: 0.95, blur: 0, isActive: true, "recede lands on the inactive look — no added blur (user 2026-07-12)")
+        assertTarget(interludeActive, opacity: 0.35, scale: 0.95, blur: 1.5, isActive: true, "v2.8 interlude fold lands on the dist-1 past look (|1|×1.5)")
     }
 
     /// Depth field must be monotonic: the accumulated BUFFERED trail (recently-passed lines that are
@@ -246,24 +247,30 @@ final class NativeLyricsAMLLParityTests: XCTestCase {
     }
 
     /// During an interlude the three dots take the active centre, so the PRECEDING active line
-    /// recedes as interludeBlend ramps 0→1: opacity 1→0.35, scale 1→0.95, blur stays 0 (user
-    /// 2026-07-12: the fold is dim + shrink ONLY — even the dist-1 landing 0.5 read as "sinking
-    /// into fog" while the row was still near the centre). Earlier bugs on this path: blur 1.5
-    /// inverted the depth gradient; before that the line stayed fully bright because amllTarget
-    /// accepted but never used interludeBlend.
+    /// recedes to a NATURAL dist-1 past line as interludeBlend ramps 0→1: opacity 1→0.35, scale
+    /// 1→0.95, blur 0→0.5 (user 2026-07-13: the row IS the previous line once the dots take
+    /// over — the dist-1 depth blur belongs to it). The in-place ORDINARY-GAP fold
+    /// (gapRecedeBlend) dims + shrinks with NO blur — the row is still the centre there.
     func test_interludeBlend_precedingLineRecedesAtFullBlend() {
         let amllActive = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false, interludeBlend: 1.0
         )
-        assertTarget(amllActive, opacity: 0.35, scale: 0.95, blur: 0, isActive: true, "preceding line folds to the inactive look at full interlude — no added blur")
+        assertTarget(amllActive, opacity: 0.35, scale: 0.95, blur: 0.5, isActive: true, "preceding line recedes to a natural dist-1 past line at full interlude")
 
-        // The retired line must NOT be blurrier than a real dist-1 past line (the gradient-inversion bug).
+        // The retired line must land on the SAME blur a real dist-1 past line gets (no inversion).
         let realDist1 = NativeLyricsVisualTarget.amllTarget(
             displayIndex: 6, currentIndex: 5, scrollTargetIndex: 5,
             hotActiveIndices: [5], isManualScrolling: false
         )
-        XCTAssertLessThanOrEqual(amllActive.blur, realDist1.blur, "retired interlude line is never blurrier than a real dist-1 past line (no inversion)")
+        XCTAssertEqual(amllActive.blur, realDist1.blur, accuracy: 1e-6, "retired interlude line blur == real dist-1 past blur")
+
+        // The ORDINARY-GAP fold happens in place (the row keeps the centre): dim + shrink, blur 0.
+        let gapFolded = NativeLyricsVisualTarget.amllTarget(
+            displayIndex: 5, currentIndex: 5, scrollTargetIndex: 5,
+            hotActiveIndices: [5], isManualScrolling: false, gapRecedeBlend: 1.0
+        )
+        assertTarget(gapFolded, opacity: 0.35, scale: 0.95, blur: 0, isActive: true, "in-place gap fold adds NO blur (user 2026-07-12)")
     }
 
     /// CHARACTERIZATION of the "smeared active row / wrong brightness" report: native keeps
