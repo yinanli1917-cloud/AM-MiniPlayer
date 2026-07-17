@@ -1435,14 +1435,34 @@ public final class MetadataResolver {
         _ candidates: [(trackName: String, artistName: String, durationDiff: Double)]
     ) -> (trackName: String, artistName: String, durationDiff: Double)? {
         guard let first = candidates.first else { return nil }
+        // Identity folds script (S/T) and strips parenthetical version
+        // suffixes for GROUPING only — a storefront can list 关键词 and
+        // 關鍵詞 (Piano Ver.) side by side for one song. The returned
+        // candidate keeps its real catalog name.
         func identity(_ c: (trackName: String, artistName: String, durationDiff: Double)) -> String {
-            let t = LanguageUtils.normalizeTrackName(c.trackName).lowercased()
-            let a = LanguageUtils.normalizeArtistName(c.artistName).lowercased()
+            let strippedTitle = c.trackName.replacingOccurrences(
+                of: "\\s*[(（][^)）]*[)）]",
+                with: "",
+                options: .regularExpression
+            )
+            let t = LanguageUtils.toSimplifiedChinese(
+                LanguageUtils.normalizeTrackName(strippedTitle)
+            ).lowercased()
+            let a = LanguageUtils.toSimplifiedChinese(
+                LanguageUtils.normalizeArtistName(c.artistName)
+            ).lowercased()
             return "\(t)|\(a)"
         }
         let firstIdentity = identity(first)
         guard candidates.allSatisfy({ identity($0) == firstIdentity }) else { return nil }
-        return candidates.min { $0.durationDiff < $1.durationDiff }
+        // Prefer the unversioned name (shortest raw title — the How Sweet
+        // rule), then the tightest duration.
+        return candidates.min {
+            if $0.trackName.count != $1.trackName.count {
+                return $0.trackName.count < $1.trackName.count
+            }
+            return $0.durationDiff < $1.durationDiff
+        }
     }
 
     /// Admission-evidence kind persisted with a localized resolution.

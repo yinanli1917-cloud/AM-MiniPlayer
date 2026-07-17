@@ -119,6 +119,18 @@ final class ResolverSingleFlightTests: XCTestCase {
         XCTAssertEqual(multiRelease?.durationDiff ?? -1, 0.05, accuracy: 0.001)
     }
 
+    func testTitleQueryAliasFoldsScriptAndVersionVariants() {
+        // CN storefront returns the same song in mixed scripts and with a
+        // version-marked sibling ("The Key" 208s: 关键词 Δ0.9 + 關鍵詞
+        // (Piano Ver.) Δ0.1). These are ONE identity; the pick prefers the
+        // unversioned (shortest raw) title over the closer-duration variant.
+        let alias = MetadataResolver.titleQueryAliasCandidate([
+            (trackName: "关键词", artistName: "林俊杰", durationDiff: 0.9),
+            (trackName: "關鍵詞 (Piano Ver.)", artistName: "林俊杰", durationDiff: 0.1)
+        ])
+        XCTAssertEqual(alias?.trackName, "关键词")
+    }
+
     func testTitleQueryAliasRejectsMixedIdentityPool() {
         // Sibling-track dump (postmortem 006 class): two distinct songs
         // survive the duration filter -> no consensus, stay unresolved.

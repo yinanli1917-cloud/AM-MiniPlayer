@@ -1168,6 +1168,35 @@ final class LyricsSelectionTests: XCTestCase {
         )?.id, 1)
     }
 
+    /// Content validation must accept EVERY known identity of the song
+    /// (original title, resolved title, catalog row name). Slow Motion
+    /// (Akina Nakamori): the resolver bridged to スローモーション, NetEase
+    /// found the correct lyrics, and the validator vetoed them because the
+    /// LRC header said 'スローモーション - 中森明菜' while it only knew
+    /// 'Slow Motion' — the correct result was discarded on the fast path.
+    func testContentValidationAcceptsAnyDualTitleIdentity() {
+        let fetcher = LyricsFetcher.shared
+        let lrc = "[00:00.00]スローモーション - 中森明菜\n[00:28.10]砂の上 走る"
+
+        XCTAssertTrue(fetcher.validateLyricsContent(
+            lrc,
+            expectedTitles: ["Slow Motion", "スローモーション"],
+            expectedArtists: ["Akina Nakamori", "中森明菜"]
+        ))
+        // Single-identity call reproduces the veto: header title unknown.
+        XCTAssertFalse(fetcher.validateLyricsContent(
+            lrc,
+            expectedTitles: ["Slow Motion"],
+            expectedArtists: ["Akina Nakamori"]
+        ))
+        // A genuinely different song's header still fails the full set.
+        XCTAssertFalse(fetcher.validateLyricsContent(
+            "[00:00.00]女朋友男朋友 - 黄韵玲\n[00:15.00]第一行",
+            expectedTitles: ["Dinner", "三个人的晚餐"],
+            expectedArtists: ["Kay Huang", "黄韵玲"]
+        ))
+    }
+
     /// The NetEase artist-discography fallback may only claim a native-title
     /// alias when the candidate title actually corroborates the input
     /// (phonetically, via either title half). Input-only "looks like an
@@ -1422,7 +1451,13 @@ final class LyricsSelectionTests: XCTestCase {
         XCTAssertTrue(selected?.nativeAliasMatched == true)
     }
 
-    func testAlbumHintAllowsSemanticEnglishNativeTitleAlias() {
+    /// CONTRACT CHANGE (evidence-first): the semantic word-pair whitelist
+    /// ("key"→关键) is deleted, so an album-mismatched alias+title dump
+    /// candidate with no title relation to the input stays unselected.
+    /// "The Key" resolves upstream via the catalog-alias bridge (关键词
+    /// arrives as the resolved title and matches P1); verified end-to-end
+    /// by the X26 network case with the whitelist already unreachable.
+    func testAlbumHintWithoutTitleEvidenceStaysUnresolved() {
         let fetcher = LyricsFetcher.shared
         let candidates = [
             LyricsFetcher.SearchCandidate(
@@ -1440,7 +1475,7 @@ final class LyricsSelectionTests: XCTestCase {
             )
         ]
 
-        let selected = fetcher.selectBestCandidate(
+        XCTAssertNil(fetcher.selectBestCandidate(
             candidates,
             source: .netEase,
             inputTitle: "The Key",
@@ -1448,10 +1483,7 @@ final class LyricsSelectionTests: XCTestCase {
             aliasConfirmedCJK: true,
             hasAlbumHint: true,
             allowNativeTitleAlias: true
-        )
-
-        XCTAssertEqual(selected?.id, 4001)
-        XCTAssertEqual(selected?.nativeAliasMatched, true)
+        ))
     }
 
     func testLongEnglishTitleRejectsSameArtistAlbumDurationCollision() {

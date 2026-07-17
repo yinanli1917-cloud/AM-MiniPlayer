@@ -145,10 +145,11 @@ extension LyricsFetcher {
                 return false
             }
             if inputLooksEnglish && !likelyJapaneseRomaji {
-                return self.localizedEnglishTitleAliasMatches(
-                    inputTitle: inputTitle,
-                    nativeTitle: candidate.name
-                )
+                // Translated English titles carry no local evidence — they
+                // resolve upstream via the catalog-alias bridge and arrive
+                // here as titleMatch. (The hardcoded word-pair whitelist that
+                // used to live here is gone; see banned-patterns.)
+                return false
             }
             return LanguageUtils.isRomanizedTitleCorroborated(
                 input: inputTitle,
@@ -285,12 +286,10 @@ extension LyricsFetcher {
                    !LanguageUtils.isLikelyRomanizedJapanese(inputTitle),
                    candidate.durationDiff < 3.0,
                    candidate.searchDescriptor.hasPrefix("alias+title") {
-                    if hasAlbumHint, !candidate.albumMatch {
-                        guard self.localizedEnglishTitleAliasMatches(
-                            inputTitle: inputTitle,
-                            nativeTitle: candidate.name
-                        ) else { return false }
-                    }
+                    // Album hint present but candidate album mismatched:
+                    // no local evidence can rescue a translated title here
+                    // (the word-pair whitelist is gone) — stay unresolved.
+                    if hasAlbumHint, !candidate.albumMatch { return false }
                     return true
                 }
                 // 🔑 Every artist-only arm below requires cross-script title
@@ -592,39 +591,6 @@ extension LyricsFetcher {
         return String(normalized.unicodeScalars.filter {
             CharacterSet.alphanumerics.contains($0) || LanguageUtils.isCJKScalar($0)
         })
-    }
-
-    private func localizedEnglishTitleAliasMatches(inputTitle: String, nativeTitle: String) -> Bool {
-        guard LanguageUtils.isPureASCII(inputTitle),
-              LanguageUtils.isLikelyEnglishTitle(inputTitle),
-              nativeTitle.unicodeScalars.contains(where: { LanguageUtils.isCJKScalar($0) }) else {
-            return false
-        }
-        let genericTitleTokens: Set<String> = [
-            "the", "and", "with", "feat", "featuring", "from", "to",
-            "a", "an", "of", "in", "on", "for", "me", "my", "you"
-        ]
-        let meaningfulTokens = inputTitle.lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-            .filter { !genericTitleTokens.contains($0) && $0.count >= 3 }
-        guard !meaningfulTokens.isEmpty, meaningfulTokens.count <= 3 else { return false }
-
-        let simplifiedNative = LanguageUtils.toSimplifiedChinese(nativeTitle)
-        let traditionalNative = LanguageUtils.toTraditionalChinese(nativeTitle)
-        let semanticTokens: [String: [String]] = [
-            "key": ["关键", "關鍵", "钥匙", "鑰匙"],
-            "keyword": ["关键词", "關鍵詞", "关键", "關鍵"],
-            "keywords": ["关键词", "關鍵詞", "关键", "關鍵"],
-            "distance": ["距离", "距離"]
-        ]
-        return meaningfulTokens.allSatisfy { token in
-            guard let aliases = semanticTokens[token] else { return false }
-            return aliases.contains { alias in
-                simplifiedNative.contains(LanguageUtils.toSimplifiedChinese(alias))
-                    || traditionalNative.contains(LanguageUtils.toTraditionalChinese(alias))
-            }
-        }
     }
 
     /// 统一艺术家匹配（简繁体 + CJK 跨语言 + normalized 去后缀）

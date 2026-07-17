@@ -275,8 +275,8 @@ extension LyricsFetcher {
               let fetched = await fetchNetEaseLyrics(
                 songId: candidate.id,
                 duration: duration,
-                expectedTitle: candidate.name,
-                expectedArtist: candidate.artist
+                expectedTitles: [candidate.name, title],
+                expectedArtists: [candidate.artist, artist]
               ) else {
             return nil
         }
@@ -384,8 +384,8 @@ extension LyricsFetcher {
            let fetched = await fetchNetEaseLyrics(
                 songId: match.id,
                 duration: duration,
-                expectedTitle: match.title,
-                expectedArtist: match.artist
+                expectedTitles: [match.title, title],
+                expectedArtists: [match.artist, artist]
            ) else {
             return nil
         }
@@ -875,8 +875,8 @@ extension LyricsFetcher {
                     guard let fetched = await self.fetchNetEaseLyrics(
                         songId: candidate.id,
                         duration: duration,
-                        expectedTitle: candidate.name,
-                        expectedArtist: candidate.artist
+                        expectedTitles: [candidate.name, params.rawTitle, params.rawOriginalTitle],
+                        expectedArtists: [candidate.artist, params.rawArtist, params.rawOriginalArtist]
                     ), !fetched.lyrics.isEmpty, fetched.lyrics.count >= 5 else {
                         return nil
                     }
@@ -1093,8 +1093,8 @@ extension LyricsFetcher {
                     guard let fetched = await self.fetchNetEaseLyrics(
                         songId: candidate.id,
                         duration: duration,
-                        expectedTitle: candidate.name,
-                        expectedArtist: candidate.artist
+                        expectedTitles: [candidate.name],
+                        expectedArtists: [candidate.artist]
                     ), !fetched.lyrics.isEmpty, fetched.lyrics.count >= 8 else {
                         return nil
                     }
@@ -1497,11 +1497,21 @@ extension LyricsFetcher {
 
     // MARK: - NetEase
 
-    /// Validate lyrics content against expected song
-    func validateLyricsContent(_ rawText: String, expectedTitle: String, expectedArtist: String) -> Bool {
+    /// Validate lyrics content against the song's KNOWN identities. A song
+    /// legitimately carries several names at once (original title, resolved
+    /// native title, the provider row's own name, per-script artist forms),
+    /// so the embedded "title - artist" header passes when it matches ANY
+    /// of them. A single-name check vetoed correct lyrics whenever the LRC
+    /// header and the catalog row used different scripts (Slow Motion vs
+    /// スローモーション - 中森明菜).
+    func validateLyricsContent(_ rawText: String, expectedTitles: [String], expectedArtists: [String]) -> Bool {
         let lines = rawText.components(separatedBy: .newlines).prefix(8)
-        let normalizedExpectedTitle = normalizedLyricsIdentity(expectedTitle, isArtist: false)
-        let normalizedExpectedArtist = normalizedLyricsIdentity(expectedArtist, isArtist: true)
+        let titleSet = expectedTitles
+            .map { normalizedLyricsIdentity($0, isArtist: false) }
+            .filter { !$0.isEmpty }
+        let artistSet = expectedArtists
+            .map { normalizedLyricsIdentity($0, isArtist: true) }
+            .filter { !$0.isEmpty }
         for line in lines {
             let text = line.replacingOccurrences(of: "\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
             guard text.contains(" - ") else { continue }
@@ -1517,12 +1527,15 @@ extension LyricsFetcher {
             let normalizedLeftArtist = normalizedLyricsIdentity(left, isArtist: true)
             let normalizedRightArtist = normalizedLyricsIdentity(right, isArtist: true)
 
-            let titleArtistOrder = lyricsIdentityMatches(normalizedLeftTitle, normalizedExpectedTitle)
-                && (normalizedExpectedArtist.isEmpty || lyricsIdentityMatches(normalizedRightArtist, normalizedExpectedArtist))
-            let artistTitleOrder = (normalizedExpectedArtist.isEmpty || lyricsIdentityMatches(normalizedLeftArtist, normalizedExpectedArtist))
-                && lyricsIdentityMatches(normalizedRightTitle, normalizedExpectedTitle)
+            func matchesAny(_ value: String, _ set: [String]) -> Bool {
+                set.contains { lyricsIdentityMatches(value, $0) }
+            }
+            let titleArtistOrder = matchesAny(normalizedLeftTitle, titleSet)
+                && (artistSet.isEmpty || matchesAny(normalizedRightArtist, artistSet))
+            let artistTitleOrder = (artistSet.isEmpty || matchesAny(normalizedLeftArtist, artistSet))
+                && matchesAny(normalizedRightTitle, titleSet)
             if !titleArtistOrder && !artistTitleOrder {
-                DebugLogger.log("NetEase", "⚠️ Content mismatch: lyrics say '\(left) - \(right)' but expected '\(expectedTitle)' by '\(expectedArtist)'")
+                DebugLogger.log("NetEase", "⚠️ Content mismatch: lyrics say '\(left) - \(right)' but expected any of \(expectedTitles) by \(expectedArtists)")
                 return false
             }
         }
@@ -1584,7 +1597,7 @@ extension LyricsFetcher {
         var primaryResult: LyricsFetchResult?
         if let match {
             DebugLogger.log("NetEase", "✅ 找到 songId=\(match.id) albumMatch=\(match.albumMatched)")
-            if let result = await fetchNetEaseLyrics(songId: match.id, duration: duration, expectedTitle: match.title, expectedArtist: match.artist) {
+            if let result = await fetchNetEaseLyrics(songId: match.id, duration: duration, expectedTitles: [match.title, title, originalTitle], expectedArtists: [match.artist, artist, originalArtist]) {
                 let lyrics = result.lyrics
                 let kind = result.kind
                 let rawScore = scorer.calculateScore(lyrics, source: .netEase, duration: duration, translationEnabled: translationEnabled, kind: kind)
@@ -1908,7 +1921,7 @@ extension LyricsFetcher {
             )
             : nil
         for c in cands.prefix(fallbackProbeLimit) {
-            if let r = await fetchNetEaseLyrics(songId: c.id, duration: duration, expectedTitle: c.name, expectedArtist: c.artist),
+            if let r = await fetchNetEaseLyrics(songId: c.id, duration: duration, expectedTitles: [c.name, params.rawTitle, params.rawOriginalTitle], expectedArtists: [c.artist, params.rawArtist, params.rawOriginalArtist]),
                !r.lyrics.isEmpty, r.lyrics.count >= 5 {
                 let candidateLyrics = removingLeadingCatalogCreditLines(r.lyrics, title: c.name, artist: c.artist)
                 if c.riskyNativeAlias {
@@ -2016,7 +2029,7 @@ extension LyricsFetcher {
             guard let id = song["id"] as? Int,
                   let name = song["name"] as? String else { continue }
             let artistName = (song["artists"] as? [[String: Any]]).map { joinedProviderArtists($0) } ?? ""
-            guard let fetched = await fetchNetEaseLyrics(songId: id, duration: duration, expectedTitle: name, expectedArtist: artistName),
+            guard let fetched = await fetchNetEaseLyrics(songId: id, duration: duration, expectedTitles: [name], expectedArtists: [artistName]),
                   !fetched.lyrics.isEmpty,
                   hasCJKLyricOverlap(fetched.lyrics, witness.lyrics) else { continue }
             let rawScore = scorer.calculateScore(fetched.lyrics, source: .netEase, duration: duration, translationEnabled: translationEnabled, kind: fetched.kind)
@@ -2196,8 +2209,8 @@ extension LyricsFetcher {
                     guard let fetched = await self.fetchNetEaseLyrics(
                         songId: candidate.id,
                         duration: duration,
-                        expectedTitle: candidate.name,
-                        expectedArtist: candidate.artist
+                        expectedTitles: [candidate.name, params.rawTitle, params.rawOriginalTitle],
+                        expectedArtists: [candidate.artist, params.rawArtist, params.rawOriginalArtist]
                     ) else {
                         return nil
                     }
@@ -2328,8 +2341,8 @@ extension LyricsFetcher {
                     guard let fetched = await self.fetchNetEaseLyrics(
                         songId: candidate.id,
                         duration: duration,
-                        expectedTitle: candidate.name,
-                        expectedArtist: candidate.artist
+                        expectedTitles: [candidate.name, params.rawTitle, params.rawOriginalTitle],
+                        expectedArtists: [candidate.artist, params.rawArtist, params.rawOriginalArtist]
                     ), !fetched.lyrics.isEmpty, fetched.lyrics.count >= 5 else {
                         return nil
                     }
@@ -2372,7 +2385,7 @@ extension LyricsFetcher {
         return best
     }
 
-    func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitle: String = "", expectedArtist: String = "") async -> (lyrics: [LyricLine], kind: LyricsKind)? {
+    func fetchNetEaseLyrics(songId: Int, duration: TimeInterval, expectedTitles: [String] = [], expectedArtists: [String] = []) async -> (lyrics: [LyricLine], kind: LyricsKind)? {
         // 🔑 yv=1 requests YRC (word-level) lyrics alongside LRC/tlyric
         guard let url = URL(string: "https://music.163.com/api/song/lyric?id=\(songId)&lv=1&tv=1&yv=1") else { return nil }
 
@@ -2382,10 +2395,10 @@ extension LyricsFetcher {
                 "Referer": "https://music.163.com"
             ], timeout: 2.4, retry: false)
 
-            // 🔑 Content validation
-            if !expectedTitle.isEmpty {
+            // 🔑 Content validation against every known identity of the song
+            if !expectedTitles.isEmpty {
                 let rawLRC = (json["lrc"] as? [String: Any])?["lyric"] as? String ?? ""
-                if !rawLRC.isEmpty && !validateLyricsContent(rawLRC, expectedTitle: expectedTitle, expectedArtist: expectedArtist) {
+                if !rawLRC.isEmpty && !validateLyricsContent(rawLRC, expectedTitles: expectedTitles, expectedArtists: expectedArtists) {
                     return nil
                 }
             }
