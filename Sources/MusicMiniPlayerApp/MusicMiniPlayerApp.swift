@@ -140,6 +140,11 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             openPage(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
         case "settings":
             openSettingsPage(named: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        case "backdrop":
+            // nanopod://backdrop/<fluid|glass> — live-switch the panel backdrop
+            // (glass = native Tahoe glass experiment; unknown values clamp to fluid).
+            let style = PanelBackdropStyle.resolve(from: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            UserDefaults.standard.set(style.rawValue, forKey: PanelBackdropStyle.defaultsKey)
         #if DEBUG || LOCAL_DEVELOPER_BUILD
         case "diagnostics":
             let action = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()

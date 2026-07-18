@@ -107,7 +107,7 @@ public struct PlaylistView: View {
                 // ═══════════════════════════════════════════
                 // MARK: - Background
                 // ═══════════════════════════════════════════
-                AdaptiveFluidBackground(artwork: effectArtwork ?? musicController.currentArtwork)
+                PanelBackdrop(artwork: effectArtwork ?? musicController.currentArtwork, role: .pageOverlay)
                     .ignoresSafeArea()
 
                 // ═══════════════════════════════════════════

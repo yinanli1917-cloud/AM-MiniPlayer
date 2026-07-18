@@ -51,7 +51,8 @@ Sources/
 │   │   │   └── ProgressiveBlurView.swift
 │   │   └── Background/           - Background views
 │   │       ├── FluidGradientBackground.swift
-│   │       └── LiquidBackgroundView.swift
+│   │       ├── LiquidBackgroundView.swift
+│   │       └── PanelBackdrop.swift   - 面板底材切换（fluid 默认 | macOS 26 原生 NSGlassEffectView 玻璃实验臂），nanopod://debug/backdrop/<style> 运行时切换
 │   ├── Utils/
 │   │   ├── HTTPClient.swift           - HTTP requests + retry + connection warmup + NetworkOutcomeLedger (protocol vs transport)
 │   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion + Japanese reading (CFStringTokenizer) + two-lane romanized-title corroboration
@@ -94,6 +95,7 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     ├── WindowAnimationCensusTests.swift - 动画普查契约：隐藏层/mask 层上的无限动画可被发现 + 安静树报零 + effect view 清单 + 格式化输出
     ├── NativeLyricsLoopIdleTests.swift - 呈现 loop 空闲裁决：暂停+间奏必须放行停摆（缺陷5根因）+ 播放中间奏保活 + 未settled运动不分播放态 + appear 窗不分播放态
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
+    └── PanelBackdropStyleTests.swift - 面板底材开关：未知/缺省值必须回落 fluid（实验不改默认外观）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 

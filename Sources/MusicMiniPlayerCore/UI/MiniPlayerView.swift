@@ -58,8 +58,8 @@ public struct MiniPlayerView: View {
     var mainBody: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background (Artwork-derived fluid gradient — no system glass)
-                FluidGradientBackground(artwork: effectArtwork ?? musicController.currentArtwork)
+                // Background: defaults-switched fluid gradient / native glass experiment
+                PanelBackdrop(artwork: effectArtwork ?? musicController.currentArtwork)
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
 
