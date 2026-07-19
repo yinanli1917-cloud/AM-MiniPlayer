@@ -98,6 +98,7 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     └── PanelBackdropStyleTests.swift - 面板底材开关：未知/缺省值必须回落 fluid（实验不改默认外观）
     └── PlaybackClockTrustTests.swift - 慢 SB 读时钟信任：漂移小于读延迟不确定度必须压制（钉死 2026-07-17 实测振荡值），大漂移（seek/晚发现换歌）仍落地
     └── RowArtworkStoreTests.swift - 行封面分层存储：内存→磁盘(Apple 层→web 层)→single-flight 网络；按来源分层落盘；终败不缓存可重试
+    └── TrackIdentityDisciplineTests.swift - 轨道身份纪律：PID 权威三门（同曲通知不换歌/未知 PID 不单独断言/Apple 图已应用丢迟到结果）+ 歌词同曲 PID 锚
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 
