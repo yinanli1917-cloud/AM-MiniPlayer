@@ -199,6 +199,9 @@ public class MusicController: ObservableObject {
         return cache
     }()
 
+    /// Playlist-row artwork tiers (memory → disk → merged network fetch).
+    @MainActor lazy var rowArtworkStore: RowArtworkStore = makeRowArtworkStore()
+
     /// Estimate NSImage memory cost for NSCache (RGBA, 4 bytes/pixel)
     static func imageCacheCost(_ image: NSImage) -> Int {
         let rep = image.representations.first

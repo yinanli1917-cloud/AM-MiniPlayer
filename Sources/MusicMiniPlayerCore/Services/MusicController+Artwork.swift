@@ -12,6 +12,71 @@ import MusicKit
 import ObjCSupport
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MARK: - Row Artwork Store
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Playlist-row artwork tiers: memory → disk (Apple tier, then web tier) →
+/// single-flighted network fetch. Before this store, row-fetched artwork was
+/// never cached (every row recreation refetched the network), duplicate
+/// concurrent fetches raced the same key, and web-sourced art vanished on
+/// memory eviction because only Apple-authoritative results reached disk.
+/// Web results persist under a separate tier key so the main-page path
+/// (which prefers Apple art via the grace-window race) never reads them.
+@MainActor
+public final class RowArtworkStore {
+    public typealias FetchResult = (image: NSImage, appleAuthoritative: Bool)
+
+    private let memoryRead: (NSString) -> NSImage?
+    private let memoryWrite: (NSImage, NSString) -> Void
+    private let diskRead: (NSString) -> NSImage?
+    private let diskWrite: (NSImage, NSString) -> Void
+    private let fetch: (String, String, String) async -> FetchResult?
+    private var inFlight: [NSString: Task<NSImage?, Never>] = [:]
+
+    public init(
+        memoryRead: @escaping (NSString) -> NSImage?,
+        memoryWrite: @escaping (NSImage, NSString) -> Void,
+        diskRead: @escaping (NSString) -> NSImage?,
+        diskWrite: @escaping (NSImage, NSString) -> Void,
+        fetch: @escaping (String, String, String) async -> FetchResult?
+    ) {
+        self.memoryRead = memoryRead
+        self.memoryWrite = memoryWrite
+        self.diskRead = diskRead
+        self.diskWrite = diskWrite
+        self.fetch = fetch
+    }
+
+    public static func webTierKey(_ key: NSString) -> NSString {
+        "web|\(key)" as NSString
+    }
+
+    public func artwork(title: String, artist: String, album: String, key: NSString) async -> NSImage? {
+        if let hit = memoryRead(key) { return hit }
+        if let disk = diskRead(key) ?? diskRead(Self.webTierKey(key)) {
+            memoryWrite(disk, key)
+            return disk
+        }
+        if let running = inFlight[key] {
+            return await running.value
+        }
+        // Unstructured on purpose (same idiom as MetadataResolver.SingleFlight):
+        // an awaiting row's cancellation must never kill the fetch other rows
+        // depend on, and a zero-awaiter completion still warms the caches.
+        let task = Task<NSImage?, Never> { [memoryWrite, diskWrite, fetch] in
+            guard let result = await fetch(title, artist, album) else { return nil }
+            memoryWrite(result.image, key)
+            diskWrite(result.image, result.appleAuthoritative ? key : Self.webTierKey(key))
+            return result.image
+        }
+        inFlight[key] = task
+        let value = await task.value
+        inFlight[key] = nil
+        return value
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - Artwork Extraction Helper
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -382,8 +447,31 @@ extension MusicController {
     /// 获取封面图片 - 双轨方案
     /// 1. 优先尝试 MusicKit（App Store 版本，需要开发者签名）
     /// 2. 回退到 iTunes Search API（开发版本，公开 API 无需签名）
+    @MainActor
     public func fetchMusicKitArtwork(title: String, artist: String, album: String) async -> NSImage? {
-        await fetchArtworkResult(title: title, artist: artist, album: album)?.image
+        guard let key = artworkMetadataCacheKey(title: title, artist: artist, album: album) else {
+            return await fetchArtworkResult(title: title, artist: artist, album: album)?.image
+        }
+        return await rowArtworkStore.artwork(title: title, artist: artist, album: album, key: key)
+    }
+
+    @MainActor
+    func makeRowArtworkStore() -> RowArtworkStore {
+        RowArtworkStore(
+            memoryRead: { [unowned self] key in artworkCache.object(forKey: key) },
+            memoryWrite: { [unowned self] image, key in
+                artworkCache.setObject(image, forKey: key, cost: Self.imageCacheCost(image))
+            },
+            diskRead: { [unowned self] key in getDiskCachedArtwork(for: key) },
+            diskWrite: { [unowned self] image, key in storeDiskCachedArtwork(image, for: key) },
+            fetch: { [weak self] title, artist, album in
+                guard let self,
+                      let result = await self.fetchArtworkResult(title: title, artist: artist, album: album) else {
+                    return nil
+                }
+                return (result.image, result.source.isAppleAuthoritative)
+            }
+        )
     }
 
     private struct ArtworkFetchResult {

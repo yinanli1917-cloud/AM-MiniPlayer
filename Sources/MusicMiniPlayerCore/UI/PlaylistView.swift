@@ -709,6 +709,22 @@ struct PlaylistItemRowCompact: View {
         await MainActor.run {
             if currentArtworkID == pid { artwork = img }
         }
+        guard img == nil else { return }
+
+        // One bounded retry: a terminal miss is usually the iTunes rate-limit
+        // window from a fetch burst, which clears within seconds. Without this
+        // the row stayed blank until recreated (.task never re-fires for the
+        // same persistentID). Sleep throws on row disappear (.task cancels).
+        try? await Task.sleep(nanoseconds: 8_000_000_000)
+        guard !Task.isCancelled, currentArtworkID == pid else { return }
+        let retried = await musicController.fetchMusicKitArtwork(
+            title: track.title,
+            artist: track.artist,
+            album: track.album
+        )
+        await MainActor.run {
+            if currentArtworkID == pid, let retried { artwork = retried }
+        }
     }
 }
 
