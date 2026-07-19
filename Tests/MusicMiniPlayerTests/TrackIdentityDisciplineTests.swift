@@ -100,6 +100,21 @@ final class TrackIdentityDisciplineTests: XCTestCase {
         XCTAssertTrue(snapshotChange(curPID: nil, curTitle: kNotPlayingSentinel, curArtist: ""))
     }
 
+    func test_snapshot_poisonedSentinelTitle_healsEvenWithMatchingPID() {
+        // Regression (2026-07-18 live): applyNoTrack left title = sentinel with
+        // the PID still set; PID-equality then suppressed every heal — panel
+        // stuck with no song info and no artwork while music played on.
+        XCTAssertTrue(snapshotChange(curPID: "AAAA", curTitle: kNotPlayingSentinel, curArtist: ""))
+        XCTAssertTrue(snapshotChange(curPID: "AAAA", curTitle: ""))
+    }
+
+    func test_notification_invalidName_neverAdoptedAsIdentity() {
+        XCTAssertFalse(MusicController.isValidTrackDisplayName(kNotPlayingSentinel))
+        XCTAssertFalse(MusicController.isValidTrackDisplayName(""))
+        XCTAssertFalse(MusicController.isValidTrackDisplayName("NOT_PLAYING"))
+        XCTAssertTrue(MusicController.isValidTrackDisplayName("Vivre Pour Vivre"))
+    }
+
     func test_snapshot_urlTrack_comparesTitleArtistAlbum() {
         XCTAssertTrue(snapshotChange(pid: "", url: true, album: "Other Album"))
         XCTAssertFalse(snapshotChange(pid: "", url: true))

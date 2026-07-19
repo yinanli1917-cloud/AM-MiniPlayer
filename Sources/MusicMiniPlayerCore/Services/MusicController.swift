@@ -1051,6 +1051,13 @@ public class MusicController: ObservableObject {
     /// queue; a heartbeat landing inside that window used to claim "first
     /// track" and re-run the whole artwork+lyrics pipeline for the same song.
     /// An unknown PID never asserts a change by itself — title+artist decide.
+    /// A displayable track name: not empty and not a not-playing sentinel.
+    /// Invalid names must never become identity (notification path) and an
+    /// invalid DISPLAYED name must always be healable (snapshot path).
+    static func isValidTrackDisplayName(_ name: String) -> Bool {
+        !name.isEmpty && name != kNotPlayingSentinel && name != "NOT_PLAYING"
+    }
+
     static func snapshotIndicatesTrackChange(
         snapshotPID: String,
         snapshotIsURLTrack: Bool,
@@ -1062,6 +1069,13 @@ public class MusicController: ObservableObject {
         currentArtist: String,
         currentAlbum: String
     ) -> Bool {
+        // Poisoned-display heal: if the DISPLAYED identity is invalid (a
+        // no-track transient landed), any valid snapshot is a change — PID
+        // equality must not suppress the repair (2026-07-18 live regression:
+        // panel stuck on sentinel title with no artwork while music played).
+        if !isValidTrackDisplayName(currentTitle) {
+            return true
+        }
         if snapshotIsURLTrack || snapshotPID.isEmpty {
             return snapshotTitle != currentTitle
                 || snapshotArtist != currentArtist
@@ -1075,12 +1089,13 @@ public class MusicController: ObservableObject {
 
     /// Applies track metadata from playerInfo userInfo and returns track-change state plus new metadata.
     private func applyTrackMetadata(from userInfo: [String: Any]) -> (Bool, String?, String?, String?) {
-        let newName = userInfo["Name"] as? String
+        // Invalid names (no-track transients) must never become identity.
+        let newName = (userInfo["Name"] as? String).flatMap { Self.isValidTrackDisplayName($0) ? $0 : nil }
         let newArtist = userInfo["Artist"] as? String
         let newAlbum = userInfo["Album"] as? String
 
         let metadataDiffers = (newName != nil && newName != currentTrackTitle) ||
-                              (newArtist != nil && newArtist != currentArtist)
+                              (newName != nil && newArtist != nil && newArtist != currentArtist)
         let trackChanged = Self.notificationIndicatesTrackChange(
             notificationPID: Self.notificationPersistentIDString(userInfo["PersistentID"]),
             currentPID: currentPersistentID,
@@ -1424,8 +1439,7 @@ public class MusicController: ObservableObject {
                         self.radioTrackCheckInFlight = false
                         self.lastRadioTrackCheckTime = Date()
                         guard let snapshot else { return }
-                        let trackChanged = !snapshot.trackName.isEmpty
-                            && snapshot.trackName != "NOT_PLAYING"
+                        let trackChanged = Self.isValidTrackDisplayName(snapshot.trackName)
                             && (snapshot.trackName != self.currentTrackTitle
                                 || snapshot.trackArtist != self.currentArtist)
                         if trackChanged {
@@ -1930,8 +1944,17 @@ public class MusicController: ObservableObject {
             if repeatMode != s.repeatMode { repeatMode = s.repeatMode }
         }
 
-        guard !s.trackName.isEmpty && s.trackName != "NOT_PLAYING" else {
-            applyNoTrack()
+        guard Self.isValidTrackDisplayName(s.trackName) else {
+            if s.persistentID.isEmpty {
+                applyNoTrack()
+            } else {
+                // Incoherent snapshot (sentinel name + a valid PID): an
+                // unreliable mid-transition read — skip the cycle entirely.
+                // Routing it to applyNoTrack used to blank the panel; the old
+                // guard compared "NOT_PLAYING" but the real sentinel is
+                // "Not Playing", so these leaked through as valid tracks.
+                DebugLogger.log("PlayerState", "⏭️ Incoherent snapshot (name='\(s.trackName)' pid='\(s.persistentID)') — skipping cycle")
+            }
             updateTimerState()
             return
         }
@@ -2005,6 +2028,9 @@ public class MusicController: ObservableObject {
             logger.info("⏹️ No track playing")
         }
         currentTrackTitle = kNotPlayingSentinel
+        // No track = no PID. Keeping the old PID here let PID-equality
+        // suppress every later heal (panel stuck on sentinel + no artwork).
+        currentPersistentID = nil
         currentArtist = ""
         currentAlbum = ""
         duration = 0
