@@ -96,6 +96,8 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     ├── NativeLyricsLoopIdleTests.swift - 呈现 loop 空闲裁决：暂停+间奏必须放行停摆（缺陷5根因）+ 播放中间奏保活 + 未settled运动不分播放态 + appear 窗不分播放态
     └── NativeLyricsImplicitAnimationTests.swift - 隐式动画卫生（窗口托管 + 事务提交才能复现）
     └── PanelBackdropStyleTests.swift - 面板底材开关：未知/缺省值必须回落 fluid（实验不改默认外观）
+    └── PlaybackClockTrustTests.swift - 慢 SB 读时钟信任：漂移小于读延迟不确定度必须压制（钉死 2026-07-17 实测振荡值），大漂移（seek/晚发现换歌）仍落地
+    └── RowArtworkStoreTests.swift - 行封面分层存储：内存→磁盘(Apple 层→web 层)→single-flight 网络；按来源分层落盘；终败不缓存可重试
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 
