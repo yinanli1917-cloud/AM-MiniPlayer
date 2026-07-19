@@ -95,6 +95,25 @@ struct PlaybackPositionCorrectionPolicy {
               secondsSinceTrackChange <= postTrackChangeSuspectWindow else { return false }
         return polledPosition - interpolatedPosition > minimumSuspiciousForwardJump
     }
+
+    // A polled position is stale by an unknown amount within [0, readLatency]:
+    // the ScriptingBridge IPC evaluates somewhere inside the read window, but
+    // the measurement is stamped at its start. Under system load (reads of
+    // 200-750ms) snapping the clock from such a read produced alternating
+    // ±0.6s corrections whose magnitude equalled the latency — the word sweep
+    // visibly rewound every minute. Trust a poll for clock sync only when the
+    // read was fast, or when the drift exceeds the read's own uncertainty
+    // (a real seek or late track discovery must land even through a slow read).
+    static let trustedReadLatency: TimeInterval = 0.15
+    static let slowReadDriftMargin: TimeInterval = 0.25
+
+    static func shouldTrustPolledPositionForClockSync(
+        drift: TimeInterval,
+        readLatency: TimeInterval
+    ) -> Bool {
+        guard readLatency > trustedReadLatency else { return true }
+        return abs(drift) > readLatency + slowReadDriftMargin
+    }
 }
 
 // MARK: - MusicController
@@ -1437,6 +1456,21 @@ public class MusicController: ObservableObject {
                 self.postTrackChangePollDeferrals = 0
 
                 self.lastPolledPosition = position
+
+                // Slow-read gate: a correction smaller than the read's own
+                // staleness uncertainty is noise — keep interpolating and let
+                // the next fast poll (the common case) correct for real.
+                let trustPolledClock = PlaybackPositionCorrectionPolicy.shouldTrustPolledPositionForClockSync(
+                    drift: drift,
+                    readLatency: sbReadTime
+                )
+                guard trustPolledClock else {
+                    DebugLogger.log("Timing", "🛡 SLOW-READ POLL: correction suppressed drift=\(String(format: "%+.2f", drift))s sbRead=\(String(format: "%.1f", sbReadTime * 1000))ms")
+                    self.lastPollTime = measurementTime
+                    self.updateTimerState()
+                    return
+                }
+
                 if abs(drift) > 0.3 {
                     DebugLogger.log("Timing", "📐 DRIFT CORRECTION: drift=\(String(format: "%+.2f", drift))s polled=\(String(format: "%.2f", position)) interpolated=\(String(format: "%.2f", self.internalCurrentTime))")
                 }
