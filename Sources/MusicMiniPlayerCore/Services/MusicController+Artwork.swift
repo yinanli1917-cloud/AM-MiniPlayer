@@ -927,6 +927,21 @@ extension MusicController {
         }
     }
 
+    /// A late artwork result must not replace an already-applied
+    /// Apple-authoritative image for the same generation: the replacement is
+    /// visually identical catalog art, but the new NSImage instance replays
+    /// the pointer-keyed background crossfade (mid-song "whole page refresh").
+    static func shouldDropLateArtworkResult(
+        source: ArtworkSource,
+        appleAppliedForGeneration: Bool
+    ) -> Bool {
+        guard appleAppliedForGeneration else { return false }
+        switch source {
+        case .sb, .playbackSession, .musicKit, .iTunes, .web:
+            return true
+        }
+    }
+
     enum ArtworkSource {
         case sb, playbackSession, musicKit, iTunes, web
 
@@ -1092,9 +1107,16 @@ extension MusicController {
             return
         }
 
-        // ScriptingBridge is the exact Music.app current-track image when it is available.
-        if source != .sb && sbAppliedForGeneration == generation {
-            logToFile("🎨 [\(source)] SB already applied for gen \(generation), discarding later result")
+        // Once an Apple-authoritative image is applied for this generation,
+        // EVERY later result is dropped — including the SB straggler, which
+        // used to land 1-2s after the iTunes race winner and replay the full
+        // background crossfade with a visually identical image. Web results
+        // never set the flag, so Apple sources still upgrade over web art.
+        if Self.shouldDropLateArtworkResult(
+            source: source,
+            appleAppliedForGeneration: sbAppliedForGeneration == generation
+        ) {
+            logToFile("🎨 [\(source)] Apple artwork already applied for gen \(generation), discarding later result")
             recordDiagnosticsArtworkDropped(
                 track: track,
                 generation: generation,

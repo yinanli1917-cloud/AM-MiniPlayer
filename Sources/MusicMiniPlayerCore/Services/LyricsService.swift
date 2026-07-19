@@ -213,6 +213,9 @@ public class LyricsService: ObservableObject {
     private var currentSongArtist: String = ""
     private var currentSongDuration: TimeInterval = 0
     private var currentSongAlbum: String = ""
+    /// Music.app persistentID anchoring the current song. The strongest
+    /// same-song signal: it survives title/artist/duration tuple drift.
+    private var currentSongPersistentID: String?
     private var currentSongTranslationID: String?
     private var translationsAreFromLyricsSource: Bool = false
     private var lastSystemTranslationLanguage: String?
@@ -459,7 +462,7 @@ public class LyricsService: ObservableObject {
     // ========================================================================
 
     @MainActor
-    func fetchLyrics(for title: String, artist: String, duration: TimeInterval, album: String = "", forceRefresh: Bool = false) {
+    func fetchLyrics(for title: String, artist: String, duration: TimeInterval, album: String = "", persistentID: String? = nil, forceRefresh: Bool = false) {
         // Ignore invalid placeholder tracks used when playback is disconnected or stopped.
         guard !title.isEmpty, title != kNotPlayingSentinel else {
             DebugLogger.log("LyricsService", "⏭️ Ignoring invalid track: '\(title)'")
@@ -493,7 +496,9 @@ public class LyricsService: ObservableObject {
                 currentDuration: currentSongDuration,
                 requestDuration: duration,
                 currentAlbum: currentSongAlbum,
-                requestAlbum: album
+                requestAlbum: album,
+                requestPersistentID: persistentID,
+                currentPersistentID: currentSongPersistentID
             )
             if isSameSong {
                 DebugLogger.log("LyricsService", "⏭️ Stability guard: '\(songID)' blocked (\(String(format: "%.1f", Date().timeIntervalSince(lastGoodTime)))s since good lyrics)")
@@ -501,6 +506,9 @@ public class LyricsService: ObservableObject {
                 currentSongDuration = duration
                 if !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     currentSongAlbum = album
+                }
+                if let persistentID, !persistentID.isEmpty {
+                    currentSongPersistentID = persistentID
                 }
                 return
             }
@@ -560,7 +568,9 @@ public class LyricsService: ObservableObject {
                     currentDuration: currentSongDuration,
                     requestDuration: duration,
                     currentAlbum: currentSongAlbum,
-                    requestAlbum: album
+                    requestAlbum: album,
+                    requestPersistentID: persistentID,
+                    currentPersistentID: currentSongPersistentID
                 )
             )
 
@@ -733,6 +743,13 @@ public class LyricsService: ObservableObject {
         currentStableSongID = stableSongID
         currentSongDuration = duration
         currentSongAlbum = album
+        // New song adopts the caller's PID (possibly nil while SB refills);
+        // a same-song refresh only upgrades the anchor, never erases it.
+        if !shouldPreserveDisplayedLyricsDuringFetch {
+            currentSongPersistentID = persistentID
+        } else if let persistentID, !persistentID.isEmpty {
+            currentSongPersistentID = persistentID
+        }
 
         // Set the display state synchronously to avoid races. `.searching`
         // already makes the view draw loadingView instead of
@@ -897,8 +914,19 @@ public class LyricsService: ObservableObject {
         currentDuration: TimeInterval,
         requestDuration: TimeInterval,
         currentAlbum: String,
-        requestAlbum: String
+        requestAlbum: String,
+        requestPersistentID: String? = nil,
+        currentPersistentID: String? = nil
     ) -> Bool {
+        // PID authority: a matching persistentID proves the same physical song
+        // regardless of tuple drift (romanized ↔ CJK title variants, stale
+        // durations) — the class that used to blank correct lyrics. A
+        // mismatch is equally decisive in the other direction.
+        if let requestPersistentID, !requestPersistentID.isEmpty,
+           let currentPersistentID, !currentPersistentID.isEmpty {
+            return requestPersistentID == currentPersistentID
+        }
+
         guard currentStableSongID == requestStableSongID else { return false }
 
         let currentAlbumID = MetadataDiskCache.normalize(currentAlbum)

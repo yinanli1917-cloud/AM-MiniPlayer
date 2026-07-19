@@ -550,7 +550,8 @@ public struct LyricsView: View {
             lyricsService.fetchLyrics(for: musicController.currentTrackTitle,
                                       artist: musicController.currentArtist,
                                       duration: musicController.duration,
-                                      album: musicController.currentAlbum)
+                                      album: musicController.currentAlbum,
+                                      persistentID: musicController.currentPersistentID)
             if #available(macOS 15.0, *) {
                 scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
             }
@@ -790,6 +791,7 @@ public struct LyricsView: View {
                     artist: musicController.currentArtist,
                     duration: musicController.duration,
                     album: musicController.currentAlbum,
+                    persistentID: musicController.currentPersistentID,
                     forceRefresh: true
                 )
             }) {
@@ -1689,7 +1691,8 @@ public struct LyricsView: View {
             lyricsService.fetchLyrics(for: title,
                                       artist: artist,
                                       duration: duration,
-                                      album: album)
+                                      album: album,
+                                      persistentID: musicController.currentPersistentID)
         }
     }
 

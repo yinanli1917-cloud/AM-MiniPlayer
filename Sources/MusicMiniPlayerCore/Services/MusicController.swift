@@ -1014,20 +1014,90 @@ public class MusicController: ObservableObject {
         syncPlaybackClock(to: renderTime, playing: newIsPlaying, at: now)
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - Track-identity discipline (pure policies)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// Music.app playerInfo carries "PersistentID" as a signed integer whose
+    /// bit pattern equals ScriptingBridge's 16-digit uppercase hex string.
+    static func notificationPersistentIDString(_ raw: Any?) -> String? {
+        if let text = raw as? String {
+            return text.isEmpty ? nil : text
+        }
+        if let number = raw as? NSNumber {
+            return String(format: "%016llX", number.uint64Value)
+        }
+        return nil
+    }
+
+    /// Same-song notifications (love, rating, AirPlay) may carry title/artist
+    /// variants; with a matching persistentID they must not register as track
+    /// changes — a spurious change replays the background crossfade, refetches
+    /// artwork, and blanks the lyrics view. PID authority applies only when
+    /// both sides are known; otherwise metadata comparison decides.
+    static func notificationIndicatesTrackChange(
+        notificationPID: String?,
+        currentPID: String?,
+        metadataDiffers: Bool
+    ) -> Bool {
+        if let notificationPID, let currentPID, !currentPID.isEmpty {
+            return notificationPID != currentPID
+        }
+        return metadataDiffers
+    }
+
+    /// Snapshot-side track-change decision. The refilling window is the trap:
+    /// a track change sets currentPersistentID = nil and refills it on the SB
+    /// queue; a heartbeat landing inside that window used to claim "first
+    /// track" and re-run the whole artwork+lyrics pipeline for the same song.
+    /// An unknown PID never asserts a change by itself — title+artist decide.
+    static func snapshotIndicatesTrackChange(
+        snapshotPID: String,
+        snapshotIsURLTrack: Bool,
+        snapshotTitle: String,
+        snapshotArtist: String,
+        snapshotAlbum: String,
+        currentPID: String?,
+        currentTitle: String,
+        currentArtist: String,
+        currentAlbum: String
+    ) -> Bool {
+        if snapshotIsURLTrack || snapshotPID.isEmpty {
+            return snapshotTitle != currentTitle
+                || snapshotArtist != currentArtist
+                || snapshotAlbum != currentAlbum
+        }
+        if let currentPID, !currentPID.isEmpty {
+            return snapshotPID != currentPID
+        }
+        return snapshotTitle != currentTitle || snapshotArtist != currentArtist
+    }
+
     /// Applies track metadata from playerInfo userInfo and returns track-change state plus new metadata.
     private func applyTrackMetadata(from userInfo: [String: Any]) -> (Bool, String?, String?, String?) {
         let newName = userInfo["Name"] as? String
         let newArtist = userInfo["Artist"] as? String
         let newAlbum = userInfo["Album"] as? String
 
-        let trackChanged = (newName != nil && newName != currentTrackTitle) ||
-                          (newArtist != nil && newArtist != currentArtist)
+        let metadataDiffers = (newName != nil && newName != currentTrackTitle) ||
+                              (newArtist != nil && newArtist != currentArtist)
+        let trackChanged = Self.notificationIndicatesTrackChange(
+            notificationPID: Self.notificationPersistentIDString(userInfo["PersistentID"]),
+            currentPID: currentPersistentID,
+            metadataDiffers: metadataDiffers
+        )
 
-        if let name = newName { currentTrackTitle = name }
-        if let artist = newArtist { currentArtist = artist }
-        if let album = newAlbum { currentAlbum = album }
+        // Identity discipline: only a real track change may rewrite the
+        // established title/artist — same-song variants would regenerate the
+        // background (pointer-keyed effect image) and blank the lyrics rows.
+        if trackChanged {
+            if let name = newName { currentTrackTitle = name }
+            if let artist = newArtist { currentArtist = artist }
+        }
+        if let album = newAlbum, currentAlbum != album { currentAlbum = album }
         if let totalTime = userInfo["Total Time"] as? Int {
-            duration = Double(totalTime) / 1000.0
+            let newDuration = Double(totalTime) / 1000.0
+            if duration != newDuration { duration = newDuration }
         }
 
         return (trackChanged, newName, newArtist, newAlbum)
@@ -1135,7 +1205,7 @@ public class MusicController: ObservableObject {
                     // Re-fetch lyrics if SB duration differs significantly from notification
                     if abs(sbDuration - oldDuration) > 1.0 {
                         Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: self.currentAlbum)
+                            self.lyricsService.fetchLyrics(for: name, artist: artist, duration: sbDuration, album: self.currentAlbum, persistentID: self.currentPersistentID)
                         }
                     }
                 }
@@ -1182,7 +1252,7 @@ public class MusicController: ObservableObject {
                     // Without this, lyrics stay at "No Lyrics" even though duration is now valid.
                     if abs(dur - oldDuration) > 1.0 {
                         Task { @MainActor in
-                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum)
+                            self.lyricsService.fetchLyrics(for: name, artist: self.currentArtist, duration: dur, album: self.currentAlbum, persistentID: self.currentPersistentID)
                         }
                     }
                 }
@@ -1828,14 +1898,22 @@ public class MusicController: ObservableObject {
             return nil
         }()
 
-        // Track-change detection.
-        let isFirstTrack = self.currentPersistentID == nil && !s.persistentID.isEmpty
+        // Track-change detection: PID authority when both sides known; an
+        // unknown (refilling) PID falls back to title+artist and never asserts
+        // a change by itself (the old "first track" claim re-ran the pipeline).
         let isURLTrack = s.trackClass == "URL track" || (s.trackClass.isEmpty && s.persistentID.isEmpty)
-        let trackChangedByID = !isURLTrack && !s.persistentID.isEmpty && s.persistentID != self.currentPersistentID
-        let trackChangedByTitle = (isURLTrack || s.persistentID.isEmpty)
-            && (s.trackName != self.currentTrackTitle || s.trackArtist != self.currentArtist || s.trackAlbum != self.currentAlbum)
-        let trackChanged = trackChangedByID || trackChangedByTitle || isFirstTrack
-        DebugLogger.log("PlayerState", "📊 track='\(s.trackName)' pid='\(s.persistentID)' dur=\(s.trackDuration) changed=\(trackChanged) (byID=\(trackChangedByID) byTitle=\(trackChangedByTitle) first=\(isFirstTrack)) curPID='\(self.currentPersistentID ?? "nil")'")
+        let trackChanged = Self.snapshotIndicatesTrackChange(
+            snapshotPID: s.persistentID,
+            snapshotIsURLTrack: isURLTrack,
+            snapshotTitle: s.trackName,
+            snapshotArtist: s.trackArtist,
+            snapshotAlbum: s.trackAlbum,
+            currentPID: self.currentPersistentID,
+            currentTitle: self.currentTrackTitle,
+            currentArtist: self.currentArtist,
+            currentAlbum: self.currentAlbum
+        )
+        DebugLogger.log("PlayerState", "📊 track='\(s.trackName)' pid='\(s.persistentID)' dur=\(s.trackDuration) changed=\(trackChanged) curPID='\(self.currentPersistentID ?? "nil")'")
 
         DispatchQueue.main.async {
             self.applySnapshot(s, quality: quality, trackChanged: trackChanged)
@@ -1858,8 +1936,14 @@ public class MusicController: ObservableObject {
             return
         }
 
-        if currentTrackTitle != s.trackName { currentTrackTitle = s.trackName }
-        if currentArtist != s.trackArtist { currentArtist = s.trackArtist }
+        // Identity discipline: title/artist rewrites are reserved for real
+        // track changes — same-song snapshot variants (AppleScript vs
+        // notification string normalization) must not regenerate the
+        // pointer-keyed background or blank the lyrics rows.
+        if trackChanged {
+            if currentTrackTitle != s.trackName { currentTrackTitle = s.trackName }
+            if currentArtist != s.trackArtist { currentArtist = s.trackArtist }
+        }
         if currentAlbum != s.trackAlbum { currentAlbum = s.trackAlbum }
         let snapshotIsURLTrack = s.trackClass == "URL track" || (s.trackClass.isEmpty && s.persistentID.isEmpty)
         if currentTrackIsURLTrack != snapshotIsURLTrack { currentTrackIsURLTrack = snapshotIsURLTrack }
@@ -1901,10 +1985,15 @@ public class MusicController: ObservableObject {
             fetchArtwork(for: s.trackName, artist: s.trackArtist, album: s.trackAlbum, persistentID: artworkPersistentID, generation: generation)
             // 🔑 Actively fetch lyrics on track changes; do not depend on SwiftUI onChange timing.
             Task { @MainActor in
-                self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum)
+                self.lyricsService.fetchLyrics(for: s.trackName, artist: s.trackArtist, duration: s.trackDuration, album: s.trackAlbum, persistentID: s.persistentID.isEmpty ? nil : s.persistentID)
             }
             debugPrint("🔄 [MusicController] Reset userManuallyOpenedLyrics = false (was \(userManuallyOpenedLyrics))\n")
             userManuallyOpenedLyrics = false
+        } else if (currentPersistentID ?? "").isEmpty, !s.persistentID.isEmpty {
+            // PID refill recovery: the SB-queue refill timed out and the
+            // snapshot carries the real ID — adopt it so PID authority resumes
+            // without re-running the artwork/lyrics pipeline.
+            currentPersistentID = s.persistentID
         }
 
         updateTimerState()
