@@ -12,10 +12,20 @@ struct NativeLyricsStaticTextRenderPlan: Equatable {
         constants: NativeLyricsTextConstants = NativeLyricsTextConstants()
     ) -> NativeLyricsStaticTextRenderPlan {
         let tokens = LyricDisplaySegmenter.displayTokens(forWords: line.words)
+        var runs = tokens.map(NativeLyricsStaticWordRunPlan.make(token:))
+        // Emphasis is contrast: a line where EVERY word qualifies (held short
+        // Latin ad-libs, backing-vocal parentheticals) must be emphasized
+        // nowhere — the active word-cascade renders base+sweep only from
+        // non-emphasis runs, so an all-emphasis line had an empty partition:
+        // nothing on screen but floating glow glyphs, and a fully blank row
+        // once those hid on manual scroll.
+        if !runs.isEmpty, runs.allSatisfy(\.isEmphasis) {
+            runs = runs.map { $0.strippingEmphasis() }
+        }
         return NativeLyricsStaticTextRenderPlan(
             displayText: NativeLyricsTextRenderPlan.cleanedDisplayText(for: line),
             tokens: tokens,
-            wordRuns: tokens.map(NativeLyricsStaticWordRunPlan.make(token:)),
+            wordRuns: runs,
             constants: constants
         )
     }
@@ -39,6 +49,17 @@ struct NativeLyricsStaticWordRunPlan: Equatable {
             duration: duration,
             isCJK: isCJK,
             isEmphasis: NativeLyricsEmphasisEligibility.shouldEmphasize(token.word.word, duration: duration)
+        )
+    }
+
+    func strippingEmphasis() -> NativeLyricsStaticWordRunPlan {
+        NativeLyricsStaticWordRunPlan(
+            text: text,
+            startTime: startTime,
+            endTime: endTime,
+            duration: duration,
+            isCJK: isCJK,
+            isEmphasis: false
         )
     }
 }
