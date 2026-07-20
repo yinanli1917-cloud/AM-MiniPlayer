@@ -102,6 +102,7 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     └── NativeLyricsEmphasisPartitionTests.swift - 全强调行退化：整行皆强调则全不强调（空 base+sweep 分区缺陷，Billie Jean 副歌类 0.8% 行）
     └── NativeLyricsInactiveBaseRestoreTests.swift - 去活路径必须还原整行基底文本（活跃级联置 nil 后隐藏字形层导致整行消失）
     └── RadioDurationlessMatchingTests.swift - 电台时长未知匹配：duration=0 是缺失信号非完美信号，标题+艺人双强制；已知时长门槛不变
+    └── TranslationWritebackTests.swift - 翻译单发布回写：纯合并函数一次赋值（曾逐行改 @Published 数组多次重渲）
     └── RadioTrackChangeDebounceTests.swift - 电台换歌确认：无 PID 身份需连续两次一致读数才触发管线（缓冲期标题瞬态不再刷新页面）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
