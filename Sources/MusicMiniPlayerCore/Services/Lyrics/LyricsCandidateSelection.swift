@@ -1229,7 +1229,9 @@ extension LyricsFetcher {
     ) -> [SearchCandidate<ID>] {
         songs.enumerated().compactMap { index, song in
             guard let s = extractSong(song) else { return nil }
-            let durationDiff = abs(s.duration - params.duration)
+            // Unknown request duration → neutral diff: the priority arms and
+            // tiebreaks must not read |candidate - 0| as a ~200s mismatch.
+            let durationDiff = params.duration > 0 ? abs(s.duration - params.duration) : 0
 
             // 🔑 Cover/Live rejection
             let coverMarkers = ["cover", "翻唱", "翻奏", "翻自", "demo", "demo版", "试唱"]
@@ -1326,8 +1328,16 @@ extension LyricsFetcher {
                 if hasCJKIdentity { return 35 }
                 return 20
             }()
-            let durationLimit = titleMatch && artistMatch ? exactIdentityDurationLimit : 20
-            guard durationDiff < durationLimit else { return nil }
+            // Duration-unknown mode (radio/URL streams report 0): the duration
+            // signal is ABSENT, not perfect. Admission then requires BOTH text
+            // signals — with one of the three rules missing, the remaining two
+            // are mandatory. A known duration keeps the hard limit unchanged.
+            if params.duration <= 0 {
+                guard titleMatch && artistMatch else { return nil }
+            } else {
+                let durationLimit = titleMatch && artistMatch ? exactIdentityDurationLimit : 20
+                guard durationDiff < durationLimit else { return nil }
+            }
 
             let normalizedNameLength = LanguageUtils.normalizeTrackName(s.name).count
 
