@@ -331,6 +331,9 @@ public class MusicController: ObservableObject {
     // metadata via AppleScriptRunner (subprocess, 0.5s kill) — cheap and reliable.
     private var lastRadioTrackCheckTime: Date = .distantPast
     private var radioTrackCheckInFlight: Bool = false
+    // Radio change-confirmation candidate (title, artist) awaiting a second sighting.
+    private var pendingSnapshotTrackTitle: String?
+    private var pendingSnapshotTrackArtist: String?
     private var fullStateSBCooldownUntil: Date = .distantPast
     private var appleScriptStateFallbackInFlight = false
     private static let fullStateSBTimeoutCooldown: TimeInterval = 90.0
@@ -1051,6 +1054,20 @@ public class MusicController: ObservableObject {
     /// queue; a heartbeat landing inside that window used to claim "first
     /// track" and re-run the whole artwork+lyrics pipeline for the same song.
     /// An unknown PID never asserts a change by itself — title+artist decide.
+    /// Radio debounce: an identity WITHOUT a PID must survive two consecutive
+    /// snapshot reads before it counts as a track change — stream-buffering
+    /// title transitions each used to re-run the full pipeline on one read.
+    static func shouldConfirmSnapshotTrackChange(
+        requiresConfirmation: Bool,
+        candidateTitle: String,
+        candidateArtist: String,
+        pendingTitle: String?,
+        pendingArtist: String?
+    ) -> Bool {
+        guard requiresConfirmation else { return true }
+        return pendingTitle == candidateTitle && pendingArtist == candidateArtist
+    }
+
     /// A displayable track name: not empty and not a not-playing sentinel.
     /// Invalid names must never become identity (notification path) and an
     /// invalid DISPLAYED name must always be healable (snapshot path).
@@ -1443,8 +1460,27 @@ public class MusicController: ObservableObject {
                             && (snapshot.trackName != self.currentTrackTitle
                                 || snapshot.trackArtist != self.currentArtist)
                         if trackChanged {
-                            DebugLogger.log("Poll", "🎵 Track change confirmed: '\(self.currentTrackTitle)' → '\(snapshot.trackName)' (reason: \(reason))")
-                            self.processPlayerState(snapshot)
+                            // Radio (no PID to arbitrate): a single differing read
+                            // can be a stream-buffering transition string — require
+                            // the same candidate on two consecutive reads before
+                            // firing the full artwork+lyrics pipeline.
+                            let confirmed = Self.shouldConfirmSnapshotTrackChange(
+                                requiresConfirmation: self.currentTrackIsURLTrack,
+                                candidateTitle: snapshot.trackName,
+                                candidateArtist: snapshot.trackArtist,
+                                pendingTitle: self.pendingSnapshotTrackTitle,
+                                pendingArtist: self.pendingSnapshotTrackArtist
+                            )
+                            if confirmed {
+                                self.pendingSnapshotTrackTitle = nil
+                                self.pendingSnapshotTrackArtist = nil
+                                DebugLogger.log("Poll", "🎵 Track change confirmed: '\(self.currentTrackTitle)' → '\(snapshot.trackName)' (reason: \(reason))")
+                                self.processPlayerState(snapshot)
+                            } else {
+                                self.pendingSnapshotTrackTitle = snapshot.trackName
+                                self.pendingSnapshotTrackArtist = snapshot.trackArtist
+                                DebugLogger.log("Poll", "🧯 RADIO CANDIDATE: '\(snapshot.trackName)' awaiting second sighting (reason: \(reason))")
+                            }
                         } else if snapshot.trackDuration > 0,
                                   abs(snapshot.trackDuration - self.duration) > 1.0 {
                             // Same track, wrong total: a stale "Total Time" survived a race
