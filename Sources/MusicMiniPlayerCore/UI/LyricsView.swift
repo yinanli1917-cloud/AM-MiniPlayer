@@ -624,9 +624,6 @@ public struct LyricsView: View {
             let newCount = newLyrics.count
             refreshDisplayLineCache()
             refreshPendingTranslationLineIndices()
-            if #available(macOS 15.0, *), newCount > 0 {
-                scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
-            }
             if newCount > 0, pendingLineHeightResetForNextPayload {
                 cache.lineHeights.removeAll()
                 pendingLineHeightResetForNextPayload = false
@@ -648,15 +645,7 @@ public struct LyricsView: View {
                 lineAdvanceTimerTargetPlaybackTime = nil
             }
         }
-        .onChange(of: lyricsService.displayState) { oldValue, newValue in
-            if #available(macOS 15.0, *) {
-                // Same edge as the old isLoading true→false: a search phase
-                // just ended with lyrics on hand.
-                if oldValue.isSearchPhase && !newValue.isSearchPhase && !lyricsService.lyrics.isEmpty {
-                    scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
-                }
-            }
-        }
+
         .onChange(of: lyricsService.translationLanguage) { _, _ in
             if #available(macOS 15.0, *) {
                 scheduleTranslationSessionConfigUpdate(after: lyricPageSwitchTranslationDeferDuration)
@@ -724,7 +713,7 @@ public struct LyricsView: View {
             updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
             scheduleNextLineAdvanceTimer()
         }
-        .modifier(SystemTranslationModifier(
+        .background(TranslationTaskHostView(
             translationSessionConfigAny: translationSessionConfigAny,
             lyricsService: lyricsService,
             translationTrigger: localTranslationTrigger
@@ -1874,7 +1863,9 @@ public struct LyricsView: View {
         if #available(macOS 15.0, *) {
             let generation = translationConfigGeneration
             translationPreflightTask?.cancel()
-            translationSessionConfigAny = nil
+            // No interim nil: tearing the config down before the preflight
+            // resolved restarted the translationTask twice per update.
+            DebugLogger.log("LyricsView", "🈺 translation config update gen=\(generation) trigger=\(trigger.map(String.init) ?? "-")")
             translationPreflightTask = Task { @MainActor in
                 guard currentPage == .lyrics, lyricsService.showTranslation else { return }
                 guard let config = await lyricsService.silentSystemTranslationConfiguration() else { return }
@@ -2590,35 +2581,40 @@ public struct LyricsView: View {
 
 // MARK: - Preview
 
-// MARK: - SystemTranslationModifier (macOS 15.0+)
+// MARK: - TranslationTaskHostView (macOS 15.0+)
+// Zero-size INVISIBLE host for the system translation session. It must never
+// wrap visible content: `.id(trigger)` recreates this host on every requested
+// translation pass, and when the old modifier wrapped the whole lyrics body,
+// each trigger/config bump tore down and rebuilt everything on screen — the
+// multi-flash during lyrics + translation load-in.
 
-struct SystemTranslationModifier: ViewModifier {
+struct TranslationTaskHostView: View {
     var translationSessionConfigAny: Any?
     let lyricsService: LyricsService
     let translationTrigger: Int
 
-    func body(content: Content) -> some View {
+    var body: some View {
         if #available(macOS 15.0, *) {
-            content
-                .modifier(TranslationTaskApplicator(
-                    configAny: translationSessionConfigAny,
-                    lyricsService: lyricsService,
-                    trigger: translationTrigger
-                ))
-        } else {
-            content
+            TranslationTaskHostCore(
+                configAny: translationSessionConfigAny,
+                lyricsService: lyricsService,
+                trigger: translationTrigger
+            )
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 }
 
 @available(macOS 15.0, *)
-private struct TranslationTaskApplicator: ViewModifier {
+private struct TranslationTaskHostCore: View {
     let configAny: Any?
     let lyricsService: LyricsService
     let trigger: Int
 
-    func body(content: Content) -> some View {
-        content
+    var body: some View {
+        Color.clear
             .translationTask(activeConfig, action: { session in
                 guard lyricsService.showTranslation,
                       !lyricsService.lyrics.isEmpty else { return }
