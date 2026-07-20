@@ -31,6 +31,12 @@ final class NativeLyricsRowView: NSView {
     private let dotLayers: [CALayer] = (0..<3).map { _ in CALayer().lyricsInert() }
     private var row: LayerBackedLyricRow?
     private var configuration: LyricsLayerRendererConfiguration?
+    // Restore source for the whole-line base+bright strings: the active
+    // word-cascade nils the layer strings (per-word glyphs carry the base),
+    // and every path that leaves the cascade must be able to put them back —
+    // a hide path without a restore rendered a fully blank row (2026-07-19).
+    private var wholeLineMainString: NSAttributedString?
+    private var wholeLineBrightString: NSAttributedString?
     private var isHovering = false
     private var mainPerRunSweepLineLayers: [NativeLyricsSweepMaskLineLayer] = []
     private var mainBaseRevealLineLayers: [NativeLyricsSweepMaskLineLayer] = []
@@ -320,6 +326,8 @@ final class NativeLyricsRowView: NSView {
         #endif
         row = nil
         configuration = nil
+        wholeLineMainString = nil
+        wholeLineBrightString = nil
         isHovering = false
         onHoverChanged = nil
         onHoverBackgroundVisible = nil
@@ -977,6 +985,8 @@ final class NativeLyricsRowView: NSView {
             applyDimBaseCompensation()
             mainTextLayer.string = nil
             mainBrightTextLayer.string = nil
+            wholeLineMainString = nil
+            wholeLineBrightString = nil
             mainTextLayer.mask = nil
             hideBaseRevealMaskLayers()
             hideEmphasisGlyphLayers()
@@ -1025,19 +1035,21 @@ final class NativeLyricsRowView: NSView {
             width: displayTextWidth,
             font: .systemFont(ofSize: plan.constants.mainFontSize, weight: .semibold)
         )
-        mainTextLayer.string = attributedText(
+        wholeLineMainString = attributedText(
             wrappedMainText,
             fontSize: plan.constants.mainFontSize,
             alpha: mainAlpha
         )
+        mainTextLayer.string = wholeLineMainString
         // The reuse pool hides every text layer in prepareForReuse() to kill stale content during
         // the transition. The dim BASE must be restored here for every non-prelude row, or a row that
         // ever passed through the pool stays invisible forever — the panel empties out as playback
         // recycles rows, and the active line shows only its sung (bright) portion. Restore it now.
         mainTextLayer.isHidden = false
-        mainBrightTextLayer.string = appliesMainSweep
+        wholeLineBrightString = appliesMainSweep
             ? attributedText(wrappedMainText, fontSize: plan.constants.mainFontSize, alpha: plan.constants.brightAlpha)
             : nil
+        mainBrightTextLayer.string = wholeLineBrightString
         activeHiddenEmphasisSignature = nil
         hideEmphasisGlyphLayers()
         if let translation = plan.translation {
@@ -1311,6 +1323,12 @@ final class NativeLyricsRowView: NSView {
     }
 
     private func applyInactivePlaybackLayerState() {
+        // Leaving the active word-cascade: the whole-line base must come back
+        // before the per-word/emphasis glyphs hide, or the row goes blank.
+        if mainTextLayer.string == nil, let wholeLineMainString {
+            mainTextLayer.string = wholeLineMainString
+            mainBrightTextLayer.string = wholeLineBrightString
+        }
         mainBrightTextLayer.isHidden = true
         mainBrightTextLayer.mask = mainSweepMaskLayer
         mainTextLayer.mask = nil
