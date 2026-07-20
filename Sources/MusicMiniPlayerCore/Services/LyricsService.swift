@@ -908,6 +908,21 @@ public class LyricsService: ObservableObject {
             && hasError
     }
 
+    /// Pure merge: translations land on eligible indices only (vocable lines
+    /// get none); the caller assigns the result to the published array ONCE.
+    static func mergingTranslations(
+        into lyrics: [LyricLine],
+        eligibleIndices: [Int],
+        translatedTexts: [String]
+    ) -> [LyricLine] {
+        var updated = lyrics
+        for (translationIdx, lyricsIdx) in eligibleIndices.enumerated()
+        where translationIdx < translatedTexts.count && lyricsIdx < updated.count {
+            updated[lyricsIdx].translation = translatedTexts[translationIdx]
+        }
+        return updated
+    }
+
     static func isLikelySameSongMetadataCorrection(
         currentStableSongID: String?,
         requestStableSongID: String,
@@ -1817,10 +1832,14 @@ public class LyricsService: ObservableObject {
             return
         }
 
-        // 🔑 Map translations back to eligible indices only — vocable lines get no translation
-        for (translationIdx, lyricsIdx) in eligibleIndices.enumerated() where translationIdx < translatedTexts.count {
-            lyrics[lyricsIdx].translation = translatedTexts[translationIdx]
-        }
+        // 🔑 Single publish: merge into a local copy and assign ONCE — the old
+        // element-by-element mutation of the @Published array multiplied the
+        // SwiftUI re-renders during the translation emergence.
+        lyrics = Self.mergingTranslations(
+            into: lyrics,
+            eligibleIndices: eligibleIndices,
+            translatedTexts: translatedTexts
+        )
         let filledLineCount = min(eligibleIndices.count, translatedTexts.count)
         let statsAfterTranslation = Self.translationCoverageStats(in: lyrics)
 
