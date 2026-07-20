@@ -98,7 +98,11 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     └── PanelBackdropStyleTests.swift - 面板底材开关：未知/缺省值必须回落 fluid（实验不改默认外观）
     └── PlaybackClockTrustTests.swift - 慢 SB 读时钟信任：漂移小于读延迟不确定度必须压制（钉死 2026-07-17 实测振荡值），大漂移（seek/晚发现换歌）仍落地
     └── RowArtworkStoreTests.swift - 行封面分层存储：内存→磁盘(Apple 层→web 层)→single-flight 网络；按来源分层落盘；终败不缓存可重试
-    └── TrackIdentityDisciplineTests.swift - 轨道身份纪律：PID 权威三门（同曲通知不换歌/未知 PID 不单独断言/Apple 图已应用丢迟到结果）+ 歌词同曲 PID 锚
+    └── TrackIdentityDisciplineTests.swift - 轨道身份纪律：PID 权威三门（同曲通知不换歌/未知 PID 不单独断言/Apple 图已应用丢迟到结果）+ 歌词同曲 PID 锚 + 中毒显示态必可自愈
+    └── NativeLyricsEmphasisPartitionTests.swift - 全强调行退化：整行皆强调则全不强调（空 base+sweep 分区缺陷，Billie Jean 副歌类 0.8% 行）
+    └── NativeLyricsInactiveBaseRestoreTests.swift - 去活路径必须还原整行基底文本（活跃级联置 nil 后隐藏字形层导致整行消失）
+    └── RadioDurationlessMatchingTests.swift - 电台时长未知匹配：duration=0 是缺失信号非完美信号，标题+艺人双强制；已知时长门槛不变
+    └── RadioTrackChangeDebounceTests.swift - 电台换歌确认：无 PID 身份需连续两次一致读数才触发管线（缓冲期标题瞬态不再刷新页面）
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 
