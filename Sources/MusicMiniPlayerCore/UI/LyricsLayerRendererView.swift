@@ -3773,17 +3773,11 @@ final class NativeLyricsSurfaceView: NSView {
             ?? configuration.rows.first(where: { $0.index == configuration.effectiveCurrentIndex }) else {
             return false
         }
-        if activeRow.displayLine.line.hasSyllableSync
-            || activeRow.interlude != nil
-            || activeRow.isPrelude {
-            return true
-        }
-        if configuration.showTranslation,
-           let translation = activeRow.displayLine.line.translation,
-           !translation.isEmpty {
-            return true
-        }
-        return false
+        return NativeLyricsLoopIdleDecision.needsTextAnimation(
+            hasSyllableSync: activeRow.displayLine.line.hasSyllableSync,
+            hasInterlude: activeRow.interlude != nil,
+            isPrelude: activeRow.isPrelude
+        )
     }
 
     private static func isSameTrackIdentity(

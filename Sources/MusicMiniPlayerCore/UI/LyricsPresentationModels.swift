@@ -198,6 +198,33 @@ enum NativeLyricsLoopIdleDecision {
     static func shouldCancelDeferredDeactivation(deferredIndex: Int?, currentIndex: Int) -> Bool {
         deferredIndex == currentIndex
     }
+
+    /// Whether the active row's TEXT still needs per-frame animation once painted.
+    ///
+    /// Word-timed rows sweep every frame (karaoke highlight) and need the loop. A
+    /// translation sweeps too, but ONLY when riding a word-timed main line —
+    /// `NativeLyricsRowView.appliesTranslationSweep` gates on the same
+    /// `hasSyllableSync` flag, rendering a line-level translation statically. So a
+    /// shown translation can never by itself justify holding the loop open: if
+    /// `hasSyllableSync` is true this already returned true above it, and if it is
+    /// false the translation isn't sweeping either.
+    ///
+    /// Regression history: cfb5308ae (2026-06-08) widened the sweep to every active
+    /// line and left this check ungated, pinning line-level+translation playback at
+    /// steady CPU (~10-20%, CVDisplayLink ticking every frame for a static overlay).
+    /// cfc152c fixed it; 7653221 reverted the whole commit; only the sibling
+    /// static-render gate was cherry-picked back (2026-07-10) — this half stayed
+    /// reverted. Restoring it here closes the loop: the translation itself was
+    /// already proven independent of this loop (its reveal is an explicit, named
+    /// CAAnimation — see `explicitAnimationKeys` — which runs on Core Animation's own
+    /// clock, not this manual per-frame tick).
+    static func needsTextAnimation(
+        hasSyllableSync: Bool,
+        hasInterlude: Bool,
+        isPrelude: Bool
+    ) -> Bool {
+        hasSyllableSync || hasInterlude || isPrelude
+    }
 }
 
 struct NativeLyricsDirectSnapRequest: Equatable {
