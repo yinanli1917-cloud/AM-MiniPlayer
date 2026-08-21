@@ -432,7 +432,19 @@ public class MusicController: ObservableObject {
         wordFillTime = clamped
     }
 
-    public func lyricRenderTime(at date: Date = Date()) -> TimeInterval {
+    #if DEBUG
+    /// Test seam: playback-clock reads that pass no explicit date use this instead of Date(),
+    /// so a harness can advance playback time deterministically, in lockstep with its own
+    /// wall clock, instead of riding the host's real run-loop pacing.
+    var debugPlaybackClockDateProvider: (() -> Date)?
+    #endif
+
+    public func lyricRenderTime(at explicitDate: Date? = nil) -> TimeInterval {
+        #if DEBUG
+        let date = explicitDate ?? debugPlaybackClockDateProvider?() ?? Date()
+        #else
+        let date = explicitDate ?? Date()
+        #endif
         let elapsed = playbackClockIsPlaying ? max(0, date.timeIntervalSince(playbackClockBaseDate)) : 0
         let time = playbackClockBaseTime + elapsed
         return duration > 0 ? min(max(0, time), duration) : max(0, time)

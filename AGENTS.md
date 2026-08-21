@@ -6,6 +6,9 @@ active task state under `.codex/tasks/`.
 
 ## Migrated Project Notes
 
+> ⚠️ 下文是 2026 年初迁移时的快照：目录树、歌词源数量、测试数等均已过时，
+> 以仓库根目录的 `CLAUDE.md` 为准（2026-08-21 仅纠偏了计数，未重写快照）。
+
 # nanoPod - macOS Menu Bar Music Mini Player
 Swift 5.9 + SwiftUI + ScriptingBridge + MusicKit + Apple Music API
 GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
@@ -77,14 +80,14 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 148 个单元测试
+Tests/MusicMiniPlayerTests/         - 889 个单元测试（2026-08-21 实测；下列三个文件只是早期快照，完整清单见 CLAUDE.md）
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── LyricsScorerTests.swift    - 评分算法 + 边界值测试
     └── MatchingUtilsTests.swift   - 匹配评分 + 权重验证
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 
-docs/lyrics_test_cases.json        - 15 条预定义歌词测试用例
+docs/lyrics_test_cases.json        - 82 条预定义歌词测试用例
 docs/lyrics_benchmark_cases.json   - 100 首全球基准测试（10 语言区域 × 10 首）
 postmortem/001~006                 - 已知 bug 根因 + 解决方案
 ```
@@ -100,7 +103,7 @@ postmortem/001~006                 - 已知 bug 根因 + 解决方案
 - `artworkFetchQueue` (low priority): Playlist artwork prefetching
 - ⚠️ ScriptingBridge must only be called on `scriptingBridgeQueue` — calling from main thread will crash
 
-### Lyrics Source Architecture (7 Parallel Sources + Quality Scoring)
+### Lyrics Source Architecture (8 Parallel Sources + Quality Scoring — 下表为旧快照，现行 8 源见 CLAUDE.md)
 
 | Source | Bonus | Notes |
 |--------|-------|-------|
@@ -153,8 +156,8 @@ NetEase/QQ share `SearchCandidate<ID>` + `selectBestCandidate()` priority chain:
 ./build_app.sh                        # Build + sign → nanoPod.app
 swift build                           # Build only (quick validation)
 open nanoPod.app                      # Launch
-swift test                            # 77 unit tests (Parser/Scorer/Matching)
-swift run LyricsVerifier run          # Run 15 lyrics regression tests
+swift test                            # 889 unit tests (needs DEVELOPER_DIR=/Applications/Xcode.app; CLT has no XCTest)
+swift run LyricsVerifier run          # Run the 82 predefined lyrics regression cases (network; provider weather applies)
 swift run LyricsVerifier run --network-only  # Developer/verifier cache-isolated diagnostic (not in release app)
 swift run LyricsVerifier check "Song" "Artist" duration  # Test a single song
 swift run LyricsVerifier library --recent 20                              # AM 资料库测试

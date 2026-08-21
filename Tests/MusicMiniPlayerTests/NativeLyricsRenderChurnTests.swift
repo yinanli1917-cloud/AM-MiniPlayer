@@ -221,16 +221,25 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         let previousIndex = 5
         let nextIndex = previousIndex + 1
         let previousStart = rows[previousIndex].displayLine.line.startTime
-        let handoffTime = rows[nextIndex].displayLine.line.startTime
 
-        mc.syncPlaybackClock(to: previousStart + 0.35, playing: true)
+        // Warm up for LONGER than the surface's 0.8 s appear (force-snap) window. While that window is
+        // open the surface runs in directSnap mode and — because this drive feeds the surface's own
+        // semantic index back as `current` — cannot advance the line, so a boundary that falls inside
+        // the window defers the handoff until the window expires (~0.5 s) while the still-active line's
+        // bright overlay follows the designed post-line afterglow. That reads as "faded before it
+        // moved" and is a harness artifact, not a handoff desync: the 0.25 s warm-up this test used to
+        // have went red 3/3 on a ~20 ms/iteration host for exactly that reason.
+        // NativeLyricsHandoffClockTests reproduces both outcomes under injected lockstep clocks.
+        mc.syncPlaybackClock(to: previousStart + 0.1, playing: true)
         surface.configure(config(rows, current: previousIndex, mc: mc))
         surface.layoutSubtreeIfNeeded()
-        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 0.35, duration: 0.25, noisy: false)
+        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 0.1, duration: 0.9, noisy: false)
 
         surface.debugResetCensus()
         surface.debugCensusEnabled = true
-        drive(surface: surface, musicController: mc, rows: rows, from: handoffTime - 0.08, duration: 1.2, noisy: false)
+        // Continue from where the warm-up stopped (0.2 s before the boundary) rather than jumping the
+        // clock, so the census holds a pre-handoff baseline of the previous row.
+        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 1.0, duration: 1.4, noisy: false)
 
         guard let track = surface.debugCensusByIndex[previousIndex] else {
             return XCTFail("previous row \(previousIndex) must stay mounted across the handoff")

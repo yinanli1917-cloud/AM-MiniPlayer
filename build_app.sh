@@ -119,8 +119,10 @@ echo "🔨 Building nanoPod..."
 # (sweep/census/dim/bloom/traj/sync) + the ~4Hz implicit-anim auditor. Those direct-file
 # writes hit the MAIN THREAD every frame and ballooned to 100s of MB, repeatedly hanging the
 # app + the machine during scroll. The DAILY app must be a clean release build with NO probes.
-# To debug with probes again, re-add the flag TEMPORARILY and rate-limit the probes first.
-swift build -c release --product MusicMiniPlayer
+# To debug with probes again, re-add the flag TEMPORARILY and rate-limit the probes first:
+#   NANOPOD_EXTRA_SWIFT_FLAGS="-Xswiftc -DLOCAL_DEVELOPER_BUILD" ./build_app.sh
+# shellcheck disable=SC2086
+swift build -c release --product MusicMiniPlayer ${NANOPOD_EXTRA_SWIFT_FLAGS:-}
 assert_binary_excludes_diagnostic_cache_mode .build/release/MusicMiniPlayer
 
 echo "📦 Creating app bundle..."
@@ -240,13 +242,16 @@ echo "🎨 Copying icon resources..."
 # 优先使用 .icon 原生格式（macOS 26 Liquid Glass）
 if [ -d "AppIcon.icon" ] && command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
     echo "🎨 Compiling AppIcon.icon using actool..."
-    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
+    # actool can die with SIGABRT (Xcode 26.6 "required plugin failed to load"); under
+    # set -e that aborted the whole script before signing, leaving a half-updated bundle.
+    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1 || true
     if [ -f "partial_info.plist" ]; then
         echo "✅ AppIcon compiled successfully"
         rm -f partial_info.plist
     else
-        echo "⚠️  actool failed, falling back to icns"
-        [ -f "Resources/AppIcon.icns" ] && COPYFILE_DISABLE=1 cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/
+        echo "⚠️  actool failed, falling back to prebuilt icon assets"
+        if [ -f "Resources/AppIcon.icns" ]; then COPYFILE_DISABLE=1 cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/; fi
+        if [ -f "Resources/Assets.car" ]; then COPYFILE_DISABLE=1 cp Resources/Assets.car nanoPod.app/Contents/Resources/; fi
     fi
 elif [ -f "Resources/AppIcon.icns" ]; then
     echo "🎨 Copying AppIcon.icns..."
