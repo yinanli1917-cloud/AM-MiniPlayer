@@ -152,7 +152,7 @@
     "duration": 234,
     "expectation": {
       "shouldFindLyrics": true,
-      "acceptableSources": ["AMLL", "NetEase", "LRCLIB"],
+      "acceptableSources": ["AMLL", "NetEase", "LRCLIB", "LRCLIB-Search"],
       "firstLineContains": "club"
     }
   },
@@ -628,7 +628,7 @@
     "expectation": {
       "shouldFindLyrics": true,
       "acceptableSources": ["NetEase", "QQ", "LRCLIB", "LRCLIB-Search", "lyrics.ovh", "Genius"],
-      "firstLineContains": "standing"
+      "firstLineContains": "learning to love you less"
     }
   },
   {

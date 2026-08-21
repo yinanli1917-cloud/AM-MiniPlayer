@@ -48,7 +48,8 @@ Sources/
 │   │   │   ├── ScrollDetector.swift
 │   │   │   ├── ScrollingText.swift
 │   │   │   ├── VisualEffectView.swift
-│   │   │   └── ProgressiveBlurView.swift
+│   │   │   ├── ProgressiveBlurView.swift
+│   │   │   └── PlaylistControlButton.swift - Shared Shuffle/Repeat capsule button chrome (icon content is a @ViewBuilder param)
 │   │   └── Background/           - Background views
 │   │       ├── FluidGradientBackground.swift
 │   │       ├── LiquidBackgroundView.swift

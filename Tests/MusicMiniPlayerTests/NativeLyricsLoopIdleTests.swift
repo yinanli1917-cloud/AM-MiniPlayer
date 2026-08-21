@@ -94,4 +94,44 @@ final class NativeLyricsLoopIdleTests: XCTestCase {
             )
         )
     }
+
+    // ── Text-animation need (line-level CPU regression, cfb5308ae/cfc152c/7653221) ──
+    // A line-level (non-syllable-synced) active row's MAIN text never sweeps, and its
+    // TRANSLATION only sweeps when the main line is word-timed (translations render
+    // statically otherwise — NativeLyricsRowView.appliesTranslationSweep). So a shown,
+    // non-empty translation must never by itself justify holding the display link open;
+    // doing so pinned line-level+translation playback at steady CPU with nothing
+    // actually animating on screen.
+
+    func test_wordTimedRow_needsTextAnimation() {
+        XCTAssertTrue(
+            NativeLyricsLoopIdleDecision.needsTextAnimation(
+                hasSyllableSync: true, hasInterlude: false, isPrelude: false
+            )
+        )
+    }
+
+    func test_lineLevelRow_withNoInterludeOrPrelude_doesNotNeedTextAnimation() {
+        XCTAssertFalse(
+            NativeLyricsLoopIdleDecision.needsTextAnimation(
+                hasSyllableSync: false, hasInterlude: false, isPrelude: false
+            )
+        )
+    }
+
+    func test_lineLevelRow_withInterlude_stillNeedsTextAnimation() {
+        XCTAssertTrue(
+            NativeLyricsLoopIdleDecision.needsTextAnimation(
+                hasSyllableSync: false, hasInterlude: true, isPrelude: false
+            )
+        )
+    }
+
+    func test_lineLevelRow_isPrelude_stillNeedsTextAnimation() {
+        XCTAssertTrue(
+            NativeLyricsLoopIdleDecision.needsTextAnimation(
+                hasSyllableSync: false, hasInterlude: false, isPrelude: true
+            )
+        )
+    }
 }

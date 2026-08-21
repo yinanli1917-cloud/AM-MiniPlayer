@@ -359,54 +359,35 @@ public struct PlaylistView: View {
                 if currentPage == .playlist {
                     HStack(spacing: 16) {
                         let themeColor = Color(red: 0.99, green: 0.24, blue: 0.27)
-                        let themeBackground = themeColor.opacity(0.20)
 
                         Spacer()
 
-                        Button(action: { musicController.toggleShuffle() }) {
-                            HStack(spacing: 5) {
-                                AnimatedShuffleIcon(
-                                    color: musicController.shuffleEnabled ? themeColor : .white,
-                                    isEnabled: musicController.shuffleEnabled,
-                                    size: 11,
-                                    weight: .regular
-                                )
-                                Text("Shuffle")
-                                    .font(.system(size: 10, weight: .medium))
-                            }
-                            .foregroundColor(musicController.shuffleEnabled ? themeColor : .white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule()
-                                    .fill(musicController.shuffleEnabled ? themeBackground : .clear)
+                        PlaylistControlButton(
+                            action: { musicController.toggleShuffle() },
+                            isEnabled: musicController.shuffleEnabled,
+                            label: "Shuffle",
+                            themeColor: themeColor
+                        ) {
+                            AnimatedShuffleIcon(
+                                color: musicController.shuffleEnabled ? themeColor : .white,
+                                isEnabled: musicController.shuffleEnabled,
+                                size: 11,
+                                weight: .regular
                             )
-                            .modifier(GlassButtonTexture(shape: Capsule()))
-                            .contentShape(Capsule())
                         }
-                        .buttonStyle(CapsulePressStyle())
 
-                        Button(action: { musicController.cycleRepeatMode() }) {
-                            HStack(spacing: 5) {
-                                Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
-                                    .contentTransition(.symbolEffect(.replace))
-                                    .font(.system(size: 11))
-                                    .rotationEffect(.degrees(repeatFlow * 12))
-                                    .scaleEffect(1 - repeatFlow * 0.12)
-                                Text("Repeat")
-                                    .font(.system(size: 10, weight: .medium))
-                            }
-                            .foregroundColor(musicController.repeatMode > 0 ? themeColor : .white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule()
-                                    .fill(musicController.repeatMode > 0 ? themeBackground : .clear)
-                            )
-                            .modifier(GlassButtonTexture(shape: Capsule()))
-                            .contentShape(Capsule())
+                        PlaylistControlButton(
+                            action: { musicController.cycleRepeatMode() },
+                            isEnabled: musicController.repeatMode > 0,
+                            label: "Repeat",
+                            themeColor: themeColor
+                        ) {
+                            Image(systemName: musicController.repeatMode == 1 ? "repeat.1" : "repeat")
+                                .contentTransition(.symbolEffect(.replace))
+                                .font(.system(size: 11))
+                                .rotationEffect(.degrees(repeatFlow * 12))
+                                .scaleEffect(1 - repeatFlow * 0.12)
                         }
-                        .buttonStyle(CapsulePressStyle())
                         .onChange(of: musicController.repeatMode) { _, _ in
                             withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { repeatFlow = 1 }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

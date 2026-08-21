@@ -16,15 +16,15 @@
 
 ## Features
 
-### 逐字高亮歌词
+### ~~逐字高亮歌词~~ ✅ 核实为已完成 (2026-07-27，本条已过期)
 
-**What:** AMLL-TTML-DB 和 NetEase YRC 已提供逐字时间轴数据，实现逐字高亮渲染。
-
-**Why:** 当前只有行级高亮，逐字高亮是 Apple Music 级体验的核心差异点。
-
-**Effort:** L
-**Priority:** P1
-**Depends on:** None
+`LyricsParser.parseTTML`/`parseYRC` 早已把逐字时间戳解析进 `LyricLine.words`
+（`LyricWord(word:startTime:endTime:)`），`LyricLine.hasSyllableSync` 直接由
+`!words.isEmpty` 判定；`LyricsLayerRendererView`/`NativeLyricsRowView`/
+`NativeLyricsTextSweepLayout` 已实现逐字扫光渲染，一直是生产路径（非实验开关），
+有 `NativeLyricsTextRenderPlanTests`/`NativeLyricsAMLLParityTests` 等大量测试
+覆盖。此条目已过期，未新建"behind a feature flag"的平行实现——那会与现有生产
+代码重复。
 
 ### 引导页面（Onboarding）
 
@@ -56,17 +56,16 @@
 
 ## Code Quality
 
-### 小清理: 按钮重复 + Binding 重复 + asyncAfter 竞态
+### ~~小清理: 按钮重复~~ ✅ DONE (2026-07-27)
 
-**What:** PlaylistView Shuffle/Repeat 按钮提取为 PlaylistControlButton + SettingsView showInDock Binding 提取 + FloatingWindowModifier 0.1s asyncAfter 改为确定性方案。
+PlaylistView Shuffle/Repeat 按钮提取为 `Components/PlaylistControlButton.swift`
+（图标内容仍是 `@ViewBuilder` 参数，Shuffle 的 AnimatedShuffleIcon 与 Repeat 的
+旋转/缩放 SF Symbol + onChange 动画不变）。
 
-**Why:** 小 DRY 违反 + 潜在竞态。
-
-**Context:** 随其他重构顺手解决，不单独开 PR。魔法数字也随重构顺手提取为常量。
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
+**其余两项核实为过期，未改动**：SettingsView `showInDock` 目前只有一处
+get/set 闭包，没有重复可提取；`FloatingWindowModifier` 在当前 Sources/ 下
+已不存在（`grep` 零命中），全仓有 8 处不同的 `asyncAfter(deadline: .now() + 0.1)`
+——不清楚原 TODO 具体指哪一处，盲猜可能改错代码，留给创建者确认。
 
 ## Completed
 
