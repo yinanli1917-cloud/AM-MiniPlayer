@@ -3,6 +3,8 @@ Swift 5.9 + SwiftUI + ScriptingBridge + MusicKit + Apple Music API
 GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
 
 > **Rules**: Only run `git push` when the user explicitly asks. Never use private APIs. Before handing over to the user, you must determine how to verify or test the bug fix / new feature and execute the verification; stay in the verification loop until confirmed working.
+>
+> **手感类验证（创始人 2026-08-21 永久规则）**：歌词切行渐隐、滚动、动效这类手感项，自验只做代码层面——单元测试、时间戳日志、可控的假时钟、确定性回放。不用 computer use，不录屏，除非创始人自己提供录屏。自验通过后提醒创始人亲自终验，自动测试通过不能替代。全局规矩见 ~/.claude/CLAUDE.md。
 
 ---
 
@@ -111,6 +113,8 @@ docs/lyrics_test_cases.json        - 15 条预定义歌词测试用例
 docs/lyrics_benchmark_cases.json   - 100 首全球基准测试（10 语言区域 × 10 首）
 docs/defect-recordings/            - 缺陷录屏逐帧证据归档（含 NOTES.md 分析）
 postmortem/001~006                 - 已知 bug 根因 + 解决方案
+
+research/references/               - 竞品动效研究（competitor motion studies）：录屏 + perceive-animation 逐帧拆解 spec
 ```
 
 ## Key Technical Decisions
