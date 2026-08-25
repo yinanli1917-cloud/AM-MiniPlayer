@@ -767,6 +767,16 @@ public class LyricsService: ObservableObject {
                duration: duration,
                album: album,
                translationEnabled: showTranslation
+           )
+           // Phase 2: CJK titles (which the non-CJK Phase-1 lookup returns nil for) get a
+           // native-exact disk serve — same exact-key identity, word-level, tight duration gate.
+           // Only evaluated when Phase 1 returned nil; the outer conditions already gated this block.
+           ?? fetcher.immediateNativeExactDiskLyrics(
+               title: title,
+               artist: artist,
+               duration: duration,
+               album: album,
+               translationEnabled: showTranslation
            ) {
             let aligned = fetcher.rescaleTimestamps(diskResult.lyrics, duration: duration)
             let processed = parser.processLyrics(aligned)

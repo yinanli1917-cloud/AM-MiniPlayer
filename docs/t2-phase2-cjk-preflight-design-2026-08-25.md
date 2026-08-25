@@ -1,4 +1,4 @@
-# T2 · Phase 2 设计 — CJK 已缓存歌同步直服（技术把关稿，未实现）
+# T2 · Phase 2 — CJK 已缓存歌同步直服（✅ 已实现，见文末实现记录）
 
 创始人裁定（2026-08-25）：已缓存的歌绝不该露 spinner。Phase 1 已落实非 CJK（见 t2-bug1/#3 收敛修法）。Phase 2 让 **CJK 也 spinner-free**——创始人曲库偏 CJK，这才是体感大头。本页只出设计+风险，供技术把关，**不动手**。
 
@@ -103,3 +103,13 @@ Phase 2 能否真的让某首 CJK 歌 spinner-free，取决于**它当初是否�
 **结论（修正评审假设）**：**"解析标题写入"并非大头（仅 5 条）**。不可达主因是"本就不是库曲"（45+部分56）与"从没播过缓存"（整库层面）。→ **写侧双键落盘只惠及 ~5 条，不划算，不建议**。64% 可达说明 Phase 1/2 的读侧预检对"已缓存的库曲"本就有效；创始人"看过又转圈"更可能是**该曲这次会话首次播放（内存缓存冷）**——而磁盘预检（Phase 1 非 CJK 已修 / Phase 2 CJK 待定）正是解这个的。真正剩余可优化的键漂移仅约 15(dur)+5(title)=20 条，性价比低，**不作为优先**。
 
 **净建议**：键漂移不是大问题；Phase 2 维持读侧 native-exact 方案（前置门槛不变），但鉴于 CJK 收益仅 6%、漂移仅 ~20 条，**是否现在实现 Phase 2 交你/创始人按性价比定**；写侧双键否决。
+
+---
+
+## 实现记录（2026-08-25，✅ 已落地）
+
+- `LyricsFetcher.immediateNativeExactDiskLyrics(title,artist,duration,album,translationEnabled)`：CJK 标题专用（非 CJK 返回 nil，归 Phase 1）。接受 `candidates` 命中的条目当且仅当：非 instrumental/unavailable、`|cached.duration − query| ≤ 1.5s`（时长门）、含 syllable-sync（词级）。命中即返回 synced 结果。**exact-key = 身份**：`candidates` 只返回存于本查询自身 dur±1 键下的条目；罗马音输入算出异键必 miss。
+- `LyricsService.fetchLyrics` 预检：Phase 1（非 CJK）`?? ` Phase 2（CJK）——Phase 1 返回 nil 且外层门（!forceRefresh/!appliedProvisionalCache/!preserve）已过时才评估 Phase 2；命中同步 applyLyrics→.content，miss 回落异步。
+- **前置门槛达成（严格子集）**：native 查询下异步路径 resolve(native→native)=no-op → 同 `candidates` 查询 → 同条目；Phase 2 额外加词级 + 1.5s 时长门（比异步 per-source get 更严）→ 严格子集，不新增碰撞面（真实库 0 碰撞佐证）。
+- 测试 `ImmediateDiskLyricsPreflightTests` **10/10**：CJK native-exact 服务 / 罗马音同曲异键 miss / 非 CJK 不走此路 / 时长门挡远邻居 / 以及 Phase 1 六项。临时磁盘缓存注入缝，未碰用户真实文件。
+- 收益复利：6% 是存量快照；今后每首新播 CJK 按原生键落盘，重播即同步命中、无 spinner、无 #1 翻转。

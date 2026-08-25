@@ -134,4 +134,49 @@ final class ImmediateDiskLyricsPreflightTests: XCTestCase {
         // No assertion on network: the pre-flight returns before launching the async fetch task,
         // so this test performs zero network I/O.
     }
+
+    // ── Phase 2: CJK native-exact serve (immediateNativeExactDiskLyrics) ────────────────────
+    // Safety rests on exact-key identity: a romanized input hashes to a different key and misses,
+    // so the 006 sibling path is unreachable; a native-CJK re-play hits its own key.
+
+    func test_phase2_cjkNativeExactWordLevelHit_isServed() {
+        tempCache.set(title: "残酷な天使のテーゼ", artist: "高橋洋子", duration: 245, album: "NEON GENESIS",
+                      source: LyricsSource.netEase.rawValue, lines: wordLevelLines("残酷"), matchedDurationDiff: 0.1)
+        let result = LyricsFetcher.shared.immediateNativeExactDiskLyrics(
+            title: "残酷な天使のテーゼ", artist: "高橋洋子", duration: 245, album: "NEON GENESIS", translationEnabled: false)
+        XCTAssertNotNil(result, "a native-CJK exact-key word-level entry must be served (Phase 2)")
+        XCTAssertTrue(result?.lyrics.contains { $0.hasSyllableSync } ?? false)
+    }
+
+    // A ROMANIZED input for the same song hashes to a different key → miss → falls to async
+    // (no wrong-lyrics via the 006 sibling path).
+    func test_phase2_romanizedInputForSameCJKSong_missesExactKey() {
+        tempCache.set(title: "残酷な天使のテーゼ", artist: "高橋洋子", duration: 245, album: "NEON GENESIS",
+                      source: LyricsSource.netEase.rawValue, lines: wordLevelLines("残酷"), matchedDurationDiff: 0.1)
+        let result = LyricsFetcher.shared.immediateNativeExactDiskLyrics(
+            title: "Zankoku na Tenshi no Teeze", artist: "Yoko Takahashi", duration: 245, album: "NEON GENESIS", translationEnabled: false)
+        XCTAssertNil(result, "a romanized query is a different key — must miss and stay on the async alias-resolved path")
+    }
+
+    // Non-CJK is owned by Phase 1; the Phase 2 method must not serve it (returns nil).
+    func test_phase2_nonCJK_isNotServedByNativeExactPath() {
+        tempCache.set(title: "Some English Song", artist: "English Artist", duration: 200, album: "",
+                      source: LyricsSource.netEase.rawValue, lines: wordLevelLines("english"), matchedDurationDiff: 0.0)
+        let result = LyricsFetcher.shared.immediateNativeExactDiskLyrics(
+            title: "Some English Song", artist: "English Artist", duration: 200, album: "", translationEnabled: false)
+        XCTAssertNil(result, "non-CJK titles are Phase 1's job; the native-exact path returns nil for them")
+    }
+
+    // The duration gate blocks a ±1 neighbor-key entry whose stored duration is genuinely far off.
+    func test_phase2_durationGate_blocksFarNeighbor() {
+        // Seed at duration 246 (so its dur-1 key = 245 overlaps a query at 245), but stored duration 246
+        // is only 1s off → within the 1.5s gate → SERVED. Then seed a far one to confirm the gate bites.
+        tempCache.set(title: "曲名テスト", artist: "アーティスト", duration: 250, album: "A",
+                      source: LyricsSource.netEase.rawValue, lines: wordLevelLines("遠い"), matchedDurationDiff: 3.0)
+        // Query at 248: keys {247,248,249} — the stored 250 entry's keys are {249,250,251}, overlap at 249.
+        // Stored duration 250 vs query 248 = 2.0s > 1.5s gate → must be blocked.
+        let result = LyricsFetcher.shared.immediateNativeExactDiskLyrics(
+            title: "曲名テスト", artist: "アーティスト", duration: 248, album: "A", translationEnabled: false)
+        XCTAssertNil(result, "an entry whose stored duration is >1.5s from the query must be blocked by the duration gate")
+    }
 }
