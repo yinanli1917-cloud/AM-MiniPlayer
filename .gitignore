@@ -53,3 +53,10 @@ __pycache__/
 # Kymograph visual-regression baseline recordings (machine-local, large binaries;
 # recovered from the pre-migration machine — see .kymo-baseline/README.md)
 .kymo-baseline/
+
+# TRAE adapter state
+.trae/.skill-hashes.json
+.trae/runtime/
+
+# Codex runtime state
+.codex/runtime/

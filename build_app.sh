@@ -240,12 +240,16 @@ echo "🎨 Copying icon resources..."
 # 优先使用 .icon 原生格式（macOS 26 Liquid Glass）
 if [ -d "AppIcon.icon" ] && command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
     echo "🎨 Compiling AppIcon.icon using actool..."
-    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1
+    # actool on a half-initialized Xcode aborts (SIGABRT, exit 134). Under `set -e` that abort would
+    # kill the whole build BEFORE codesign — shipping an unsigned bundle (breaks AppleScript automation)
+    # with no icon. Neutralize the abort and fall back to the prebuilt icon resources in Resources/.
+    xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1 || true
     if [ -f "partial_info.plist" ]; then
         echo "✅ AppIcon compiled successfully"
         rm -f partial_info.plist
     else
-        echo "⚠️  actool failed, falling back to icns"
+        echo "⚠️  actool unavailable/aborted — falling back to prebuilt icon resources"
+        [ -f "Resources/Assets.car" ] && COPYFILE_DISABLE=1 cp Resources/Assets.car nanoPod.app/Contents/Resources/
         [ -f "Resources/AppIcon.icns" ] && COPYFILE_DISABLE=1 cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/
     fi
 elif [ -f "Resources/AppIcon.icns" ]; then
