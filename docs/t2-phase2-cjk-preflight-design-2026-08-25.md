@@ -55,3 +55,34 @@ Phase 2 能否真的让某首 CJK 歌 spinner-free，取决于**它当初是否�
 | 写入用了解析标题 | 原生查询 miss → 异步 | 该曲仍 spinner，不错歌词 |
 
 **请把关点**：exact-key=身份 的论证是否认可；时长门 1.5s 是否合适；是否要求实现时先用创始人真实缓存抽查键一致性。认可后我实现 + 测试 + 全绿再报。
+
+---
+
+## 技术把关回应（2026-08-25，采纳评审意见）
+
+评审正确指出原"QED"过头（同专辑同名 clean/explicit 版若 normalize 剥版本注释则同键异词）。以下三条按评审补齐。
+
+### (c) normalize() 对版本括注的实际处理 — 已核实
+`MetadataDiskCache.normalize` = 小写 + 合并空白 + **仅剥 ASCII 标点字符**（保留 CJK/数字/非 ASCII）。它剥的是 `(` `)` 字符本身，**保留括注里的词**：`Song (Clean)`→`song clean`、`(Explicit)`→`song explicit`、`(Live)`→`song live`、`(2023 Remaster)`→`song 2023 remaster`——**版本词进入键、互相区分**。故评审担心的 clean/explicit 同键**不成立**（除非版本信息根本不在标题里、而在独立 tag，且专辑+时长也全同——见残留风险）。
+
+### (a) 等价性上界（取代 QED，作主论证）
+- **Phase 1（非 CJK）已满足**：异步即时路径（LyricsFetcher:643）用 `canUseImmediateCachedLyrics(lyrics, source, title: ot, artist: oa)` + `scorer.calculateScore`；我的 `immediateSyncedDiskLyrics` 用**完全相同**的 `canUseImmediateCachedLyrics` + 同一 candidates 查询 + 同一 scorer（synced-only 是更严的子集，不更宽）。→ Phase 1 的任何命中都是异步路径本就会返回的同一条目、过同一验证器；**Phase 1 不新增任何碰撞面，正确性以现状为上界**。
+- **Phase 2（CJK）尚未满足，需细化**：异步路径**不经**即时 607 路径服务 CJK（非 CJK 门挡住），而是经**解析/native-title 桥**（LyricsFetcher:705 `metadataResolver.diskCache.get`→native title→`lyricsDiskCache.candidates(nativeTitle)`）或 source 专用 `lyricsDiskCache.get`（LyricsSourceFetchers:2654）。所以 Phase 2 CJK 的上界**不是**即时路径，而是**解析路径**。实现前必须让 Phase 2 的 native-exact 直服**套用解析路径服务该 CJK 曲时的同一组验证器**（不止 `canUseImmediateCachedLyrics` 去掉 ASCII 门），使其成为解析路径的严格子集（query 标题已是 native、省掉解析步，其余验证不减）。**这条是 Phase 2 实现的前置门槛，未达不实现。**
+
+### (b) 创始人真实 lyrics_cache.json 只读抽查（数字）
+对真实资料库 **1715 首**（219 CJK 标题/艺人，1496 非 CJK）重算键、比对 450 条磁盘缓存：
+- **exact-key 碰撞（不同 normalized (title,artist,album,dur) 的库曲撞同键）：0 条。** 碰撞风险在真实库上经验为零。
+- **CJK 键命中：14/219（6%）** ← Phase 2 能同步直服的比例。**modest**——多数 CJK 曲要么没播过缓存、要么缓存在异于 native 的键下。
+- **非 CJK 键命中：58/1496（4%）** ← Phase 1 已覆盖。
+- 同 title+artist 异时长的版本对：3 组，均**异专辑→异键**（如 自作多情 322s『冬日浪漫』vs 320s『真經典』），不碰撞。
+
+**诚实结论**：整库命中率低（4-6%）主因是绝大多数库曲根本没播过缓存（450 条 vs 1715 首）；**修复真正受益的是"重播过、已缓存"的歌**（创始人"这首我看过歌词，怎么又转圈"的正是这类），整库比例低估了重播收益。但也不能排除部分已缓存曲因键漂移（时长/专辑/标题在写入与读取间不一致）而 miss——这与 #3 的键稳定性同源，是 Phase 2 之外可另查的点。Phase 2 的**正确性不受命中率影响**（miss→异步，绝不错歌词）。
+
+### 残留风险（更新风险表）
+| 风险 | 覆盖 | 残留 |
+|---|---|---|
+| clean/explicit/live 同键异词 | normalize 保留版本词→异键 | 仅当版本信息不在标题、且专辑+时长(±1)全同——真实库经验命中 0 |
+| exact-key 碰撞 | 真实库实测 0 | 可忽略 |
+| ±1 时长邻居跨接 | 加 ≤1.5s 时长门 + 异曲必异标题/专辑 | 无（3 组版本对均异专辑） |
+
+**给把关**：(c)(b) 已完成，(a) 的 Phase 1 部分已满足、Phase 2 部分转为"实现前须套解析路径同验证器"的前置门槛。是否认可以此门槛推进 Phase 2 实现？鉴于 CJK 收益仅 6%，是否值得现在做、还是先排查键漂移（可能一并抬高 Phase 1/2 命中率）由你/创始人定。
