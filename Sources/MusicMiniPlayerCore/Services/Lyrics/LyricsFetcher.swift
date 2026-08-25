@@ -23,7 +23,13 @@ public final class LyricsFetcher {
     let parser = LyricsParser.shared
     let scorer = LyricsScorer.shared
     let metadataResolver = MetadataResolver.shared
+    #if DEBUG
+    /// Test seam: injectable so a test can point the lyrics disk cache at a temp file instead of
+    /// the user's real lyrics_cache.json. Production is immutable.
+    var lyricsDiskCache = LyricsDiskCache()
+    #else
     let lyricsDiskCache = LyricsDiskCache()
+    #endif
     private let logger = Logger(subsystem: "com.nanoPod", category: "LyricsFetcher")
 
     let netEaseTimeOffset: Double = 0.7
@@ -3154,6 +3160,46 @@ public final class LyricsFetcher {
                 && !LanguageUtils.isLikelyEnglishTitle(title)
         }
         return !isLikelyRomanizedCJKLyrics(lyrics, source: source)
+    }
+
+    /// Synchronous, correctness-gated disk-cache lookup for the fetch PRE-FLIGHT (before the
+    /// async pipeline / any spinner). Returns a trusted word-level result only, reusing the exact
+    /// guards the async immediate path uses: the non-CJK-title gate (CJK titles need alias
+    /// resolution — postmortem 006 — and are deliberately excluded here; that path stays async)
+    /// plus `canUseImmediateCachedLyrics` (requires syllable sync, and blocks romanized→CJK
+    /// sibling collisions). A miss returns nil and the caller falls through to the normal async
+    /// fetch — no regression. Availability rows (instrumental/unavailable) are intentionally NOT
+    /// served here: those are "no lyrics" verdicts that the async path owns.
+    /// `lyricsDiskCache.candidates` is memory-backed (SHA-keyed dict), so this is cheap on the
+    /// main thread.
+    func immediateSyncedDiskLyrics(
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String,
+        translationEnabled: Bool
+    ) -> LyricsFetchResult? {
+        guard !LanguageUtils.containsCJK(title), !LanguageUtils.containsCJK(artist) else { return nil }
+        let cachedCandidates = lyricsDiskCache.candidates(title: title, artist: artist, duration: duration, album: album)
+            + (!album.isEmpty ? lyricsDiskCache.candidates(title: title, artist: artist, duration: duration) : [])
+        for cached in cachedCandidates {
+            guard let cachedSource = LyricsSource(rawValue: cached.source) else { continue }
+            // Synced-only pre-flight: skip instrumental/unavailable availability rows.
+            guard cached.kind != .instrumental, cached.kind != .unavailable else { continue }
+            let lyrics = cached.lines.map { LyricsDiskCache.lyricLines(from: $0) } ?? parser.parseLRC(cached.syncedLyrics)
+            guard canUseImmediateCachedLyrics(lyrics, source: cachedSource, title: title, artist: artist) else { continue }
+            let score = scorer.calculateScore(lyrics, source: cachedSource, duration: duration, translationEnabled: translationEnabled)
+            return LyricsFetchResult(
+                lyrics: lyrics,
+                source: cachedSource,
+                score: score,
+                kind: .synced,
+                albumMatched: cached.album != nil && MetadataDiskCache.normalize(cached.album ?? "") == MetadataDiskCache.normalize(album),
+                titleMatched: true,
+                matchedDurationDiff: cached.matchedDurationDiff
+            )
+        }
+        return nil
     }
 
     private func hasSaneForegroundTimeline(_ lyrics: [LyricLine], duration: TimeInterval) -> Bool {
