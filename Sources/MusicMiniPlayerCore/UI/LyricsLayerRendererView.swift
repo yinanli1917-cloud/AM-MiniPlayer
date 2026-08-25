@@ -351,6 +351,28 @@ final class NativeLyricsSurfaceView: NSView {
     }
     /// The renderer's resolved semantic (active) line index — what the surface believes is current.
     var debugNativeSemanticIndex: Int? { nativeSemanticCurrentIndex }
+    #if DEBUG
+    /// Test seam: deterministic wall clock for the presentation-tick path (spring/wave deltas,
+    /// the appear window, the text-phase throttle). nil = CACurrentMediaTime().
+    var debugNowOverride: (() -> CFTimeInterval)?
+    var debugNativeScrollTargetIndex: Int? { nativeTimelineState?.scrollToIndex }
+    var debugForceSnapUntil: CFTimeInterval { forceSnapUntil }
+    private var isDebugDrivenTick = false
+    /// Run exactly one presentation tick from a test. While `debugNowOverride` is set,
+    /// display-link- and idle-timer-originated ticks are ignored so the test owns the cadence.
+    func debugTick(displayInterval: TimeInterval) {
+        isDebugDrivenTick = true
+        presentationTick(displayInterval: displayInterval, displayTimestamp: nil)
+        isDebugDrivenTick = false
+    }
+    #endif
+
+    private func currentMediaTime() -> CFTimeInterval {
+        #if DEBUG
+        if let debugNowOverride { return debugNowOverride() }
+        #endif
+        return CACurrentMediaTime()
+    }
     /// The row index the surface currently believes the cursor is over (single hover authority).
     var debugHoveredRowIndex: Int? { hoveredRowIndex }
     /// Drives the geometry hover resolver from a fixed surface-space point (headless: no NSEvent).
@@ -426,11 +448,11 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func frameSnapMode(
         for configuration: LyricsLayerRendererConfiguration,
-        now: CFTimeInterval = CACurrentMediaTime()
+        now: CFTimeInterval? = nil
     ) -> NativeLyricsSnapMode {
         NativeLyricsSnapMode.resolve(
             playbackMode: configuration.playbackMode,
-            isWithinAppearWindow: now < forceSnapUntil
+            isWithinAppearWindow: (now ?? currentMediaTime()) < forceSnapUntil
         )
     }
 
@@ -682,7 +704,7 @@ final class NativeLyricsSurfaceView: NSView {
             // instead of briefly placing rows at ty=0 (the presentation-layer overlap bloom,
             // confirmed via the bloom probe: presSpread=0 while the model ySpread was normal).
             presentationEngine.resetForTrackChange()
-            forceSnapUntil = CACurrentMediaTime() + 0.8
+            forceSnapUntil = currentMediaTime() + 0.8
             visualStates.removeAll()
             measuredHeightsByIndex.removeAll()
             lastAppliedYByIndex.removeAll()
@@ -707,7 +729,7 @@ final class NativeLyricsSurfaceView: NSView {
         // moment the rows first appear (empty → non-empty), which is when they actually get positioned.
         if (self.configuration?.rows.isEmpty ?? true) && !configuration.rows.isEmpty {
             presentationEngine.resetForTrackChange()
-            forceSnapUntil = CACurrentMediaTime() + 0.8
+            forceSnapUntil = currentMediaTime() + 0.8
             // Rows are mounting NOW (empty → non-empty). Hide them until the loop commits a spread
             // frame so the first-frame pre-commit identity never shows as a stacked flash.
             armInitialRevealGate()
@@ -1057,7 +1079,7 @@ final class NativeLyricsSurfaceView: NSView {
         // While forced, playbackMode == .directSnap so both the engine and applyFrame snap to the
         // settled positions; by the time the window ends the engine is parked there, so natural mode
         // resumes without a jump.
-        if CACurrentMediaTime() < forceSnapUntil {
+        if currentMediaTime() < forceSnapUntil {
             runtimeConfiguration.suppressInitialMotion = true
         }
         runtimeConfiguration.nativeManualScrollSnapshot = manualScrollState.activeSnapshot
@@ -2345,6 +2367,9 @@ final class NativeLyricsSurfaceView: NSView {
         displayTimestamp: TimeInterval?
     ) {
         _ = displayTimestamp
+        #if DEBUG
+        if debugNowOverride != nil, !isDebugDrivenTick { return }
+        #endif
         guard let configuration else {
             stopPresentationLoop()
             return
@@ -2352,7 +2377,7 @@ final class NativeLyricsSurfaceView: NSView {
         let previousSemanticIndex = nativeSemanticCurrentIndex
         let previousTimelineState = nativeTimelineState
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
-        let now = CACurrentMediaTime()
+        let now = currentMediaTime()
         let snapMode = frameSnapMode(for: runtimeConfiguration, now: now)
         let delta = lastPresentationTick.map { max(0, now - $0) }
             ?? displayInterval
@@ -3773,17 +3798,11 @@ final class NativeLyricsSurfaceView: NSView {
             ?? configuration.rows.first(where: { $0.index == configuration.effectiveCurrentIndex }) else {
             return false
         }
-        if activeRow.displayLine.line.hasSyllableSync
-            || activeRow.interlude != nil
-            || activeRow.isPrelude {
-            return true
-        }
-        if configuration.showTranslation,
-           let translation = activeRow.displayLine.line.translation,
-           !translation.isEmpty {
-            return true
-        }
-        return false
+        return NativeLyricsLoopIdleDecision.needsTextAnimation(
+            hasSyllableSync: activeRow.displayLine.line.hasSyllableSync,
+            hasInterlude: activeRow.interlude != nil,
+            isPrelude: activeRow.isPrelude
+        )
     }
 
     private static func isSameTrackIdentity(

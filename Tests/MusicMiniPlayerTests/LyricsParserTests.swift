@@ -264,6 +264,37 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(lines[0].words.last?.endTime ?? 0, 210.65, accuracy: 0.001)
     }
 
+    // Founder report (2026-07-27): "some lines degrading from word-level to line-level".
+    // Root cause: parseYRC decodes HTML entities into the LINE's `text` (LyricsParser.swift:340,
+    // decodeHTMLEntities) but never decodes the per-word `words` array itself (built raw at
+    // :309-314, no decode call — unlike parseTTML's extractTimedWords, which decodes each span
+    // at :136 before either words or lineText are built, so both stay consistent there). NetEase
+    // YRC commonly HTML-entity-escapes apostrophes in English contractions (htmlEntityMap already
+    // handles &#39; / &apos; / the JS-escaped \' form — proof this is real source data, not a
+    // hypothetical). So `text` ends up decoded ("It's") while `words` stays raw ("It&#39;s") —
+    // LyricLine.init's word/text consistency invariant (LyricModels.swift:89-94, added in 219913f
+    // for a DIFFERENT staleness bug: stripChineseTranslations splitting text without updating
+    // words) sees a mismatch and silently clears words to [], degrading that one line from
+    // word-level (karaoke sweep) to line-level (flat highlight) rendering — exactly the reported
+    // symptom, and it fires on ANY line containing an escaped apostrophe/ampersand/quote.
+    func testParseYRC_htmlEntityInWordDoesNotDegradeLineToLineLevel() {
+        let yrc = "[204420,3000](204420,1500,0)It&#39;s (205920,1500,0)fine"
+
+        guard let lines = parser.parseYRC(yrc, timeOffset: 0) else {
+            XCTFail("YRC parse returned nil")
+            return
+        }
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines[0].text, "It's fine", "the line's display text must be entity-decoded")
+        XCTAssertTrue(
+            lines[0].hasSyllableSync,
+            "a line with real per-word timing must not silently degrade to line-level " +
+            "just because one word contains an HTML entity — words: \(lines[0].words.map(\.word))"
+        )
+        XCTAssertEqual(lines[0].words.map(\.word), ["It's ", "fine"])
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - createUnsyncedLyrics
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

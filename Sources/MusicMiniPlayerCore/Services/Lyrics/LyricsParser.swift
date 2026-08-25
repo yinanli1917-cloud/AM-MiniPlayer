@@ -306,7 +306,13 @@ public final class LyricsParser {
 
                     let wordStartMs = Int(content[wordStartRange]) ?? 0
                     let wordDurationMs = Int(content[wordDurationRange]) ?? 0
-                    let wordText = String(content[charRange])
+                    // Decode entities PER WORD, matching parseTTML's extractTimedWords (:136).
+                    // Undecoded words + a later-decoded lineText (:340) desync whenever a word
+                    // contains an escaped apostrophe/ampersand/quote (NetEase YRC commonly HTML-
+                    // or JS-escapes English contractions) — LyricLine.init's word/text
+                    // consistency invariant then silently clears words, degrading that line from
+                    // word-level to line-level rendering.
+                    let wordText = decodeHTMLEntities(String(content[charRange]))
 
                     lineText += wordText
                     let wordStartTime = max(0, Double(wordStartMs) / 1000.0 - timeOffset)

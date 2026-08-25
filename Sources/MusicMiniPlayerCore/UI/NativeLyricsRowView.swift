@@ -645,6 +645,14 @@ final class NativeLyricsRowView: NSView {
     private(set) var debugLastTranslationExpectedProgress: CGFloat?
     private(set) var debugLastTranslationAppliedProgress: CGFloat?
     private(set) var debugLastTranslationBrightOverlayPresent = false
+    // Active-line MAIN sweep truth captured on the last updatePlaybackPhase (mirrors the translation
+    // trio). `expected` = model wavefront fraction; `applied` = what the renderer clipped to;
+    // `perRunSweep` = whether the per-word mask engaged (true) or the whole-line gradient fallback ran
+    // (false, e.g. bounds not yet laid out). "整行已高亮 / mask lost" shows up as brightOverlayPresent
+    // with applied≈1 while expected is small, or perRunSweep=false while expected per-run sweep.
+    private(set) var debugLastMainExpectedProgress: CGFloat?
+    private(set) var debugLastMainAppliedProgress: CGFloat?
+    private(set) var debugLastMainBrightOverlayPresent = false
     /// The translation sung-overlay opacity (mirrors debugMainBrightOpacity). The deactivation fade
     /// scales it toward 0 as a line recedes; a teardown that forgets to restore it to 1 makes a
     /// re-shown row relight from the residual fraction. The reuse-state test reads it.
@@ -1245,6 +1253,10 @@ final class NativeLyricsRowView: NSView {
             debugLastTranslationAppliedProgress = appliedTranslation?.progress
             debugLastTranslationBrightOverlayPresent =
                 !translationBrightTextLayer.isHidden && translationBrightTextLayer.string != nil
+            debugLastMainExpectedProgress = plan.mainSweepProgress
+            debugLastMainAppliedProgress = appliedMainProgress.progress
+            debugLastMainBrightOverlayPresent =
+                !mainBrightTextLayer.isHidden && mainBrightTextLayer.string != nil
             #endif
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep

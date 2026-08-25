@@ -50,7 +50,8 @@ Sources/
 │   │   │   ├── ScrollDetector.swift
 │   │   │   ├── ScrollingText.swift
 │   │   │   ├── VisualEffectView.swift
-│   │   │   └── ProgressiveBlurView.swift
+│   │   │   ├── ProgressiveBlurView.swift
+│   │   │   └── PlaylistControlButton.swift - Shared Shuffle/Repeat capsule button chrome (icon content is a @ViewBuilder param)
 │   │   └── Background/           - Background views
 │   │       ├── FluidGradientBackground.swift
 │   │       ├── LiquidBackgroundView.swift
@@ -78,7 +79,7 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 665 个单元测试
+Tests/MusicMiniPlayerTests/         - 889 个单元测试（2026-08-21 `swift test` 实测）
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── JapaneseReadingTests.swift - 日语读音判定（8 对旧白名单 fixture + 前缀扩展负例 + 长音折叠 + fail-closed + 包含下限）
     ├── MetadataDiskCacheTierTests.swift - 元数据缓存层隔离（CN/多区域互不覆盖）+ CN 证据元组往返 + v6 schema 冲洗 + 防抖合并写
@@ -106,10 +107,11 @@ Tests/MusicMiniPlayerTests/         - 665 个单元测试
     └── RadioDurationlessMatchingTests.swift - 电台时长未知匹配：duration=0 是缺失信号非完美信号，标题+艺人双强制；已知时长门槛不变
     └── TranslationWritebackTests.swift - 翻译单发布回写：纯合并函数一次赋值（曾逐行改 @Published 数组多次重渲）
     └── RadioTrackChangeDebounceTests.swift - 电台换歌确认：无 PID 身份需连续两次一致读数才触发管线（缓冲期标题瞬态不再刷新页面）
+    └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
 
-docs/lyrics_test_cases.json        - 15 条预定义歌词测试用例
+docs/lyrics_test_cases.json        - 82 条预定义歌词测试用例（`LyricsVerifier run` 全量跑）
 docs/lyrics_benchmark_cases.json   - 100 首全球基准测试（10 语言区域 × 10 首）
 docs/defect-recordings/            - 缺陷录屏逐帧证据归档（含 NOTES.md 分析）
 postmortem/001~006                 - 已知 bug 根因 + 解决方案
@@ -192,8 +194,8 @@ NetEase/QQ share `SearchCandidate<ID>` + `selectBestCandidate()` priority chain:
 ./build_app.sh                        # Build + sign → nanoPod.app
 swift build                           # Build only (quick validation)
 open nanoPod.app                      # Launch
-swift test                            # 77 unit tests (Parser/Scorer/Matching)
-swift run LyricsVerifier run          # Run 15 lyrics regression tests
+swift test                            # 889 unit tests (needs DEVELOPER_DIR=/Applications/Xcode.app; CLT has no XCTest)
+swift run LyricsVerifier run          # Run the 82 predefined lyrics regression cases (network; provider weather applies)
 swift run LyricsVerifier check "Song" "Artist" duration  # Test a single song
 swift run LyricsVerifier library --recent 20                              # AM 资料库测试
 swift run LyricsVerifier benchmark                                       # 100 首全球基准测试

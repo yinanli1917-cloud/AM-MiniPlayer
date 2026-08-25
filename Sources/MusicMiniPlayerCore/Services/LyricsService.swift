@@ -751,6 +751,61 @@ public class LyricsService: ObservableObject {
             currentSongPersistentID = persistentID
         }
 
+        // 🔑 Synchronous disk pre-flight (founder ruling 2026-08-25: a cached song must NEVER show a
+        // spinner). Runs in THIS main-thread tick, before .searching is published, so SwiftUI only
+        // ever sees the final .content — no spinner, no line-level→word-level upgrade flip (bugs
+        // T2#1/#3). Only fires on a genuine miss (no in-memory content applied above) and reuses the
+        // fetcher's correctness-gated word-level-only lookup (non-CJK + canUseImmediateCachedLyrics;
+        // CJK stays on the async path pending the Phase-2 exact-key design). A miss falls through to
+        // the normal async fetch — no regression.
+        if !forceRefresh,
+           !appliedProvisionalCache,
+           !shouldPreserveDisplayedLyricsDuringFetch,
+           let diskResult = fetcher.immediateSyncedDiskLyrics(
+               title: title,
+               artist: artist,
+               duration: duration,
+               album: album,
+               translationEnabled: showTranslation
+           )
+           // Phase 2: CJK titles (which the non-CJK Phase-1 lookup returns nil for) get a
+           // native-exact disk serve — same exact-key identity, word-level, tight duration gate.
+           // Only evaluated when Phase 1 returned nil; the outer conditions already gated this block.
+           ?? fetcher.immediateNativeExactDiskLyrics(
+               title: title,
+               artist: artist,
+               duration: duration,
+               album: album,
+               translationEnabled: showTranslation
+           ) {
+            let aligned = fetcher.rescaleTimestamps(diskResult.lyrics, duration: duration)
+            let processed = parser.processLyrics(aligned)
+            let hasSourceTranslation = processed.lyrics.contains { $0.hasTranslation }
+            let cacheItem = CachedLyricsItem(
+                lyrics: processed.lyrics,
+                firstRealLyricIndex: processed.firstRealLyricIndex,
+                hasSourceTranslation: hasSourceTranslation,
+                isUnsynced: false,
+                source: diskResult.source.rawValue,
+                score: diskResult.score
+            )
+            lyricsCache.setObject(cacheItem, forKey: songID as NSString)
+            applyLyrics(
+                processed.lyrics,
+                firstRealLyricIndex: processed.firstRealLyricIndex,
+                hasSourceTranslation: hasSourceTranslation,
+                isUnsynced: false,
+                songID: songID,
+                title: title,
+                artist: artist,
+                stableSongID: stableSongID,
+                duration: duration,
+                album: album
+            )
+            DebugLogger.log("LyricsService", "⚡ Immediate disk pre-flight (word-level, no spinner): '\(songID)' src=\(diskResult.source.rawValue) \(processed.lyrics.count)L")
+            return
+        }
+
         // Set the display state synchronously to avoid races. `.searching`
         // already makes the view draw loadingView instead of
         // scrollableLyricsContent, so clearing lyrics here is unnecessary and

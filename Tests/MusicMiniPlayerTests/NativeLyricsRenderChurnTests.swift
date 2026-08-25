@@ -63,15 +63,18 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
     }
 
     @MainActor
-    private func config(_ rowList: [LayerBackedLyricRow], current: Int, mc: MusicController) -> LyricsLayerRendererConfiguration {
+    private func config(
+        _ rowList: [LayerBackedLyricRow], current: Int, mc: MusicController,
+        hasSyllableSync: Bool = true, isManualScrolling: Bool = false
+    ) -> LyricsLayerRendererConfiguration {
         var heights: [Int: CGFloat] = [:]
         for r in rowList { heights[r.index] = 56 }
         return LyricsLayerRendererConfiguration(
             rows: rowList, currentIndex: current, anchorY: 300, rowWidth: 320,
             renderedIndices: rowList.map(\.index), accumulatedHeights: heights, lineTargetIndices: [:],
-            lineInterval: 4, hasSyllableSync: true,
+            lineInterval: 4, hasSyllableSync: hasSyllableSync,
             trackContext: DiagnosticTrackContext(title: "T", artist: "A", album: "Al", duration: 240),
-            isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: false, reduceMotion: false,
+            isWaveTimelineDiagnosticsEnabled: false, isManualScrolling: isManualScrolling, reduceMotion: false,
             suppressInitialMotion: false, pendingTranslationLineIndices: [], showTranslation: false,
             isTranslating: false, translationFailed: false, interludeAfterIndex: nil, directSnapRequest: nil,
             controlsVisible: false, musicController: mc,
@@ -80,6 +83,18 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
             onManualScrollChromeReset: nil, onHeightMeasured: { _, _ in }, lineMotionSamplingEnabled: false,
             lineMotionFocusedSamplingUntil: Date.distantPast, lineMotionFirstRealDisplayIndex: 0,
             onLineMotionFrames: { _, _, _, _ in })
+    }
+
+    // Line-level (no per-word timing) counterpart of makeRows — same text/timing shape, so any
+    // measured-height difference between the two variants comes from hasSyllableSync alone.
+    private func makeLineLevelRows(_ n: Int) -> [LayerBackedLyricRow] {
+        (0..<n).map { i in
+            let s = TimeInterval(i) * 1.2, e = TimeInterval(i) * 1.2 + 1.2
+            let line = LyricLine(text: "line \(i) words here", startTime: s, endTime: e)
+            let dl = DisplayLyricLine(id: "r\(i)", sourceIndex: i, segmentIndex: 0, segmentCount: 1, line: line)
+            return LayerBackedLyricRow(id: dl.id, index: i, displayLine: dl, sourceLine: line,
+                                       isPrelude: false, preludeEndTime: 0, interlude: nil)
+        }
     }
 
     // A deterministic NOISY clock like the real SB clock: forward on average, but dips backward on
@@ -206,16 +221,25 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         let previousIndex = 5
         let nextIndex = previousIndex + 1
         let previousStart = rows[previousIndex].displayLine.line.startTime
-        let handoffTime = rows[nextIndex].displayLine.line.startTime
 
-        mc.syncPlaybackClock(to: previousStart + 0.35, playing: true)
+        // Warm up for LONGER than the surface's 0.8 s appear (force-snap) window. While that window is
+        // open the surface runs in directSnap mode and — because this drive feeds the surface's own
+        // semantic index back as `current` — cannot advance the line, so a boundary that falls inside
+        // the window defers the handoff until the window expires (~0.5 s) while the still-active line's
+        // bright overlay follows the designed post-line afterglow. That reads as "faded before it
+        // moved" and is a harness artifact, not a handoff desync: the 0.25 s warm-up this test used to
+        // have went red 3/3 on a ~20 ms/iteration host for exactly that reason.
+        // NativeLyricsHandoffClockTests reproduces both outcomes under injected lockstep clocks.
+        mc.syncPlaybackClock(to: previousStart + 0.1, playing: true)
         surface.configure(config(rows, current: previousIndex, mc: mc))
         surface.layoutSubtreeIfNeeded()
-        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 0.35, duration: 0.25, noisy: false)
+        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 0.1, duration: 0.9, noisy: false)
 
         surface.debugResetCensus()
         surface.debugCensusEnabled = true
-        drive(surface: surface, musicController: mc, rows: rows, from: handoffTime - 0.08, duration: 1.2, noisy: false)
+        // Continue from where the warm-up stopped (0.2 s before the boundary) rather than jumping the
+        // clock, so the census holds a pre-handoff baseline of the previous row.
+        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 1.0, duration: 1.4, noisy: false)
 
         guard let track = surface.debugCensusByIndex[previousIndex] else {
             return XCTFail("previous row \(previousIndex) must stay mounted across the handoff")
@@ -295,5 +319,195 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
             0.03,
             "previous row took a single-frame scale step larger than the smooth-motion budget"
         )
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Layout-stability gate (founder report: "歌词在滚动前后/active 前后，行间距会变" —
+    // line spacing changes around the active-line handoff and around manual scroll).
+    //
+    // A row's `view.frame` alone is NOT what the eye sees: applyFrame also applies a scale
+    // transform (view.setPositioning) around the layer's default CENTER anchor point, and that
+    // transform never touches `.frame` — so a scale != 1 on the active row makes it visually
+    // grow/shrink from its own middle without the layout's bookkeeping (frame, next row's Y)
+    // changing at all. Reading raw `.frame` would be blind to exactly the effect the founder is
+    // describing. This computes the EFFECTIVE on-screen rect (frame re-centered at the applied
+    // scale) so the gap check matches what a human eye perceives, not just the layout ledger.
+    // The GAP between two consecutive rows' effective rects (not their absolute Y) is what must
+    // stay constant: a uniform shift of every row below a height change is invisible to a
+    // relative-gap check and IS legitimate (normal scroll), so this only fires on a genuine
+    // spacing change.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    @MainActor
+    private func rowFrames(_ surface: NativeLyricsSurfaceView, count: Int) -> [Int: CGRect] {
+        var frames: [Int: CGRect] = [:]
+        for i in 0..<count {
+            guard let view = surface.debugRowView(forIndex: i), view.frame.height > 1 else { continue }
+            let frame = view.frame
+            let scale = view.positioningTransform.a
+            if scale == 1 {
+                frames[i] = frame
+            } else {
+                let scaledHeight = frame.height * scale
+                frames[i] = CGRect(x: frame.minX, y: frame.midY - scaledHeight / 2, width: frame.width, height: scaledHeight)
+            }
+        }
+        return frames
+    }
+
+    // isFlipped == true on NativeLyricsRowView (Y increases downward), so a healthy stack has
+    // row[i+1].minY at row[i].maxY plus whatever intentional gap the layout wants.
+    private func lineGaps(_ frames: [Int: CGRect]) -> [Int: CGFloat] {
+        var gaps: [Int: CGFloat] = [:]
+        for i in frames.keys {
+            guard let a = frames[i], let b = frames[i + 1] else { continue }
+            gaps[i] = b.minY - a.maxY
+        }
+        return gaps
+    }
+
+    private func assertGapsStable(
+        before: [Int: CGFloat], after: [Int: CGFloat],
+        excludingRowIndices activeIndices: Set<Int>, tolerance: CGFloat = 1.0,
+        context: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        var drifted: [String] = []
+        for (idx, beforeGap) in before.sorted(by: { $0.key < $1.key }) {
+            // A gap touching an active row (idx or idx+1) may move — that's the active line's
+            // own intended motion. Every OTHER gap is between two non-active lines and must not.
+            if activeIndices.contains(idx) || activeIndices.contains(idx + 1) { continue }
+            guard let afterGap = after[idx] else { continue }
+            if abs(afterGap - beforeGap) > tolerance {
+                drifted.append("gap[\(idx)/\(idx + 1)]: \(String(format: "%.2f", beforeGap)) -> \(String(format: "%.2f", afterGap)) (Δ\(String(format: "%.2f", afterGap - beforeGap)))")
+            }
+        }
+        XCTAssertTrue(drifted.isEmpty, "\(context) — non-active line gaps drifted:\n" + drifted.joined(separator: "\n"), file: file, line: line)
+    }
+
+    /// Re-configures at a FROZEN playback time for `ticks` frames — lets the position/visual
+    /// springs run as long as needed to fully converge without the wall-clock line-advance timer
+    /// pushing the semantic index into the NEXT line (which a long `drive()` window would do).
+    @MainActor
+    private func settleInPlace(surface: NativeLyricsSurfaceView, musicController: MusicController, rows: [LayerBackedLyricRow], at playbackTime: TimeInterval, hasSyllableSync: Bool, ticks: Int) {
+        musicController.syncPlaybackClock(to: playbackTime, playing: true)
+        for _ in 0..<ticks {
+            surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: musicController, hasSyllableSync: hasSyllableSync))
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
+        }
+    }
+
+    @MainActor
+    private func runHandoffGapStabilityCheck(rows: [LayerBackedLyricRow], hasSyllableSync: Bool, label: String) {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+
+        let previousIndex = 5
+        let nextIndex = previousIndex + 1
+        let previousStart = rows[previousIndex].displayLine.line.startTime
+        let handoffTime = rows[nextIndex].displayLine.line.startTime
+
+        mc.syncPlaybackClock(to: previousStart + 0.35, playing: true)
+        surface.configure(config(rows, current: previousIndex, mc: mc, hasSyllableSync: hasSyllableSync))
+        surface.layoutSubtreeIfNeeded()
+        // Settle windows on BOTH sides (springs are critically-damped, mass 1/stiffness
+        // 100/damping 20 — converges within a few hundred ms): the gate must compare two FULLY
+        // SETTLED states, not two different amounts of spring lag, or it would flag normal
+        // transition animation as a bug. Windows are sized to stay inside the 1.2s test line so
+        // driving to "settle" doesn't itself cross into the next handoff.
+        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 0.35, duration: 0.8, noisy: false)
+        settleInPlace(surface: surface, musicController: mc, rows: rows, at: previousStart + 1.15, hasSyllableSync: hasSyllableSync, ticks: 180)
+
+        let beforeGaps = lineGaps(rowFrames(surface, count: rows.count))
+
+        drive(surface: surface, musicController: mc, rows: rows, from: handoffTime + 0.35, duration: 0.8, noisy: false)
+        settleInPlace(surface: surface, musicController: mc, rows: rows, at: handoffTime + 1.15, hasSyllableSync: hasSyllableSync, ticks: 180)
+
+        let afterGaps = lineGaps(rowFrames(surface, count: rows.count))
+
+        assertGapsStable(
+            before: beforeGaps, after: afterGaps,
+            excludingRowIndices: [previousIndex, nextIndex],
+            context: "\(label) handoff \(previousIndex)->\(nextIndex)"
+        )
+    }
+
+    // DIAGNOSED, NOT YET FIXED (founder report: "歌词在滚动前后/active 前后，行间距会变").
+    // Root cause (see LyricsPresentationModels.swift:388-408, NativeLyricsVisualTarget.amllTarget):
+    // non-active rows' blur grows with `dist = |displayIndex - currentIndex|`
+    // (`renderedBlur`), and that blur renders OUTSIDE the row's `.frame` bounds
+    // (`layer.masksToBounds = false`, NativeLyricsRowView.swift:916 and sublayers) — a real
+    // CIGaussianBlur visually expands a layer's apparent footprint. So every non-active row's
+    // visual footprint is a function of its CURRENT distance from the active line; the instant
+    // the active line moves by one, EVERY row's distance — and so its blur, and so its visually
+    // perceived edges — shifts by one step, simultaneously, network-wide. That is very likely
+    // the felt "spacing changed" effect. Confirmed NOT explained by measured text height, font
+    // size, or scale (all verified distance/active-state-independent for non-active rows).
+    // A second, less-isolated contributor remains: the SPECIFIC set of drifted gaps was not
+    // stable across different settle-window lengths in this test's own iteration (see git history
+    // of this method), suggesting an additional position-settling interaction near the
+    // `nativeLyricAutoVisibleRowRadius` visible-window edge that was not pinned to one line
+    // within this diagnosis pass.
+    // This lands squarely inside the depth-blur / wave-motion cluster that postmortems 004 and
+    // the lyrics-ux-contract.md defect log required repeated ON-DEVICE visual confirmation to
+    // touch safely (a purely offline fix risks the same "passed tests, still looked wrong"
+    // failure mode documented there). Per plan, stopping here: XCTExpectFailure keeps this
+    // reproduction green in CI (and will itself fail — loudly — the day someone's fix makes the
+    // assertion pass, forcing a conscious removal of this wrapper) instead of leaving a
+    // permanently-red test in the suite.
+    @MainActor
+    func test_lineGapsStableAcrossHandoff_wordLevel() {
+        XCTExpectFailure("Diagnosed, not fixed — see comment above. Founder/product decision needed on the blur-footprint tradeoff before an on-device-verified fix.")
+        runHandoffGapStabilityCheck(rows: makeRows(20), hasSyllableSync: true, label: "word-level")
+    }
+
+    @MainActor
+    func test_lineGapsStableAcrossHandoff_lineLevel() {
+        XCTExpectFailure("Diagnosed, not fixed — see comment above test_lineGapsStableAcrossHandoff_wordLevel. Founder/product decision needed on the blur-footprint tradeoff before an on-device-verified fix.")
+        runHandoffGapStabilityCheck(rows: makeLineLevelRows(20), hasSyllableSync: false, label: "line-level")
+    }
+
+    @MainActor
+    private func runManualScrollGapStabilityCheck(rows: [LayerBackedLyricRow], hasSyllableSync: Bool, label: String) {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+        surface.debugSkipDedupe = true
+
+        let currentIndex = 5
+        mc.syncPlaybackClock(to: rows[currentIndex].displayLine.line.startTime + 0.35, playing: true)
+        surface.configure(config(rows, current: currentIndex, mc: mc, hasSyllableSync: hasSyllableSync))
+        surface.layoutSubtreeIfNeeded()
+        drive(surface: surface, musicController: mc, rows: rows, from: rows[currentIndex].displayLine.line.startTime + 0.35, duration: 0.3, noisy: false)
+
+        let beforeGaps = lineGaps(rowFrames(surface, count: rows.count))
+
+        surface.debugBeginManualScroll()
+        XCTAssertTrue(surface.debugManualScrollActive, "precondition: manual scroll engaged")
+        surface.configure(config(rows, current: currentIndex, mc: mc, hasSyllableSync: hasSyllableSync, isManualScrolling: true))
+        for _ in 0..<12 { RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0)) }
+
+        let duringGaps = lineGaps(rowFrames(surface, count: rows.count))
+
+        assertGapsStable(
+            before: beforeGaps, after: duringGaps,
+            excludingRowIndices: [currentIndex],
+            context: "\(label) manual-scroll enter (current=\(currentIndex))"
+        )
+    }
+
+    @MainActor
+    func test_lineGapsStableEnteringManualScroll_wordLevel() {
+        runManualScrollGapStabilityCheck(rows: makeRows(20), hasSyllableSync: true, label: "word-level")
+    }
+
+    @MainActor
+    func test_lineGapsStableEnteringManualScroll_lineLevel() {
+        runManualScrollGapStabilityCheck(rows: makeLineLevelRows(20), hasSyllableSync: false, label: "line-level")
     }
 }
