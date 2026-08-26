@@ -315,6 +315,10 @@ final class NativeLyricsSurfaceView: NSView {
     private var lastAppliedConfigureSignature: String?
     #if DEBUG
     var debugSkipDedupe = false
+    /// Soak/churn seams: bounded-growth proxies (mounted rows, visual-state map, reuse pool).
+    var debugMountedRowCount: Int { rowViews.count }
+    var debugVisualStateCount: Int { visualStates.count }
+    var debugReusePoolCount: Int { rowViewReusePool.count }
     /// A/B seam: when true, visualCurrentIndex binds the visual demotion to the SEMANTIC line index
     /// (pre-1e1ffbf), instead of the scroll wave's per-row targetIndex (current). Headless-only.
     static var debugForceSemanticVisualIndex = false

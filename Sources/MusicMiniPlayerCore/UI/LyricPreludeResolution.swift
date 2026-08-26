@@ -20,6 +20,18 @@ import Foundation
 // This pure function never forms an inverted range: when the scan start is not strictly inside the
 // source array it simply falls through to the prelude line's own end time (the original fallback).
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/// Glyphs treated as prelude / interlude ellipsis rows (the "…" display line).
+/// Shared by `LyricLayerRowBuilder` and `LyricsView` so the crash-era scan and
+/// the display-line splitter never disagree on what counts as a prelude.
+enum LyricPreludeGlyph {
+    static let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・"]
+
+    static func isEllipsis(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        return ellipsisPatterns.contains(trimmed) || trimmed.isEmpty
+    }
+}
+
 public enum LyricPreludeResolution {
 
     /// Resolve the end time for a prelude/ellipsis display row.

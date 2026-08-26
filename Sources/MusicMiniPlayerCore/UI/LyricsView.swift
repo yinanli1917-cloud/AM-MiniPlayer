@@ -1083,38 +1083,11 @@ public struct LyricsView: View {
     // MARK: - Lyric Line Helpers
 
     private func makeLayerBackedRows(from displayLines: [DisplayLyricLine]) -> [LayerBackedLyricRow] {
-        displayLines.enumerated().map { index, displayLine in
-            let line = displayLine.line
-            let sourceLine = lyricsService.lyrics.indices.contains(displayLine.sourceIndex)
-                ? lyricsService.lyrics[displayLine.sourceIndex]
-                : line
-            let isPrelude = isPreludeEllipsis(line.text)
-            // Crash-safe prelude end-time (was an inline range scan that trapped on an inverted Range
-            // when the display index ran past the source line count — the nanoPod SIGTRAP on CJK
-            // prelude songs). Logic extracted to a pure, tested helper in Core.
-            let preludeEndTime: TimeInterval = isPrelude
-                ? LyricPreludeResolution.preludeEndTime(
-                    displayIndex: index,
-                    preludeLineEndTime: line.endTime,
-                    sourceLines: lyricsService.lyrics,
-                    firstRealIndex: lyricsService.firstRealLyricIndex,
-                    isEllipsis: isPreludeEllipsis
-                )
-                : line.endTime
-            return LayerBackedLyricRow(
-                id: displayLine.id,
-                index: index,
-                displayLine: displayLine,
-                sourceLine: sourceLine,
-                isPrelude: isPrelude,
-                preludeEndTime: preludeEndTime,
-                interlude: displayLine.isLastSegment
-                    ? checkForInterlude(at: displayLine.sourceIndex).map {
-                        LayerBackedLyricInterlude(startTime: $0.startTime, endTime: $0.endTime)
-                    }
-                    : nil
-            )
-        }
+        LyricLayerRowBuilder.makeRows(
+            from: displayLines,
+            sourceLines: lyricsService.lyrics,
+            firstRealLyricIndex: lyricsService.firstRealLyricIndex
+        )
     }
 
 
@@ -1903,19 +1876,7 @@ public struct LyricsView: View {
     // MARK: - Utilities
 
     private func isPreludeEllipsis(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        let ellipsisPatterns = ["...", "…", "⋯", "。。。", "···", "・・・"]
-        return ellipsisPatterns.contains(trimmed) || trimmed.isEmpty
-    }
-
-    private func checkForInterlude(at index: Int) -> (startTime: TimeInterval, endTime: TimeInterval)? {
-        let lyrics = lyricsService.lyrics
-        guard index + 1 < lyrics.count else { return nil }
-        let currentLine = lyrics[index]
-        let nextLine = lyrics[index + 1]
-        if isPreludeEllipsis(currentLine.text) || isPreludeEllipsis(nextLine.text) { return nil }
-        let gap = nextLine.startTime - currentLine.endTime
-        return gap >= 5.0 ? (startTime: currentLine.endTime, endTime: nextLine.startTime) : nil
+        LyricPreludeGlyph.isEllipsis(text)
     }
 
     private func makeDisplayLyricLines(from lyrics: [LyricLine]) -> [DisplayLyricLine] {

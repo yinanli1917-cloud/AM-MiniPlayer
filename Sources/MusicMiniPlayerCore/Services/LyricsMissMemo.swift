@@ -73,4 +73,12 @@ final class LyricsMissMemo<Payload> {
     func clear(forKey key: String) {
         lock.withLock { _ = entries.removeValue(forKey: key) }
     }
+
+    /// Soak/test seam: live entry count after pruning anything past TTL at `now`.
+    func entryCountForTesting(at now: Date = Date()) -> Int {
+        lock.withLock {
+            entries = entries.filter { now.timeIntervalSince($0.value.recordedAt) < ttl }
+            return entries.count
+        }
+    }
 }

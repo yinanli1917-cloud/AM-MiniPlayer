@@ -249,10 +249,9 @@ public class LyricsService: ObservableObject {
     private let networkPathMonitor = NWPathMonitor()
     private let networkPathMonitorQueue = DispatchQueue(label: "com.nanoPod.lyrics.network-path", qos: .utility)
     /// Last observed path state. Only touched on networkPathMonitorQueue
-    /// (serial), so no extra locking is needed. Optional: `nil` until the
-    /// first callback, so the initial "already online" report can never be
-    /// mistaken for a recovery transition.
-    private var lastNetworkPathSatisfied: Bool?
+    /// (serial). Optional: `nil` until the first callback, so the initial
+    /// "already online" report can never be mistaken for a recovery transition.
+    private let networkPathLatch = LyricsNetworkPathLatch()
 
     /// Clears translation text from all lyric lines.
     private func clearAllTranslations() {
@@ -382,13 +381,9 @@ public class LyricsService: ObservableObject {
     private func startNetworkRecoveryMonitor() {
         networkPathMonitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            let isSatisfied = path.status == .satisfied
-            let wasSatisfied = self.lastNetworkPathSatisfied
-            self.lastNetworkPathSatisfied = isSatisfied
-            // Only an offline→online TRANSITION triggers recovery. The very
-            // first callback (wasSatisfied == nil) is the current state, not
-            // a transition, and repeated .satisfied reports are no-ops.
-            guard isSatisfied, wasSatisfied == false else { return }
+            // Latch decides: first callback is state, not a transition;
+            // only offline→online fires. Repeated .satisfied reports are no-ops.
+            guard self.networkPathLatch.note(isSatisfied: path.status == .satisfied) else { return }
             Task { @MainActor in
                 self.retryAfterNetworkRecoveryIfNeeded()
             }
@@ -401,7 +396,10 @@ public class LyricsService: ObservableObject {
         // Re-fetch ONLY when the current track is parked on the
         // network-unreachable terminal — any other state (lyrics shown,
         // genuine "Lyrics unavailable", still searching) needs no recovery.
-        guard displayState == .networkUnreachable, !currentSongTitle.isEmpty else { return }
+        guard LyricsNetworkRecoveryPolicy.shouldRetryFetch(
+            displayState: displayState,
+            currentSongTitle: currentSongTitle
+        ) else { return }
         DebugLogger.log("LyricsService", "🛜 Connectivity returned — re-fetching lyrics for current track '\(currentSongTitle)'")
         // Plain re-issue (no forceRefresh): the empty-with-error state passes
         // shouldRetryAfterEmptyCurrentResult, and nothing negative was cached
