@@ -1089,17 +1089,18 @@ public struct LyricsView: View {
                 ? lyricsService.lyrics[displayLine.sourceIndex]
                 : line
             let isPrelude = isPreludeEllipsis(line.text)
-            let preludeEndTime: TimeInterval = {
-                guard isPrelude else { return line.endTime }
-                if index == 0 && lyricsService.firstRealLyricIndex < lyricsService.lyrics.count {
-                    return lyricsService.lyrics[lyricsService.firstRealLyricIndex].startTime
-                }
-                for nextIndex in max(index + 1, lyricsService.firstRealLyricIndex)..<lyricsService.lyrics.count {
-                    let nextLine = lyricsService.lyrics[nextIndex]
-                    if !isPreludeEllipsis(nextLine.text) { return nextLine.startTime }
-                }
-                return line.endTime
-            }()
+            // Crash-safe prelude end-time (was an inline range scan that trapped on an inverted Range
+            // when the display index ran past the source line count — the nanoPod SIGTRAP on CJK
+            // prelude songs). Logic extracted to a pure, tested helper in Core.
+            let preludeEndTime: TimeInterval = isPrelude
+                ? LyricPreludeResolution.preludeEndTime(
+                    displayIndex: index,
+                    preludeLineEndTime: line.endTime,
+                    sourceLines: lyricsService.lyrics,
+                    firstRealIndex: lyricsService.firstRealLyricIndex,
+                    isEllipsis: isPreludeEllipsis
+                )
+                : line.endTime
             return LayerBackedLyricRow(
                 id: displayLine.id,
                 index: index,
