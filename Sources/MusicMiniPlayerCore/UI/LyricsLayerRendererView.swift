@@ -334,6 +334,17 @@ final class NativeLyricsSurfaceView: NSView {
     // they are only revealed once the loop has committed a real, spread frame. Counted down in
     // presentationTick; a fallback in configure reveals immediately when no loop will run.
     private var initialRevealTicksRemaining = 0
+
+    /// The renderer's wall clock. In release this is exactly `CACurrentMediaTime()`; a DEBUG test
+    /// seam (`debugNowOverride`) can inject a deterministic clock. MUST live at plain class scope
+    /// (outside the DEBUG-only helper region below) so release callers can find it.
+    private func currentMediaTime() -> CFTimeInterval {
+        #if DEBUG
+        if let debugNowOverride { return debugNowOverride() }
+        #endif
+        return CACurrentMediaTime()
+    }
+
     #if DEBUG
     private var debugBypassInitialRevealGate = false
     var debugInitialMeasurementsPending: Bool {
@@ -366,13 +377,6 @@ final class NativeLyricsSurfaceView: NSView {
         isDebugDrivenTick = false
     }
     #endif
-
-    private func currentMediaTime() -> CFTimeInterval {
-        #if DEBUG
-        if let debugNowOverride { return debugNowOverride() }
-        #endif
-        return CACurrentMediaTime()
-    }
     /// The row index the surface currently believes the cursor is over (single hover authority).
     var debugHoveredRowIndex: Int? { hoveredRowIndex }
     /// Drives the geometry hover resolver from a fixed surface-space point (headless: no NSEvent).
