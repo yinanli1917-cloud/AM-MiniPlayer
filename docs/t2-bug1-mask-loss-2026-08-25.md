@@ -53,3 +53,13 @@ DEVELOPER_DIR=/Applications/Xcode.app swift test --filter NativeLyricsMaskHandof
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app swift test --filter NativeLyricsGranularityUpgradeTests
 ```
+
+---
+
+## 更正与收口（2026-08-25 晚）
+
+创始人更正观察：不是"行级→词级一次性升级"，而是**"逐字→逐行→逐字，随时来回振荡"**，并疑为性能问题。本文上半部分的 granularity-一次性升级是一个真实机制、但**不是他看到的主症**。
+
+**真根（代码坐实）**：`applyFetchedLyricsIfCurrent`（LyricsService:~1366）apply 到显示**只守 songID、不比已显示内容质量/粒度**。前台词级显示后，≤9s 的显示 backfill 与**时长校正重取**（MusicController:1252/1299）会**无条件整份替换** self.lyrics 成那一轮竞速结果——某轮 NetEase 超时则 LRCLIB 行级胜出→逐字掉逐行；下轮又逐字。调试日志实证同曲一会话取 2-4 次。这与 >3s 违规同根（发布后那条慢且会改显示的尾巴），详见 [3s 方案页](t2-3s-budget-plan-2026-08-25.md)。
+
+**已修（P1，提交 02eaf3f，创始人经主会话批准）**：① `applyFetchedLyricsIfCurrent` 发布后冻结显示（已有内容则不替换，结果仍缓存供下次）；② 稳定性闸扩展为"内容在屏即不重取同曲"。默认发布后连 line→word 也不升级（零闪）。全测 902/0。手感终验归创始人（新终验构建含 P1）。P2（3s 窗收编 backfill）待诊断数据 + 翻译取舍。
