@@ -95,6 +95,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MetadataWarmupSweep.shared.startIfNeeded()
 
         debugPrint("[AppMain] Setup complete\n")
+        E2EEventLog.emit("app_ready", [
+            "pid": String(ProcessInfo.processInfo.processIdentifier)
+        ])
+        E2EStatusDump.writeCurrent()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -102,6 +106,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        E2EEventLog.emit("app_terminating", [
+            "pid": String(ProcessInfo.processInfo.processIdentifier)
+        ])
+        E2EEventLog.flush()
         DiagnosticsService.shared.prepareForTermination()
         // Stop the warm-up sweep BEFORE flushing so no new resolutions
         // race the final cache write (bundle swap must stay last).

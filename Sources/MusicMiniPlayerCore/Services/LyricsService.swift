@@ -56,6 +56,18 @@ enum LyricsDisplayState: Equatable {
         self == .searching || self == .deepSearching
     }
 
+    /// Stable machine label for the e2e event log. Production callers never
+    /// serialize this unless `NANOPOD_E2E=1`.
+    var e2eLabel: String {
+        switch self {
+        case .searching: return "searching"
+        case .deepSearching: return "deepSearching"
+        case .content: return "content"
+        case .noLyrics: return "noLyrics"
+        case .networkUnreachable: return "networkUnreachable"
+        }
+    }
+
     /// Transition for the moment the backfill becomes the only remaining
     /// hope. REQUIRED CORRECTION (adversarial review of #5): deep-searching
     /// may only replace the plain spinner — content already on screen
@@ -551,6 +563,13 @@ public class LyricsService: ObservableObject {
         }
 
         DebugLogger.log("LyricsService", "🚀 fetchLyrics START: '\(title)' by '\(artist)' dur=\(duration) album='\(album)' (forceRefresh=\(forceRefresh), curSongID='\(currentSongID ?? "nil")', curDur=\(currentSongDuration), curAlbum='\(currentSongAlbum)')")
+        E2EEventLog.emit("fetch_start", [
+            "title": title,
+            "artist": artist,
+            "duration": String(format: "%.3f", duration),
+            "album": album,
+            "forceRefresh": forceRefresh ? "true" : "false"
+        ])
         recordDiagnosticsLyricsFetchStarted(
             title: title,
             artist: artist,
@@ -650,6 +669,14 @@ public class LyricsService: ObservableObject {
             displayState = verdict.displayState
             error = verdict.errorMessage
             DebugLogger.log("MissMemo", "⚡ confirmed-miss replay served from session memo: '\(songID)' (\(verdict.errorMessage))")
+            E2EEventLog.emit("no_lyrics", [
+                "title": title,
+                "artist": artist,
+                "verdict": String(describing: verdict),
+                "displayState": displayState.e2eLabel,
+                "source": "missMemo"
+            ])
+            E2EStatusDump.writeCurrent()
             recordDiagnosticsLyricsMiss(
                 title: title,
                 artist: artist,
@@ -688,6 +715,14 @@ public class LyricsService: ObservableObject {
                 displayState = .noLyrics
                 error = "No lyrics available"
                 DebugLogger.log("LyricsService", "❌ Using cached no-lyrics result")
+                E2EEventLog.emit("no_lyrics", [
+                    "title": title,
+                    "artist": artist,
+                    "verdict": "noLyrics",
+                    "displayState": displayState.e2eLabel,
+                    "source": "memoryCache"
+                ])
+                E2EStatusDump.writeCurrent()
                 recordDiagnosticsLyricsMiss(
                     title: title,
                     artist: artist,
@@ -1115,6 +1150,14 @@ public class LyricsService: ObservableObject {
         }
         displayState = verdict.displayState
         error = verdict.errorMessage
+        E2EEventLog.emit("no_lyrics", [
+            "title": currentSongTitle,
+            "artist": currentSongArtist,
+            "verdict": String(describing: verdict),
+            "displayState": displayState.e2eLabel,
+            "source": "terminalMiss"
+        ])
+        E2EStatusDump.writeCurrent()
     }
 
     private func launchAuthoritativeBackfill(
@@ -1429,6 +1472,19 @@ public class LyricsService: ObservableObject {
         // Diagnostic: log the first real lyric line so content correctness can be verified.
         let firstReal = newLyrics.dropFirst(firstRealLyricIndex).first { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty && $0.text != "⋯" }
         DebugLogger.log("LyricsService", "📋 Applied: '\(songID)' \(newLyrics.count)L, firstReal=\"\(firstReal?.text.prefix(40) ?? "nil")\", unsynced=\(isUnsyncedLyrics)")
+        let translationStats = Self.translationCoverageStats(in: newLyrics)
+        E2EEventLog.emit("lyrics_applied", [
+            "title": title,
+            "artist": artist,
+            "lineCount": String(newLyrics.count),
+            "hasTranslation": hasTranslation ? "true" : "false",
+            "sourceTranslation": hasSourceTranslation ? "true" : "false",
+            "translationLineCount": String(translationStats.translated),
+            "unsynced": isUnsyncedLyrics ? "true" : "false",
+            "firstReal": String(firstReal?.text.prefix(80) ?? ""),
+            "displayState": displayState.e2eLabel
+        ])
+        E2EStatusDump.writeCurrent()
 
         // 🔑 Stability guard: record when good lyrics were applied.
         // This blocks re-fetches from variant titles, duration corrections,
@@ -1880,6 +1936,12 @@ public class LyricsService: ObservableObject {
         let songIDBeforeAwait = currentSongID
         let lyricsCountBeforeAwait = lyrics.count
         debugLogPublic("🔄 Starting translation: \(eligibleIndices.count)/\(lyricsCountBeforeAwait) lines")
+        E2EEventLog.emit("translation_start", [
+            "title": currentSongTitle,
+            "artist": currentSongArtist,
+            "eligible": String(eligibleIndices.count),
+            "lyricsCount": String(lyricsCountBeforeAwait)
+        ])
 
         let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
         guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
@@ -1944,6 +2006,14 @@ public class LyricsService: ObservableObject {
             }
         }
         debugLogPublic("✅ Translation completed: \(translatedTexts.count) lines")
+        E2EEventLog.emit("translation_complete", [
+            "title": currentSongTitle,
+            "artist": currentSongArtist,
+            "translatedCount": String(translatedTexts.count),
+            "hasTranslation": hasTranslation ? "true" : "false",
+            "displayState": displayState.e2eLabel
+        ])
+        E2EStatusDump.writeCurrent()
     }
 
     // ========================================================================

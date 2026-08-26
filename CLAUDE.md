@@ -63,6 +63,7 @@ Sources/
 │   │   ├── LanguageUtils.swift        - Language detection + S/T Chinese conversion + Japanese reading (CFStringTokenizer) + two-lane romanized-title corroboration
 │   │   ├── MatchingUtils.swift        - Matching score utilities
 │   │   ├── DebugLogger.swift          - Debug logging
+│   │   ├── E2EEventLog.swift          - 真 app 端到端冒烟：NANOPOD_E2E=1 才写 JSONL 事件 + status 快照（生产默认无 I/O）
 │   │   ├── NSImage+AverageColor.swift - Color extraction + brightness sampling
 │   │   ├── MetadataDiskCache.swift    - Persistent metadata cache（CN/多区域两层独立字典 + 防抖落盘 + flush + v8 行级 evidence 戳）
 │   │   ├── SBTimeoutRunner.swift      - ScriptingBridge timeout wrapper
@@ -112,6 +113,7 @@ Tests/MusicMiniPlayerTests/         - 889 个单元测试（2026-08-21 `swift te
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
 
 scripts/fix_menubar.py             - macOS 26 ControlCenter menu bar database fix
+scripts/e2e_smoke.sh               - 真 app 端到端冒烟（构建→启动→osascript 驱 Music→JSONL 断言；跑前静音、跑完恢复）
 
 docs/lyrics_test_cases.json        - 82 条预定义歌词测试用例（`LyricsVerifier run` 全量跑）
 docs/lyrics_benchmark_cases.json   - 100 首全球基准测试（10 语言区域 × 10 首）
@@ -203,6 +205,7 @@ swift run LyricsVerifier library --recent 20                              # AM �
 swift run LyricsVerifier benchmark                                       # 100 首全球基准测试
 swift run LyricsVerifier benchmark --region ko                           # 按区域筛选 (en/ko/ja/zh/es/hi/fr/pt/th/ar)
 swift run LyricsVerifier benchmark --no-local-translation                # 跳过本地 ML 翻译验证
+./scripts/e2e_smoke.sh            # 真 app 端到端冒烟（静音+恢复；断言 JSONL，不看屏幕）
 ```
 
 Config files: `Package.swift`, `build_app.sh`, `Resources/AppIcon.icns`

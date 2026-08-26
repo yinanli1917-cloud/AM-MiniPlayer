@@ -189,6 +189,21 @@ public class MusicController: ObservableObject {
 
     /// Records an in-app seek so the native renderer snaps to the new line instead of waving to it.
     func registerSeek() { seekGeneration &+= 1 }
+
+    func emitE2ESeekIfNeeded(from: TimeInterval, to: TimeInterval, playing: Bool) {
+        guard E2EEventLog.isEnabled else { return }
+        let dt = abs(to - from)
+        guard dt > 2.0 else { return }
+        E2EEventLog.emit("seek_observed", [
+            "from": String(format: "%.3f", from),
+            "to": String(format: "%.3f", to),
+            "dt": String(format: "%.3f", dt),
+            "playing": playing ? "true" : "false",
+            "title": currentTrackTitle,
+            "artist": currentArtist
+        ])
+        E2EStatusDump.writeCurrent()
+    }
     var lastUserActionTime: Date = .distantPast
 
     public var lyricsService: LyricsService { LyricsService.shared }
@@ -625,6 +640,9 @@ public class MusicController: ObservableObject {
         logger.info("✅ Successfully created and stored SBApplication for Music.app")
 
         let isRunning = app.isRunning
+        E2EEventLog.emit("music_connected", [
+            "musicRunning": isRunning ? "true" : "false"
+        ])
         if !isRunning {
             debugPrint("🚀 [connect] Music.app is not running, launching it...\n")
             app.activate()
@@ -1154,6 +1172,13 @@ public class MusicController: ObservableObject {
     private func handleTrackChange(name: String, artist: String, album: String) {
         logger.info("🎵 Track changed (notification): \(name) - \(artist)")
         logToFile("🎵 Track changed: \(name) - \(artist)")
+        E2EEventLog.emit("track_change", [
+            "title": name,
+            "artist": artist,
+            "album": album,
+            "reason": "notification"
+        ])
+        E2EStatusDump.writeCurrent()
 
         lastPolledPosition = 0  // Reset so position-jump detection doesn't false-trigger
         currentPersistentID = nil
@@ -1487,6 +1512,12 @@ public class MusicController: ObservableObject {
                                 self.pendingSnapshotTrackTitle = nil
                                 self.pendingSnapshotTrackArtist = nil
                                 DebugLogger.log("Poll", "🎵 Track change confirmed: '\(self.currentTrackTitle)' → '\(snapshot.trackName)' (reason: \(reason))")
+                                E2EEventLog.emit("track_change", [
+                                    "title": snapshot.trackName,
+                                    "artist": snapshot.trackArtist,
+                                    "fromTitle": self.currentTrackTitle,
+                                    "reason": reason
+                                ])
                                 self.processPlayerState(snapshot)
                             } else {
                                 self.pendingSnapshotTrackTitle = snapshot.trackName
@@ -1634,6 +1665,7 @@ public class MusicController: ObservableObject {
                 }
                 if self.seekPending || timeDiff > 2.0 || shouldCorrectVisibleLyrics {
                     let wasSeeking = self.seekPending
+                    self.emitE2ESeekIfNeeded(from: self.currentTime, to: position, playing: playing)
                     self.currentTime = position
                     self.seekPending = false
                     // 🔑 Update lyrics on hard time sync (seek, pause, or large drift).
@@ -2034,6 +2066,9 @@ public class MusicController: ObservableObject {
         syncPlaybackClock(to: s.position, playing: isPlaying, at: s.measurementTime)
         if seekPending || !isPlaying || timeDiff > 2.0 {
             let wasSeeking = seekPending
+            if !trackChanged {
+                emitE2ESeekIfNeeded(from: currentTime, to: s.position, playing: s.isPlaying)
+            }
             currentTime = s.position
             seekPending = false
             if !wasSeeking && !lyricsService.isManualScrolling {
