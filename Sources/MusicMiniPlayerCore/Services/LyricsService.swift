@@ -485,7 +485,11 @@ public class LyricsService: ObservableObject {
         // Only forceRefresh (user-initiated retry button) bypasses this guard.
         if !forceRefresh,
            let lastGoodTime = lastGoodLyricsTime,
-           Date().timeIntervalSince(lastGoodTime) < stabilityGuardCooldown,
+           // P1: block same-song re-fetch whenever content is ON SCREEN (not just within the short
+           // cooldown). A duration/album correction for a song that already shows lyrics must not
+           // re-fetch (and thus not risk replacing them) — "只在无内容时才 fetch". The cooldown clause
+           // still covers the brief window right after a landing before displayState settles.
+           (displayState == .content || Date().timeIntervalSince(lastGoodTime) < stabilityGuardCooldown),
            !lyrics.isEmpty, error == nil {
             // Same title+artist is acceptable only inside this short cooldown:
             // it prevents a visible second refresh from metadata corrections,
@@ -1363,6 +1367,16 @@ public class LyricsService: ObservableObject {
         await MainActor.run {
             guard self.currentSongID == songID else {
                 DebugLogger.log("LyricsService", "⏭️ Cached but not current song, skipping apply: \(songID)")
+                return
+            }
+            // P1 anti-oscillation (founder 2026-08-25: no mid-stream re-dress): once this song already
+            // has content on screen, a LATER result (a slow foreground winner that differs from a
+            // provisional, the ≤9s backfill, or a duration-correction re-fetch) must NOT replace it —
+            // that unconditional swap was the "逐字→逐行→逐字" oscillation. The result is already cached
+            // above, so the better version simply shows on the next play; the current play never flips.
+            // Only the FIRST publish for a song (display still empty/searching) reaches applyLyrics here.
+            if self.displayState == .content, !self.lyrics.isEmpty {
+                DebugLogger.log("LyricsService", "🧊 Display frozen for '\(songID)' — cached the result but not replacing shown lyrics (P1)")
                 return
             }
             applyLyrics(processed.lyrics,
