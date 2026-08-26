@@ -4,7 +4,7 @@ GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
 
 > **Rules**: Only run `git push` when the user explicitly asks. Never use private APIs. Before handing over to the user, you must determine how to verify or test the bug fix / new feature and execute the verification; stay in the verification loop until confirmed working.
 >
-> **歌词验收硬标准（创始人长期规定，2026-08-25 重申入档）**：所有歌词匹配从播放到出词不得超过 3 秒，含翻译；准确率与性能一样都不能缺。此前只存在于创始人口头，未落档导致各代 agent 不知情——今为唯一权威记载，任何歌词管线改动以此为验收线。
+> **歌词验收硬标准（创始人 A 规则，2026-08-26 拍板，取代 08-25 含翻译全 3s 口径）**：原文歌词从播放到出词，所有路径（缓存命中、未命中、各歌词源、冷启动、切歌、seek）硬保证 ≤3 秒。翻译并行去取：3 秒内到就一起出，没到先出原文、翻译到了无缝补上，不打断不闪烁。准确率与性能一样都不能缺。此前 08-25 口头口径是含翻译全 3s——今为唯一权威记载，任何歌词管线改动以此为验收线。
 >
 > **手感类验证（创始人 2026-08-21 永久规则）**：歌词切行渐隐、滚动、动效这类手感项，自验只做代码层面——单元测试、时间戳日志、可控的假时钟、确定性回放。不用 computer use，不录屏，除非创始人自己提供录屏。自验通过后提醒创始人亲自终验，自动测试通过不能替代。全局规矩见 ~/.claude/CLAUDE.md。
 
@@ -31,6 +31,7 @@ Sources/
 │   │   ├── MetadataWarmupSweep.swift      - 启动元数据预热：每 schema 版本一次，后台串行解析队列/最近曲目缺失行（utility QoS + 让位前台抓取 + 可整体取消，仅元数据不抓歌词）
 │   │   └── Lyrics/
 │   │       ├── LyricsFetcher.swift              - GAMMA pipeline orchestration + fetchAllSources + AuthoritativeBackfillBudget (回填 9s 硬上限) + DrainExitFacts（排水循环退出闭包拆分：纯项每结果只算一次，事件项留在闭包内）
+│   │       ├── LyricsOriginalDeliverySLA.swift  - 原文 3s A 规则：路径天花板 + 翻译后补不闸原文（2.9/3.1 边界）
 │   │       ├── LyricsSourceFetchers.swift       - 8 source fetch methods (AM/AMLL/NE/QQ/LRCLIB×2/Genius/ovh) + AppleMusicCapabilityLatch（首次 developer-token 失败后进程级跳过 MusicKit，按能力非编译开关）
 │   │       ├── LyricsCandidateSelection.swift   - SearchCandidate + selectBestCandidate + artist alias + 日语读音相等门（取代 romaji 白名单）+ 包含匹配 ≥4 拉丁字符下限
 │   │       ├── LyricsResultSelection.swift      - selectBest + identity consensus + validators + rescale + 写一次记忆化（token/solo/romaji/quality 每结果只算一次；单结果池统一走 solo 裁决备忘录）
@@ -82,7 +83,7 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 889 个单元测试（2026-08-21 `swift test` 实测）
+Tests/MusicMiniPlayerTests/         - 985 个单元测试（2026-08-26 `swift test` 实测；2026-08-21 为 889）
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── JapaneseReadingTests.swift - 日语读音判定（8 对旧白名单 fixture + 前缀扩展负例 + 长音折叠 + fail-closed + 包含下限）
     ├── MetadataDiskCacheTierTests.swift - 元数据缓存层隔离（CN/多区域互不覆盖）+ CN 证据元组往返 + v6 schema 冲洗 + 防抖合并写
@@ -109,6 +110,8 @@ Tests/MusicMiniPlayerTests/         - 889 个单元测试（2026-08-21 `swift te
     └── NativeLyricsInactiveBaseRestoreTests.swift - 去活路径必须还原整行基底文本（活跃级联置 nil 后隐藏字形层导致整行消失）
     └── RadioDurationlessMatchingTests.swift - 电台时长未知匹配：duration=0 是缺失信号非完美信号，标题+艺人双强制；已知时长门槛不变
     └── TranslationWritebackTests.swift - 翻译单发布回写：纯合并函数一次赋值（曾逐行改 @Published 数组多次重渲）
+    └── LyricsOriginalDeliverySLATests.swift - 原文 3s A 规则：十条路径天花板 + 2.9/3.1 边界 + 准确率降级阶梯 + 前台窗口 clip
+    └── LyricsLateTranslationInsertTests.swift - 翻译后补热插入：只改译文、词轴/displayState 不动；托管 surface 3.1s sidecar 不重建 semantic
     └── RadioTrackChangeDebounceTests.swift - 电台换歌确认：无 PID 身份需连续两次一致读数才触发管线（缓冲期标题瞬态不再刷新页面）
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
 

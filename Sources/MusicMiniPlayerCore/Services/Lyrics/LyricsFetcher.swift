@@ -230,8 +230,45 @@ public final class LyricsFetcher {
     // foreground latency under provider/executor load.
     static let foregroundHardDeadline: TimeInterval = 2.70
 
+    /// Clip a per-branch landing window so it cannot outrun the outer
+    /// foreground deadline. Inner 2.95/3.0 caps previously left only 50ms of
+    /// scheduler headroom and leaked as 3.1–4.0s original latency.
+    static func clipToForegroundBudget(_ seconds: TimeInterval) -> TimeInterval {
+        min(max(0, seconds), foregroundHardDeadline)
+    }
+
     var foregroundHardDeadlineForTesting: TimeInterval {
         Self.foregroundHardDeadline
+    }
+
+    func foregroundNativeProviderTimeoutForTesting(
+        title: String,
+        artist: String,
+        album: String
+    ) -> TimeInterval {
+        foregroundNativeProviderTimeout(title: title, artist: artist, album: album)
+    }
+
+    private func foregroundNativeProviderTimeout(
+        title: String,
+        artist: String,
+        album: String
+    ) -> TimeInterval {
+        let shouldProtectNativeProviderRace = LanguageUtils.containsCJK(title)
+            || LanguageUtils.containsCJK(artist)
+            || LanguageUtils.containsCJK(album)
+        let titleIsASCII = LanguageUtils.isPureASCII(title)
+        let shouldProtectAsciiNativeAlias = titleIsASCII && !LanguageUtils.isLikelyEnglishTitle(title)
+        if shouldProtectAsciiNativeAlias {
+            return Self.clipToForegroundBudget(2.55)
+        }
+        if shouldProtectNativeProviderRace && !album.isEmpty {
+            return Self.clipToForegroundBudget(3.0)
+        }
+        if shouldProtectNativeProviderRace {
+            return Self.clipToForegroundBudget(2.8)
+        }
+        return Self.clipToForegroundBudget(2.2)
     }
 
     // MARK: - Authoritative Backfill Budget (review #6+#7, corrected arithmetic)
@@ -422,7 +459,7 @@ public final class LyricsFetcher {
         return foregroundEmptyResultDeadline(
             shouldProtectAsciiNativeAlias: shouldProtectAsciiNativeAlias,
             shouldProbeCatalogExactTitle: shouldProbeCatalogExactTitle,
-            catalogExactTitleLandingDeadline: shouldProbeCatalogExactTitle ? 2.95 : 0,
+            catalogExactTitleLandingDeadline: shouldProbeCatalogExactTitle ? Self.clipToForegroundBudget(2.95) : 0,
             shouldProbeLibraryNativeTitle: shouldProbeLibraryNativeTitle,
             shouldProbeAlbumTitleEchoNativeAlias: shouldProbeAlbumTitleEchoNativeAlias
         )
@@ -675,7 +712,7 @@ public final class LyricsFetcher {
         let shouldDelayLowTierFallbacks = !alb.isEmpty
             && !(titleIsASCII && LanguageUtils.isLikelyEnglishTitle(ot))
         let lowTierFallbackDelay: UInt64 = shouldDelayLowTierFallbacks ? 700_000_000 : 0
-        let albumScopedLandingDeadline: TimeInterval = 2.85
+        let albumScopedLandingDeadline: TimeInterval = Self.clipToForegroundBudget(2.85)
         let shouldProbeArtistDiscographyAlias = self.shouldForegroundNetEaseArtistDiscographyAliasFallback(
             title: ot,
             artist: oa,
@@ -684,8 +721,8 @@ public final class LyricsFetcher {
             duration: d,
             album: alb
         )
-        let catalogExactTitleLandingDeadline: TimeInterval = shouldProbeCatalogExactTitle ? 2.95 : 0
-        let libraryNativeTitleLandingDeadline: TimeInterval = shouldProbeLibraryNativeTitle ? 2.95 : 0
+        let catalogExactTitleLandingDeadline: TimeInterval = shouldProbeCatalogExactTitle ? Self.clipToForegroundBudget(2.95) : 0
+        let libraryNativeTitleLandingDeadline: TimeInterval = shouldProbeLibraryNativeTitle ? Self.clipToForegroundBudget(2.95) : 0
         let emptyResultDeadline = foregroundEmptyResultDeadline(
             shouldProtectAsciiNativeAlias: shouldProtectAsciiNativeAlias,
             shouldProbeCatalogExactTitle: shouldProbeCatalogExactTitle,
@@ -693,16 +730,7 @@ public final class LyricsFetcher {
             shouldProbeLibraryNativeTitle: shouldProbeLibraryNativeTitle,
             shouldProbeAlbumTitleEchoNativeAlias: shouldProbeAlbumTitleEchoNativeAlias
         )
-        let nativeProviderTimeout: TimeInterval
-        if shouldProtectAsciiNativeAlias {
-            nativeProviderTimeout = 2.55
-        } else if shouldProtectNativeProviderRace && !alb.isEmpty {
-            nativeProviderTimeout = 3.0
-        } else if shouldProtectNativeProviderRace {
-            nativeProviderTimeout = 2.8
-        } else {
-            nativeProviderTimeout = 2.2
-        }
+        let nativeProviderTimeout = foregroundNativeProviderTimeout(title: ot, artist: oa, album: alb)
 
         if shouldUsePreflightLibraryNativeTitleCache(
             shouldProbeLibraryNativeTitle: shouldProbeLibraryNativeTitle,
@@ -997,7 +1025,7 @@ public final class LyricsFetcher {
                     group.addTask {
                         branch2Fired.value = true
                         albumScopedBranchFired.value = true
-                        guard let best = await self.withHardSourceTimeout(seconds: 2.9, operation: {
+                        guard let best = await self.withHardSourceTimeout(seconds: Self.clipToForegroundBudget(2.9), operation: {
                             await self.fetchAlbumTitleEchoNativeNetEase(
                                 title: ot,
                                 artist: oa,
@@ -1022,7 +1050,7 @@ public final class LyricsFetcher {
                         branch2Fired.value = true
                         libraryNativeTitleBranchFired.value = true
                         DebugLogger.log("⚡ Branch-2 library native-title catalog bridge: '\(ot)' by '\(oa)'")
-                        guard let best = await self.withHardSourceTimeout(seconds: 2.95, operation: {
+                        guard let best = await self.withHardSourceTimeout(seconds: libraryNativeTitleLandingDeadline, operation: {
                             await self.fetchLibraryNativeTitleAliasForeground(
                                 title: ot,
                                 artist: oa,
@@ -1318,7 +1346,8 @@ public final class LyricsFetcher {
                 // below required a synced result or a still-pending branch,
                 // and the miss path rode the full 5s ceiling — "evidence-only
                 // markers bypass the fast exit". Marker-only sets now take the
-                // same 2.2-2.95s empty fast exit as a truly-empty timeline.
+                // same clipped-empty fast exit as a truly-empty timeline
+                // (landing windows are clipToForegroundBudget'd ≤ 2.70s).
                 let hasOnlyAvailabilityMarkers = results.allSatisfy {
                     $0.kind == .instrumental || $0.kind == .unavailable
                 }

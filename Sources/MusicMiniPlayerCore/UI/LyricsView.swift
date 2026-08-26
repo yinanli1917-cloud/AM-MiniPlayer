@@ -620,7 +620,10 @@ public struct LyricsView: View {
             }
         }
         // Translation changes.
-        .onChange(of: lyricsService.lyrics) { _, newLyrics in
+        .onChange(of: lyricsService.lyrics) { oldLyrics, newLyrics in
+            let translationOnly = LyricsService.isTranslationOnlyWriteback(
+                previous: oldLyrics, next: newLyrics
+            )
             let newCount = newLyrics.count
             refreshDisplayLineCache()
             refreshPendingTranslationLineIndices()
@@ -628,13 +631,15 @@ public struct LyricsView: View {
                 cache.lineHeights.removeAll()
                 pendingLineHeightResetForNextPayload = false
             }
-            updateHeightCache()
-            if newCount > 0 {
-                updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
-                scheduleNextLineAdvanceTimer()
-                suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
-                startLineMotionSamplingWindow(duration: lyricLineMotionTrackSwitchSampleDuration)
+            if translationOnly {
+                cache.heightCacheInvalidated = true
             }
+            updateHeightCache()
+            guard newCount > 0, !translationOnly else { return }
+            updateDisplayCurrentLineIndex(at: musicController.lyricRenderTime())
+            scheduleNextLineAdvanceTimer()
+            suppressLineMotionDuringLayoutSettlement(duration: lyricLineLayoutSettleDuration)
+            startLineMotionSamplingWindow(duration: lyricLineMotionTrackSwitchSampleDuration)
         }
         .onChange(of: musicController.isPlaying) { _, isPlaying in
             if isPlaying {

@@ -27,6 +27,9 @@ APP = ROOT / "nanoPod.app"
 APP_BIN = APP / "Contents" / "MacOS" / "nanoPod"
 BUNDLE_ID = "com.yinanli.nanoPod"
 LYRICS_BUDGET_S = 3.0
+# A-rule 2026-08-26: original lyrics ≤ 3s is the hard fail. Translation is a
+# sidecar — if it lands inside 3s it ships with the original; if later, the
+# original still PASSES and translation is recorded as a hot-insert.
 
 # Visual-harness fixtures already known to live in the founder's library.
 TRACK_TRANSLATION = {
@@ -592,7 +595,7 @@ def scenario_cold_start(
     pid: int,
     after_seq: int,
 ) -> tuple[ScenarioResult, int]:
-    result = ScenarioResult("cold_start_lyrics_with_translation")
+    result = ScenarioResult("cold_start_original_lyrics")
     track = TRACK_TRANSLATION
     play_ms = now_ms()
     play_out = play_music_track(track["title"], track["artist"])
@@ -618,10 +621,12 @@ def scenario_cold_start(
                 applied = event
             elif event.get("event") == "translation_complete" and title_matches(event, track["title"]):
                 trans = event
-        if applied and (str(applied.get("hasTranslation") or "") == "true" or trans is not None or time.time() > deadline - 0.01):
+        if applied and (str(applied.get("hasTranslation") or "") == "true" or trans is not None):
             break
-        if applied and str(applied.get("hasTranslation") or "") == "true":
-            break
+        if applied and time.time() > deadline - 8 and trans is None:
+            # Original is up; keep waiting a bit for the sidecar, but do not
+            # hold the 3s original budget for it.
+            pass
         time.sleep(0.1)
 
     if fetch:
@@ -642,36 +647,48 @@ def scenario_cold_start(
         return result, after_seq
 
     has_trans = str(applied.get("hasTranslation") or "") == "true" or trans is not None
-    ready = trans if (trans and str(applied.get("hasTranslation") or "") != "true") else applied
     fetch_ms = int(fetch["ts_ms"]) if fetch and fetch.get("ts_ms") is not None else play_return_ms
-    ready_ms = int(ready["ts_ms"])
-    latency_fetch_s = (ready_ms - fetch_ms) / 1000.0
-    latency_play_s = (ready_ms - play_return_ms) / 1000.0
+    original_ms = int(applied["ts_ms"])
+    original_s = (original_ms - fetch_ms) / 1000.0
+    original_play_s = (original_ms - play_return_ms) / 1000.0
+    trans_s = None
+    if trans and trans.get("ts_ms") is not None:
+        trans_s = (int(trans["ts_ms"]) - fetch_ms) / 1000.0
+    elif str(applied.get("hasTranslation") or "") == "true":
+        trans_s = original_s
     result.metrics = {
         "play_issued_ms": play_ms,
         "play_return_ms": play_return_ms,
         "fetch_ts_ms": fetch.get("ts_ms") if fetch else None,
         "lyrics_ts_ms": applied.get("ts_ms"),
         "translation_ts_ms": trans.get("ts_ms") if trans else None,
-        "latency_from_fetch_s": round(latency_fetch_s, 3),
-        "latency_from_play_return_s": round(latency_play_s, 3),
+        "original_from_fetch_s": round(original_s, 3),
+        "original_from_play_return_s": round(original_play_s, 3),
+        "translation_from_fetch_s": round(trans_s, 3) if trans_s is not None else None,
         "has_translation": has_trans,
+        "sidecar": trans_s is not None and trans_s > LYRICS_BUDGET_S,
         "budget_s": LYRICS_BUDGET_S,
     }
-    if not has_trans:
-        result.detail = "lyrics appeared but translation path produced no translation"
-        return result, after_seq
-    if latency_fetch_s > LYRICS_BUDGET_S:
+    if original_s > LYRICS_BUDGET_S:
         result.detail = (
-            f"translation-ready {latency_fetch_s:.3f}s after fetch_start "
+            f"original lyrics {original_s:.3f}s after fetch_start "
             f"(budget {LYRICS_BUDGET_S:.1f}s)"
         )
         return result, after_seq
+    if not has_trans:
+        result.detail = "lyrics appeared but translation path produced no translation"
+        return result, after_seq
     result.passed = True
-    result.detail = (
-        f"lyrics+translation in {latency_fetch_s:.3f}s from fetch_start "
-        f"({latency_play_s:.3f}s from play return)"
-    )
+    if trans_s is not None and trans_s > LYRICS_BUDGET_S:
+        result.detail = (
+            f"original {original_s:.3f}s from fetch_start "
+            f"(budget {LYRICS_BUDGET_S:.1f}s); translation sidecar {trans_s:.3f}s"
+        )
+    else:
+        result.detail = (
+            f"original+translation in {original_s:.3f}s from fetch_start "
+            f"({original_play_s:.3f}s from play return)"
+        )
     return result, after_seq
 
 
@@ -763,6 +780,7 @@ def scenario_no_lyrics(event_log: Path, pid: int, after_seq: int) -> tuple[Scena
         result.evidence.append("CANDIDATES " + json.dumps(NO_LYRICS_CANDIDATES, ensure_ascii=False))
         return result, after_seq
 
+    osa('tell application "Music" to set song repeat to one', check=False)
     play_out = play_music_track(chosen["title"], chosen["artist"])
     if play_out is None:
         result.detail = f'found then lost {chosen["title"]} / {chosen["artist"]}'
@@ -770,7 +788,9 @@ def scenario_no_lyrics(event_log: Path, pid: int, after_seq: int) -> tuple[Scena
     result.evidence.append(f"PLAY {iso_now()} {play_out}")
     terminal = None
     deadline = time.time() + 18
+    replays = 0
     while time.time() < deadline:
+        jumped_away = False
         for event in load_events(event_log):
             try:
                 seq = int(event.get("seq") or 0)
@@ -781,8 +801,15 @@ def scenario_no_lyrics(event_log: Path, pid: int, after_seq: int) -> tuple[Scena
             if event.get("event") in {"no_lyrics", "lyrics_applied"} and title_matches(event, chosen["title"]):
                 terminal = event
                 break
+            if event.get("event") == "track_change" and not title_matches(event, chosen["title"]):
+                jumped_away = True
         if terminal:
             break
+        if jumped_away and replays < 2:
+            osa('tell application "Music" to set song repeat to one', check=False)
+            retry = play_music_track(chosen["title"], chosen["artist"])
+            replays += 1
+            result.evidence.append(f"REPLAY {iso_now()} n={replays} {retry}")
         if not process_alive(pid):
             break
         time.sleep(0.15)

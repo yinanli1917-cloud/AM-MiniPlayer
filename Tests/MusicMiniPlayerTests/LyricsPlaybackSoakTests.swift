@@ -310,7 +310,7 @@ final class LyricsPlaybackSoakTests: XCTestCase {
         }
 
         XCTAssertLessThanOrEqual(maxMounted, 24, "mounted rows must stay in the visible-radius ballpark across 6h")
-        XCTAssertLessThanOrEqual(maxVisual, 24, "visualStates must be filtered to the current track's rows")
+        XCTAssertLessThanOrEqual(maxVisual, 24, "visualStates must stay in the visible-window ballpark, not the whole song")
         XCTAssertLessThanOrEqual(maxPool, 80, "reuse pool hard cap")
     }
 }

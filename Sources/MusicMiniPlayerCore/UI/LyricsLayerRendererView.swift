@@ -8,6 +8,7 @@ let nativeLyricContentLeadingInset: CGFloat = 32
 let nativeLyricContentTrailingInset: CGFloat = 32
 private let nativeLyricAutoVisibleRowRadius = 12
 private let nativeLyricManualVisibleRowRadius = 12
+private let nativeLyricVisualStateRetentionRadius = nativeLyricAutoVisibleRowRadius * 4
 private let nativeLyricTextFrameInterval: TimeInterval = 1.0 / 60.0
 private let nativeLyricFrameSummaryInterval: TimeInterval = 10
 private let nativeLyricsTopOverlayReservedHeight: CGFloat = 56
@@ -673,6 +674,19 @@ final class NativeLyricsSurfaceView: NSView {
         s += "|tr\(c.showTranslation ? 1 : 0)\(c.isTranslating ? 1 : 0)\(c.translationFailed ? 1 : 0)"
         s += "|pt\(c.pendingTranslationLineIndices.count)|sy\(c.hasSyllableSync ? 1 : 0)"
         s += "|rm\(c.reduceMotion ? 1 : 0)|si\(c.suppressInitialMotion ? 1 : 0)"
+        // Late translation sidecar: row ids stay put, so a translation-only
+        // writeback would otherwise share the previous signature and skip the
+        // paint. Hash the translation strings so hot-insert still reconfigures.
+        var translationHash = 0
+        for row in c.rows {
+            if let text = row.displayLine.line.translation {
+                translationHash = translationHash &* 16777619
+                for byte in text.utf8 {
+                    translationHash = translationHash &* 31 &+ Int(byte)
+                }
+            }
+        }
+        s += "|th\(translationHash)"
         // controlsVisible arms the bottom reserved tap zone. Omitting it deduped the
         // "controls faded out" reconfigure whenever nothing else changed (frozen index
         // during manual scroll = exactly that), so the invisible controls kept eating
@@ -918,8 +932,11 @@ final class NativeLyricsSurfaceView: NSView {
         rowTapHandlers = rowTapHandlers.filter { rowIndex, _ in
             visibleRows.contains { $0.index == rowIndex }
         }
-        let currentIndexSet = Set(runtimeConfiguration.rows.map(\.index))
-        visualStates = visualStates.filter { currentIndexSet.contains($0.key) }
+        let keepVisual = visualStateRetentionIndices(
+            visibleRows: visibleRows,
+            configuration: runtimeConfiguration
+        )
+        visualStates = visualStates.filter { keepVisual.contains($0.key) }
         let visualTargetsChanged = syncVisualTargets(
             runtimeConfiguration: runtimeConfiguration,
             visibleRows: visibleRows,
@@ -1470,6 +1487,39 @@ final class NativeLyricsSurfaceView: NSView {
             }
         }
         return changed
+    }
+
+    /// Keep visual motion state for the visible window, in-flight handoff
+    /// rows, and a bounded band around the focal index. Same-track seeks
+    /// used to retain every visited index for the whole song (520-row
+    /// stress: 55 → 68). Nearby unmount/re-enter (row 0 culled at focus 40,
+    /// then back at 12) must keep fading from the prior visual, so the band
+    /// is wider than the mount radius — still O(1) vs song length.
+    private func visualStateRetentionIndices(
+        visibleRows: [LayerBackedLyricRow],
+        configuration: LyricsLayerRendererConfiguration
+    ) -> Set<Int> {
+        var keep = Set(visibleRows.map(\.index))
+        if let deferred = deferredDeactivationIndex {
+            keep.insert(deferred)
+        }
+        keep.formUnion(configuration.nativeHotActiveIndices)
+        keep.formUnion(configuration.nativeBufferedActiveIndices)
+        if let text = configuration.nativeTextActiveIndex {
+            keep.insert(text)
+        }
+        if let semantic = configuration.nativeSemanticCurrentIndex {
+            keep.insert(semantic)
+        }
+        let focus = configuration.effectiveScrollTargetIndex
+        keep.insert(configuration.effectiveCurrentIndex)
+        keep.insert(focus)
+        let lo = max(0, focus - nativeLyricVisualStateRetentionRadius)
+        let hi = focus + nativeLyricVisualStateRetentionRadius
+        for key in visualStates.keys where key >= lo && key <= hi {
+            keep.insert(key)
+        }
+        return keep
     }
 
     private func visualRowsToSync(

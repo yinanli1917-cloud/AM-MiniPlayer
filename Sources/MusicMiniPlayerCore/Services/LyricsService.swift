@@ -2,7 +2,7 @@
  * [INPUT]: Lyrics submodules (LyricsFetcher, LyricsParser, LyricsScorer, MetadataResolver), Network (NWPathMonitor)
  * [OUTPUT]: Lyrics service singleton with lyrics/currentLineIndex/translation published state + LyricsDisplayState machine (isLoading is a derived compat shim)
  * [POS]: Services facade coordinating lyrics fetch, parse, selection, and translation
- * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; clipped/transport-degraded sweeps publish a retryable incomplete-search state and never a no-lyrics memo; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; refreshes may not demote displayed same-song lyrics to a spinner, while different-track fetches clear stale rows before searching; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7); confirmed terminal misses memo into LyricsMissMemo for the session (20min TTL) — replay answers instantly, forceRefresh bypasses+clears, never recorded on cancellation/offline/incomplete sweeps
+ * [NOTE]: Foreground/backfill pipelines bind NetworkOutcomeLedger task-locals; clipped/transport-degraded sweeps publish a retryable incomplete-search state and never a no-lyrics memo; the "No internet connection" terminal self-recovers via a silent NWPathMonitor re-fetch; refreshes may not demote displayed same-song lyrics to a spinner, while different-track fetches clear stale rows before searching; deep-search may only relabel the searching spinner, never displayed content (review #5); the deep-search window is bounded by LyricsFetcher.AuthoritativeBackfillBudget.overall = 9s (review #6+#7); confirmed terminal misses memo into LyricsMissMemo for the session (20min TTL) — replay answers instantly, forceRefresh bypasses+clears, never recorded on cancellation/offline/incomplete sweeps; original lyrics publish inside the 3s A-rule (foregroundHardDeadline 2.70s) and translation is a sidecar hot-insert (`applyLateTranslationWriteback`) that must not rebuild the word axis or demote `.content`
  * [PROTOCOL]: Update this header on behavior changes; keep foreground, authoritative backfill, and queue-preload work cancellable on track changes
  */
 
@@ -35,10 +35,10 @@ enum LyricsDisplayState: Equatable {
     /// Bounded window (review #6+#7): this state can only end through the
     /// backfill returning, and the backfill is hard-capped at
     /// `LyricsFetcher.AuthoritativeBackfillBudget.overall` (9s — every child
-    /// bounded end-to-end plus an overall sentinel). The searching phase
-    /// before it is capped by the foreground 5s ceiling, and a marker-only
-    /// miss exits the foreground in 2.2-2.95s — so the spinner phases now
-    /// have real, enforced ceilings instead of the old open-ended ~18s drain.
+    /// bounded end-to-end plus an overall sentinel). Original lyrics must
+    /// publish inside the 3s A-rule (`foregroundHardDeadline` 2.70s); a
+    /// marker-only miss exits the foreground inside that same budget.
+    /// Translation is a sidecar and must not extend the spinner.
     case deepSearching
     /// The published `lyrics` array is the content to render.
     case content
@@ -221,6 +221,10 @@ public class LyricsService: ObservableObject {
     private let translationLanguageKey = "translationLanguage"
 
     private var currentSongID: String?
+
+    #if DEBUG
+    var debugCurrentSongID: String? { currentSongID }
+    #endif
     private var currentSongTitle: String = ""
     private var currentSongArtist: String = ""
     private var currentSongDuration: TimeInterval = 0
@@ -1013,6 +1017,67 @@ public class LyricsService: ObservableObject {
             updated[lyricsIdx].translation = translatedTexts[translationIdx]
         }
         return updated
+    }
+
+    /// True when `next` is the same word axis as `previous` and only translation
+    /// strings changed. Used to hot-insert a late sidecar without treating it
+    /// as a new lyrics payload (no layout-settle freeze, no track-switch sampling).
+    static func isTranslationOnlyWriteback(previous: [LyricLine], next: [LyricLine]) -> Bool {
+        guard !previous.isEmpty, previous.count == next.count else { return false }
+        var translationChanged = false
+        for (a, b) in zip(previous, next) {
+            if a.text != b.text { return false }
+            if a.startTime != b.startTime { return false }
+            if a.endTime != b.endTime { return false }
+            if a.words.count != b.words.count { return false }
+            for (wa, wb) in zip(a.words, b.words) {
+                if wa.word != wb.word { return false }
+                if wa.startTime != wb.startTime { return false }
+                if wa.endTime != wb.endTime { return false }
+            }
+            if a.translation != b.translation { translationChanged = true }
+        }
+        return translationChanged
+    }
+
+    /// Hot-insert translations onto the currently displayed original axis.
+    /// Does not replace words/start/end, does not demote `displayState`, and
+    /// refuses to write if the song identity or line count drifted.
+    @MainActor
+    @discardableResult
+    func applyLateTranslationWriteback(
+        eligibleIndices: [Int],
+        translatedTexts: [String],
+        expectedSongID: String?,
+        expectedLineCount: Int
+    ) -> Bool {
+        guard displayState == .content,
+              currentSongID == expectedSongID,
+              lyrics.count == expectedLineCount,
+              !lyrics.isEmpty else {
+            return false
+        }
+        let merged = Self.mergingTranslations(
+            into: lyrics,
+            eligibleIndices: eligibleIndices,
+            translatedTexts: translatedTexts
+        )
+        guard Self.isTranslationOnlyWriteback(previous: lyrics, next: merged) else {
+            return false
+        }
+        lyrics = merged
+        let stats = Self.translationCoverageStats(in: lyrics)
+        translationFailed = stats.missing > 0
+        E2EEventLog.emit("translation_complete", [
+            "title": currentSongTitle,
+            "artist": currentSongArtist,
+            "translatedCount": String(min(eligibleIndices.count, translatedTexts.count)),
+            "hasTranslation": hasTranslation ? "true" : "false",
+            "displayState": displayState.e2eLabel,
+            "sidecar": "true"
+        ])
+        E2EStatusDump.writeCurrent()
+        return true
     }
 
     static func isLikelySameSongMetadataCorrection(
@@ -1956,20 +2021,17 @@ public class LyricsService: ObservableObject {
         }
 
         // 🔑 After await: song may have changed — verify before writing back
-        guard currentSongID == songIDBeforeAwait, lyrics.count == lyricsCountBeforeAwait else {
+        let filledLineCount = min(eligibleIndices.count, translatedTexts.count)
+        guard applyLateTranslationWriteback(
+            eligibleIndices: eligibleIndices,
+            translatedTexts: translatedTexts,
+            expectedSongID: songIDBeforeAwait,
+            expectedLineCount: lyricsCountBeforeAwait
+        ) else {
             debugLogPublic("⚠️ Song changed during translation, discarding results")
             return
         }
 
-        // 🔑 Single publish: merge into a local copy and assign ONCE — the old
-        // element-by-element mutation of the @Published array multiplied the
-        // SwiftUI re-renders during the translation emergence.
-        lyrics = Self.mergingTranslations(
-            into: lyrics,
-            eligibleIndices: eligibleIndices,
-            translatedTexts: translatedTexts
-        )
-        let filledLineCount = min(eligibleIndices.count, translatedTexts.count)
         let statsAfterTranslation = Self.translationCoverageStats(in: lyrics)
 
         currentSongTranslationID = translationID
@@ -2006,14 +2068,6 @@ public class LyricsService: ObservableObject {
             }
         }
         debugLogPublic("✅ Translation completed: \(translatedTexts.count) lines")
-        E2EEventLog.emit("translation_complete", [
-            "title": currentSongTitle,
-            "artist": currentSongArtist,
-            "translatedCount": String(translatedTexts.count),
-            "hasTranslation": hasTranslation ? "true" : "false",
-            "displayState": displayState.e2eLabel
-        ])
-        E2EStatusDump.writeCurrent()
     }
 
     // ========================================================================

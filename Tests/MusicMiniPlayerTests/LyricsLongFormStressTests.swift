@@ -222,12 +222,15 @@ final class LyricsLongFormStressTests: XCTestCase {
             }
             XCTAssertLessThanOrEqual(surface.debugMountedRowCount, 40,
                                      "520-row song must not mount more than the visible+warmup window at index \(current)")
-            // visualStates are filtered to the current TRACK's indices, not the
-            // visible window (LyricsLayerRendererView.reconcileVisibleRowViews).
-            // Seeking around a 520-row song therefore accumulates states (55 at
-            // index 260, 68 at 519 in this drive). Pin the leak ceiling — never
-            // past song length — and report the missing visible-window prune.
-            XCTAssertLessThanOrEqual(surface.debugVisualStateCount, longLineCount, "index \(current)")
+            // Visible-window prune (A-rule stage 2 / 2026-08-26 stress bug):
+            // same-track seeks used to keep visualStates for every visited
+            // index (55 at 260, 68 at 519). Focal band is visible-radius×4
+            // (=48); a jump to a new neighborhood drops the old band.
+            XCTAssertLessThanOrEqual(
+                surface.debugVisualStateCount,
+                52,
+                "index \(current): visualStates must prune to a focal band, not accumulate across seeks (was 55@260 / 68@519)"
+            )
             XCTAssertLessThanOrEqual(surface.debugReusePoolCount, 80, "index \(current)")
             if let sem = surface.debugNativeSemanticIndex {
                 XCTAssertTrue(built.indices.contains(sem))
