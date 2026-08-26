@@ -167,6 +167,40 @@ final class ImmediateDiskLyricsPreflightTests: XCTestCase {
         XCTAssertNil(result, "non-CJK titles are Phase 1's job; the native-exact path returns nil for them")
     }
 
+    // ── P1 anti-oscillation: a same-song re-fetch while content is displayed must not replace it ──
+    // Founder 2026-08-25: "逐字→逐行→逐字" oscillation = a later re-fetch (duration correction) that
+    // re-selects a worse-granularity result and swaps the display. P1 blocks the same-song re-fetch
+    // whenever content is on screen, so the display is frozen.
+    @MainActor
+    func test_p1_sameSongDurationCorrectionRefetch_whileContentDisplayed_isBlocked() {
+        let service = LyricsService.shared
+        let title = "P1 Freeze \(UUID().uuidString.prefix(8))"
+        let artist = "Freeze Artist"
+
+        // 1) First fetch: word-level disk hit → content shown, word-level.
+        tempCache.set(title: title, artist: artist, duration: 205, album: "Alb",
+                      source: LyricsSource.netEase.rawValue, lines: wordLevelLines("first"), matchedDurationDiff: 0.1)
+        service.fetchLyrics(for: title, artist: artist, duration: 205, album: "Alb", persistentID: "p1freeze", forceRefresh: false)
+        XCTAssertEqual(service.displayState, .content)
+        XCTAssertTrue(service.lyrics.contains { $0.hasSyllableSync }, "precondition: first publish is word-level")
+        XCTAssertTrue(service.lyrics.contains { $0.text.contains("first") })
+
+        // 2) Overwrite the disk entry with a WORSE line-level result and re-fetch the SAME song with a
+        //    +1s duration correction (a new songID, the path that used to slip past the guard).
+        tempCache.set(title: title, artist: artist, duration: 206, album: "Alb",
+                      source: LyricsSource.lrclib.rawValue, lines: lineLevelLines("second"), matchedDurationDiff: 0.0)
+        service.fetchLyrics(for: title, artist: artist, duration: 206, album: "Alb", persistentID: "p1freeze", forceRefresh: false)
+
+        // 3) P1: blocked — the display must stay the word-level "first", never flip to line-level "second".
+        XCTAssertEqual(service.displayState, .content, "display must remain content, not re-enter searching")
+        XCTAssertTrue(service.lyrics.contains { $0.hasSyllableSync },
+                      "P1: a same-song correction must NOT downgrade the shown word-level lyrics to line-level")
+        XCTAssertTrue(service.lyrics.contains { $0.text.contains("first") },
+                      "P1: the originally shown lyrics must remain — no mid-stream replacement")
+        XCTAssertFalse(service.lyrics.contains { $0.text.contains("second") },
+                       "P1: the re-fetch's worse result must not reach the display")
+    }
+
     // The duration gate blocks a ±1 neighbor-key entry whose stored duration is genuinely far off.
     func test_phase2_durationGate_blocksFarNeighbor() {
         // Seed at duration 246 (so its dur-1 key = 245 overlaps a query at 245), but stored duration 246
