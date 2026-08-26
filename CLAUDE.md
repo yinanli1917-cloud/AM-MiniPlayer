@@ -4,6 +4,8 @@ GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
 
 > **Rules**: Only run `git push` when the user explicitly asks. Never use private APIs. Before handing over to the user, you must determine how to verify or test the bug fix / new feature and execute the verification; stay in the verification loop until confirmed working.
 >
+> **歌词验收硬标准（创始人长期规定，2026-08-25 重申入档）**：所有歌词匹配从播放到出词不得超过 3 秒，含翻译；准确率与性能一样都不能缺。此前只存在于创始人口头，未落档导致各代 agent 不知情——今为唯一权威记载，任何歌词管线改动以此为验收线。
+>
 > **手感类验证（创始人 2026-08-21 永久规则）**：歌词切行渐隐、滚动、动效这类手感项，自验只做代码层面——单元测试、时间戳日志、可控的假时钟、确定性回放。不用 computer use，不录屏，除非创始人自己提供录屏。自验通过后提醒创始人亲自终验，自动测试通过不能替代。全局规矩见 ~/.claude/CLAUDE.md。
 
 ---
