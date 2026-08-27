@@ -279,6 +279,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showFloatingWindow()
         } else {
             floatingWindow?.orderOut(nil)
+            musicController.setPanelOccluded(true)
             showMenuBarMenu()
         }
     }
@@ -367,6 +368,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if revealNearbySnapPosition, let snappableWindow = window as? SnappablePanel {
             snappableWindow.revealAtNearbySnapPosition()
         }
+        musicController.setPanelOccluded(false)
     }
 
     func toggleFloatingWindow() {
@@ -374,9 +376,11 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if window.isVisible {
             window.orderOut(nil)
+            musicController.setPanelOccluded(true)
         } else {
             NSApp.activate(ignoringOtherApps: true)
             window.orderFront(nil)
+            musicController.setPanelOccluded(false)
         }
     }
 
@@ -384,6 +388,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func collapseToMenuBar() {
         isFloatingMode = false
         floatingWindow?.orderOut(nil)
+        musicController.setPanelOccluded(true)
         showMenuBarMenu()
     }
 
@@ -682,7 +687,14 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 class FloatingWindowDelegate: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
+        AppMain.shared?.musicController.setPanelOccluded(true)
         return false
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let occluded = !window.isVisible || !window.occlusionState.contains(.visible)
+        MusicController.shared.setPanelOccluded(occluded)
     }
 }
 

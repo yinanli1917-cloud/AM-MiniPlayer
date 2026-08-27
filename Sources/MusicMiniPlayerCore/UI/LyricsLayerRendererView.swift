@@ -320,6 +320,7 @@ final class NativeLyricsSurfaceView: NSView {
     var debugMountedRowCount: Int { rowViews.count }
     var debugVisualStateCount: Int { visualStates.count }
     var debugReusePoolCount: Int { rowViewReusePool.count }
+    var debugIsPresentationLoopRunning: Bool { displayLink != nil }
     /// A/B seam: when true, visualCurrentIndex binds the visual demotion to the SEMANTIC line index
     /// (pre-1e1ffbf), instead of the scroll wave's per-row targetIndex (current). Headless-only.
     static var debugForceSemanticVisualIndex = false
@@ -454,6 +455,7 @@ final class NativeLyricsSurfaceView: NSView {
     private var dimProbeIndex: Int?
     private var dimProbeUntil: CFTimeInterval = 0
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
+    private var occlusionObserver: NSObjectProtocol?
 
     private func frameSnapMode(
         for configuration: LyricsLayerRendererConfiguration,
@@ -484,6 +486,9 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     deinit {
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+        }
         if let activeDisplayLink = displayLink {
             CVDisplayLinkStop(activeDisplayLink)
         }
@@ -501,6 +506,69 @@ final class NativeLyricsSurfaceView: NSView {
         layer?.masksToBounds = false
         setupSurfaceInterludeDots()
         installLocalEventMonitor()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installWindowOcclusionObserver()
+    }
+
+    private func installWindowOcclusionObserver() {
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+            self.occlusionObserver = nil
+        }
+        guard let window else {
+            stopPresentationLoop()
+            return
+        }
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleWindowOcclusionChange()
+            }
+        }
+        handleWindowOcclusionChange()
+    }
+
+    private func isHostWindowOccluded() -> Bool {
+        guard let window else { return true }
+        if !window.isVisible { return true }
+        // Headless tests host the surface in an alpha=0 window so it never flashes.
+        // Those windows can report a non-visible occlusionState; they still need the
+        // loop so deterministic ticks and layout can run.
+        if window.alphaValue < 0.01 { return false }
+        return !window.occlusionState.contains(.visible)
+    }
+
+    private func handleWindowOcclusionChange() {
+        if isHostWindowOccluded() {
+            cancelNativeLineAdvanceTimer()
+            stopPresentationLoop()
+            return
+        }
+        guard let configuration else { return }
+        let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        let snapMode = frameSnapMode(for: runtimeConfiguration)
+        let vetoes = NativeLyricsLoopIdleDecision.vetoes(
+            keepsAppearWindowAlive: snapMode.keepsPresentationLoopAlive,
+            hasPendingTapSettle: pendingTapToLineSettleTiming != nil,
+            hasEngineMotion: presentationEngine.hasActiveMotion,
+            hasVisualMotion: hasActiveVisualMotion,
+            hasActiveTextAnimation: hasActiveTextAnimation(configuration: runtimeConfiguration),
+            hasInterlude: runtimeConfiguration.interludeAfterIndex != nil,
+            hasDeferredDeactivation: deferredDeactivationIndex != nil,
+            isPlaying: runtimeConfiguration.musicController.isPlaying
+        )
+        if NativeLyricsLoopIdleDecision.shouldKeepPresentationLoopRunning(
+            isWindowOccluded: false,
+            vetoes: vetoes
+        ) {
+            startPresentationLoop()
+        }
     }
 
     private func setupSurfaceInterludeDots() {
@@ -2329,7 +2397,7 @@ final class NativeLyricsSurfaceView: NSView {
     }
 
     private func startPresentationLoop() {
-
+        guard !isHostWindowOccluded() else { return }
         guard displayLink == nil else { return }
         var link: CVDisplayLink?
         guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess,
@@ -2394,17 +2462,21 @@ final class NativeLyricsSurfaceView: NSView {
             hasDeferredDeactivation: deferredDeactivationIndex != nil,
             isPlaying: runtimeConfiguration.musicController.isPlaying
         )
-        guard vetoes.isEmpty else {
-            #if LOCAL_DEVELOPER_BUILD
-            let now = CACurrentMediaTime()
-            if now - lastLoopStopVetoLog > 2 {
-                lastLoopStopVetoLog = now
-                DebugLogger.log("LoopStopVeto", "\(vetoes.joined(separator: ",")) isPlaying=\(runtimeConfiguration.musicController.isPlaying) deferred=\(deferredDeactivationIndex.map(String.init) ?? "nil") cur=\(runtimeConfiguration.effectiveCurrentIndex)")
-            }
-            #endif
+        let occluded = isHostWindowOccluded()
+        guard NativeLyricsLoopIdleDecision.shouldKeepPresentationLoopRunning(
+            isWindowOccluded: occluded,
+            vetoes: vetoes
+        ) else {
+            stopPresentationLoop()
             return
         }
-        stopPresentationLoop()
+        #if LOCAL_DEVELOPER_BUILD
+        let now = CACurrentMediaTime()
+        if now - lastLoopStopVetoLog > 2 {
+            lastLoopStopVetoLog = now
+            DebugLogger.log("LoopStopVeto", "\(vetoes.joined(separator: ",")) isPlaying=\(runtimeConfiguration.musicController.isPlaying) deferred=\(deferredDeactivationIndex.map(String.init) ?? "nil") cur=\(runtimeConfiguration.effectiveCurrentIndex)")
+        }
+        #endif
     }
 
     private func stopPresentationLoop() {
@@ -2428,6 +2500,10 @@ final class NativeLyricsSurfaceView: NSView {
         #if DEBUG
         if debugNowOverride != nil, !isDebugDrivenTick { return }
         #endif
+        if isHostWindowOccluded() {
+            stopPresentationLoop()
+            return
+        }
         guard let configuration else {
             stopPresentationLoop()
             return
@@ -3492,7 +3568,8 @@ final class NativeLyricsSurfaceView: NSView {
     ) {
         guard configuration.playbackMode == .natural,
               configuration.musicController.isPlaying,
-              !configuration.rows.isEmpty else {
+              !configuration.rows.isEmpty,
+              !isHostWindowOccluded() else {
             cancelNativeLineAdvanceTimer()
             return
         }
@@ -3524,7 +3601,7 @@ final class NativeLyricsSurfaceView: NSView {
     private func handleNativeLineAdvanceTimer() {
         nativeLineAdvanceTimer = nil
         nativeLineAdvanceTimerTargetPlaybackTime = nil
-        guard configuration != nil else { return }
+        guard configuration != nil, !isHostWindowOccluded() else { return }
         // Run a FULL presentation tick, not a partial position-only update. The previous handler
         // advanced the timeline + engine (position → new line centered) and applied frames, but
         // never re-synced the per-row VISUAL targets (opacity/blur) or the text phase (karaoke

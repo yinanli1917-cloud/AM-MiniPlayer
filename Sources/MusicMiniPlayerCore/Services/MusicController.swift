@@ -116,6 +116,20 @@ struct PlaybackPositionCorrectionPolicy {
     }
 }
 
+enum PlaybackInterpolationPolicy {
+    /// Local clock interpolation is only useful while something on screen can
+    /// observe it (progress bar / SwiftUI lyrics). An occluded panel must not
+    /// keep the 10 Hz timer alive; `lyricRenderTime()` is wall-clock based and
+    /// catches up on reveal.
+    static func shouldRun(
+        isPlaying: Bool,
+        windowMovementPaused: Bool,
+        panelOccluded: Bool
+    ) -> Bool {
+        isPlaying && !windowMovementPaused && !panelOccluded
+    }
+}
+
 // MARK: - MusicController
 
 public class MusicController: ObservableObject {
@@ -323,6 +337,8 @@ public class MusicController: ObservableObject {
 
     // Pause interpolation while the window is moving so timers and display refresh do not compete for frame budget.
     private var windowMovementPaused = false
+    // Pause interpolation while the floating panel is ordered-out / occluded.
+    private var panelOccluded = false
 
     // Position-jump track change detection (radio stations)
     // Radio tracks don't reliably fire playerInfo notifications.
@@ -820,7 +836,11 @@ public class MusicController: ObservableObject {
     func updateTimerState() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let shouldRun = self.isPlaying && !self.windowMovementPaused
+            let shouldRun = PlaybackInterpolationPolicy.shouldRun(
+                isPlaying: self.isPlaying,
+                windowMovementPaused: self.windowMovementPaused,
+                panelOccluded: self.panelOccluded
+            )
             let usesNativeLyricsRenderer = self.currentPage == .lyrics && LyricsRendererMode.current == .native
             let targetInterval: TimeInterval = usesNativeLyricsRenderer
                 ? 0.1
@@ -855,6 +875,29 @@ public class MusicController: ObservableObject {
         interpolationTimerActive = false
         interpolationTimerInterval = 0
     }
+
+    /// The floating panel is not on-screen. Stop 10 Hz interpolation; the wall-clock
+    /// playback clock keeps advancing so lyrics/progress catch up on reveal.
+    public func setPanelOccluded(_ occluded: Bool) {
+        guard panelOccluded != occluded else { return }
+        panelOccluded = occluded
+        if !occluded {
+            let now = Date()
+            let time = lyricRenderTime(at: now)
+            internalCurrentTime = time
+            currentTime = time
+            lastFrameTime = now
+            if !lyricsService.isManualScrolling {
+                lyricsService.updateCurrentTime(time)
+            }
+        }
+        updateTimerState()
+    }
+
+#if DEBUG
+    var debugInterpolationTimerActive: Bool { interpolationTimerActive }
+    var debugPanelOccluded: Bool { panelOccluded }
+#endif
 
     /// Window movement start/end notifications emitted by SnappablePanel.
     func setupWindowMovementObserver() {

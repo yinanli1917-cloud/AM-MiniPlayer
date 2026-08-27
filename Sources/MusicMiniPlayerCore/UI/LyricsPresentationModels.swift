@@ -190,6 +190,21 @@ enum NativeLyricsLoopIdleDecision {
         ].compactMap { $0 }
     }
 
+    /// Whether the presentation display-link should stay armed.
+    ///
+    /// An occluded / ordered-out window cannot change a pixel the user can see.
+    /// Word-sweep vetoes must not keep a hidden panel ticking at 60 Hz (measured
+    /// 2026-08-27: background-hidden syllable playback still ran CVDisplayLink
+    /// and billed ~10% process CPU on M1). Visibility resume restarts the loop
+    /// via the occlusion callback.
+    static func shouldKeepPresentationLoopRunning(
+        isWindowOccluded: Bool,
+        vetoes: [String]
+    ) -> Bool {
+        if isWindowOccluded { return false }
+        return !vetoes.isEmpty
+    }
+
     /// A deferral aimed at the row that is CURRENT again can never finalize: the
     /// finalize threshold is opacity < 0.38 but an active row targets ≈1.0. This
     /// happens when a pause lands mid-handoff and the frozen playback time
