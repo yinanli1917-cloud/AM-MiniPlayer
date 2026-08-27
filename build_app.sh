@@ -1,7 +1,30 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="2.5"
+# Marketing version comes from the latest/exact v0.* git tag (founder 2026-08-27:
+# shipping line is v0.28). Old v2.x tags are historical and must never be used
+# as CFBundleShortVersionString. Override with NANOPOD_MARKETING_VERSION if needed.
+resolve_marketing_version() {
+    if [ -n "${NANOPOD_MARKETING_VERSION:-}" ]; then
+        echo "$NANOPOD_MARKETING_VERSION"
+        return
+    fi
+    local exact
+    exact="$(git describe --tags --exact-match --match 'v0.*' 2>/dev/null || true)"
+    if [ -n "$exact" ]; then
+        echo "${exact#v}"
+        return
+    fi
+    local latest
+    latest="$(git tag -l 'v0.*' | sort -V | tail -1)"
+    if [ -n "$latest" ]; then
+        echo "${latest#v}"
+        return
+    fi
+    echo "0.28"
+}
+
+VERSION="$(resolve_marketing_version)"
 UPDATE_DIR="$HOME/Library/Application Support/nanoPod/updates"
 
 cleanup_bundle_metadata() {
@@ -239,32 +262,39 @@ cat > nanoPod.entitlements << 'ENTITLEMENTS'
 ENTITLEMENTS
 
 echo "🎨 Copying icon resources..."
-# 优先使用 .icon 原生格式（macOS 26 Liquid Glass）
+# Finder/Dock read CFBundleIconFile → AppIcon.icns. Always copy the prebuilt
+# icns first so an actool "success" that does not emit icns cannot ship a
+# bundle without an icon (2026-08-27 missing-icon regression).
+if [ -f "Resources/AppIcon.icns" ]; then
+    echo "🎨 Copying AppIcon.icns..."
+    COPYFILE_DISABLE=1 cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/
+    echo "✅ AppIcon.icns copied"
+fi
+# Prefer .icon native format (macOS 26 Liquid Glass) for Assets.car in addition
+# to the icns, never instead of it.
 if [ -d "AppIcon.icon" ] && command -v xcrun &> /dev/null && xcrun --find actool &> /dev/null; then
     echo "🎨 Compiling AppIcon.icon using actool..."
     # actool on a half-initialized Xcode aborts (SIGABRT, exit 134, "required plugin failed to load").
     # Under `set -e` that abort would kill the whole build BEFORE codesign — shipping an unsigned
-    # bundle (breaks AppleScript automation) with no icon. Neutralize the abort and fall back to the
-    # prebuilt icon resources in Resources/.
+    # bundle (breaks AppleScript automation) with no icon. Neutralize the abort and keep the icns.
     xcrun actool AppIcon.icon --compile nanoPod.app/Contents/Resources --platform macosx --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist partial_info.plist > /dev/null 2>&1 || true
     if [ -f "partial_info.plist" ]; then
-        echo "✅ AppIcon compiled successfully"
+        echo "✅ AppIcon catalog compiled (Assets.car)"
         rm -f partial_info.plist
     else
-        echo "⚠️  actool unavailable/aborted — falling back to prebuilt icon assets"
-        if [ -f "Resources/AppIcon.icns" ]; then COPYFILE_DISABLE=1 cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/; fi
+        echo "⚠️  actool unavailable/aborted — icns fallback already copied"
         if [ -f "Resources/Assets.car" ]; then COPYFILE_DISABLE=1 cp Resources/Assets.car nanoPod.app/Contents/Resources/; fi
     fi
-elif [ -f "Resources/AppIcon.icns" ]; then
-    echo "🎨 Copying AppIcon.icns..."
-    COPYFILE_DISABLE=1 cp Resources/AppIcon.icns nanoPod.app/Contents/Resources/
-    echo "✅ AppIcon.icns copied"
-elif [ -f "Resources/Assets.car" ]; then
+elif [ -f "Resources/Assets.car" ] && [ ! -f "nanoPod.app/Contents/Resources/Assets.car" ]; then
     echo "🎨 Copying Assets.car..."
     COPYFILE_DISABLE=1 cp Resources/Assets.car nanoPod.app/Contents/Resources/
     echo "✅ Assets.car copied"
-else
-    echo "⚠️  No icon available"
+fi
+
+if [ ! -f "nanoPod.app/Contents/Resources/AppIcon.icns" ]; then
+    echo "❌ AppIcon.icns missing from bundle; refusing to ship an icon-less app"
+    echo "   expected Resources/AppIcon.icns to be copied into nanoPod.app/Contents/Resources/"
+    exit 1
 fi
 
 cleanup_bundle_metadata
