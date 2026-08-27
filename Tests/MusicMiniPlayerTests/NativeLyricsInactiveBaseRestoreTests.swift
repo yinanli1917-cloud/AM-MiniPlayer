@@ -21,6 +21,7 @@ final class NativeLyricsInactiveBaseRestoreTests: XCTestCase {
     private var window: NSWindow?
 
     override func tearDown() {
+        NativeLyricsFeelParity.resetTestingOverrides()
         window?.close()
         window = nil
         super.tearDown()
@@ -91,14 +92,21 @@ final class NativeLyricsInactiveBaseRestoreTests: XCTestCase {
 
         XCTAssertNotNil(view.debugMainTextLayerString, "configured row starts with a whole-line base")
 
-        // Drive the active word-cascade phase: geometryReady nils the whole-line
-        // strings by design (per-word glyphs carry the base from here).
+        // Drive the active word-cascade phase. v2.8 Canvas keeps the dim base
+        // string (pass 1); only the bright overlay is per-glyph. The old native
+        // path niled the string — that was the activation 行距 jump.
+        _ = view.updatePlaybackPhase(configuration: cfg)
+        XCTAssertNotNil(view.debugMainTextLayerString,
+                        "activation must keep the whole-line dim base")
+        XCTAssertEqual(view.debugVisibleDimWordGlyphCount, 0,
+                       "dim tiles stay hidden on the shipping Canvas-aligned path")
+
+        // Safety net: if a hide path still nils the string (layer A/B arm, reuse),
+        // finalize must restore it — the 2026-07-19 blank-row door.
+        NativeLyricsFeelParity.testingSweep = .layer
         _ = view.updatePlaybackPhase(configuration: cfg)
         XCTAssertNil(view.debugMainTextLayerString,
-                     "precondition: the active cascade owns the base (whole-line string nil)")
-
-        // Leaving the cascade must restore the whole-line base — this was the
-        // blank-row door: glyphs hidden, string still nil, nothing on screen.
+                     "precondition: layer A/B arm still tessellates dim into glyphs")
         view.finalizeDeactivationState(renderTime: 5.0)
         XCTAssertNotNil(view.debugMainTextLayerString,
                         "inactive row must never be left without its whole-line base text")
