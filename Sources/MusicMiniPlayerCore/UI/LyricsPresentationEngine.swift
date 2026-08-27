@@ -544,15 +544,11 @@ final class LyricsPresentationEngine {
         spring.updateParameters(visualSpringParameters(for: configuration))
     }
 
-    /// The spring driving line POSITION. The per-row visual motion (blur/scale/opacity) must advance on
-    /// the SAME spring so the depth-of-field tracks the scroll exactly (v2.8 drives all four from one
-    /// `interpolatingSpring`). Using a separate, slower fixed spring for blur let it lag the position,
-    /// so a just-passed line reached its new slot while still sharp — a lopsided, non-progressive field.
+    /// v2.8 drives position with damping 16.5 and visual (scale/blur/opacity)
+    /// with damping 20 (`LyricLineView` interpolatingSpring). Keep them distinct
+    /// so handoff feel matches the SwiftUI kernel.
     var currentVisualSpringParameters: LyricsPresentationSpringParameters {
-        guard let configuration = latestConfiguration else {
-            return .amllSeekOrInterlude
-        }
-        return visualSpringParameters(for: configuration)
+        .amllVisual
     }
 
     private func visualSpringParameters(

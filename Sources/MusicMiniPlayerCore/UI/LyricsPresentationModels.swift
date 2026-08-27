@@ -269,6 +269,14 @@ struct LyricsPresentationSpringParameters: Equatable {
         damping: 16.5
     )
 
+    /// v2.8 LyricLineView visual spring (scale/blur/opacity): same mass/stiffness
+    /// as position, damping 20. Distinct from `amllNatural` (position, 16.5).
+    static let amllVisual = LyricsPresentationSpringParameters(
+        mass: 1.0,
+        stiffness: 100,
+        damping: 20
+    )
+
     static func amllPosition(
         lineInterval: TimeInterval?,
         isSeeking: Bool,
