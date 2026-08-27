@@ -49,6 +49,14 @@ private struct NativeLyricsTokenGlyphPlan {
 }
 
 enum NativeLyricsTextSweepLayout {
+    static var mainParagraphStyle: NSParagraphStyle {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.alignment = .left
+        paragraph.lineSpacing = 0
+        return paragraph
+    }
+
     static func make(
         displayText: String,
         wordRuns: [NativeLyricsWordRunPlan],
@@ -82,7 +90,8 @@ enum NativeLyricsTextSweepLayout {
         let attributed = NSAttributedString(
             string: displayText,
             attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+                .paragraphStyle: NativeLyricsTextSweepLayout.mainParagraphStyle
             ]
         )
         let storage = NSTextStorage(attributedString: attributed)
@@ -297,6 +306,67 @@ enum NativeLyricsTextSweepLayout {
             ))
         }
         return glyphs
+    }
+
+    struct LayoutSnapshot: Equatable {
+        let lineCount: Int
+        let fragmentHeights: [CGFloat]
+        let fragmentMinYs: [CGFloat]
+        let glyphMinXs: [CGFloat]
+        let glyphMidYs: [CGFloat]
+
+        var lineSpacing: CGFloat {
+            guard fragmentMinYs.count >= 2 else { return 0 }
+            return fragmentMinYs[1] - fragmentMinYs[0]
+        }
+
+        var meanGlyphAdvance: CGFloat {
+            guard glyphMinXs.count >= 2 else { return 0 }
+            let gaps = zip(glyphMinXs.dropFirst(), glyphMinXs).map { $0 - $1 }
+            return gaps.reduce(0, +) / CGFloat(gaps.count)
+        }
+    }
+
+    /// Layout-only snapshot of wrap fragments and glyph origins. Independent of
+    /// isActive / float — this is the typesetting the dim base must keep across
+    /// activation (founder 2026-08-27 行距 bug).
+    static func layoutSnapshot(
+        displayText: String,
+        wordRuns: [NativeLyricsWordRunPlan],
+        width: CGFloat,
+        fontSize: CGFloat
+    ) -> LayoutSnapshot {
+        let plan = makePlan(
+            displayText: displayText,
+            wordRuns: wordRuns,
+            width: width,
+            fontSize: fontSize,
+            fadeHalfPoint: 12
+        )
+        var heights: [CGFloat] = []
+        var minYs: [CGFloat] = []
+        var glyphMinXs: [CGFloat] = []
+        var glyphMidYs: [CGFloat] = []
+        for line in plan {
+            guard !line.runs.isEmpty else { continue }
+            let minY = line.runs.map(\.rect.minY).min() ?? 0
+            let maxY = line.runs.map(\.rect.maxY).max() ?? minY
+            heights.append(maxY - minY)
+            minYs.append(minY)
+            for run in line.runs {
+                for glyph in run.glyphs {
+                    glyphMinXs.append(glyph.rect.minX)
+                    glyphMidYs.append(glyph.rect.midY)
+                }
+            }
+        }
+        return LayoutSnapshot(
+            lineCount: heights.count,
+            fragmentHeights: heights,
+            fragmentMinYs: minYs,
+            glyphMinXs: glyphMinXs,
+            glyphMidYs: glyphMidYs
+        )
     }
 }
 

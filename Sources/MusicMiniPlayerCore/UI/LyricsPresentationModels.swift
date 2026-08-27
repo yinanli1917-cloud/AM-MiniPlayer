@@ -466,12 +466,13 @@ struct NativeLyricsVisualMotionState: Equatable {
     mutating func setTarget(_ nextTarget: NativeLyricsVisualTarget) -> Bool {
         guard target != nextTarget else { return false }
         target = nextTarget
-        // Blur economy: blur is a stepped depth cue, not a springed channel (AMLL sets it without
-        // an underdamped spring — see advance()). Snapping it here also lets rows whose retarget
-        // changed ONLY the blur tier stay settled — and therefore rasterized — through the handoff
-        // scroll, instead of holding every far row unsettled for the whole spring.
-        blur = nextTarget.blur
-        blurVelocity = 0
+        // Blur economy (shipping default): blur is a stepped depth cue, not a springed
+        // channel. v2.8 LyricLineView sprang blur with interpolatingSpring damping 20 —
+        // `NativeLyricsFeelParity.blurMode == .v28` restores that for A/B.
+        if NativeLyricsFeelParity.blurMode == .current {
+            blur = nextTarget.blur
+            blurVelocity = 0
+        }
         return true
     }
 
@@ -490,9 +491,12 @@ struct NativeLyricsVisualMotionState: Equatable {
         let kick: CGFloat = 12
         opacityVelocity = (nextTarget.opacity - opacity) * kick
         scaleVelocity = (nextTarget.scale - scale) * kick
-        // Blur snaps at retarget (see setTarget); only opacity/scale keep the kick.
-        blur = nextTarget.blur
-        blurVelocity = 0
+        if NativeLyricsFeelParity.blurMode == .current {
+            blur = nextTarget.blur
+            blurVelocity = 0
+        } else {
+            blurVelocity = (nextTarget.blur - blur) * kick
+        }
     }
 
     @discardableResult
@@ -541,6 +545,26 @@ struct NativeLyricsVisualMotionState: Equatable {
         scale = min(1.05, max(0.9, scale))
         blur = max(0, blur)
         return before != self
+    }
+
+    /// Feel-parity tables sample the live spring. Keep this a thin alias so the
+    /// documented v2.8-vs-current curves cannot drift from `advance()`.
+    static func advanceScalarForSampling(
+        value: CGFloat,
+        target: CGFloat,
+        velocity: inout CGFloat,
+        step: CGFloat,
+        spring: LyricsPresentationSpringParameters,
+        monotonic: Bool
+    ) -> CGFloat {
+        advanceScalar(
+            value: value,
+            target: target,
+            velocity: &velocity,
+            step: step,
+            spring: spring,
+            monotonic: monotonic
+        )
     }
 
     private static func advanceScalar(

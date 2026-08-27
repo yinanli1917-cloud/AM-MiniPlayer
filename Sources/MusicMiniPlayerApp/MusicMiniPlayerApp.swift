@@ -169,8 +169,19 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "debug":
             // nanopod://debug/animsweep — one-shot whole-window animation census
             // (defect 5: names server-side animation survivors on a static panel).
-            if url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased() == "animsweep" {
+            // nanopod://debug/feel/<appear|blur|sweep>/<v28|current|layer>
+            // nanopod://debug/feel/reset
+            let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+            if path == "animsweep" {
                 Task { @MainActor in WindowAnimationCensus.dump() }
+            } else if path == "feel/reset" || path.hasPrefix("feel/") {
+                let parts = path.split(separator: "/").map(String.init)
+                if parts.count >= 2 {
+                    _ = NativeLyricsFeelParity.apply(
+                        channel: parts[1],
+                        value: parts.count >= 3 ? parts[2] : "reset"
+                    )
+                }
             }
         #endif
         default:

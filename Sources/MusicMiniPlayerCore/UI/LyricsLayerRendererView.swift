@@ -463,7 +463,10 @@ final class NativeLyricsSurfaceView: NSView {
     ) -> NativeLyricsSnapMode {
         NativeLyricsSnapMode.resolve(
             playbackMode: configuration.playbackMode,
-            isWithinAppearWindow: (now ?? currentMediaTime()) < forceSnapUntil
+            isWithinAppearWindow: NativeLyricsFeelParity.forceSnapActive(
+                now: now ?? currentMediaTime(),
+                until: forceSnapUntil
+            )
         )
     }
 
@@ -794,7 +797,7 @@ final class NativeLyricsSurfaceView: NSView {
             // instead of briefly placing rows at ty=0 (the presentation-layer overlap bloom,
             // confirmed via the bloom probe: presSpread=0 while the model ySpread was normal).
             presentationEngine.resetForTrackChange()
-            forceSnapUntil = currentMediaTime() + 0.8
+            forceSnapUntil = NativeLyricsFeelParity.forceSnapDeadline(now: currentMediaTime())
             visualStates.removeAll()
             measuredHeightsByIndex.removeAll()
             lastAppliedYByIndex.removeAll()
@@ -819,7 +822,7 @@ final class NativeLyricsSurfaceView: NSView {
         // moment the rows first appear (empty → non-empty), which is when they actually get positioned.
         if (self.configuration?.rows.isEmpty ?? true) && !configuration.rows.isEmpty {
             presentationEngine.resetForTrackChange()
-            forceSnapUntil = currentMediaTime() + 0.8
+            forceSnapUntil = NativeLyricsFeelParity.forceSnapDeadline(now: currentMediaTime())
             // Rows are mounting NOW (empty → non-empty). Hide them until the loop commits a spread
             // frame so the first-frame pre-commit identity never shows as a stacked flash.
             armInitialRevealGate()
@@ -1172,7 +1175,7 @@ final class NativeLyricsSurfaceView: NSView {
         // While forced, playbackMode == .directSnap so both the engine and applyFrame snap to the
         // settled positions; by the time the window ends the engine is parked there, so natural mode
         // resumes without a jump.
-        if currentMediaTime() < forceSnapUntil {
+        if NativeLyricsFeelParity.forceSnapActive(now: currentMediaTime(), until: forceSnapUntil) {
             runtimeConfiguration.suppressInitialMotion = true
         }
         runtimeConfiguration.nativeManualScrollSnapshot = manualScrollState.activeSnapshot
@@ -1689,8 +1692,10 @@ final class NativeLyricsSurfaceView: NSView {
         textConfiguration: LyricsLayerRendererConfiguration,
         runtimeConfiguration: LyricsLayerRendererConfiguration
     ) {
-        let isActive = row.index == textConfiguration.effectiveTextActiveIndex
-            && textConfiguration.musicController.isPlaying
+        let isActive = NativeLyricsTextActivation.isLineTextActive(
+            rowIndex: row.index,
+            textActiveIndex: textConfiguration.effectiveTextActiveIndex
+        )
         let wasActive = textActiveByRowIndex[row.index] ?? false
         textActiveByRowIndex[row.index] = isActive
         guard wasActive != isActive else { return }
@@ -1922,7 +1927,7 @@ final class NativeLyricsSurfaceView: NSView {
         // The transform now carries ONLY scale — never translation. (Translation here was the bug:
         // AppKit's commit-time layout resets a layer-backed view's transform to identity, dropping the
         // row to the origin for a frame; the frame does not get reset.)
-        view.setPositioning(CGAffineTransform(scaleX: visual.scale, y: visual.scale))
+        view.setPositioning(NativeLyricsRowScale.leadingTransform(scale: visual.scale, height: frame.height))
         let appliedTransform = view.layer?.affineTransform() ?? .identity
         let appliedScale = sqrt(appliedTransform.a * appliedTransform.a + appliedTransform.c * appliedTransform.c)
         recordRowFrameParityIfChanged(rowID: row.id, sample: NativeLyricsRowFrameParitySample(

@@ -528,6 +528,16 @@ final class NativeLyricsRowView: NSView {
 
     var debugMainTextLayerHidden: Bool { mainTextLayer.isHidden }
 
+    var debugVisibleDimWordGlyphCount: Int {
+        mainDimWordGlyphLayers.filter { !$0.isHidden }.count
+    }
+
+    var debugVisibleBrightWordGlyphCount: Int {
+        mainBrightWordGlyphLayers.filter { !$0.isHidden }.count
+    }
+
+    var debugDimCompensationActive: Bool { mainDimCompensationActive }
+
     /// True when the hover background is actually painted for this row. Tests assert it clears once
     /// the row is no longer under the cursor (the "hover bg stuck after the row moved away" bug).
     var debugHoverBackgroundVisible: Bool { isHovering && !backgroundLayer.isHidden }
@@ -545,8 +555,8 @@ final class NativeLyricsRowView: NSView {
     @MainActor
     func debugActiveMainPhaseWordFloat(currentTime: TimeInterval) -> (sampleCount: Int, floatSpread: CGFloat)? {
         guard let row else { return nil }
-        // Force an active plan: the preview MusicController reports isPlaying == false, which would
-        // zero every baseFloatY. We want the genuine per-word float at this time.
+        // Force an active plan at this time so tests can prove each word floats by
+        // its OWN amount (spread > 0 = the cascade) instead of one collapsed value.
         let plan = NativeLyricsTextRenderPlan.make(
             configuration: .init(line: row.displayLine.line, currentTime: currentTime, isActive: true)
         )
@@ -1036,7 +1046,10 @@ final class NativeLyricsRowView: NSView {
         let wasAwaitingTranslation = !translationLoadingDotContainerLayer.isHidden
 
         let plan = textRenderPlan(row: row, configuration: configuration)
-        let isActive = row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying
+        let isActive = NativeLyricsTextActivation.isLineTextActive(
+            rowIndex: row.index,
+            textActiveIndex: configuration.effectiveTextActiveIndex
+        )
         let appliesMainSweep = isActive && row.displayLine.line.hasSyllableSync && !plan.wordRuns.isEmpty
         // The attributed alpha is STATE-INDEPENDENT (always the inactive look). The dim tier of a
         // sweeping row rides mainTextLayer.opacity via applyDimBaseCompensation, in lockstep with
@@ -1226,7 +1239,10 @@ final class NativeLyricsRowView: NSView {
         // SB clock: a backward resync dip at line start collapses the active plan to progress 0
         // for a frame — the handoff style flash (docs/defect-recordings/2026-07-11).
         let renderTime = configuration.phaseRenderTime()
-        let isActive = row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying
+        let isActive = NativeLyricsTextActivation.isLineTextActive(
+            rowIndex: row.index,
+            textActiveIndex: configuration.effectiveTextActiveIndex
+        )
 
         var sample: NativeLyricsTextPhaseSample?
         if managesTransaction {
@@ -1434,20 +1450,24 @@ final class NativeLyricsRowView: NSView {
             ?? plan.wordRuns.first
         let linePlan = mainSweepLinePlan(for: plan, bounds: mainBrightTextLayer.bounds)
         let emphasisOrders = Self.activeEmphasisOrders(plan: plan)
-        // v2.8 per-word cascade: once the line is laid out, every word is drawn by per-glyph layers so
-        // each WORD floats by its OWN baseFloatY (rolling rise, AMLL base float). Non-emphasis glyphs
-        // parent to the dim and bright text layers — the bright ones inherit the sweep mask, so a 2pt
-        // float never disturbs the horizontal wavefront and brightness stays a smooth gradient.
-        // Emphasis words keep their dedicated scale/glow glyph layers. The whole-line text layers then
-        // draw nothing. Before layout (bounds are .zero on a fresh/pooled row) we fall back to the
-        // single whole-line text + a collapsed line-level float, so the dim base is never blank
-        // (the 从无到有 guard).
+        // v2.8 Canvas: dim base is one laid-out string (pass 1); only the bright overlay
+        // is per-glyph so words can float (pass 2). Nilling the dim string and retessellating
+        // it as CATextLayer tiles was the activation 行距/字距 jump (founder 2026-08-27).
+        // Before layout (bounds are .zero on a fresh/pooled row) we keep the whole-line dim
+        // and hide the sung overlay, so the dim base is never blank (the 从无到有 guard).
         let geometryReady = mainBrightTextLayer.bounds.width > 1
             && mainBrightTextLayer.bounds.height > 1
             && !linePlan.isEmpty
+        let keepWholeLineDim = NativeLyricsFeelParity.keepsWholeLineDimBase
         let wordFloatResult: MainWordFloatAppliedMetrics
         if geometryReady {
-            if mainTextLayer.string != nil { mainTextLayer.string = nil }
+            if keepWholeLineDim {
+                if mainTextLayer.string == nil, let wholeLineMainString {
+                    mainTextLayer.string = wholeLineMainString
+                }
+            } else if mainTextLayer.string != nil {
+                mainTextLayer.string = nil
+            }
             if mainBrightTextLayer.string != nil { mainBrightTextLayer.string = nil }
             activeHiddenEmphasisSignature = nil
             if mainTextLayer.affineTransform() != .identity {
@@ -1460,7 +1480,8 @@ final class NativeLyricsRowView: NSView {
                 plan: plan,
                 currentTime: currentTime,
                 linePlan: linePlan,
-                emphasisOrders: emphasisOrders
+                emphasisOrders: emphasisOrders,
+                floatsDimBase: !keepWholeLineDim
             )
         } else {
             // Geometry is not ready (fresh/pooled/offscreen row). A whole-line bright
@@ -2193,7 +2214,8 @@ final class NativeLyricsRowView: NSView {
         plan: NativeLyricsTextRenderPlan,
         currentTime: TimeInterval,
         linePlan: [NativeLyricsTextSweepVisualLinePlan],
-        emphasisOrders: Set<Int>
+        emphasisOrders: Set<Int>,
+        floatsDimBase: Bool
     ) -> MainWordFloatAppliedMetrics {
         let floats = plan.perWordFloatY(at: currentTime)
         var inputs: [(glyph: NativeLyricsTextSweepVisualRun.Glyph, floatY: CGFloat)] = []
@@ -2221,7 +2243,7 @@ final class NativeLyricsRowView: NSView {
             let glyph = input.glyph
             let dimLayer = mainDimWordGlyphLayers[index]
             let brightLayer = mainBrightWordGlyphLayers[index]
-            dimLayer.isHidden = false
+            dimLayer.isHidden = !floatsDimBase
             brightLayer.isHidden = false
             let signature = EmphasisGlyphLayerSignature(
                 glyph: glyph,
@@ -2235,24 +2257,30 @@ final class NativeLyricsRowView: NSView {
                 // ink of CJK strokes / descenders is shaved (same trap the whole-line layer pads
                 // around). The view is flipped (y-down), so glyph.rect.minY is the top: extend the box
                 // DOWNWARD by textBottomClipPad (keeping the top edge fixed) for room below the glyph.
-                for layer in [dimLayer, brightLayer] {
+                let layersToWrite = floatsDimBase ? [dimLayer, brightLayer] : [brightLayer]
+                for layer in layersToWrite {
                     layer.string = glyph.text
                     layer.bounds = CGRect(
                         origin: .zero,
                         size: CGSize(width: glyph.rect.width, height: glyph.rect.height + Self.textBottomClipPad)
                     )
                 }
-                dimLayer.foregroundColor = dimColor
+                if floatsDimBase {
+                    dimLayer.foregroundColor = dimColor
+                    debugWordGlyphColorAssignCount += 1
+                }
                 brightLayer.foregroundColor = brightColor
-                debugWordGlyphColorAssignCount += 2
+                debugWordGlyphColorAssignCount += 1
             }
             // Center sits pad/2 below the glyph midY so the taller box keeps its TOP at glyph.rect.minY
             // (text stays exactly where the whole-line layer drew it; only the bottom gains room).
-            let centerY = glyph.rect.midY + Self.textBottomClipPad / 2 + input.floatY
-            let position = CGPoint(x: glyph.rect.midX, y: centerY)
-            dimLayer.position = position
-            brightLayer.position = position
-            let appliedFloat = position.y - glyph.rect.midY - Self.textBottomClipPad / 2
+            // v2.8 Canvas: dim pass has zero vertical float; only the bright overlay lifts.
+            // The `layer` A/B arm floats dim tiles too (the activation 行距 jump).
+            let dimCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + (floatsDimBase ? input.floatY : 0)
+            let brightCenterY = glyph.rect.midY + Self.textBottomClipPad / 2 + input.floatY
+            dimLayer.position = CGPoint(x: glyph.rect.midX, y: dimCenterY)
+            brightLayer.position = CGPoint(x: glyph.rect.midX, y: brightCenterY)
+            let appliedFloat = brightLayer.position.y - glyph.rect.midY - Self.textBottomClipPad / 2
             minFloat = min(minFloat, appliedFloat)
             maxFloat = max(maxFloat, appliedFloat)
         }
@@ -2770,7 +2798,10 @@ final class NativeLyricsRowView: NSView {
         NativeLyricsTextRenderPlan.Configuration(
             line: row.displayLine.line,
             currentTime: currentTime ?? configuration.phaseRenderTime(),
-            isActive: row.index == configuration.effectiveTextActiveIndex && configuration.musicController.isPlaying,
+            isActive: NativeLyricsTextActivation.isLineTextActive(
+                rowIndex: row.index,
+                textActiveIndex: configuration.effectiveTextActiveIndex
+            ),
             staticOpacity: 1,
             showTranslation: configuration.showTranslation
         )
