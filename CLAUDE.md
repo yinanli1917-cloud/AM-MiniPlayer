@@ -8,6 +8,8 @@ GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
 >
 > **手感类验证（创始人 2026-08-21 永久规则）**：歌词切行渐隐、滚动、动效这类手感项，自验只做代码层面——单元测试、时间戳日志、可控的假时钟、确定性回放。不用 computer use，不录屏，除非创始人自己提供录屏。自验通过后提醒创始人亲自终验，自动测试通过不能替代。全局规矩见 ~/.claude/CLAUDE.md。
 >
+> **先复现再修（创始人 2026-08-27 立为项目铁律）**：凡创始人报告的 bug，动手改代码前必须先在代码层面复现——假时钟、状态注入、确定性回放做出可重跑的失败用例；穷举后仍复现不了的，先加 DEBUG 埋点让日常使用自动留证，拿到证据再修。禁止只凭对现象的推测模型直接开改（前科：08-25 防振荡改动未复现创始人所报 mask bug 就动手，直到 08-27 才真复现根因是布局竞态）。「未复现」永远不许当「没问题」上报。
+>
 > **版本号（创始人 2026-08-27 裁定）**：现行发售线是 **v0.28**。`build_app.sh` 从 git tag `v0.*` 生成 `CFBundleShortVersionString` / `CFBundleVersion` / `BuildInfo.txt`（exact match 优先，否则最新 `v0.*`；可用 `NANOPOD_MARKETING_VERSION` 覆盖）。旧 **v2.x tags 保留为历史，不删不改、不参与版本生成**（v2.8 是旧 SwiftUI 内核命名，与 v0.28 无关）。证据：`git log` 找到 `b24b182 build: release nanoPod 0.28 beta bridge` 与 `60dcb1d`（「Future v0.x tags derive update sequence from the minor version」）；tag `v2.8` 的 subject 就是那次 0.28 beta bridge；仓库无 CHANGELOG；`Sources/MusicMiniPlayerApp/Info.plist` 与旧 `build_app.sh` 曾写死 `2.5`。搜过：`CHANGELOG*`、`git log --all --grep=v0.`、`git log --grep=0.28`、`git log --grep=版本号`、源码/注释 `v0.`。
 
 ---
@@ -46,6 +48,7 @@ Sources/
 │   │   ├── LyricsLayerRendererView.swift - Native lyrics surface + frame loop
 │   │   ├── NativeLyricsRowView.swift     - Native row text/dot layer rendering
 │   │   ├── NativeLyricsLayerSupport.swift - Display-link and inert-layer helpers
+│   │   ├── NativeLyricsFeelParity.swift - 切行手感三对照（appear/blur/sweep），nanopod://debug/feel/<channel>/<v28|current|layer>
 │   │   ├── HoverableButtons.swift - Button components + Tab Bar + corner radius utilities
 │   │   ├── PlaylistView.swift     - Playlist queue + artwork loading
 │   │   ├── SnappablePanel.swift   - Snappable floating panel + gestures
@@ -109,7 +112,10 @@ Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift te
     └── RowArtworkStoreTests.swift - 行封面分层存储：内存→磁盘(Apple 层→web 层)→single-flight 网络；按来源分层落盘；终败不缓存可重试
     └── TrackIdentityDisciplineTests.swift - 轨道身份纪律：PID 权威三门（同曲通知不换歌/未知 PID 不单独断言/Apple 图已应用丢迟到结果）+ 歌词同曲 PID 锚 + 中毒显示态必可自愈
     └── NativeLyricsEmphasisPartitionTests.swift - 全强调行退化：整行皆强调则全不强调（空 base+sweep 分区缺陷，Billie Jean 副歌类 0.8% 行）
-    └── NativeLyricsInactiveBaseRestoreTests.swift - 去活路径必须还原整行基底文本（活跃级联置 nil 后隐藏字形层导致整行消失）
+    └── NativeLyricsInactiveBaseRestoreTests.swift - 去活路径必须还原整行基底文本（layer A/B 臂仍会 nil；默认 v2.8 dim 整行保留）
+    └── NativeLyricsPauseFreezeTests.swift - 假时钟暂停注入：逐字进度必须冻结，不许升整行
+    └── NativeLyricsActiveLineSpacingTests.swift - 激活前后行高/字距/基线快照（中英）+ v2.8 leading scale
+    └── NativeLyricsFeelParityTests.swift - 切行手感三对照（appear 窗 / blur 阶跃 / Canvas vs CALayer dim）量化表 + nanopod://debug/feel/
     └── RadioDurationlessMatchingTests.swift - 电台时长未知匹配：duration=0 是缺失信号非完美信号，标题+艺人双强制；已知时长门槛不变
     └── TranslationWritebackTests.swift - 翻译单发布回写：纯合并函数一次赋值（曾逐行改 @Published 数组多次重渲）
     └── LyricsOriginalDeliverySLATests.swift - 原文 3s A 规则：十条路径天花板 + 2.9/3.1 边界 + 准确率降级阶梯 + 前台窗口 clip
@@ -189,7 +195,11 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
 - ❌ SwiftUI `onChange(currentTrackTitle)` runs AFTER body → first post-track-change render feeds the native surface NEW identity + OLD cachedLayerRows = one-frame stale-rows flash
   ✅ `cachedLayerRowsTrackKey` identity gate: rows cached for another track render as `[]`
 - ❌ Resident CIGaussianBlur on static lyric rows → the compositor re-evaluates every resident filter each frame it recomposites the surface; during the active line's word sweep the ~12-25 static blurred rows billed WindowServer +38 CPU points on M1 while the app itself stayed cheap (~10%)
-  ✅ Blur economy: rasterize settled non-active blurred rows (`applyRasterizationPolicy` + `refreshRasterization` in NativeLyricsRowView; dot-animation veto; backing-scale rasterizationScale) + blur is a stepped depth cue (snaps in setTarget/quickRetarget so blur-only retargets settle instantly and stay rasterized through handoffs); guarded by NativeLyricsBlurEconomyTests
+  ✅ Blur economy: rasterize settled non-active blurred rows (`applyRasterizationPolicy` + `refreshRasterization` in NativeLyricsRowView; dot-animation veto; backing-scale rasterizationScale) + blur is a stepped depth cue (snaps in setTarget/quickRetarget so blur-only retargets settle instantly and stay rasterized through handoffs); guarded by NativeLyricsBlurEconomyTests. v2.8 springed blur is the `nanopod://debug/feel/blur/v28` A/B arm.
+- ❌ 激活行把 dim 基底从整行 CATextLayer 改铺成 per-glyph 并一起 float → 中文换行行距/字距跳变
+  ✅ v2.8 Canvas 模型：dim 整行保留、只让亮层 float；`nanopod://debug/feel/sweep/layer` 对照旧路径
+- ❌ 文本 isActive 绑 `isPlaying` → 暂停把逐字进度打成 1（整行全亮）
+  ✅ 暂停只冻播放钟；当前行保持 text-active；`NativeLyricsPauseFreezeTests`
 - ❌ actool "success" (`partial_info.plist` exists) skipping `Resources/AppIcon.icns` → Finder/Dock 无图标
   ✅ 先拷 icns，再尝试 actool 出 Assets.car；bundle 内没有 `AppIcon.icns` 则拒绝交付
 - ❌ 行级 LRCLIB 命中就 cancelAll 前台/回填 → 逐字源被剪掉；P1 一律冻结显示 → 行级永远升不了逐字
