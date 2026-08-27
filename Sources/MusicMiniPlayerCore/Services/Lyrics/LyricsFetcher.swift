@@ -184,6 +184,26 @@ public final class LyricsFetcher {
         deadlineClipped || hadTransportFailures
     }
 
+    func emitSourceResultE2E(phase: String, result: LyricsFetchResult) {
+        E2EEventLog.emit("source_result", [
+            "phase": phase,
+            "source": result.source.rawValue,
+            "kind": result.kind.rawValue,
+            "score": String(format: "%.1f", result.score),
+            "syllable": result.lyrics.contains(where: { $0.hasSyllableSync }) ? "1" : "0",
+            "lines": String(result.lyrics.count),
+            "titleMatched": result.titleMatched ? "1" : "0",
+            "albumMatched": result.albumMatched ? "1" : "0"
+        ])
+    }
+
+    func emitSourceRequestE2E(_ source: LyricsSource, phase: String) {
+        E2EEventLog.emit("source_request", [
+            "phase": phase,
+            "source": source.rawValue
+        ])
+    }
+
     // ┌──────────────────────────────────────────────────────────────────────┐
     // │ LyricsClassifier — shared helper used by both the live app and the  │
     // │ LyricsVerifier JSON dump. Centralising classification here means    │
@@ -309,6 +329,8 @@ public final class LyricsFetcher {
         static let lrclibSearchChild: TimeInterval = 3.2
         static let netEaseChild: TimeInterval = 4.8
         static let qqChild: TimeInterval = 3.2
+        static let appleMusicChild: TimeInterval = 3.2
+        static let amllChild: TimeInterval = 3.2
         static let albumTitleEchoChild: TimeInterval = 2.9
 
         // Album-scoped composite: metadata resolve, then a 3-source probe.
@@ -331,8 +353,8 @@ public final class LyricsFetcher {
         /// must never undercut this, or it would clip legitimate work.
         static var longestChildCeiling: TimeInterval {
             max(lrclibChild, lrclibSearchChild, netEaseChild, qqChild,
-                albumTitleEchoChild, albumScopedComposite, resolvedComposite,
-                witnessComposite)
+                appleMusicChild, amllChild, albumTitleEchoChild, albumScopedComposite,
+                resolvedComposite, witnessComposite)
         }
 
         /// Concurrency width for the parallel alias-discovery searches:
@@ -1250,12 +1272,16 @@ public final class LyricsFetcher {
                 if let r = result {
                     results.append(r)
                     partialResults.value = results
+                    emitSourceResultE2E(phase: "foreground", result: r)
                     DebugLogger.log("✅ \(r.source): score=\(String(format: "%.1f", r.score)), lines=\(r.lyrics.count), albumMatch=\(r.albumMatched)")
                     let rFacts = self.drainExitFacts(for: r, songDuration: d)
                     let isLineTimedCJKNativeProviderResult = shouldProtectNativeProviderRace
                         && r.source.profile.isCJKNativeProvider
                         && r.kind == .synced
                         && !rFacts.hasSyllableSyncedLine
+                    // Line-level must not cancel word-level sources still in flight
+                    // (founder 2026-08-27: 预算内到手的逐字优先).
+                    let isWordLevelSynced = r.kind == .synced && rFacts.hasSyllableSyncedLine
 
                     let hasStrongCatalogEvidence = r.albumMatched
                         || (r.matchedDurationDiff.map { $0 < 1.0 } ?? false)
@@ -1301,6 +1327,7 @@ public final class LyricsFetcher {
                         && !catalogExactTitleEvidencePending
                         && !libraryNativeTitleEvidencePending
                         && !isLineTimedCJKNativeProviderResult
+                        && isWordLevelSynced
                         && (!needsIdentityWitness || hasIdentityWitness) {
                         DebugLogger.log("⚡ Early return: \(r.source) score=\(String(format: "%.1f", r.score)) >= \(Int(self.earlyReturnThreshold)) albumMatch=\(r.albumMatched)")
                         group.cancelAll()
@@ -1309,14 +1336,16 @@ public final class LyricsFetcher {
                     if hasAlbumHint
                         && hasAlbumExactSyncedResult
                         && r.source.profile.canTriggerEarlyReturn
-                        && !isLineTimedCJKNativeProviderResult {
+                        && !isLineTimedCJKNativeProviderResult
+                        && isWordLevelSynced {
                         DebugLogger.log("⚡ Early return: \(r.source) album-exact synced score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
                     }
                     if rFacts.tightCatalogAliasIdentity,
                        r.source.profile.canTriggerEarlyReturn,
-                       !isLineTimedCJKNativeProviderResult {
+                       !isLineTimedCJKNativeProviderResult,
+                       isWordLevelSynced {
                         DebugLogger.log("⚡ Early return: \(r.source) tight catalog-alias score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
@@ -1325,7 +1354,8 @@ public final class LyricsFetcher {
                        r.score >= 18,
                        !self.isLibraryFallbackSource(r.source),
                        self.hasIndependentLyricAgreement(for: r, allResults: results),
-                       !isLineTimedCJKNativeProviderResult {
+                       !isLineTimedCJKNativeProviderResult,
+                       isWordLevelSynced {
                         DebugLogger.log("⚡ Early return: \(r.source) cross-source agreement score=\(String(format: "%.1f", r.score))")
                         group.cancelAll()
                         break
@@ -1434,6 +1464,7 @@ public final class LyricsFetcher {
                     return $0.kind == .synced
                         && !lineTimedCJKNativeProvider
                         && !looseNativeAlias
+                        && facts.hasSyllableSyncedLine
                         && (
                             tightCatalogAliasCanFastExit
                             || ($0.score >= 40 && (
@@ -1446,6 +1477,7 @@ public final class LyricsFetcher {
                 let hasTrustedExactSyncedResult = results.contains {
                     let facts = self.drainExitFacts(for: $0, songDuration: d)
                     guard $0.kind == .synced,
+                          facts.hasSyllableSyncedLine,
                           $0.titleMatched,
                           ($0.matchedDurationDiff.map { $0 < 1.5 } ?? false),
                           ($0.score >= 40 || facts.tightCatalogAliasIdentity),
@@ -1458,6 +1490,10 @@ public final class LyricsFetcher {
                     $0.kind == .synced && $0.albumMatched && $0.score >= 30
                 }
                 let hasAnySyncedResult = results.contains { $0.kind == .synced && $0.score > 0 }
+                let hasWordLevelSyncedResult = results.contains {
+                    self.drainExitFacts(for: $0, songDuration: d).hasSyllableSyncedLine
+                        && $0.kind == .synced
+                }
                 let hasOnlyWeakLibraryFallbackSyncedResults = hasAnySyncedResult && results.allSatisfy {
                     $0.kind != .synced || (
                         $0.source.profile.isLibraryFallback &&
@@ -1531,6 +1567,7 @@ public final class LyricsFetcher {
                         && !facts.hasSyllableSyncedLine
                     return $0.kind == .synced
                         && !lineTimedCJKNativeProvider
+                        && facts.hasSyllableSyncedLine
                         && $0.score >= 60
                         && $0.source.profile.canTriggerEarlyReturn
                         && ($0.titleMatched || facts.strongNativeAliasIdentity)
@@ -1547,7 +1584,7 @@ public final class LyricsFetcher {
                     || (!protectNativeProviderRace && albumScopedBranchFired.value && !albumScopedBranchLanded.value && elapsed >= albumScopedLandingDeadline)
                     || (!protectNativeProviderRace && branch2Fired.value && !branch2Landed.value && !libraryNativeTitleBranchFired.value && elapsed >= 2.2)
                     || (!protectNativeProviderRace && branch3Fired.value && !branch3Landed.value && elapsed >= 2.2)
-                    || (hasAnySyncedResult && !protectNativeProviderRace && elapsed >= 2.2)
+                    || (hasWordLevelSyncedResult && !protectNativeProviderRace && elapsed >= 2.2)
                     || (protectNativeProviderRace && elapsed >= 2.9)
                     || elapsed >= 2.9 {
                     DebugLogger.log("⏱️ Time budget (\(String(format: "%.1f", elapsed))s) → \(results.count) results")
@@ -1582,6 +1619,15 @@ public final class LyricsFetcher {
             : normalizedResults
 
         let selectedForeground = selectBestResult(from: finalResults, songDuration: d)
+        E2EEventLog.emit("lyrics_foreground_done", [
+            "title": ot,
+            "artist": oa,
+            "resultCount": String(finalResults.count),
+            "sources": finalResults.map(\.source.rawValue).joined(separator: ","),
+            "selected": selectedForeground?.source.rawValue ?? "none",
+            "selectedSyllable": (selectedForeground?.lyrics.contains { $0.hasSyllableSync } == true) ? "1" : "0",
+            "elapsedMs": String(Int((elapsed * 1000).rounded()))
+        ])
         persistTrustedForegroundLyrics(
             from: finalResults,
             title: ot,
@@ -1885,6 +1931,12 @@ public final class LyricsFetcher {
             addBoundedChild(seconds: AuthoritativeBackfillBudget.lrclibSearchChild) {
                 await self.fetchFromLRCLIBSearch(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
             }
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.amllChild) {
+                await self.fetchFromAMLL(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled)
+            }
+            addBoundedChild(seconds: AuthoritativeBackfillBudget.appleMusicChild) {
+                await self.fetchFromAppleMusic(title: cleanTitle, artist: cleanArtist, duration: duration, translationEnabled: translationEnabled, album: cleanAlbum)
+            }
             addBoundedChild(seconds: AuthoritativeBackfillBudget.netEaseChild) {
                 await self.fetchFromNetEase(title: cleanTitle, artist: cleanArtist,
                                             originalTitle: cleanTitle, originalArtist: cleanArtist,
@@ -1987,11 +2039,8 @@ public final class LyricsFetcher {
                     // wire carries work its own per-child cap vouched for.
                     pendingRealChildren -= 1
                     results.append(result)
-                    if result.kind == .synced,
-                       (
-                        (result.titleMatched && result.score >= 45 && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
-                            || (result.score >= 70 && selectedHasPersistentIdentity(result))
-                       ) {
+                    emitSourceResultE2E(phase: "backfill", result: result)
+                    if shouldCancelAuthoritativeBackfill(after: result) {
                         group.cancelAll()
                         break
                     }

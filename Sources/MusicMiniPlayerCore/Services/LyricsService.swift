@@ -369,6 +369,39 @@ public class LyricsService: ObservableObject {
         return !lyrics.contains { $0.hasSyllableSync }
     }
 
+    /// Foreground may publish line-level (or unsynced) inside the 3s A-rule, but
+    /// the 9s authoritative backfill must keep racing for word-level. Already
+    /// word-level content does not relaunch it.
+    static func shouldLaunchAuthoritativeBackfill(
+        hasForegroundResult: Bool,
+        kind: LyricsKind?,
+        hasWordLevel: Bool
+    ) -> Bool {
+        if !hasForegroundResult { return true }
+        if kind == .unsynced { return true }
+        if kind == .synced && !hasWordLevel { return true }
+        return false
+    }
+
+    /// Quality-gated display replace (founder 2026-08-27): line→word and
+    /// unsynced→synced MUST hot-switch; word→line is still frozen (P1).
+    static func shouldReplaceDisplayedLyrics(
+        displayState: LyricsDisplayState,
+        displayedIsEmpty: Bool,
+        displayedHasWordLevel: Bool,
+        displayedIsUnsynced: Bool,
+        incomingHasWordLevel: Bool,
+        incomingIsUnsynced: Bool,
+        incomingIsEmpty: Bool
+    ) -> Bool {
+        if incomingIsEmpty { return false }
+        if displayState != .content || displayedIsEmpty { return true }
+        if displayedHasWordLevel && !incomingHasWordLevel { return false }
+        if !displayedHasWordLevel && incomingHasWordLevel { return true }
+        if displayedIsUnsynced && !incomingIsUnsynced { return true }
+        return false
+    }
+
     // ========================================================================
     // MARK: - Init
     // ========================================================================
@@ -468,6 +501,52 @@ public class LyricsService: ObservableObject {
     @MainActor
     public func debugExpireStabilityGuardForTesting() {
         lastGoodLyricsTime = Date().addingTimeInterval(-(stabilityGuardCooldown + 1))
+    }
+
+    @MainActor
+    func debugSeedDisplayedLyricsForTesting(
+        _ lyrics: [LyricLine],
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String = "",
+        isUnsynced: Bool
+    ) {
+        currentFetchTask?.cancel()
+        currentFetchTask = nil
+        cancelCurrentBackfill()
+        let songID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
+        applyLyrics(
+            lyrics,
+            firstRealLyricIndex: lyrics.firstIndex(where: { LyricsParser.shared.isRealLyricLine($0.text) }) ?? 0,
+            hasSourceTranslation: lyrics.contains { $0.hasTranslation },
+            isUnsynced: isUnsynced,
+            songID: songID,
+            title: title,
+            artist: artist,
+            stableSongID: Self.stableSongIdentity(title: title, artist: artist),
+            duration: duration,
+            album: album
+        )
+    }
+
+    @MainActor
+    func debugApplyFetchedResultForTesting(
+        _ result: LyricsFetcher.LyricsFetchResult,
+        title: String,
+        artist: String,
+        duration: TimeInterval,
+        album: String = ""
+    ) async {
+        let songID = Self.songIdentity(title: title, artist: artist, duration: duration, album: album)
+        await applyFetchedLyricsIfCurrent(
+            result,
+            title: title,
+            artist: artist,
+            duration: duration,
+            songID: songID,
+            album: album
+        )
     }
     #endif
 
@@ -972,7 +1051,12 @@ public class LyricsService: ObservableObject {
         }
 
         await applyFetchedLyricsIfCurrent(bestResult, title: title, artist: artist, duration: duration, songID: songID, album: album)
-        if bestResult.kind == .unsynced {
+        let foregroundHasWordLevel = bestResult.lyrics.contains { $0.hasSyllableSync }
+        if Self.shouldLaunchAuthoritativeBackfill(
+            hasForegroundResult: true,
+            kind: bestResult.kind,
+            hasWordLevel: foregroundHasWordLevel
+        ) {
             launchAuthoritativeBackfill(
                 title: title,
                 artist: artist,
@@ -1475,14 +1559,20 @@ public class LyricsService: ObservableObject {
                 DebugLogger.log("LyricsService", "⏭️ Cached but not current song, skipping apply: \(songID)")
                 return
             }
-            // P1 anti-oscillation (founder 2026-08-25: no mid-stream re-dress): once this song already
-            // has content on screen, a LATER result (a slow foreground winner that differs from a
-            // provisional, the ≤9s backfill, or a duration-correction re-fetch) must NOT replace it —
-            // that unconditional swap was the "逐字→逐行→逐字" oscillation. The result is already cached
-            // above, so the better version simply shows on the next play; the current play never flips.
-            // Only the FIRST publish for a song (display still empty/searching) reaches applyLyrics here.
-            if self.displayState == .content, !self.lyrics.isEmpty {
-                DebugLogger.log("LyricsService", "🧊 Display frozen for '\(songID)' — cached the result but not replacing shown lyrics (P1)")
+            // Quality-gated replace (founder 2026-08-27): P1 still blocks demotion
+            // (逐字→逐行 oscillation), but line-level / unsynced on screen MUST
+            // hot-switch when a later result is word-level.
+            let incomingHasWordLevel = processed.lyrics.contains { $0.hasSyllableSync }
+            if !Self.shouldReplaceDisplayedLyrics(
+                displayState: self.displayState,
+                displayedIsEmpty: self.lyrics.isEmpty,
+                displayedHasWordLevel: self.lyrics.contains { $0.hasSyllableSync },
+                displayedIsUnsynced: self.isUnsyncedLyrics,
+                incomingHasWordLevel: incomingHasWordLevel,
+                incomingIsUnsynced: isUnsynced,
+                incomingIsEmpty: processed.lyrics.isEmpty
+            ) {
+                DebugLogger.log("LyricsService", "🧊 Display frozen for '\(songID)' — cached the result but not replacing shown lyrics (P1, not an upgrade)")
                 return
             }
             applyLyrics(processed.lyrics,

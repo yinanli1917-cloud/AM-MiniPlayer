@@ -415,6 +415,21 @@ extension LyricsFetcher {
         return Double(syllableCount) / Double(result.lyrics.count) >= 0.3
     }
 
+    /// Backfill may stop once a title-matched WORD-LEVEL result is in hand.
+    /// A line-level synced hit (typical LRCLIB) must never cancel AMLL/NE/QQ.
+    func shouldCancelAuthoritativeBackfill(after result: LyricsFetchResult) -> Bool {
+        guard result.kind == .synced, hasWordLevelSync(result) else { return false }
+        if result.titleMatched, result.score >= 45,
+           result.matchedDurationDiff.map({ $0 < 2.0 }) ?? true {
+            return true
+        }
+        return result.score >= 70 && (
+            result.albumMatched
+                || (result.titleMatched && (result.matchedDurationDiff.map { $0 < 2.0 } ?? true))
+                || result.source.profile.hasSelfEvidentCatalogIdentity
+        )
+    }
+
     private func hasLooseCatalogVersionMismatch(_ result: LyricsFetchResult, songDuration: TimeInterval) -> Bool {
         guard songDuration > 0,
               result.kind == .synced,

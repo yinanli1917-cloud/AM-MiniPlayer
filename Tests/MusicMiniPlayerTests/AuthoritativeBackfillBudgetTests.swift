@@ -79,9 +79,12 @@ final class AuthoritativeBackfillBudgetTests: XCTestCase {
         XCTAssertEqual(Budget.lrclibSearchChild, 3.2, accuracy: 0.0001)
         XCTAssertEqual(Budget.netEaseChild, 4.8, accuracy: 0.0001)
         XCTAssertEqual(Budget.qqChild, 3.2, accuracy: 0.0001)
+        XCTAssertEqual(Budget.appleMusicChild, 3.2, accuracy: 0.0001)
+        XCTAssertEqual(Budget.amllChild, 3.2, accuracy: 0.0001)
         XCTAssertEqual(Budget.albumTitleEchoChild, 2.9, accuracy: 0.0001)
         for cap in [Budget.lrclibChild, Budget.lrclibSearchChild,
                     Budget.netEaseChild, Budget.qqChild,
+                    Budget.appleMusicChild, Budget.amllChild,
                     Budget.albumTitleEchoChild] {
             XCTAssertLessThanOrEqual(cap, Budget.overall)
         }

@@ -1310,6 +1310,7 @@ extension LyricsFetcher {
     // MARK: - AMLL-TTML-DB
 
     func fetchFromAMLL(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.amll, phase: "fetch")
         // 尝试通过 Apple Music Track ID 直接获取
         if let trackId = await getAppleMusicTrackId(title: title, artist: artist, duration: duration),
            let lyrics = await fetchAMLLTTML(platform: "am-lyrics", filename: "\(trackId).ttml") {
@@ -1558,6 +1559,7 @@ extension LyricsFetcher {
     }
 
     func fetchFromNetEase(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.netEase, phase: "fetch")
         DebugLogger.log("NetEase", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s) album='\(album)'")
         let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, album: album, disableCjkEscapeInP3: false)
         let headers = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
@@ -2518,6 +2520,7 @@ extension LyricsFetcher {
     }
 
     func fetchFromQQMusic(title: String, artist: String, originalTitle: String, originalArtist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.qq, phase: "fetch")
         DebugLogger.log("QQMusic", "🔍 搜索: '\(title)' by '\(artist)' (\(Int(duration))s) album='\(album)'")
         let params = SearchParams(title: title, artist: artist, originalTitle: originalTitle, originalArtist: originalArtist, duration: duration, album: album, disableCjkEscapeInP3: false)
         guard let apiURL = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") else { return nil }
@@ -2645,6 +2648,7 @@ extension LyricsFetcher {
     // MARK: - LRCLIB
 
     func fetchFromLRCLIB(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.lrclib, phase: "fetch")
         DebugLogger.log("LRCLIB", "🔍 /get '\(title)' by '\(artist)' (\(Int(duration))s)")
         let normalizedTitle = LanguageUtils.normalizeTrackName(title)
         let normalizedArtist = LanguageUtils.normalizeArtistName(artist)
@@ -2711,6 +2715,7 @@ extension LyricsFetcher {
     }
 
     func fetchFromLRCLIBSearch(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.lrclibSearch, phase: "fetch")
         DebugLogger.log("LRCLIB", "🔍 /search '\(title)' by '\(artist)' (\(Int(duration))s)")
         // Boundary mapping: same one-shot string→case mapping as /get above.
         if let cached = lyricsDiskCache.get(title: title, artist: artist, duration: duration),
@@ -3174,6 +3179,7 @@ extension LyricsFetcher {
     // MARK: - lyrics.ovh
 
     func fetchFromLyricsOVH(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.lyricsOvh, phase: "fetch")
         let normalizedTitle = LanguageUtils.normalizeTrackName(title)
         let normalizedArtist = LanguageUtils.normalizeArtistName(artist)
 
@@ -3197,6 +3203,7 @@ extension LyricsFetcher {
     // MARK: - Genius（纯文本备选源，覆盖面最广）
 
     func fetchFromGenius(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool) async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.genius, phase: "fetch")
         guard let searchURL = HTTPClient.buildURL(
             base: "https://genius.com/api/search/song",
             queryItems: ["q": "\(title) \(artist)", "per_page": "5"]
@@ -3293,6 +3300,7 @@ extension LyricsFetcher {
     }
 
     func fetchFromAppleMusic(title: String, artist: String, duration: TimeInterval, translationEnabled: Bool, album: String = "") async -> LyricsFetchResult? {
+        emitSourceRequestE2E(.appleMusic, phase: "fetch")
         // Capability latch: once this process has failed to mint a developer
         // token, every further MusicKit request is doomed — skip silently
         // (no request, no log, no result). Entitled builds never arm this.
