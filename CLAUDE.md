@@ -7,6 +7,8 @@ GitHub: https://github.com/yinanli1917-cloud/AM-MiniPlayer
 > **歌词验收硬标准（创始人 A 规则，2026-08-26 拍板，取代 08-25 含翻译全 3s 口径）**：原文歌词从播放到出词，所有路径（缓存命中、未命中、各歌词源、冷启动、切歌、seek）硬保证 ≤3 秒。翻译并行去取：3 秒内到就一起出，没到先出原文、翻译到了无缝补上，不打断不闪烁。准确率与性能一样都不能缺。此前 08-25 口头口径是含翻译全 3s——今为唯一权威记载，任何歌词管线改动以此为验收线。
 >
 > **手感类验证（创始人 2026-08-21 永久规则）**：歌词切行渐隐、滚动、动效这类手感项，自验只做代码层面——单元测试、时间戳日志、可控的假时钟、确定性回放。不用 computer use，不录屏，除非创始人自己提供录屏。自验通过后提醒创始人亲自终验，自动测试通过不能替代。全局规矩见 ~/.claude/CLAUDE.md。
+>
+> **版本号（创始人 2026-08-27 裁定）**：现行发售线是 **v0.28**。`build_app.sh` 从 git tag `v0.*` 生成 `CFBundleShortVersionString` / `CFBundleVersion` / `BuildInfo.txt`（exact match 优先，否则最新 `v0.*`；可用 `NANOPOD_MARKETING_VERSION` 覆盖）。旧 **v2.x tags 保留为历史，不删不改、不参与版本生成**（v2.8 是旧 SwiftUI 内核命名，与 v0.28 无关）。证据：`git log` 找到 `b24b182 build: release nanoPod 0.28 beta bridge` 与 `60dcb1d`（「Future v0.x tags derive update sequence from the minor version」）；tag `v2.8` 的 subject 就是那次 0.28 beta bridge；仓库无 CHANGELOG；`Sources/MusicMiniPlayerApp/Info.plist` 与旧 `build_app.sh` 曾写死 `2.5`。搜过：`CHANGELOG*`、`git log --all --grep=v0.`、`git log --grep=0.28`、`git log --grep=版本号`、源码/注释 `v0.`。
 
 ---
 
@@ -23,7 +25,7 @@ Sources/
 │   │   ├── MusicController.swift          - Thin facade: @Published state + notifications/polling/Timer
 │   │   ├── MusicController+Artwork.swift  - Artwork extraction/fetching/caching
 │   │   ├── MusicController+Playback.swift - Playback controls + volume + favorites + AppleEventCode
-│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService) + NWPathMonitor offline self-recovery + LyricsDisplayState machine (deep-search never demotes content) + 会话未命中备忘三集成点（确认未命中记录/抓取开始短路/forceRefresh 旁路清除）
+│   │   ├── LyricsService.swift            - Lyrics facade + cache + translation (includes TranslationService) + NWPathMonitor offline self-recovery + LyricsDisplayState machine (deep-search never demotes content) + 会话未命中备忘三集成点（确认未命中记录/抓取开始短路/forceRefresh 旁路清除）+ 行级/unsynced 必须回填且允许行→逐字热切换（P1 只禁降级）
 │   │   ├── LyricsMissMemo.swift           - 会话级已确认无歌词备忘（20min TTL，纯内存不落盘，重启即清；取消/离线永不记录）
 │   │   ├── MenuBarHealer.swift            - Self-heal macOS 26 ControlCenter plist at launch
 │   │   ├── UpdateService.swift            - Silent GitHub Releases check + download + SHA256 verify + stage
@@ -83,7 +85,7 @@ Sources/
     ├── BenchmarkCases.swift       - 全球基准测试数据模型 + 加载器
     └── BenchmarkValidator.swift   - 基准测试五层验证（翻译泄漏/语言一致性/源翻译/ML翻译/时间轴）
 
-Tests/MusicMiniPlayerTests/         - 985 个单元测试（2026-08-26 `swift test` 实测；2026-08-21 为 889）
+Tests/MusicMiniPlayerTests/         - 999 个单元测试（2026-08-27 `swift test` 实测；2026-08-26 为 985）
     ├── LyricsParserTests.swift    - TTML/LRC/YRC 解析测试
     ├── JapaneseReadingTests.swift - 日语读音判定（8 对旧白名单 fixture + 前缀扩展负例 + 长音折叠 + fail-closed + 包含下限）
     ├── MetadataDiskCacheTierTests.swift - 元数据缓存层隔离（CN/多区域互不覆盖）+ CN 证据元组往返 + v6 schema 冲洗 + 防抖合并写
@@ -111,6 +113,8 @@ Tests/MusicMiniPlayerTests/         - 985 个单元测试（2026-08-26 `swift te
     └── RadioDurationlessMatchingTests.swift - 电台时长未知匹配：duration=0 是缺失信号非完美信号，标题+艺人双强制；已知时长门槛不变
     └── TranslationWritebackTests.swift - 翻译单发布回写：纯合并函数一次赋值（曾逐行改 @Published 数组多次重渲）
     └── LyricsOriginalDeliverySLATests.swift - 原文 3s A 规则：十条路径天花板 + 2.9/3.1 边界 + 准确率降级阶梯 + 前台窗口 clip
+    └── LyricsWordLevelPriorityTests.swift - 逐字优先（池内 syllable 必须赢行级）+ 回填不因行级 cancel + 行→逐字热切换
+    └── NativeLyricsMaskExhaustiveHandoffTests.swift - 假时钟穷举切行 mask（零几何/appear 窗/远跳/中段 seek）+ v2.8 visual spring damping 20
     └── LyricsLateTranslationInsertTests.swift - 翻译后补热插入：只改译文、词轴/displayState 不动；托管 surface 3.1s sidecar 不重建 semantic
     └── RadioTrackChangeDebounceTests.swift - 电台换歌确认：无 PID 身份需连续两次一致读数才触发管线（缓冲期标题瞬态不再刷新页面）
     └── NativeLyricsHandoffClockTests.swift - 切行确定性时钟门：注入播放钟+墙钟锁步驱动真 surface（debugNowOverride/debugTick/debugPlaybackClockDateProvider），钉死上一行位移/opacity/亮层同帧退场（边界后 +150ms 错峰）；复现旧红测试=0.8s appear 窗内切行被冻结、余晖先暗的 harness 伪影
@@ -186,6 +190,10 @@ Pure ASCII input: Parallel queries to CN + inferred region (JP/KR), CN CJK title
   ✅ `cachedLayerRowsTrackKey` identity gate: rows cached for another track render as `[]`
 - ❌ Resident CIGaussianBlur on static lyric rows → the compositor re-evaluates every resident filter each frame it recomposites the surface; during the active line's word sweep the ~12-25 static blurred rows billed WindowServer +38 CPU points on M1 while the app itself stayed cheap (~10%)
   ✅ Blur economy: rasterize settled non-active blurred rows (`applyRasterizationPolicy` + `refreshRasterization` in NativeLyricsRowView; dot-animation veto; backing-scale rasterizationScale) + blur is a stepped depth cue (snaps in setTarget/quickRetarget so blur-only retargets settle instantly and stay rasterized through handoffs); guarded by NativeLyricsBlurEconomyTests
+- ❌ actool "success" (`partial_info.plist` exists) skipping `Resources/AppIcon.icns` → Finder/Dock 无图标
+  ✅ 先拷 icns，再尝试 actool 出 Assets.car；bundle 内没有 `AppIcon.icns` 则拒绝交付
+- ❌ 行级 LRCLIB 命中就 cancelAll 前台/回填 → 逐字源被剪掉；P1 一律冻结显示 → 行级永远升不了逐字
+  ✅ 预算内到手的逐字优先；行级/unsynced 必须 launch 回填（含 AMLL/AM）；只允许升级热切换、禁止降级
 - Full records in `postmortem/` and `.claude/rules/banned-patterns.md`
 
 ### Matching Algorithm (Unified SearchCandidate)
@@ -201,7 +209,7 @@ NetEase/QQ share `SearchCandidate<ID>` + `selectBestCandidate()` priority chain:
 ./build_app.sh                        # Build + sign → nanoPod.app
 swift build                           # Build only (quick validation)
 open nanoPod.app                      # Launch
-swift test                            # 889 unit tests (needs DEVELOPER_DIR=/Applications/Xcode.app; CLT has no XCTest)
+swift test                            # 999 unit tests (needs DEVELOPER_DIR=/Applications/Xcode.app; CLT has no XCTest)
 swift run LyricsVerifier run          # Run the 82 predefined lyrics regression cases (network; provider weather applies)
 swift run LyricsVerifier check "Song" "Artist" duration  # Test a single song
 swift run LyricsVerifier library --recent 20                              # AM 资料库测试
