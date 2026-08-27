@@ -637,6 +637,12 @@ final class NativeLyricsRowView: NSView {
     /// syllable sync this must be `true`; if it is `false` the active line degraded to
     /// line-level because its text geometry was not laid out when the phase was computed.
     private(set) var debugLastAppliedActivePerRunSweep = false
+    /// Index of the word currently under the sweep (`-1` if none). Paired with
+    /// `debugLastWholeLineHighlight` for the 2026-08-27 mask-trace probe.
+    private(set) var debugLastActiveWordIndex: Int = -1
+    /// True when the active word-level line is showing whole-line bright instead of
+    /// the per-word mask (the "整行直接高亮" signature).
+    private(set) var debugLastWholeLineHighlight = false
     private(set) var debugPlaybackPhaseUpdateCount = 0
     // Active-line translation sweep truth captured on the last updatePlaybackPhase. `expected` is
     // what the model wants (partial mid-line), `applied` is what the renderer actually clipped to,
@@ -1258,6 +1264,25 @@ final class NativeLyricsRowView: NSView {
             debugLastMainBrightOverlayPresent =
                 !mainBrightTextLayer.isHidden && mainBrightTextLayer.string != nil
             #endif
+            #if DEBUG || LOCAL_DEVELOPER_BUILD
+            if expectsPerRunSweep {
+                debugLastActiveWordIndex = plan.wordRuns.lastIndex(where: { $0.startTime <= renderTime }) ?? 0
+            } else {
+                debugLastActiveWordIndex = -1
+            }
+            debugLastWholeLineHighlight = expectsPerRunSweep
+                && !appliedMainProgress.appliedPerRunSweep
+                && !mainBrightTextLayer.isHidden
+                && mainBrightTextLayer.string != nil
+            NativeLyricsMaskTrace.record(
+                rowID: row.displayLine.id,
+                wordIndex: debugLastActiveWordIndex,
+                wholeLineHighlight: debugLastWholeLineHighlight,
+                perRunSweep: appliedMainProgress.appliedPerRunSweep,
+                expected: plan.mainSweepProgress,
+                applied: appliedMainProgress.progress
+            )
+            #endif
             let expectsNoLineLevelMainSweep = !expectsPerRunSweep
             let appliesLineLevelMainSweep = expectsNoLineLevelMainSweep
                 && mainBrightTextLayer.string != nil
@@ -1425,11 +1450,53 @@ final class NativeLyricsRowView: NSView {
                 emphasisOrders: emphasisOrders
             )
         } else {
+            // Geometry is not ready (fresh/pooled/offscreen row). A whole-line bright
+            // overlay plus a zero-size gradient mask reads as "整行已高亮 / mask lost".
+            // Keep the dim base, hide the sung overlay, wait for layout.
             hideMainWordGlyphLayers()
-            let floatTransform = CGAffineTransform(translationX: 0, y: plan.activeLineFloatY(at: currentTime))
-            mainTextLayer.setAffineTransform(floatTransform)
-            mainBrightTextLayer.setAffineTransform(floatTransform)
+            hidePerRunSweepMaskLayers()
+            mainBrightTextLayer.mask = nil
+            mainBrightTextLayer.string = nil
+            mainBrightTextLayer.isHidden = true
+            mainTextLayer.setAffineTransform(.identity)
+            mainBrightTextLayer.setAffineTransform(.identity)
             wordFloatResult = .inactive
+            let layoutResult = lastLineLayoutMetrics
+            return MainTextPhaseAppliedMetrics(
+                progress: 0,
+                appliedPerRunSweep: false,
+                appliedBaseReveal: false,
+                appliedPerGlyphEmphasis: false,
+                expectedEmphasisGlyphCount: 0,
+                appliedEmphasisGlyphCount: 0,
+                appliedEmphasisGlyphMotionCount: 0,
+                maxAppliedEmphasisScale: 1,
+                maxAppliedEmphasisLiftMagnitude: 0,
+                maxAppliedEmphasisGlowOpacity: 0,
+                maxAppliedEmphasisAlpha: 0,
+                textLayoutCoverageGapCount: 0,
+                expectedSweepLineCount: 0,
+                appliedSweepLineCount: 0,
+                sweepLineCoverageGapCount: 0,
+                sweepWavefrontErrorMax: 0,
+                baseRevealLineCoverageGapCount: 0,
+                baseRevealWavefrontErrorMax: 0,
+                emphasisGlyphPositionSampleCount: 0,
+                emphasisGlyphPositionErrorMax: 0,
+                emphasisGlyphScaleErrorMax: 0,
+                emphasisGlyphAlphaErrorMax: 0,
+                emphasisGlyphGlowErrorMax: 0,
+                textGlyphGeometrySampleCount: 0,
+                textGlyphGeometryCoverageGapCount: 0,
+                textGlyphGeometryPositionErrorMax: 0,
+                lineLayoutSampleCount: layoutResult.sampleCount,
+                lineLayoutHeightErrorMax: layoutResult.heightErrorMax,
+                lineLayoutWidthErrorMax: layoutResult.widthErrorMax,
+                mainTextFrameHeightErrorMax: layoutResult.mainFrameHeightError,
+                translationTextFrameHeightErrorMax: layoutResult.translationFrameHeightError,
+                mainWordFloatSampleCount: 0,
+                mainWordFloatSpread: 0
+            )
         }
         // Pin the post-line fade monotone so a backward clock step can't re-light the overlay. The
         // floor only falls here; it is reset solely by the line-key / explicit-seek guard at the top.

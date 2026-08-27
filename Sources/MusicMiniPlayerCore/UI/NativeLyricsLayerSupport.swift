@@ -207,3 +207,55 @@ private extension CGImage {
         )!
     }()
 }
+
+/// DEBUG mask-state probe (founder 2026-08-27). Records only on transitions so a
+/// daily session cannot balloon. Armed when `NANOPOD_MASK_TRACE=1` or under
+/// LOCAL_DEVELOPER_BUILD. Production default: no I/O.
+enum NativeLyricsMaskTrace {
+    private static let lock = NSLock()
+    private static var lastKey: String = ""
+
+    static func record(
+        rowID: String,
+        wordIndex: Int,
+        wholeLineHighlight: Bool,
+        perRunSweep: Bool,
+        expected: CGFloat,
+        applied: CGFloat
+    ) {
+        #if DEBUG || LOCAL_DEVELOPER_BUILD
+        let armed = ProcessInfo.processInfo.environment["NANOPOD_MASK_TRACE"] == "1"
+        #if LOCAL_DEVELOPER_BUILD
+        let localBuild = true
+        #else
+        let localBuild = false
+        #endif
+        guard armed || localBuild else { return }
+        let key = "\(rowID)|\(wordIndex)|\(wholeLineHighlight)|\(perRunSweep)"
+        lock.lock()
+        let changed = key != lastKey
+        if changed { lastKey = key }
+        lock.unlock()
+        guard changed else { return }
+        let line = String(
+            format: "{\"event\":\"mask_state\",\"row\":\"%@\",\"word\":%d,\"wholeLineHighlight\":%@,\"perRunSweep\":%@,\"expected\":%.3f,\"applied\":%.3f}\n",
+            rowID, wordIndex,
+            wholeLineHighlight ? "true" : "false",
+            perRunSweep ? "true" : "false",
+            Double(expected), Double(applied)
+        )
+        let url = URL(fileURLWithPath: "/tmp/nanopod_mask_trace.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        if let data = line.data(using: .utf8) {
+            try? handle.write(contentsOf: data)
+        }
+        #else
+        _ = (rowID, wordIndex, wholeLineHighlight, perRunSweep, expected, applied)
+        #endif
+    }
+}

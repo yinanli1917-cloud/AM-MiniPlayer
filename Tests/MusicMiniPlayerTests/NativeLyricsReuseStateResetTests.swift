@@ -148,6 +148,18 @@ final class NativeLyricsReuseStateResetTests: XCTestCase {
     @MainActor
     func test_finalizeDeactivationStateDoesNotReenterPlaybackPhase() {
         let rowView = NativeLyricsRowView(frame: NSRect(x: 0, y: 0, width: 320, height: 56))
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: NSSize(width: 320, height: 56)),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0
+        window.contentView = rowView
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+
         let musicController = MusicController(preview: true)
         musicController.duration = 60
         musicController.isPlaying = true
@@ -158,7 +170,15 @@ final class NativeLyricsReuseStateResetTests: XCTestCase {
             row: rows[0],
             configuration: config(rows: rows, currentIndex: 0, musicController: musicController)
         )
-        XCTAssertTrue(rowView.debugMainBrightOverlayActive, "precondition: active syllable row has a bright overlay")
+        rowView.layoutSubtreeIfNeeded()
+        CATransaction.flush()
+        _ = rowView.updatePlaybackPhase(
+            configuration: config(rows: rows, currentIndex: 0, musicController: musicController)
+        )
+        XCTAssertTrue(
+            rowView.debugLastAppliedActivePerRunSweep,
+            "precondition: laid-out active syllable row is in per-word karaoke, not the whole-line fallback"
+        )
 
         let phaseUpdatesAfterActiveConfigure = rowView.debugPlaybackPhaseUpdateCount
         rowView.beginDeactivationFade()
