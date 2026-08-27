@@ -510,4 +510,35 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
     func test_lineGapsStableEnteringManualScroll_lineLevel() {
         runManualScrollGapStabilityCheck(rows: makeLineLevelRows(20), hasSyllableSync: false, label: "line-level")
     }
+
+    @MainActor
+    func test_wordGlyphColorIsNotReassignedEveryFrame() {
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+        let rows = makeRows(8)
+        surface.debugSkipDedupe = true
+        let start = rows[0].displayLine.line.startTime + 0.15
+        mc.syncPlaybackClock(to: start, playing: true)
+        surface.configure(config(rows, current: 0, mc: mc))
+        surface.layoutSubtreeIfNeeded()
+        drive(surface: surface, musicController: mc, rows: rows, from: start, duration: 0.35, noisy: false)
+
+        let index = surface.debugNativeSemanticIndex ?? 0
+        guard let view = surface.debugRowView(forIndex: index) else {
+            XCTFail("expected a mounted row at \(index)")
+            return
+        }
+        let afterWarm = view.debugWordGlyphColorAssignCount
+        XCTAssertGreaterThan(afterWarm, 0, "warmup must paint per-glyph colors once")
+
+        drive(surface: surface, musicController: mc, rows: rows, from: start + 0.35, duration: 0.35, noisy: false)
+        XCTAssertEqual(
+            view.debugWordGlyphColorAssignCount,
+            afterWarm,
+            "steady karaoke frames must not re-assign CATextLayer.foregroundColor"
+        )
+    }
 }

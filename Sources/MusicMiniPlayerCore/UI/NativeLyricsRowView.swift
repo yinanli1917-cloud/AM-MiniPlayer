@@ -174,12 +174,14 @@ final class NativeLyricsRowView: NSView {
         let width: CGFloat
         let height: CGFloat
         let fontSize: CGFloat
+        let brightAlpha: CGFloat
 
-        init(glyph: NativeLyricsTextSweepVisualRun.Glyph, fontSize: CGFloat) {
+        init(glyph: NativeLyricsTextSweepVisualRun.Glyph, fontSize: CGFloat, brightAlpha: CGFloat = 1) {
             text = glyph.text
             width = glyph.rect.width.rounded(.toNearestOrAwayFromZero)
             height = glyph.rect.height.rounded(.toNearestOrAwayFromZero)
             self.fontSize = fontSize
+            self.brightAlpha = (brightAlpha * 1000).rounded(.toNearestOrAwayFromZero) / 1000
         }
     }
 
@@ -392,6 +394,8 @@ final class NativeLyricsRowView: NSView {
         hideTranslationSweepMaskLayers()
         hideEmphasisGlyphLayers()
         hideMainWordGlyphLayers()
+        mainWordGlyphLayerSignatures = Array(repeating: nil, count: mainWordGlyphLayerSignatures.count)
+        debugWordGlyphColorAssignCount = 0
         hideTranslationLoadingDots()
         hideDotLayers()
     }
@@ -680,6 +684,11 @@ final class NativeLyricsRowView: NSView {
     /// Per-frame write ATTEMPTS (before the redundancy guard). attempts >> count on steady frames is
     /// the reproduction: the render path re-writes every frame; the guard is what stops the re-composite.
     private(set) var layerMutationAttempts = 0
+    /// Counts CATextLayer.foregroundColor writes on the per-glyph karaoke copies.
+    /// A settled sweep must not re-assign color every frame — that dirties the layer
+    /// and forces CoreText to typeset again (measured 2026-08-27: CATextLayer drawInContext
+    /// dominated presentationTick).
+    private(set) var debugWordGlyphColorAssignCount = 0
     func setPositioning(_ transform: CGAffineTransform) {
         layerMutationAttempts += 1
         // Track the intended transform for layout()'s re-assertion regardless of whether we write now.
@@ -1441,8 +1450,12 @@ final class NativeLyricsRowView: NSView {
             if mainTextLayer.string != nil { mainTextLayer.string = nil }
             if mainBrightTextLayer.string != nil { mainBrightTextLayer.string = nil }
             activeHiddenEmphasisSignature = nil
-            mainTextLayer.setAffineTransform(.identity)
-            mainBrightTextLayer.setAffineTransform(.identity)
+            if mainTextLayer.affineTransform() != .identity {
+                mainTextLayer.setAffineTransform(.identity)
+            }
+            if mainBrightTextLayer.affineTransform() != .identity {
+                mainBrightTextLayer.setAffineTransform(.identity)
+            }
             wordFloatResult = applyMainWordFloatGlyphLayers(
                 plan: plan,
                 currentTime: currentTime,
@@ -2210,7 +2223,11 @@ final class NativeLyricsRowView: NSView {
             let brightLayer = mainBrightWordGlyphLayers[index]
             dimLayer.isHidden = false
             brightLayer.isHidden = false
-            let signature = EmphasisGlyphLayerSignature(glyph: glyph, fontSize: fontSize)
+            let signature = EmphasisGlyphLayerSignature(
+                glyph: glyph,
+                fontSize: fontSize,
+                brightAlpha: plan.constants.brightAlpha
+            )
             if mainWordGlyphLayerSignatures.indices.contains(index),
                mainWordGlyphLayerSignatures[index] != signature {
                 mainWordGlyphLayerSignatures[index] = signature
@@ -2225,9 +2242,10 @@ final class NativeLyricsRowView: NSView {
                         size: CGSize(width: glyph.rect.width, height: glyph.rect.height + Self.textBottomClipPad)
                     )
                 }
+                dimLayer.foregroundColor = dimColor
+                brightLayer.foregroundColor = brightColor
+                debugWordGlyphColorAssignCount += 2
             }
-            dimLayer.foregroundColor = dimColor
-            brightLayer.foregroundColor = brightColor
             // Center sits pad/2 below the glyph midY so the taller box keeps its TOP at glyph.rect.minY
             // (text stays exactly where the whole-line layer drew it; only the bottom gains room).
             let centerY = glyph.rect.midY + Self.textBottomClipPad / 2 + input.floatY

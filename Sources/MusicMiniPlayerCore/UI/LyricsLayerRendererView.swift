@@ -2579,19 +2579,21 @@ final class NativeLyricsSurfaceView: NSView {
             || snapMode.keepsPresentationLoopAlive
         manualPresentationNeedsApply = false
         withDisabledLayerActions {
-            refreshTextActivation(runtimeConfiguration: runtimeConfiguration)
-            // Fade the receding line's bright sung-overlay toward 0 in step with its opacity recede,
-            // so it never snaps off at finalization (#2c blink). Progress maps the row's current
-            // opacity (active ≈1.0 → past ≈0.35) onto [1,0]; finalizeDeferredDeactivation then clears
-            // the (already near-invisible) overlay + mask once the row settles.
-            if let deferredIdx = deferredDeactivationIndex,
-               let id = rowIDByIndex[deferredIdx],
-               let view = rowViews[id] {
-                let opacity = visualStates[deferredIdx]?.opacity ?? 1.0
-                let progress = max(0, min(1, (opacity - 0.35) / 0.65))
-                view.updateDeactivationFade(progress: progress)
+            if shouldApplyPresentationFrame || shouldApplyManualPresentation {
+                refreshTextActivation(runtimeConfiguration: runtimeConfiguration)
+                // Fade the receding line's bright sung-overlay toward 0 in step with its opacity recede,
+                // so it never snaps off at finalization (#2c blink). Progress maps the row's current
+                // opacity (active ≈1.0 → past ≈0.35) onto [1,0]; finalizeDeferredDeactivation then clears
+                // the (already near-invisible) overlay + mask once the row settles.
+                if let deferredIdx = deferredDeactivationIndex,
+                   let id = rowIDByIndex[deferredIdx],
+                   let view = rowViews[id] {
+                    let opacity = visualStates[deferredIdx]?.opacity ?? 1.0
+                    let progress = max(0, min(1, (opacity - 0.35) / 0.65))
+                    view.updateDeactivationFade(progress: progress)
+                }
+                finalizeDeferredDeactivation(runtimeConfiguration: runtimeConfiguration)
             }
-            finalizeDeferredDeactivation(runtimeConfiguration: runtimeConfiguration)
             if shouldUpdateTextPhase {
                 updateTextPhasesForCurrentConfiguration(runtimeConfiguration: runtimeConfiguration)
             }
