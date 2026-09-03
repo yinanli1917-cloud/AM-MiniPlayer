@@ -6,6 +6,8 @@ This project uses the global Codex harness. Before substantial work,
 Codex should use `python3 scripts/codex_harness.py context` and the
 active task state under `.codex/tasks/`.
 
+_(现状 2026-09-03：全局 codex harness 已由创始人于 2026-08-17 下令停用（`~/.codex/harness-disabled*`，kyb 有案），其 bin 目录已不在，上述命令目前报 FileNotFoundError。本段是历史描述，非当前可执行指令，保留以备重新启用时对照。)_
+
 > **Rules**: Only run `git push` when the user explicitly asks. Never use private APIs. Before handing over to the user, you must determine how to verify or test the bug fix / new feature and execute the verification; stay in the verification loop until confirmed working.
 >
 > **歌词验收硬标准（创始人 A 规则，2026-08-26 拍板，取代 08-25 含翻译全 3s 口径）**：原文歌词从播放到出词，所有路径（缓存命中、未命中、各歌词源、冷启动、切歌、seek）硬保证 ≤3 秒。翻译并行去取：3 秒内到就一起出，没到先出原文、翻译到了无缝补上，不打断不闪烁。准确率与性能一样都不能缺。此前 08-25 口头口径是含翻译全 3s——今为唯一权威记载，任何歌词管线改动以此为验收线。
