@@ -336,6 +336,7 @@ extension MusicController {
                 ("Recent Song 1", "Artist A", "Album A", "A", 190.0),
                 ("Recent Song 2", "Artist B", "Album B", "B", 210.0)
             ]
+            queueProvenance = .preview
             return
         }
 
@@ -390,6 +391,38 @@ extension MusicController {
         }
     }
 
+    /// Result of one attempt to read the Up Next queue via ScriptingBridge. Kept
+    /// separate from the [(title:...)] tuple array so the provenance decision
+    /// (`MusicController.provenance(for:)`) is a pure, unit-testable mapping that
+    /// never touches ScriptingBridge itself.
+    enum QueueFetchOutcome: Equatable {
+        /// `currentPlaylist`/`tracks` resolved — the normal library-playlist path.
+        case success(playlistName: String?)
+        /// Music.app is playing but exposes no `currentPlaylist` for this source
+        /// (radio stations and Apple Music streaming URLs raise "Can't get current
+        /// playlist" here — this is a source limitation, not a bug to special-case).
+        case noCurrentPlaylist
+        /// No `currentTrack` could be read (nothing is playing, or the app just quit).
+        case noCurrentTrack
+        /// Music.app is not running.
+        case appUnavailable
+    }
+
+    /// Pure decision: how should the fetch outcome be reported to the UI?
+    /// No ScriptingBridge, no side effects — safe to unit test directly.
+    static func provenance(for outcome: QueueFetchOutcome) -> MusicQueueProvenance {
+        switch outcome {
+        case .success(let playlistName):
+            return .playlistContextOnly(playlistName: playlistName)
+        case .noCurrentPlaylist:
+            return .unavailable(reason: .noPublicQueueObject)
+        case .noCurrentTrack:
+            return .unavailable(reason: .noCurrentTrack)
+        case .appUnavailable:
+            return .unavailable(reason: .musicAppUnavailable)
+        }
+    }
+
     public func refreshQueueForPlaylistOpen() {
         let hasVisibleQueueData = !upNextTracks.isEmpty || !recentTracks.isEmpty
         let recentlyCompletedQueue = Date().timeIntervalSince(lastQueueFetchCompletedAt) < 5.0
@@ -411,6 +444,9 @@ extension MusicController {
         debugPrint("📋 [fetchUpNextViaBridge] Called, queueApp=\(queueApp != nil)\n")
         guard let app = queueApp, app.isRunning else {
             debugPrint("⚠️ [fetchUpNextViaBridge] queueApp not available\n")
+            await MainActor.run {
+                self.queueProvenance = Self.provenance(for: .appUnavailable)
+            }
             return
         }
 
@@ -418,10 +454,10 @@ extension MusicController {
 
         // 🔑 Use one serial queue so concurrent ScriptingBridge requests cannot crash.
         let controller = WeakSendableReference(self)
-        let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
+        let (tracks, outcome): ([(title: String, artist: String, album: String, persistentID: String, duration: Double)], QueueFetchOutcome) = await withCheckedContinuation { continuation in
             scriptingBridgeQueue.async {
                 guard let self = controller.value else {
-                    continuation.resume(returning: [])
+                    continuation.resume(returning: ([], .appUnavailable))
                     return
                 }
                 defer { DispatchQueue.main.async { controller.value?.lastSBQueueHeartbeat = Date() } }
@@ -442,6 +478,7 @@ extension MusicController {
                 return
             }
             let didChange = self.applyUpNextTracksIfChanged(tracks)
+            self.queueProvenance = Self.provenance(for: outcome)
             self.lastQueueFetchCompletedAt = Date()
             self.lastQueueFetchCompletedGeneration = requestQueueGeneration
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
@@ -456,14 +493,15 @@ extension MusicController {
     /// Apple Event — during rapid switching, the playlist/track objects become stale and
     /// cause EXC_BAD_ACCESS (pointer authentication failure). The generation check bails
     /// early when a new track change has been detected, preventing iteration on stale objects.
-    private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+    private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> ([(title: String, artist: String, album: String, persistentID: String, duration: Double)], QueueFetchOutcome) {
         let gen = artworkFetchGeneration  // Snapshot generation at start
+        var outcome: QueueFetchOutcome = .noCurrentTrack
 
         // 🔑 Hard timeout: prevents scriptingBridgeQueue from backing up when
         // Music.app hangs the playlist IPC. Previously the heartbeat recovery
         // recreated the SBApplication, which caused EXC_BAD_ACCESS in
         // AEProcessMessage (ARC-freed app with pending AE replies).
-        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
+        let tracks = SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
             guard let self else { return nil }
             var result: [(String, String, String, String, Double)] = []
 
@@ -471,13 +509,24 @@ extension MusicController {
             // Music.app mutates the playlist mid-loop (rapid switching, queue edit).
             let ex = OBJCCatch {
 
-            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-                  let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+            guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
                   let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-                debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n")
+                debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack\n")
+                outcome = .noCurrentTrack
                 return
             }
+
+            // 🔑 Radio stations and Apple Music streaming URL tracks raise
+            // "Can't get current playlist" here — a source limitation (no public
+            // queue object), not a bug. Reported to the UI via QueueFetchOutcome
+            // so Up Next can explain the empty state instead of looking broken.
+            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+                debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentPlaylist\n")
+                outcome = .noCurrentPlaylist
+                return
+            }
+            outcome = .success(playlistName: playlist.value(forKey: "name") as? String)
 
             let trackCount = tracks.count
             let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
@@ -545,7 +594,8 @@ extension MusicController {
                 DebugLogger.log("Playback", "⚠️ [getUpNextTracksFromApp] NSException swallowed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
             }
             return result
-        } ?? []
+        }
+        return (tracks ?? [], outcome)
     }
 
     /// Fetches recent playback history through ScriptingBridge using this controller's dedicated app instance.

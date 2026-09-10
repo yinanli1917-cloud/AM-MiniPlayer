@@ -122,11 +122,11 @@ public struct PlaylistView: View {
                             // ═══════════════════════════════════════════
                             PlaylistSection(
                                 sectionID: "history",
-                                title: "History",
+                                title: PlaylistL10n.localized("history"),
                                 headerHeight: headerHeight
                             ) {
                                 if musicController.recentTracks.isEmpty {
-                                    emptyStateText("No recent tracks")
+                                    emptyStateText(PlaylistL10n.localized("noRecentTracks"))
                                 } else {
                                     ForEach(musicController.recentTracks.reversed(), id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
@@ -145,7 +145,7 @@ public struct PlaylistView: View {
                             // MARK: - Now Playing Section（普通标题，不 sticky）
                             // ═══════════════════════════════════════════
                             PlainHeaderSection(
-                                title: "Now Playing",
+                                title: PlaylistL10n.localized("nowPlaying"),
                                 headerHeight: headerHeight
                             ) {
                                 nowPlayingCard(geometry: geometry, artSize: artSize)
@@ -157,11 +157,16 @@ public struct PlaylistView: View {
                             // ═══════════════════════════════════════════
                             PlaylistSection(
                                 sectionID: "upNext",
-                                title: "Up Next",
+                                title: PlaylistL10n.localized("upNext"),
                                 headerHeight: headerHeight
                             ) {
                                 if musicController.upNextTracks.isEmpty {
-                                    emptyStateText("Queue is empty")
+                                    emptyStateText(PlaylistL10n.localized(
+                                        UpNextEmptyState.messageKey(
+                                            provenance: musicController.queueProvenance,
+                                            isEmpty: musicController.upNextTracks.isEmpty
+                                        )
+                                    ))
                                 } else {
                                     ForEach(musicController.upNextTracks, id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
@@ -504,6 +509,20 @@ public struct PlaylistView: View {
 // 🔑 避免 Section + pinnedViews 的递归 bug (POSTM-001)
 // 🔑 用 PreferenceKey 报告 section 位置给父视图
 // 🔑 内部 header 在 section 未滚动时显示，滚动后由全局 overlay 接管
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - UpNextEmptyState
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 Pure decision (no SwiftUI): which PlaylistL10n key explains an empty Up Next?
+// `queueProvenance.isUnavailable` means Music.app exposed no queue for this source
+// (radio / Apple Music streaming URL) — say so instead of a generic "empty".
+
+enum UpNextEmptyState {
+    static func messageKey(provenance: MusicQueueProvenance, isEmpty: Bool) -> String {
+        guard isEmpty else { return "queueEmpty" }
+        return provenance.isUnavailable ? "queueUnavailableForSource" : "queueEmpty"
+    }
+}
 
 struct PlaylistSection<Content: View>: View {
     let sectionID: String
