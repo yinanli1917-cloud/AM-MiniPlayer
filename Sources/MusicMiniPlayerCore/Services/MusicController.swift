@@ -167,7 +167,7 @@ public class MusicController: ObservableObject {
     /// Why `upNextTracks` looks the way it does — lets the UI explain an empty Up Next
     /// (e.g. radio/Apple Music streams expose no `currentPlaylist`) instead of just
     /// showing a generic empty state. Written only from the queue-fetch pipeline.
-    @Published public internal(set) var queueProvenance: MusicQueueProvenance = .unavailable(reason: .noCurrentTrack)
+    @Published public internal(set) var queueProvenance: MusicQueueProvenance = .unavailable(reason: .pendingPublicRefresh)
     @Published public var currentPage: PlayerPage = .album {
         didSet {
             if oldValue != currentPage {

@@ -70,4 +70,16 @@ final class QueueProvenanceEmptyStateTests: XCTestCase {
     func test_messageKey_emptyAndPreview_isGenericQueueEmpty() {
         XCTAssertEqual(UpNextEmptyState.messageKey(provenance: .preview, isEmpty: true), "queueEmpty")
     }
+
+    func test_messageKey_emptyAndNonSourceUnavailableReasons_areGenericQueueEmpty() {
+        // Startup default (pendingPublicRefresh), nothing playing (noCurrentTrack),
+        // and Music.app not running (musicAppUnavailable) are not "this source
+        // exposes no queue" — they must not claim a source limitation.
+        for reason: MusicQueueUnavailableReason in [.pendingPublicRefresh, .noCurrentTrack, .musicAppUnavailable] {
+            XCTAssertEqual(
+                UpNextEmptyState.messageKey(provenance: .unavailable(reason: reason), isEmpty: true),
+                "queueEmpty"
+            )
+        }
+    }
 }

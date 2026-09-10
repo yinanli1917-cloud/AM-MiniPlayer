@@ -236,14 +236,11 @@ public struct PlaylistView: View {
                 // resolve/failure already clear it immediately elsewhere.
                 .task(id: pendingJump?.persistentID) {
                     guard let pending = pendingJump else { return }
-                    while !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        guard !Task.isCancelled, pendingJump == pending else { return }
-                        if !pending.isPending(currentPersistentID: musicController.currentPersistentID, now: Date()) {
-                            pendingJump = nil
-                            return
-                        }
-                    }
+                    let remaining = JumpToPendingState.timeout - Date().timeIntervalSince(pending.startedAt)
+                    let nanoseconds = UInt64(max(0, remaining) * 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                    guard !Task.isCancelled, pendingJump == pending else { return }
+                    pendingJump = nil
                 }
 
                 // ═══════════════════════════════════════════
@@ -541,13 +538,22 @@ public struct PlaylistView: View {
 // MARK: - UpNextEmptyState
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🔑 Pure decision (no SwiftUI): which PlaylistL10n key explains an empty Up Next?
-// `queueProvenance.isUnavailable` means Music.app exposed no queue for this source
-// (radio / Apple Music streaming URL) — say so instead of a generic "empty".
+// Only .noPublicQueueObject / .noCurrentPlaylistForTrackClass mean Music.app
+// actively exposed no queue for this source (radio / Apple Music streaming URL)
+// — say so instead of a generic "empty". Every other unavailable reason (startup
+// default, no current track, app unavailable, pending refresh) is not a source
+// limitation and must not claim one.
 
 enum UpNextEmptyState {
     static func messageKey(provenance: MusicQueueProvenance, isEmpty: Bool) -> String {
         guard isEmpty else { return "queueEmpty" }
-        return provenance.isUnavailable ? "queueUnavailableForSource" : "queueEmpty"
+        switch provenance {
+        case .unavailable(reason: .noPublicQueueObject),
+             .unavailable(reason: .noCurrentPlaylistForTrackClass):
+            return "queueUnavailableForSource"
+        default:
+            return "queueEmpty"
+        }
     }
 }
 
