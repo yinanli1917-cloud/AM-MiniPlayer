@@ -189,9 +189,13 @@ extension MusicController {
         }
     }
 
-    public func playTrack(persistentID: String) {
+    /// - Parameter completion: Reports whether the AppleScript command actually
+    ///   ran without error. Always called on the main thread. Optional/defaulted
+    ///   so existing callers (including other worktrees) keep compiling unchanged.
+    public func playTrack(persistentID: String, completion: ((Bool) -> Void)? = nil) {
         if isPreview {
             logger.info("Preview: playTrack \(persistentID)")
+            completion?(true)
             return
         }
 
@@ -208,28 +212,34 @@ extension MusicController {
             """
 
             var error: NSDictionary?
+            var succeeded = false
             if let appleScript = NSAppleScript(source: script) {
                 appleScript.executeAndReturnError(&error)
                 if let error = error {
                     debugPrint("⚠️ [playTrack] AppleScript error: \(error)\n")
                 } else {
+                    succeeded = true
                     debugPrint("▶️ [playTrack] Started playing via AppleScript\n")
                 }
+            }
+            if let completion {
+                DispatchQueue.main.async { completion(succeeded) }
             }
         }
     }
 
-    public func playTrack(title: String, artist: String, album: String, persistentID: String) {
+    public func playTrack(title: String, artist: String, album: String, persistentID: String, completion: ((Bool) -> Void)? = nil) {
         if persistentID.hasPrefix("am:") {
-            playAppleMusicTrack(title: title, artist: artist, album: album, appleMusicID: String(persistentID.dropFirst(3)))
+            playAppleMusicTrack(title: title, artist: artist, album: album, appleMusicID: String(persistentID.dropFirst(3)), completion: completion)
         } else {
-            playTrack(persistentID: persistentID)
+            playTrack(persistentID: persistentID, completion: completion)
         }
     }
 
-    private func playAppleMusicTrack(title: String, artist: String, album: String, appleMusicID: String) {
+    private func playAppleMusicTrack(title: String, artist: String, album: String, appleMusicID: String, completion: ((Bool) -> Void)? = nil) {
         guard MusicAuthorization.currentStatus == .authorized else {
             DebugLogger.log("Playback", "⚠️ Apple Music row playback requires MusicKit authorization")
+            completion?(false)
             return
         }
 
@@ -242,6 +252,7 @@ extension MusicController {
                     album: album
                 ) else {
                     DebugLogger.log("Playback", "⚠️ Apple Music row playback could not resolve '\(title)' by '\(artist)'")
+                    await MainActor.run { completion?(false) }
                     return
                 }
 
@@ -252,9 +263,11 @@ extension MusicController {
                 await MainActor.run { [weak self] in
                     self?.lastUserActionTime = playbackStartTime
                     self?.markQueueMayHaveChanged()
+                    completion?(true)
                 }
             } catch {
                 DebugLogger.log("Playback", "⚠️ Apple Music row playback failed: \(error.localizedDescription)")
+                await MainActor.run { completion?(false) }
             }
         }
     }

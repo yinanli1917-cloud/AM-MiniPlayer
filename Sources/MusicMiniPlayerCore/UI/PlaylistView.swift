@@ -67,6 +67,10 @@ public struct PlaylistView: View {
     // Sticky header 状态
     @State private var sectionOffsets: [String: CGFloat] = [:]
 
+    // D1: 点行跳曲后的等待态——点击即显，换曲确认/失败/4s 超时清除。
+    // 放列表容器一层，行重建（滚动回收）时状态不丢。
+    @State private var pendingJump: JumpToPendingState? = nil
+
     // ═══════════════════════════════════════════
     // MARK: - Constants
     // ═══════════════════════════════════════════
@@ -134,7 +138,8 @@ public struct PlaylistView: View {
                                             artSize: rowArtSize,
                                             currentPage: $currentPage,
                                             isScrolling: isManualScrolling,
-                                            fadeHeaderHeight: headerHeight
+                                            fadeHeaderHeight: headerHeight,
+                                            pendingJump: $pendingJump
                                         )
                                     }
                                 }
@@ -174,7 +179,8 @@ public struct PlaylistView: View {
                                             artSize: rowArtSize,
                                             currentPage: $currentPage,
                                             isScrolling: isManualScrolling,
-                                            fadeHeaderHeight: headerHeight
+                                            fadeHeaderHeight: headerHeight,
+                                            pendingJump: $pendingJump
                                         )
                                     }
                                 }
@@ -218,6 +224,27 @@ public struct PlaylistView: View {
                     onScrollOffsetChanged: { _ in },
                     isEnabled: currentPage == .playlist
                 )
+                // D1: a jump resolves the instant the controller confirms the new
+                // current track — don't wait for the timeout poll below.
+                .onChange(of: musicController.currentPersistentID) { _, newID in
+                    if let pending = pendingJump, pending.persistentID == newID {
+                        pendingJump = nil
+                    }
+                }
+                // D1: the only other way a pending jump clears itself — no completion
+                // ever arrives (e.g. Music.app never confirms). Polls at a low rate;
+                // resolve/failure already clear it immediately elsewhere.
+                .task(id: pendingJump?.persistentID) {
+                    guard let pending = pendingJump else { return }
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        guard !Task.isCancelled, pendingJump == pending else { return }
+                        if !pending.isPending(currentPersistentID: musicController.currentPersistentID, now: Date()) {
+                            pendingJump = nil
+                            return
+                        }
+                    }
+                }
 
                 // ═══════════════════════════════════════════
                 // MARK: - Global Sticky Header Overlay
@@ -595,14 +622,22 @@ struct PlaylistItemRowCompact: View {
     @Binding var currentPage: PlayerPage
     var isScrolling: Bool = false
     var fadeHeaderHeight: CGFloat = 0
+    @Binding var pendingJump: JumpToPendingState?
 
     @State private var isHovering = false
+    @State private var isCursorPushed = false
     @State private var artwork: NSImage? = nil
     @State private var currentArtworkID: String = ""
     @EnvironmentObject var musicController: MusicController
 
     private var isCurrentTrack: Bool {
         track.persistentID == musicController.currentPersistentID
+    }
+
+    // D1: this row's own jump-to-tap feedback — shows while the tap is in
+    // flight, clears on resolve/failure/timeout (all decided by the container).
+    private var isPendingJump: Bool {
+        pendingJump?.persistentID == track.persistentID
     }
 
     var body: some View {
@@ -612,12 +647,18 @@ struct PlaylistItemRowCompact: View {
                     currentPage = .album
                 }
             } else {
+                let id = track.persistentID
+                pendingJump = JumpToPendingState(persistentID: id, startedAt: Date())
                 musicController.playTrack(
                     title: track.title,
                     artist: track.artist,
                     album: track.album,
-                    persistentID: track.persistentID
-                )
+                    persistentID: id
+                ) { success in
+                    if !success {
+                        pendingJump = JumpToPendingState.clearingOnFailure(current: pendingJump, failedID: id)
+                    }
+                }
             }
         }) {
             HStack(spacing: 8) {
@@ -642,6 +683,7 @@ struct PlaylistItemRowCompact: View {
                     Text(track.title)
                         .font(.system(size: 11, weight: isCurrentTrack ? .bold : .medium))
                         .foregroundStyle(isCurrentTrack ? Color(red: 0.99, green: 0.24, blue: 0.27) : .white)
+                        .opacity(isPendingJump ? 0.6 : 1.0)
                         .lineLimit(1)
 
                     Text(track.artist)
@@ -652,7 +694,11 @@ struct PlaylistItemRowCompact: View {
 
                 Spacer()
 
-                if isCurrentTrack {
+                if isPendingJump {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.trailing, 8)
+                } else if isCurrentTrack {
                     Image(systemName: "waveform")
                         .font(.system(size: 11))
                         .foregroundStyle(Color(red: 0.99, green: 0.24, blue: 0.27))
@@ -676,9 +722,34 @@ struct PlaylistItemRowCompact: View {
             withAnimation(.smooth(duration: 0.2)) {
                 isHovering = hovering
             }
+            setCursorPushed(hovering)
+        }
+        .onChange(of: isScrolling) { _, scrolling in
+            // 🔑 discoverability cursor must not stay stuck once a scroll starts
+            // under the pointer — pop it the same way onHover would have.
+            if scrolling {
+                isHovering = false
+                setCursorPushed(false)
+            }
+        }
+        .onDisappear {
+            setCursorPushed(false)
         }
         .task(id: track.persistentID) {
             await loadArtwork()
+        }
+    }
+
+    /// Pushes/pops NSCursor.pointingHand exactly once per hover-in/out so repeated
+    /// calls (onHover re-entrancy, onChange, onDisappear) never leave the cursor
+    /// stack unbalanced.
+    private func setCursorPushed(_ pushed: Bool) {
+        guard pushed != isCursorPushed else { return }
+        isCursorPushed = pushed
+        if pushed {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
         }
     }
 
