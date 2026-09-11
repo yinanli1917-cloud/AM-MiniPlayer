@@ -30,6 +30,22 @@ public final class LyricsFetcher {
     #else
     let lyricsDiskCache = LyricsDiskCache()
     #endif
+    #if DEBUG
+    /// Test seam (A1 apply-on-select). When set, `fetchAllSourcesWithinForegroundBudget`
+    /// adds one extra child task to the source group that awaits this closure
+    /// and IGNORES cancellation before returning nil — reproducing a child
+    /// that keeps the group draining after `deliver` has already fired.
+    /// Nil in production and reset by each test that arms it.
+    static var foregroundTeardownStallForTesting: (@Sendable () async -> Void)?
+    /// Test seam (A1 apply-on-select). When set, invoked with the wall-clock
+    /// timestamp at which `deliver` is called inside the drain loop's group
+    /// closure — i.e. the verdict moment, before any teardown/persistence
+    /// runs. Lets tests measure the gap between the verdict and when the
+    /// caller of `fetchAllSources` actually resumes, without depending on
+    /// network timing for the deadline half of that measurement. Nil in
+    /// production and reset by each test that arms it.
+    static var foregroundVerdictObserverForTesting: (@Sendable (Date) -> Void)?
+    #endif
     private let logger = Logger(subsystem: "com.nanoPod", category: "LyricsFetcher")
 
     let netEaseTimeOffset: Double = 0.7
@@ -577,15 +593,29 @@ public final class LyricsFetcher {
     ) async -> [LyricsFetchResult] {
         let started = Date()
         let partialResults = Box<[LyricsFetchResult]>([])
-        let completed = await withHardTimeout(seconds: Self.foregroundHardDeadline) {
+        // apply-on-select (A1): the drain loop's verdict is the caller's
+        // signal to resume — group teardown (TaskGroup.cancelAll() still
+        // draining children that ignore cancellation) and post-verdict
+        // persistence keep running in `deliverGapMarker`'s background worker.
+        let deliverGapMarker = Box<Date?>(nil)
+        let completed = await withHardTimeout(seconds: Self.foregroundHardDeadline) { deliver in
             await self.fetchAllSourcesWithinForegroundBudget(
                 title: title,
                 artist: artist,
                 duration: duration,
                 translationEnabled: translationEnabled,
                 album: album,
-                partialResults: partialResults
+                partialResults: partialResults,
+                deliver: { value in
+                    deliverGapMarker.value = Date()
+                    deliver(value)
+                }
             )
+        }
+        if let verdictAt = deliverGapMarker.value {
+            let verdictOffset = verdictAt.timeIntervalSince(started)
+            let deliveredOffset = Date().timeIntervalSince(started)
+            DebugLogger.log("⚡ apply-on-select: verdict at \(String(format: "%.3f", verdictOffset))s, delivered at \(String(format: "%.3f", deliveredOffset))s")
         }
         let result: [LyricsFetchResult]
         if let completed {
@@ -623,7 +653,8 @@ public final class LyricsFetcher {
         duration: TimeInterval,
         translationEnabled: Bool,
         album: String = "",
-        partialResults: Box<[LyricsFetchResult]>
+        partialResults: Box<[LyricsFetchResult]>,
+        deliver: (@Sendable ([LyricsFetchResult]) -> Void)? = nil
     ) async -> [LyricsFetchResult] {
         // One absolute clock covers cache preflights and the source group.
         // The inner sentinel helps the group drain promptly; the outer caller
@@ -718,6 +749,14 @@ public final class LyricsFetcher {
         }
 
         var results: [LyricsFetchResult] = []
+        // apply-on-select (A1): the verdict computed at the drain loop's exit
+        // (inside the group closure below) is stashed here so the code AFTER
+        // `await withTaskGroup { ... }` — which only runs once every child
+        // has finished tearing down — can reuse it for persistence and the
+        // return value instead of recomputing. `deliver` is called from
+        // inside the closure, before teardown, so the caller does not wait
+        // for cancelled children to drain.
+        let verdictBox = Box<(finalResults: [LyricsFetchResult], sortedResults: [LyricsFetchResult], selectedForeground: LyricsFetchResult?)?>(nil)
         let branch2Fired = Box(false)
         let branch2Landed = Box(false)
         let albumScopedBranchFired = Box(false)
@@ -815,6 +854,14 @@ public final class LyricsFetcher {
         }
 
         await withTaskGroup(of: LyricsFetchResult?.self) { group in
+            #if DEBUG
+            if let stall = Self.foregroundTeardownStallForTesting {
+                group.addTask {
+                    await stall()
+                    return nil
+                }
+            }
+            #endif
             let remainingForegroundBudget = max(
                 0,
                 Self.foregroundHardDeadline - Date().timeIntervalSince(fetchStart)
@@ -1592,42 +1639,65 @@ public final class LyricsFetcher {
                     break
                 }
             }
+
+            // apply-on-select (A1): compute the verdict and deliver it to the
+            // caller HERE, before this closure returns. `await withTaskGroup`
+            // does not return until every child (including ones cancelled
+            // above) has finished running — for children that ignore
+            // cancellation that is the primary stall this primitive exists to
+            // route around. Computing and delivering inside the closure means
+            // the caller resumes the instant the drain loop has its verdict;
+            // teardown of already-cancelled children keeps happening after
+            // that, invisibly to the caller, in this same worker task.
+            guard !Task.isCancelled else {
+                DebugLogger.log("⏭️ fetchAllSources cancelled before result normalization")
+                return
+            }
+
+            let elapsed = Date().timeIntervalSince(fetchStart)
+            DebugLogger.log("🏁 fetchAllSources: \(results.count) results in \(String(format: "%.1f", elapsed))s (branch3=\(branch3Fired.value))")
+
+            let normalizedResults = normalizeForegroundResultScripts(
+                results,
+                title: ot,
+                artist: oa,
+                album: alb
+            )
+            let shouldSuppressWeakTerminalAvailability = shouldSuppressWeakTerminalAvailabilityForNativeAliasMiss(
+                album: alb,
+                results: normalizedResults,
+                albumScopedBranchFired: albumScopedBranchFired.value,
+                catalogExactTitleBranchFired: catalogExactTitleBranchFired.value
+            )
+            let finalResults = shouldSuppressWeakTerminalAvailability
+                ? normalizedResults.filter { !($0.kind == .instrumental || $0.kind == .unavailable) || $0.albumMatched }
+                : normalizedResults
+
+            let selectedForeground = selectBestResult(from: finalResults, songDuration: d)
+            E2EEventLog.emit("lyrics_foreground_done", [
+                "title": ot,
+                "artist": oa,
+                "resultCount": String(finalResults.count),
+                "sources": finalResults.map(\.source.rawValue).joined(separator: ","),
+                "selected": selectedForeground?.source.rawValue ?? "none",
+                "selectedSyllable": (selectedForeground?.lyrics.contains { $0.hasSyllableSync } == true) ? "1" : "0",
+                "elapsedMs": String(Int((elapsed * 1000).rounded()))
+            ])
+            let sortedResults = finalResults.sorted { $0.score > $1.score }
+            verdictBox.value = (finalResults: finalResults, sortedResults: sortedResults, selectedForeground: selectedForeground)
+            #if DEBUG
+            Self.foregroundVerdictObserverForTesting?(Date())
+            #endif
+            deliver?(sortedResults)
         }
 
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled, let verdict = verdictBox.value else {
             DebugLogger.log("⏭️ fetchAllSources cancelled before result normalization")
             return []
         }
-
-        let elapsed = Date().timeIntervalSince(fetchStart)
-        DebugLogger.log("🏁 fetchAllSources: \(results.count) results in \(String(format: "%.1f", elapsed))s (branch3=\(branch3Fired.value))")
-
-        let normalizedResults = normalizeForegroundResultScripts(
-            results,
-            title: ot,
-            artist: oa,
-            album: alb
-        )
-        let shouldSuppressWeakTerminalAvailability = shouldSuppressWeakTerminalAvailabilityForNativeAliasMiss(
-            album: alb,
-            results: normalizedResults,
-            albumScopedBranchFired: albumScopedBranchFired.value,
-            catalogExactTitleBranchFired: catalogExactTitleBranchFired.value
-        )
-        let finalResults = shouldSuppressWeakTerminalAvailability
-            ? normalizedResults.filter { !($0.kind == .instrumental || $0.kind == .unavailable) || $0.albumMatched }
-            : normalizedResults
-
-        let selectedForeground = selectBestResult(from: finalResults, songDuration: d)
-        E2EEventLog.emit("lyrics_foreground_done", [
-            "title": ot,
-            "artist": oa,
-            "resultCount": String(finalResults.count),
-            "sources": finalResults.map(\.source.rawValue).joined(separator: ","),
-            "selected": selectedForeground?.source.rawValue ?? "none",
-            "selectedSyllable": (selectedForeground?.lyrics.contains { $0.hasSyllableSync } == true) ? "1" : "0",
-            "elapsedMs": String(Int((elapsed * 1000).rounded()))
-        ])
+        let finalResults = verdict.finalResults
+        let sortedResults = verdict.sortedResults
+        let selectedForeground = verdict.selectedForeground
         persistTrustedForegroundLyrics(
             from: finalResults,
             title: ot,
@@ -1675,7 +1745,7 @@ public final class LyricsFetcher {
             }
         }
 
-        return finalResults.sorted { $0.score > $1.score }
+        return sortedResults
     }
 
     private func normalizeForegroundResultScripts(
@@ -3410,11 +3480,36 @@ public final class LyricsFetcher {
         seconds: TimeInterval,
         operation: @escaping @Sendable () async -> T?
     ) async -> T? {
+        await withHardTimeout(seconds: seconds) { _ in await operation() }
+    }
+
+    /// Apply-on-select primitive (A1). `operation` is handed a `deliver`
+    /// closure it may call the instant it has a verdict — the continuation
+    /// resumes with that value immediately (no extra `Task {}` hop), while
+    /// `operation` itself keeps running in the background worker to finish
+    /// structured-concurrency teardown (e.g. `TaskGroup.cancelAll()` still
+    /// draining children that ignore cancellation) and any post-verdict
+    /// persistence. If `operation` returns without calling `deliver`, its
+    /// return value is used. The wall-clock deadline and outer cancellation
+    /// remain races against the same single-resume `TimeoutState`, so
+    /// whichever of {deliver, worker completion, deadline, cancellation}
+    /// happens first wins and every later one is a no-op.
+    ///
+    /// Internal (not private) so it is reachable from tests via
+    /// `@testable import` — see the note on `TimeoutState` above.
+    func withHardTimeout<T: Sendable>(
+        seconds: TimeInterval,
+        operation: @escaping @Sendable (@escaping @Sendable (T) -> Void) async -> T?
+    ) async -> T? {
         let state = TimeoutState<T>()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 state.setContinuation(continuation)
-                let worker = Task { await operation() }
+                let worker = Task {
+                    await operation { value in
+                        state.resume(value)
+                    }
+                }
                 state.setWorker(worker)
                 Task {
                     let value = await worker.value
@@ -3470,7 +3565,11 @@ private final class Box<T>: @unchecked Sendable {
     }
 }
 
-private final class TimeoutState<T: Sendable>: @unchecked Sendable {
+// Internal (not private) so LyricsFetcherApplyOnSelectTests (a same-module
+// XCTest target reached via @testable import) can exercise the delivery
+// primitive directly — @testable import only lifts `internal` visibility,
+// never `private`/`fileprivate`.
+final class TimeoutState<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var didResume = false
     private var continuation: CheckedContinuation<T?, Never>?
