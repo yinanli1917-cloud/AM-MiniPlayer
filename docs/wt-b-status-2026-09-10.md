@@ -2,12 +2,12 @@
 
 分支 `claude/nice-archimedes-0d8856`（worktree nice-archimedes-0d8856）。规划/验收 Fable 5.1，写码跑测 Sonnet 5。
 
-## B1 行距漂移 — 结论：harness 伪影，已收口（ba7c79c）
+## B1 行距漂移 — 测试伪影已清，肉眼诉求待证据（ba7c79c）
 - 80c5a7e 的两条 XCTExpectFailure 复现测试量的是 `view.frame` 几何，模糊不可能改 frame；其「模糊足迹撑开行距」诊断与测量对象不符。
 - 实跑 6/6：surface 真正的激活行是 8→9（墙钟 line-advance Timer 在 settle 窗口内多推 3 行），测试只排除 {5,6}，激活行自身位移漏进断言。
 - `NativeLyricsSnapMath.targetY` 只依赖累计行高 + anchor，不依赖与激活行的距离；行高每行恒 44。
 - 改为锁步注入时钟驱动并断言激活对正确，两条测试 3/3 绿，去掉 XCTExpectFailure。
-- 因此「行距是否随模糊变化」这个请示前提不成立，不送裁决。创始人感受到的「行距变」最可能是 B2 的顶→底波浪（下文）或模糊光晕的视觉扩张，后者不改几何。
+- 因此「行距是否随模糊变化」这个请示前提不成立，不送裁决。但创始人肉眼看到的「行距变」尚未有证据解释（候选：B2 顶→底波浪、模糊光晕的视觉扩张）。主会话 09-10 定：加一次一行的 DEBUG 埋点（激活行前后行距、行高、基线），随阶段 bundle 让创始人日常使用留证，拿到证据再判；B1 不标关闭。
 
 ## B2 退场/入场时钟不同步 — 结论：契约规定的 AMLL 波浪，非 bug（5c332d2）
 锁步时钟下八行起始时刻（`NativeLyricsWaveOnsetTableTests`）与 `LyricWaveTiming.staggerSchedule` 逐行吻合：
@@ -21,7 +21,7 @@
 | i+4 | 469ms | 467ms | +216ms |
 
 入场行 opacity 与位移同帧起。staggerSchedule 自 07-20 至今无改动。08-27 的 damping 20 只改视觉弹簧阻尼，不改错峰。
-**待创始人裁决（一条）**：是否保留「入场行比退场行晚一拍（80ms）、下方逐行再晚一拍」的顶→底波浪；若要改，方向是入场与退场同帧起、波从入场行向两侧扩散。这是手感取舍，合并到 B6 终验一起看。
+主会话 09-10 定：不单独送裁决，并入 B6 终验；出 bundle 时提供两个对照臂 `nanopod://debug/feel/wave/topdown`（现行）与 `wave/sync`（入场与退场同帧起、波从入场行向两侧扩散），创始人自己切着看。
 
 ## B3 激活行亮度封顶 162 — 部分复现，修复中
 - 复现到同类缺陷：窗口被遮挡时 `presentationTick` 直接返回、loop 停摆，入场行 opacity 冻在 0.35，解除遮挡后不追赶、从头收敛；1s 遮挡把亮度达标推迟到边界后 ~1.9s（`NativeLyricsOcclusionBrightnessTests` S4 红）。
