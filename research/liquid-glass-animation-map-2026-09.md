@@ -235,6 +235,23 @@ C1 是路线图里最先做、也最难的一项（roadmap 原文：「先出设
 - "Shuffle/Repeat"按钮调用点归属（`PlaylistControlButton.swift` vs 具体图标内容传入方）未逐行核实。
 - "玻璃叠玻璃"风险仅在 `PanelBackdrop.swift` 本身确认了设计意图（page overlay 用 Color.clear），但未逐一 grep `MiniPlayerView.swift`/`PlaylistView.swift` 全部子视图确认没有绕开这道防线的独立 `ultraThinMaterial`/`VisualEffectView` 用法。
 
+**后续项：** `PlaylistTabBarIntegrated`（`Sources/MusicMiniPlayerCore/UI/HoverableButtons.swift:295-338`）grep 全仓库无调用点——本次 WT-C 调研故意没有删，是否移除交创始人裁定。
+
+---
+
+## 附录 A：spike——透明 NSPanel 上的 SwiftUI glassEffect 渲染与 morph（2026-09-10 首跑，2026-09-11 rev2 补两个方法论洞）
+
+**Setup**：面板配置复刻自 `Sources/MusicMiniPlayerCore/UI/SnappablePanel.swift:312-323`。代码：`research/spikes/glass-morph-spike/main.swift`+`run.sh`，独立 `swiftc -target arm64-apple-macos26.0` 编译（SDK 26.2），不进 Package.swift。
+
+**rev2 改动**：首跑两个判定都有洞——RENDER 靠 `CGWindowListCreateImage` 像素采样撞了截屏 TCC 拒绝（alpha 全 0），MORPH 只追踪了切换前已存在的 pill 层，card 的 glass 层切换后才出生、从未被枚举到，MORPH=no 是方法论假阴性。rev2 修法：①RENDER 改等价论证——同进程内另起一个 `NSGlassEffectView`（配置抄 `Sources/MusicMiniPlayerCore/UI/Background/PanelBackdrop.swift:106-115` 的 `NativeGlassSurface.makeNSView`：`cornerRadius=16`+`tintColor`，该臂已被创始人 A/B 验证在同一面板类上真实渲染），两棵层树都按类名+非零 bounds 比对是否有共享的 backdrop 层类；②MORPH 改为切换后每帧（600ms@60Hz）重新全树枚举，任何新出生的 `CABackdropLayer`（及其带 cornerRadius/mask 的父层）从出生帧起按 `ObjectIdentifier` 追踪，判据：出生后层或 pill 层连续 ≥5 帧 bounds/position 变化才算 MORPH=yes,`--no-animation` 对照臂全部 ≤2 帧落定才能把 MORPH=no 当真。新增 scenario 2：pill+card 常驻，`HStack spacing` 在 `withAnimation(.smooth(duration:0.4))` 里 4↔60 切换（容器内邻近融合，非身份切换）。
+
+**结果**（`results/summary.md` 四个 VERDICT）：
+- RENDER=**yes-by-equivalence**，四次跑（两 scenario × 有/无动画）一致：SwiftUI glassEffect 树与 NSGlassEffectView 控制树都恰好各含 1 个非零 bounds 的 `CABackdropLayer`。等价论证成立——SwiftUI `glassEffect` 在这块透明 `NSPanel` 上用的是同一套玻璃合成底层，不是空壳。
+- MORPH=**yes**，两个 scenario 都拿到强信号：scenario 1 动画臂，card 的 `CABackdropLayer` 在 frame 13 出生，19 个连续变化帧步内从 194.9×65.6pt 撑到 225.4×79.9pt；对照臂 `--no-animation` 同一层 0 帧步落定（`no(control-lands-fast)`），证明 logger 分得清"连续变形"和"单跳"。scenario 2 动画臂，pill 自己的层在 23 个连续帧步内随 spacing 4→60 位移/重排；对照臂同样 0 帧步落定。
+- **caveat**：`CABackdropLayer` 是 SwiftUI 内部创建、非本项目直接调用，不算 `banned-patterns.md` 里 `DnV1eX/LiquidGlassKit` 那条禁止的私有 API 用法，只是确认底层机制存在这个私有类。
+
+**对 C1 选项 (a) 的含义**：两个洞都补上——渲染是真的（非空转），morph 也是连续的（非瞬移），scenario 1（身份切换/union）和 scenario 2（容器内邻近融合）两种触发方式都验证到位。(a) 方案的渲染与 morph 可行性从[未验证]转为已验证；仍未做的是屏幕录制/肉眼终验（TCC 权限+创始人终验，本 spike 范围之外）与真实歌词卡片场景下的性能代价评估。
+
 ---
 
 ## 6. 来源
