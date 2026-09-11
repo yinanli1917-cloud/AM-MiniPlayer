@@ -67,6 +67,10 @@ public struct PlaylistView: View {
     // Sticky header 状态
     @State private var sectionOffsets: [String: CGFloat] = [:]
 
+    // D1: 点行跳曲后的等待态——点击即显，换曲确认/失败/4s 超时清除。
+    // 放列表容器一层，行重建（滚动回收）时状态不丢。
+    @State private var pendingJump: JumpToPendingState? = nil
+
     // ═══════════════════════════════════════════
     // MARK: - Constants
     // ═══════════════════════════════════════════
@@ -122,11 +126,11 @@ public struct PlaylistView: View {
                             // ═══════════════════════════════════════════
                             PlaylistSection(
                                 sectionID: "history",
-                                title: "History",
+                                title: PlaylistL10n.localized("history"),
                                 headerHeight: headerHeight
                             ) {
                                 if musicController.recentTracks.isEmpty {
-                                    emptyStateText("No recent tracks")
+                                    emptyStateText(PlaylistL10n.localized("noRecentTracks"))
                                 } else {
                                     ForEach(musicController.recentTracks.reversed(), id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
@@ -134,7 +138,8 @@ public struct PlaylistView: View {
                                             artSize: rowArtSize,
                                             currentPage: $currentPage,
                                             isScrolling: isManualScrolling,
-                                            fadeHeaderHeight: headerHeight
+                                            fadeHeaderHeight: headerHeight,
+                                            pendingJump: $pendingJump
                                         )
                                     }
                                 }
@@ -145,7 +150,7 @@ public struct PlaylistView: View {
                             // MARK: - Now Playing Section（普通标题，不 sticky）
                             // ═══════════════════════════════════════════
                             PlainHeaderSection(
-                                title: "Now Playing",
+                                title: PlaylistL10n.localized("nowPlaying"),
                                 headerHeight: headerHeight
                             ) {
                                 nowPlayingCard(geometry: geometry, artSize: artSize)
@@ -157,11 +162,16 @@ public struct PlaylistView: View {
                             // ═══════════════════════════════════════════
                             PlaylistSection(
                                 sectionID: "upNext",
-                                title: "Up Next",
+                                title: PlaylistL10n.localized("upNext"),
                                 headerHeight: headerHeight
                             ) {
                                 if musicController.upNextTracks.isEmpty {
-                                    emptyStateText("Queue is empty")
+                                    emptyStateText(PlaylistL10n.localized(
+                                        UpNextEmptyState.messageKey(
+                                            provenance: musicController.queueProvenance,
+                                            isEmpty: musicController.upNextTracks.isEmpty
+                                        )
+                                    ))
                                 } else {
                                     ForEach(musicController.upNextTracks, id: \.persistentID) { track in
                                         PlaylistItemRowCompact(
@@ -169,7 +179,8 @@ public struct PlaylistView: View {
                                             artSize: rowArtSize,
                                             currentPage: $currentPage,
                                             isScrolling: isManualScrolling,
-                                            fadeHeaderHeight: headerHeight
+                                            fadeHeaderHeight: headerHeight,
+                                            pendingJump: $pendingJump
                                         )
                                     }
                                 }
@@ -213,6 +224,24 @@ public struct PlaylistView: View {
                     onScrollOffsetChanged: { _ in },
                     isEnabled: currentPage == .playlist
                 )
+                // D1: a jump resolves the instant the controller confirms the new
+                // current track — don't wait for the timeout poll below.
+                .onChange(of: musicController.currentPersistentID) { _, newID in
+                    if let pending = pendingJump, pending.persistentID == newID {
+                        pendingJump = nil
+                    }
+                }
+                // D1: the only other way a pending jump clears itself — no completion
+                // ever arrives (e.g. Music.app never confirms). Polls at a low rate;
+                // resolve/failure already clear it immediately elsewhere.
+                .task(id: pendingJump?.persistentID) {
+                    guard let pending = pendingJump else { return }
+                    let remaining = JumpToPendingState.timeout - Date().timeIntervalSince(pending.startedAt)
+                    let nanoseconds = UInt64(max(0, remaining) * 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                    guard !Task.isCancelled, pendingJump == pending else { return }
+                    pendingJump = nil
+                }
 
                 // ═══════════════════════════════════════════
                 // MARK: - Global Sticky Header Overlay
@@ -505,6 +534,29 @@ public struct PlaylistView: View {
 // 🔑 用 PreferenceKey 报告 section 位置给父视图
 // 🔑 内部 header 在 section 未滚动时显示，滚动后由全局 overlay 接管
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - UpNextEmptyState
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔑 Pure decision (no SwiftUI): which PlaylistL10n key explains an empty Up Next?
+// Only .noPublicQueueObject / .noCurrentPlaylistForTrackClass mean Music.app
+// actively exposed no queue for this source (radio / Apple Music streaming URL)
+// — say so instead of a generic "empty". Every other unavailable reason (startup
+// default, no current track, app unavailable, pending refresh) is not a source
+// limitation and must not claim one.
+
+enum UpNextEmptyState {
+    static func messageKey(provenance: MusicQueueProvenance, isEmpty: Bool) -> String {
+        guard isEmpty else { return "queueEmpty" }
+        switch provenance {
+        case .unavailable(reason: .noPublicQueueObject),
+             .unavailable(reason: .noCurrentPlaylistForTrackClass):
+            return "queueUnavailableForSource"
+        default:
+            return "queueEmpty"
+        }
+    }
+}
+
 struct PlaylistSection<Content: View>: View {
     let sectionID: String
     let title: String
@@ -576,14 +628,22 @@ struct PlaylistItemRowCompact: View {
     @Binding var currentPage: PlayerPage
     var isScrolling: Bool = false
     var fadeHeaderHeight: CGFloat = 0
+    @Binding var pendingJump: JumpToPendingState?
 
     @State private var isHovering = false
+    @State private var isCursorPushed = false
     @State private var artwork: NSImage? = nil
     @State private var currentArtworkID: String = ""
     @EnvironmentObject var musicController: MusicController
 
     private var isCurrentTrack: Bool {
         track.persistentID == musicController.currentPersistentID
+    }
+
+    // D1: this row's own jump-to-tap feedback — shows while the tap is in
+    // flight, clears on resolve/failure/timeout (all decided by the container).
+    private var isPendingJump: Bool {
+        pendingJump?.persistentID == track.persistentID
     }
 
     var body: some View {
@@ -593,12 +653,18 @@ struct PlaylistItemRowCompact: View {
                     currentPage = .album
                 }
             } else {
+                let id = track.persistentID
+                pendingJump = JumpToPendingState(persistentID: id, startedAt: Date())
                 musicController.playTrack(
                     title: track.title,
                     artist: track.artist,
                     album: track.album,
-                    persistentID: track.persistentID
-                )
+                    persistentID: id
+                ) { success in
+                    if !success {
+                        pendingJump = JumpToPendingState.clearingOnFailure(current: pendingJump, failedID: id)
+                    }
+                }
             }
         }) {
             HStack(spacing: 8) {
@@ -623,6 +689,7 @@ struct PlaylistItemRowCompact: View {
                     Text(track.title)
                         .font(.system(size: 11, weight: isCurrentTrack ? .bold : .medium))
                         .foregroundStyle(isCurrentTrack ? Color(red: 0.99, green: 0.24, blue: 0.27) : .white)
+                        .opacity(isPendingJump ? 0.6 : 1.0)
                         .lineLimit(1)
 
                     Text(track.artist)
@@ -633,7 +700,11 @@ struct PlaylistItemRowCompact: View {
 
                 Spacer()
 
-                if isCurrentTrack {
+                if isPendingJump {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.trailing, 8)
+                } else if isCurrentTrack {
                     Image(systemName: "waveform")
                         .font(.system(size: 11))
                         .foregroundStyle(Color(red: 0.99, green: 0.24, blue: 0.27))
@@ -657,9 +728,34 @@ struct PlaylistItemRowCompact: View {
             withAnimation(.smooth(duration: 0.2)) {
                 isHovering = hovering
             }
+            setCursorPushed(hovering)
+        }
+        .onChange(of: isScrolling) { _, scrolling in
+            // 🔑 discoverability cursor must not stay stuck once a scroll starts
+            // under the pointer — pop it the same way onHover would have.
+            if scrolling {
+                isHovering = false
+                setCursorPushed(false)
+            }
+        }
+        .onDisappear {
+            setCursorPushed(false)
         }
         .task(id: track.persistentID) {
             await loadArtwork()
+        }
+    }
+
+    /// Pushes/pops NSCursor.pointingHand exactly once per hover-in/out so repeated
+    /// calls (onHover re-entrancy, onChange, onDisappear) never leave the cursor
+    /// stack unbalanced.
+    private func setCursorPushed(_ pushed: Bool) {
+        guard pushed != isCursorPushed else { return }
+        isCursorPushed = pushed
+        if pushed {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
         }
     }
 
