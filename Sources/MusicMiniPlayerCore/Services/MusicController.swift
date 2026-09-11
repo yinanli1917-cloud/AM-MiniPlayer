@@ -164,6 +164,10 @@ public class MusicController: ObservableObject {
     @Published public var repeatMode: Int = 0 // 0 = off, 1 = one, 2 = all
     @Published public var upNextTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
     @Published public var recentTracks: [(title: String, artist: String, album: String, persistentID: String, duration: TimeInterval)] = []
+    /// Why `upNextTracks` looks the way it does — lets the UI explain an empty Up Next
+    /// (e.g. radio/Apple Music streams expose no `currentPlaylist`) instead of just
+    /// showing a generic empty state. Written only from the queue-fetch pipeline.
+    @Published public internal(set) var queueProvenance: MusicQueueProvenance = .unavailable(reason: .pendingPublicRefresh)
     @Published public var currentPage: PlayerPage = .album {
         didSet {
             if oldValue != currentPage {
@@ -778,6 +782,7 @@ public class MusicController: ObservableObject {
             (title: "Next Song 2", artist: "Artist Y", album: "Album Y", persistentID: "5", duration: 220.0),
             (title: "Next Song 3", artist: "Artist Z", album: "Album Z", persistentID: "6", duration: 195.0)
         ]
+        self.queueProvenance = .preview
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

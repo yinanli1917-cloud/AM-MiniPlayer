@@ -189,9 +189,13 @@ extension MusicController {
         }
     }
 
-    public func playTrack(persistentID: String) {
+    /// - Parameter completion: Reports whether the AppleScript command actually
+    ///   ran without error. Always called on the main thread. Optional/defaulted
+    ///   so existing callers (including other worktrees) keep compiling unchanged.
+    public func playTrack(persistentID: String, completion: ((Bool) -> Void)? = nil) {
         if isPreview {
             logger.info("Preview: playTrack \(persistentID)")
+            completion?(true)
             return
         }
 
@@ -208,28 +212,34 @@ extension MusicController {
             """
 
             var error: NSDictionary?
+            var succeeded = false
             if let appleScript = NSAppleScript(source: script) {
                 appleScript.executeAndReturnError(&error)
                 if let error = error {
                     debugPrint("⚠️ [playTrack] AppleScript error: \(error)\n")
                 } else {
+                    succeeded = true
                     debugPrint("▶️ [playTrack] Started playing via AppleScript\n")
                 }
+            }
+            if let completion {
+                DispatchQueue.main.async { completion(succeeded) }
             }
         }
     }
 
-    public func playTrack(title: String, artist: String, album: String, persistentID: String) {
+    public func playTrack(title: String, artist: String, album: String, persistentID: String, completion: ((Bool) -> Void)? = nil) {
         if persistentID.hasPrefix("am:") {
-            playAppleMusicTrack(title: title, artist: artist, album: album, appleMusicID: String(persistentID.dropFirst(3)))
+            playAppleMusicTrack(title: title, artist: artist, album: album, appleMusicID: String(persistentID.dropFirst(3)), completion: completion)
         } else {
-            playTrack(persistentID: persistentID)
+            playTrack(persistentID: persistentID, completion: completion)
         }
     }
 
-    private func playAppleMusicTrack(title: String, artist: String, album: String, appleMusicID: String) {
+    private func playAppleMusicTrack(title: String, artist: String, album: String, appleMusicID: String, completion: ((Bool) -> Void)? = nil) {
         guard MusicAuthorization.currentStatus == .authorized else {
             DebugLogger.log("Playback", "⚠️ Apple Music row playback requires MusicKit authorization")
+            completion?(false)
             return
         }
 
@@ -242,6 +252,7 @@ extension MusicController {
                     album: album
                 ) else {
                     DebugLogger.log("Playback", "⚠️ Apple Music row playback could not resolve '\(title)' by '\(artist)'")
+                    await MainActor.run { completion?(false) }
                     return
                 }
 
@@ -252,9 +263,11 @@ extension MusicController {
                 await MainActor.run { [weak self] in
                     self?.lastUserActionTime = playbackStartTime
                     self?.markQueueMayHaveChanged()
+                    completion?(true)
                 }
             } catch {
                 DebugLogger.log("Playback", "⚠️ Apple Music row playback failed: \(error.localizedDescription)")
+                await MainActor.run { completion?(false) }
             }
         }
     }
@@ -336,6 +349,7 @@ extension MusicController {
                 ("Recent Song 1", "Artist A", "Album A", "A", 190.0),
                 ("Recent Song 2", "Artist B", "Album B", "B", 210.0)
             ]
+            queueProvenance = .preview
             return
         }
 
@@ -390,6 +404,81 @@ extension MusicController {
         }
     }
 
+    /// Result of one attempt to read the Up Next queue via ScriptingBridge. Kept
+    /// separate from the [(title:...)] tuple array so the provenance decision
+    /// (`MusicController.provenance(for:)`) is a pure, unit-testable mapping that
+    /// never touches ScriptingBridge itself.
+    enum QueueFetchOutcome: Equatable {
+        /// `currentPlaylist`/`tracks` resolved — the normal library-playlist path.
+        case success(playlistName: String?)
+        /// Music.app is playing but exposes no `currentPlaylist` for this source
+        /// (radio stations and Apple Music streaming URLs raise "Can't get current
+        /// playlist" here — this is a source limitation, not a bug to special-case).
+        case noCurrentPlaylist
+        /// No `currentTrack` could be read (nothing is playing, or the app just quit).
+        case noCurrentTrack
+        /// Music.app is not running.
+        case appUnavailable
+        /// The ScriptingBridge read hit its hard deadline (SBTimeoutRunner
+        /// returned nil). This is NOT the same as the source having no queue —
+        /// Music.app may still have a perfectly good Up Next list, the read
+        /// just didn't land in time. Rows and provenance must be left as-is;
+        /// treating a timeout as an empty/unavailable queue would wipe visible
+        /// rows on every slow read.
+        case timedOut
+    }
+
+    /// Pure decision: how should the fetch outcome be reported to the UI?
+    /// No ScriptingBridge, no side effects — safe to unit test directly.
+    static func provenance(for outcome: QueueFetchOutcome) -> MusicQueueProvenance {
+        switch outcome {
+        case .success(let playlistName):
+            return .playlistContextOnly(playlistName: playlistName)
+        case .noCurrentPlaylist:
+            return .unavailable(reason: .noPublicQueueObject)
+        case .noCurrentTrack:
+            return .unavailable(reason: .noCurrentTrack)
+        case .appUnavailable:
+            return .unavailable(reason: .musicAppUnavailable)
+        case .timedOut:
+            // Never surfaced: callers must check `shouldSkipQueueApply` first
+            // and leave the previous provenance untouched on timeout.
+            return .unavailable(reason: .musicAppUnavailable)
+        }
+    }
+
+    /// Pure decision: should a fetch outcome clear the currently displayed
+    /// Up Next / Recent rows? True for every outcome that means "this source
+    /// has no queue right now" (app quit, nothing playing, radio/stream with
+    /// no public queue object). False for `.success` (rows are replaced by
+    /// the fetched — possibly empty — snapshot instead) and `.timedOut`
+    /// (rows must be left untouched; a slow read is not an empty queue).
+    static func shouldClearQueueRows(for outcome: QueueFetchOutcome) -> Bool {
+        switch outcome {
+        case .appUnavailable, .noCurrentTrack, .noCurrentPlaylist:
+            return true
+        case .success, .timedOut:
+            return false
+        }
+    }
+
+    /// Pure decision: should this fetch's result be applied to state at all
+    /// (rows + provenance)? Only `.timedOut` says no — every other outcome,
+    /// including the empty-queue ones, is a real answer from Music.app and
+    /// must be applied (via `applyUpNextTracksIfChanged`/provenance update).
+    static func shouldSkipQueueApply(for outcome: QueueFetchOutcome) -> Bool {
+        outcome == .timedOut
+    }
+
+    /// Pure decision: should an in-flight ScriptingBridge scan loop abort
+    /// this iteration because a newer track change (generation bump)
+    /// happened since the scan started? Shared by the Up Next and Recent
+    /// scan loops so both cancel identically instead of iterating over
+    /// stale SBElementArray objects (EXC_BAD_ACCESS risk).
+    static func shouldAbortScan(capturedGeneration: Int, currentGeneration: Int) -> Bool {
+        capturedGeneration != currentGeneration
+    }
+
     public func refreshQueueForPlaylistOpen() {
         let hasVisibleQueueData = !upNextTracks.isEmpty || !recentTracks.isEmpty
         let recentlyCompletedQueue = Date().timeIntervalSince(lastQueueFetchCompletedAt) < 5.0
@@ -411,6 +500,13 @@ extension MusicController {
         debugPrint("📋 [fetchUpNextViaBridge] Called, queueApp=\(queueApp != nil)\n")
         guard let app = queueApp, app.isRunning else {
             debugPrint("⚠️ [fetchUpNextViaBridge] queueApp not available\n")
+            await MainActor.run {
+                self.queueProvenance = Self.provenance(for: .appUnavailable)
+                if Self.shouldClearQueueRows(for: .appUnavailable) {
+                    self.applyUpNextTracksIfChanged([])
+                    self.applyRecentTracksIfChanged([])
+                }
+            }
             return
         }
 
@@ -418,10 +514,10 @@ extension MusicController {
 
         // 🔑 Use one serial queue so concurrent ScriptingBridge requests cannot crash.
         let controller = WeakSendableReference(self)
-        let tracks: [(title: String, artist: String, album: String, persistentID: String, duration: Double)] = await withCheckedContinuation { continuation in
+        let (tracks, outcome): ([(title: String, artist: String, album: String, persistentID: String, duration: Double)], QueueFetchOutcome) = await withCheckedContinuation { continuation in
             scriptingBridgeQueue.async {
                 guard let self = controller.value else {
-                    continuation.resume(returning: [])
+                    continuation.resume(returning: ([], .appUnavailable))
                     return
                 }
                 defer { DispatchQueue.main.async { controller.value?.lastSBQueueHeartbeat = Date() } }
@@ -441,7 +537,16 @@ extension MusicController {
                 self.logger.info("Discarded stale Up Next fetch for queue generation \(requestQueueGeneration), track generation \(requestGeneration)")
                 return
             }
+            guard !Self.shouldSkipQueueApply(for: outcome) else {
+                // SB read timed out — keep the existing rows and provenance;
+                // a slow read is not evidence the queue is empty/unavailable.
+                self.logger.info("SB Up Next read timed out; keeping existing rows and provenance")
+                self.lastQueueFetchCompletedAt = Date()
+                self.lastQueueFetchCompletedGeneration = requestQueueGeneration
+                return
+            }
             let didChange = self.applyUpNextTracksIfChanged(tracks)
+            self.queueProvenance = Self.provenance(for: outcome)
             self.lastQueueFetchCompletedAt = Date()
             self.lastQueueFetchCompletedGeneration = requestQueueGeneration
             self.logger.info("✅ Fetched \(tracks.count) up next tracks via ScriptingBridge")
@@ -456,14 +561,15 @@ extension MusicController {
     /// Apple Event — during rapid switching, the playlist/track objects become stale and
     /// cause EXC_BAD_ACCESS (pointer authentication failure). The generation check bails
     /// early when a new track change has been detected, preventing iteration on stale objects.
-    private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+    private func getUpNextTracksFromApp(_ app: SBApplication, limit: Int) -> ([(title: String, artist: String, album: String, persistentID: String, duration: Double)], QueueFetchOutcome) {
         let gen = artworkFetchGeneration  // Snapshot generation at start
+        var outcome: QueueFetchOutcome = .noCurrentTrack
 
         // 🔑 Hard timeout: prevents scriptingBridgeQueue from backing up when
         // Music.app hangs the playlist IPC. Previously the heartbeat recovery
         // recreated the SBApplication, which caused EXC_BAD_ACCESS in
         // AEProcessMessage (ARC-freed app with pending AE replies).
-        return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
+        let tracks = SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
             guard let self else { return nil }
             var result: [(String, String, String, String, Double)] = []
 
@@ -471,13 +577,24 @@ extension MusicController {
             // Music.app mutates the playlist mid-loop (rapid switching, queue edit).
             let ex = OBJCCatch {
 
-            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
-                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray,
-                  let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
+            guard let currentTrack = app.value(forKey: "currentTrack") as? NSObject,
                   let currentID = currentTrack.value(forKey: "persistentID") as? String else {
-                debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack or playlist\n")
+                debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentTrack\n")
+                outcome = .noCurrentTrack
                 return
             }
+
+            // 🔑 Radio stations and Apple Music streaming URL tracks raise
+            // "Can't get current playlist" here — a source limitation (no public
+            // queue object), not a bug. Reported to the UI via QueueFetchOutcome
+            // so Up Next can explain the empty state instead of looking broken.
+            guard let playlist = app.value(forKey: "currentPlaylist") as? NSObject,
+                  let tracks = playlist.value(forKey: "tracks") as? SBElementArray else {
+                debugPrint("⚠️ [getUpNextTracksFromApp] Failed to get currentPlaylist\n")
+                outcome = .noCurrentPlaylist
+                return
+            }
+            outcome = .success(playlistName: playlist.value(forKey: "name") as? String)
 
             let trackCount = tracks.count
             let currentName = currentTrack.value(forKey: "name") as? String ?? "Unknown"
@@ -487,7 +604,7 @@ extension MusicController {
             if currentIndex >= 0 && currentIndex < trackCount {
                 let upperBound = min(trackCount, currentIndex + 1 + limit)
                 for i in (currentIndex + 1)..<upperBound {
-                    guard self.artworkFetchGeneration == gen else {
+                    guard !Self.shouldAbortScan(capturedGeneration: gen, currentGeneration: self.artworkFetchGeneration) else {
                         debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
                         return
                     }
@@ -510,7 +627,7 @@ extension MusicController {
                 var fallbackIndex = -1
 
                 for i in 0..<trackCount {
-                    guard self.artworkFetchGeneration == gen else {
+                    guard !Self.shouldAbortScan(capturedGeneration: gen, currentGeneration: self.artworkFetchGeneration) else {
                         debugPrint("⚠️ [getUpNextTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
                         return
                     }
@@ -545,7 +662,16 @@ extension MusicController {
                 DebugLogger.log("Playback", "⚠️ [getUpNextTracksFromApp] NSException swallowed: \(ex.name.rawValue) — \(ex.reason ?? "nil")")
             }
             return result
-        } ?? []
+        }
+        // `tracks == nil` means SBTimeoutRunner hit its deadline before the
+        // closure signaled (or self was deallocated mid-read) — NOT that the
+        // closure observed and reported an empty/unavailable queue. `outcome`
+        // is captured by the closure and mutated on its own queue, so reading
+        // it here on a timeout would race with (or precede) that mutation.
+        // Report `.timedOut` explicitly so the caller keeps existing rows
+        // instead of wiping them (see `shouldSkipQueueApply`).
+        guard let tracks else { return ([], .timedOut) }
+        return (tracks, outcome)
     }
 
     /// Fetches recent playback history through ScriptingBridge using this controller's dedicated app instance.
@@ -581,7 +707,14 @@ extension MusicController {
             guard let self = self else { return }
             defer { DispatchQueue.main.async { self.lastSBQueueHeartbeat = Date() } }
 
-            let tracks = self.getRecentTracksFromApp(app, limit: 10)
+            guard let tracks = self.getRecentTracksFromApp(app, limit: 10) else {
+                // SB read timed out — keep existing recent rows, same policy
+                // as the Up Next timeout path (shouldSkipQueueApply).
+                DispatchQueue.main.async {
+                    self.logger.info("SB Recent read timed out; keeping existing rows")
+                }
+                return
+            }
 
             DispatchQueue.main.async {
                 let didChange = self.applyRecentTracksIfChanged(tracks)
@@ -646,7 +779,11 @@ extension MusicController {
     /// 🔑 Hard 3s timeout prevents scriptingBridgeQueue from hanging indefinitely on
     /// playlist IPC — which previously triggered the removed heartbeat-recreate path
     /// and the EXC_BAD_ACCESS in AEProcessMessage.
-    private func getRecentTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)] {
+    /// Returns `nil` when the SB read timed out (SBTimeoutRunner deadline) so
+    /// callers can keep the existing recent-history rows instead of wiping
+    /// them — mirrors `getUpNextTracksFromApp`'s `.timedOut` outcome.
+    private func getRecentTracksFromApp(_ app: SBApplication, limit: Int) -> [(title: String, artist: String, album: String, persistentID: String, duration: Double)]? {
+        let gen = artworkFetchGeneration  // Snapshot generation at start (same pattern as getUpNextTracksFromApp)
         return SBTimeoutRunner.run(timeout: 3.0, lane: "queueSnapshot") { [weak self] () -> [(String, String, String, String, Double)]? in
             guard let self else { return nil }
             var recentList: [(String, String, String, String, Double)] = []
@@ -664,6 +801,10 @@ extension MusicController {
                 if currentIndex >= 0 && currentIndex < tracks.count {
                     let lowerBound = max(0, currentIndex - limit)
                     for i in lowerBound..<currentIndex {
+                        guard !Self.shouldAbortScan(capturedGeneration: gen, currentGeneration: self.artworkFetchGeneration) else {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                            return
+                        }
                         guard let track = tracks.object(at: i) as? NSObject,
                               let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
@@ -680,6 +821,10 @@ extension MusicController {
                     }
                 } else {
                     for i in 0..<tracks.count {
+                        guard !Self.shouldAbortScan(capturedGeneration: gen, currentGeneration: self.artworkFetchGeneration) else {
+                            debugPrint("⚠️ [getRecentTracksFromApp] Generation changed (\(gen) → \(self.artworkFetchGeneration)), aborting\n")
+                            return
+                        }
                         guard let track = tracks.object(at: i) as? NSObject,
                               let trackID = track.value(forKey: "persistentID") as? String else { continue }
 
@@ -707,7 +852,7 @@ extension MusicController {
 
             // Return the last `limit` items in reverse order so the most recent item comes first.
             return Array(recentList.suffix(limit).reversed())
-        } ?? []
+        }
     }
 
     @discardableResult
