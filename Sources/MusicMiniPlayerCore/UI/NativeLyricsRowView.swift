@@ -589,6 +589,20 @@ final class NativeLyricsRowView: NSView {
     // glyphs) is meant for ONE active line; if several rows carry it at once the panel blooms
     // (the #1 initial-load / rapid-switch overlap), and if a demoted line keeps it the line
     // flashes bright (the #3 revert). Counting it is the channel the model-opacity sensor missed.
+    /// Bright karaoke-overlay opacity. Compiled into every build (including plain release):
+    /// the ActiveBrightness probe in LyricsLayerRendererView reads it under DebugLogger's
+    /// runtime switch, not a compile-time gate. The #2c "dim line blinks while receding"
+    /// suspect is the deferred-deactivation clearing this overlay abruptly (a brightness
+    /// step) while the row is still partly visible. Sampling it per tick across a line
+    /// advance shows whether the recede is monotonic (clean) or has a brighten-then-dim
+    /// step (blink).
+    var debugMainBrightOpacity: Float { mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity }
+
+    /// The CIGaussianBlur radius actually applied to this row's layer (the depth-of-field blur).
+    /// Compiled into every build for the same reason as `debugMainBrightOpacity` above — the
+    /// LineGaps probe reads it under DebugLogger's runtime switch.
+    var debugAppliedBlurRadius: CGFloat { max(0, appliedBlurRadius) }
+
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     var debugMainBrightOverlayActive: Bool {
         mainBrightTextLayer.string != nil && !mainBrightTextLayer.isHidden
@@ -611,12 +625,6 @@ final class NativeLyricsRowView: NSView {
         return color.alphaComponent
     }
 
-    /// Bright karaoke-overlay opacity + presence. The #2c "dim line blinks while receding" suspect
-    /// is the deferred-deactivation clearing this overlay abruptly (a brightness step) while the row
-    /// is still partly visible. Sampling it per tick across a line advance shows whether the recede
-    /// is monotonic (clean) or has a brighten-then-dim step (blink).
-    var debugMainBrightOpacity: Float { mainBrightTextLayer.isHidden ? 0 : mainBrightTextLayer.opacity }
-
     /// True when the bright text layer has NOT been laid out yet (bounds ≈ .zero). A row in
     /// this state renders its text at frame origin + full depth-of-field blur — exactly the
     /// "overlapping heavily blurred" first-frame bloom. Used by the reconcile bloom probe to
@@ -632,8 +640,6 @@ final class NativeLyricsRowView: NSView {
         let s = (mainTextLayer.string as? NSAttributedString)?.string ?? (mainTextLayer.string as? String) ?? ""
         return String(s.prefix(6))
     }
-    /// The CIGaussianBlur radius actually applied to this row's layer (the depth-of-field blur).
-    var debugAppliedBlurRadius: CGFloat { max(0, appliedBlurRadius) }
     /// The PRESENTATION-layer on-screen Y (transform ty) — what Core Animation is rendering NOW,
     /// which can diverge from the committed model Y during a transition.
     var debugPresentationY: CGFloat { (layer?.presentation()?.affineTransform().ty) ?? (layer?.affineTransform().ty ?? 0) }

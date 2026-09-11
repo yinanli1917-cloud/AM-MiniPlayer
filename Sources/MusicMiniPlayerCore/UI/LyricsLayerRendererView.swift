@@ -463,15 +463,65 @@ final class NativeLyricsSurfaceView: NSView {
     // presentationTick / handleWindowOcclusionChange observes un-occlusion.
     private var pendingOcclusionResumeSnap = false
 
-    #if LOCAL_DEVELOPER_BUILD
     // Probe for defect B3 (2026-07-27 recording, 162/255 active line): log once per line
     // activation, ~1.0s after the semantic index changes, so a real dwell that's stuck dim can be
-    // told apart from a normal spring-in that simply hasn't settled yet. Never per-frame.
+    // told apart from a normal spring-in that simply hasn't settled yet. Never per-frame. Compiled
+    // into every build (including the founder's release stage bundle); gated only by
+    // DebugLogger's runtime switch (NANOPOD_DEBUG_LOG / enableDebugFileLog / diagnostics session),
+    // which is a cheap no-op when disabled — see DebugLogger.isEnabled().
     private var activeBrightnessProbeIndex: Int?
     private var activeBrightnessProbeArmedAt: CFTimeInterval?
     private var activeBrightnessProbeLogged = false
     private var lastUnocclusionMediaTime: CFTimeInterval?
-    #endif
+    // Probe for defect B1 (line-spacing changes around the active line / around scrolling):
+    // logs the mounted rows' effective on-screen geometry (minY/height/scale/gap-to-next) once
+    // per line activation (~1.2s after activation, once the wave/springs settle) and once at the
+    // start/end of a manual-scroll gesture. Same runtime gating as ActiveBrightness above.
+    private var lineGapsProbeIndex: Int?
+    private var lineGapsProbeArmedAt: CFTimeInterval?
+    private var lineGapsProbeLogged = false
+
+    // Probe for defect B1 (line spacing changes around the active line / around scrolling):
+    // dumps the mounted rows' EFFECTIVE on-screen geometry (frame re-centered at the applied
+    // scale, mirroring NativeLyricsRenderChurnTests.rowFrames/lineGaps) for active-2...active+3,
+    // plus the active row's anchor target and per-row blur radius. Called at most once per line
+    // activation (~1.2s after it settles) and at most twice per manual-scroll gesture (start/end)
+    // — never per frame. A no-op file write when DebugLogger's runtime switch is off.
+    private func logLineGapsProbe(phase: String?, activeIndex: Int, anchorY: CGFloat) {
+        struct RowGeometry {
+            let index: Int
+            let minY: CGFloat
+            let height: CGFloat
+            let scale: CGFloat
+            let blur: CGFloat
+        }
+        var geometries: [RowGeometry] = []
+        for idx in (activeIndex - 2)...(activeIndex + 3) {
+            guard idx >= 0,
+                  let id = rowIDByIndex[idx],
+                  let view = rowViews[id],
+                  view.frame.height > 1 else { continue }
+            let frame = view.frame
+            let scale = view.positioningTransform.a
+            let (minY, height): (CGFloat, CGFloat)
+            if scale == 1 {
+                (minY, height) = (frame.minY, frame.height)
+            } else {
+                let scaledHeight = frame.height * scale
+                (minY, height) = (frame.midY - scaledHeight / 2, scaledHeight)
+            }
+            geometries.append(RowGeometry(index: idx, minY: minY, height: height, scale: scale, blur: view.debugAppliedBlurRadius))
+        }
+        let byIndex = Dictionary(uniqueKeysWithValues: geometries.map { ($0.index, $0) })
+        let rowsDescription = geometries.map { g -> String in
+            let gap = byIndex[g.index + 1].map { String(format: "%.1f", $0.minY - (g.minY + g.height)) } ?? "-"
+            return "[\(g.index):y=\(String(format: "%.1f", g.minY)) h=\(String(format: "%.1f", g.height)) "
+                + "s=\(String(format: "%.2f", g.scale)) g=\(gap) b=\(String(format: "%.1f", g.blur))]"
+        }.joined()
+        let tag = "LineGaps"
+        let prefix = phase.map { "phase=\($0) " } ?? ""
+        DebugLogger.log(tag, "\(prefix)idx=\(activeIndex) anchor=\(String(format: "%.1f", anchorY)) rows=\(rowsDescription)")
+    }
 
     private func frameSnapMode(
         for configuration: LyricsLayerRendererConfiguration,
@@ -577,9 +627,7 @@ final class NativeLyricsSurfaceView: NSView {
         if pendingOcclusionResumeSnap {
             pendingOcclusionResumeSnap = false
             snapPresentationStateAfterOcclusion(configuration: configuration)
-            #if LOCAL_DEVELOPER_BUILD
             lastUnocclusionMediaTime = currentMediaTime()
-            #endif
         }
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         let snapMode = frameSnapMode(for: runtimeConfiguration)
@@ -2544,9 +2592,7 @@ final class NativeLyricsSurfaceView: NSView {
         if pendingOcclusionResumeSnap {
             pendingOcclusionResumeSnap = false
             snapPresentationStateAfterOcclusion(configuration: configuration)
-            #if LOCAL_DEVELOPER_BUILD
             lastUnocclusionMediaTime = currentMediaTime()
-            #endif
         }
         let previousSemanticIndex = nativeSemanticCurrentIndex
         let previousTimelineState = nativeTimelineState
@@ -2600,8 +2646,11 @@ final class NativeLyricsSurfaceView: NSView {
                 }
             }
         }
+        #endif
         // Probe for defect B3 (2026-07-27 recording, 162/255 active line): arm on the activation
         // itself, then log ONCE ~1.0s later — one line per line activation, never per frame.
+        // Compiled into every build; gated only by DebugLogger's runtime switch (cheap no-op when
+        // disabled, see DebugLogger.isEnabled()).
         if activeTextLineChanged {
             activeBrightnessProbeIndex = runtimeConfiguration.effectiveCurrentIndex
             activeBrightnessProbeArmedAt = now
@@ -2626,7 +2675,21 @@ final class NativeLyricsSurfaceView: NSView {
                     + "loop=\(displayLink != nil ? 1 : 0) sinceUnoccluded=\(sinceUnoccluded)"
             )
         }
-        #endif
+        // Probe for defect B1 (line spacing changes around the active line / around scrolling):
+        // arm on the same activation, log ONCE ~1.2s later (after wave/springs settle) — one line
+        // per line activation, never per frame.
+        if activeTextLineChanged {
+            lineGapsProbeIndex = runtimeConfiguration.effectiveCurrentIndex
+            lineGapsProbeArmedAt = now
+            lineGapsProbeLogged = false
+        }
+        if !lineGapsProbeLogged,
+           let armedIdx = lineGapsProbeIndex,
+           let armedAt = lineGapsProbeArmedAt,
+           now - armedAt >= 1.2 {
+            lineGapsProbeLogged = true
+            logLineGapsProbe(phase: nil, activeIndex: armedIdx, anchorY: runtimeConfiguration.anchorY)
+        }
         let shouldUpdateTextPhase = shouldUpdateActiveTextPhase(
             runtimeConfiguration: runtimeConfiguration,
             now: now,
@@ -3342,6 +3405,7 @@ final class NativeLyricsSurfaceView: NSView {
         renderTelemetry.recordManualScrollStart()
         refreshRowInteractionState(configuration: runtimeConfiguration)
         queueNativeManualScrollPresentation()
+        logLineGapsProbe(phase: "manualStart", activeIndex: runtimeConfiguration.effectiveCurrentIndex, anchorY: runtimeConfiguration.anchorY)
         let frozenIndex = configuration.effectiveScrollTargetIndex
         let onManualScrollStarted = configuration.onManualScrollStarted
         deferParentCallback {
@@ -3356,6 +3420,8 @@ final class NativeLyricsSurfaceView: NSView {
         manualScrollState.clampToBounds(manualScrollBounds(for: runtimeConfiguration(from: configuration)))
         renderTelemetry.recordManualScrollEnd()
         queueNativeManualScrollPresentation()
+        let endRuntimeConfiguration = runtimeConfiguration(from: configuration)
+        logLineGapsProbe(phase: "manualEnd", activeIndex: endRuntimeConfiguration.effectiveCurrentIndex, anchorY: endRuntimeConfiguration.anchorY)
         let onManualScrollEnded = configuration.onManualScrollEnded
         deferParentCallback {
             onManualScrollEnded()
