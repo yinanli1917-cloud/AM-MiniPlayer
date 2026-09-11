@@ -456,6 +456,22 @@ final class NativeLyricsSurfaceView: NSView {
     private var dimProbeUntil: CFTimeInterval = 0
     private var pendingTapToLineSettleTiming: (targetIndex: Int, startedAt: CFTimeInterval, deadline: CFTimeInterval)?
     private var occlusionObserver: NSObjectProtocol?
+    // Defect B3: the viewer saw nothing while occluded, so on the first tick after un-occlusion
+    // every row must SNAP to its current target instead of resuming mid-spring (which otherwise
+    // reads as "opacity was frozen at 0.35 for the whole occlusion, then re-animates 0.35→1 in
+    // front of the viewer"). Set when occlusion begins; consumed (and cleared) the first time
+    // presentationTick / handleWindowOcclusionChange observes un-occlusion.
+    private var pendingOcclusionResumeSnap = false
+
+    #if LOCAL_DEVELOPER_BUILD
+    // Probe for defect B3 (2026-07-27 recording, 162/255 active line): log once per line
+    // activation, ~1.0s after the semantic index changes, so a real dwell that's stuck dim can be
+    // told apart from a normal spring-in that simply hasn't settled yet. Never per-frame.
+    private var activeBrightnessProbeIndex: Int?
+    private var activeBrightnessProbeArmedAt: CFTimeInterval?
+    private var activeBrightnessProbeLogged = false
+    private var lastUnocclusionMediaTime: CFTimeInterval?
+    #endif
 
     private func frameSnapMode(
         for configuration: LyricsLayerRendererConfiguration,
@@ -549,11 +565,22 @@ final class NativeLyricsSurfaceView: NSView {
 
     private func handleWindowOcclusionChange() {
         if isHostWindowOccluded() {
+            pendingOcclusionResumeSnap = true
             cancelNativeLineAdvanceTimer()
             stopPresentationLoop()
             return
         }
         guard let configuration else { return }
+        // Un-occluding: the viewer saw nothing for the whole occluded stretch, so bring every row
+        // straight to its CURRENT target (position + opacity/scale/blur) and resolve any deferred
+        // deactivation, instead of letting the loop resume mid-spring from wherever it was frozen.
+        if pendingOcclusionResumeSnap {
+            pendingOcclusionResumeSnap = false
+            snapPresentationStateAfterOcclusion(configuration: configuration)
+            #if LOCAL_DEVELOPER_BUILD
+            lastUnocclusionMediaTime = currentMediaTime()
+            #endif
+        }
         let runtimeConfiguration = runtimeConfiguration(from: configuration)
         let snapMode = frameSnapMode(for: runtimeConfiguration)
         let vetoes = NativeLyricsLoopIdleDecision.vetoes(
@@ -2506,12 +2533,20 @@ final class NativeLyricsSurfaceView: NSView {
         if debugNowOverride != nil, !isDebugDrivenTick { return }
         #endif
         if isHostWindowOccluded() {
+            pendingOcclusionResumeSnap = true
             stopPresentationLoop()
             return
         }
         guard let configuration else {
             stopPresentationLoop()
             return
+        }
+        if pendingOcclusionResumeSnap {
+            pendingOcclusionResumeSnap = false
+            snapPresentationStateAfterOcclusion(configuration: configuration)
+            #if LOCAL_DEVELOPER_BUILD
+            lastUnocclusionMediaTime = currentMediaTime()
+            #endif
         }
         let previousSemanticIndex = nativeSemanticCurrentIndex
         let previousTimelineState = nativeTimelineState
@@ -2564,6 +2599,32 @@ final class NativeLyricsSurfaceView: NSView {
                     fh.closeFile()
                 }
             }
+        }
+        // Probe for defect B3 (2026-07-27 recording, 162/255 active line): arm on the activation
+        // itself, then log ONCE ~1.0s later — one line per line activation, never per frame.
+        if activeTextLineChanged {
+            activeBrightnessProbeIndex = runtimeConfiguration.effectiveCurrentIndex
+            activeBrightnessProbeArmedAt = now
+            activeBrightnessProbeLogged = false
+        }
+        if !activeBrightnessProbeLogged,
+           let armedIdx = activeBrightnessProbeIndex,
+           let armedAt = activeBrightnessProbeArmedAt,
+           now - armedAt >= 1.0 {
+            activeBrightnessProbeLogged = true
+            let rowOp = visualStates[armedIdx]?.opacity ?? -1
+            let dimTier = visualStates[armedIdx]?.target.dimBaseBrightness ?? -1
+            let bright = rowIDByIndex[armedIdx].flatMap { rowViews[$0] }.map { CGFloat($0.debugMainBrightOpacity) } ?? -1
+            let eff = rowOp * bright
+            let occluded = isHostWindowOccluded()
+            let sinceUnoccluded = lastUnocclusionMediaTime.map { String(format: "%.2f", now - $0) } ?? "-"
+            DebugLogger.log(
+                "ActiveBrightness",
+                "idx=\(armedIdx) rowOp=\(String(format: "%.3f", rowOp)) bright=\(String(format: "%.3f", bright)) "
+                    + "dimTier=\(String(format: "%.2f", dimTier)) eff=\(String(format: "%.3f", eff)) "
+                    + "deferred=\(deferredDeactivationIndex.map(String.init) ?? "-") occluded=\(occluded ? 1 : 0) "
+                    + "loop=\(displayLink != nil ? 1 : 0) sinceUnoccluded=\(sinceUnoccluded)"
+            )
         }
         #endif
         let shouldUpdateTextPhase = shouldUpdateActiveTextPhase(
@@ -3378,6 +3439,30 @@ final class NativeLyricsSurfaceView: NSView {
         if visualTargetsChanged || hasActiveVisualMotion || hasActiveTextAnimation(configuration: runtimeConfiguration) {
             startPresentationLoop()
         }
+    }
+
+    /// Defect B3: the viewer saw nothing while the host window was occluded — the presentation
+    /// loop was stopped for the whole stretch, so any in-flight spring (row position, opacity/
+    /// scale/blur, a deferred-deactivation fade) was frozen exactly where it was and would
+    /// otherwise resume mid-animation on the first post-occlusion tick (reading as "this line sat
+    /// dim/transitioning for the entire occlusion, then visibly re-animated to full brightness").
+    /// Bring every row straight to its CURRENT target instead: reuse the same direct-snap
+    /// machinery a track switch/seek uses (`forceDirectSnap`, which snaps BOTH the position engine
+    /// and `visualStates` via `syncVisualTargets(snap: true)`), then resolve any deferred
+    /// deactivation exactly as a normal tick would (`finalizeDeferredDeactivation`, which either
+    /// finalizes a fully-dimmed row or — if it now targets the current row — restores the resting
+    /// bright overlay via `endDeactivationFade`).
+    private func snapPresentationStateAfterOcclusion(configuration: LyricsLayerRendererConfiguration) {
+        let runtimeConfiguration = runtimeConfiguration(from: configuration)
+        let currentIndex = runtimeConfiguration.effectiveCurrentIndex
+        forceDirectSnap(to: currentIndex, reason: .occlusionResume)
+        finalizeDeferredDeactivation(runtimeConfiguration: runtimeConfiguration)
+        #if LOCAL_DEVELOPER_BUILD
+        DebugLogger.log(
+            "OcclusionResumeSnap",
+            "idx=\(currentIndex) deferred=\(deferredDeactivationIndex.map(String.init) ?? "nil")"
+        )
+        #endif
     }
 
     private func semanticSpringRetarget(
