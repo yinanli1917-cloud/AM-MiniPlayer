@@ -213,3 +213,96 @@ public protocol PlaybackSource: AnyObject {
 - YTMDesktop Companion Server：https://github.com/ytmdesktop/ytmdesktop/wiki/v2-%E2%80%90-Companion-Server-API-v1 ；https://ytmdesktop.github.io/developer/companion-server/getting-started.html
 - pear-desktop：https://github.com/th-ch/youtube-music
 - WebNowPlaying：https://github.com/keifufu/WebNowPlaying
+
+---
+
+## 9. 追加调研（2026-09-11）：完整版（非 App Store）下网易云 / QQ 音乐官方客户端的路径
+
+背景：创始人 09-11 否决「网易云只支持第三方客户端、QQ 不做」，并定产品分两版：纯净版上 App Store，完整版不上。本节只列事实与出处，不做私有 API 是否开例外的判断（那是创始人的决定），也未写任何私有 API 代码。原始分稿：scratchpad part5 / part6 / part7 / part8。
+
+### 9.1 先把两件事分开
+
+- **「控制中心能显示并控制网易云 / QQ」**：这是系统自己的事。只要客户端调用公开的 `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter` 发布信息，控制中心、媒体键、锁屏就都能显示与控制。系统内部经 MediaRemote 读，第三方 app 不在这条链上。
+- **「第三方 app（nanoPod）能读到网易云 / QQ 在放什么」**：这是另一件事。公开 API 没有读的入口（第 1 节结论 1）。能读的只有 MediaRemote 私有框架，而且 15.4 起有 entitlement 校验。
+
+主会话核实：创始人说的「以前实验过」在 kyb、AI 对话导出、仓库、记忆、Apple Notes 里都没有记录。最可能是他看到的是第一件事。
+
+### 9.2 官方客户端是否发布到系统 Now Playing（本机一手证据）
+
+本机版本：NeteaseMusic 3.1.5（CEF 壳）、QQMusic 11.2.1（原生 AppKit）。
+
+| 检查 | NeteaseMusic | QQMusic |
+|---|---|---|
+| `otool -L` 链接 MediaPlayer.framework | ✓（weak） | ✓（weak） |
+| `nm -u` 未定义类符号 `_OBJC_CLASS_$_MPNowPlayingInfoCenter` | ✓ | ✓ |
+| `nm -u` `_OBJC_CLASS_$_MPRemoteCommandCenter` | ✓ | ✓ |
+| `nm -u` `_OBJC_CLASS_$_MPMediaItemArtwork` | ✓ | ✓ |
+| `strings` 选择子 `setNowPlayingInfo:` | ✓ | ✓ |
+| 媒体键 | 另有 SPMediaKeyTap 符号 50 处（旧式全局媒体键劫持库，与 Now Playing 并存） | — |
+| AppleScript 字典 | 无（`sdef` -192） | 无（`sdef` -192） |
+| URL scheme | `orpheus://` | `qqmusicmac://` |
+
+结论（事实层）：**两者都以 ObjC 类引用方式链接了 MPNowPlayingInfoCenter / MPRemoteCommandCenter / MPMediaItemArtwork**，即都向系统 Now Playing 发布曲目与封面、接收系统远程命令。这与「控制中心能显示并控制」一致。
+- 网易云网络证据：2023-06-08 Apple 中文社区帖，macOS 13.4 下控制中心一度控不了网易云，解法是在网易云设置里打开「系统媒体快捷键」（https://discussionschinese.apple.com/thread/254912751 ）；当前 3.1.5 是否仍需手动开：未核实（主二进制里没有该中文文案，可能在 CEF 前端资源里）。
+- QQ 音乐网络证据：没找到控制中心显示 QQ 音乐的一手帖子或截图。静态证据（上表）足够强，但建议创始人花十秒实机确认：播放 QQ 音乐，看控制中心「正在播放」是否出现并能切歌。
+- URL scheme 能力（是否能控制播放而非只打开页面）：两者都未核实。
+
+### 9.3 MediaRemote 在 macOS 15.4 之后的实际状况（一手证据）
+
+| 日期 | 事实 | 出处 |
+|---|---|---|
+| 2025-03-22 | LyricFever #94：15.3 / 15.4 beta 上 `MRMediaRemoteGetNowPlayingInfo` 返回 `Operation not permitted`；同帖指出 `MRMediaRemoteCommand`（发控制命令）仍可用 | https://github.com/aviwad/LyricFever/issues/94 （抓取时仍 Open） |
+| 2025-04-01 | nowplaying-cli #28「no longer works on macOS 15.4」，关联 boring.notch #417、BetterTouchTool、Keyboard Maestro 论坛，跨项目同时爆发 | https://github.com/kirtan-shah/nowplaying-cli/issues/28 |
+| 2025 春 | boring.notch #434 / #445 / #490：15.4 上标题、艺人、封面全部消失（Spotify / Apple Music / Safari / Chrome 来源都一样） | https://github.com/TheBoredTeam/boring.notch/issues/434 、/445、/490 |
+| README 现状 | mediaremote-adapter「Why」：15.4 起 mediaremoted 只放行 bundle id 以 `com.apple.` 开头的进程 | https://github.com/ungive/mediaremote-adapter |
+| README 现状 | media-remote：「After macOS 15.4, Apple introduced entitlement verification in the mediaremoted daemon」 | https://github.com/nohackjustnoobb/media-remote |
+| README 现状 | MediaRemoteWizard：向 mediaremoted 注入代码把校验改成恒 YES，**必须关 SIP**，Apple Silicon 还要开 `arm64e_preview_abi` | https://github.com/Mx-Iris/MediaRemoteWizard |
+
+未核实：Apple 一侧没有任何 release note 或论坛回复说明此变更；被校验的 entitlement 的确切字符串名没有一手出处。
+
+要点：**读（GetNowPlayingInfo）被拒，写（SendCommand / SetElapsedTime / SetShuffleMode / SetRepeatMode）不受影响**。boring.notch 就是读走 perl 适配器、写直接取 MediaRemote 函数指针（`MediaControllers/NowPlayingController.swift` 62-94 行）。
+
+### 9.4 绕法现状：ungive/mediaremote-adapter
+
+- **机制**：fork 系统自带 `/usr/bin/perl`（其标识 `com.apple.perl5`，苹果签名），perl 脚本用 `DynaLoader::dl_load_file` dlopen 随 app 打包的 `MediaRemoteAdapter.framework`，由 perl 进程代为调用 MediaRemote，结果经 stdout 回宿主。`get` 一次快照；`stream` 持续推送（有 debounce，封面异步到达）。写命令也经 adapter（`adapter_send`），v0.7.5 修过 seek/speed。
+- **存活证据**：README 徽章「macOS 27.0 (26A5425a)，last tested 2026-09-04」；issues #5 / #7 / #13（2025-06 到 07）是 macOS 26.0 各 beta 的自动探针帖，作者答「Still works」；releases v0.7.3（2026-04-24）到 v0.7.7（2026-09-03）持续更新。nowplaying-cli README 列「Tahoe 26.3 tested」并注明其 `src/mediaremote-mini/` 拷自本项目（最后提交 2026-04-06）。
+- **使用者**（README 自列）：musicpresence.app、folivora.ai、LyricFever、boring.notch、nowplaying-cli。集成方式两种：LyricFever 走 SPM `import MediaRemoteAdapter`，Embed Frameworks 带 CodeSignOnCopy；boring.notch 把 `.pl` 与编译好的 `.framework` 直接提交进仓库、Embed 时 CodeSignOnCopy。
+- **自检**：`test` 命令，exit 0 表示当前系统仍放行；README 建议失败时回退 AppleScript。issue #14（2025-08-14 合并）加了 NowPlayingTestClient。
+- **代价**：子进程模型（每次 `get` 一个 perl 进程；`stream` 一个常驻子进程），README 只定性说开销小，无量化数字；封面首帧不保证有；不需要用户授权任何系统权限；不需要关 SIP。签名 / 公证 / Hardened Runtime：README 与 38 条 issue 标题都没提，实际集成者（LyricFever 公开分发、boring.notch 公开分发）在用；未核实是否有人在公证上踩坑。
+- **license**：BSD-3-Clause。
+- **性质**：仍是私有框架 + 依赖苹果未公开的放行规则，苹果任何一次调整都可能整体失效；media-remote README 原话：「your app may not be approved for distribution on the App Store」。
+
+### 9.5 「私有绕法过审」反例强度
+
+Tuneful 在 Mac App Store 上架（id6739804295），但 v2.0 起闭源，GitHub 仓库只剩 README，无法证实它用不用私有框架。证据强度弱，不能当反例。
+
+### 9.6 公开替代路径能拿到什么
+
+| 路径 | 权限 | 网易云（CEF） | QQ（原生） | 能拿到 | 拿不到 | 证据 |
+|---|---|---|---|---|---|---|
+| Accessibility（AXUIElement / System Events UI scripting） | 用户在系统设置开辅助功能；非沙盒可用 | AX 树冷启动为空，需先设 `AXManualAccessibility` 唤醒（Electron/Chromium 机制，约 150ms 后填充） | 原生控件天然有 AX 树 | 窗口里可见的歌名、艺人、按钮；能按按钮 | 播放位置与封面无保证（取决于控件是否暴露 value）；无稳定 ID | 没有任何人对这两款 app 实测成功的一手案例；机制出处 Electron accessibility 文档 |
+| 网易云日志文件 `~/Library/Containers/com.netease.163music/Data/Documents/storage/Logs/music.163.log` | 无 | 2016 年项目 supertanglang/NeteaseMusicNowPlaying 用正则解析该日志 JSON 行取歌名/歌手 | — | 歌名、歌手（2016 格式） | 位置、控制 | 读私有存储，按现行铁律属禁区；当前 3.1.5 日志格式未核实 |
+| URL scheme `orpheus://` / `qqmusicmac://` | 无 | 未核实能否控制播放 | 未核实 | — | — | 只找到 iOS 端整理帖 |
+| 第三方开源客户端本地 HTTP | 无 | 见第 2 节 | — | 见第 2 节 | — | 已核实源码 |
+| 键盘媒体键模拟（`NX_KEYTYPE_PLAY` 等系统事件） | 无（发系统媒体键事件是公开 CGEvent） | 谁在前台响应谁收 | 同 | 单向 play/pause/next/prev | 任何读取 | 通用机制，未针对两款 app 实测 |
+
+### 9.7 若完整版准许私有 API，方案形态（只描述，不写代码）
+
+- 在 E1 协议下加一个 `SystemNowPlayingSource`：读走 mediaremote-adapter `stream`，写走 adapter `send`（不自己 dlopen MediaRemote）。启动先跑 `test` 自检，失败则该源标 `.unavailable`，UI 退化，不影响 Apple Music 源。
+- 能力：标题 / 艺人 / 专辑 / 时长 / 位置 / 播放状态 / 封面 / 来源 bundle id 全有；控制 play/pause/next/prev/seek/shuffle/repeat；**无队列**；持久身份用 MediaRemote 的 content identifier（是否跨会话稳定：未核实），回退到 bundle id + 元数据。
+- 构建：完整版 target 内嵌 `.framework` + `.pl`，Embed 时 CodeSignOnCopy；纯净版 target 不含这些文件，代码按 target 条件编译隔离。
+- 风险：苹果调整放行规则即整体失效；以 `test` 自检 + 退化为唯一防线。
+
+### 9.8 创始人可做的十秒验证
+
+播放 QQ 音乐，看控制中心「正在播放」是否出现且能切歌。出现即证实 9.2 的 QQ 结论；不出现则 QQ 连 MediaRemote 路也走不通。
+
+### 9.9 本节未核实清单
+
+- 15.4 校验的 entitlement 确切名称；Apple 官方说明。
+- mediaremote-adapter 的量化开销；公证 / Hardened Runtime 下是否有人踩坑。
+- Tuneful 当前二进制是否用私有框架。
+- 网易云 3.1.5 是否仍需手动开「系统媒体快捷键」；QQ 音乐控制中心显示的实机确认。
+- AX 对两款 app 的可读字段（需实机开辅助功能权限探测）。
+- `orpheus://` / `qqmusicmac://` 的控制能力。
+- MediaRemote content identifier 的跨会话稳定性。
