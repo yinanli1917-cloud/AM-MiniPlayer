@@ -174,7 +174,7 @@ public protocol PlaybackSource: AnyObject {
 - `AppleMusicPlaybackSource`：包现有 SB 代码；`nativeID = persistentID`；artwork `.image`；capabilities 全开。
 - `SpotifyPlaybackSource`：ScriptingBridge 生成 Spotify 头文件；`nativeID = spotify url`；artwork `.url`；无 queueRead / playByID / addToLibrary。
 - `LocalHTTPPlaybackSource`（一套轮询壳，按 profile 区分 YesPlayMusic / Alger / Vutron / YTMDesktop 的端点、字段、鉴权）；`nativeID` 为源站 id；artwork `.url`；capabilities 按 profile 声明。
-- 歌词侧：`LyricsService.fetchLyrics(... persistentID:)` 的 persistentID 参数改传 `identity.stableKey`（Apple Music 下值等于 `appleMusic:<persistentID>`，需与 WT-A 对齐前缀变更对缓存键的影响）。
+- 歌词侧（WT-A 2026-09-10 裁定）：`LyricsService.fetchLyrics(... persistentID:)` 的 persistentID **保持裸值不动**，源信息另开参数（如 `source: PlaybackSourceID`）；`stableKey` 的源前缀只在协议层拼，不下渗到歌词管线与磁盘缓存键。
 
 ---
 
