@@ -18,7 +18,7 @@ public protocol AppleMusicControlSink: AnyObject {
     func cycleRepeatMode()
     func setVolume(_ level: Int)
     func toggleStar()
-    func playTrack(persistentID: String)
+    func playTrack(persistentID: String, completion: ((Bool) -> Void)?)
     func fetchUpNextQueue(forceRecent: Bool)
 }
 

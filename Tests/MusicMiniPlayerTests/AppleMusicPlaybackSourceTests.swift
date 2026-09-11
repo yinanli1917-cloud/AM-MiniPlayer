@@ -44,7 +44,7 @@ private final class FakeAppleMusicControlSink: AppleMusicControlSink {
 
     func setVolume(_ level: Int) { setVolumeCalls.append(level) }
     func toggleStar() { toggleStarCalls += 1 }
-    func playTrack(persistentID: String) { playTrackCalls.append(persistentID) }
+    func playTrack(persistentID: String, completion: ((Bool) -> Void)?) { playTrackCalls.append(persistentID) }
     func fetchUpNextQueue(forceRecent: Bool) { fetchUpNextQueueCalls.append(forceRecent) }
 }
 

@@ -229,6 +229,6 @@ public final class AppleMusicPlaybackSource: PlaybackSource {
     }
 
     public func play(itemID: String) async {
-        sink.playTrack(persistentID: itemID)
+        sink.playTrack(persistentID: itemID, completion: nil)
     }
 }
