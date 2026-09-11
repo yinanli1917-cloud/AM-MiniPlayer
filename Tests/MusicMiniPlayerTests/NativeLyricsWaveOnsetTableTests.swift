@@ -23,6 +23,7 @@ final class NativeLyricsWaveOnsetTableTests: XCTestCase {
         hostedSurfaces.removeAll()
         hostWindow?.orderOut(nil)
         hostWindow = nil
+        NativeLyricsFeelParity.resetTestingOverrides()
         super.tearDown()
     }
 
@@ -272,6 +273,154 @@ final class NativeLyricsWaveOnsetTableTests: XCTestCase {
                 else { opacityVerdict = "fires independently" }
             }
             print("[WaveOnset] incoming row i+1=\(incoming.index): posOnset=\(fmt(pos)) opacityOnset=\(fmt(opv)) blurOnset=\(fmt(blv)) — opacity \(opacityVerdict)")
+        }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Same lockstep drive as the topdown test above, but with the `sync` feel arm
+    // active (nanopod://debug/feel/wave/sync): the outgoing row i and incoming
+    // row i+1 must depart their baseline on the SAME frame (±1 frame), and rows
+    // i+2.. must follow LyricWaveTiming.staggerSchedule's live `.syncPair` table.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    @MainActor
+    func test_syncArm_outgoingAndIncomingRowsShareOnsetFrame() {
+        NativeLyricsFeelParity.testingWave = .sync
+        defer { NativeLyricsFeelParity.testingWave = nil }
+
+        let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
+        host(surface, NSSize(width: 360, height: 600))
+        let mc = MusicController(preview: true)
+        mc.duration = 240
+        mc.isPlaying = true
+        let rowCount = 20
+        let rows = makeRows(rowCount)
+        surface.debugSkipDedupe = true
+
+        let i = 5
+        let iPlus1 = i + 1
+        let lineEnd = rows[i].displayLine.line.endTime
+        let previousStart = rows[i].displayLine.line.startTime
+
+        var wall: CFTimeInterval = 1_000
+        var date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        surface.debugNowOverride = { wall }
+        mc.debugPlaybackClockDateProvider = { date }
+        defer {
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+        }
+
+        let wallStepPerFrame: TimeInterval = 1.0 / 60.0
+        let playbackStep = 1.0 / 60.0
+        func step(playback: TimeInterval) {
+            wall += wallStepPerFrame
+            date = date.addingTimeInterval(playbackStep)
+            mc.syncPlaybackClock(to: playback, playing: true, at: date)
+            surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: mc))
+            surface.debugTick(displayInterval: wallStepPerFrame)
+            RunLoop.main.run(until: Date())
+        }
+
+        let warmupStart = previousStart + 0.1
+        let warmupFrames = 60
+        mc.syncPlaybackClock(to: warmupStart, playing: true, at: date)
+        surface.configure(config(rows, current: i, mc: mc))
+        surface.layoutSubtreeIfNeeded()
+        for f in 0..<warmupFrames {
+            step(playback: warmupStart + TimeInterval(f) * playbackStep)
+        }
+
+        let trackedIndices = (-3...4).map { i + $0 }.filter { $0 >= 0 && $0 < rowCount }
+        let censusStart = warmupStart + TimeInterval(warmupFrames) * playbackStep
+        surface.debugResetCensus()
+        surface.debugCensusEnabled = true
+        let censusFrames = 72
+        var semanticTrace: [Int] = []
+        var yByIndex: [Int: [CGFloat]] = [:]
+        for f in 0..<censusFrames {
+            let playback = censusStart + TimeInterval(f) * playbackStep
+            step(playback: playback)
+            semanticTrace.append(surface.debugNativeSemanticIndex ?? -1)
+            for idx in trackedIndices {
+                let track = surface.debugCensusByIndex[idx]
+                yByIndex[idx, default: []].append(track?.y.last ?? (yByIndex[idx]?.last ?? 0))
+            }
+        }
+        surface.debugCensusEnabled = false
+
+        var boundaryFrame: Int?
+        for f in 0..<censusFrames {
+            let playback = censusStart + TimeInterval(f) * playbackStep
+            if playback >= lineEnd - 0.001 { boundaryFrame = f; break }
+        }
+        guard let boundaryFrame else {
+            XCTFail("boundary frame (line \(i) end) never entered the census window")
+            return
+        }
+        guard semanticTrace.firstIndex(where: { $0 == iPlus1 }) != nil else {
+            XCTFail("semantic index never advanced to \(iPlus1); trace=\(semanticTrace)")
+            return
+        }
+
+        let renderedIndices = rows.map(\.index)
+        let schedule = LyricWaveTiming.staggerSchedule(
+            for: renderedIndices, newIndex: iPlus1, lineInterval: 4, shape: .syncPair
+        )
+        let expectedDelayByIndex: [Int: TimeInterval] = Dictionary(
+            uniqueKeysWithValues: schedule.map { ($0.lineIndex, $0.delay) }
+        )
+        XCTAssertEqual(expectedDelayByIndex[i] ?? -1, 0, accuracy: 0.0001, "sync schedule: outgoing row fires at the boundary")
+        XCTAssertEqual(expectedDelayByIndex[iPlus1] ?? -1, 0, accuracy: 0.0001, "sync schedule: incoming row fires at the boundary")
+
+        let frameSeconds = 1.0 / 60.0
+        let tolFrames: Double = 1.0
+        let tolMs = tolFrames * frameSeconds * 1000
+
+        func posOnsetMs(_ idx: Int) -> Double? {
+            guard let y = yByIndex[idx], y.count == censusFrames else { return nil }
+            let pre = max(3, boundaryFrame)
+            let baseline = y.prefix(pre).reduce(0, +) / CGFloat(pre)
+            guard let onset = firstOnset(y, baseline: baseline, boundaryFrame: boundaryFrame, tol: 0.5) else {
+                return nil
+            }
+            return Double(onset - boundaryFrame) * frameSeconds * 1000
+        }
+
+        var rowsOut: [(index: Int, posOnsetMs: Double?, expectedMs: Double?)] = []
+        for delta in -3...4 {
+            let idx = i + delta
+            guard idx >= 0 && idx < rowCount else { continue }
+            rowsOut.append((idx, posOnsetMs(idx), expectedDelayByIndex[idx].map { $0 * 1000 }))
+        }
+        print("[WaveOnsetSync] boundaryFrame=\(boundaryFrame) frameMs=\(String(format: "%.2f", frameSeconds * 1000))")
+        print("[WaveOnsetSync] row | posOnset(ms) | expected(ms)")
+        for r in rowsOut {
+            let pos = r.posOnsetMs.map { String(format: "%7.1f", $0) } ?? "    n/a"
+            let exp = r.expectedMs.map { String(format: "%7.1f", $0) } ?? "    n/a"
+            print("[WaveOnsetSync] \(String(format: "%3d", r.index)) | \(pos)      | \(exp)")
+        }
+
+        // Outgoing (i) and incoming (i+1) must share the same onset frame — both are
+        // scheduled at delay 0, so both should already be moving by the boundary frame
+        // (or within ±1 frame either side of it).
+        guard let outgoingPos = posOnsetMs(i), let incomingPos = posOnsetMs(iPlus1) else {
+            XCTFail("outgoing (\(i)) or incoming (\(iPlus1)) row position never departed baseline")
+            return
+        }
+        XCTAssertEqual(outgoingPos, incomingPos, accuracy: tolMs,
+                       "sync arm: outgoing row \(i) and incoming row \(iPlus1) must start on the same frame")
+        XCTAssertEqual(outgoingPos, 0, accuracy: tolMs, "sync arm: boundary pair fires at the boundary frame, not staggered")
+
+        // Rows i+2.. must follow the live sync schedule (±1 frame).
+        for delta in 2...4 {
+            let idx = i + delta
+            guard idx < rowCount, let expected = expectedDelayByIndex[idx].map({ $0 * 1000 }) else { continue }
+            guard let actual = posOnsetMs(idx) else {
+                XCTFail("row \(idx) (i+\(delta)) position never departed baseline (expected onset \(expected) ms)")
+                continue
+            }
+            XCTAssertEqual(actual, expected, accuracy: tolMs,
+                            "row \(idx) (i+\(delta)) position onset should match the live .syncPair schedule (±1 frame)")
         }
     }
 }
