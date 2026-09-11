@@ -39,3 +39,74 @@
 
 ## B6 切行手感终验 — 归创始人
 出阶段包时提醒：看一次普通切行（上一行 ~0.15s 内不动，然后位移/变暗/亮层同起）、看 B2 波浪要不要改。
+
+## B5 附录（2026-09-11 实测）
+
+**二进制**：`nanoPod.app/Contents/MacOS/nanoPod` md5=`55fa543f7bd2ca07dff0f418e543277c`（与要求值一致）。
+BuildInfo.txt: `version=0.29 build_time=2026-08-28T03:58:00Z git=fef1fff release_sha256=494e7eb8… auto_update=disabled`。
+
+**时间窗**：16:41–16:48 PDT（硬窗 16:40–17:10，17:08 前停测，全部完成）。
+
+**环境**：`uptime` 起测 load average 2.28/3.59/4.39，测到一半升到 5.19/4.14/4.34 — 未满足 README「安静桌面」前提，绝对值不可比，仅信邻近配对差值。ambient WindowServer 中位数本身就到 44–47%，比记忆中的基线高得多，说明当时机器另有负载。
+
+**曲目**：词级/逐字候选=葉子(電視劇《薔薇之戀》原聲帶版)（Library）；行级+译文候选=At Your Best (You Are Love)（Library，`showTranslation=1, translationLanguage=zh` 已是创始人原设置，未改动）。
+**未能核实 syllable/逐字命中**：`~/Library/Application Support/nanoPod/Diagnostics/Live/nanopod_debug.log` 最后写入时间是 6-21，这次运行全程未追加一行 — release 二进制不出这份 DEBUG 日志（CLAUDE.md 记录过的"release-only编译坑"同类现象），grep 落空。改用 CPU 特征做弱代理：gate4 三窗 app 中位数 1.5–6.0%、p95 7.8–10.7%，弱于 README 记忆基线（sweep 8–18%），**未达≥3%硬门槛的第一窗（1.5%）**，即"确认在扫掠而非停在封面页"这一步没坐实，后续 gate4 数字仅供参考。
+
+**窗口缩短**：README 默认 30s×3 轮，本次因时间硬窗压缩为 **15s×1 轮**（Gate4 做了 A-B-A 三步而非 3 轮）；60s 预热等待缩到 20s/10s。
+
+### 表：per-window WS/app CPU（median/p95，%）
+
+| label | WS median | WS p95 | app median | app p95 |
+|---|---|---|---|---|
+| ambient (app 未运行) | 46.9 | 48.2 | 0.0 | 0.0 |
+| virgin (面板开,不播放) | 45.0 | 45.9 | 0.1 | 0.2 |
+| paused_after_play (播完暂停) | 44.8 | 45.9 | 0.4 | 0.6 |
+| gate4_A_raster_on_r1 (逐字歌,raster ON) | 39.7 | 44.4 | 1.5 | 10.7 |
+| gate4_B_raster_off_r1 (同曲,raster OFF) | 50.3 | 54.8 | 4.9 | 9.2 |
+| gate4_A_raster_on_r1b (同曲,raster ON 复位) | 39.3 | 45.9 | 6.0 | 7.8 |
+| idle_gate_line_level_translation (行级+译文) | 44.1 | 59.9 | 6.8 | 9.7 |
+
+### 邻近配对差值
+
+- virgin − ambient：WS −1.9，app +0.1（面板打开本身几乎不加 WS 负担）
+- paused_after_play − virgin：WS −0.2，app +0.3（**PASS**：README 门槛 WS≤+5 且 app≤0.5% 都满足，但见下"sample"证据）
+- gate4 OFF − ON(r1)：WS +10.6，app +3.4（raster OFF 更贵，方向与"raster 帮忙"假设一致）
+- gate4 ON(r1b) − OFF(r1)（A-B-A 的第二个 A）：WS −11.0，app +1.1 — 与上一步方向抵消，说明本轮环境漂移（load average 从 2.x 涨到 5.x）已经盖过了 raster 信号本身，**gate4 本次数字不可信，只能定性记录、不能定论**
+- idle gate app 中位数 6.8% vs 门槛 ≤1.5%：**表面 FAIL**，但同一时段 ambient/WS 已异常高且 gate4 也自相矛盾，更可能是环境噪声而非真回归；需要在安静机器上重测才能定论
+
+### sample_paused.txt（5s，paused_after_play 窗口后）
+
+`CA::Transaction::commit` / `CVDisplayLink` / `presentationTick` 出现次数均为 **0** — 暂停后主线程确实无持续提交，闲置判定成立（与 B5 idle-loop 目标一致）。
+
+### LoopStop 日志证据
+
+无法核实——本次运行 `nanopod_debug.log` 全程未写入新行（release 构建不出此 DEBUG 日志，最后一条记录停在 2026-06-21），grep `LoopStop`/`LoopStopVeto` 落空，非"确认无触发"，而是"这条通路本次不可观测"。
+
+### PASS/FAIL 小结（均需在安静机器复测确认）
+
+| 门 | 本次读数 | README 阈值 | 判定 |
+|---|---|---|---|
+| gate5 paused−virgin | WS −0.2, app +0.4% | WS≤+5 且 app≤0.5% | 表面 PASS，但见上方环境噪声说明 |
+| gate5 sample | commit/CVDisplayLink/presentationTick=0 | 应为 0 | PASS |
+| gate4 OFF−ON | 方向不一致（+10.6 后又 −11.0） | OFF−ON≥0 视为"raster 未帮倒忙" | 不可判定，环境污染 |
+| gate4 sweep 验证 | app 中位数最低 1.5% | ≥3% | **FAIL**（未能确认逐字扫掠强度），拉低 gate4 全部数字的可信度 |
+| idle gate | app 中位数 6.8% | ≤1.5% | 表面 FAIL，同上原因存疑 |
+
+### 遗留/未完成
+
+- 未能核实所选歌曲确为逐字(syllable)源命中——release 日志不可用，仅有弱 CPU 代理，且代理本身未过 3% 门槛。
+- 未按 README 做 3 轮×30s；仅 1 轮×15s（gate4 是 A-B-A 三步单轮）。
+- 全程环境噪声大（load average 2.3→5.2漂移，WS 基线 39–60% 大幅波动），任何本附录里的绝对值和大多数差值都不能当结论用，只能当"需要在安静桌面重跑"的初步信号，尤其 idle gate 的表面 FAIL 需要复测才能确认是否为真回归。
+- 建议后续在真正安静桌面、且允许 30s×3 轮的时间窗内重跑本附录全部四类窗口。
+
+**收尾状态**：Music 已 stop、shuffle 恢复为 false（与开始时一致）；nanoPod 已退出（`pgrep -x nanoPod` 空）；`NANOPOD_BLUR_RASTER_OFF` 已 unsetenv（`launchctl getenv` 返回空）。未做 `git commit`。
+
+### 更正：release 构建的调试日志开关（规划会话核实，2026-09-11）
+- 附录里「release 二进制不出 DEBUG 日志」需更正为「release 默认关」：`DiagnosticsService.isOwnerDiagnosticsBuild` 只在 DEBUG/LOCAL_DEVELOPER_BUILD 为真，所以 release 不会自动调用 `setDiagnosticsFileLoggingEnabled(true)`，也不会把日志导到 Application Support。但 `DebugLogger.isEnabled()` 还接受 `UserDefaults` 键 `enableDebugFileLog`，且 release 里编译着 `DebugLogger.log`。
+- 创始人开启方法（一次性）：
+  ```bash
+  defaults write com.yinanli.nanoPod enableDebugFileLog -bool YES
+  ```
+  重启 nanoPod 后日志写到 `/tmp/nanopod_debug.log`（release 未调 `setLogURL`，用 DebugLogger 默认路径）。关闭：`defaults delete com.yinanli.nanoPod enableDebugFileLog`。
+- 因此 ec64853 提交说明里「DiagnosticsService 每次启动都开 DebugLogger」只对 DEBUG 构建成立；阶段包的 BuildInfo/说明必须附上面这条 defaults 命令，否则 ActiveBrightness / LineGaps 埋点在创始人机器上不落盘。
+- B5 复测时同样先开这个开关，才能 grep `LoopStop`/`LoopStopVeto` 与 syllable 源命中。
