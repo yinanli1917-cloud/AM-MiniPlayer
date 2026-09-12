@@ -612,6 +612,35 @@ public final class LyricsParser {
     /// 剥离任意位置的元信息行（作词/作曲/编曲/演唱等）
     /// 🔑 必须在 mergeLyricsWithTranslation 之前调用，否则元信息行会吃掉翻译时间戳
     public func stripMetadataLines(_ lines: [LyricLine]) -> [LyricLine] {
+        // A title/credit separator line ("Song - Artist") only pollutes
+        // identity when it appears as a HEADER before any real content.
+        // Gate on POSITION — determined chronologically by startTime, not
+        // wall-clock time or raw array order — so a header pushed past a
+        // few seconds by a long instrumental intro still gets stripped,
+        // while a real mid-song lyric containing " - " is never touched
+        // because a real line has already appeared by then.
+        let chronologicalIndices = lines.indices.sorted { lines[$0].startTime < lines[$1].startTime }
+        var leadingTitleSeparatorIndices = Set<Int>()
+        var sawRealLyric = false
+        for index in chronologicalIndices {
+            let trimmed = lines[index].text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if isTitleSeparatorLine(trimmed) {
+                if !sawRealLyric { leadingTitleSeparatorIndices.insert(index) }
+                continue
+            }
+            if isProviderCatalogMetadataLine(trimmed)
+                || isMetadataKeywordLine(trimmed)
+                || isByCreditLine(trimmed)
+                || isSourceCreditLine(trimmed)
+                || isDecorativeMarker(trimmed)
+                || isSectionTagLine(trimmed)
+                || isPureSymbols(trimmed) {
+                continue
+            }
+            sawRealLyric = true
+        }
+
         let basicFiltered = lines.enumerated().compactMap { index, line -> LyricLine? in
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { return nil }
@@ -624,8 +653,9 @@ public final class LyricsParser {
             // 标题/信用分隔符行（"Song - Artist" 或 "Song -Artist"）
             // QQ/NetEase 常在开头放 "Song Title (ver.) - Artist" 元信息行
             // 🔑 Widened: " -" without trailing space (e.g. "You Belong to Me -Norman Wisdom")
-            //    and startTime ≤ 5s (title cards can appear at 1-3s, not just ≤1s)
-            if isTitleSeparatorLine(trimmed) && line.startTime <= 5.0 { return nil }
+            //    Gated on chronological POSITION (before the first real
+            //    lyric line), not wall-clock time.
+            if isTitleSeparatorLine(trimmed) && leadingTitleSeparatorIndices.contains(index) { return nil }
             // 信用行（"Mastering by X @ Y"）无冒号但有明确 role keyword + @/by
             if isByCreditLine(trimmed) { return nil }
             // Some providers append publishing/recording credits without a
