@@ -1,0 +1,3 @@
+import MusicMiniPlayerAppKit
+
+AppMain.main()
