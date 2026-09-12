@@ -191,3 +191,12 @@ Caveats：
 - 环境 load average 观测到 4.86（首窗口),不算严格安静，但主会话开场已确认 0 个 swift 编译进程；load 数值本身可能受其他后台应用影响,未逐项排查。
 
 End state：Music.app 已 `stop`；`launchctl getenv NANOPOD_BLUR_RASTER_OFF` 为空；nanoPod 以 stage bundle 方式运行（pid 10474，`open` 常规启动，非 debug 进程）。未尝试恢复此前任何播放曲目（按指示：Music 保持 stopped，不做恢复）。
+
+### 埋点开关核实（2026-09-12 实机，三组对照）
+- 代码无误：release 编译着 DebugLogger 与两条埋点，`isEnabled()` 三源取或。根因在环境：本机曾以沙盒身份运行过 com.yinanli.nanoPod，`~/Library/Containers/com.yinanli.nanoPod/` 仍在，cfprefsd 把 `defaults write com.yinanli.nanoPod …` 静默重定向到容器 plist；而现在的 app 非沙盒（entitlements app-sandbox=false），读的是 `~/Library/Preferences/com.yinanli.nanoPod.plist`——创始人写的键从未到达 app。
+- 实测：A `launchctl setenv NANOPOD_DEBUG_LOG 1` 重启 → 40s 增 137 行（18 条埋点）；B 域名形式 defaults 重启 → 0 行（复现创始人症状）；C 显式路径 defaults 重启 → 增 87 行。
+- 对创始人有效的命令（已在他机器上写入，当前即生效）：
+  ```bash
+  defaults write ~/Library/Preferences/com.yinanli.nanoPod.plist enableDebugFileLog -bool YES
+  ```
+  重启 nanoPod 后日志在 /tmp/nanopod_debug.log。阶段包说明里的域名形式命令作废，改成这条。
