@@ -24,8 +24,9 @@ _(现状 2026-09-03：全局 codex harness 已由创始人于 2026-08-17 下令�
 
 ```
 Sources/
-├── MusicMiniPlayerApp/
-│   ├── MusicMiniPlayerApp.swift  - AppDelegate + window management
+├── MusicMiniPlayerApp/            - 纯净版可执行 target：只剩 main.swift（AppMain.main()）+ Info.plist + entitlements（2026-09-12 WT-E 目录切分，为纯净版/完整版两个产品做准备）
+├── MusicMiniPlayerAppKit/         - App 层库 target（原 MusicMiniPlayerApp 源码整体 git mv 至此，零逻辑改动）
+│   ├── MusicMiniPlayerApp.swift  - AppDelegate + window management（AppMain 与委托方法 public）
 │   ├── SettingsView.swift        - Settings view (menu bar + settings window + components)
 │   └── LocalizedStrings.swift    - L10n localization + UserDefaults binding helpers
 ├── MusicMiniPlayerCore/
