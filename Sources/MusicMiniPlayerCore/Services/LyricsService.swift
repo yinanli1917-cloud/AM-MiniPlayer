@@ -360,6 +360,50 @@ public class LyricsService: ObservableObject {
         }
     }
 
+    // ------------------------------------------------------------------
+    // MARK: - Cache cost estimation (banned-patterns: NSCache cost, not count)
+    // ------------------------------------------------------------------
+    //
+    // NSCache.countLimit caps ENTRIES regardless of size — a 3-line unsynced
+    // song and an 80-line word-level song both count as "1", so totalCostLimit
+    // (the byte-aware governor) was configured but never fed real costs and
+    // stayed inert. This mirrors the artwork-cache fix (banned-patterns.md):
+    // always setObject(_:forKey:cost:) with a real byte estimate, cost is the
+    // sole governor, no countLimit.
+    //
+    // Constants (deliberately simple, no per-platform introspection):
+    //   - UTF-16 code unit ~= 2 bytes (Swift String storage, worst case for
+    //     non-ASCII lyrics which are common: CJK/Japanese/Korean).
+    //   - perWordOverhead: LyricWord holds a UUID (16B) + 2 Doubles (16B) +
+    //     Swift struct/array slot overhead — rounded to 64B/word.
+    //   - perLineOverhead: LyricLine holds a UUID + 2 Doubles + array header +
+    //     Optional<String> slot + NSObject/class wrapper slack — rounded to
+    //     128B/line.
+    //   - fixedItemOverhead: CachedLyricsItem's own ivars (source, score,
+    //     timestamp, bools) + NSObject header — rounded to 256B/item.
+    static let lyricsCacheBytesPerUTF16Unit = 2
+    static let lyricsCachePerWordOverheadBytes = 64
+    static let lyricsCachePerLineOverheadBytes = 128
+    static let lyricsCacheFixedItemOverheadBytes = 256
+
+    /// Pure, testable byte-cost estimate for a set of lyric lines, used as the
+    /// NSCache `cost` for a cached lyrics item. Monotonic in text length and
+    /// word count; an item with translations costs strictly more than the
+    /// same item without.
+    static func estimatedLyricsCacheCost(for lyrics: [LyricLine]) -> Int {
+        var total = lyricsCacheFixedItemOverheadBytes
+        for line in lyrics {
+            var lineBytes = lyricsCachePerLineOverheadBytes
+            lineBytes += line.text.utf16.count * lyricsCacheBytesPerUTF16Unit
+            if let translation = line.translation {
+                lineBytes += translation.utf16.count * lyricsCacheBytesPerUTF16Unit
+            }
+            lineBytes += line.words.count * lyricsCachePerWordOverheadBytes
+            total += lineBytes
+        }
+        return total
+    }
+
     static func shouldRefreshCachedLyricsForGranularity(
         lyrics: [LyricLine],
         isNoLyrics: Bool,
@@ -416,8 +460,13 @@ public class LyricsService: ObservableObject {
             self.translationLanguage = Locale.current.language.languageCode?.identifier ?? "zh"
         }
 
-        lyricsCache.countLimit = 50
-        lyricsCache.totalCostLimit = 10 * 1024 * 1024
+        // No countLimit: cost (real byte estimate) is the sole governor —
+        // see estimatedLyricsCacheCost. A typical 80-line word-level song
+        // (~25 UTF16 units/line text + translation, ~8 words/line) costs
+        // ~58 KiB; 10 MiB only holds ~180 such songs, short of the "several
+        // hundred songs" target, so this is set to 20 MiB (~360 songs) while
+        // staying a modest fraction of a menu-bar app's footprint.
+        lyricsCache.totalCostLimit = 20 * 1024 * 1024
 
         HTTPClient.warmup()
         startNetworkRecoveryMonitor()
@@ -909,7 +958,7 @@ public class LyricsService: ObservableObject {
                 source: diskResult.source.rawValue,
                 score: diskResult.score
             )
-            lyricsCache.setObject(cacheItem, forKey: songID as NSString)
+            lyricsCache.setObject(cacheItem, forKey: songID as NSString, cost: Self.estimatedLyricsCacheCost(for: processed.lyrics))
             applyLyrics(
                 processed.lyrics,
                 firstRealLyricIndex: processed.firstRealLyricIndex,
@@ -1533,7 +1582,7 @@ public class LyricsService: ObservableObject {
             source: bestResult.source.rawValue,
             score: bestResult.score
         )
-        lyricsCache.setObject(cacheItem, forKey: songID as NSString)
+        lyricsCache.setObject(cacheItem, forKey: songID as NSString, cost: Self.estimatedLyricsCacheCost(for: processed.lyrics))
         DebugLogger.log("LyricsService", "📦 Cached: '\(songID)' (\(processed.lyrics.count) lines, unsynced=\(isUnsynced))")
         recordDiagnosticsLyricsFetchFinished(
             title: title,
@@ -2378,7 +2427,7 @@ public class LyricsService: ObservableObject {
                     source: bestResult.source.rawValue,
                     score: bestResult.score
                 )
-                self.lyricsCache.setObject(cacheItem, forKey: songID as NSString)
+                self.lyricsCache.setObject(cacheItem, forKey: songID as NSString, cost: Self.estimatedLyricsCacheCost(for: processed.lyrics))
             }
         }
     }
