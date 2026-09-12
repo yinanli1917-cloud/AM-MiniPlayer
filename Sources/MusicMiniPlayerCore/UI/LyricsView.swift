@@ -79,6 +79,15 @@ struct LyricWaveTiming {
     static let tailAccelerationFactor: TimeInterval = 1.05
     static let largeJumpThreshold = 4
 
+    /// `topDown` is the shipping order: rows fire in ascending index order, top to
+    /// bottom, outgoing row before incoming row. `syncPair` (feel A/B, `nanopod://
+    /// debug/feel/wave/sync`) starts the outgoing row i and incoming row i+1 on the
+    /// SAME frame and spreads the wave outward from that pair in both directions.
+    enum Shape: Equatable {
+        case topDown
+        case syncPair
+    }
+
     static func targetRadius(lineInterval: TimeInterval?, hasSyllableSync: Bool) -> Int {
         14
     }
@@ -101,7 +110,21 @@ struct LyricWaveTiming {
     static func staggerSchedule(
         for indices: [Int],
         newIndex: Int,
-        lineInterval: TimeInterval? = nil
+        lineInterval: TimeInterval? = nil,
+        shape: Shape = .topDown
+    ) -> [StaggerTarget] {
+        switch shape {
+        case .topDown:
+            return topDownSchedule(for: indices, newIndex: newIndex, lineInterval: lineInterval)
+        case .syncPair:
+            return syncPairSchedule(for: indices, newIndex: newIndex, lineInterval: lineInterval)
+        }
+    }
+
+    private static func topDownSchedule(
+        for indices: [Int],
+        newIndex: Int,
+        lineInterval: TimeInterval?
     ) -> [StaggerTarget] {
         guard !indices.isEmpty else { return [] }
 
@@ -132,6 +155,77 @@ struct LyricWaveTiming {
         }
 
         return schedule
+    }
+
+    /// `sync` feel arm: outgoing row (newIndex-1) and incoming row (newIndex) both
+    /// fire on the boundary frame (delay 0); the wave spreads outward from that
+    /// pair in both directions at `baseDelay` per row. Rows below the pair never
+    /// accelerate (mirrors how topDown never accelerates before `newIndex`); rows
+    /// above the pair use the same tail-acceleration rule as topDown (divide the
+    /// increment by `tailAccelerationFactor` after each row at/above `newIndex`).
+    /// Rows outside the lead-in radius get delay 0, same as topDown.
+    private static func syncPairSchedule(
+        for indices: [Int],
+        newIndex: Int,
+        lineInterval: TimeInterval?
+    ) -> [StaggerTarget] {
+        guard !indices.isEmpty else { return [] }
+        let sorted = indices.sorted()
+
+        let visibleTopLineIndex = max(0, newIndex - 3)
+        let startPosition = sorted.firstIndex(where: { $0 >= visibleTopLineIndex }) ?? 0
+        let baseDelay = baseDelay(
+            for: sorted,
+            startPosition: startPosition,
+            newIndex: newIndex,
+            lineInterval: lineInterval
+        )
+
+        var delayByIndex: [Int: TimeInterval] = [:]
+        for i in 0..<startPosition {
+            delayByIndex[sorted[i]] = 0
+        }
+
+        guard let oldPos = sorted.firstIndex(of: newIndex - 1),
+              let newPos = sorted.firstIndex(of: newIndex) else {
+            // No adjacent boundary pair in this rendered window (edge case, e.g. a
+            // seek landed newIndex outside `indices`) — fall back to flat zero for
+            // everything past the lead-in, same shape as an all-radius topDown miss.
+            for i in startPosition..<sorted.count where delayByIndex[sorted[i]] == nil {
+                delayByIndex[sorted[i]] = 0
+            }
+            return sorted.map { StaggerTarget(lineIndex: $0, delay: delayByIndex[$0] ?? 0) }
+        }
+
+        delayByIndex[sorted[oldPos]] = 0
+        delayByIndex[sorted[newPos]] = 0
+
+        // Downward: i-1, i-2, ... toward the lead-in cutoff. Constant baseDelay,
+        // no tail acceleration (matches topDown, which never accelerates below newIndex).
+        if oldPos > startPosition {
+            var downDelay: TimeInterval = 0
+            var p = oldPos - 1
+            while p >= startPosition {
+                downDelay += baseDelay
+                delayByIndex[sorted[p]] = downDelay
+                if p == startPosition { break }
+                p -= 1
+            }
+        }
+
+        // Upward: i+2, i+3, ... with the same tail-acceleration rule topDown applies
+        // from newIndex onward.
+        if newPos + 1 < sorted.count {
+            var upDelay: TimeInterval = 0
+            var upBase = baseDelay
+            for p in (newPos + 1)..<sorted.count {
+                upDelay += upBase
+                delayByIndex[sorted[p]] = upDelay
+                upBase /= tailAccelerationFactor
+            }
+        }
+
+        return sorted.map { StaggerTarget(lineIndex: $0, delay: delayByIndex[$0] ?? 0) }
     }
 
     static func baseDelay(

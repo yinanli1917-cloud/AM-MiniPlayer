@@ -790,7 +790,7 @@ struct NativeLyricsRenderTelemetryAccumulator {
             tapDirectSnapCount += 1
         case .manualScroll:
             manualRecoveryDirectSnapCount += 1
-        case .initialLayout, .reducedMotion, .seek, .trackReset:
+        case .initialLayout, .reducedMotion, .seek, .trackReset, .occlusionResume:
             break
         }
     }
