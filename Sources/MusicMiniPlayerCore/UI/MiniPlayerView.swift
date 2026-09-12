@@ -457,9 +457,10 @@ extension MiniPlayerView {
             .accessibilityLabel(musicController.repeatMode == 0 ? "关闭循环" : musicController.repeatMode == 1 ? "单曲循环" : "列表循环")
             .onChange(of: musicController.repeatMode) { _, _ in
                 guard !reduceMotion else { return }
-                withAnimation(.spring(response: 0.12, dampingFraction: 0.9)) { repeatFlow = 1 }
+                let style = ShuffleRepeatStyle.resolve(arm: MicroInteractionFeel.shuffleRepeat, reduceMotion: reduceMotion)
+                withAnimation(style.trigger) { repeatFlow = 1 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { repeatFlow = 0 }
+                    withAnimation(style.rebound) { repeatFlow = 0 }
                 }
             }
         }

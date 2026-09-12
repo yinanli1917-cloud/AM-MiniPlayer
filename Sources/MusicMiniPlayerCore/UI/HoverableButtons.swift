@@ -121,6 +121,29 @@ struct GlassCircle: ViewModifier {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// MARK: - HoverCapsuleStyle（纯函数：hover 高亮背景的 opacity/动画决策）
+// ═══════════════════════════════════════════════════════════════════════════════
+/// Factored out so the on/off arm + Reduce Motion snap-vs-fade logic is
+/// testable without a live view. `.off` arm always renders today's look
+/// (opacity 0, no capsule). `.capsule` arm fades a flat color tint in/out
+/// over `MicroInteractionFeel.Tokens.hoverCapsuleDuration` — never a glass
+/// material (no glass-on-glass).
+enum HoverCapsuleStyle {
+    static func resolve(
+        arm: MicroInteractionFeel.HoverCapsuleMode,
+        isHovering: Bool,
+        reduceMotion: Bool
+    ) -> (opacity: Double, animation: Animation?) {
+        guard arm == .capsule else { return (0, nil) }
+        let opacity = isHovering ? MicroInteractionFeel.Tokens.hoverCapsuleOpacity : 0
+        let animation: Animation? = reduceMotion
+            ? nil
+            : .smooth(duration: MicroInteractionFeel.Tokens.hoverCapsuleDuration)
+        return (opacity, animation)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - HoverableActionButton（统一的 Glass 按钮）
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -135,6 +158,9 @@ struct HoverableActionButton: View {
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var effectiveLuminance: CGFloat { artworkBrightness }
+    private var hoverCapsule: (opacity: Double, animation: Animation?) {
+        HoverCapsuleStyle.resolve(arm: MicroInteractionFeel.hoverCapsule, isHovering: isHovering, reduceMotion: reduceMotion)
+    }
 
     var body: some View {
         Button(action: action) {
@@ -142,6 +168,7 @@ struct HoverableActionButton: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .contentShape(Capsule())
+                .background(Capsule().fill(Color.primary.opacity(hoverCapsule.opacity)))
                 .modifier(GlassButtonBackground(luminance: effectiveLuminance))
         }
         .buttonStyle(.plain)
@@ -149,7 +176,10 @@ struct HoverableActionButton: View {
             if reduceMotion {
                 isHovering = hovering
             } else {
-                withAnimation(.smooth(duration: 0.25)) {
+                let capsuleAnimation = HoverCapsuleStyle.resolve(
+                    arm: MicroInteractionFeel.hoverCapsule, isHovering: hovering, reduceMotion: reduceMotion
+                ).animation
+                withAnimation(capsuleAnimation ?? .smooth(duration: 0.25)) {
                     isHovering = hovering
                 }
             }
@@ -264,10 +294,19 @@ struct TranslationButtonView: View {
                         .scaleEffect(isPressed ? 0.82 : (isHovering ? 1.08 : 1.0))
                         .scaleEffect(1 + toggleBounce * 0.15)
                 )
+                .background(
+                    Circle()
+                        .fill(Color.primary.opacity(
+                            HoverCapsuleStyle.resolve(arm: MicroInteractionFeel.hoverCapsule, isHovering: isHovering, reduceMotion: reduceMotion).opacity
+                        ))
+                )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            let capsuleAnimation = HoverCapsuleStyle.resolve(
+                arm: MicroInteractionFeel.hoverCapsule, isHovering: hovering, reduceMotion: reduceMotion
+            ).animation
+            withAnimation(reduceMotion ? nil : (capsuleAnimation ?? .easeInOut(duration: 0.2))) {
                 isHovering = hovering
             }
         }
