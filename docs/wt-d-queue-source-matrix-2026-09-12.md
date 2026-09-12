@@ -35,3 +35,41 @@
 1. 分别处理"current track 读不到"（真的没有东西在播）和"current track 读得到但 current playlist 读不到"（有东西在播，只是这个来源没有公开队列对象）两种情况——目前 `getUpNextTracksFromApp` 已经分两步 guard，方向是对的。
 2. 第二步 guard 失败时，需要确认失败路径是"正常返回 nil/类型不符"还是"AppleEvent 异常直接抛出"——如果是后者，`outcome = .noCurrentPlaylist` 这行赋值必须在异常抛出点之前完成，或者在 `OBJCCatch` 捕获异常时按已读到的 `currentTrack.class`（URL track 等）显式回填 `.noCurrentPlaylistForTrackClass`，而不是让 `outcome` 停留在初始的 `.noCurrentTrack`。
 3. `MusicQueueProvenance.noCurrentPlaylistForTrackClass(String)` 这个已声明未使用的 case，正是为这条路径设计的——用真实读到的 `class of current track`（如「URL track」）作为参数，比笼统的 `.noPublicQueueObject` 更精确，且已经被 UI 消费。
+
+## 补测 2026-09-12 第二轮
+
+订阅歌单 Classical Chill（103首）：subscription playlist，`current playlist` 可读，8s→20s 读数不变（曲目数103/剩余102/current track class shared track）。Jazz Chill（49首）复测一致，佐证订阅歌单稳定可读。
+
+AM 专辑 Kind of Blue：`open location` 后 30s 轮询 `player state` 始终 `playing`，但 `current track name` 全程仍是此前歌单曲目（Endless Stairs），track 从未切换；显式 `play` 后仍是同一曲目。判定：本机本轮 `open location` 未能让该专辑实际开始播放。
+
+电台 Apple Music 1：`open location`（https:// 与 itmss:// 两种 URL 均试）后轮询 30s+16s，`player state` 始终 `playing`，但曲目在第16s 变成库内曲目「葉子」（current playlist = Music / user playlist / special kind Music，非电台），可判定为库内接续播放而非电台真正起播；两种 URL 变体均未能让电台开始播放。按要求标注：**需创始人手动起播**，未伪造电台已播成功。
+
+AM 目录单曲复现：多次 `open location` 尝试均未切歌，直到 `tell application "Music" to activate` 前置激活应用后，`open location` 才生效——此时 `player state` 变为 `stopped`（非 playing）；`class of current track` 报 `-1700`（无法把 «class pTrk» 强转 string，说明有个 track 对象但类型系统层面取不到具体 class 字符串）；`name of current track`、`current playlist` 相关全部 `-1728`；`current playlist exists` 干净返回 `false`（非异常）。多次显式 `play` 均未能让其从 stopped 变为 playing——如实记录：本轮未能复现"目录单曲处于 playing 态"，只复现了"目录单曲已加载但未播放"这一子状态，`current track`/`current playlist` 的 -1728 报错在此状态下同样成立。
+
+## ScriptingBridge 异常 vs nil 实测
+
+编译并运行 `/private/tmp/.../scratchpad/sbprobe.m`（ObjC，`SBApplication applicationWithBundleIdentifier:@"com.apple.Music"`），在上述目录单曲状态（current track 存在但 -1728、current playlist 不可读）下：
+
+```
+currentTrack: VALUE SBObject
+currentTrack: lastError = (nil)
+currentPlaylist: VALUE SBObject
+currentPlaylist: lastError = (nil)
+currentPlaylist.tracks: VALUE SBElementArray
+currentPlaylist.tracks: lastError = (nil)
+```
+
+`valueForKey:@"currentTrack"` / `@"currentPlaylist"` / 其 `.tracks` 三者都**不抛异常、不返回 nil**——ScriptingBridge 直接给一个未解析的 `SBObject`/`SBElementArray` 代理对象，`[app lastError]` 也是 nil。继续深一层，对该代理对象取具体属性（`sbprobe2.m`）：
+
+```
+currentPlaylist.name: NIL
+currentPlaylist.name: lastError = (nil)
+currentPlaylist.tracks.count: VALUE __NSCFNumber (0)
+currentPlaylist.tracks.count: lastError = (nil)
+currentTrack.name: NIL
+currentTrack.name: lastError = (nil)
+```
+
+代理对象的 `.name` 属性静默返回 `NIL`（不抛异常），`.tracks.count` 返回 `0`（不是错误），`lastError` 全程 `nil`。控制组（`play user playlist "Piano Chronicle"` 播放中）用同一二进制跑：`currentPlaylist.name` = `Piano Chronicle`，`tracks.count` = `218`，`currentTrack.name` = `Ylang Ylang`，全部正常取值。
+
+**结论（修正此前的异常假设）**：`getUpNextTracksFromApp` 的 `app.value(forKey: "currentPlaylist")` 这一步在目录内容场景下拿到的不是 nil、也不抛 Objective-C 异常，而是一个可以成功 `as?` 转型的空代理对象；guard 因此会通过。真正的失败点在guard之后：读该代理对象的 `name`/其它属性时，ScriptingBridge 把 AppleEvent 的 `-1728` 静默吞成 `nil`（无异常、`lastError` 也不填）。也就是说本轮实测排除了"OBJCCatch 吞异常"这个假设——代码里如果只在 `value(forKey:)` 那一层做 guard，永远走不到 `.noCurrentPlaylist` 分支；必须在读取代理对象的具体属性（如 name 或 tracks）时再判一次 nil，才能把这类目录单曲/专辑/电台命中到 `.noCurrentPlaylistForTrackClass`，否则 `outcome` 会一路停留在初始值 `.noCurrentTrack`（对应 UI 上笼统的 "Queue is empty"，而非 D3 专属文案）。
