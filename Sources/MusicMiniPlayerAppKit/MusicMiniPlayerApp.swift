@@ -14,8 +14,7 @@ import MusicMiniPlayerCore
 // ──────────────────────────────────────────────
 
 /// macOS menu bar mini player with floating-window support.
-@main
-class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
+public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
     static var shared: AppMain!
 
     var statusItem: NSStatusItem!
@@ -46,7 +45,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
         }
     }
 
-    static func main() {
+    public static func main() {
         let app = NSApplication.shared
         let delegate = AppMain()
         AppMain.shared = delegate
@@ -61,7 +60,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
         app.run()
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         debugPrint("[AppMain] Application launched\n")
 
         // ──────────────────────────────────────────────
@@ -106,11 +105,11 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
         E2EStatusDump.writeCurrent()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    public func applicationWillTerminate(_ notification: Notification) {
         E2EEventLog.emit("app_terminating", [
             "pid": String(ProcessInfo.processInfo.processIdentifier)
         ])
@@ -432,7 +431,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
         button.performClick(nil)
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
+    public func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === menuBarMenu else { return }
         populateMenuBarMenu(menu)
     }

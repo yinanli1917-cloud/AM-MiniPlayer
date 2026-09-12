@@ -1,6 +1,6 @@
 # 2026-07-11 Defect 3 recording — handoff multi-flash + translation mask full reveal
 
-Source: `/Users/liyinan/Movies/Omi Screen Recorder/Screen-2026-07-11-231327(1).mp4`
+Source: `/Users/yinanli/Movies/Omi Screen Recorder/Screen-2026-07-11-231327(1).mp4`
 (copied here as `recording.mp4`). 500x632, 46.571 fps, 592 decoded frames, 14.0 s.
 Song: Japanese word-level lyrics with Chinese translation (そうよ小雨の降る街角でも /
 抱きしめていいわ / You're my Sexy dandy). Analysis session: 2026-07-11, frame-level
