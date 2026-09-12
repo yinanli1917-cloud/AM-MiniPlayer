@@ -26,6 +26,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var diagnosticsWindow: NSWindow?
     #endif
     let musicController = MusicController.shared
+    /// C1 贴边形变（research/c1-edge-morph-design-2026-09-12.md §1/§9 commit 1）：
+    /// 计划者偏离设计文档——不把呈现态挂到 `MusicController`，用独立模型，随
+    /// `musicController` 一起注入给 SwiftUI 内容层。
+    let edgePresentationModel = EdgePresentationModel()
     let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
     private var settingsWindowDelegate: SettingsWindowDelegate?
@@ -359,6 +363,34 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             LyricsService.shared.isManualScrolling = true
         }
 
+        // C1 贴边形变 hook 接线（research/c1-edge-morph-design-2026-09-12.md §9
+        // commit 1）：几何弹簧的起播/落定信号译成 `SnapEvent`，喂给独立的
+        // `edgePresentationModel`（偏离设计文档 §1 的 MusicController 挂载方案）。
+        snappableWindow.onGeometryMorphWillStart = { [weak self] event, time in
+            guard let self else { return }
+            let before = self.edgePresentationModel.presentation
+            self.edgePresentationModel.apply(event)
+            #if DEBUG
+            let after = self.edgePresentationModel.presentation
+            DebugLogger.log(
+                "EdgeMorph",
+                "t=\(time) clock=geometry event=\(event) state=\(before)→\(after)"
+            )
+            #endif
+        }
+        snappableWindow.onGeometryMorphDidSettle = { [weak self] time in
+            guard let self else { return }
+            let before = self.edgePresentationModel.presentation
+            self.edgePresentationModel.apply(.settled)
+            #if DEBUG
+            let after = self.edgePresentationModel.presentation
+            DebugLogger.log(
+                "EdgeMorph",
+                "t=\(time) clock=geometry event=settled state=\(before)→\(after)"
+            )
+            #endif
+        }
+
         windowDelegate = FloatingWindowDelegate()
         snappableWindow.delegate = windowDelegate
 
@@ -370,6 +402,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.collapseToMenuBar()
         })
         .environmentObject(musicController)
+        .environmentObject(edgePresentationModel)
 
         let hostingView = NSHostingView(rootView: contentView)
         hostingView.autoresizingMask = [.width, .height]

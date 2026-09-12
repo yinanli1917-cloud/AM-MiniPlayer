@@ -20,6 +20,8 @@ public enum EdgePresentation: Equatable {
 
 发布位置：**不新增 ObservableObject**，理由是 `SnappablePanel` 是 `NSPanel` 子类而非 SwiftUI 视图模型，现有跨层桥接方式已经是闭包回调（`onEdgeHiddenChanged`，`SnappablePanel.swift:18`），不是 Combine/Observation。沿用同一模式：`MusicController`（已是 `@EnvironmentObject`，见 `MiniPlayerView.swift:7`）新增一个 `@Published var edgePresentation: EdgePresentation`，由 AppKit 侧的窗口 delegate/管理代码（`MusicMiniPlayerApp.swift`，创建 `SnappablePanel` 处）把新增回调接到这个 `@Published` 字段上。SwiftUI 通过已经在用的 `@EnvironmentObject var musicController` 观察它，零轮询——这与 `currentPage`（同文件同一个 `MusicController` 上的 `@Published`，`MiniPlayerView.swift:75,82` 已经在读）是完全同构的机制，不引入新的观察路径。
 
+**实现偏离（计划者 2026-09-12 裁定，commit 1 落地）**：没有把 `edgePresentation` 挂到 `MusicController` 上，而是新增独立的 `@MainActor final class EdgePresentationModel: ObservableObject`（`Sources/MusicMiniPlayerCore/UI/EdgePresentation.swift`），随 `musicController` 一起在 `MusicMiniPlayerApp.swift` 用 `.environmentObject` 注入给 mini player 内容视图——理由是窗口呈现态与播放态门面职责不同，不该共享同一个 `ObservableObject`。
+
 ## 2. Pill 内容与分层（避免 glass-on-glass）
 
 6pt 常驻露边（`edgeHiddenVisibleWidth = 6`，`SnappablePanel.swift:13`）、30pt hover 探出（`peekAmount = 30`，`SnappablePanel.swift:401`）。Pill 内容：一个贴合露边宽度的竖直胶囊，内容为**封面缩略图 + 一条细的播放进度竖线**；`peeking` 态胶囊变宽，露出 play/pause 按钮。内容必须够「轻」才配得上玻璃——缩略图+进度线+一个按钮，不塞文字。
@@ -80,7 +82,7 @@ AppKit 侧现状**零读取**（`research/liquid-glass-animation-map-2026-09.md:
 
 ## 9. 文件改动与三次提交拆分
 
-1. **hook + state**（可独立编译验证）：`SnappablePanel.swift`（新增 `onGeometryMorphWillStart` 闭包 + 四处 reduce-motion 判断 + `checkAndHideToEdgeWithVelocity`/`peekFromEdge` 等处提前触发点）、`MusicController`（新增 `@Published var edgePresentation`）、`MusicMiniPlayerApp.swift`（接线回调到 `edgePresentation`）、新文件 `EdgePresentationReducer.swift`（纯函数 + `EdgePresentation` 定义）。
+1. **hook + state**（可独立编译验证，已落地）：`SnappablePanel.swift`（新增 `onGeometryMorphWillStart`/`onGeometryMorphDidSettle` 闭包 + `reduceMotionProvider` + 四处 reduce-motion 判断 + `hideToEdge`/`restoreFromEdge`/`peekFromEdge`/`hideBackToEdge` 提前触发点）、`MusicMiniPlayerApp.swift`（接线回调到下面的模型 + DEBUG 日志）、新文件 `EdgePresentation.swift`（`EdgePresentation` + `SnapEvent` + 纯函数 `EdgePresentationReducer` + `EdgePresentationModel`）。**偏离 §1**：状态没有挂在 `MusicController` 上，而是独立的 `EdgePresentationModel`，见 §1 末尾的偏离记录。
 2. **pill + container + 对照臂**（依赖 1）：新文件 `EdgeMorphHost.swift`（pill 内容视图、`GlassEffectContainer`/`glassEffectID`）、`PanelBackdrop.swift`（pill 态下 `.base` 让位 `Color.clear` 的分支）、`MiniPlayerView.swift`（挂载 `EdgeMorphHost`）、新文件 `EdgeMorphFeel.swift`（`EdgeMorphMode` 注册表，模式仿 `NativeLyricsFeelParity.swift`）。
 3. **时钟 + 测试**（依赖 1、2）：`MicroInteractionFeel.swift`（新增 4 个 token）、新文件 `EdgeMorphClockScheduler.swift`（纯调度函数）、DEBUG 日志埋点、新测试文件 `EdgeMorphClockSchedulerTests.swift`/`EdgePresentationReducerTests.swift`/`EdgeMorphFeelTests.swift`。
 
