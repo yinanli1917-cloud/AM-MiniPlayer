@@ -351,6 +351,16 @@ public class SnappablePanel: NSPanel {
         return false
     }
 
+    /// 全局快捷键入口：贴边隐藏到离窗口当前位置最近的一侧（无需先手动拖拽触发）。
+    /// 已经贴边隐藏时不重复触发。
+    public func hideToNearestEdge() {
+        guard !isEdgeHidden, let screen = screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        let windowCenterX = frame.origin.x + frame.width / 2
+        let edge: Edge = windowCenterX < visible.midX ? .left : .right
+        hideToEdge(edge)
+    }
+
     private func hideToEdge(_ edge: Edge) {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame

@@ -15,7 +15,7 @@ import MusicMiniPlayerCore
 
 /// macOS menu bar mini player with floating-window support.
 @main
-class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
+class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelCommands {
     static var shared: AppMain!
 
     var statusItem: NSStatusItem!
@@ -28,6 +28,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let musicController = MusicController.shared
     let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
+    private var globalShortcutRegistrar: GlobalShortcutRegistrar?
     private var settingsWindowDelegate: SettingsWindowDelegate?
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     private var diagnosticsWindowDelegate: SettingsWindowDelegate?
@@ -93,6 +94,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // sweep itself polls until the queue snapshot populates.
         // ──────────────────────────────────────────────
         MetadataWarmupSweep.shared.startIfNeeded()
+
+        let registrar = GlobalShortcutRegistrar(controller: musicController, panel: self)
+        registrar.activate()
+        globalShortcutRegistrar = registrar
 
         debugPrint("[AppMain] Setup complete\n")
         E2EEventLog.emit("app_ready", [
@@ -394,6 +399,16 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.orderFront(nil)
             musicController.setPanelOccluded(false)
         }
+    }
+
+    /// PanelCommands conformance for GlobalShortcutRegistrar (nanoPod.togglePanel).
+    func togglePanel() {
+        toggleFloatingWindow()
+    }
+
+    /// PanelCommands conformance for GlobalShortcutRegistrar (nanoPod.hideToEdge).
+    func hideToEdge() {
+        (floatingWindow as? SnappablePanel)?.hideToNearestEdge()
     }
 
     /// Collapses the floating window back to the menu bar.
