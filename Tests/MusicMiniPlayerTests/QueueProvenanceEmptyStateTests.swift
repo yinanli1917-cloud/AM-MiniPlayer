@@ -38,6 +38,52 @@ final class QueueProvenanceEmptyStateTests: XCTestCase {
         XCTAssertEqual(provenance, .unavailable(reason: .musicAppUnavailable))
     }
 
+    func test_provenance_noCurrentPlaylistForTrackClass_mapsToUnavailableWithTrackClass() {
+        // AM catalog content (URL track): currentPlaylist resolves to an unresolved
+        // SBObject proxy whose .name silently reads nil, but the track's own `kind`
+        // string was readable — carry it through for the source-specific message.
+        let provenance = MusicController.provenance(for: .noCurrentPlaylistForTrackClass("URL track"))
+        XCTAssertEqual(provenance, .unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")))
+        XCTAssertTrue(provenance.isUnavailable)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARK: - MusicController.classifyPlaylistProxy(playlistName:trackCount:currentTrackKind:)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func test_classifyPlaylistProxy_nilName_withTrackClass_isNoCurrentPlaylistForTrackClass() {
+        // Real-machine finding (docs/wt-d-queue-source-matrix-2026-09-12.md): Apple
+        // Music catalog content (URL track) resolves `currentPlaylist` to a live but
+        // unresolved SBObject proxy — `.name` reads back nil, `.tracks.count` is 0,
+        // no exception, `lastError` stays nil. Must not be read as a real, empty playlist.
+        let outcome = MusicController.classifyPlaylistProxy(playlistName: nil, trackCount: 0, currentTrackKind: "URL track")
+        XCTAssertEqual(outcome, .noCurrentPlaylistForTrackClass("URL track"))
+    }
+
+    func test_classifyPlaylistProxy_nilName_withoutTrackClass_fallsBackToNoCurrentPlaylist() {
+        // Track `kind` itself wasn't readable either — fall back to the generic
+        // source-limitation reason rather than inventing a track class.
+        let outcome = MusicController.classifyPlaylistProxy(playlistName: nil, trackCount: 0, currentTrackKind: nil)
+        XCTAssertEqual(outcome, .noCurrentPlaylist)
+    }
+
+    func test_classifyPlaylistProxy_blankTrackClass_fallsBackToNoCurrentPlaylist() {
+        let outcome = MusicController.classifyPlaylistProxy(playlistName: nil, trackCount: 0, currentTrackKind: "   ")
+        XCTAssertEqual(outcome, .noCurrentPlaylist)
+    }
+
+    func test_classifyPlaylistProxy_nonNilName_zeroTracks_isSuccessNotUnavailable() {
+        // A genuinely empty library playlist is a real empty queue, not "unavailable" —
+        // trackCount == 0 alone must never trigger the unresolved-proxy path.
+        let outcome = MusicController.classifyPlaylistProxy(playlistName: "Empty Playlist", trackCount: 0, currentTrackKind: "file track")
+        XCTAssertEqual(outcome, .success(playlistName: "Empty Playlist"))
+    }
+
+    func test_classifyPlaylistProxy_nonNilName_withTracks_isSuccess() {
+        let outcome = MusicController.classifyPlaylistProxy(playlistName: "Piano Chronicle", trackCount: 217, currentTrackKind: "shared track")
+        XCTAssertEqual(outcome, .success(playlistName: "Piano Chronicle"))
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MARK: - UpNextEmptyState.messageKey(provenance:isEmpty:)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -54,6 +100,13 @@ final class QueueProvenanceEmptyStateTests: XCTestCase {
     func test_messageKey_emptyAndUnavailable_explainsNoQueueForSource() {
         XCTAssertEqual(
             UpNextEmptyState.messageKey(provenance: .unavailable(reason: .noPublicQueueObject), isEmpty: true),
+            "queueUnavailableForSource"
+        )
+    }
+
+    func test_messageKey_emptyAndNoCurrentPlaylistForTrackClass_explainsNoQueueForSource() {
+        XCTAssertEqual(
+            UpNextEmptyState.messageKey(provenance: .unavailable(reason: .noCurrentPlaylistForTrackClass("URL track")), isEmpty: true),
             "queueUnavailableForSource"
         )
     }
