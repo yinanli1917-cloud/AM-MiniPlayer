@@ -17,6 +17,11 @@ import MusicMiniPlayerCore
 public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static var shared: AppMain!
 
+    /// Extra playback sources passed in by the caller of `main(extraPlaybackSources:)`
+    /// (e.g. the full-edition executable). Stored only — not yet wired into any
+    /// registry or launch logic; this is skeleton plumbing for a later pass.
+    public static private(set) var extraPlaybackSources: [PlaybackSource] = []
+
     var statusItem: NSStatusItem!
     var menuBarMenu: NSMenu?
     var floatingWindow: NSPanel?
@@ -44,7 +49,8 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    public static func main() {
+    public static func main(extraPlaybackSources: [PlaybackSource] = []) {
+        Self.extraPlaybackSources = extraPlaybackSources
         let app = NSApplication.shared
         let delegate = AppMain()
         AppMain.shared = delegate

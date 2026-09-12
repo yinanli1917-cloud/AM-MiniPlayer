@@ -27,6 +27,22 @@ resolve_marketing_version() {
 VERSION="$(resolve_marketing_version)"
 UPDATE_DIR="$HOME/Library/Application Support/nanoPod/updates"
 
+# Edition split (WT-E E3 skeleton, docs/wt-e-full-edition-plan-2026-09-12.md):
+# "pure" (default) builds the App Store-bound product with zero private-API
+# code in its dependency graph; "full" builds the GitHub-only product that
+# will later carry NanoPodFullEdition. Defaulting to pure keeps the daily
+# delivered build the sandboxed one unless a caller explicitly opts into full.
+NANOPOD_EDITION="${NANOPOD_EDITION:-pure}"
+case "$NANOPOD_EDITION" in
+    pure) PRODUCT_NAME="MusicMiniPlayer" ;;
+    full) PRODUCT_NAME="MusicMiniPlayerFull" ;;
+    *)
+        echo "❌ Unknown NANOPOD_EDITION='$NANOPOD_EDITION' (expected pure|full)"
+        exit 1
+        ;;
+esac
+RELEASE_BINARY=".build/release/$PRODUCT_NAME"
+
 cleanup_bundle_metadata() {
     find nanoPod.app -name '._*' -delete 2>/dev/null || true
     xattr -cr nanoPod.app 2>/dev/null || true
@@ -75,7 +91,7 @@ assert_build_marker_hash_matches_release_binary() {
     local marker_hash
     local release_hash
     marker_hash="$(tr ' ' '\n' < nanoPod.app/Contents/Resources/BuildInfo.txt | awk -F= '$1 == "release_sha256" { print $2 }')"
-    release_hash="$(shasum -a 256 .build/release/MusicMiniPlayer | awk '{print $1}')"
+    release_hash="$(shasum -a 256 "$RELEASE_BINARY" | awk '{print $1}')"
 
     if [ -z "$marker_hash" ]; then
         echo "❌ BuildInfo.txt does not include release_sha256"
@@ -145,8 +161,8 @@ echo "🔨 Building nanoPod..."
 # To debug with probes again, re-add the flag TEMPORARILY and rate-limit the probes first:
 #   NANOPOD_EXTRA_SWIFT_FLAGS="-Xswiftc -DLOCAL_DEVELOPER_BUILD" ./build_app.sh
 # shellcheck disable=SC2086
-swift build -c release --product MusicMiniPlayer ${NANOPOD_EXTRA_SWIFT_FLAGS:-}
-assert_binary_excludes_diagnostic_cache_mode .build/release/MusicMiniPlayer
+swift build -c release --product "$PRODUCT_NAME" ${NANOPOD_EXTRA_SWIFT_FLAGS:-}
+assert_binary_excludes_diagnostic_cache_mode "$RELEASE_BINARY"
 
 echo "📦 Creating app bundle..."
 if pgrep -x nanoPod >/dev/null 2>&1; then
@@ -162,11 +178,11 @@ rm -rf nanoPod.app
 mkdir -p nanoPod.app/Contents/MacOS
 mkdir -p nanoPod.app/Contents/Resources
 
-# Copy binary (still named MusicMiniPlayer from Swift package)
-COPYFILE_DISABLE=1 cp .build/release/MusicMiniPlayer nanoPod.app/Contents/MacOS/nanoPod
+# Copy binary (still named after the SwiftPM product, e.g. MusicMiniPlayer/MusicMiniPlayerFull)
+COPYFILE_DISABLE=1 cp "$RELEASE_BINARY" nanoPod.app/Contents/MacOS/nanoPod
 chmod +x nanoPod.app/Contents/MacOS/nanoPod
 
-SOURCE_HASH="$(shasum -a 256 .build/release/MusicMiniPlayer | awk '{print $1}')"
+SOURCE_HASH="$(shasum -a 256 "$RELEASE_BINARY" | awk '{print $1}')"
 BUNDLE_HASH="$(shasum -a 256 nanoPod.app/Contents/MacOS/nanoPod | awk '{print $1}')"
 if [ "$SOURCE_HASH" != "$BUNDLE_HASH" ]; then
     echo "❌ Bundle executable hash mismatch"
@@ -180,7 +196,7 @@ BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 GIT_REV="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 write_build_marker() {
-    local build_marker="version=$VERSION build_time=$BUILD_TIME git=$GIT_REV release_sha256=$SOURCE_HASH auto_update=disabled"
+    local build_marker="version=$VERSION build_time=$BUILD_TIME git=$GIT_REV release_sha256=$SOURCE_HASH auto_update=disabled edition=$NANOPOD_EDITION"
     cat > nanoPod.app/Contents/Resources/BuildInfo.txt << BUILDINFO
 $build_marker
 BUILDINFO
@@ -314,6 +330,9 @@ sign_bundle
 assert_codesign_valid
 assert_local_build_identity
 assert_build_marker_hash_matches_release_binary
+if [ "$NANOPOD_EDITION" = "pure" ]; then
+    scripts/assert_pure_edition.sh "$RELEASE_BINARY" nanoPod.app
+fi
 write_signed_hash_manifest
 echo "✅ Code signature verified"
 

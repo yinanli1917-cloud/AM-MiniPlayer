@@ -10,11 +10,19 @@ import Foundation
 //        "appleMusic:" 前缀只活在协议层，不得下渗到 LyricsService。
 // =============================================================================
 
-/// 播放源标识。第一步只加 `.appleMusic`；其余候选（spotify /
-/// neteaseThirdParty / youtubeMusicDesktop / browserYouTube）见调研第 2 节
-/// 能力矩阵，等创始人裁决范围再加 case。
-public enum PlaybackSourceID: String, Codable, CaseIterable {
-    case appleMusic
+/// 播放源标识。struct 而非 enum：Core 只定义 `.appleMusic`，其余候选
+/// （systemNowPlaying 等，见调研第 2 节能力矩阵）由各自 target 用
+/// `extension PlaybackSourceID` 追加，Core 与纯净版对完整版零知识。
+public struct PlaybackSourceID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+}
+
+extension PlaybackSourceID {
+    public static let appleMusic = PlaybackSourceID(rawValue: "appleMusic")
 }
 
 /// 持久身份：跨轮询、跨重启稳定。
