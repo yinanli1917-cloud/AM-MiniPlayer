@@ -51,6 +51,22 @@ enum MetadataResolveProbe {
         lock.unlock()
         entryGate = nil
     }
+
+    /// searchITunes call counter, tagged by region — proves the A2 waste
+    /// (speculative regional probes for pure-English input) and its fix.
+    static func noteSearchITunes(region: String) {
+        note("searchITunes:\(region)")
+    }
+
+    static func searchITunesCount(region: String) -> Int {
+        count("searchITunes:\(region)")
+    }
+
+    static var totalSearchITunesCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts.filter { $0.key.hasPrefix("searchITunes:") }.values.reduce(0, +)
+    }
 }
 #endif
 
@@ -280,6 +296,14 @@ public final class MetadataResolver {
         guard !cleanAlbum.isEmpty else { return nil }
         guard LanguageUtils.isPureASCII(title) || LanguageUtils.isPureASCII(cleanAlbum) else { return nil }
 
+        // Negative-evidence replay (A2): this exact (title, artist, duration,
+        // album) query already came back empty within the TTL window — skip
+        // the regions × searchTerms fan-out entirely.
+        if diskCache.getNegativeAlbumScoped(title: title, artist: artist, duration: duration, album: cleanAlbum) {
+            DebugLogger.log("MetadataResolver", "🧊 Album-scoped negative-evidence hit; skipping fan-out for '\(title)'/'\(cleanAlbum)'")
+            return nil
+        }
+
         struct AlbumScopedCandidate {
             let title: String
             let artist: String
@@ -368,7 +392,12 @@ public final class MetadataResolver {
             return collected
         }
 
-        guard !candidates.isEmpty else { return nil }
+        guard !candidates.isEmpty else {
+            if !Task.isCancelled && Self.negativeWriteQuorumMet {
+                diskCache.setNegativeAlbumScoped(title: title, artist: artist, duration: duration, album: cleanAlbum)
+            }
+            return nil
+        }
         let best = candidates.min { lhs, rhs in
             if lhs.artistMatches != rhs.artistMatches { return lhs.artistMatches && !rhs.artistMatches }
             // 🔑 Within the album, prefer the track whose CJK title romanizes to
@@ -396,6 +425,7 @@ public final class MetadataResolver {
             // must carry the evidence that admitted them (postmortem 006).
             durationDiff: best.durationDiff
         )
+        diskCache.clearNegativeAlbumScoped(title: title, artist: artist, duration: duration, album: cleanAlbum)
         DebugLogger.log("MetadataResolver", "💿 album scoped resolve: '\(title)'/'\(cleanAlbum)' → '\(best.title)'/'\(best.album)' by '\(best.artist)' (\(best.region), Δ\(String(format: "%.2f", best.durationDiff))s)")
         return (best.title, best.artist, best.album, best.region, best.durationDiff)
     }
@@ -469,6 +499,14 @@ public final class MetadataResolver {
         artist: String,
         duration: TimeInterval
     ) async -> (title: String, artist: String) {
+        // 🔑 A2 English-title gate: a pure-English title with an ASCII
+        // artist has no CJK romanization to discover — the CN + localized
+        // waves below are guaranteed empty for it. Skip them outright
+        // instead of firing ~10-20 discarded iTunes/MusicKit round trips.
+        if Self.speculativeCJKDiscoveryIsPointless(title: title, artist: artist) {
+            DebugLogger.log("MetadataResolver", "⏭️ English-title gate: skipping CN/localized speculative waves for '\(title)' by '\(artist)'")
+            return (title, artist)
+        }
         async let cnTask = fetchChineseMetadata(title: title, artist: artist, duration: duration)
         async let localizedTask = fetchLocalizedMetadata(title: title, artist: artist, duration: duration)
 
@@ -633,6 +671,13 @@ public final class MetadataResolver {
             }
         }
 
+        // Negative-evidence replay (A2): this exact query already came back
+        // empty within the TTL window — skip the CN search wave entirely.
+        if diskCache.getNegativeChinese(title: title, artist: artist, duration: duration) {
+            DebugLogger.log("MetadataResolver", "🧊 CN negative-evidence hit; skipping search wave for '\(title)' by '\(artist)'")
+            return nil
+        }
+
         let searchWaves = Self.songScopedSearchWaves(title: title, artist: artist)
         DebugLogger.log("MetadataResolver", "🇨🇳 CN 搜索开始: '\(title)' by '\(artist)' (\(Int(duration))s)")
 
@@ -768,10 +813,18 @@ public final class MetadataResolver {
             )
         }
 
-        guard let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) else { return nil }
-        // Persist successful CN resolutions only — no negative caching. The
-        // row carries the REAL measured durationDiff that admitted it, the
-        // same evidence discipline as the localized tier (postmortem 006).
+        guard let best = candidates.min(by: { $0.durationDiff < $1.durationDiff }) else {
+            // Negative-evidence write (A2): only when the query actually
+            // completed (not cancelled) with quorum-trustworthy network
+            // evidence — a transport-dead run says nothing about the song.
+            if !Task.isCancelled && Self.negativeWriteQuorumMet {
+                diskCache.setNegativeChinese(title: title, artist: artist, duration: duration)
+            }
+            return nil
+        }
+        // Persist successful CN resolutions only. The row carries the REAL
+        // measured durationDiff that admitted it, the same evidence
+        // discipline as the localized tier (postmortem 006).
         diskCache.setChinese(
             title: title, artist: artist, duration: duration,
             resolvedTitle: best.title, resolvedArtist: best.artist,
@@ -948,6 +1001,13 @@ public final class MetadataResolver {
             DebugLogger.log("MetadataResolver", "🧹 Ignoring stale localized cache: '\(cached.resolvedTitle)' for input '\(title)'")
         }
 
+        // Negative-evidence replay (A2): this exact query already came back
+        // empty within the TTL window — skip the region fan-out entirely.
+        if diskCache.getNegative(title: title, artist: artist, duration: duration) {
+            DebugLogger.log("MetadataResolver", "🧊 Localized negative-evidence hit; skipping region fan-out for '\(title)' by '\(artist)'")
+            return nil
+        }
+
         let regions = inferRegions(title: title, artist: artist)
         DebugLogger.log("MetadataResolver", "🌏 inferRegions: '\(title)' by '\(artist)' → \(regions)")
         guard !regions.isEmpty else {
@@ -1063,6 +1123,9 @@ public final class MetadataResolver {
 
         if bestMatch == nil {
             DebugLogger.log("MetadataResolver", "⚠️ 所有区域均无匹配结果")
+            if !Task.isCancelled && Self.negativeWriteQuorumMet {
+                diskCache.setNegative(title: title, artist: artist, duration: duration)
+            }
         } else if let m = bestMatch {
             // Persist successful resolutions only — no negative caching.
             // m.3 is the measured durationDiff that admitted this row; the
@@ -1081,6 +1144,52 @@ public final class MetadataResolver {
     /// 推断可能的区域（委托给 LanguageUtils 统一实现）
     public func inferRegions(title: String, artist: String) -> [String] {
         LanguageUtils.inferRegions(title: title, artist: artist)
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // MARK: - English-Title Speculative-Discovery Gate
+    // ────────────────────────────────────────────────────────────────
+
+    /// A pure-English title (with an ASCII artist and a non-CJK album, when
+    /// an album is given) has no CJK romanization to discover — every
+    /// speculative CN/JP/KR/HK/TW region probe fired for it is guaranteed
+    /// to come back empty. Firing them anyway is the A2 waste: for
+    /// "Billie Jean" / "Michael Jackson" it costs 10-20+ discarded
+    /// iTunes/MusicKit round trips per cold fetch.
+    ///
+    /// This gate does NOT change `inferRegions` semantics for non-English
+    /// input (romanized JP/KR titles still need the catch-all region list),
+    /// and it must never gate the library-native-title probe — that probe
+    /// is the DESIGNED path for English-titled CJK songs (e.g. a Japanese
+    /// song officially titled "First Love") and already carries its own
+    /// `isLikelyEnglishTitle` check for the opposite purpose.
+    /// Negative-write quorum: a "this query is empty" row is only
+    /// trustworthy when the search actually got at least one real HTTP
+    /// answer AND nothing died in transport — a network outage returning
+    /// zero results is a verdict about the network, not the song.
+    ///
+    /// FAIL-CLOSED when no ledger is bound (unlike LyricsFetcher's
+    /// `negativeVerdictQuorumMet`, which default-allows): MetadataWarmupSweep
+    /// and the lyrics preload path run with NO ledger bound (see
+    /// LyricsService.fetchLyrics — "preload stays unbound, the backfill
+    /// binds its own"). Default-allowing there would let an OFFLINE warm-up
+    /// persist a 24h negative row from pure silence — no evidence either
+    /// way — which is exactly the "离线不落负" (never write a negative verdict
+    /// while offline) violation this cache must not repeat. A negative
+    /// metadata claim needs POSITIVE proof the query actually ran; only a
+    /// bound ledger with ≥1 protocol response and no transport failure can
+    /// supply that.
+    static var negativeWriteQuorumMet: Bool {
+        guard let ledger = NetworkOutcomeLedger.current else { return false }
+        return ledger.protocolResponses >= 1 && !ledger.hadTransportFailures
+    }
+
+    public static func speculativeCJKDiscoveryIsPointless(
+        title: String, artist: String, album: String = ""
+    ) -> Bool {
+        LanguageUtils.isLikelyEnglishTitle(title)
+            && LanguageUtils.isPureASCII(artist)
+            && !LanguageUtils.containsCJK(album)
     }
 
     static func songScopedSearchWaves(title: String, artist: String) -> [[String]] {
@@ -1519,7 +1628,21 @@ public final class MetadataResolver {
 
     // MARK: - Catalog Search (MusicKit primary → iTunes HTTP fallback)
 
+    #if DEBUG
+    /// Test-only injection seam: when set, `searchITunes` calls this instead
+    /// of hitting MusicKit/iTunes HTTP. Lets tests assert "0 speculative
+    /// searchITunes calls for English input" without a network dependency.
+    /// Compiled out of release builds.
+    static var searchITunesOverrideForTesting: (@Sendable (String, String, Int) async -> [[String: Any]]?)?
+    #endif
+
     private func searchITunes(term: String, region: String, limit: Int = 30) async -> [[String: Any]]? {
+        #if DEBUG
+        MetadataResolveProbe.noteSearchITunes(region: region)
+        if let override = Self.searchITunesOverrideForTesting {
+            return await override(term, region, limit)
+        }
+        #endif
         // 🔑 MusicKit (user's storefront) + iTunes HTTP (specific region) in parallel.
         // MusicKit is fast/on-device but region-agnostic — it can't search TW/HK/JP storefronts.
         // iTunes HTTP is region-specific — essential for cross-region resolution.
