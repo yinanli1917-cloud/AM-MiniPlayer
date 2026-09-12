@@ -69,6 +69,7 @@ public final class GlobalShortcutRegistrar {
     private weak var controller: MusicController?
     private weak var panel: PanelCommands?
     private var isActive = false
+    private var hasRegisteredHandlers = false
 
     public init(controller: MusicController, panel: PanelCommands) {
         self.controller = controller
@@ -95,22 +96,27 @@ public final class GlobalShortcutRegistrar {
         }
     }
 
-    /// 注册全部五个动作的按键回调。幂等——重复调用不会叠加多份处理器。
+    /// 注册全部五个动作的按键回调（仅首次调用生效，幂等）；随后总是启用快捷键。
+    /// 处理器注册与启用分离——`deactivate()` 只需 `disable(_:)`，无需担心重复注册处理器。
+    @MainActor
     public func activate() {
         assert(Thread.isMainThread, "GlobalShortcutRegistrar must activate on the main thread")
-        guard !isActive else { return }
-        isActive = true
-
-        for action in GlobalShortcutAction.allCases {
-            KeyboardShortcuts.onKeyDown(
-                for: action.name,
-                action: Self.handler(for: action, controller: controller, panel: panel)
-            )
+        if !hasRegisteredHandlers {
+            hasRegisteredHandlers = true
+            for action in GlobalShortcutAction.allCases {
+                KeyboardShortcuts.onKeyDown(
+                    for: action.name,
+                    action: Self.handler(for: action, controller: controller, panel: panel)
+                )
+            }
         }
+        KeyboardShortcuts.enable(GlobalShortcutAction.allCases.map(\.name))
+        isActive = true
     }
 
     /// 停用全部五个快捷键。KeyboardShortcuts 3.0.1 没有移除单个 onKeyDown 处理器的 API，
     /// 因此用 `disable(_:)` 让快捷键停止触发——处理器闭包仍留在库内部表中，但不会再被调用。
+    @MainActor
     public func deactivate() {
         assert(Thread.isMainThread, "GlobalShortcutRegistrar must deactivate on the main thread")
         guard isActive else { return }

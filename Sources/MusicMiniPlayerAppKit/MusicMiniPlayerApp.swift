@@ -401,12 +401,12 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate, PanelComm
     }
 
     /// PanelCommands conformance for GlobalShortcutRegistrar (nanoPod.togglePanel).
-    func togglePanel() {
+    public func togglePanel() {
         toggleFloatingWindow()
     }
 
     /// PanelCommands conformance for GlobalShortcutRegistrar (nanoPod.hideToEdge).
-    func hideToEdge() {
+    public func hideToEdge() {
         (floatingWindow as? SnappablePanel)?.hideToNearestEdge()
     }
 

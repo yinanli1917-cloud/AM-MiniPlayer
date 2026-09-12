@@ -18,6 +18,7 @@ private final class FakePanelCommands: PanelCommands {
     func hideToEdge() { hideToEdgeCallCount += 1 }
 }
 
+@MainActor
 final class GlobalShortcutsTests: XCTestCase {
 
     func test_allActionsHaveNoDefaultShortcut() {
