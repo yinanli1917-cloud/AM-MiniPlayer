@@ -793,6 +793,12 @@ public class LyricsService: ObservableObject {
         // search — drop the session verdict before anything can answer from it.
         if forceRefresh {
             missMemo.clear(forKey: Self.missMemoKey(forSongID: songID))
+            // A metadata miss recorded within the last 24h (commit 6cef712's
+            // negative-evidence rows) must not short-circuit a user-initiated
+            // retry the way it legitimately short-circuits a cold-start replay.
+            MetadataResolver.shared.diskCache.clearNegatives(
+                title: title, artist: artist, duration: duration, album: album
+            )
         }
 
         // Memo HIT point: a song whose confirmed no-lyrics terminal this
