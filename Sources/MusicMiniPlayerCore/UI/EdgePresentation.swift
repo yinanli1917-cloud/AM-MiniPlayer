@@ -90,14 +90,33 @@ public enum EdgePresentationReducer {
 /// 设计文档 §1：不把 `edgePresentation` 挂到 `MusicController` 上，改用这个
 /// 专属 ObservableObject，由 App 侧和 `MusicController` 一起通过
 /// `.environmentObject` 注入给 SwiftUI 内容层。
+/// 面板当前贴靠的屏幕边缘。与 `SnappablePanel.Edge` 同构（`.none/.left/.right`），
+/// 独立声明是因为 `SnappablePanel` 不是 SwiftUI 可见类型——`EdgeMorphHost` 需要
+/// 一个纯 Swift 值来决定 pill 从哪条边露出。
+public enum SnappedEdge: Equatable {
+    case none, left, right
+}
+
 @MainActor
 public final class EdgePresentationModel: ObservableObject {
     @Published public private(set) var presentation: EdgePresentation = .card
+
+    /// commit 2 新增（design §9 commit 2 的 TODO）：`SnappablePanel.hiddenEdge` 是
+    /// 已经公开的只读属性，但 SwiftUI 内容层没有到 `SnappablePanel` 的引用。
+    /// `MusicMiniPlayerApp.swift` 在既有的 `onGeometryMorphWillStart`/
+    /// `onGeometryMorphDidSettle` 回调里多读一次 `snappableWindow.hiddenEdge`
+    /// 并写进这里——不新增 hook、不改 `SnappablePanel.swift`。
+    @Published public private(set) var snappedEdge: SnappedEdge = .none
 
     public init() {}
 
     /// 应用一个 `SnapEvent`，纯函数 `EdgePresentationReducer.reduce` 落地为发布状态。
     public func apply(_ event: SnapEvent) {
         presentation = EdgePresentationReducer.reduce(current: presentation, event: event)
+    }
+
+    /// 由 App 层在几何回调里同步写入 `SnappablePanel.hiddenEdge` 的镜像值。
+    public func updateSnappedEdge(_ edge: SnappedEdge) {
+        snappedEdge = edge
     }
 }

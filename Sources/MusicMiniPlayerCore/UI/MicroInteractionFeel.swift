@@ -18,6 +18,7 @@ public enum MicroInteractionFeel {
     public static let progressHoverDefaultsKey = "nanoPodFeelProgressHover"
     public static let shuffleRepeatDefaultsKey = "nanoPodFeelShuffleRepeat"
     public static let windowPresentDefaultsKey = "nanoPodFeelWindowPresent"
+    public static let edgeMorphDefaultsKey = "nanoPodFeelEdgeMorph"
 
     public enum HoverCapsuleMode: String, CaseIterable {
         case capsule = "capsule"
@@ -69,12 +70,27 @@ public enum MicroInteractionFeel {
         }
     }
 
+    /// C1 贴边形变对照臂：`.morph`（默认，card↔pill Liquid Glass morph）vs `.v0`
+    /// （今天的行为，字节级不变——`EdgeMorphHost` 整体不渲染）。默认是 `.morph`
+    /// 而非其余 channel 惯用的 legacy 默认，因为这是「默认新行为」型 channel，
+    /// 与 `NativeLyricsFeelParity` 的默认惯例一致（design doc §7）。
+    public enum EdgeMorphMode: String, CaseIterable {
+        case morph = "morph"
+        case v0 = "v0"
+
+        public static func resolve(from raw: String?) -> EdgeMorphMode {
+            guard let raw else { return .morph }
+            return EdgeMorphMode(rawValue: raw.lowercased()) ?? .morph
+        }
+    }
+
     #if DEBUG
     nonisolated(unsafe) public static var testingHoverCapsule: HoverCapsuleMode?
     nonisolated(unsafe) public static var testingPressScale: PressScaleMode?
     nonisolated(unsafe) public static var testingProgressHover: ProgressHoverMode?
     nonisolated(unsafe) public static var testingShuffleRepeat: ShuffleRepeatMode?
     nonisolated(unsafe) public static var testingWindowPresent: WindowPresentMode?
+    nonisolated(unsafe) public static var testingEdgeMorph: EdgeMorphMode?
 
     public static func resetTestingOverrides() {
         testingHoverCapsule = nil
@@ -82,6 +98,7 @@ public enum MicroInteractionFeel {
         testingProgressHover = nil
         testingShuffleRepeat = nil
         testingWindowPresent = nil
+        testingEdgeMorph = nil
     }
     #endif
 
@@ -135,6 +152,16 @@ public enum MicroInteractionFeel {
         )
     }
 
+    public static var edgeMorph: EdgeMorphMode {
+        #if DEBUG
+        if let testingEdgeMorph { return testingEdgeMorph }
+        if isRunningTests { return .morph }
+        #endif
+        return EdgeMorphMode.resolve(
+            from: UserDefaults.standard.string(forKey: edgeMorphDefaultsKey)
+        )
+    }
+
     private static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
@@ -163,6 +190,9 @@ public enum MicroInteractionFeel {
         case "windowpresent":
             UserDefaults.standard.set(WindowPresentMode.resolve(from: value).rawValue, forKey: windowPresentDefaultsKey)
             return true
+        case "edgemorph":
+            UserDefaults.standard.set(EdgeMorphMode.resolve(from: value).rawValue, forKey: edgeMorphDefaultsKey)
+            return true
         default:
             return false
         }
@@ -174,6 +204,7 @@ public enum MicroInteractionFeel {
         UserDefaults.standard.removeObject(forKey: progressHoverDefaultsKey)
         UserDefaults.standard.removeObject(forKey: shuffleRepeatDefaultsKey)
         UserDefaults.standard.removeObject(forKey: windowPresentDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: edgeMorphDefaultsKey)
         #if DEBUG
         resetTestingOverrides()
         #endif
