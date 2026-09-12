@@ -170,6 +170,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // nanopod://debug/animsweep — one-shot whole-window animation census
             // (defect 5: names server-side animation survivors on a static panel).
             // nanopod://debug/feel/<appear|blur|sweep>/<v28|current|layer>
+            // nanopod://debug/feel/wave/<topdown|sync>
             // nanopod://debug/feel/reset
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
             if path == "animsweep" {

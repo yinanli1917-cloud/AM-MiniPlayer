@@ -10,10 +10,14 @@ import Foundation
 /// - blur: stepped depth cue (`current`, default, CPU) vs visual-spring (`v28`)
 /// - sweep: Canvas-aligned whole-line dim base (`v28`, default after the
 ///   activation-spacing fix) vs native per-glyph dim tessellation (`layer`)
+/// - wave: `LyricWaveTiming.staggerSchedule`'s top-to-bottom order (`topdown`,
+///   default) vs outgoing+incoming row starting on the same frame with the
+///   wave spreading outward from that pair (`sync`)
 public enum NativeLyricsFeelParity {
     public static let appearDefaultsKey = "nanoPodFeelAppearWindow"
     public static let blurDefaultsKey = "nanoPodFeelBlur"
     public static let sweepDefaultsKey = "nanoPodFeelSweep"
+    public static let waveDefaultsKey = "nanoPodFeelWave"
     public static let appearWindowDuration: TimeInterval = 0.8
 
     public enum AppearWindowMode: String, CaseIterable {
@@ -50,15 +54,31 @@ public enum NativeLyricsFeelParity {
         }
     }
 
+    /// `topdown`: outgoing row starts at 0.16s, incoming row i+1 at 0.24s (shipping default,
+    /// `LyricWaveTiming.staggerSchedule`'s original top-to-bottom order).
+    /// `sync`: outgoing row i and incoming row i+1 start on the SAME frame at the boundary,
+    /// with the wave spreading outward from that pair in both directions.
+    public enum WaveMode: String, CaseIterable {
+        case topdown = "topdown"
+        case sync = "sync"
+
+        public static func resolve(from raw: String?) -> WaveMode {
+            guard let raw else { return .topdown }
+            return WaveMode(rawValue: raw.lowercased()) ?? .topdown
+        }
+    }
+
     #if DEBUG
     nonisolated(unsafe) public static var testingAppear: AppearWindowMode?
     nonisolated(unsafe) public static var testingBlur: BlurMode?
     nonisolated(unsafe) public static var testingSweep: SweepPathMode?
+    nonisolated(unsafe) public static var testingWave: WaveMode?
 
     public static func resetTestingOverrides() {
         testingAppear = nil
         testingBlur = nil
         testingSweep = nil
+        testingWave = nil
     }
     #endif
 
@@ -90,6 +110,23 @@ public enum NativeLyricsFeelParity {
         return SweepPathMode.resolve(
             from: UserDefaults.standard.string(forKey: sweepDefaultsKey)
         )
+    }
+
+    public static var waveMode: WaveMode {
+        #if DEBUG
+        if let testingWave { return testingWave }
+        if isRunningTests { return .topdown }
+        #endif
+        return WaveMode.resolve(
+            from: UserDefaults.standard.string(forKey: waveDefaultsKey)
+        )
+    }
+
+    /// The `LyricWaveTiming.Shape` this arm resolves to — the single seam
+    /// `LyricsPresentationEngine.makeNaturalWavePlan` reads to pick a schedule.
+    /// (`LyricWaveTiming.Shape` is module-internal, so this stays internal too.)
+    static var waveShape: LyricWaveTiming.Shape {
+        waveMode == .sync ? .syncPair : .topDown
     }
 
     private static var isRunningTests: Bool {
@@ -126,6 +163,7 @@ public enum NativeLyricsFeelParity {
             UserDefaults.standard.removeObject(forKey: appearDefaultsKey)
             UserDefaults.standard.removeObject(forKey: blurDefaultsKey)
             UserDefaults.standard.removeObject(forKey: sweepDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: waveDefaultsKey)
             #if DEBUG
             resetTestingOverrides()
             #endif
@@ -140,6 +178,9 @@ public enum NativeLyricsFeelParity {
             return true
         case "sweep":
             UserDefaults.standard.set(SweepPathMode.resolve(from: value).rawValue, forKey: sweepDefaultsKey)
+            return true
+        case "wave":
+            UserDefaults.standard.set(WaveMode.resolve(from: value).rawValue, forKey: waveDefaultsKey)
             return true
         default:
             return false
