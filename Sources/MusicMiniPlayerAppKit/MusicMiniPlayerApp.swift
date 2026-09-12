@@ -28,7 +28,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// C1 贴边形变（research/c1-edge-morph-design-2026-09-12.md §1/§9 commit 1）：
     /// 计划者偏离设计文档——不把呈现态挂到 `MusicController`，用独立模型，随
     /// `musicController` 一起注入给 SwiftUI 内容层。
-    let edgePresentationModel = EdgePresentationModel()
+    let edgePresentationModel = MainActor.assumeIsolated { EdgePresentationModel() }
     let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
     private var settingsWindowDelegate: SettingsWindowDelegate?
@@ -367,6 +367,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // `edgePresentationModel`（偏离设计文档 §1 的 MusicController 挂载方案）。
         snappableWindow.onGeometryMorphWillStart = { [weak self] event, time in
             guard let self else { return }
+            MainActor.assumeIsolated {
             let before = self.edgePresentationModel.presentation
             self.edgePresentationModel.apply(event)
             #if DEBUG
@@ -376,9 +377,11 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 "t=\(time) clock=geometry event=\(event) state=\(before)→\(after)"
             )
             #endif
+            }
         }
         snappableWindow.onGeometryMorphDidSettle = { [weak self] time in
             guard let self else { return }
+            MainActor.assumeIsolated {
             let before = self.edgePresentationModel.presentation
             self.edgePresentationModel.apply(.settled)
             #if DEBUG
@@ -388,6 +391,7 @@ public class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 "t=\(time) clock=geometry event=settled state=\(before)→\(after)"
             )
             #endif
+            }
         }
 
         windowDelegate = FloatingWindowDelegate()
