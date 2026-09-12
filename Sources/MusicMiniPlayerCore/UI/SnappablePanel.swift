@@ -16,6 +16,19 @@ public class SnappablePanel: NSPanel {
 
     public var onDragStateChanged: ((Bool) -> Void)?
     public var onEdgeHiddenChanged: ((Bool) -> Void)?
+    /// C1 贴边形变（研究见 research/c1-edge-morph-design-2026-09-12.md §4）：
+    /// 几何弹簧「即将开始」的信号，在真正调用 `startSpringAnimation()`/
+    /// `startPeekAnimation()`（→ `launchAnimation()` 设置 `animStartTime`）之前
+    /// fire，携带即将发生的 `SnapEvent` 与 `CACurrentMediaTime()`，供 SwiftUI
+    /// 内容层 pre-seed 调度用。不改动弹簧数学本身。
+    public var onGeometryMorphWillStart: ((SnapEvent, CFTimeInterval) -> Void)?
+    /// 几何弹簧真正落定（`renderFrame()` 里 `t >= settlingDuration` 分支，或
+    /// Reduce Motion 直接跳到终点）时 fire 一次，携带落定时刻。
+    public var onGeometryMorphDidSettle: ((CFTimeInterval) -> Void)?
+    /// Reduce Motion 读取源，默认读 `NSWorkspace`；测试可覆盖为固定值。
+    public var reduceMotionProvider: () -> Bool = {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
     /// 获取当前页面状态（用于判断是否允许双指拖拽）
     public var currentPageProvider: (() -> PlayerPage)?
     /// 获取当前是否处于手动滚动状态（歌词页面）
@@ -355,6 +368,8 @@ public class SnappablePanel: NSPanel {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
 
+        onGeometryMorphWillStart?(.hideRequested, CACurrentMediaTime())
+
         hiddenEdge = edge
 
         let targetX: CGFloat = edge == .left
@@ -368,7 +383,12 @@ public class SnappablePanel: NSPanel {
         // 清零速度：贴边距离近，高速度只会制造过冲 + 更多重窗口帧
         springVelocityX = 0
         springVelocityY = 0
-        startSpringAnimation()
+
+        if reduceMotionProvider() {
+            snapImmediatelyToAnimationTarget()
+        } else {
+            startSpringAnimation()
+        }
 
         isEdgeHidden = true
         onEdgeHiddenChanged?(true)
@@ -377,6 +397,8 @@ public class SnappablePanel: NSPanel {
     private func restoreFromEdge() {
         guard isEdgeHidden, let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
+
+        onGeometryMorphWillStart?(.restoreRequested, CACurrentMediaTime())
 
         let isTop = frame.origin.y + frame.height / 2 > visible.midY
         let wasLeft = hiddenEdge == .left
@@ -387,7 +409,12 @@ public class SnappablePanel: NSPanel {
         animationTarget = NSPoint(x: targetX, y: targetY)
         springVelocityX = 0
         springVelocityY = 0
-        startSpringAnimation()
+
+        if reduceMotionProvider() {
+            snapImmediatelyToAnimationTarget()
+        } else {
+            startSpringAnimation()
+        }
 
         isEdgeHidden = false
         hiddenEdge = .none
@@ -423,6 +450,8 @@ public class SnappablePanel: NSPanel {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
 
+        onGeometryMorphWillStart?(.peekEntered, CACurrentMediaTime())
+
         let targetX: CGFloat = hiddenEdge == .left
             ? visible.minX - frame.width + edgeHiddenVisibleWidth + peekAmount
             : visible.maxX - edgeHiddenVisibleWidth - peekAmount
@@ -430,12 +459,19 @@ public class SnappablePanel: NSPanel {
         animationTarget = NSPoint(x: targetX, y: frame.origin.y)
         springVelocityX = 0
         springVelocityY = 0
-        startPeekAnimation()
+
+        if reduceMotionProvider() {
+            snapImmediatelyToAnimationTarget()
+        } else {
+            startPeekAnimation()
+        }
     }
 
     private func hideBackToEdge() {
         guard let screen = screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
+
+        onGeometryMorphWillStart?(.peekExited, CACurrentMediaTime())
 
         let targetX: CGFloat = hiddenEdge == .left
             ? visible.minX - frame.width + edgeHiddenVisibleWidth
@@ -444,7 +480,12 @@ public class SnappablePanel: NSPanel {
         animationTarget = NSPoint(x: targetX, y: frame.origin.y)
         springVelocityX = 0
         springVelocityY = 0
-        startPeekAnimation()
+
+        if reduceMotionProvider() {
+            snapImmediatelyToAnimationTarget()
+        } else {
+            startPeekAnimation()
+        }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -531,7 +572,18 @@ public class SnappablePanel: NSPanel {
         if t >= Double(currentSpring.settlingDuration) {
             setFrameOrigin(animationTarget)
             stopAllAnimations()
+            onGeometryMorphDidSettle?(CACurrentMediaTime())
         }
+    }
+
+    /// Reduce Motion 路径：跳过弹簧插值，直接落到 `animationTarget`，等价于
+    /// `renderFrame()` 里 `t >= settlingDuration` 分支的终态，但不经过任何一帧
+    /// 插值。打断任何正在跑的动画（`stopAllAnimations()`，与 `launchAnimation()`
+    /// 起手时的打断语义一致），随后同步 fire 一次 settle 回调。
+    private func snapImmediatelyToAnimationTarget() {
+        stopAllAnimations()
+        setFrameOrigin(animationTarget)
+        onGeometryMorphDidSettle?(CACurrentMediaTime())
     }
 
     private func stopAllAnimations() {
