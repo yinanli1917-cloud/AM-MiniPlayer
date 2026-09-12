@@ -138,6 +138,18 @@ public class LyricsService: ObservableObject {
     }
 
     @Published public var translationRequestTrigger: Int = 0
+    /// A5 part 2: pure coalescer (fake-clock testable, see
+    /// TranslationRequestCoalescerTests) replacing LyricsView's inline
+    /// generation-counter debounce for translation *requests* specifically.
+    /// Config (language-pair) changes still debounce via
+    /// scheduleTranslationSessionConfigUpdate in LyricsView — this only
+    /// coalesces the "please translate now" signal.
+    @MainActor
+    private lazy var translationRequestCoalescer = TranslationRequestCoalescer(delay: 0.05)
+    private var translationRequestContinuation: AsyncStream<Void>.Continuation?
+    private lazy var translationRequestStream: AsyncStream<Void> = AsyncStream { [weak self] continuation in
+        self?.translationRequestContinuation = continuation
+    }
     @Published public var isTranslating: Bool = false
     @Published public var translationFailed: Bool = false
     @Published public private(set) var canTranslate: Bool = false
@@ -2268,10 +2280,59 @@ public class LyricsService: ObservableObject {
         }
     }
 
-    /// Performs system translation from SwiftUI .translationTask().
+    /// Enqueues a "please translate now" request, coalescing bursts (track
+    /// change + language change + showTranslation toggle firing close
+    /// together) into a single delayed signal — same behavior as the old
+    /// LyricsView generation-counter, now via the pure, fake-clock-testable
+    /// `TranslationRequestCoalescer`. The signal is consumed by whichever
+    /// `serveTranslationRequests` loop is currently live, so it works
+    /// whether or not a TranslationSession has been created yet.
+    @MainActor
+    public func requestTranslation() {
+        translationRequestCoalescer.trigger { [weak self] in
+            self?.translationRequestContinuation?.yield(())
+        }
+    }
+
+    /// Discards any buffered-but-unconsumed request and hands out a fresh
+    /// stream. Call this when the translation session's configuration is
+    /// about to change (e.g. target language) so a request queued for the
+    /// OLD session/language can never be replayed onto the NEW one.
+    @MainActor
+    public func resetTranslationRequestStream() {
+        translationRequestContinuation?.finish()
+        translationRequestContinuation = nil
+        translationRequestStream = AsyncStream { [weak self] continuation in
+            self?.translationRequestContinuation = continuation
+        }
+    }
+
+    /// Consumes translation requests for as long as `session` (or the
+    /// injected fake in tests) stays valid — call once from the
+    /// `.translationTask` action closure. A single long-lived session serves
+    /// every request until SwiftUI invalidates it on a real config change,
+    /// so the SECOND song's translation reuses the already-warmed session
+    /// instead of paying model warm-up again (A5 part 1's fix removed the
+    /// artificial per-request delay; this removes the per-request session
+    /// rebuild). The loop exits cleanly when `resetTranslationRequestStream()`
+    /// finishes the stream, or when the caller's task is cancelled.
     @available(macOS 15.0, *)
     @MainActor
-    public func performSystemTranslation(session: TranslationSession) async {
+    public func serveTranslationRequests<Executor: LyricsTranslationExecuting>(with session: Executor) async {
+        for await _ in translationRequestStream {
+            if Task.isCancelled { return }
+            await performSystemTranslation(session: session)
+        }
+    }
+
+    /// Performs system translation from SwiftUI .translationTask().
+    /// Generic over `LyricsTranslationExecuting` (not the concrete
+    /// `TranslationSession`) so tests can inject a fake executor and assert
+    /// session/executor reuse across songs without needing a real on-device
+    /// translation model (see LyricsServiceTranslationSessionReuseTests).
+    @available(macOS 15.0, *)
+    @MainActor
+    public func performSystemTranslation<Executor: LyricsTranslationExecuting>(session: Executor) async {
         // Prevent duplicate translation work while a translation is already running.
         guard !isTranslating else { return }
         guard !lyrics.isEmpty, showTranslation, !isLoading else { return }
