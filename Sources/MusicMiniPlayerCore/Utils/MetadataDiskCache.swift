@@ -123,17 +123,37 @@ extension MetadataDiskCache {
 // MARK: - Cache File Envelope
 // ============================================================================
 
+/// Negative-evidence row: "this exact (title, artist, duration[, album]) query
+/// came back empty" — no resolved title/artist to carry, just a timestamp for
+/// TTL expiry. Shields repeat cold starts from re-running a search that is
+/// already known to be fruitless (A2: negative-evidence cache).
+public struct MetadataNegativeEntry: Codable, Equatable {
+    public let ts: TimeInterval
+
+    enum CodingKeys: String, CodingKey {
+        case ts
+    }
+}
+
 private struct MetadataCacheFile: Codable {
     let version: Int
     var entries: [String: MetadataCacheEntry]
     /// CN-tier rows. Optional for decode tolerance only — see the tier
     /// separation note in the file header.
     var cnEntries: [String: MetadataCacheEntry]?
+    /// Negative-evidence rows, one dictionary per tier. Optional for decode
+    /// tolerance — files written before v9 simply have none.
+    var negativeEntries: [String: MetadataNegativeEntry]?
+    var negativeCnEntries: [String: MetadataNegativeEntry]?
+    var negativeAlbumEntries: [String: MetadataNegativeEntry]?
 
     enum CodingKeys: String, CodingKey {
         case version
         case entries
         case cnEntries = "cn_entries"
+        case negativeEntries = "negative_entries"
+        case negativeCnEntries = "negative_cn_entries"
+        case negativeAlbumEntries = "negative_album_entries"
     }
 }
 
@@ -143,20 +163,34 @@ private struct MetadataCacheFile: Codable {
 
 public final class MetadataDiskCache {
 
+    /// v9: adds negative-evidence rows (one dictionary per tier — localized,
+    /// CN, album-scoped) so a confirmed-empty query is not re-run on every
+    /// cold start (A2). Positive resolutions always overwrite a negative row
+    /// for the same key.
     /// v8: localized rows carry the admission-evidence kind (`evidence`),
     /// and the romanized→CJK tier accepts Apple-index catalog aliases
     /// (title-query consensus). Rows written under uniqueness-fallback or
     /// heuristic-only admission must flush once; the cache self-heals.
     /// (v7: Japanese-reading corroboration replaced the romaji whitelist.
     ///  v6: CN-tier rows split into `cn_entries`, preflightExact removed.)
-    public static let schemaVersion = 8
+    public static let schemaVersion = 9
     public static let ttlSeconds: TimeInterval = 30 * 86400  // 30 days
+    /// TTL for negative-evidence rows — matches the lyrics availability
+    /// "verdict" TTL (24h) used elsewhere in the lyrics pipeline
+    /// (CachedLyricsItem's non-"no lyrics" expiry, LyricsFetcher's 24h
+    /// availability-verdict cache). Shorter than the 30-day positive TTL:
+    /// an empty metadata search is much cheaper to re-check than a full
+    /// lyrics fetch, and catalogs change more often than song identity.
+    public static let negativeTTLSeconds: TimeInterval = 86400  // 24h
 
     private let fileURL: URL
     private let persistDebounce: TimeInterval
     private let queue = DispatchQueue(label: "com.yinanli.MusicMiniPlayer.metadata-disk-cache")
     private var memory: [String: MetadataCacheEntry] = [:]     // localized tier
     private var cnMemory: [String: MetadataCacheEntry] = [:]   // CN tier
+    private var negativeMemory: [String: MetadataNegativeEntry] = [:]        // localized tier negatives
+    private var negativeCnMemory: [String: MetadataNegativeEntry] = [:]      // CN tier negatives
+    private var negativeAlbumMemory: [String: MetadataNegativeEntry] = [:]   // album-scoped tier negatives
     private var loaded = false
     private var dirty = false
     private var persistScheduled = false
@@ -232,8 +266,125 @@ public final class MetadataDiskCache {
         queue.sync {
             ensureLoaded()
             memory[key] = entry
+            // Positive resolutions always overwrite a stale negative row.
+            negativeMemory.removeValue(forKey: key)
             scheduleDebouncedPersist()
         }
+    }
+
+    // ------------------------------------------------------------------------
+    // MARK: - Negative-Evidence API (A2)
+    // ------------------------------------------------------------------------
+    //
+    // One dictionary per tier, mirroring the positive tiers' key derivation
+    // exactly so a negative row shields precisely the query it was learned
+    // from. A hit within `negativeTTLSeconds` means "skip the network,
+    // this exact query is already known to be fruitless." Cancellation must
+    // never write a negative row — only a completed, quorum-trustworthy
+    // empty result does (call sites decide that; this cache only stores).
+
+    /// Localized-tier negative check.
+    public func getNegative(title: String, artist: String, duration: TimeInterval) -> Bool {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsReads else { return false }
+        #endif
+        let key = Self.cacheKey(title: title, artist: artist, duration: duration)
+        return queue.sync {
+            ensureLoaded()
+            return liveNegative(key, in: &negativeMemory)
+        }
+    }
+
+    public func setNegative(title: String, artist: String, duration: TimeInterval) {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else { return }
+        #endif
+        let key = Self.cacheKey(title: title, artist: artist, duration: duration)
+        queue.sync {
+            ensureLoaded()
+            // Never shadow a positive row that already answers this query.
+            guard memory[key] == nil else { return }
+            negativeMemory[key] = MetadataNegativeEntry(ts: Date().timeIntervalSince1970)
+            scheduleDebouncedPersist()
+        }
+    }
+
+    /// CN-tier negative check.
+    public func getNegativeChinese(title: String, artist: String, duration: TimeInterval) -> Bool {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsReads else { return false }
+        #endif
+        let key = Self.cacheKey(title: title, artist: artist, duration: duration)
+        return queue.sync {
+            ensureLoaded()
+            return liveNegative(key, in: &negativeCnMemory)
+        }
+    }
+
+    public func setNegativeChinese(title: String, artist: String, duration: TimeInterval) {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else { return }
+        #endif
+        let key = Self.cacheKey(title: title, artist: artist, duration: duration)
+        queue.sync {
+            ensureLoaded()
+            guard cnMemory[key] == nil else { return }
+            negativeCnMemory[key] = MetadataNegativeEntry(ts: Date().timeIntervalSince1970)
+            scheduleDebouncedPersist()
+        }
+    }
+
+    /// Album-scoped-tier negative check. Keyed like the album-scoped
+    /// single-flight key (title|artist|duration|album) — distinct from the
+    /// localized tier's key, since an album-scoped miss says nothing about
+    /// a plain title/artist/duration lookup and vice versa.
+    public func getNegativeAlbumScoped(title: String, artist: String, duration: TimeInterval, album: String) -> Bool {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsReads else { return false }
+        #endif
+        let key = Self.albumScopedCacheKey(title: title, artist: artist, duration: duration, album: album)
+        return queue.sync {
+            ensureLoaded()
+            return liveNegative(key, in: &negativeAlbumMemory)
+        }
+    }
+
+    /// Positive album-scoped resolutions overwrite a stale negative row.
+    public func clearNegativeAlbumScoped(title: String, artist: String, duration: TimeInterval, album: String) {
+        let key = Self.albumScopedCacheKey(title: title, artist: artist, duration: duration, album: album)
+        queue.sync {
+            ensureLoaded()
+            negativeAlbumMemory.removeValue(forKey: key)
+        }
+    }
+
+    public func setNegativeAlbumScoped(title: String, artist: String, duration: TimeInterval, album: String) {
+        #if DEBUG
+        let effectivePolicy = LyricsCachePolicyContext.current
+        guard effectivePolicy.allowsWrites else { return }
+        #endif
+        let key = Self.albumScopedCacheKey(title: title, artist: artist, duration: duration, album: album)
+        queue.sync {
+            ensureLoaded()
+            negativeAlbumMemory[key] = MetadataNegativeEntry(ts: Date().timeIntervalSince1970)
+            scheduleDebouncedPersist()
+        }
+    }
+
+    /// TTL-checked negative read; expired rows are dropped in place.
+    /// Must be called inside `queue`.
+    private func liveNegative(_ key: String, in store: inout [String: MetadataNegativeEntry]) -> Bool {
+        guard let entry = store[key] else { return false }
+        if Date().timeIntervalSince1970 - entry.ts > Self.negativeTTLSeconds {
+            store.removeValue(forKey: key)
+            return false
+        }
+        return true
     }
 
     // ------------------------------------------------------------------------
@@ -275,6 +426,7 @@ public final class MetadataDiskCache {
         queue.sync {
             ensureLoaded()
             cnMemory[key] = entry
+            negativeCnMemory.removeValue(forKey: key)
             scheduleDebouncedPersist()
         }
     }
@@ -354,6 +506,9 @@ public final class MetadataDiskCache {
         }
         memory = envelope.entries
         cnMemory = envelope.cnEntries ?? [:]
+        negativeMemory = envelope.negativeEntries ?? [:]
+        negativeCnMemory = envelope.negativeCnEntries ?? [:]
+        negativeAlbumMemory = envelope.negativeAlbumEntries ?? [:]
     }
 
     /// Marks the state dirty and arms ONE coalesced write `persistDebounce`
@@ -377,7 +532,14 @@ public final class MetadataDiskCache {
         #if DEBUG
         diskWriteCount += 1
         #endif
-        let envelope = MetadataCacheFile(version: Self.schemaVersion, entries: memory, cnEntries: cnMemory)
+        let envelope = MetadataCacheFile(
+            version: Self.schemaVersion,
+            entries: memory,
+            cnEntries: cnMemory,
+            negativeEntries: negativeMemory,
+            negativeCnEntries: negativeCnMemory,
+            negativeAlbumEntries: negativeAlbumMemory
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(envelope) else { return }
@@ -402,6 +564,19 @@ public final class MetadataDiskCache {
         let nt = normalize(title)
         let na = normalize(artist)
         let raw = "\(nt)|\(na)|\(Int(duration))"
+        let digest = SHA256.hash(data: Data(raw.utf8))
+        return digest.compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Album-scoped negative-tier key — same idiom as `cacheKey` plus the
+    /// normalized album, mirroring `MetadataResolver.singleFlightKey`'s
+    /// album-aware form so the negative row shields exactly the query it
+    /// was learned from.
+    public static func albumScopedCacheKey(title: String, artist: String, duration: TimeInterval, album: String) -> String {
+        let nt = normalize(title)
+        let na = normalize(artist)
+        let nAlbum = normalize(album)
+        let raw = "\(nt)|\(na)|\(Int(duration))|\(nAlbum)"
         let digest = SHA256.hash(data: Data(raw.utf8))
         return digest.compactMap { String(format: "%02x", $0) }.joined()
     }

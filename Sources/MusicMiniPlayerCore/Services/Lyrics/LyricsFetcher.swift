@@ -1020,7 +1020,7 @@ public final class LyricsFetcher {
                     }
                 }
 
-                if !alb.isEmpty {
+                if !alb.isEmpty && !MetadataResolver.speculativeCJKDiscoveryIsPointless(title: ot, artist: oa, album: alb) {
                     branch2Fired.value = true
                     albumScopedBranchFired.value = true
                     group.addTask {
@@ -1164,7 +1164,12 @@ public final class LyricsFetcher {
                     }
                 }
 
-                let regions = self.metadataResolver.inferRegions(title: ot, artist: oa)
+                // 🔑 A2 English-title gate: pure-English title + ASCII artist
+                // has no CJK romanization to discover — every region here is
+                // guaranteed empty (task A2, waste verified on "Billie Jean").
+                let regions = MetadataResolver.speculativeCJKDiscoveryIsPointless(title: ot, artist: oa, album: alb)
+                    ? []
+                    : self.metadataResolver.inferRegions(title: ot, artist: oa)
                 for region in regions {
                     group.addTask {
                         guard let localized = await self.withHardMetadataTimeout(seconds: 1.0, operation: {
@@ -1223,6 +1228,13 @@ public final class LyricsFetcher {
             group.addTask {
                 try? await Task.sleep(nanoseconds: self.branch3SafetyNetDelay)
                 if Task.isCancelled { return nil }
+                // 🔑 A2 English-title gate: same rationale as Branch-2 —
+                // resolveSearchMetadata forwards ASCII input to the CN/
+                // localized waves, which are gated internally, but skip the
+                // safety-net call outright for a clean audit trail.
+                if MetadataResolver.speculativeCJKDiscoveryIsPointless(title: ot, artist: oa, album: alb) {
+                    return nil
+                }
                 guard let resolved = await self.withHardMetadataTimeout(seconds: 1.0, operation: {
                     await self.metadataResolver.resolveSearchMetadata(
                         title: ot, artist: oa, duration: d
