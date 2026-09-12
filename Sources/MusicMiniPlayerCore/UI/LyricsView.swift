@@ -61,7 +61,17 @@ private let lyricLineMotionCaptureMissEventInterval: TimeInterval = 3.0
 private let lyricLineLayoutSettleDuration: TimeInterval = 0.65
 private let lyricInitialRenderVisibleRange = 4
 private let lyricSteadyRenderVisibleRange = 6
-private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.55
+// A5 (2026-09): was 0.55s — an artificial floor on every translation request,
+// stacked on top of the (now memoized, see TranslationAvailabilityMemo) system
+// availability check. The generation-counter debounce in
+// scheduleTranslationSessionConfigUpdate/scheduleTranslationRequest already
+// coalesces bursts from the several onChange sites that call it (track
+// change, translationLanguage change, showTranslation toggle, translation
+// trigger) — a burst within this window collapses to the LAST call because
+// each call bumps `translationConfigGeneration` and only the latest
+// `asyncAfter` survives the generation check. 50ms is enough to absorb that
+// burst without reading as a perceptible delay.
+private let lyricPageSwitchTranslationDeferDuration: TimeInterval = 0.05
 private let lyricMinimumGeneratedSegmentDuration: TimeInterval = 1.65
 private let lyricContentLeadingInset: CGFloat = 32
 private let lyricContentTrailingInset: CGFloat = 32

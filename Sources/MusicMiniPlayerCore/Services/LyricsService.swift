@@ -317,6 +317,11 @@ public class LyricsService: ObservableObject {
     private let parser = LyricsParser.shared
     private let scorer = LyricsScorer.shared
     private let metadataResolver = MetadataResolver.shared
+    /// Persists ML-translated lines across sessions/process restarts, keyed
+    /// by (song identity, target language, content fingerprint). See
+    /// Services/TranslationDiskCache.swift. `internal` (not private) so
+    /// tests can inject a temp-file instance via `debugTranslationDiskCache`.
+    var translationDiskCache = TranslationDiskCache(fileURL: TranslationDiskCache.defaultURL())
 
     // ========================================================================
     // MARK: - Cache
@@ -1904,6 +1909,18 @@ public class LyricsService: ObservableObject {
         )
     }
 
+    /// Content fingerprint for TranslationDiskCache: reuses the same
+    /// first-real-line SHA256 identity as `lyricsWorkloadIdentity` so a
+    /// persisted translation is only replayed onto lyric content it was
+    /// actually derived from (a source swap invalidates the row).
+    static func translationFingerprint(lyrics: [LyricLine], firstRealLyricIndex: Int) -> String {
+        let identity = lyricsWorkloadIdentity(lyrics: lyrics, firstRealLyricIndex: firstRealLyricIndex)
+        return TranslationDiskCache.fingerprint(
+            firstRealLineSHA256: identity.firstRealLineSHA256,
+            lineCount: lyrics.count
+        )
+    }
+
     private static func normalizedFirstRealLineSHA256(_ line: String) -> String {
         let normalized = LanguageUtils.toSimplifiedChinese(line)
             .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
@@ -2206,7 +2223,11 @@ public class LyricsService: ObservableObject {
         let lyricsCountBeforeAwait = lyrics.count
         let targetLanguage = Locale.Language(identifier: targetLanguageID)
 
-        let status = await LanguageAvailability().status(from: sourceLanguage, to: targetLanguage)
+        // Memoized per (source, target) pair for the process lifetime — a
+        // per-song system availability check was audit fact (a)'s second
+        // artificial-delay source (~1 real system call per song even when
+        // the language pair never changes).
+        let status = await TranslationAvailabilityMemo.shared.status(from: sourceLanguage, to: targetLanguage)
         guard currentSongID == songIDBeforeAwait,
               translationLanguage == languageBeforeAwait,
               lyrics.count == lyricsCountBeforeAwait else {
@@ -2308,26 +2329,79 @@ public class LyricsService: ObservableObject {
             "lyricsCount": String(lyricsCountBeforeAwait)
         ])
 
-        let textsToTranslate = eligibleIndices.map { lyrics[$0].text }
-        guard let translatedTexts = await TranslationService.translationTask(session, lyrics: textsToTranslate) else {
-            debugLogPublic("❌ Translation failed; preserving user preference for the next retry")
-            currentSongTranslationID = translationID
-            translationFailed = true
-            recordDiagnosticsSystemTranslationGap(
-                reason: "translation task failed",
-                translationLanguage: targetLanguageID
-            )
-            return
+        // ------------------------------------------------------------------
+        // Disk persistence: a persisted translation for this exact content
+        // (song identity + target language + content fingerprint) skips the
+        // ML translator entirely — same-session revisit AND a fresh process
+        // restart both reuse it. Lines the disk cache doesn't have still
+        // fall through to chunked ML translation below.
+        // ------------------------------------------------------------------
+        let songKey = songIDBeforeAwait ?? ""
+        let contentFingerprint = Self.translationFingerprint(lyrics: lyrics, firstRealLyricIndex: firstRealLyricIndex)
+        let diskHit = translationDiskCache.get(songKey: songKey, targetLanguage: targetLanguageID, fingerprint: contentFingerprint) ?? [:]
+
+        let cachedIndices = eligibleIndices.filter { diskHit[$0] != nil }
+        var filledLineCount = 0
+        if !cachedIndices.isEmpty {
+            let cachedTexts = cachedIndices.compactMap { diskHit[$0] }
+            if applyLateTranslationWriteback(
+                eligibleIndices: cachedIndices,
+                translatedTexts: cachedTexts,
+                expectedSongID: songIDBeforeAwait,
+                expectedLineCount: lyricsCountBeforeAwait
+            ) {
+                filledLineCount += cachedTexts.count
+                debugLogPublic("💾 [Translation] Reused \(cachedTexts.count) persisted lines, skipped ML translator")
+            }
         }
 
-        // 🔑 After await: song may have changed — verify before writing back
-        let filledLineCount = min(eligibleIndices.count, translatedTexts.count)
-        guard applyLateTranslationWriteback(
-            eligibleIndices: eligibleIndices,
-            translatedTexts: translatedTexts,
-            expectedSongID: songIDBeforeAwait,
-            expectedLineCount: lyricsCountBeforeAwait
-        ) else {
+        let remainingIndices = eligibleIndices.filter { diskHit[$0] == nil }
+
+        if remainingIndices.isEmpty {
+            // Everything came from disk — no ML call, no chunking needed.
+        } else {
+            let textsToTranslate = remainingIndices.map { lyrics[$0].text }
+            var anyChunkLanded = false
+            await ChunkedTranslationRunner.run(
+                lines: textsToTranslate,
+                executor: session
+            ) { [weak self] chunkResult in
+                guard let self else { return }
+                // chunkResult keys are indices into `textsToTranslate`; map back
+                // to original lyrics-array indices via `remainingIndices`.
+                let orderedLocalIndices = chunkResult.keys.sorted()
+                let chunkLyricsIndices = orderedLocalIndices.map { remainingIndices[$0] }
+                let chunkTexts = orderedLocalIndices.map { chunkResult[$0]! }
+                guard self.applyLateTranslationWriteback(
+                    eligibleIndices: chunkLyricsIndices,
+                    translatedTexts: chunkTexts,
+                    expectedSongID: songIDBeforeAwait,
+                    expectedLineCount: lyricsCountBeforeAwait
+                ) else { return }
+                anyChunkLanded = true
+                filledLineCount += chunkTexts.count
+                var toPersist: [Int: String] = [:]
+                for (idx, text) in zip(chunkLyricsIndices, chunkTexts) { toPersist[idx] = text }
+                self.translationDiskCache.set(
+                    songKey: songKey,
+                    targetLanguage: targetLanguageID,
+                    fingerprint: contentFingerprint,
+                    lines: toPersist
+                )
+            }
+            if !anyChunkLanded && cachedIndices.isEmpty {
+                debugLogPublic("❌ Translation failed; preserving user preference for the next retry")
+                currentSongTranslationID = translationID
+                translationFailed = true
+                recordDiagnosticsSystemTranslationGap(
+                    reason: "translation task failed",
+                    translationLanguage: targetLanguageID
+                )
+                return
+            }
+        }
+
+        guard currentSongID == songIDBeforeAwait, lyrics.count == lyricsCountBeforeAwait else {
             debugLogPublic("⚠️ Song changed during translation, discarding results")
             return
         }
@@ -2367,7 +2441,7 @@ public class LyricsService: ObservableObject {
                 )
             }
         }
-        debugLogPublic("✅ Translation completed: \(translatedTexts.count) lines")
+        debugLogPublic("✅ Translation completed: \(filledLineCount) lines")
     }
 
     // ========================================================================
