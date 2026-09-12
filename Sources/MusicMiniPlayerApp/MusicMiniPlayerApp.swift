@@ -29,6 +29,10 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let settingsWindowState = SettingsWindowState()
     private var windowDelegate: FloatingWindowDelegate?
     private var settingsWindowDelegate: SettingsWindowDelegate?
+    /// Bumped on every present/dismiss transition of `floatingWindow` so a
+    /// pending fade-out's `orderOut` completion can detect it was superseded
+    /// by a later show and skip itself (WindowPresentGeneration.shouldApply).
+    private var windowPresentGeneration = 0
     #if DEBUG || LOCAL_DEVELOPER_BUILD
     private var diagnosticsWindowDelegate: SettingsWindowDelegate?
     #endif
@@ -171,17 +175,23 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // (defect 5: names server-side animation survivors on a static panel).
             // nanopod://debug/feel/<appear|blur|sweep>/<v28|current|layer>
             // nanopod://debug/feel/wave/<topdown|sync>
-            // nanopod://debug/feel/reset
+            // nanopod://debug/feel/<hoverCapsule|pressScale|progressHover|shuffleRepeat|windowPresent>/<arm>
+            // nanopod://debug/feel/reset — resets both NativeLyricsFeelParity and MicroInteractionFeel
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
             if path == "animsweep" {
                 Task { @MainActor in WindowAnimationCensus.dump() }
-            } else if path == "feel/reset" || path.hasPrefix("feel/") {
+            } else if path == "feel/reset" {
+                _ = NativeLyricsFeelParity.apply(channel: "reset", value: "reset")
+                MicroInteractionFeel.reset()
+            } else if path.hasPrefix("feel/") {
                 let parts = path.split(separator: "/").map(String.init)
                 if parts.count >= 2 {
-                    _ = NativeLyricsFeelParity.apply(
-                        channel: parts[1],
-                        value: parts.count >= 3 ? parts[2] : "reset"
-                    )
+                    let channel = parts[1]
+                    let value = parts.count >= 3 ? parts[2] : "reset"
+                    let handled = NativeLyricsFeelParity.apply(channel: channel, value: value)
+                    if !handled {
+                        _ = MicroInteractionFeel.apply(channel: channel, value: value)
+                    }
                 }
             }
         #endif
@@ -375,7 +385,7 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let window = floatingWindow else { return }
         isFloatingMode = true
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        presentFloatingWindow(window, makeKey: true)
 
         if revealNearbySnapPosition, let snappableWindow = window as? SnappablePanel {
             snappableWindow.revealAtNearbySnapPosition()
@@ -387,11 +397,11 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let window = floatingWindow else { return }
 
         if window.isVisible {
-            window.orderOut(nil)
+            dismissFloatingWindow(window)
             musicController.setPanelOccluded(true)
         } else {
             NSApp.activate(ignoringOtherApps: true)
-            window.orderFront(nil)
+            presentFloatingWindow(window, makeKey: false)
             musicController.setPanelOccluded(false)
         }
     }
@@ -399,9 +409,75 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Collapses the floating window back to the menu bar.
     func collapseToMenuBar() {
         isFloatingMode = false
-        floatingWindow?.orderOut(nil)
+        if let window = floatingWindow {
+            dismissFloatingWindow(window)
+        }
         musicController.setPanelOccluded(true)
         showMenuBarMenu()
+    }
+
+    /// Entry point for `FloatingWindowDelegate.windowShouldClose` (a different
+    /// class), which needs the same fade-out treatment as the other hide paths.
+    func dismissFloatingWindowFromDelegate(_ window: NSPanel) {
+        dismissFloatingWindow(window)
+    }
+
+    // MARK: - Window Present/Dismiss Animation (windowPresent feel channel)
+
+    /// `.fade` arm fades the window in from alpha 0 (unless Reduce Motion is
+    /// on, which always hard-cuts). `.hardcut` arm is the original
+    /// `makeKeyAndOrderFront`/`orderFront` behaviour, untouched.
+    private func presentFloatingWindow(_ window: NSPanel, makeKey: Bool) {
+        let generation = WindowPresentGeneration.advance(&windowPresentGeneration)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard WindowPresentPolicy.resolve(arm: MicroInteractionFeel.windowPresent, reduceMotion: reduceMotion) else {
+            window.alphaValue = 1
+            if makeKey {
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                window.orderFront(nil)
+            }
+            return
+        }
+
+        window.alphaValue = 0
+        if makeKey {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            window.orderFront(nil)
+        }
+        NSAnimationContext.runAnimationGroup { [weak self] context in
+            guard let self, WindowPresentGeneration.shouldApply(token: generation, currentGeneration: self.windowPresentGeneration) else { return }
+            context.duration = MicroInteractionFeel.Tokens.windowFadeInDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 1
+        }
+    }
+
+    /// `.fade` arm fades alpha to 0 then `orderOut`s in the completion,
+    /// restoring alpha to 1 afterward so no other code path ever observes a
+    /// visible-but-transparent window. A show requested while the fade is
+    /// still pending bumps `windowPresentGeneration`, so this completion
+    /// no-ops instead of hiding the window the newer show just presented.
+    private func dismissFloatingWindow(_ window: NSPanel) {
+        let generation = WindowPresentGeneration.advance(&windowPresentGeneration)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard WindowPresentPolicy.resolve(arm: MicroInteractionFeel.windowPresent, reduceMotion: reduceMotion) else {
+            window.orderOut(nil)
+            window.alphaValue = 1
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = MicroInteractionFeel.Tokens.windowFadeOutDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 0
+        }, completionHandler: { [weak self, weak window] in
+            guard let self, let window else { return }
+            guard WindowPresentGeneration.shouldApply(token: generation, currentGeneration: self.windowPresentGeneration) else { return }
+            window.orderOut(nil)
+            window.alphaValue = 1
+        })
     }
 
     /// Shows the floating window from the menu bar; no longer toggles between menu-bar and floating modes.
@@ -698,7 +774,11 @@ class AppMain: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 class FloatingWindowDelegate: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
+        if let panel = sender as? NSPanel, let app = AppMain.shared, panel === app.floatingWindow {
+            app.dismissFloatingWindowFromDelegate(panel)
+        } else {
+            sender.orderOut(nil)
+        }
         AppMain.shared?.musicController.setPanelOccluded(true)
         return false
     }
