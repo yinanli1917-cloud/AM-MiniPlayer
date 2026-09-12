@@ -384,20 +384,80 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         XCTAssertTrue(drifted.isEmpty, "\(context) — non-active line gaps drifted:\n" + drifted.joined(separator: "\n"), file: file, line: line)
     }
 
-    /// Re-configures at a FROZEN playback time for `ticks` frames — lets the position/visual
-    /// springs run as long as needed to fully converge without the wall-clock line-advance timer
-    /// pushing the semantic index into the NEXT line (which a long `drive()` window would do).
+    // Lockstep-clock gap-stability check (retires the wall-clock `runHandoffGapStabilityCheck`).
+    // The original red result on this method was a harness artifact: `drive`/`settleInPlace` ran on
+    // the real wall clock, and the surface's own wall-clock line-advance Timer
+    // (LyricsLayerRendererView.swift, `scheduleNativeLineAdvanceTimerIfNeeded`) fired independently of
+    // the test's `RunLoop.main.run(until:)` budget, moving the active pair from 8->9 while the
+    // exclusion set stayed {5,6}. This class boxes the clock (rather than a local var + `inout`) so
+    // `surface.debugNowOverride`'s captured closure and the helper functions below can both touch it
+    // without tripping Swift's exclusivity checker.
+
+    private final class LockstepClock {
+        var wall: CFTimeInterval = 1_000
+        var date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    }
+
+    /// Drives the injected wall + playback clocks together by `playbackStep` per tick and runs one
+    /// presentation tick (mirrors NativeLyricsHandoffClockTests.runHandoff's `step`).
     @MainActor
-    private func settleInPlace(surface: NativeLyricsSurfaceView, musicController: MusicController, rows: [LayerBackedLyricRow], at playbackTime: TimeInterval, hasSyllableSync: Bool, ticks: Int) {
-        musicController.syncPlaybackClock(to: playbackTime, playing: true)
-        for _ in 0..<ticks {
-            surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: musicController, hasSyllableSync: hasSyllableSync))
-            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60.0))
+    private func lockstepStep(
+        surface: NativeLyricsSurfaceView, mc: MusicController, rows: [LayerBackedLyricRow],
+        hasSyllableSync: Bool, playback: TimeInterval, clock: LockstepClock, playbackStep: TimeInterval
+    ) {
+        clock.wall += playbackStep
+        clock.date = clock.date.addingTimeInterval(playbackStep)
+        mc.syncPlaybackClock(to: playback, playing: true, at: clock.date)
+        surface.configure(config(rows, current: surface.debugNativeSemanticIndex ?? 0, mc: mc, hasSyllableSync: hasSyllableSync))
+        surface.debugTick(displayInterval: playbackStep)
+        RunLoop.main.run(until: Date())
+    }
+
+    /// Ticks the lockstep clock at a FROZEN playback time until every mounted row's y/scale
+    /// changes by < 0.01 for 30 consecutive ticks (true steady state), or a fixed 3s (180 ticks @60fps)
+    /// elapses — whichever comes first.
+    @MainActor
+    private func settleLockstep(
+        surface: NativeLyricsSurfaceView, mc: MusicController, rows: [LayerBackedLyricRow],
+        hasSyllableSync: Bool, at playbackTime: TimeInterval, clock: LockstepClock, playbackStep: TimeInterval
+    ) {
+        var stableRun = 0
+        var previous = rowFrames(surface, count: rows.count)
+        var previousScales: [Int: CGFloat] = [:]
+        for i in 0..<rows.count {
+            previousScales[i] = surface.debugRowView(forIndex: i)?.positioningTransform.a
+        }
+        let maxTicks = 180
+        for _ in 0..<maxTicks {
+            lockstepStep(surface: surface, mc: mc, rows: rows, hasSyllableSync: hasSyllableSync,
+                         playback: playbackTime, clock: clock, playbackStep: playbackStep)
+            let current = rowFrames(surface, count: rows.count)
+            var currentScales: [Int: CGFloat] = [:]
+            for i in 0..<rows.count {
+                currentScales[i] = surface.debugRowView(forIndex: i)?.positioningTransform.a
+            }
+            var maxDelta: CGFloat = 0
+            for i in 0..<rows.count {
+                if let a = previous[i], let b = current[i] {
+                    maxDelta = max(maxDelta, abs(a.minY - b.minY))
+                }
+                if let a = previousScales[i], let b = currentScales[i] {
+                    maxDelta = max(maxDelta, abs(a - b))
+                }
+            }
+            previous = current
+            previousScales = currentScales
+            if maxDelta < 0.01 {
+                stableRun += 1
+                if stableRun >= 30 { break }
+            } else {
+                stableRun = 0
+            }
         }
     }
 
     @MainActor
-    private func runHandoffGapStabilityCheck(rows: [LayerBackedLyricRow], hasSyllableSync: Bool, label: String) {
+    private func runHandoffGapStabilityCheckLockstep(rows: [LayerBackedLyricRow], hasSyllableSync: Bool, label: String) {
         let surface = NativeLyricsSurfaceView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
         host(surface, NSSize(width: 360, height: 600))
         let mc = MusicController(preview: true)
@@ -410,64 +470,76 @@ final class NativeLyricsRenderChurnTests: XCTestCase {
         let previousStart = rows[previousIndex].displayLine.line.startTime
         let handoffTime = rows[nextIndex].displayLine.line.startTime
 
-        mc.syncPlaybackClock(to: previousStart + 0.35, playing: true)
+        let clock = LockstepClock()
+        surface.debugNowOverride = { [weak clock] in clock?.wall ?? 0 }
+        mc.debugPlaybackClockDateProvider = { [weak clock] in clock?.date ?? Date() }
+        defer {
+            surface.debugNowOverride = nil
+            mc.debugPlaybackClockDateProvider = nil
+        }
+        let playbackStep = 1.0 / 60.0
+
+        // Warm-up: mount at line start + 0.1 and run continuously to +1.15 (1.05 s), well past the
+        // 0.8 s appear (force-snap) window so it has expired before we start settling/measuring.
+        let warmupStart = previousStart + 0.1
+        mc.syncPlaybackClock(to: warmupStart, playing: true, at: clock.date)
         surface.configure(config(rows, current: previousIndex, mc: mc, hasSyllableSync: hasSyllableSync))
         surface.layoutSubtreeIfNeeded()
-        // Settle windows on BOTH sides (springs are critically-damped, mass 1/stiffness
-        // 100/damping 20 — converges within a few hundred ms): the gate must compare two FULLY
-        // SETTLED states, not two different amounts of spring lag, or it would flag normal
-        // transition animation as a bug. Windows are sized to stay inside the 1.2s test line so
-        // driving to "settle" doesn't itself cross into the next handoff.
-        drive(surface: surface, musicController: mc, rows: rows, from: previousStart + 0.35, duration: 0.8, noisy: false)
-        settleInPlace(surface: surface, musicController: mc, rows: rows, at: previousStart + 1.15, hasSyllableSync: hasSyllableSync, ticks: 180)
+        let warmupEnd = previousStart + 1.15
+        var t = warmupStart
+        while t < warmupEnd {
+            t += playbackStep
+            lockstepStep(surface: surface, mc: mc, rows: rows, hasSyllableSync: hasSyllableSync,
+                         playback: t, clock: clock, playbackStep: playbackStep)
+        }
+        XCTAssertEqual(surface.debugNativeSemanticIndex, previousIndex,
+                       "\(label): must still be on the previous line \(previousIndex) after warm-up (was \(String(describing: surface.debugNativeSemanticIndex)))")
 
+        // Settle to true steady state at a frozen playback time, then measure.
+        settleLockstep(surface: surface, mc: mc, rows: rows, hasSyllableSync: hasSyllableSync,
+                      at: warmupEnd, clock: clock, playbackStep: playbackStep)
+        XCTAssertEqual(surface.debugNativeSemanticIndex, previousIndex,
+                       "\(label): settling before the handoff must not itself advance the line")
         let beforeGaps = lineGaps(rowFrames(surface, count: rows.count))
 
-        drive(surface: surface, musicController: mc, rows: rows, from: handoffTime + 0.35, duration: 0.8, noisy: false)
-        settleInPlace(surface: surface, musicController: mc, rows: rows, at: handoffTime + 1.15, hasSyllableSync: hasSyllableSync, ticks: 180)
+        // Drive lockstep across the boundary into the next line, then settle again at a frozen time.
+        var p = warmupEnd
+        let afterHandoffTarget = handoffTime + 1.15
+        while p < afterHandoffTarget {
+            p += playbackStep
+            lockstepStep(surface: surface, mc: mc, rows: rows, hasSyllableSync: hasSyllableSync,
+                         playback: p, clock: clock, playbackStep: playbackStep)
+        }
+        XCTAssertEqual(surface.debugNativeSemanticIndex, nextIndex,
+                       "\(label): must have handed off to line \(nextIndex) by now (was \(String(describing: surface.debugNativeSemanticIndex)))")
 
+        settleLockstep(surface: surface, mc: mc, rows: rows, hasSyllableSync: hasSyllableSync,
+                      at: afterHandoffTarget, clock: clock, playbackStep: playbackStep)
+        XCTAssertEqual(surface.debugNativeSemanticIndex, nextIndex,
+                       "\(label): settling after the handoff must not advance past \(nextIndex)")
         let afterGaps = lineGaps(rowFrames(surface, count: rows.count))
 
         assertGapsStable(
             before: beforeGaps, after: afterGaps,
             excludingRowIndices: [previousIndex, nextIndex],
-            context: "\(label) handoff \(previousIndex)->\(nextIndex)"
+            context: "\(label) lockstep handoff \(previousIndex)->\(nextIndex)"
         )
     }
 
-    // DIAGNOSED, NOT YET FIXED (founder report: "歌词在滚动前后/active 前后，行间距会变").
-    // Root cause (see LyricsPresentationModels.swift:388-408, NativeLyricsVisualTarget.amllTarget):
-    // non-active rows' blur grows with `dist = |displayIndex - currentIndex|`
-    // (`renderedBlur`), and that blur renders OUTSIDE the row's `.frame` bounds
-    // (`layer.masksToBounds = false`, NativeLyricsRowView.swift:916 and sublayers) — a real
-    // CIGaussianBlur visually expands a layer's apparent footprint. So every non-active row's
-    // visual footprint is a function of its CURRENT distance from the active line; the instant
-    // the active line moves by one, EVERY row's distance — and so its blur, and so its visually
-    // perceived edges — shifts by one step, simultaneously, network-wide. That is very likely
-    // the felt "spacing changed" effect. Confirmed NOT explained by measured text height, font
-    // size, or scale (all verified distance/active-state-independent for non-active rows).
-    // A second, less-isolated contributor remains: the SPECIFIC set of drifted gaps was not
-    // stable across different settle-window lengths in this test's own iteration (see git history
-    // of this method), suggesting an additional position-settling interaction near the
-    // `nativeLyricAutoVisibleRowRadius` visible-window edge that was not pinned to one line
-    // within this diagnosis pass.
-    // This lands squarely inside the depth-blur / wave-motion cluster that postmortems 004 and
-    // the lyrics-ux-contract.md defect log required repeated ON-DEVICE visual confirmation to
-    // touch safely (a purely offline fix risks the same "passed tests, still looked wrong"
-    // failure mode documented there). Per plan, stopping here: XCTExpectFailure keeps this
-    // reproduction green in CI (and will itself fail — loudly — the day someone's fix makes the
-    // assertion pass, forcing a conscious removal of this wrapper) instead of leaving a
-    // permanently-red test in the suite.
+    // Non-active line gaps stay constant across a 5->6 handoff under a lockstep (injected) clock,
+    // driven to true steady state on both sides. The 80c5a7e-era red result on this method was a
+    // harness artifact: the wall-clock line-advance Timer (see comment block above) moved the ACTIVE
+    // pair from 8->9 while the exclusion set stayed {5,6}, so the assertion measured the wrong rows.
+    // Blur (`NativeLyricsVisualTarget.amllTarget`'s renderedBlur) renders outside `.frame` bounds and
+    // cannot move `view.frame` itself, so it cannot be the cause of a `.frame`-based gap drift either.
     @MainActor
     func test_lineGapsStableAcrossHandoff_wordLevel() {
-        XCTExpectFailure("Diagnosed, not fixed — see comment above. Founder/product decision needed on the blur-footprint tradeoff before an on-device-verified fix.")
-        runHandoffGapStabilityCheck(rows: makeRows(20), hasSyllableSync: true, label: "word-level")
+        runHandoffGapStabilityCheckLockstep(rows: makeRows(20), hasSyllableSync: true, label: "word-level")
     }
 
     @MainActor
     func test_lineGapsStableAcrossHandoff_lineLevel() {
-        XCTExpectFailure("Diagnosed, not fixed — see comment above test_lineGapsStableAcrossHandoff_wordLevel. Founder/product decision needed on the blur-footprint tradeoff before an on-device-verified fix.")
-        runHandoffGapStabilityCheck(rows: makeLineLevelRows(20), hasSyllableSync: false, label: "line-level")
+        runHandoffGapStabilityCheckLockstep(rows: makeLineLevelRows(20), hasSyllableSync: false, label: "line-level")
     }
 
     @MainActor

@@ -139,10 +139,53 @@ final class NativeLyricsFeelParityTests: XCTestCase {
         )
         XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "blur", value: "v28"))
         XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "sweep", value: "layer"))
+        XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "wave", value: "sync"))
         XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "reset", value: ""))
         XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.appearDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.blurDefaultsKey))
         XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.sweepDefaultsKey))
+        XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.waveDefaultsKey))
         XCTAssertFalse(NativeLyricsFeelParity.apply(channel: "nope", value: "v28"))
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // wave channel: topdown (shipping default) vs sync (outgoing+incoming start
+    // on the same frame). nanopod://debug/feel/wave/<topdown|sync>, .../reset.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    func test_waveMode_unknownOrAbsentValueFallsBackToTopDown() {
+        XCTAssertEqual(NativeLyricsFeelParity.WaveMode.resolve(from: nil), .topdown)
+        XCTAssertEqual(NativeLyricsFeelParity.WaveMode.resolve(from: "nope"), .topdown)
+        XCTAssertEqual(NativeLyricsFeelParity.WaveMode.resolve(from: "SYNC"), .sync)
+        XCTAssertEqual(NativeLyricsFeelParity.WaveMode.resolve(from: "topdown"), .topdown)
+
+        NativeLyricsFeelParity.testingWave = nil
+        XCTAssertEqual(NativeLyricsFeelParity.waveShape, .topDown, "unresolved value stays the shipping default shape")
+    }
+
+    func test_waveMode_urlSetsSyncPairAndResetRestoresTopDown() {
+        XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "wave", value: "sync"))
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: NativeLyricsFeelParity.waveDefaultsKey),
+            "sync"
+        )
+        // testingWave (DEBUG-only override) takes precedence over UserDefaults in tests,
+        // so exercise the resolved shape via the raw resolver instead of `waveShape` here.
+        XCTAssertEqual(
+            NativeLyricsFeelParity.WaveMode.resolve(
+                from: UserDefaults.standard.string(forKey: NativeLyricsFeelParity.waveDefaultsKey)
+            ),
+            .sync
+        )
+
+        XCTAssertTrue(NativeLyricsFeelParity.apply(channel: "reset", value: ""))
+        XCTAssertNil(UserDefaults.standard.string(forKey: NativeLyricsFeelParity.waveDefaultsKey))
+    }
+
+    func test_waveShape_testingOverrideSelectsSchedule() {
+        NativeLyricsFeelParity.testingWave = .topdown
+        XCTAssertEqual(NativeLyricsFeelParity.waveShape, .topDown)
+        NativeLyricsFeelParity.testingWave = .sync
+        XCTAssertEqual(NativeLyricsFeelParity.waveShape, .syncPair)
     }
 }

@@ -262,7 +262,8 @@ final class LyricsPresentationEngine {
         let schedule = LyricWaveTiming.staggerSchedule(
             for: indices,
             newIndex: newIndex,
-            lineInterval: lineInterval
+            lineInterval: lineInterval,
+            shape: NativeLyricsFeelParity.waveShape
         )
         return LyricsPresentationWavePlan(
             targetRadius: targetRadius,

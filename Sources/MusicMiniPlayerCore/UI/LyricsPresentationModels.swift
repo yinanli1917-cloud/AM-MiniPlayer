@@ -127,6 +127,10 @@ enum LyricsPresentationDirectSnapReason: Equatable {
     case trackReset
     case manualScroll
     case reducedMotion
+    // The viewer saw nothing while the host window was occluded (system overlay, another Space,
+    // minimized). Resuming must SNAP every row to its current target rather than resume mid-spring
+    // — see `handleWindowOcclusionChange` / defect B3 in CLAUDE.md.
+    case occlusionResume
 }
 
 enum LyricsPresentationPlaybackMode: Equatable {
