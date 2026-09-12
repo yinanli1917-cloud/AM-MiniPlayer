@@ -43,14 +43,19 @@ let package = Package(
             dependencies: ["MusicMiniPlayerCore"],
             path: "Sources/LyricsVerifier"
         ),
+        .target(
+            name: "MusicMiniPlayerAppKit",
+            dependencies: ["MusicMiniPlayerCore"],
+            path: "Sources/MusicMiniPlayerAppKit",
+            exclude: ["CLAUDE.md"]
+        ),
         .executableTarget(
             name: "MusicMiniPlayer",
-            dependencies: ["MusicMiniPlayerCore"],
+            dependencies: ["MusicMiniPlayerAppKit"],
             path: "Sources/MusicMiniPlayerApp",
             exclude: [
                 "Info.plist",
-                "MusicMiniPlayer.entitlements",
-                "CLAUDE.md"
+                "MusicMiniPlayer.entitlements"
             ],
             linkerSettings: [
                 .unsafeFlags([
