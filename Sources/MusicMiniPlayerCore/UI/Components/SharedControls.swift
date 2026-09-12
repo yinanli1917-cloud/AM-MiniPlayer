@@ -2,6 +2,54 @@ import SwiftUI
 import AppKit
 import Combine
 
+/// Pure decision function for button press-scale feel (Play/Pause, Skip,
+/// capsule buttons). `.unified` resolves to the shared `MicroInteractionFeel`
+/// tokens (critically damped spring, no overshoot); `.legacy` passes through
+/// whatever scale/animation the call site already used before unification —
+/// callers supply their own historical values so the legacy arm stays
+/// byte-for-byte identical to today's shipped feel.
+enum PressScaleStyle {
+    static func resolve(
+        arm: MicroInteractionFeel.PressScaleMode,
+        isPressed: Bool,
+        reduceMotion: Bool,
+        legacy: (scale: CGFloat, animation: Animation?)
+    ) -> (scale: CGFloat, animation: Animation?) {
+        guard !reduceMotion else { return (1.0, nil) }
+        guard isPressed else {
+            switch arm {
+            case .unified:
+                return (1.0, .spring(response: MicroInteractionFeel.Tokens.pressSpringResponse, dampingFraction: MicroInteractionFeel.Tokens.pressSpringDamping))
+            case .legacy:
+                return (1.0, legacy.animation)
+            }
+        }
+        switch arm {
+        case .unified:
+            return (
+                CGFloat(MicroInteractionFeel.Tokens.pressScaleFactor),
+                .spring(response: MicroInteractionFeel.Tokens.pressSpringResponse, dampingFraction: MicroInteractionFeel.Tokens.pressSpringDamping)
+            )
+        case .legacy:
+            return (legacy.scale, legacy.animation)
+        }
+    }
+}
+
+/// Pure decision function for the progress-bar hover-height transition
+/// (CABasicAnimation duration + timing). `.legacy` = the original 0.25s
+/// easeInEaseOut; `.tuned` reads the shared `MicroInteractionFeel` token.
+enum ProgressHoverStyle {
+    static func resolve(arm: MicroInteractionFeel.ProgressHoverMode) -> (duration: CFTimeInterval, timing: CAMediaTimingFunctionName) {
+        switch arm {
+        case .legacy:
+            return (0.25, .easeInEaseOut)
+        case .tuned:
+            return (MicroInteractionFeel.Tokens.progressHoverDuration, .easeOut)
+        }
+    }
+}
+
 // NSView wrapper that prevents window dragging
 struct NonDraggableView: NSViewRepresentable {
     func makeNSView(context: Context) -> NonDraggableNSView {
@@ -652,12 +700,13 @@ private final class NativePlaybackProgressView: NSView {
             width: signature.rect.width * signature.progress,
             height: signature.barHeight
         )
+        let hoverStyle = ProgressHoverStyle.resolve(arm: MicroInteractionFeel.progressHover)
         let hoverTransitionDuration: CFTimeInterval? = {
             guard let previous else { return nil }
             guard !prefersReducedMotion else { return nil }
             let hoverChanged = abs(previous.barHeight - signature.barHeight) > 0.001
                 || abs(previous.barY - signature.barY) > 0.001
-            return hoverChanged ? 0.25 : nil
+            return hoverChanged ? hoverStyle.duration : nil
         }()
         let progressTransitionDuration: CFTimeInterval? = {
             guard let previous else { return nil }
@@ -674,19 +723,19 @@ private final class NativePlaybackProgressView: NSView {
             frame: trackFrame,
             cornerRadius: signature.barHeight / 2,
             animationDuration: hoverTransitionDuration,
-            timingFunctionName: .easeInEaseOut
+            timingFunctionName: hoverStyle.timing
         )
         applyProgressFrame(
             fillLayer,
             frame: trackFrame,
             cornerRadius: signature.barHeight / 2,
             animationDuration: hoverTransitionDuration,
-            timingFunctionName: .easeInEaseOut
+            timingFunctionName: hoverStyle.timing
         )
         applyProgressMask(
             frame: fillMaskFrame,
             animationDuration: hoverTransitionDuration ?? progressTransitionDuration,
-            timingFunctionName: hoverTransitionDuration == nil ? .linear : .easeInEaseOut
+            timingFunctionName: hoverTransitionDuration == nil ? .linear : hoverStyle.timing
         )
     }
 
@@ -902,12 +951,18 @@ private struct PlayPausePressStyle: ButtonStyle {
     let reduceMotion: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.86 : 1.0)
-            .animation(
-                reduceMotion ? nil : .interpolatingSpring(mass: 0.75, stiffness: 560, damping: 22, initialVelocity: 0),
-                value: configuration.isPressed
+        let resolved = PressScaleStyle.resolve(
+            arm: MicroInteractionFeel.pressScale,
+            isPressed: configuration.isPressed,
+            reduceMotion: reduceMotion,
+            legacy: (
+                scale: 0.86,
+                animation: .interpolatingSpring(mass: 0.75, stiffness: 560, damping: 22, initialVelocity: 0)
             )
+        )
+        configuration.label
+            .scaleEffect(resolved.scale)
+            .animation(resolved.animation, value: configuration.isPressed)
     }
 }
 
@@ -1227,13 +1282,19 @@ private struct SkipPressStyle: ButtonStyle {
     let reduceMotion: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.90 : 1.0)
-            .opacity(1.0)
-            .animation(
-                reduceMotion ? nil : .interpolatingSpring(mass: 1.0, stiffness: 400, damping: 28, initialVelocity: 0),
-                value: configuration.isPressed
+        let resolved = PressScaleStyle.resolve(
+            arm: MicroInteractionFeel.pressScale,
+            isPressed: configuration.isPressed,
+            reduceMotion: reduceMotion,
+            legacy: (
+                scale: 0.90,
+                animation: .interpolatingSpring(mass: 1.0, stiffness: 400, damping: 28, initialVelocity: 0)
             )
+        )
+        configuration.label
+            .scaleEffect(resolved.scale)
+            .opacity(1.0)
+            .animation(resolved.animation, value: configuration.isPressed)
     }
 }
 
@@ -1580,13 +1641,19 @@ struct CapsulePressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.93 : 1.0)
-            .opacity(configuration.isPressed ? 0.8 : 1.0)
-            .animation(
-                reduceMotion ? nil : .spring(response: 0.1, dampingFraction: 0.7),
-                value: configuration.isPressed
+        let resolved = PressScaleStyle.resolve(
+            arm: MicroInteractionFeel.pressScale,
+            isPressed: configuration.isPressed,
+            reduceMotion: reduceMotion,
+            legacy: (
+                scale: 0.93,
+                animation: .spring(response: 0.1, dampingFraction: 0.7)
             )
+        )
+        configuration.label
+            .scaleEffect(resolved.scale)
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
+            .animation(resolved.animation, value: configuration.isPressed)
     }
 }
 
