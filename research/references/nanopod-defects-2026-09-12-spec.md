@@ -138,3 +138,43 @@ No manual scroll gesture was found in the recording (all row motion corresponds 
 
 - The task brief's phrase "presettle f1755 → plateau f1758/1761 → jump f1764" is confirmed with a small refinement: the plateau is measured at top=172 for the active row across f1757–1763 (7 frames), not starting at f1758 — f1755–1756 are still in the tail of the preceding 1px drift, and f1757 is the first fully-settled frame. The jump itself is exactly at f1764 as reported.
 - No frames were added to the evidence directory beyond the 15 the prior agent left; all new numbers here come from re-processing `bands.json` (already in the scratchpad) and one fresh sequential-decode pass restricted to f1040–1066 and f1488–1520/1638–1665 for the brightness-bucket measurements, plus the reused `contact_scroll_1050-1059.png` / `bigzoom_1052-1055.png` crops for visual cross-check. No new seeks were performed on the source video — the two fresh decode passes were done as fresh sequential reads from frame 0 up to the needed range and stopped there, consistent with the "never seek" convention.
+
+---
+
+## Symptom 1 — re-analysis (within-glyph double image)
+
+**Setup note (px/pt scale):** the recording is 500×632, and the raw decoded frames confirm the same 500×632 — no 2x/Retina downscale in the file. Glyph strokes measured below span ~11–13px top-to-bottom for a CJK character at the app's active-line font size, consistent with **1pt ≈ 1px** in this recording (a hypothesized 2pt ghost offset would read as ≈2px).
+
+**Hypothesis under test:** each sung glyph on the active line is drawn twice — dim copy (~35%) in place, bright copy (~85%) floated up ~2pt, eased in over the first ~1s after the word sounds; unsung glyphs single dim copy; inactive lines/translation single copy.
+
+**Method:** used the CJK active line's word-reveal transition at f1638→f1665 (t≈27.32–27.77s, 450ms, well inside the correct-sweep window the prior pass sampled at f1640–1664) and the Japanese post-handoff line at f1070–1100 as a second window. For each, isolated a single stroke segment with no other glyph geometry crossing it (verified visually via 6–10x nearest-neighbour zoom first), then took the mean intensity across a narrow x-band and plotted the resulting y-profile per frame, each normalized to its own peak so profile *shape* (not brightness) is comparable across frames.
+
+| glyph/stroke | frame(s) | peak raw value | peak y-position | top-edge behavior | bottom-edge behavior | 2nd peak? |
+|---|---|---|---|---|---|---|
+| CJK top stroke, x394–400 | f1638 (dim) | 188.5 | y=177–178 | steep (idx5→6: 0.23→1.0) | steep (idx8→9: 0.89→0.31→0) | no |
+| same stroke | f1642 | 211.0 | y=177–178 | softer | softer | no |
+| same stroke | f1646 | 217.5 | y=177–178 | softer | softer | no |
+| same stroke | f1650 | 223.2 | y=177–178 | softer, extends 1px earlier | softer, extends 1px later | no |
+| same stroke | f1654 | 223.3 | y=177–178 | " | " | no |
+| same stroke | f1658 | 222.8 | y=177–178 | " | " | no |
+| same stroke | f1662 (bright) | 223.2 | y=177–178 | broadest | broadest | no |
+| same stroke | f1665 (bright, holds) | 223.0 | y=177–178 | broadest, symmetric with top | broadest, symmetric with bottom | no |
+
+Measured offset: **0px / 0pt** — the peak y-position is bit-for-bit identical (y=177–178) across all 8 frames spanning the full 450ms reveal, dim through fully bright. What *does* change is the profile's width: both the top edge and the bottom edge broaden by about the same amount as brightness rises (188→223, a 1.2x gain), i.e. **symmetric** broadening consistent with anti-aliasing/contrast widening a fixed-position edge, not an asymmetric bright-above/dim-below duplicate. There is no second local maximum at any frame — the profile stays strictly unimodal throughout.
+
+A wider, un-isolated x-average (385–412px, spanning into the glyph's adjacent lower curl) does show what looks like a growing "shoulder" below the main peak as the frames progress (`symptom1_ghost_contamination_control.png`) — but cross-checking against the isolated-stroke plot shows this is the *neighboring stroke's own edge* entering the wider sample window as it independently brightens, not a second copy of the same stroke. This is exactly the kind of artifact the task brief warned the first pass's cross-row method would miss, and it is why this pass measured stroke-isolated profiles rather than whole-glyph or whole-line bands.
+
+The Japanese line at f1070–1100 (the broken instant-full-bright handoff from Symptom 2) was also checked; its one still-brightening glyph column (x≈328–336) was visually confirmed static in position between f1070 and f1100 (`zoom_j_1070.png`/`zoom_j_1100.png`, not separately archived) — same finding, no offset.
+
+**Emphasis-held word / translation-row control:** no long-held (≥1s) English emphasis word was located within the time budget for this pass — flagged as an open gap, not evidence either way. The translation row (band top≈231, e.g. under the f1638–1665 CJK line) was checked as the negative control: its stroke intensity profile is static and near-uniform across f1638/1654/1665 with no reveal, no brightening, and correspondingly no fringe of any kind (`symptom1_ghost_translation_row_control.png`) — as expected since translation is not word-synced here.
+
+**Evidence images** (`research/references/nanopod-defects-2026-09-12-frames/`):
+- `symptom1_ghost_glyph_sweep_montage.png` — 6x zoom of the test glyph across f1638→f1665, side by side (visually static position, brightening only)
+- `symptom1_ghost_profile_plot_isolated_stroke.png` — the isolated-stroke normalized-profile chart (table above)
+- `symptom1_ghost_contamination_control.png` — the wide-average profile showing the neighboring-stroke artifact that could be mistaken for a fringe
+- `symptom1_ghost_translation_row_control.png` — translation-row control, static across the same frame range
+
+**Verdict:** the recording does **not** show a 2pt (≈2px) dim-below/bright-above duplicate-copy structure on the sung glyphs tested. The measured peak position is pixel-identical (0px offset) across the full ~1s+ reveal window on an isolated stroke, with only symmetric edge-softening as brightness rises — the opposite of the hypothesis's predicted asymmetric fringe. This is a negative finding specific to the two windows tested (one CJK word-reveal, one Japanese post-handoff glyph); it does not rule out the effect on glyphs/lines not sampled here, and the emphasis-word and largest-magnitude comparison cells in the task brief were not reached within this pass's budget.
+
+**Corrections:**
+- The first pass's cross-row/vertical-overlap and content-correlation checks (Symptom 1 section above) operate at line/row granularity and are structurally unable to see a same-row, same-glyph, sub-pixel vertical duplicate — they were never testing this hypothesis, so their "0 hits" result is not evidence against it. This pass's isolated-stroke profiling is offset-sensitive down to ~1px and is the correct instrument for the within-glyph claim; it also found no ghost, but on entirely different evidence and only for the specific glyphs sampled.
