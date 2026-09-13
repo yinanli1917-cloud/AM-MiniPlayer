@@ -108,8 +108,10 @@ final class LyricsFetcherApplyOnSelectTests: XCTestCase {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     func test_outerCancellation_workerCancelledAndCallerGetsNil() async {
-        let workerObservedCancellation = ManagedBox<Bool>(false)
         let fetcherRef = fetcher
+        // Create the stream before the task so we can await it in the test.
+        let (cancellationObservedStream, cancellationObservedContinuation) = AsyncStream<Void>.makeStream()
+        let continuationBox = ManagedBox<AsyncStream<Void>.Continuation?>(cancellationObservedContinuation)
 
         let outer = Task<Int?, Never> {
             await fetcherRef.withHardTimeout(seconds: 5.0) { _ in
@@ -118,7 +120,8 @@ final class LyricsFetcherApplyOnSelectTests: XCTestCase {
                 // propagates (a false pass here would hide a real bug).
                 for _ in 0..<40 {
                     if Task.isCancelled {
-                        workerObservedCancellation.value = true
+                        // Signal that cancellation was observed
+                        continuationBox.value?.yield()
                         break
                     }
                     try? await Task.sleep(nanoseconds: 50_000_000)
@@ -133,8 +136,24 @@ final class LyricsFetcherApplyOnSelectTests: XCTestCase {
         let result = await outer.value
 
         XCTAssertNil(result)
+
+        // Wait for the worker to observe cancellation, with a 2s timeout.
+        // This ensures the worker has actually observed Task.isCancelled before
+        // we verify it did so.
+        let observedCancellation = ManagedBox<Bool>(false)
+        let waitTask = Task<Void, Never> {
+            for await _ in cancellationObservedStream {
+                observedCancellation.value = true
+                break
+            }
+        }
+
+        // Give the worker up to 2s to observe cancellation and signal via the stream.
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        waitTask.cancel()
+
         XCTAssertTrue(
-            workerObservedCancellation.value,
+            observedCancellation.value,
             "worker task must observe cooperative cancellation after outer cancellation"
         )
     }
