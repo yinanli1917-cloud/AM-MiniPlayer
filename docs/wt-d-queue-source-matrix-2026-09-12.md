@@ -73,3 +73,20 @@ currentTrack.name: lastError = (nil)
 代理对象的 `.name` 属性静默返回 `NIL`（不抛异常），`.tracks.count` 返回 `0`（不是错误），`lastError` 全程 `nil`。控制组（`play user playlist "Piano Chronicle"` 播放中）用同一二进制跑：`currentPlaylist.name` = `Piano Chronicle`，`tracks.count` = `218`，`currentTrack.name` = `Ylang Ylang`，全部正常取值。
 
 **结论（修正此前的异常假设）**：`getUpNextTracksFromApp` 的 `app.value(forKey: "currentPlaylist")` 这一步在目录内容场景下拿到的不是 nil、也不抛 Objective-C 异常，而是一个可以成功 `as?` 转型的空代理对象；guard 因此会通过。真正的失败点在guard之后：读该代理对象的 `name`/其它属性时，ScriptingBridge 把 AppleEvent 的 `-1728` 静默吞成 `nil`（无异常、`lastError` 也不填）。也就是说本轮实测排除了"OBJCCatch 吞异常"这个假设——代码里如果只在 `value(forKey:)` 那一层做 guard，永远走不到 `.noCurrentPlaylist` 分支；必须在读取代理对象的具体属性（如 name 或 tracks）时再判一次 nil，才能把这类目录单曲/专辑/电台命中到 `.noCurrentPlaylistForTrackClass`，否则 `outcome` 会一路停留在初始值 `.noCurrentTrack`（对应 UI 上笼统的 "Queue is empty"，而非 D3 专属文案）。
+
+## 补测 2026-09-12 第三轮：随机态、真实历史、实时队列其他路径
+
+### 1. 随机（shuffle）态下 AppleScript 能否拿到随机顺序或下一首
+- 字典实查（`sdef Music.app`）：与随机相关的只有 `shuffle enabled`（布尔）、`shuffle mode`（songs/albums/groupings）、`song repeat`；没有任何「下一首」「播放顺序」「队列」属性，`current playlist` 只是「包含当前曲的歌单」（access r）。
+- 真机（Piano Chronicle，shuffle 开）：`index of current track` 序列 19 → 36 → 183，连续两次 `next track` 之间没有任何可读属性能预测下一个 index。结论：随机态下 Up Next 无法从公开接口得到，`getUpNextTracksFromApp` 按存储顺序取当前曲之后的行在随机态下必然与实际不符。
+- 已确认的代码事实：History 也是按存储顺序取当前曲之前的行，不是播放记录。
+
+### 2. Music.app 自己的播放记录能不能当 History
+- 字典有 `played date` / `played count` / `skipped date`（track 属性）。
+- 真机：`next track` 跳过后 2 秒内 `played date` 与 `skipped date` 都没有更新（短播放不计入）。Music 只在曲目播满或达到阈值后更新 played date，且只对库内曲目有效（AM 目录曲不在库中无此属性）。结论：可作为「已完整播放」的持久证据，但不是实时、不覆盖非库曲，不能单独当 History。
+
+### 3. 「实时队列」其他路径
+- MusicKit：SystemMusicPlayer 平台清单无 macOS（仅 Mac Catalyst），macOS 上没有读 Music.app 播放会话队列的 API；ApplicationMusicPlayer 的队列是 nanoPod 自己的，"doesn't affect the Music app's state"（见 09-11 三批核实）。
+- Accessibility：Music.app 主窗口 AX 树里有 `AXCheckBox description="playing next"`（工具栏切换）；点开后 AX 树从 1826 个元素增至 2827 个，新增一个 AXTable（1245 行/格），Playing Next 列表确实暴露。代价：①需要辅助功能授权（沙盒 app 可被授予，但要用户去系统设置手动开）；②必须 Music 主窗口存在且面板处于打开状态（会改用户的 Music 界面）；③本次用 AppleScript 枚举整棵树耗时超过 3 分钟（AX C API 会快得多，但仍是 UI 抓取，随 Music 版本随时失效）。结论：纯净版（App Store）不可行；完整版技术上可行但脆弱，属 UI 抓取。
+- MediaRemote adapter（ungive/mediaremote-adapter）：只暴露 now-playing 元数据与播放命令，README 明确无队列；实现靠 Apple 签名的 /usr/bin/perl 加载私有框架绕过 15.4 的限制，与「不用私有 API」规矩冲突。
+- 分布式通知 `com.apple.Music.playerInfo`：切随机/循环时会发（本机 ObjC 监听实测，四次切换四次通知），但 userInfo 只有曲目元数据键（Artist/Album/Name/PersistentID/Player State/Total Time 等），没有 Shuffle/Repeat 键，也没有队列信息。
